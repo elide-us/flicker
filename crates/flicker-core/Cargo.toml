@@ -1,0 +1,11 @@
+[package]
+name = "flicker-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+bytemuck.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

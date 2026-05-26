@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/flicker-core",
+    "crates/flicker-render",
+    "crates/flicker-2d",
+    "crates/flicker-script",
+    "crates/flicker-net",
+    "crates/flicker-app",
+    "crates/flicker",
+    "examples/hello-sprite",
+    "examples/square-chase",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/elide-us/flicker"
+authors = ["Aaron Stackpole <aaron@elideus.net>"]
+
+[workspace.dependencies]
+# Graphics & windowing
+wgpu = "22"
+winit = "0.30"
+pollster = "0.4"
+
+# Math
+glam = { version = "0.29", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+
+# Scripting
+mlua = { version = "0.10", features = ["luau", "vendored", "async", "serialize"] }
+
+# Async runtime (for net + async script bridge)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+
+# Networking
+tokio-tungstenite = "0.24"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Image loading (for textures)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Text rendering (cosmic-text on wgpu). Pinned to a version that resolves on wgpu 22.
+glyphon = "0.6"
+
+# Small, dependency-free RNG used by example games.
+fastrand = "2"
+
+# Internal cross-crate deps
+flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
+flicker-render = { version = "0.1.0", path = "crates/flicker-render" }
+flicker-2d = { version = "0.1.0", path = "crates/flicker-2d" }
+flicker-script = { version = "0.1.0", path = "crates/flicker-script" }
+flicker-net = { version = "0.1.0", path = "crates/flicker-net" }
+flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,11 @@
+[package]
+name = "flicker-2d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flicker-core.workspace = true
+flicker-render.workspace = true
+glam.workspace = true
+tracing.workspace = true
