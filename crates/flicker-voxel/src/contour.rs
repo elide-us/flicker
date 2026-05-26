@@ -506,6 +506,286 @@ pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
     }
 }
 
+/// LOD level used during contouring.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Lod(u8);
+
+impl Lod {
+    #[must_use]
+    pub fn new(level: u8) -> Option<Self> {
+        (level <= 7).then_some(Self(level))
+    }
+
+    #[must_use]
+    pub fn level(self) -> u8 {
+        self.0
+    }
+
+    #[must_use]
+    pub fn stride(self) -> u32 {
+        1_u32 << self.0
+    }
+}
+
+/// Optional face-neighbor context used for seam-aware LOD contouring.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct NeighborContext<'a> {
+    pub neg_x: Option<(&'a Cluster, Lod)>,
+    pub pos_x: Option<(&'a Cluster, Lod)>,
+    pub neg_y: Option<(&'a Cluster, Lod)>,
+    pub pos_y: Option<(&'a Cluster, Lod)>,
+    pub neg_z: Option<(&'a Cluster, Lod)>,
+    pub pos_z: Option<(&'a Cluster, Lod)>,
+}
+
+#[must_use]
+pub fn contour_cluster_lod(cluster: &Cluster, lod: Lod) -> CellMesh {
+    contour_cluster_lod_with_neighbors(cluster, lod, &NeighborContext::default())
+}
+
+#[must_use]
+pub fn contour_cluster_lod_with_neighbors(
+    cluster: &Cluster,
+    lod: Lod,
+    neighbors: &NeighborContext<'_>,
+) -> CellMesh {
+    let stride = lod.stride();
+    if stride == 1
+        && neighbors.neg_x.is_none()
+        && neighbors.pos_x.is_none()
+        && neighbors.neg_y.is_none()
+        && neighbors.pos_y.is_none()
+        && neighbors.neg_z.is_none()
+        && neighbors.pos_z.is_none()
+    {
+        return contour_cluster(cluster);
+    }
+
+    let cell_max = CLUSTER_DIM - stride;
+    let cell_dim = (CLUSTER_DIM / stride) as usize;
+    let cell_stride_y = cell_dim;
+    let cell_stride_z = cell_dim * cell_dim;
+    let cell_idx = |cx: u32, cy: u32, cz: u32| -> usize {
+        (cx / stride) as usize
+            + (cy / stride) as usize * cell_stride_y
+            + (cz / stride) as usize * cell_stride_z
+    };
+
+    let sample_voxel = |x: i32, y: i32, z: i32| -> Voxel {
+        if (0..CLUSTER_DIM as i32).contains(&x)
+            && (0..CLUSTER_DIM as i32).contains(&y)
+            && (0..CLUSTER_DIM as i32).contains(&z)
+        {
+            return cluster.get(LocalCoord::new(x as u32, y as u32, z as u32).expect("bounds"));
+        }
+        let (face, nx, ny, nz) = if x < 0 {
+            (neighbors.neg_x, CLUSTER_DIM as i32 - 1, y, z)
+        } else if x >= CLUSTER_DIM as i32 {
+            (neighbors.pos_x, 0, y, z)
+        } else if y < 0 {
+            (neighbors.neg_y, x, CLUSTER_DIM as i32 - 1, z)
+        } else if y >= CLUSTER_DIM as i32 {
+            (neighbors.pos_y, x, 0, z)
+        } else if z < 0 {
+            (neighbors.neg_z, x, y, CLUSTER_DIM as i32 - 1)
+        } else {
+            (neighbors.pos_z, x, y, 0)
+        };
+        if let Some((n, _)) = face {
+            if (0..CLUSTER_DIM as i32).contains(&nx)
+                && (0..CLUSTER_DIM as i32).contains(&ny)
+                && (0..CLUSTER_DIM as i32).contains(&nz)
+            {
+                return n.get(LocalCoord::new(nx as u32, ny as u32, nz as u32).expect("bounds"));
+            }
+        }
+        Voxel::EMPTY
+    };
+
+    let mut vertices = Vec::new();
+    let mut cell_vertex = vec![u32::MAX; cell_dim * cell_dim * cell_dim];
+    let mut bounds_min = [f32::INFINITY; 3];
+    let mut bounds_max = [f32::NEG_INFINITY; 3];
+
+    for cz in (0..cell_max).step_by(stride as usize) {
+        for cy in (0..cell_max).step_by(stride as usize) {
+            for cx in (0..cell_max).step_by(stride as usize) {
+                let mut classes = [false; 8];
+                let mut any_solid = false;
+                let mut all_solid = true;
+                let mut corners = [[0.0_f32; 3]; 8];
+                let mut materials = [Material::EMPTY; 8];
+                for k in 0..=1u32 {
+                    for j in 0..=1u32 {
+                        for i in 0..=1u32 {
+                            let vx = cx + i * stride;
+                            let vy = cy + j * stride;
+                            let vz = cz + k * stride;
+                            let v = sample_voxel(vx as i32, vy as i32, vz as i32);
+                            let s = is_voxel_solid(v);
+                            let idx = (i + (j << 1) + (k << 2)) as usize;
+                            classes[idx] = s;
+                            any_solid |= s;
+                            all_solid &= s;
+                            let [dx, dy, dz] = v.corner().to_components();
+                            corners[idx] = [vx as f32 + dx, vy as f32 + dy, vz as f32 + dz];
+                            materials[idx] = v.material();
+                        }
+                    }
+                }
+                if any_solid == all_solid {
+                    continue;
+                }
+                let mut centroid = [0.0_f32; 3];
+                for c in &corners {
+                    centroid[0] += c[0];
+                    centroid[1] += c[1];
+                    centroid[2] += c[2];
+                }
+                centroid[0] /= 8.0;
+                centroid[1] /= 8.0;
+                centroid[2] /= 8.0;
+                let to_i = |b: bool| if b { 1 } else { 0 };
+                let dx_sum: i32 = (to_i(classes[1]) - to_i(classes[0]))
+                    + (to_i(classes[3]) - to_i(classes[2]))
+                    + (to_i(classes[5]) - to_i(classes[4]))
+                    + (to_i(classes[7]) - to_i(classes[6]));
+                let dy_sum: i32 = (to_i(classes[2]) - to_i(classes[0]))
+                    + (to_i(classes[3]) - to_i(classes[1]))
+                    + (to_i(classes[6]) - to_i(classes[4]))
+                    + (to_i(classes[7]) - to_i(classes[5]));
+                let dz_sum: i32 = (to_i(classes[4]) - to_i(classes[0]))
+                    + (to_i(classes[5]) - to_i(classes[1]))
+                    + (to_i(classes[6]) - to_i(classes[2]))
+                    + (to_i(classes[7]) - to_i(classes[3]));
+                let (nx, ny, nz) = (-(dx_sum as f32), -(dy_sum as f32), -(dz_sum as f32));
+                let len = (nx * nx + ny * ny + nz * nz).sqrt();
+                let normal = if len > 0.0 {
+                    [nx / len, ny / len, nz / len]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+                let mut best_d2 = f32::INFINITY;
+                let mut best_material = Material::EMPTY;
+                for idx in 0..8 {
+                    if !classes[idx] {
+                        continue;
+                    }
+                    let c = corners[idx];
+                    let d2 = (c[0] - centroid[0]).powi(2)
+                        + (c[1] - centroid[1]).powi(2)
+                        + (c[2] - centroid[2]).powi(2);
+                    if d2 < best_d2 {
+                        best_d2 = d2;
+                        best_material = materials[idx];
+                    }
+                }
+                let vid = vertices.len() as u32;
+                cell_vertex[cell_idx(cx, cy, cz)] = vid;
+                vertices.push(Vertex {
+                    position: centroid,
+                    normal,
+                    material: best_material.raw(),
+                });
+                for a in 0..3 {
+                    bounds_min[a] = bounds_min[a].min(centroid[a]);
+                    bounds_max[a] = bounds_max[a].max(centroid[a]);
+                }
+            }
+        }
+    }
+    if vertices.is_empty() {
+        return empty_mesh();
+    }
+    let mut indices_u32 = Vec::new();
+    for vz in (stride..cell_max).step_by(stride as usize) {
+        for vy in (stride..cell_max).step_by(stride as usize) {
+            for vx in (0..cell_max).step_by(stride as usize) {
+                let a = is_voxel_solid(sample_voxel(vx as i32, vy as i32, vz as i32));
+                let b = is_voxel_solid(sample_voxel((vx + stride) as i32, vy as i32, vz as i32));
+                if a == b {
+                    continue;
+                }
+                let va = cell_vertex[cell_idx(vx, vy - stride, vz - stride)];
+                let vb = cell_vertex[cell_idx(vx, vy, vz - stride)];
+                let vc = cell_vertex[cell_idx(vx, vy, vz)];
+                let vd = cell_vertex[cell_idx(vx, vy - stride, vz)];
+                if [va, vb, vc, vd].contains(&u32::MAX) {
+                    continue;
+                }
+                if a {
+                    indices_u32.extend_from_slice(&[va, vb, vc, va, vc, vd]);
+                } else {
+                    indices_u32.extend_from_slice(&[va, vc, vb, va, vd, vc]);
+                }
+            }
+        }
+    }
+    for vz in (stride..cell_max).step_by(stride as usize) {
+        for vy in (0..cell_max).step_by(stride as usize) {
+            for vx in (stride..cell_max).step_by(stride as usize) {
+                let a = is_voxel_solid(sample_voxel(vx as i32, vy as i32, vz as i32));
+                let b = is_voxel_solid(sample_voxel(vx as i32, (vy + stride) as i32, vz as i32));
+                if a == b {
+                    continue;
+                }
+                let va = cell_vertex[cell_idx(vx - stride, vy, vz - stride)];
+                let vb = cell_vertex[cell_idx(vx, vy, vz - stride)];
+                let vc = cell_vertex[cell_idx(vx, vy, vz)];
+                let vd = cell_vertex[cell_idx(vx - stride, vy, vz)];
+                if [va, vb, vc, vd].contains(&u32::MAX) {
+                    continue;
+                }
+                if a {
+                    indices_u32.extend_from_slice(&[va, vd, vc, va, vc, vb]);
+                } else {
+                    indices_u32.extend_from_slice(&[va, vb, vc, va, vc, vd]);
+                }
+            }
+        }
+    }
+    for vz in (0..cell_max).step_by(stride as usize) {
+        for vy in (stride..cell_max).step_by(stride as usize) {
+            for vx in (stride..cell_max).step_by(stride as usize) {
+                let a = is_voxel_solid(sample_voxel(vx as i32, vy as i32, vz as i32));
+                let b = is_voxel_solid(sample_voxel(vx as i32, vy as i32, (vz + stride) as i32));
+                if a == b {
+                    continue;
+                }
+                let va = cell_vertex[cell_idx(vx - stride, vy - stride, vz)];
+                let vb = cell_vertex[cell_idx(vx, vy - stride, vz)];
+                let vc = cell_vertex[cell_idx(vx, vy, vz)];
+                let vd = cell_vertex[cell_idx(vx - stride, vy, vz)];
+                if [va, vb, vc, vd].contains(&u32::MAX) {
+                    continue;
+                }
+                if a {
+                    indices_u32.extend_from_slice(&[va, vb, vc, va, vc, vd]);
+                } else {
+                    indices_u32.extend_from_slice(&[va, vc, vb, va, vd, vc]);
+                }
+            }
+        }
+    }
+    let indices = if vertices.len() > (u16::MAX as usize + 1) {
+        Indices::U32(indices_u32)
+    } else {
+        Indices::U16(indices_u32.into_iter().map(|i| i as u16).collect())
+    };
+    CellMesh {
+        metadata: MeshMetadata {
+            lod: lod.level() as u32,
+            cluster_dim: CLUSTER_DIM,
+            vertex_count: vertices.len(),
+            triangle_count: indices.triangle_count(),
+            bounds_min,
+            bounds_max,
+        },
+        vertices,
+        indices,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
