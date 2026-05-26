@@ -39,7 +39,9 @@ mod material;
 mod voxel;
 
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
-pub use contour::{contour_cluster, CellMesh, Indices, MeshMetadata, Vertex};
+pub use contour::{
+    contour_cluster, contour_cluster_lod, CellMesh, Indices, Lod, MeshMetadata, Vertex,
+};
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;

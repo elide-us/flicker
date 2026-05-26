@@ -59,6 +59,45 @@
 use crate::cluster::CLUSTER_DIM;
 use crate::{Cluster, LocalCoord, Material, Voxel};
 
+/// LOD level for subsampling. Valid range: 0..=7.
+/// Stride is `2^level` voxels per sample.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Lod(u8);
+
+impl Lod {
+    pub const ZERO: Lod = Lod(0);
+    pub const MAX: Lod = Lod(7);
+
+    #[must_use]
+    pub fn new(level: u8) -> Option<Lod> {
+        if level <= Self::MAX.0 {
+            Some(Lod(level))
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn level(self) -> u8 {
+        self.0
+    }
+
+    #[must_use]
+    pub fn stride(self) -> u32 {
+        1u32 << self.0
+    }
+
+    #[must_use]
+    pub fn sample_dim(self) -> u32 {
+        CLUSTER_DIM / self.stride()
+    }
+
+    #[must_use]
+    pub fn cell_dim(self) -> u32 {
+        self.sample_dim() - 1
+    }
+}
+
 /// One mesh vertex.
 ///
 /// Position is in cluster-local coordinates (each axis in `[0, 256]`).
@@ -182,12 +221,12 @@ fn is_voxel_solid(v: Voxel) -> bool {
     v.material() != Material::EMPTY
 }
 
-fn empty_mesh() -> CellMesh {
+fn empty_mesh(lod: Lod) -> CellMesh {
     CellMesh {
         vertices: Vec::new(),
         indices: Indices::U16(Vec::new()),
         metadata: MeshMetadata {
-            lod: 0,
+            lod: lod.level() as u32,
             cluster_dim: CLUSTER_DIM,
             vertex_count: 0,
             triangle_count: 0,
@@ -204,9 +243,22 @@ fn empty_mesh() -> CellMesh {
 /// which is IEEE-754 stable).
 #[must_use]
 pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
+    contour_cluster_lod(cluster, Lod::ZERO)
+}
+
+/// Contour a cluster at a specific LOD level.
+///
+/// LOD 0 is equivalent to [`contour_cluster`].
+/// Higher levels subsample by reading every `2^L`-th voxel.
+#[must_use]
+pub fn contour_cluster_lod(cluster: &Cluster, lod: Lod) -> CellMesh {
+    let stride = lod.stride();
+    let sample_dim = lod.sample_dim();
+    let cell_max = lod.cell_dim();
+
     // --- Shortcut 1: cluster is uniform (no overrides). ---
     if cluster.is_uniform() {
-        return empty_mesh();
+        return empty_mesh(lod);
     }
 
     // --- Shortcut 2: every override has the same classification as the base. ---
@@ -216,24 +268,32 @@ pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
         .overrides()
         .any(|(_, v)| is_voxel_solid(v) != base_solid);
     if !any_override_differs {
-        return empty_mesh();
+        return empty_mesh(lod);
     }
 
-    // --- Pre-classify all voxels into a flat array for fast lookups. ---
-    let dim = CLUSTER_DIM as usize;
+    // --- Pre-classify sampled voxels into a flat array for fast lookups. ---
+    // Allocation is `sample_dim^3`, so high LODs do not pay the full 256^3 cost.
+    let dim = sample_dim as usize;
     let stride_y = dim;
     let stride_z = dim * dim;
     let voxel_idx = |x: u32, y: u32, z: u32| -> usize {
         x as usize + y as usize * stride_y + z as usize * stride_z
     };
-    let mut is_solid = vec![base_solid; dim * dim * dim];
-    for (coord, voxel) in cluster.overrides() {
-        is_solid[voxel_idx(coord.x(), coord.y(), coord.z())] = is_voxel_solid(voxel);
+    let mut is_solid = vec![false; dim * dim * dim];
+    for z in 0..sample_dim {
+        for y in 0..sample_dim {
+            for x in 0..sample_dim {
+                let vx = x * stride;
+                let vy = y * stride;
+                let vz = z * stride;
+                let voxel = cluster.get(LocalCoord::new(vx, vy, vz).expect("in bounds"));
+                is_solid[voxel_idx(x, y, z)] = is_voxel_solid(voxel);
+            }
+        }
     }
     let solid_at = |x: u32, y: u32, z: u32| -> bool { is_solid[voxel_idx(x, y, z)] };
 
     // --- Pass 1: scan cells, emit vertices. ---
-    let cell_max = CLUSTER_DIM - 1;
     let cell_dim = cell_max as usize;
     let cell_stride_y = cell_dim;
     let cell_stride_z = cell_dim * cell_dim;
@@ -279,9 +339,12 @@ pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
                 for k in 0..=1u32 {
                     for j in 0..=1u32 {
                         for i in 0..=1u32 {
-                            let vx = cx + i;
-                            let vy = cy + j;
-                            let vz = cz + k;
+                            let sx = cx + i;
+                            let sy = cy + j;
+                            let sz = cz + k;
+                            let vx = sx * stride;
+                            let vy = sy * stride;
+                            let vz = sz * stride;
                             let v = cluster.get(LocalCoord::new(vx, vy, vz).expect("in bounds"));
                             let [dx, dy, dz] = v.corner().to_components();
                             let idx = (i + (j << 1) + (k << 2)) as usize;
@@ -379,7 +442,7 @@ pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
 
     if vertices.is_empty() {
         // Defensive — the two shortcuts above should already cover this case.
-        return empty_mesh();
+        return empty_mesh(lod);
     }
 
     // --- Pass 2: face emission per axis. ---
@@ -494,7 +557,7 @@ pub fn contour_cluster(cluster: &Cluster) -> CellMesh {
     let triangle_count = indices.triangle_count();
     CellMesh {
         metadata: MeshMetadata {
-            lod: 0,
+            lod: lod.level() as u32,
             cluster_dim: CLUSTER_DIM,
             vertex_count,
             triangle_count,
@@ -538,6 +601,39 @@ mod tests {
         } else {
             [0.0, 0.0, 0.0]
         }
+    }
+
+    fn plane_fixture() -> Cluster {
+        let mut c = Cluster::empty();
+        let v = solid_voxel();
+        for z in 0..CLUSTER_DIM {
+            for y in 0..128 {
+                for x in 0..CLUSTER_DIM {
+                    c.set(coord(x, y, z), v);
+                }
+            }
+        }
+        c
+    }
+
+    fn sphere_fixture() -> Cluster {
+        let mut c = Cluster::empty();
+        let v = solid_voxel();
+        let center = 128.0f32;
+        let r2 = 64.0f32 * 64.0f32;
+        for z in 0..CLUSTER_DIM {
+            let dz = z as f32 - center;
+            for y in 0..CLUSTER_DIM {
+                let dy = y as f32 - center;
+                for x in 0..CLUSTER_DIM {
+                    let dx = x as f32 - center;
+                    if dx * dx + dy * dy + dz * dz <= r2 {
+                        c.set(coord(x, y, z), v);
+                    }
+                }
+            }
+        }
+        c
     }
 
     /// Collect undirected (min, max) edges across all triangles and return
@@ -1032,6 +1128,54 @@ mod tests {
                 assert!(v.position[a] >= min[a] - 1e-6);
                 assert!(v.position[a] <= max[a] + 1e-6);
             }
+        }
+    }
+
+    #[test]
+    fn lod_type_validation() {
+        for level in 0u8..=7 {
+            assert!(Lod::new(level).is_some());
+        }
+        assert!(Lod::new(8).is_none());
+        assert!(Lod::new(255).is_none());
+        assert_eq!(Lod::ZERO.level(), 0);
+        assert_eq!(Lod::ZERO.stride(), 1);
+        assert_eq!(Lod::new(3).expect("valid").stride(), 8);
+        assert_eq!(Lod::MAX.level(), 7);
+        assert_eq!(Lod::MAX.stride(), 128);
+        assert_eq!(Lod::MAX.sample_dim(), 2);
+        assert_eq!(Lod::MAX.cell_dim(), 1);
+    }
+
+    #[test]
+    fn lod0_equivalent_to_wrapper() {
+        let mut single = Cluster::empty();
+        single.set(coord(10, 10, 10), solid_voxel());
+        let fixtures = [single, plane_fixture(), sphere_fixture()];
+        for fixture in fixtures {
+            let m0 = contour_cluster(&fixture);
+            let mz = contour_cluster_lod(&fixture, Lod::ZERO);
+            assert_eq!(m0.metadata(), mz.metadata());
+            assert_eq!(m0.vertices(), mz.vertices());
+            assert_eq!(m0.indices(), mz.indices());
+        }
+    }
+
+    #[test]
+    fn uniform_clusters_empty_at_all_lods() {
+        for level in 0u8..=7 {
+            let lod = Lod::new(level).expect("valid");
+            assert!(contour_cluster_lod(&Cluster::empty(), lod).is_empty());
+            assert!(contour_cluster_lod(&Cluster::uniform(solid_voxel()), lod).is_empty());
+        }
+    }
+
+    #[test]
+    fn lod_metadata_matches_requested_level() {
+        let c = sphere_fixture();
+        for level in 0u8..=7 {
+            let lod = Lod::new(level).expect("valid");
+            assert_eq!(contour_cluster_lod(&c, lod).metadata().lod, level as u32);
         }
     }
 }
