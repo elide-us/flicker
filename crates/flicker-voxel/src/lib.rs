@@ -32,12 +32,14 @@
 #![forbid(unsafe_code)]
 
 mod cluster;
+mod contour;
 mod corner_vector;
 mod local_coord;
 mod material;
 mod voxel;
 
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
+pub use contour::{contour_cluster, CellMesh, Indices, MeshMetadata, Vertex};
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
