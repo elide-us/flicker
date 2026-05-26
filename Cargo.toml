@@ -8,6 +8,7 @@ members = [
     "crates/flicker-net",
     "crates/flicker-app",
     "crates/flicker",
+    "crates/flicker-voxel",
     "examples/hello-sprite",
     "examples/square-chase",
 ]
