@@ -10,6 +10,8 @@ use glyphon::{
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
+use crate::pipeline_mesh::DEPTH_FORMAT;
+
 struct QueuedText {
     buffer: Buffer,
     left: f32,
@@ -37,8 +39,21 @@ impl TextPipeline {
         let cache = glyphon::Cache::new(device);
         let viewport = Viewport::new(device, &cache);
         let mut atlas = TextAtlas::new(device, queue, &cache, surface_format);
-        let text_renderer =
-            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
+        // 2D overlay — share the depth attachment with the 3D pipeline but
+        // neither write nor test depth so text always layers on top.
+        let depth_stencil = Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+        let text_renderer = TextRenderer::new(
+            &mut atlas,
+            device,
+            wgpu::MultisampleState::default(),
+            depth_stencil,
+        );
 
         Self {
             font_system,

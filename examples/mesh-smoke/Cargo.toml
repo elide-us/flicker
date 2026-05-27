@@ -1,0 +1,12 @@
+[package]
+name = "mesh-smoke"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+flicker = { path = "../../crates/flicker" }
+anyhow.workspace = true
+glam.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

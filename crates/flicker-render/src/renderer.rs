@@ -2,18 +2,24 @@
 //!
 //! Lifecycle each frame:
 //! 1. The driver (typically `flicker-app`) calls [`Renderer::begin_frame`] to
-//!    reset per-frame draw queues.
-//! 2. User code calls `draw_triangle` / `draw_sprite` / `draw_text` any number
-//!    of times.
-//! 3. The driver calls [`Renderer::end_frame`] which uploads vertex/text data,
-//!    encodes a single render pass, and presents.
+//!    reset per-frame draw queues. Uploaded mesh storage persists across
+//!    frames; only the per-frame mesh draw queue clears.
+//! 2. User code calls `draw_triangle` / `draw_sprite` / `draw_text` /
+//!    `draw_mesh` any number of times. The 3D-camera state is set via
+//!    [`Renderer::set_camera`] (typically once per frame).
+//! 3. The driver calls [`Renderer::end_frame`] which uploads vertex/text/
+//!    per-draw data, encodes a single render pass with a `Depth32Float`
+//!    attachment, and presents. 3D meshes render first so 2D primitives
+//!    layer on top.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use glam::Vec2;
+use glam::{Mat4, Vec2};
 use winit::window::Window;
 
+use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
+use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
@@ -37,8 +43,22 @@ pub struct Renderer {
     triangle: TrianglePipeline,
     sprite: SpritePipeline,
     text: TextPipeline,
+    mesh: MeshPipeline,
+
+    /// Depth attachment shared by every pipeline in the main pass. The
+    /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
+    /// test (their depth-stencil state is "always pass, no write").
+    #[allow(dead_code)]
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
 
     textures: Vec<LoadedTexture>,
+    meshes: Vec<LoadedMesh>,
+    /// Current camera (cached so the runner can request the aspect-
+    /// dependent view-projection in `end_frame`). `None` means "no
+    /// camera set this frame" — `draw_mesh` still works but the matrix
+    /// from the previous `set_camera` carries over.
+    camera: Option<Camera>,
 }
 
 impl Renderer {
@@ -94,9 +114,13 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        let (depth_texture, depth_view) = create_depth_view(&device, width, height);
+
         let triangle = TrianglePipeline::new(&device, surface_format);
         let sprite = SpritePipeline::new(&device, surface_format);
         let text = TextPipeline::new(&device, &queue, surface_format);
+        let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
+        let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
 
         Ok(Self {
             window,
@@ -109,7 +133,12 @@ impl Renderer {
             triangle,
             sprite,
             text,
+            mesh,
+            depth_texture,
+            depth_view,
             textures: Vec::new(),
+            meshes: Vec::new(),
+            camera: None,
         })
     }
 
@@ -118,7 +147,8 @@ impl Renderer {
         &self.window
     }
 
-    /// Reconfigure the surface and update cached screen size.
+    /// Reconfigure the surface, update cached screen size, and recreate
+    /// the depth texture.
     pub fn resize(&mut self, width: u32, height: u32) {
         let w = width.max(1);
         let h = height.max(1);
@@ -126,6 +156,9 @@ impl Renderer {
         self.config.height = h;
         self.surface.configure(&self.device, &self.config);
         self.screen = Vec2::new(w as f32, h as f32);
+        let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
+        self.depth_texture = depth_texture;
+        self.depth_view = depth_view;
     }
 
     /// Current logical size of the rendering surface, in pixels.
@@ -150,11 +183,24 @@ impl Renderer {
         TextureHandle(id)
     }
 
-    /// Reset all per-frame draw queues. Called by the runner at the start of every frame.
+    /// Upload a 3D mesh and return a handle. The mesh persists across
+    /// frames; subsequent `draw_mesh(handle, ...)` calls reuse the same
+    /// GPU buffers.
+    pub fn upload_mesh(&mut self, vertices: &[MeshVertex], indices: MeshIndices<'_>) -> MeshHandle {
+        let loaded = self.mesh.upload(&self.device, vertices, indices);
+        let id = self.meshes.len() as u32;
+        self.meshes.push(loaded);
+        MeshHandle(id)
+    }
+
+    /// Reset all per-frame draw queues. Called by the runner at the start
+    /// of every frame. Mesh **storage** (uploaded vertex/index buffers)
+    /// is retained; only the per-frame mesh **draw queue** clears.
     pub fn begin_frame(&mut self) {
         self.triangle.clear();
         self.sprite.clear();
         self.text.clear();
+        self.mesh.clear();
     }
 
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
@@ -183,13 +229,40 @@ impl Renderer {
         self.text.push(text, position.x, position.y, size, color);
     }
 
+    /// Set the 3D camera used for subsequent `draw_mesh` calls. Typically
+    /// called once per frame before any `draw_mesh`.
+    pub fn set_camera(&mut self, camera: &Camera) {
+        self.camera = Some(*camera);
+    }
+
+    /// Queue a mesh for rendering this frame.
+    ///
+    /// `model` is the cluster-local-to-world transform; the camera (set
+    /// via [`Renderer::set_camera`]) supplies the view and projection.
+    /// `options` controls fill vs wireframe and the tint.
+    pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
+        self.mesh.push(mesh, model, options.tint, options.wireframe);
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
     pub fn end_frame(&mut self) -> Result<()> {
+        // Update camera-derived view-projection (if a camera is set).
+        if let Some(cam) = self.camera {
+            let aspect = if self.screen.y > 0.0 {
+                self.screen.x / self.screen.y
+            } else {
+                1.0
+            };
+            self.mesh
+                .set_camera_matrix(&self.queue, cam.view_projection(aspect));
+        }
+
         // Upload buffered geometry/text.
         self.triangle.prepare(&self.device, &self.queue);
         self.sprite.prepare(&self.device, &self.queue);
+        self.mesh.prepare(&self.device, &self.queue);
         self.text
             .prepare(
                 &self.device,
@@ -234,11 +307,20 @@ impl Renderer {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
 
+            // 3D first so 2D layers on top.
+            self.mesh.render(&mut pass, &self.meshes);
             self.triangle.render(&mut pass);
             self.sprite.render(&mut pass, &self.textures);
             self.text.render(&mut pass).context("text render failed")?;

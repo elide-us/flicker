@@ -8,6 +8,8 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 
+use crate::pipeline_mesh::DEPTH_FORMAT;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
@@ -72,7 +74,16 @@ impl TrianglePipeline {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // 2D overlay — share the depth attachment with the 3D pipeline
+            // but neither write nor test depth, so triangles always layer
+            // on top of the 3D scene regardless of camera depth.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,

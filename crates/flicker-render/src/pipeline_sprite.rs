@@ -8,6 +8,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
 
+use crate::pipeline_mesh::DEPTH_FORMAT;
 use crate::texture::TextureHandle;
 
 #[repr(C)]
@@ -116,7 +117,16 @@ impl SpritePipeline {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
-            depth_stencil: None,
+            // 2D overlay — share the depth attachment with the 3D pipeline
+            // but neither write nor test depth so sprites always layer on
+            // top of the 3D scene.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,

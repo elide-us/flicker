@@ -1547,6 +1547,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-smoke"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "glam",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "metal"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
