@@ -2953,4 +2953,135 @@ mod tests {
         assert_eq!(m_lod2.indices(), m_lod0.indices());
         assert_eq!(m_lod2.metadata(), m_lod0.metadata());
     }
+
+    // ---- Join-point perturbation ----
+
+    /// Verify that perturbing a single voxel's corner vector shifts the
+    /// centroids of all mixed cells that contain it as a corner-source.
+    ///
+    /// Fixture: a half-slab (solid for y < 128). Cell `(cx, cy, cz)` is
+    /// mixed when its 8 corner-voxels span the y=128 boundary; that
+    /// means `cy = 127` and any `cx, cz in 0..255`. Voxel `(vx, vy, vz)`
+    /// is a corner-source for cells `(vx-1..vx, vy-1..vy, vz-1..vz)` —
+    /// up to 8 cells. Of those, only the cells with `cy = 127` are
+    /// mixed.
+    ///
+    /// Perturb voxel `(100, 127, 100)`'s corner vector from default to
+    /// `(0.5, 1.5, 0.5)` — Y maxed to the upper extreme of the allowed
+    /// range. This voxel is a corner-source for 4 mixed cells on this
+    /// slab: `(99, 127, 99)`, `(100, 127, 99)`, `(99, 127, 100)`,
+    /// `(100, 127, 100)`. Each of those cells' centroid Y shifts upward
+    /// by `(1.5 - default_y) / 8 ≈ 0.124` units. All other cells emit
+    /// vertices identical to the unperturbed baseline.
+    #[test]
+    fn corner_vector_perturbation_at_slab_boundary() {
+        use crate::corner_vector::CornerVector;
+
+        let material = Material::new(1, 0, 0).unwrap();
+        let default_voxel = Voxel::new(CornerVector::DEFAULT, material);
+
+        // Baseline slab: all default corner vectors.
+        let mut baseline = Cluster::empty();
+        for z in 0..CLUSTER_DIM {
+            for y in 0..128u32 {
+                for x in 0..CLUSTER_DIM {
+                    baseline.set(coord(x, y, z), default_voxel);
+                }
+            }
+        }
+
+        // Perturbed slab: same classification, one voxel's Y join
+        // shifted up to 1.5 (the upper extreme of the allowed range).
+        let perturbed_voxel = Voxel::new(CornerVector::from_components(0.5, 1.5, 0.5), material);
+        let mut perturbed = Cluster::empty();
+        for z in 0..CLUSTER_DIM {
+            for y in 0..128u32 {
+                for x in 0..CLUSTER_DIM {
+                    perturbed.set(coord(x, y, z), default_voxel);
+                }
+            }
+        }
+        perturbed.set(coord(100, 127, 100), perturbed_voxel);
+
+        let m_baseline = contour_cluster(&baseline);
+        let m_perturbed = contour_cluster(&perturbed);
+
+        // The perturbation changes positions only, not topology.
+        assert_eq!(
+            m_baseline.metadata().vertex_count,
+            m_perturbed.metadata().vertex_count,
+            "perturbation must not change vertex count"
+        );
+        assert_eq!(
+            m_baseline.metadata().triangle_count,
+            m_perturbed.metadata().triangle_count,
+        );
+
+        // The 4 cells affected: (cx, 127, cz) for (cx, cz) in
+        // {(99, 99), (100, 99), (99, 100), (100, 100)}. Their baseline
+        // centroids have X and Z at cx + 0.5 + default_offset.
+        let default_decoded = (128.0_f32 / 255.0) * 2.0 - 0.5;
+        let base_offset = default_decoded;
+        let affected_xz: [(f32, f32); 4] = [
+            (99.5 + base_offset, 99.5 + base_offset),
+            (100.5 + base_offset, 99.5 + base_offset),
+            (99.5 + base_offset, 100.5 + base_offset),
+            (100.5 + base_offset, 100.5 + base_offset),
+        ];
+
+        // Expected Y shift per affected vertex: (1.5 - default_y) / 8.
+        let expected_y_shift = (1.5 - default_decoded) / 8.0;
+        let tolerance = 1e-4;
+
+        // For every baseline vertex, find its (X, Z) match in the
+        // perturbed mesh and compare Y. Slab vertices are at unique
+        // (X, Z) coordinates.
+        let mut affected_count = 0;
+        let mut unaffected_count = 0;
+        for vb in m_baseline.vertices() {
+            let vp = m_perturbed
+                .vertices()
+                .iter()
+                .find(|v| {
+                    (v.position[0] - vb.position[0]).abs() < tolerance
+                        && (v.position[2] - vb.position[2]).abs() < tolerance
+                })
+                .expect("each baseline vertex should have a matching perturbed vertex");
+
+            let dy = vp.position[1] - vb.position[1];
+            let is_affected = affected_xz.iter().any(|&(ax, az)| {
+                (vb.position[0] - ax).abs() < tolerance && (vb.position[2] - az).abs() < tolerance
+            });
+
+            if is_affected {
+                affected_count += 1;
+                assert!(
+                    (dy - expected_y_shift).abs() < 1e-3,
+                    "affected vertex at (X={}, Z={}) Y shift {} should be ~{}",
+                    vb.position[0],
+                    vb.position[2],
+                    dy,
+                    expected_y_shift,
+                );
+            } else {
+                unaffected_count += 1;
+                assert!(
+                    dy.abs() < 1e-5,
+                    "unaffected vertex at (X={}, Z={}) shifted Y by {}; expected 0",
+                    vb.position[0],
+                    vb.position[2],
+                    dy,
+                );
+            }
+        }
+
+        assert_eq!(
+            affected_count, 4,
+            "expected exactly 4 vertices shifted by the perturbation"
+        );
+        assert!(
+            unaffected_count > 60_000,
+            "expected most vertices to be unaffected; found {unaffected_count}"
+        );
+    }
 }

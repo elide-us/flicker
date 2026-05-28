@@ -10,7 +10,9 @@ mod runner;
 pub use runner::run;
 
 // Re-export so games can `use flicker::app::{App, run, InputState, Key};`
-// without reaching into `flicker::core::input::*` themselves.
+// (plus the bindings layer) without reaching into
+// `flicker::core::input::*` themselves.
+pub use flicker_core::input::bindings::{Action, Bindings, ControlConfig};
 pub use flicker_core::input::{InputState, Key};
 
 use std::time::Duration;

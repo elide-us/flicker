@@ -104,7 +104,13 @@ impl<A: App> ApplicationHandler for Runner<A> {
             WindowEvent::MouseInput { state, button, .. } => {
                 let down = matches!(state, ElementState::Pressed);
                 match button {
-                    MouseButton::Left => self.input.mouse_left = down,
+                    MouseButton::Left => {
+                        // Record an up→down edge for click-to-toggle UI.
+                        if down && !self.input.mouse_left {
+                            self.input.mouse_left_pressed = true;
+                        }
+                        self.input.mouse_left = down;
+                    }
                     MouseButton::Right => self.input.mouse_right = down,
                     MouseButton::Middle => self.input.mouse_middle = down,
                     // Back / Forward / Other — not modeled yet; ignore.
@@ -137,10 +143,11 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.last_update = Some(now);
 
                 self.app.update(dt, &self.input, renderer);
-                // Per-frame scroll delta is "what arrived this frame";
-                // reset now so the next `update` sees only the next
-                // frame's events.
+                // Per-frame scroll delta and "just-pressed" edges are
+                // "what arrived this frame"; reset them now so the
+                // next `update` sees only the next frame's events.
                 self.input.mouse_wheel_delta = 0.0;
+                self.input.mouse_left_pressed = false;
 
                 if self.app.should_quit() {
                     tracing::info!("app requested quit");
@@ -161,17 +168,36 @@ impl<A: App> ApplicationHandler for Runner<A> {
     }
 }
 
-/// Translate a winit physical key into our minimal [`Key`] enum. Keys we
+/// Translate a winit physical key into our [`Key`] enum. Keys we
 /// haven't named yet are returned as `None`; add a variant in
 /// `flicker-core::input::Key` and a mapping arm here as games need them.
 fn translate_key(key: PhysicalKey) -> Option<Key> {
     let PhysicalKey::Code(code) = key else {
         return None;
     };
-    match code {
-        KeyCode::Escape => Some(Key::Escape),
-        _ => None,
-    }
+    Some(match code {
+        KeyCode::Escape => Key::Escape,
+        KeyCode::KeyA => Key::A,
+        KeyCode::KeyB => Key::B,
+        KeyCode::KeyC => Key::C,
+        KeyCode::KeyD => Key::D,
+        KeyCode::KeyE => Key::E,
+        KeyCode::KeyF => Key::F,
+        KeyCode::KeyQ => Key::Q,
+        KeyCode::KeyR => Key::R,
+        KeyCode::KeyS => Key::S,
+        KeyCode::KeyW => Key::W,
+        KeyCode::KeyX => Key::X,
+        KeyCode::KeyZ => Key::Z,
+        KeyCode::ArrowUp => Key::Up,
+        KeyCode::ArrowDown => Key::Down,
+        KeyCode::ArrowLeft => Key::Left,
+        KeyCode::ArrowRight => Key::Right,
+        KeyCode::Space => Key::Space,
+        KeyCode::ShiftLeft => Key::LeftShift,
+        KeyCode::ControlLeft => Key::LeftControl,
+        _ => return None,
+    })
 }
 
 /// Run the application. Blocks until the event loop exits.

@@ -2,4 +2,5 @@
 
 pub mod input;
 
+pub use input::bindings::{Action, Bindings, ControlConfig};
 pub use input::{InputState, Key};
