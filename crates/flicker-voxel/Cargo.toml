@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Phase 1 is a pure-data crate. No third-party dependencies; standard library
-# only. If a future phase needs one, add it to the workspace dependency table
-# first and inherit from there.
+# `bytemuck` is the only third-party dependency — used to mark `Vertex`
+# as `Pod`/`Zeroable` so a downstream graphics crate can cast a slice of
+# vertices into its own GPU vertex type without copying. Storage and
+# contouring are otherwise standard-library only.
 [dependencies]
+bytemuck.workspace = true

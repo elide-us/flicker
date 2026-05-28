@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 flicker-core.workspace = true
+flicker-voxel.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 glam.workspace = true

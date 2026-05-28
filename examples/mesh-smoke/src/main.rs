@@ -3,20 +3,29 @@
 //! Visual expectations when running:
 //!   * A shaded cube sits at the origin, rotating slowly under a slow
 //!     orbiting camera.
-//!   * Each face has a slightly different hue (the material id of each
-//!     face's two triangles differs), shaded with simple Lambertian
-//!     lighting — the lit faces should appear distinctly brighter than
-//!     the back-facing ones.
+//!   * Faces are tiled with the procedural magenta/black missing-
+//!     texture checker (one cell per world-space unit), modulated by
+//!     simple Lambertian lighting — the lit faces should appear
+//!     distinctly brighter than the back-facing ones.
 //!   * A bright-green wireframe overlay sits on top of the fill, drawn
 //!     by re-issuing `draw_mesh` with `wireframe: true`. Edges should
-//!     appear as thin lines along every triangle edge of the cube,
-//!     including the diagonal of each face (each face is two triangles).
+//!     appear as one-pixel-wide lines along every triangle edge of the
+//!     cube, including the diagonal of each face (each face is two
+//!     triangles). The wireframe is a separate line-list draw against
+//!     an edge index buffer the pipeline builds at upload time, so it
+//!     works on shared-vertex meshes too.
 //!   * Debug text in the top-left reads `fill + wireframe smoke check,
 //!     frame N`.
-//!   * No z-fighting between fill and wireframe (the barycentric
-//!     discard handles overlap — wireframe pixels survive, fill pixels
-//!     remain visible everywhere else).
+//!   * No z-fighting between fill and wireframe: the depth pipeline
+//!     uses `LessEqual`, so the line-list draw lands on top of the
+//!     just-written fill depth values cleanly.
 //!   * Escape exits cleanly.
+//!
+//! The cube uses per-face duplicated vertices, but that's no longer a
+//! requirement for the wireframe to render correctly — the line-list
+//! pipeline doesn't care whether triangles share vertices. The cube
+//! keeps its duplicated vertices to make per-face material ids well-
+//! defined.
 
 use std::time::Duration;
 

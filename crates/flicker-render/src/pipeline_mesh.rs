@@ -19,22 +19,29 @@
 //! and test so they layer on top of the 3D scene as overlays. Depth
 //! is cleared to `1.0` at the start of every frame.
 //!
-//! # Wireframe
+//! # Wireframe via line-list edge buffer
 //!
-//! Wireframe is rendered through the same pipeline by setting the
-//! per-draw `flags.x = 1.0`. The shader carries a per-vertex
-//! barycentric coordinate computed from `vertex_index % 3` and
-//! `discard`s fragments where `min(bary) > 0.02` — only edge pixels
-//! survive. This avoids the `POLYGON_MODE_LINE` device feature and
-//! works on every wgpu backend.
+//! Each uploaded mesh carries two index buffers: a **triangle index
+//! buffer** (the caller's `MeshIndices`) and an **edge index buffer**
+//! built during `upload` by walking the triangle indices and deduping
+//! each undirected edge `(min, max)` through a `HashSet`. Each unique
+//! edge contributes 2 indices to the edge buffer.
 //!
-//! Note: barycentrics derived from `vertex_index % 3` are exact for
-//! non-indexed draws (and indexed draws where no vertex is shared
-//! between triangles). Shared-vertex indexed meshes produce
-//! approximate wireframes — acceptable for debug visualization but
-//! not pixel-perfect. The smoke-check example uses a duplicated-
-//! vertex cube so its wires are exact.
+//! Two render pipelines share the vertex shader, bind groups, depth
+//! state, and color target — they differ only in primitive topology:
+//!
+//! * `triangle_pipeline`: `TriangleList`, back-face culling enabled.
+//! * `line_pipeline`: `LineList`, culling disabled (the notion of
+//!   "back-facing" doesn't apply to lines).
+//!
+//! `MeshPipeline::render` dispatches per draw call based on the
+//! wireframe flag: wireframe draws bind the line pipeline and the
+//! edge index buffer; filled draws bind the triangle pipeline and the
+//! triangle index buffer. The fragment shader's wireframe branch then
+//! emits the wireframe color directly — no barycentric trick, no
+//! shared-vertex caveat.
 
+use std::collections::HashSet;
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
@@ -68,12 +75,17 @@ struct PerDraw {
 
 const PER_DRAW_RAW_SIZE: u64 = std::mem::size_of::<PerDraw>() as u64;
 
-/// One persistent GPU-side mesh.
+/// One persistent GPU-side mesh. Holds both a triangle index buffer
+/// (for filled draws) and an edge index buffer (for line-list wireframe
+/// draws). Both reference the same vertex buffer.
 pub struct LoadedMesh {
     vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: u32,
-    index_format: wgpu::IndexFormat,
+    triangle_index_buffer: wgpu::Buffer,
+    triangle_index_count: u32,
+    triangle_index_format: wgpu::IndexFormat,
+    edge_index_buffer: wgpu::Buffer,
+    edge_index_count: u32,
+    edge_index_format: wgpu::IndexFormat,
 }
 
 /// One queued draw call for the current frame.
@@ -87,7 +99,8 @@ const MESH_VERTEX_ATTRS: [wgpu::VertexAttribute; 3] =
 
 /// The 3D mesh pipeline.
 pub struct MeshPipeline {
-    pipeline: wgpu::RenderPipeline,
+    triangle_pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     camera_buf: wgpu::Buffer,
@@ -155,23 +168,36 @@ impl MeshPipeline {
             attributes: &MESH_VERTEX_ATTRS,
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("flicker.mesh.pipeline"),
+        // Depth-stencil shared between both pipelines. `LessEqual` lets
+        // a wireframe pass land on top of a fill pass at the exact same
+        // depth — without this, the line draw would lose the depth test
+        // against the fill's just-written depth values and render nothing.
+        let depth_stencil = Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::LessEqual,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
+        let color_target = Some(wgpu::ColorTargetState {
+            format: surface_format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+
+        let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("flicker.mesh.triangle_pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[vertex_layout],
+                buffers: std::slice::from_ref(&vertex_layout),
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: std::slice::from_ref(&color_target),
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -183,18 +209,38 @@ impl MeshPipeline {
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                // `LessEqual` lets a wireframe pass land on top of a
-                // fill pass at the exact same depth — without this, the
-                // wireframe overlay would lose the depth test against
-                // the fill's just-written depth values and render
-                // nothing.
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+            depth_stencil: depth_stencil.clone(),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("flicker.mesh.line_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: std::slice::from_ref(&vertex_layout),
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: std::slice::from_ref(&color_target),
+                compilation_options: Default::default(),
             }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                // Lines have no notion of "back-facing" — disable culling.
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -218,7 +264,8 @@ impl MeshPipeline {
         let bind_group = make_bind_group(device, &bind_group_layout, &camera_buf, &per_draw_buf);
 
         Self {
-            pipeline,
+            triangle_pipeline,
+            line_pipeline,
             bind_group_layout,
             bind_group,
             camera_buf,
@@ -231,6 +278,7 @@ impl MeshPipeline {
 
     /// Upload an indexed mesh and return a handle. The mesh persists
     /// across frames (caller must keep the handle to draw it again).
+    /// Also builds an edge index buffer for line-list wireframe draws.
     pub fn upload(
         &self,
         device: &wgpu::Device,
@@ -242,10 +290,12 @@ impl MeshPipeline {
             contents: bytemuck::cast_slice(vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let (index_buffer, index_count, index_format) = match indices {
+
+        // Triangle index buffer — exactly what the caller submitted.
+        let (triangle_index_buffer, triangle_index_count, triangle_index_format) = match indices {
             MeshIndices::U16(idx) => (
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("flicker.mesh.ibo"),
+                    label: Some("flicker.mesh.tri_ibo"),
                     contents: bytemuck::cast_slice(idx),
                     usage: wgpu::BufferUsages::INDEX,
                 }),
@@ -254,7 +304,7 @@ impl MeshPipeline {
             ),
             MeshIndices::U32(idx) => (
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("flicker.mesh.ibo"),
+                    label: Some("flicker.mesh.tri_ibo"),
                     contents: bytemuck::cast_slice(idx),
                     usage: wgpu::BufferUsages::INDEX,
                 }),
@@ -262,11 +312,54 @@ impl MeshPipeline {
                 wgpu::IndexFormat::Uint32,
             ),
         };
+
+        // Edge index buffer — undirected edges of the triangle mesh,
+        // each represented as one `(min, max)` entry in a `HashSet`
+        // so shared edges (the typical case for a 2-manifold) are
+        // emitted exactly once.
+        let edges = extract_edges(&indices);
+        let edge_index_count = (edges.len() * 2) as u32;
+        // Match the format-selection rule to the triangle buffer for
+        // consistency: u16 unless the vertex count overflows it.
+        let use_u32 = vertices.len() > (u16::MAX as usize + 1);
+        let (edge_index_buffer, edge_index_format) = if use_u32 {
+            let mut flat = Vec::with_capacity(edges.len() * 2);
+            for (a, b) in &edges {
+                flat.push(*a);
+                flat.push(*b);
+            }
+            (
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("flicker.mesh.edge_ibo"),
+                    contents: bytemuck::cast_slice(&flat),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                wgpu::IndexFormat::Uint32,
+            )
+        } else {
+            let mut flat = Vec::with_capacity(edges.len() * 2);
+            for (a, b) in &edges {
+                flat.push(*a as u16);
+                flat.push(*b as u16);
+            }
+            (
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("flicker.mesh.edge_ibo"),
+                    contents: bytemuck::cast_slice(&flat),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                wgpu::IndexFormat::Uint16,
+            )
+        };
+
         LoadedMesh {
             vertex_buffer,
-            index_buffer,
-            index_count,
-            index_format,
+            triangle_index_buffer,
+            triangle_index_count,
+            triangle_index_format,
+            edge_index_buffer,
+            edge_index_count,
+            edge_index_format,
         }
     }
 
@@ -281,6 +374,13 @@ impl MeshPipeline {
             view_projection: view_projection.to_cols_array_2d(),
         };
         queue.write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&uniform));
+    }
+
+    /// Exposes the camera uniform buffer so sibling pipelines (e.g.
+    /// the immediate-mode lines pipeline) can reuse the same
+    /// view-projection without keeping their own copy.
+    pub fn camera_buffer(&self) -> &wgpu::Buffer {
+        &self.camera_buf
     }
 
     /// Queue a mesh for rendering this frame.
@@ -329,23 +429,80 @@ impl MeshPipeline {
         queue.write_buffer(&self.per_draw_buf, 0, &staging);
     }
 
-    /// Issue the queued draws.
+    /// Issue the queued draws. Wireframe draws bind the line-list
+    /// pipeline + the edge index buffer; filled draws bind the
+    /// triangle-list pipeline + the triangle index buffer.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, meshes: &'a [LoadedMesh]) {
         if self.queued.is_empty() {
             return;
         }
-        pass.set_pipeline(&self.pipeline);
         for (i, draw) in self.queued.iter().enumerate() {
             let Some(mesh) = meshes.get(draw.handle.0 as usize) else {
                 continue;
             };
             let offset = (i as u32) * self.per_draw_stride;
-            pass.set_bind_group(0, &self.bind_group, &[offset]);
-            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-            pass.set_index_buffer(mesh.index_buffer.slice(..), mesh.index_format);
-            pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+            let wireframe = draw.per_draw.flags[0] > 0.5;
+            if wireframe {
+                pass.set_pipeline(&self.line_pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[offset]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(mesh.edge_index_buffer.slice(..), mesh.edge_index_format);
+                pass.draw_indexed(0..mesh.edge_index_count, 0, 0..1);
+            } else {
+                pass.set_pipeline(&self.triangle_pipeline);
+                pass.set_bind_group(0, &self.bind_group, &[offset]);
+                pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                pass.set_index_buffer(
+                    mesh.triangle_index_buffer.slice(..),
+                    mesh.triangle_index_format,
+                );
+                pass.draw_indexed(0..mesh.triangle_index_count, 0, 0..1);
+            }
         }
     }
+}
+
+/// Walk the triangle indices and return the deduplicated set of
+/// undirected edges, each represented as `(min, max)` in u32. Degenerate
+/// triangles (two equal indices on an edge) are silently skipped.
+fn extract_edges(indices: &MeshIndices<'_>) -> HashSet<(u32, u32)> {
+    let mut edges: HashSet<(u32, u32)> = HashSet::new();
+    let mut push = |a: u32, b: u32| {
+        if a == b {
+            return;
+        }
+        let key = if a < b { (a, b) } else { (b, a) };
+        edges.insert(key);
+    };
+    match indices {
+        MeshIndices::U16(idx) => {
+            let n = idx.len() - idx.len() % 3;
+            let mut i = 0;
+            while i < n {
+                let a = idx[i] as u32;
+                let b = idx[i + 1] as u32;
+                let c = idx[i + 2] as u32;
+                push(a, b);
+                push(b, c);
+                push(a, c);
+                i += 3;
+            }
+        }
+        MeshIndices::U32(idx) => {
+            let n = idx.len() - idx.len() % 3;
+            let mut i = 0;
+            while i < n {
+                let a = idx[i];
+                let b = idx[i + 1];
+                let c = idx[i + 2];
+                push(a, b);
+                push(b, c);
+                push(a, c);
+                i += 3;
+            }
+        }
+    }
+    edges
 }
 
 fn make_bind_group(

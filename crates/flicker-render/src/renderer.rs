@@ -18,7 +18,10 @@ use anyhow::{Context, Result};
 use glam::{Mat4, Vec2};
 use winit::window::Window;
 
+use glam::Vec3;
+
 use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
+use crate::pipeline_lines::LinesPipeline;
 use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
@@ -44,6 +47,7 @@ pub struct Renderer {
     sprite: SpritePipeline,
     text: TextPipeline,
     mesh: MeshPipeline,
+    lines: LinesPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -121,6 +125,7 @@ impl Renderer {
         let text = TextPipeline::new(&device, &queue, surface_format);
         let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
+        let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
 
         Ok(Self {
             window,
@@ -134,6 +139,7 @@ impl Renderer {
             sprite,
             text,
             mesh,
+            lines,
             depth_texture,
             depth_view,
             textures: Vec::new(),
@@ -193,6 +199,19 @@ impl Renderer {
         MeshHandle(id)
     }
 
+    /// Upload a [`flicker_voxel::CellMesh`] directly. The vertex slice
+    /// is reinterpreted in place as `[MeshVertex]` (no per-vertex copy)
+    /// thanks to the matching layouts asserted in `mesh.rs`; the index
+    /// buffer's `U16` / `U32` variant carries over.
+    pub fn upload_voxel_mesh(&mut self, mesh: &flicker_voxel::CellMesh) -> MeshHandle {
+        let vertices: &[MeshVertex] = bytemuck::cast_slice(mesh.vertices());
+        let indices = match mesh.indices() {
+            flicker_voxel::Indices::U16(v) => MeshIndices::U16(v.as_slice()),
+            flicker_voxel::Indices::U32(v) => MeshIndices::U32(v.as_slice()),
+        };
+        self.upload_mesh(vertices, indices)
+    }
+
     /// Reset all per-frame draw queues. Called by the runner at the start
     /// of every frame. Mesh **storage** (uploaded vertex/index buffers)
     /// is retained; only the per-frame mesh **draw queue** clears.
@@ -201,6 +220,7 @@ impl Renderer {
         self.sprite.clear();
         self.text.clear();
         self.mesh.clear();
+        self.lines.clear();
     }
 
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
@@ -244,6 +264,20 @@ impl Renderer {
         self.mesh.push(mesh, model, options.tint, options.wireframe);
     }
 
+    /// Draw a wireframe axis-aligned bounding box this frame. Lives in
+    /// 3D space at world coordinates `[min, max]`, drawn as the 12
+    /// edges of the box at the given RGBA color. Uses the immediate-
+    /// mode line-list pipeline, depth-tested against the 3D scene
+    /// (lines occluded by mesh in front of them; lines don't write
+    /// depth so they don't occlude later draws).
+    ///
+    /// Submitted immediate-mode — no upload, no handle, no
+    /// persistence. Cheap (12 segments → 24 vertices). Multiple boxes
+    /// per frame are fine.
+    pub fn draw_bounding_box(&mut self, min: Vec3, max: Vec3, color: [f32; 4]) {
+        self.lines.push_box(min, max, color);
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
@@ -263,6 +297,7 @@ impl Renderer {
         self.triangle.prepare(&self.device, &self.queue);
         self.sprite.prepare(&self.device, &self.queue);
         self.mesh.prepare(&self.device, &self.queue);
+        self.lines.prepare(&self.device, &self.queue);
         self.text
             .prepare(
                 &self.device,
@@ -319,8 +354,11 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // 3D first so 2D layers on top.
+            // 3D mesh first; immediate-mode lines layer on top of the
+            // mesh (still in 3D space, depth-tested but not depth-
+            // writing); then 2D overlays on top.
             self.mesh.render(&mut pass, &self.meshes);
+            self.lines.render(&mut pass);
             self.triangle.render(&mut pass);
             self.sprite.render(&mut pass, &self.textures);
             self.text.render(&mut pass).context("text render failed")?;

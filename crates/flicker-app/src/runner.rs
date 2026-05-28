@@ -20,7 +20,7 @@ use flicker_render::Renderer;
 use glam::Vec2;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -111,6 +111,17 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     _ => {}
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Accumulate into the per-frame delta; reset after
+                // `App::update` consumes it. Line vs pixel deltas are
+                // normalized so a "one-notch" mouse wheel and a
+                // trackpad swipe both land in roughly the same range.
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => (p.y / 120.0) as f32,
+                };
+                self.input.mouse_wheel_delta += scroll;
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = matches!(event.state, ElementState::Pressed);
                 if let Some(key) = translate_key(event.physical_key) {
@@ -126,6 +137,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.last_update = Some(now);
 
                 self.app.update(dt, &self.input, renderer);
+                // Per-frame scroll delta is "what arrived this frame";
+                // reset now so the next `update` sees only the next
+                // frame's events.
+                self.input.mouse_wheel_delta = 0.0;
 
                 if self.app.should_quit() {
                     tracing::info!("app requested quit");

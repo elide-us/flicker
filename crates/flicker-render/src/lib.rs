@@ -11,6 +11,7 @@
 //! always layer on top.
 
 mod mesh;
+mod pipeline_lines;
 mod pipeline_mesh;
 mod pipeline_sprite;
 mod pipeline_text;

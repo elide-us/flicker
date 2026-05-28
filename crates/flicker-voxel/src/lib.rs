@@ -34,6 +34,7 @@
 mod cluster;
 mod contour;
 mod corner_vector;
+pub mod generators;
 mod local_coord;
 mod material;
 mod voxel;

@@ -32,6 +32,11 @@ pub struct InputState {
     pub mouse_left: bool,
     pub mouse_right: bool,
     pub mouse_middle: bool,
+    /// Accumulated scroll delta since the previous frame consumed it.
+    /// Positive = scroll up (wheel toward the user / two-finger swipe up).
+    /// The driver resets this to `0.0` immediately after `App::update`
+    /// returns so each frame sees only that frame's scroll events.
+    pub mouse_wheel_delta: f32,
     keys_held: HashSet<Key>,
 }
 

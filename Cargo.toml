@@ -12,6 +12,7 @@ members = [
     "examples/hello-sprite",
     "examples/square-chase",
     "examples/mesh-smoke",
+    "examples/voxel-cluster",
 ]
 
 [workspace.package]
@@ -71,6 +72,7 @@ flicker-2d = { version = "0.1.0", path = "crates/flicker-2d" }
 flicker-script = { version = "0.1.0", path = "crates/flicker-script" }
 flicker-net = { version = "0.1.0", path = "crates/flicker-net" }
 flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
+flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
 
 [profile.dev]
 opt-level = 1

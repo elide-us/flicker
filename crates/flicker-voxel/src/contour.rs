@@ -279,11 +279,13 @@ impl<'a> NeighborContext<'a> {
 /// Normal is unit-length and points away from solid voxels. Material is
 /// the packed 12/12/8 representation returned by [`Material::raw`].
 ///
-/// The layout is `#[repr(C)]` and plain data — 28 bytes — so a downstream
-/// graphics crate can view it as `bytemuck::Pod` without this crate having
-/// to depend on `bytemuck`.
+/// The layout is `#[repr(C)]` and plain data — 28 bytes — derived `Pod`
+/// and `Zeroable` so a downstream graphics crate can cast a vertex slice
+/// to its own GPU vertex type (with the same field layout) without
+/// copying. `flicker-render`'s `MeshVertex` is the intended target;
+/// compile-time assertions in that crate verify the layouts match.
 #[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
@@ -2279,21 +2281,6 @@ mod tests {
     }
 
     // ---- Helpers for seam tests ----
-
-    /// Build a cluster where the +X half (x ≥ 128) is solid. Used for
-    /// seam tests where the surface lies on x ≈ 128.
-    fn build_left_solid_cluster() -> Cluster {
-        let mut c = Cluster::empty();
-        let v = solid_voxel();
-        for z in 0..256u32 {
-            for y in 0..256u32 {
-                for x in 0..128u32 {
-                    c.set(coord(x, y, z), v);
-                }
-            }
-        }
-        c
-    }
 
     /// Translate a vertex position by `offset` and return the modified
     /// vertex. Used to combine adjacent-cluster meshes in world space.

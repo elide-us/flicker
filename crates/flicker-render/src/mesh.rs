@@ -10,10 +10,10 @@ use glam::{Mat4, Vec3};
 /// One vertex of a 3D mesh.
 ///
 /// The byte layout (`28` bytes — `position[3] + normal[3] + material[1]`)
-/// mirrors `flicker_voxel::Vertex` exactly so a downstream crate can
-/// cast a voxel-contour vertex slice into a `MeshVertex` slice without
-/// copying. Declaring it here (rather than depending on `flicker-voxel`)
-/// keeps the render crate independent of voxel internals.
+/// mirrors `flicker_voxel::Vertex` exactly so a `flicker_voxel::CellMesh`
+/// can be uploaded with zero per-vertex copying via
+/// `Renderer::upload_voxel_mesh`. The compile-time assertion below
+/// catches accidental drift between the two layouts.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, PartialEq)]
 pub struct MeshVertex {
@@ -21,6 +21,21 @@ pub struct MeshVertex {
     pub normal: [f32; 3],
     pub material: u32,
 }
+
+// Layout sanity: `MeshVertex` must be byte-for-byte equivalent to
+// `flicker_voxel::Vertex`. `Renderer::upload_voxel_mesh` relies on the
+// `bytemuck::cast_slice` from one to the other, which is sound only if
+// both size and alignment match.
+const _: () = {
+    assert!(
+        std::mem::size_of::<MeshVertex>() == std::mem::size_of::<flicker_voxel::Vertex>(),
+        "MeshVertex size must match flicker_voxel::Vertex"
+    );
+    assert!(
+        std::mem::align_of::<MeshVertex>() == std::mem::align_of::<flicker_voxel::Vertex>(),
+        "MeshVertex alignment must match flicker_voxel::Vertex"
+    );
+};
 
 /// Opaque handle to an uploaded mesh stored on the renderer. Meshes
 /// persist across frames; only the per-frame draw queue resets.
@@ -100,6 +115,28 @@ impl Camera {
     /// per draw to produce the final clip-space transform.
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
         self.projection(aspect) * self.view()
+    }
+
+    /// Camera positioned to orbit `target` at `distance`, looking
+    /// inward. `yaw` rotates around the world Y axis; `pitch` is
+    /// elevation in radians (positive = looking down from above).
+    /// `pitch` is clamped to `(-1.5, 1.5)` radians to avoid gimbal
+    /// flip near the poles. Other camera parameters (`up`, FOV, near,
+    /// far) inherit from [`Camera::default`].
+    pub fn orbit(target: Vec3, distance: f32, yaw: f32, pitch: f32) -> Self {
+        let pitch = pitch.clamp(-1.5, 1.5);
+        let position = target
+            + Vec3::new(
+                distance * pitch.cos() * yaw.sin(),
+                distance * pitch.sin(),
+                distance * pitch.cos() * yaw.cos(),
+            );
+        Self {
+            position,
+            target,
+            up: Vec3::Y,
+            ..Self::default()
+        }
     }
 }
 
