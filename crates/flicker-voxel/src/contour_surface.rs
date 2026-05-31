@@ -95,7 +95,7 @@ use std::collections::HashMap;
 
 use crate::cluster::CLUSTER_DIM;
 use crate::mesh::{CellMesh, Indices, MeshMetadata, Vertex};
-use crate::seam::{read_corner, FaceDir, HaloVertex, NeighborContext, NeighborHalo};
+use crate::seam::{read_corner, FaceDir, Lod, NeighborContext, NeighborHalo};
 use crate::{Cluster, LocalCoord, Material, Voxel};
 
 /// Per-face references to neighbor halos, supplied to
@@ -132,12 +132,12 @@ fn is_voxel_solid(v: Voxel) -> bool {
     v.material() != Material::EMPTY
 }
 
-fn empty_surface_mesh() -> CellMesh {
+fn empty_surface_mesh(lod: Lod) -> CellMesh {
     CellMesh::from_parts(
         Vec::new(),
         Indices::U16(Vec::new()),
         MeshMetadata {
-            lod: 0,
+            lod: lod.level() as u32,
             cluster_dim: CLUSTER_DIM,
             vertex_count: 0,
             triangle_count: 0,
@@ -147,125 +147,36 @@ fn empty_surface_mesh() -> CellMesh {
     )
 }
 
-/// Voxel array index for a cluster-local coordinate. Inlined helper
-/// shared by the contour pass's pre-classification and vertex-table
-/// reads.
+/// Sample-grid index for a sample coordinate. The sample dim depends
+/// on LOD (`CLUSTER_DIM >> lod.level()`) so the caller passes it in.
 #[inline]
-fn voxel_idx(x: u32, y: u32, z: u32) -> usize {
-    let dim = CLUSTER_DIM as usize;
-    x as usize + y as usize * dim + z as usize * dim * dim
-}
-
-/// Map a single-axis-OOB search position to `(face, perp_a, perp_b)`.
-///
-/// Returns `Some` when exactly one of `(px, py, pz)` is OOB by
-/// exactly one voxel (`-1` or `dim`); returns `None` for multi-axis
-/// OOB (cluster edges/corners) or single-axis OOB further than one
-/// voxel (beyond the halo's known data). The two in-range coords
-/// become `(perp_a, perp_b)` per the face's axis convention.
-fn halo_query_coords(px: i32, py: i32, pz: i32, dim: i32) -> Option<(FaceDir, u32, u32)> {
-    let xo = !(0..dim).contains(&px);
-    let yo = !(0..dim).contains(&py);
-    let zo = !(0..dim).contains(&pz);
-    let oob = u8::from(xo) + u8::from(yo) + u8::from(zo);
-    if oob != 1 {
-        return None;
-    }
-    if xo {
-        let face = if px == -1 {
-            FaceDir::NegX
-        } else if px == dim {
-            FaceDir::PosX
-        } else {
-            return None;
-        };
-        Some((face, py as u32, pz as u32))
-    } else if yo {
-        let face = if py == -1 {
-            FaceDir::NegY
-        } else if py == dim {
-            FaceDir::PosY
-        } else {
-            return None;
-        };
-        Some((face, px as u32, pz as u32))
-    } else {
-        let face = if pz == -1 {
-            FaceDir::NegZ
-        } else if pz == dim {
-            FaceDir::PosZ
-        } else {
-            return None;
-        };
-        Some((face, px as u32, py as u32))
-    }
-}
-
-/// Promote a halo vertex into the cluster's vertex buffer on first
-/// use; return the assigned vertex index (cached in `halo_intern`).
-///
-/// Once interned, a halo vertex is indistinguishable from an
-/// in-cluster vertex to downstream consumers — it participates in
-/// quads via its assigned index, and its position widens the cluster
-/// mesh's bounds. The intern map is keyed by `(face, perp_a, perp_b)`
-/// so distinct halo positions get distinct indices and the
-/// degenerate-quad guard remains valid.
-#[allow(clippy::too_many_arguments)]
-fn intern_halo_vertex(
-    face: FaceDir,
-    perp_a: u32,
-    perp_b: u32,
-    hv: &HaloVertex,
-    halo_intern: &mut HashMap<(FaceDir, u32, u32), u32>,
-    vertices: &mut Vec<Vertex>,
-    bounds_min: &mut [f32; 3],
-    bounds_max: &mut [f32; 3],
-) -> u32 {
-    if let Some(&idx) = halo_intern.get(&(face, perp_a, perp_b)) {
-        return idx;
-    }
-    let idx = vertices.len() as u32;
-    vertices.push(Vertex {
-        position: hv.position,
-        normal: hv.normal,
-        material: hv.material,
-    });
-    halo_intern.insert((face, perp_a, perp_b), idx);
-    for ax in 0..3 {
-        if hv.position[ax] < bounds_min[ax] {
-            bounds_min[ax] = hv.position[ax];
-        }
-        if hv.position[ax] > bounds_max[ax] {
-            bounds_max[ax] = hv.position[ax];
-        }
-    }
-    idx
+fn sample_idx(x: u32, y: u32, z: u32, sample_dim: usize) -> usize {
+    x as usize + y as usize * sample_dim + z as usize * sample_dim * sample_dim
 }
 
 /// 3D Manhattan-shell quadrant search around a sign-changing axis
-/// edge. Each visited offset is classified into one of four quad
-/// slots by the signs of its perpendicular-axis components; the
-/// first vertex per slot wins. Returns `[v_mm, v_pm, v_pp, v_mp]`
-/// with `u32::MAX` for any slot that never filled.
+/// edge, in **sample-grid** coordinates. Each visited offset is
+/// classified into one of four quad slots by the signs of its
+/// perpendicular-axis components; the first vertex per slot wins.
+/// Returns `[v_mm, v_pm, v_pp, v_mp]` with `u32::MAX` for any slot
+/// that never filled.
 ///
-/// In-cluster positions consult `voxel_to_vertex`. Single-axis OOB
-/// positions (`-1` or `dim` on one axis) consult the matching halo
-/// in `halos`; halo vertices are promoted into the cluster's vertex
-/// buffer via [`intern_halo_vertex`] on first hit.
-#[allow(clippy::too_many_arguments)]
+/// OOB sample positions return nothing — the search treats the
+/// cluster's boundary as a wall. Cross-seam stitching to neighbor
+/// halos is the responsibility of Step 4, which emits explicit
+/// deterministic boundary geometry per face. With halos out of this
+/// search, slot vertices are always distinct in-cluster vertices, so
+/// fan-via-collapse is no longer needed — the caller uses
+/// [`push_oriented_quad`] directly.
 fn find_four_quadrant_vertices(
     a: [i32; 3],
     b: [i32; 3],
     perp_axis_a: usize,
     perp_axis_b: usize,
+    sample_dim: usize,
     voxel_to_vertex: &[u32],
-    halos: &NeighborHalos<'_>,
-    halo_intern: &mut HashMap<(FaceDir, u32, u32), u32>,
-    vertices: &mut Vec<Vertex>,
-    bounds_min: &mut [f32; 3],
-    bounds_max: &mut [f32; 3],
 ) -> [u32; 4] {
-    let dim_i32 = CLUSTER_DIM as i32;
+    let sample_dim_i32 = sample_dim as i32;
     let mut slots: [u32; 4] = [u32::MAX; 4];
     for shell in 1..=MAX_QUAD_SEARCH_RADIUS {
         for dx in -shell..=shell {
@@ -297,43 +208,18 @@ fn find_four_quadrant_vertices(
                         let px = ep[0] + dx;
                         let py = ep[1] + dy;
                         let pz = ep[2] + dz;
-                        if (0..dim_i32).contains(&px)
-                            && (0..dim_i32).contains(&py)
-                            && (0..dim_i32).contains(&pz)
+                        if (0..sample_dim_i32).contains(&px)
+                            && (0..sample_dim_i32).contains(&py)
+                            && (0..sample_dim_i32).contains(&pz)
                         {
-                            let v = voxel_to_vertex[voxel_idx(px as u32, py as u32, pz as u32)];
+                            let v = voxel_to_vertex
+                                [sample_idx(px as u32, py as u32, pz as u32, sample_dim)];
                             if v != u32::MAX {
                                 slots[slot] = v;
                                 break;
                             }
-                        } else if let Some((face, perp_a_c, perp_b_c)) =
-                            halo_query_coords(px, py, pz, dim_i32)
-                        {
-                            let halo_opt = match face {
-                                FaceDir::NegX => halos.neg_x,
-                                FaceDir::PosX => halos.pos_x,
-                                FaceDir::NegY => halos.neg_y,
-                                FaceDir::PosY => halos.pos_y,
-                                FaceDir::NegZ => halos.neg_z,
-                                FaceDir::PosZ => halos.pos_z,
-                            };
-                            if let Some(halo) = halo_opt {
-                                if let Some(hv) = halo.vertex_at(perp_a_c, perp_b_c) {
-                                    let idx = intern_halo_vertex(
-                                        face,
-                                        perp_a_c,
-                                        perp_b_c,
-                                        hv,
-                                        halo_intern,
-                                        vertices,
-                                        bounds_min,
-                                        bounds_max,
-                                    );
-                                    slots[slot] = idx;
-                                    break;
-                                }
-                            }
                         }
+                        // OOB: no in-cluster vertex; halo work is in Step 4.
                     }
                 }
             }
@@ -345,21 +231,19 @@ fn find_four_quadrant_vertices(
     slots
 }
 
-/// Degenerate-quad guard: any pair of equal corners means the quad
-/// isn't actually a quad. Two of the four push_oriented_quad triangles
-/// would have a repeated vertex and render as nothing.
-fn any_pair_equal(q: [u32; 4]) -> bool {
-    let [a, b, c, d] = q;
-    a == b || a == c || a == d || b == c || b == d || c == d
-}
-
-/// Single-cluster contour. Equivalent to
-/// [`contour_surface_with_neighbors`] with no neighbor context and no
-/// halos — useful when contouring a stand-alone cluster or when
-/// running tests that should not depend on seam data.
+/// Single-cluster contour at LOD 0. Equivalent to
+/// [`contour_surface_with_neighbors`] with `Lod::ZERO`, no neighbor
+/// context, and no halos — useful when contouring a stand-alone
+/// cluster or when running tests that should not depend on LOD or
+/// seam data.
 #[must_use]
 pub fn contour_surface(cluster: &Cluster) -> CellMesh {
-    contour_surface_with_neighbors(cluster, &NeighborContext::none(), &NeighborHalos::default())
+    contour_surface_with_neighbors(
+        cluster,
+        Lod::ZERO,
+        &NeighborContext::none(),
+        &NeighborHalos::default(),
+    )
 }
 
 /// Contour `cluster` into a [`CellMesh`] by walking surface-boundary
@@ -386,25 +270,42 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
 /// halos emit coincident geometry at the seam — z-buffer ties on
 /// coplanar geometry are visually invisible.
 ///
-/// # Scope
+/// # LOD
 ///
-/// LOD 0 only.
+/// `lod` selects the sample stride `S = 2^lod.level()`. The contour
+/// walks a `(CLUSTER_DIM / S)³` sample grid; sample `(sx, sy, sz)`
+/// reads the voxel at `(sx*S, sy*S, sz*S)`. Vertex positions are
+/// `(sx*S + δx, sy*S + δy, sz*S + δz)`, so adjacent samples on the
+/// surface lie `S` voxels apart. The quad-search shells walk
+/// sample-grid offsets, so the search radius scales naturally with
+/// LOD. When a neighbor's halo was built at a coarser LOD, the
+/// contour rounds its perpendicular query coordinates down to the
+/// halo's stride before [`NeighborHalo::vertex_at`]; adjacent fine
+/// queries that round to the same coarse halo position share their
+/// intern index and the resulting quad collapses to a fan triangle
+/// via [`push_quad_or_triangle`].
 ///
 /// # Simplification
 ///
-/// Each solid surface voxel emits one vertex at its own `+++` corner.
-/// For height-field terrain this is correct. For free-standing solids
-/// (e.g. a 2×2×2 solid cube in air fixture) this is offset by one
-/// corner from where dual contouring would place vertices — a
-/// follow-up will address the full air-anchor case.
+/// Each solid surface voxel (at the active LOD's sample grid) emits
+/// one vertex at its own `+++` corner. For height-field terrain this
+/// is correct. For free-standing solids (e.g. a 2×2×2 solid cube in
+/// air fixture) this is offset by one corner from where dual
+/// contouring would place vertices — a follow-up will address the
+/// full air-anchor case.
 #[must_use]
 pub fn contour_surface_with_neighbors(
     cluster: &Cluster,
+    lod: Lod,
     neighbors: &NeighborContext<'_>,
     halos: &NeighborHalos<'_>,
 ) -> CellMesh {
-    let dim = CLUSTER_DIM as usize;
-    let dim_i32 = CLUSTER_DIM as i32;
+    let local_stride = lod.stride();
+    let stride_u = local_stride as usize;
+    let stride_i32 = local_stride as i32;
+    let sample_dim_u32 = lod.sample_dim();
+    let sample_dim = sample_dim_u32 as usize;
+    let sample_dim_i32 = sample_dim_u32 as i32;
     let base_solid = is_voxel_solid(cluster.base());
 
     // Early exit: if no override has a classification differing from
@@ -416,37 +317,57 @@ pub fn contour_surface_with_neighbors(
         .overrides()
         .any(|(_, v)| is_voxel_solid(v) != base_solid);
     if !has_difference {
-        return empty_surface_mesh();
+        return empty_surface_mesh(lod);
     }
 
-    // --- Step 1: pre-classify every voxel in one O(dim³) scan. ---
+    // --- Step 1: pre-classify every sample-grid voxel in one
+    // O(sample_dim³) scan. ---
     //
-    // Memory: `dim³` bytes = 16 MB. We start the buffer at `base_solid`
-    // and stamp only the overrides — `cluster.overrides()` is
-    // typically << dim³ entries.
-    let mut is_solid = vec![base_solid; dim * dim * dim];
+    // Memory: `sample_dim³` bytes — 16 MB at LOD 0, 4 KB at LOD 4,
+    // 8 bytes at LOD 7. We start the buffer at `base_solid` and stamp
+    // only the stride-aligned overrides; non-stride-aligned overrides
+    // are invisible at this LOD.
+    let mut is_solid = vec![base_solid; sample_dim * sample_dim * sample_dim];
     for (coord, voxel) in cluster.overrides() {
-        is_solid[voxel_idx(coord.x(), coord.y(), coord.z())] = is_voxel_solid(voxel);
+        if coord.x() % local_stride == 0
+            && coord.y() % local_stride == 0
+            && coord.z() % local_stride == 0
+        {
+            let sx = coord.x() / local_stride;
+            let sy = coord.y() / local_stride;
+            let sz = coord.z() / local_stride;
+            is_solid[sample_idx(sx, sy, sz, sample_dim)] = is_voxel_solid(voxel);
+        }
     }
-    let solid_at = |x: i32, y: i32, z: i32| -> bool {
-        if (0..dim_i32).contains(&x) && (0..dim_i32).contains(&y) && (0..dim_i32).contains(&z) {
-            is_solid[voxel_idx(x as u32, y as u32, z as u32)]
+    let solid_at = |sx: i32, sy: i32, sz: i32| -> bool {
+        if (0..sample_dim_i32).contains(&sx)
+            && (0..sample_dim_i32).contains(&sy)
+            && (0..sample_dim_i32).contains(&sz)
+        {
+            is_solid[sample_idx(sx as u32, sy as u32, sz as u32, sample_dim)]
         } else {
             // Single-axis OOB resolves through the matching face
-            // neighbor via `read_corner`; multi-axis OOB falls back
-            // to `cluster.base()`.
-            is_voxel_solid(read_corner(cluster, neighbors, x, y, z))
+            // neighbor via `read_corner` at voxel-grid coords (sample
+            // coord * local stride). Multi-axis OOB falls back to
+            // `cluster.base()`.
+            is_voxel_solid(read_corner(
+                cluster,
+                neighbors,
+                sx * stride_i32,
+                sy * stride_i32,
+                sz * stride_i32,
+            ))
         }
     };
 
-    // --- Step 2: emit one vertex per solid-surface voxel. ---
+    // --- Step 2: emit one vertex per solid sample-grid surface voxel. ---
     //
-    // `voxel_to_vertex` maps every voxel index to the vertex emitted
-    // for that voxel, or `u32::MAX` when the voxel emitted nothing
-    // (not solid, or solid but every 6-neighbor is also solid). Same
-    // memory shape as the cell-based algorithm's `cell_vertex` table.
+    // `voxel_to_vertex` maps every sample-grid voxel index to the
+    // vertex emitted for that sample, or `u32::MAX` when the sample
+    // emitted nothing (not solid, or solid but every 6-sample-neighbor
+    // is also solid).
     let mut vertices: Vec<Vertex> = Vec::new();
-    let mut voxel_to_vertex: Vec<u32> = vec![u32::MAX; dim * dim * dim];
+    let mut voxel_to_vertex: Vec<u32> = vec![u32::MAX; sample_dim * sample_dim * sample_dim];
     let mut bounds_min = [f32::INFINITY; 3];
     let mut bounds_max = [f32::NEG_INFINITY; 3];
 
@@ -458,40 +379,45 @@ pub fn contour_surface_with_neighbors(
         }
     };
 
-    for vz in 0..dim_i32 {
-        for vy in 0..dim_i32 {
-            for vx in 0..dim_i32 {
-                if !solid_at(vx, vy, vz) {
+    for sz in 0..sample_dim_i32 {
+        for sy in 0..sample_dim_i32 {
+            for sx in 0..sample_dim_i32 {
+                if !solid_at(sx, sy, sz) {
                     continue;
                 }
-                let nxn = solid_at(vx - 1, vy, vz);
-                let nxp = solid_at(vx + 1, vy, vz);
-                let nyn = solid_at(vx, vy - 1, vz);
-                let nyp = solid_at(vx, vy + 1, vz);
-                let nzn = solid_at(vx, vy, vz - 1);
-                let nzp = solid_at(vx, vy, vz + 1);
+                let nxn = solid_at(sx - 1, sy, sz);
+                let nxp = solid_at(sx + 1, sy, sz);
+                let nyn = solid_at(sx, sy - 1, sz);
+                let nyp = solid_at(sx, sy + 1, sz);
+                let nzn = solid_at(sx, sy, sz - 1);
+                let nzp = solid_at(sx, sy, sz + 1);
                 let any_nonsolid = !nxn || !nxp || !nyn || !nyp || !nzn || !nzp;
                 if !any_nonsolid {
                     continue;
                 }
 
-                // Vertex position = the voxel's owned `+++` corner.
-                // For default corner vector this is voxel-center + 0.5
-                // on each axis; the heightmap generator places the
-                // surface column's topmost voxel's Y component at
-                // `fractional(h)`, so the vertex Y is exactly the
-                // surface height at that column's sample point.
-                let voxel = cluster
-                    .get(LocalCoord::new(vx as u32, vy as u32, vz as u32).expect("in bounds"));
+                // Vertex position = sample voxel's owned `+++` corner
+                // in voxel coords: (sx*S + δx, sy*S + δy, sz*S + δz).
+                // The cv is read from the actual voxel at the sample
+                // position so the heightmap generator's fractional-Y
+                // top-voxel join still expresses the surface at LOD 0;
+                // at higher LOD, the cv read from the strided voxel
+                // quantizes to that voxel's join.
+                let voxel = cluster.get(
+                    LocalCoord::new(
+                        (sx as u32) * local_stride,
+                        (sy as u32) * local_stride,
+                        (sz as u32) * local_stride,
+                    )
+                    .expect("in bounds"),
+                );
                 let [dx, dy, dz] = voxel.corner().to_components();
-                let position = [vx as f32 + dx, vy as f32 + dy, vz as f32 + dz];
+                let position = [
+                    (sx as f32) * (stride_u as f32) + dx,
+                    (sy as f32) * (stride_u as f32) + dy,
+                    (sz as f32) * (stride_u as f32) + dz,
+                ];
 
-                // Normal = -gradient(classification). Per-axis
-                // gradient is (positive-side - negative-side), so when
-                // the +x neighbor is empty (the air side) and -x is
-                // solid, dx = -1 and the normal points in +x — out of
-                // the solid toward the empty side. Mirror of the
-                // existing algorithm's normal convention.
                 let gx = to_i(nxp) - to_i(nxn);
                 let gy = to_i(nyp) - to_i(nyn);
                 let gz = to_i(nzp) - to_i(nzn);
@@ -502,16 +428,11 @@ pub fn contour_surface_with_neighbors(
                 let normal = if len > 0.0 {
                     [nx / len, ny / len, nz / len]
                 } else {
-                    // Pathological: surface voxel with zero gradient.
-                    // Cannot happen given the surface predicate above
-                    // (at least one neighbor differs), but kept as a
-                    // defensive fallback matching the cell-based
-                    // algorithm's choice.
                     [0.0, 1.0, 0.0]
                 };
 
                 let vid = vertices.len() as u32;
-                voxel_to_vertex[voxel_idx(vx as u32, vy as u32, vz as u32)] = vid;
+                voxel_to_vertex[sample_idx(sx as u32, sy as u32, sz as u32, sample_dim)] = vid;
                 vertices.push(Vertex {
                     position,
                     normal,
@@ -530,57 +451,40 @@ pub fn contour_surface_with_neighbors(
     }
 
     if vertices.is_empty() {
-        return empty_surface_mesh();
+        return empty_surface_mesh(lod);
     }
 
-    // --- Step 3: emit quads from sign-changing axis edges. ---
+    // --- Step 3: emit quads from sign-changing sample-grid axis
+    // edges. ---
     //
-    // For each axis (X, Y, Z) iterate every axis-aligned voxel pair
+    // For each axis (X, Y, Z) iterate every axis-aligned sample pair
     // and test for sign change (one solid, one not). For each
     // sign-changing edge, search the four perpendicular-plane
     // quadrants outward for the nearest emitted surface vertex via
-    // [`find_four_quadrant_vertices`]; if all four quadrants return a
-    // vertex, emit one quad. Winding is chosen by
-    // [`push_oriented_quad`] (face normal aligned with the average of
-    // the four vertex normals).
-    //
-    // At a height step the corner voxel buried inside the taller
-    // column is interior and emits no vertex; the quadrant search
-    // reaches over it into the taller column's top, producing the
-    // tilted quad that bridges the step. At a cluster seam, the
-    // quadrant search reaches OOB positions exactly one voxel past
-    // the face — those are answered by the relevant halo, with the
-    // halo vertex interned into this cluster's vertex buffer on
-    // first use.
+    // [`find_four_quadrant_vertices`]; if all four quadrants return
+    // an in-cluster vertex, emit a quad. OOB slots return `u32::MAX`
+    // and the edge is skipped — Step 4 handles cross-seam emission
+    // explicitly per face.
     let mut indices_u32: Vec<u32> = Vec::new();
-    let mut halo_intern: HashMap<(FaceDir, u32, u32), u32> = HashMap::new();
 
-    // X-axis edges: pair (vx, vy, vz)/(vx+1, vy, vz). Edge axis = 0
-    // (X). Perpendicular axes = 1 (Y) and 2 (Z).
-    for vz in 0..dim_i32 {
-        for vy in 0..dim_i32 {
-            for vx in 0..(dim_i32 - 1) {
-                let s0 = solid_at(vx, vy, vz);
-                let s1 = solid_at(vx + 1, vy, vz);
+    // X-axis edges.
+    for sz in 0..sample_dim_i32 {
+        for sy in 0..sample_dim_i32 {
+            for sx in 0..(sample_dim_i32 - 1) {
+                let s0 = solid_at(sx, sy, sz);
+                let s1 = solid_at(sx + 1, sy, sz);
                 if s0 == s1 {
                     continue;
                 }
                 let slots = find_four_quadrant_vertices(
-                    [vx, vy, vz],
-                    [vx + 1, vy, vz],
+                    [sx, sy, sz],
+                    [sx + 1, sy, sz],
                     1,
                     2,
+                    sample_dim,
                     &voxel_to_vertex,
-                    halos,
-                    &mut halo_intern,
-                    &mut vertices,
-                    &mut bounds_min,
-                    &mut bounds_max,
                 );
                 if slots.contains(&u32::MAX) {
-                    continue;
-                }
-                if any_pair_equal(slots) {
                     continue;
                 }
                 push_oriented_quad(&mut indices_u32, &vertices, slots);
@@ -588,32 +492,24 @@ pub fn contour_surface_with_neighbors(
         }
     }
 
-    // Y-axis edges: pair (vx, vy, vz)/(vx, vy+1, vz). Edge axis = 1
-    // (Y). Perpendicular axes = 0 (X) and 2 (Z).
-    for vz in 0..dim_i32 {
-        for vy in 0..(dim_i32 - 1) {
-            for vx in 0..dim_i32 {
-                let s0 = solid_at(vx, vy, vz);
-                let s1 = solid_at(vx, vy + 1, vz);
+    // Y-axis edges.
+    for sz in 0..sample_dim_i32 {
+        for sy in 0..(sample_dim_i32 - 1) {
+            for sx in 0..sample_dim_i32 {
+                let s0 = solid_at(sx, sy, sz);
+                let s1 = solid_at(sx, sy + 1, sz);
                 if s0 == s1 {
                     continue;
                 }
                 let slots = find_four_quadrant_vertices(
-                    [vx, vy, vz],
-                    [vx, vy + 1, vz],
+                    [sx, sy, sz],
+                    [sx, sy + 1, sz],
                     0,
                     2,
+                    sample_dim,
                     &voxel_to_vertex,
-                    halos,
-                    &mut halo_intern,
-                    &mut vertices,
-                    &mut bounds_min,
-                    &mut bounds_max,
                 );
                 if slots.contains(&u32::MAX) {
-                    continue;
-                }
-                if any_pair_equal(slots) {
                     continue;
                 }
                 push_oriented_quad(&mut indices_u32, &vertices, slots);
@@ -621,32 +517,24 @@ pub fn contour_surface_with_neighbors(
         }
     }
 
-    // Z-axis edges: pair (vx, vy, vz)/(vx, vy, vz+1). Edge axis = 2
-    // (Z). Perpendicular axes = 0 (X) and 1 (Y).
-    for vz in 0..(dim_i32 - 1) {
-        for vy in 0..dim_i32 {
-            for vx in 0..dim_i32 {
-                let s0 = solid_at(vx, vy, vz);
-                let s1 = solid_at(vx, vy, vz + 1);
+    // Z-axis edges.
+    for sz in 0..(sample_dim_i32 - 1) {
+        for sy in 0..sample_dim_i32 {
+            for sx in 0..sample_dim_i32 {
+                let s0 = solid_at(sx, sy, sz);
+                let s1 = solid_at(sx, sy, sz + 1);
                 if s0 == s1 {
                     continue;
                 }
                 let slots = find_four_quadrant_vertices(
-                    [vx, vy, vz],
-                    [vx, vy, vz + 1],
+                    [sx, sy, sz],
+                    [sx, sy, sz + 1],
                     0,
                     1,
+                    sample_dim,
                     &voxel_to_vertex,
-                    halos,
-                    &mut halo_intern,
-                    &mut vertices,
-                    &mut bounds_min,
-                    &mut bounds_max,
                 );
                 if slots.contains(&u32::MAX) {
-                    continue;
-                }
-                if any_pair_equal(slots) {
                     continue;
                 }
                 push_oriented_quad(&mut indices_u32, &vertices, slots);
@@ -654,9 +542,45 @@ pub fn contour_surface_with_neighbors(
         }
     }
 
-    // Vertex count <= 65536 still fits in u16 (index range is
-    // 0..vertex_count). 65537+ needs u32. Same threshold as the
-    // cell-based algorithm.
+    // --- Step 4: deterministic cross-seam emission. ---
+    //
+    // For each face where `halo.stride() <= local_stride` (i.e. self
+    // is the coarser-or-matched side), walk halo vertex pairs and
+    // emit cross-seam geometry connecting them to local boundary
+    // plane vertices: cross-seam quads when both endpoints have
+    // self-stride-aligned local vertices (matched-LOD case), fan
+    // triangles converging to the floor-rounded local apex
+    // otherwise (finer halo case). When the halo is coarser than
+    // self, self does no work — the neighbor's mesh handles that
+    // seam from its (coarser) side. Each face uses its own intern
+    // map; halo vertices land in self's vertex buffer with new
+    // indices.
+    let face_iter: [(FaceDir, Option<&NeighborHalo>); 6] = [
+        (FaceDir::NegX, halos.neg_x),
+        (FaceDir::PosX, halos.pos_x),
+        (FaceDir::NegY, halos.neg_y),
+        (FaceDir::PosY, halos.pos_y),
+        (FaceDir::NegZ, halos.neg_z),
+        (FaceDir::PosZ, halos.pos_z),
+    ];
+    for (face, halo_opt) in face_iter {
+        if let Some(halo) = halo_opt {
+            if halo.stride() <= local_stride {
+                emit_face_seam_geometry(
+                    face,
+                    halo,
+                    &voxel_to_vertex,
+                    sample_dim,
+                    local_stride,
+                    &mut vertices,
+                    &mut bounds_min,
+                    &mut bounds_max,
+                    &mut indices_u32,
+                );
+            }
+        }
+    }
+
     let use_u32 = vertices.len() > (u16::MAX as usize + 1);
     let indices = if use_u32 {
         Indices::U32(indices_u32)
@@ -670,7 +594,7 @@ pub fn contour_surface_with_neighbors(
         vertices,
         indices,
         MeshMetadata {
-            lod: 0,
+            lod: lod.level() as u32,
             cluster_dim: CLUSTER_DIM,
             vertex_count,
             triangle_count,
@@ -678,6 +602,36 @@ pub fn contour_surface_with_neighbors(
             bounds_max,
         },
     )
+}
+
+/// Push one triangle in the orientation that aligns with the average
+/// of its three vertex normals. Geometric face normal:
+/// `(p1 - p0) × (p2 - p0)`. If `face_n · avg_n < 0`, the natural
+/// winding is flipped.
+fn push_oriented_triangle(indices: &mut Vec<u32>, vertices: &[Vertex], tri: [u32; 3]) {
+    let p0 = vertices[tri[0] as usize].position;
+    let p1 = vertices[tri[1] as usize].position;
+    let p2 = vertices[tri[2] as usize].position;
+    let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+    let face_n = [
+        e1[1] * e2[2] - e1[2] * e2[1],
+        e1[2] * e2[0] - e1[0] * e2[2],
+        e1[0] * e2[1] - e1[1] * e2[0],
+    ];
+    let mut avg = [0.0_f32; 3];
+    for &vid in &tri {
+        let n = vertices[vid as usize].normal;
+        avg[0] += n[0];
+        avg[1] += n[1];
+        avg[2] += n[2];
+    }
+    let dot = face_n[0] * avg[0] + face_n[1] * avg[1] + face_n[2] * avg[2];
+    if dot >= 0.0 {
+        indices.extend_from_slice(&[tri[0], tri[1], tri[2]]);
+    } else {
+        indices.extend_from_slice(&[tri[0], tri[2], tri[1]]);
+    }
 }
 
 /// Push two triangles for the quad with corners `q = [v00, v10, v11,
@@ -714,6 +668,211 @@ fn push_oriented_quad(indices: &mut Vec<u32>, vertices: &[Vertex], q: [u32; 4]) 
     } else {
         // Flipped winding.
         indices.extend_from_slice(&[q[0], q[2], q[1], q[0], q[3], q[2]]);
+    }
+}
+
+/// Step 4 per-face cross-seam emission for a face where the halo's
+/// stride is `<=` the local sample stride (i.e., self is the
+/// coarser-or-matched side of the seam — self does the explicit
+/// stitching; finer-halo case the neighbor will handle from its
+/// side).
+///
+/// Walks the halo's vertex grid in voxel-coordinate steps of
+/// `halo.stride()`. For each interned halo vertex `H`, iterates the
+/// `+perp_a` and `+perp_b` adjacent halo positions; whenever both
+/// endpoints carry a halo vertex, the pair is offered to
+/// [`emit_seam_pair`]. The pair is connected to the local boundary
+/// plane via either a cross-seam quad (when both endpoints land on
+/// self-stride-aligned local surface vertices — the matched-LOD
+/// case) or a fan triangle to the floor-rounded local apex (when
+/// the halo is finer than the local stride and the endpoints lie
+/// inside one self-stride cell).
+///
+/// Halo vertices intern per-face via a local `HashMap<(perp_a_voxel,
+/// perp_b_voxel), u32>` — Step 4 is the sole halo-emission path now,
+/// so there is no cross-step sharing to worry about.
+#[allow(clippy::too_many_arguments)]
+fn emit_face_seam_geometry(
+    face: FaceDir,
+    halo: &NeighborHalo,
+    voxel_to_vertex: &[u32],
+    sample_dim: usize,
+    self_stride: u32,
+    vertices: &mut Vec<Vertex>,
+    bounds_min: &mut [f32; 3],
+    bounds_max: &mut [f32; 3],
+    indices: &mut Vec<u32>,
+) {
+    let halo_stride = halo.stride();
+    let halo_dim = CLUSTER_DIM;
+    let sample_dim_u32 = sample_dim as u32;
+
+    let (face_axis, boundary_sample, perp_a_axis, perp_b_axis) = match face {
+        FaceDir::PosX => (0_usize, sample_dim_u32 - 1, 1_usize, 2_usize),
+        FaceDir::NegX => (0, 0, 1, 2),
+        FaceDir::PosY => (1, sample_dim_u32 - 1, 0, 2),
+        FaceDir::NegY => (1, 0, 0, 2),
+        FaceDir::PosZ => (2, sample_dim_u32 - 1, 0, 1),
+        FaceDir::NegZ => (2, 0, 0, 1),
+    };
+
+    // Per-face intern table for halo vertices, keyed by voxel-coord
+    // perpendicular position. Repeated lookups at the same key reuse
+    // the same self-vertex-buffer index.
+    let mut halo_intern: HashMap<(u32, u32), u32> = HashMap::new();
+
+    // Intern (or retrieve) the halo vertex at voxel-coord
+    // `(perp_a_voxel, perp_b_voxel)` on this face. Returns `None` if
+    // the halo has no surface vertex at that position.
+    let mut intern_halo =
+        |perp_a_voxel: u32, perp_b_voxel: u32, vertices: &mut Vec<Vertex>| -> Option<u32> {
+            if let Some(&idx) = halo_intern.get(&(perp_a_voxel, perp_b_voxel)) {
+                return Some(idx);
+            }
+            let hv = halo.vertex_at(perp_a_voxel, perp_b_voxel)?;
+            let idx = vertices.len() as u32;
+            vertices.push(Vertex {
+                position: hv.position,
+                normal: hv.normal,
+                material: hv.material,
+            });
+            halo_intern.insert((perp_a_voxel, perp_b_voxel), idx);
+            for ax in 0..3 {
+                if hv.position[ax] < bounds_min[ax] {
+                    bounds_min[ax] = hv.position[ax];
+                }
+                if hv.position[ax] > bounds_max[ax] {
+                    bounds_max[ax] = hv.position[ax];
+                }
+            }
+            Some(idx)
+        };
+
+    // Look up the local boundary-plane vertex at voxel-coord
+    // `(perp_a_voxel, perp_b_voxel)`. Returns `None` if the position
+    // is not on the self-stride sample grid OR if no local surface
+    // vertex was emitted there.
+    let local_at_voxel = |perp_a_voxel: u32, perp_b_voxel: u32| -> Option<u32> {
+        if !perp_a_voxel.is_multiple_of(self_stride) || !perp_b_voxel.is_multiple_of(self_stride) {
+            return None;
+        }
+        let perp_a_sample = perp_a_voxel / self_stride;
+        let perp_b_sample = perp_b_voxel / self_stride;
+        if perp_a_sample >= sample_dim_u32 || perp_b_sample >= sample_dim_u32 {
+            return None;
+        }
+        let mut sample = [0u32; 3];
+        sample[face_axis] = boundary_sample;
+        sample[perp_a_axis] = perp_a_sample;
+        sample[perp_b_axis] = perp_b_sample;
+        let idx = sample_idx(sample[0], sample[1], sample[2], sample_dim);
+        let v = voxel_to_vertex[idx];
+        if v == u32::MAX {
+            None
+        } else {
+            Some(v)
+        }
+    };
+
+    // Iterate halo vertex grid in voxel-coord steps of halo_stride.
+    let mut perp_b = 0u32;
+    while perp_b < halo_dim {
+        let mut perp_a = 0u32;
+        while perp_a < halo_dim {
+            // +perp_a pair.
+            if perp_a + halo_stride < halo_dim {
+                let h_a = intern_halo(perp_a, perp_b, vertices);
+                let h_b = intern_halo(perp_a + halo_stride, perp_b, vertices);
+                if let (Some(ha), Some(hb)) = (h_a, h_b) {
+                    emit_seam_pair(
+                        ha,
+                        hb,
+                        perp_a,
+                        perp_b,
+                        perp_a + halo_stride,
+                        perp_b,
+                        halo_stride,
+                        self_stride,
+                        &local_at_voxel,
+                        vertices,
+                        indices,
+                    );
+                }
+            }
+            // +perp_b pair.
+            if perp_b + halo_stride < halo_dim {
+                let h_a = intern_halo(perp_a, perp_b, vertices);
+                let h_b = intern_halo(perp_a, perp_b + halo_stride, vertices);
+                if let (Some(ha), Some(hb)) = (h_a, h_b) {
+                    emit_seam_pair(
+                        ha,
+                        hb,
+                        perp_a,
+                        perp_b,
+                        perp_a,
+                        perp_b + halo_stride,
+                        halo_stride,
+                        self_stride,
+                        &local_at_voxel,
+                        vertices,
+                        indices,
+                    );
+                }
+            }
+            perp_a += halo_stride;
+        }
+        perp_b += halo_stride;
+    }
+}
+
+/// Bridge one pair of adjacent halo vertices `(H_a, H_b)` to the
+/// local boundary plane:
+///
+/// * If both endpoints' voxel positions land on local surface
+///   vertices (the matched-LOD case), emit a cross-seam quad
+///   `[L_a, L_b, H_b, H_a]`.
+/// * If only one endpoint lands on a local vertex, emit one
+///   triangle from `(H_a, H_b)` to that local vertex.
+/// * Otherwise (typical finer-halo case), find the local apex by
+///   flooring the pair's lower-endpoint voxel position to the
+///   self-stride grid, look up the local vertex there, and emit a
+///   fan triangle `(H_a, H_b, L_apex)` if it exists. If even the
+///   floor-rounded apex has no local surface vertex, skip the pair.
+#[allow(clippy::too_many_arguments)]
+fn emit_seam_pair(
+    h_a: u32,
+    h_b: u32,
+    perp_a_voxel_a: u32,
+    perp_b_voxel_a: u32,
+    perp_a_voxel_b: u32,
+    perp_b_voxel_b: u32,
+    _halo_stride: u32,
+    self_stride: u32,
+    local_at_voxel: &dyn Fn(u32, u32) -> Option<u32>,
+    vertices: &[Vertex],
+    indices: &mut Vec<u32>,
+) {
+    let l_a = local_at_voxel(perp_a_voxel_a, perp_b_voxel_a);
+    let l_b = local_at_voxel(perp_a_voxel_b, perp_b_voxel_b);
+    match (l_a, l_b) {
+        (Some(la), Some(lb)) => {
+            push_oriented_quad(indices, vertices, [la, lb, h_b, h_a]);
+        }
+        (Some(la), None) => {
+            push_oriented_triangle(indices, vertices, [h_a, h_b, la]);
+        }
+        (None, Some(lb)) => {
+            push_oriented_triangle(indices, vertices, [h_a, h_b, lb]);
+        }
+        (None, None) => {
+            // Finer-halo: try floor-rounded local apex inside the
+            // self-stride cell containing the pair's lower endpoint.
+            let perp_a_apex = (perp_a_voxel_a / self_stride) * self_stride;
+            let perp_b_apex = (perp_b_voxel_a / self_stride) * self_stride;
+            if let Some(la) = local_at_voxel(perp_a_apex, perp_b_apex) {
+                push_oriented_triangle(indices, vertices, [h_a, h_b, la]);
+            }
+        }
     }
 }
 
@@ -1372,13 +1531,14 @@ mod tests {
     #[test]
     fn no_neighbors_matches_legacy_contour_surface() {
         // The bare `contour_surface(c)` entry point is a one-line
-        // wrapper around `contour_surface_with_neighbors` with empty
-        // neighbor context and empty halos. The outputs must be
-        // byte-equal.
+        // wrapper around `contour_surface_with_neighbors` with
+        // `Lod::ZERO`, empty neighbor context, and empty halos. The
+        // outputs must be byte-equal.
         let c = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
         let a = contour_surface(&c);
         let b = contour_surface_with_neighbors(
             &c,
+            Lod::ZERO,
             &crate::seam::NeighborContext::none(),
             &NeighborHalos::default(),
         );
@@ -1422,8 +1582,12 @@ mod tests {
             pos_x: Some(&halo_pos_x),
             ..NeighborHalos::default()
         };
-        let wall_with_neighbor =
-            count_walls(&contour_surface_with_neighbors(&left, &neighbors, &halos));
+        let wall_with_neighbor = count_walls(&contour_surface_with_neighbors(
+            &left,
+            Lod::ZERO,
+            &neighbors,
+            &halos,
+        ));
 
         assert!(
             wall_with_neighbor * 10 < wall_alone,
@@ -1453,7 +1617,7 @@ mod tests {
             pos_x: Some(&halo_pos_x),
             ..NeighborHalos::default()
         };
-        let mesh = contour_surface_with_neighbors(&left, &neighbors, &halos);
+        let mesh = contour_surface_with_neighbors(&left, Lod::ZERO, &neighbors, &halos);
 
         let mut cross_seam = 0usize;
         each_triangle(&mesh, |tri| {
@@ -1473,6 +1637,290 @@ mod tests {
         assert!(
             cross_seam > 500,
             "expected substantial cross-seam quad emission; got {cross_seam}"
+        );
+    }
+
+    // ---- LOD ----
+
+    #[test]
+    fn lod_1_produces_strided_sample_grid() {
+        // At LOD 1 the contour walks a 128³ sample grid: half the
+        // resolution per axis, so a flat-top surface emits roughly
+        // `(CLUSTER_DIM/2 - 2)² ≈ 15.9K` strict-+Y interior top
+        // vertices (boundary rim vertices have mixed normals because
+        // their -X/-Z neighbors are OOB → base = empty, so they fall
+        // below the `normal[1] > 0.9` threshold). The same metric at
+        // LOD 0 gives `254² ≈ 64.5K` — exactly the 4× scaling factor
+        // expected from doubling the stride.
+        let cluster = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let mesh = contour_surface_with_neighbors(
+            &cluster,
+            Lod::new(1).unwrap(),
+            &crate::seam::NeighborContext::none(),
+            &NeighborHalos::default(),
+        );
+        assert_eq!(mesh.metadata().lod, 1);
+
+        let top_at_lod1 = mesh.vertices().iter().filter(|v| v.normal[1] > 0.9).count();
+        let top_at_lod0 = contour_surface(&cluster)
+            .vertices()
+            .iter()
+            .filter(|v| v.normal[1] > 0.9)
+            .count();
+        // LOD 1 should produce roughly 1/4 the strict-+Y top
+        // vertices of LOD 0 — the 2D scale factor from doubling the
+        // stride on a 2D top face.
+        let ratio = top_at_lod1 as f32 / top_at_lod0 as f32;
+        assert!(
+            (0.20..=0.30).contains(&ratio),
+            "LOD 1 top-vertex count {top_at_lod1} should be ~1/4 of LOD 0's \
+             {top_at_lod0} (ratio {ratio:.3} not in 0.20..=0.30)"
+        );
+    }
+
+    #[test]
+    fn lod_4_triangle_count_at_least_100x_less_than_lod_0() {
+        // At LOD 4 the sample grid is 16³ = 4096 samples vs 256³ ≈
+        // 16M at LOD 0. Top-surface triangle count should drop by far
+        // more than 100×.
+        let cluster = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let mesh_lod0 = contour_surface(&cluster);
+        let mesh_lod4 = contour_surface_with_neighbors(
+            &cluster,
+            Lod::new(4).unwrap(),
+            &crate::seam::NeighborContext::none(),
+            &NeighborHalos::default(),
+        );
+        let t0 = mesh_lod0.indices().triangle_count();
+        let t4 = mesh_lod4.indices().triangle_count();
+        assert!(
+            t4 * 100 < t0,
+            "LOD 4 triangles ({t4}) should be ≥ 100× less than LOD 0 ({t0})"
+        );
+    }
+
+    #[test]
+    fn matched_lod_seam_stays_clean_at_lod_1() {
+        // Two heightmap clusters contoured at LOD 1 with each acting
+        // as the other's +X / -X halo (also at LOD 1). The contour
+        // should still produce substantial cross-seam emission — the
+        // matched-stride halo lookups land directly on the neighbor's
+        // sampled vertices, no rounding needed.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let lod = Lod::new(1).unwrap();
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, lod)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, lod);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, lod, &neighbors, &halos);
+
+        let mut cross_seam = 0usize;
+        each_triangle(&mesh, |tri| {
+            for &idx in &tri {
+                if mesh.vertices()[idx as usize].position[0] > 256.0 {
+                    cross_seam += 1;
+                    break;
+                }
+            }
+        });
+        assert!(
+            cross_seam > 200,
+            "expected ≥ 200 cross-seam triangles at matched LOD 1; got {cross_seam}"
+        );
+    }
+
+    #[test]
+    fn mismatched_lod_seam_emits_fan_triangles() {
+        // Local cluster at LOD 1 (the COARSER side of the seam), +X
+        // neighbor at LOD 0 (finer). `halo.stride() = 1 <
+        // self.stride = 2`, so Step 4 fires on self and emits
+        // deterministic cross-seam geometry connecting the fine halo
+        // to self's coarser boundary plane via fan triangles.
+        //
+        // The asymmetric work assignment means the FINER neighbor
+        // (LOD 0 here) does NO cross-seam work for this seam — its
+        // Step 4 condition `halo.stride() <= self.stride` is
+        // `2 <= 1` which is false. Only the coarser side stitches.
+        //
+        // Count: total cross-seam triangles (any with a vertex at
+        // `position[0] > 256`). The +X face's halo has full-resolution
+        // surface vertices; each halo edge pair → 1 fan triangle at
+        // most, plus matched corners → quads. Threshold > 1500
+        // accounts for the dense halo contribution.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let self_lod = Lod::new(1).unwrap();
+        let neighbor_lod = Lod::ZERO;
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, neighbor_lod)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, neighbor_lod);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, self_lod, &neighbors, &halos);
+
+        let mut cross_seam = 0usize;
+        each_triangle(&mesh, |tri| {
+            let any_halo = tri
+                .iter()
+                .any(|&idx| mesh.vertices()[idx as usize].position[0] > 256.0);
+            if any_halo {
+                cross_seam += 1;
+            }
+        });
+        assert!(
+            cross_seam > 1500,
+            "expected ≥ 1500 cross-seam triangles when self is the \
+             coarser side of a LOD0/LOD1 seam; got {cross_seam}"
+        );
+    }
+
+    #[test]
+    fn fine_side_emits_no_cross_seam_geometry() {
+        // The mirror of `mismatched_lod_seam_emits_fan_triangles`:
+        // local LOD 0 with a LOD 1 +X neighbor. `halo.stride() = 2 >
+        // self.stride = 1`, so Step 4 does NOT fire on self. Self
+        // emits no cross-seam triangles; the neighbor's mesh handles
+        // the seam from its (coarser) side.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let neighbor_lod = Lod::new(1).unwrap();
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, neighbor_lod)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, neighbor_lod);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, Lod::ZERO, &neighbors, &halos);
+        let mut cross_seam = 0usize;
+        each_triangle(&mesh, |tri| {
+            if tri
+                .iter()
+                .any(|&idx| mesh.vertices()[idx as usize].position[0] > 256.0)
+            {
+                cross_seam += 1;
+            }
+        });
+        assert_eq!(
+            cross_seam, 0,
+            "finer-side LOD 0 with coarser-side LOD 1 neighbor should \
+             emit no cross-seam triangles; got {cross_seam}"
+        );
+    }
+
+    #[test]
+    fn lod0_vs_lod4_seam_has_complete_fan_coverage() {
+        // Local LOD 4 (the coarsest possible side in this scene),
+        // +X neighbor at LOD 0 (the finest). `halo.stride() = 1 <<
+        // self.stride = 16`. Step 4 fires; every halo vertex on the
+        // seam should be reached by a fan triangle converging to
+        // self's coarse local boundary vertices.
+        //
+        // Count: total halo vertices interned (= cross-seam vertex
+        // count at `position[0] > 256`) and total cross-seam
+        // triangles. The ratio (triangles / halo vertices) should be
+        // healthy — multiple fan triangles per local apex means
+        // multiple halo vertices share each local vertex via the
+        // fan structure. Assert ratio > 0.5 so we're definitely
+        // beyond a one-triangle-per-halo case.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let self_lod = Lod::new(4).unwrap();
+        let neighbor_lod = Lod::ZERO;
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, neighbor_lod)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, neighbor_lod);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, self_lod, &neighbors, &halos);
+
+        // Count distinct halo-side vertices and cross-seam triangles.
+        let mut halo_vertex_count = 0usize;
+        for v in mesh.vertices() {
+            if v.position[0] > 256.0 {
+                halo_vertex_count += 1;
+            }
+        }
+        let mut cross_seam_triangles = 0usize;
+        each_triangle(&mesh, |tri| {
+            if tri
+                .iter()
+                .any(|&idx| mesh.vertices()[idx as usize].position[0] > 256.0)
+            {
+                cross_seam_triangles += 1;
+            }
+        });
+
+        assert!(
+            halo_vertex_count > 0,
+            "fixture sanity: expected halo vertices to be interned"
+        );
+        assert!(
+            cross_seam_triangles > 0,
+            "fixture sanity: expected cross-seam triangles"
+        );
+        let ratio = cross_seam_triangles as f32 / halo_vertex_count as f32;
+        assert!(
+            ratio > 0.5,
+            "LOD0/LOD4 seam should produce multiple triangles per \
+             halo vertex via fan structure; ratio={ratio} \
+             (triangles={cross_seam_triangles}, halo_vertices={halo_vertex_count})"
+        );
+    }
+
+    #[test]
+    fn matched_lod_seam_unchanged_by_fan_pass() {
+        // When the halo's stride matches the local stride, Step 4 is
+        // dormant and Step 3's halo lookup behaves identically to the
+        // pre-fan-pass code. Asserted as: matched-LOD cross-seam
+        // emission stays within the same range as the existing
+        // `matched_lod_seam_emits_cross_seam_quads` test ( > 500).
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, Lod::ZERO)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, Lod::ZERO);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, Lod::ZERO, &neighbors, &halos);
+        let mut cross_seam = 0usize;
+        each_triangle(&mesh, |tri| {
+            if tri
+                .iter()
+                .any(|&idx| mesh.vertices()[idx as usize].position[0] > 256.0)
+            {
+                cross_seam += 1;
+            }
+        });
+        assert!(
+            cross_seam > 500,
+            "matched-LOD cross-seam emission should remain unchanged \
+             by the Step 4 fan pass; got {cross_seam}"
         );
     }
 }

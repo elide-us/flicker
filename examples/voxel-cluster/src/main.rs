@@ -72,10 +72,6 @@ use flicker_voxel::{
 /// Edge length of the multi-cluster field, in clusters.
 const FIELD_SIZE: u16 = 3;
 
-/// Eye height above local ground when the camera spawns, in voxels.
-/// Roughly the player's eye level — ~5'6" at 6-inch voxels.
-const SPAWN_EYE_HEIGHT: f32 = 11.0;
-
 /// Color for the centroid wireframe (lines from voxel centers to
 /// their `+++` corner joins). Neon green for high contrast against
 /// the depth-banded water surface and the green per-triangle
@@ -261,16 +257,19 @@ impl App for VoxelCluster {
         // Contour and upload each cluster, supplying its 4 XZ-face
         // neighbors so the contour pass classifies cluster-boundary
         // voxels correctly and stitches cross-seam quads from each
-        // neighbor's boundary halo. The 3×3 grid has no Y neighbors
-        // — those stay `None`. Halos are built per-call from the
-        // adjacent cluster's voxel data; their cost is bounded by
-        // the CLUSTER_DIM² × 6 boundary slab.
+        // neighbor's boundary halo. Per-cluster LOD is the Manhattan
+        // distance from the (0, 0) corner — clusters at the far
+        // corner get LOD 4 (stride 16). Each neighbor's halo is built
+        // at the neighbor's OWN LOD, so mismatched seams collapse to
+        // fan triangles via the halo-stride rounding in the contour
+        // pass. The 3×3 grid has no Y neighbors — those stay `None`.
         let build_start = std::time::Instant::now();
         let mut total_v = 0usize;
         let mut total_t = 0usize;
         let mut total_s = 0usize;
         let mut renders = Vec::with_capacity(map.len());
         for (id, cluster) in map.iter() {
+            let local_lod = cluster_lod(id.x(), id.z());
             let neighbors = build_neighbor_context(&map, id);
             let halos_owned = build_halos(&neighbors);
             let halos = NeighborHalos {
@@ -281,7 +280,7 @@ impl App for VoxelCluster {
                 neg_z: halos_owned.neg_z.as_ref(),
                 pos_z: halos_owned.pos_z.as_ref(),
             };
-            let mesh = contour_surface_with_neighbors(cluster, &neighbors, &halos);
+            let mesh = contour_surface_with_neighbors(cluster, local_lod, &neighbors, &halos);
             let meta = *mesh.metadata();
             let handle = renderer.upload_voxel_mesh(&mesh);
 
@@ -319,16 +318,12 @@ impl App for VoxelCluster {
             "ready"
         );
 
-        // Spawn at field center, eye height above local ground.
-        // Field XZ extent is `[0, FIELD_SIZE * CLUSTER_DIM]`; center is
-        // the midpoint.
-        let field_extent = FIELD_SIZE as f32 * CLUSTER_DIM as f32;
-        let spawn_x = field_extent * 0.5;
-        let spawn_z = field_extent * 0.5;
-        let ground = heightmap::world_height(spawn_x, spawn_z);
-        self.position = Vec3::new(spawn_x, ground + SPAWN_EYE_HEIGHT, spawn_z);
-        self.yaw = 0.0;
-        self.pitch = 0.0;
+        // Spawn above the LOD-0 corner looking diagonally across the
+        // field toward the LOD-4 far corner. Camera pose is fixed so
+        // the visible scene shows the LOD progression on first frame.
+        self.position = Vec3::new(128.0, 360.0, -64.0);
+        self.yaw = 0.785; // ≈ π/4 — face the diagonal toward (+X, +Z).
+        self.pitch = -0.5; // Look down at the field.
 
         // 1×1 white pixel — tinted to build solid colored HUD quads.
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
@@ -443,7 +438,7 @@ impl App for VoxelCluster {
 
         // HUD text.
         renderer.draw_text(
-            "voxel cluster — depth-banded water + cumulonimbus + cirrus — WASD move, R/F up/down, right-drag look",
+            "voxel cluster — mixed-LOD 0..4 — WASD move, R/F up/down, right-drag look",
             Vec2::new(16.0, 16.0),
             22.0,
             [1.0, 1.0, 1.0, 1.0],
@@ -542,17 +537,26 @@ fn draw_checkbox(renderer: &mut Renderer, white: TextureHandle, rect: Rect, chec
     );
 }
 
+/// Static LOD assignment for the demo: Manhattan distance from the
+/// `(0, 0)` corner. The 3×3 grid covers LOD 0 (the closest corner)
+/// through LOD 4 (the far corner); the diagonal layout means every
+/// interior cluster has at least one mismatched-LOD seam, so the
+/// fan-triangulation path is always exercised.
+fn cluster_lod(cx: u16, cz: u16) -> Lod {
+    Lod::new((cx + cz) as u8).expect("LOD ≤ 7 for the demo grid")
+}
+
 /// Build a [`NeighborContext`] for the cluster at `id` from the 3×3
-/// XZ grid. Looks up each of the four XZ-face neighbors; the Y faces
-/// stay `None` (the scene is a single Y layer). All neighbors share
-/// LOD 0 in this scene.
+/// XZ grid. Looks up each of the four XZ-face neighbors at the
+/// neighbor's own LOD ([`cluster_lod`]). The Y faces stay `None`
+/// (the scene is a single Y layer).
 fn build_neighbor_context<'a>(map: &'a ClusterMap, id: ClusterId) -> NeighborContext<'a> {
-    let lod = Lod::ZERO;
     let cx = id.x();
     let cy = id.y();
     let cz = id.z();
     let lookup = |nx: u16, nz: u16| -> Option<(&flicker_voxel::Cluster, Lod)> {
-        map.get(ClusterId::new(0, nx, cy, nz)).map(|c| (c, lod))
+        map.get(ClusterId::new(0, nx, cy, nz))
+            .map(|c| (c, cluster_lod(nx, nz)))
     };
     NeighborContext {
         neg_x: if cx > 0 { lookup(cx - 1, cz) } else { None },

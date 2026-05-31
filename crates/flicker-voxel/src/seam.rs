@@ -252,8 +252,15 @@ pub enum FaceDir {
 /// lands).
 pub struct NeighborHalo {
     face: FaceDir,
+    /// Voxel-coordinate stride between populated `vertices` slots —
+    /// equals `lod.stride()` for the LOD passed to [`build_halo`]. The
+    /// contour pass rounds query coordinates down to multiples of this
+    /// stride before calling [`NeighborHalo::vertex_at`] so it stays a
+    /// strict accessor.
+    stride: u32,
     /// Flat row-major: `vertices[perp_b * CLUSTER_DIM + perp_a]`.
-    /// `None` slots indicate the neighbor did not emit a vertex there.
+    /// `None` slots indicate the neighbor did not emit a vertex there
+    /// (either no surface voxel or off the LOD stride).
     vertices: Vec<Option<HaloVertex>>,
 }
 
@@ -264,9 +271,23 @@ impl NeighborHalo {
         self.face
     }
 
+    /// Voxel-coordinate stride between populated slots — `1` at LOD 0,
+    /// `2` at LOD 1, `2^L` in general. The contour pass divides query
+    /// perpendicular coordinates by this value (and multiplies back) to
+    /// land on the nearest populated halo position, which is what
+    /// makes mismatched-LOD seams collapse adjacent quads into fan
+    /// triangles instead of producing cracks.
+    #[must_use]
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+
     /// Look up the vertex at boundary-plane position `(perp_a, perp_b)`.
     /// Both coords must be in `[0, CLUSTER_DIM)`; out-of-range queries
-    /// return `None`.
+    /// return `None`. The accessor is **strict** — positions that are
+    /// not exact multiples of [`Self::stride`] return `None`. Callers
+    /// crossing a stride boundary are expected to round the coordinates
+    /// down themselves.
     #[must_use]
     pub fn vertex_at(&self, perp_a: u32, perp_b: u32) -> Option<&HaloVertex> {
         if perp_a >= CLUSTER_DIM || perp_b >= CLUSTER_DIM {
@@ -317,13 +338,22 @@ pub fn build_halo(neighbor: &Cluster, face: FaceDir, lod: Lod) -> NeighborHalo {
         }
     };
 
+    // The neighbor's mesh at LOD L has its `Pos*` boundary plane at
+    // sample `sample_dim - 1`, which is voxel `CLUSTER_DIM - 2^L`.
+    // The halo must read at that exact voxel so its emitted halo
+    // vertices coincide with the neighbor's actual mesh vertex
+    // positions. `Pos*` faces remain at voxel 0 — the neighbor's
+    // `Neg*` boundary is always at sample 0 = voxel 0 regardless of
+    // stride.
+    let neighbor_stride = lod.stride() as i32;
+    let neg_boundary_voxel = dim_i32 - neighbor_stride;
     let (boundary_axis, boundary_value, shift_value): (usize, i32, f32) = match face {
         FaceDir::PosX => (0, 0, CLUSTER_DIM as f32),
-        FaceDir::NegX => (0, dim_i32 - 1, -(dim_i32 as f32)),
+        FaceDir::NegX => (0, neg_boundary_voxel, -(dim_i32 as f32)),
         FaceDir::PosY => (1, 0, CLUSTER_DIM as f32),
-        FaceDir::NegY => (1, dim_i32 - 1, -(dim_i32 as f32)),
+        FaceDir::NegY => (1, neg_boundary_voxel, -(dim_i32 as f32)),
         FaceDir::PosZ => (2, 0, CLUSTER_DIM as f32),
-        FaceDir::NegZ => (2, dim_i32 - 1, -(dim_i32 as f32)),
+        FaceDir::NegZ => (2, neg_boundary_voxel, -(dim_i32 as f32)),
     };
     let (perp_a_axis, perp_b_axis): (usize, usize) = match face {
         FaceDir::NegX | FaceDir::PosX => (1, 2),
@@ -343,12 +373,19 @@ pub fn build_halo(neighbor: &Cluster, face: FaceDir, lod: Lod) -> NeighborHalo {
             nv[perp_b_axis] = perp_b as i32;
 
             if solid_at(nv[0], nv[1], nv[2]) {
-                let nxn = solid_at(nv[0] - 1, nv[1], nv[2]);
-                let nxp = solid_at(nv[0] + 1, nv[1], nv[2]);
-                let nyn = solid_at(nv[0], nv[1] - 1, nv[2]);
-                let nyp = solid_at(nv[0], nv[1] + 1, nv[2]);
-                let nzn = solid_at(nv[0], nv[1], nv[2] - 1);
-                let nzp = solid_at(nv[0], nv[1], nv[2] + 1);
+                // Stride-aware 6-neighbor lookups so the surface
+                // predicate matches what the neighbor's contour pass
+                // sees at its own LOD. At LOD 0 (stride 1) these
+                // are single-voxel reads as before; at LOD > 0 each
+                // axis offset is `±neighbor_stride`, so the gradient
+                // and the surface predicate identify the sample-grid
+                // sign-changes the neighbor's mesh would emit at.
+                let nxn = solid_at(nv[0] - neighbor_stride, nv[1], nv[2]);
+                let nxp = solid_at(nv[0] + neighbor_stride, nv[1], nv[2]);
+                let nyn = solid_at(nv[0], nv[1] - neighbor_stride, nv[2]);
+                let nyp = solid_at(nv[0], nv[1] + neighbor_stride, nv[2]);
+                let nzn = solid_at(nv[0], nv[1], nv[2] - neighbor_stride);
+                let nzp = solid_at(nv[0], nv[1], nv[2] + neighbor_stride);
                 let any_nonsolid = !nxn || !nxp || !nyn || !nyp || !nzn || !nzp;
                 if any_nonsolid {
                     let vox = neighbor.get(
@@ -393,7 +430,11 @@ pub fn build_halo(neighbor: &Cluster, face: FaceDir, lod: Lod) -> NeighborHalo {
         perp_b += stride;
     }
 
-    NeighborHalo { face, vertices }
+    NeighborHalo {
+        face,
+        stride: stride as u32,
+        vertices,
+    }
 }
 
 #[cfg(test)]
@@ -561,5 +602,71 @@ mod tests {
         // Coordinates ≥ CLUSTER_DIM return None rather than panicking.
         assert!(halo.vertex_at(CLUSTER_DIM, 0).is_none());
         assert!(halo.vertex_at(0, CLUSTER_DIM).is_none());
+    }
+
+    #[test]
+    fn halo_stride_field_matches_lod() {
+        // `stride()` reports the voxel-coord stride between populated
+        // slots: 1, 2, 4, … for LOD 0, 1, 2, … respectively.
+        let neighbor = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        for level in 0..=4u8 {
+            let lod = Lod::new(level).unwrap();
+            let halo = build_halo(&neighbor, FaceDir::PosX, lod);
+            assert_eq!(
+                halo.stride(),
+                lod.stride(),
+                "halo at LOD {level}: stride {} should equal lod.stride() {}",
+                halo.stride(),
+                lod.stride()
+            );
+        }
+    }
+
+    #[test]
+    fn halo_at_lod_1_returns_none_at_odd_positions() {
+        // At LOD 1 the halo only populates positions where both
+        // perp_a and perp_b are even (stride 2). Odd positions stay
+        // `None`; the contour pass rounds queries down before
+        // calling vertex_at.
+        let neighbor = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let halo = build_halo(&neighbor, FaceDir::PosX, Lod::new(1).unwrap());
+        // vy=127 is odd → no halo vertex at any vz.
+        assert!(
+            halo.vertex_at(127, 0).is_none(),
+            "vy=127 (odd) should be None at LOD 1"
+        );
+        // vy=126 is even → halo vertex present (top-of-slab column).
+        assert!(
+            halo.vertex_at(126, 0).is_some(),
+            "vy=126 (even) should carry a halo vertex at LOD 1"
+        );
+    }
+
+    #[test]
+    fn neg_face_halo_position_respects_neighbor_stride() {
+        // A LOD 1 neighbor's PosX boundary plane is at voxel
+        // `vx = 254`, not 255 — the neighbor at LOD 1 only samples
+        // even voxels, so its last in-stride X column is at 254.
+        // The halo built for the local cluster's NegX face (= the
+        // neighbor's PosX side) must read at that voxel and place
+        // the resulting halo vertex at the matching world position.
+        //
+        // Off-by-one (boundary at vx=255 instead of 254) pushes the
+        // halo one voxel into the seam gap and leaves a visible
+        // crack between the local mesh and the neighbor's mesh.
+        let neighbor = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let halo = build_halo(&neighbor, FaceDir::NegX, Lod::new(1).unwrap());
+        // The neighbor's top-of-slab surface at LOD 1 sits at voxel
+        // vy=126 (the last even-aligned solid row); vz=128 is an
+        // arbitrary even column inside the cluster.
+        let hv = halo.vertex_at(126, 128).expect("vy=126 top-of-slab");
+        // Position in the active cluster's frame: vx_neighbor=254
+        // plus cv_x (≈0.5) minus CLUSTER_DIM (256) = -1.5.
+        assert!(
+            (hv.position[0] - (-1.5)).abs() < 0.05,
+            "NegX LOD 1 halo position[0] = {} expected ≈ -1.5 \
+             (was previously -0.5 due to stride-ignoring boundary_value)",
+            hv.position[0]
+        );
     }
 }
