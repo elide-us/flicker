@@ -176,6 +176,35 @@ impl HeightField {
             )
         }
     }
+
+    /// Bilinearly-interpolated surface height at fractional `(x, z)`. Reads
+    /// only the cached 256² column grid — `world_height_seeded` rebuilds
+    /// the wave field per call and is far too slow for the union's
+    /// 16 M `is_solid` queries. Out-of-cache `(x, z)` clamps to the edge.
+    ///
+    /// The bilinear surface is `C0`-continuous and `C1`-discontinuous at
+    /// column boundaries — terrain normals will look bilinearly faceted,
+    /// which is fine; shading is deferred to texturing.
+    #[must_use]
+    pub fn height_bilinear(&self, x: f32, z: f32) -> f32 {
+        let max = (CLUSTER_DIM - 1) as f32;
+        let xc = x.clamp(0.0, max);
+        let zc = z.clamp(0.0, max);
+        let x0 = xc.floor() as i32;
+        let z0 = zc.floor() as i32;
+        let x1 = (x0 + 1).min(CLUSTER_DIM as i32 - 1);
+        let z1 = (z0 + 1).min(CLUSTER_DIM as i32 - 1);
+        let tx = xc - x0 as f32;
+        let tz = zc - z0 as f32;
+        let stride = CLUSTER_DIM as usize;
+        let h00 = self.heights[z0 as usize * stride + x0 as usize];
+        let h10 = self.heights[z0 as usize * stride + x1 as usize];
+        let h01 = self.heights[z1 as usize * stride + x0 as usize];
+        let h11 = self.heights[z1 as usize * stride + x1 as usize];
+        let hx0 = h00 * (1.0 - tx) + h10 * tx;
+        let hx1 = h01 * (1.0 - tx) + h11 * tx;
+        hx0 * (1.0 - tz) + hx1 * tz
+    }
 }
 
 impl Primitive for HeightField {
@@ -215,6 +244,24 @@ impl Primitive for HeightField {
             position,
             normal: [nx / len, ny / len, nz / len],
         }
+    }
+}
+
+/// `HeightField` as an [`Sdf`] for use inside a [`Scene`] union. The
+/// implicit field is `p.y − height_bilinear(p.x, p.z)`: negative below
+/// the surface (solid), zero on it, positive above. The bilinear
+/// sample reads only the cached 256² column grid (see
+/// [`HeightField::height_bilinear`]) — never the procedural sampler —
+/// so the union's 16 M `is_solid` calls stay fast.
+///
+/// Note this does NOT use [`impl_sdf_primitive!`]: the dedicated
+/// [`Primitive`] impl above carries an integer-grid normal that is
+/// cheaper than the central-difference gradient `sdf_hermite` would
+/// produce, and we keep that bespoke path for direct use of
+/// `HeightField` as a stand-alone primitive.
+impl Sdf for HeightField {
+    fn distance(&self, p: [f32; 3]) -> f32 {
+        p[1] - self.height_bilinear(p[0], p[2])
     }
 }
 
@@ -457,6 +504,53 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// The split-scene world: the procedural heightmap fills the lower
+    /// band (y ≈ 64–192) and the six analytic-primitive gallery sits
+    /// above (centers at y ≈ 220) so the shapes float clear of the
+    /// terrain peaks. Same XZ grid as [`Self::gallery`]. The default
+    /// scene the example contours.
+    #[must_use]
+    pub fn world() -> Self {
+        let cy = 220.0_f32;
+        let parts: Vec<Box<dyn Sdf>> = vec![
+            // Terrain — the cached wave field. Bilinear SDF inside.
+            Box::new(HeightField::from_default_seed([0.0, 0.0, 0.0])),
+            // Row z=96: sphere, cube, cylinder.
+            Box::new(Sphere {
+                center: [64.0, cy, 96.0],
+                radius: 22.0,
+            }),
+            Box::new(Cube {
+                center: [128.0, cy, 96.0],
+                half: [22.0, 22.0, 22.0],
+            }),
+            Box::new(Cylinder {
+                center: [192.0, cy, 96.0],
+                radius: 20.0,
+                half_height: 22.0,
+            }),
+            // Row z=160: half-sphere (dome base sits at y=200 — its
+            // own center.y), half-cylinder, cone. The dome's lower
+            // base must clear the terrain top (~192), so its center
+            // is at 200 rather than `cy`.
+            Box::new(HalfSphere {
+                center: [64.0, 200.0, 160.0],
+                radius: 24.0,
+            }),
+            Box::new(HalfCylinder {
+                center: [128.0, cy, 160.0],
+                radius: 22.0,
+                half_height: 22.0,
+            }),
+            Box::new(Cone {
+                center: [192.0, cy, 160.0],
+                base_radius: 22.0,
+                half_height: 22.0,
+            }),
+        ];
+        Self { parts }
+    }
+
     /// A 3×2 XZ grid of the six analytic primitives at y=128 inside the
     /// 256³ cluster, sized with margins so no two shapes overlap.
     /// Row z=96: sphere, cube, cylinder. Row z=160: half-sphere (dome),

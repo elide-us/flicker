@@ -196,6 +196,8 @@ fn translate_key(key: PhysicalKey) -> Option<Key> {
         KeyCode::Space => Key::Space,
         KeyCode::ShiftLeft => Key::LeftShift,
         KeyCode::ControlLeft => Key::LeftControl,
+        KeyCode::Digit1 => Key::Digit1,
+        KeyCode::Digit2 => Key::Digit2,
         _ => return None,
     })
 }

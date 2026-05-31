@@ -54,6 +54,9 @@ pub enum Key {
     Space,
     LeftShift,
     LeftControl,
+    // Number-row digits — useful for debug toggles in examples.
+    Digit1,
+    Digit2,
 }
 
 /// Per-frame input snapshot. Held-state plus a small set of "just
