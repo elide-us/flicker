@@ -13,6 +13,7 @@
 
 use crate::cluster::{Cluster, CLUSTER_DIM};
 use crate::corner_vector::CornerVector;
+use crate::heightmap::world_height_seeded;
 use crate::local_coord::LocalCoord;
 use crate::material::Material;
 use crate::voxel::Voxel;
@@ -470,6 +471,140 @@ fn radial_falloff(
     }
 }
 
+/// Generate a cluster from the world heightmap function at the world
+/// origin. Equivalent to [`heightmap_terrain_at`] with a zero offset;
+/// preserved as the single-cluster convenience the Step 2 example used.
+#[must_use]
+pub fn heightmap_terrain(seed: u64, material: Material) -> Cluster {
+    heightmap_terrain_at(seed, material, [0.0, 0.0, 0.0])
+}
+
+/// Generate a cluster from the world heightmap function at a given
+/// world offset — the multi-cluster generator that **expresses** the
+/// surface through join placement rather than only through
+/// classification.
+///
+/// For each `(x, z)` column the heightmap is sampled at the column's
+/// voxel-center world coordinates
+/// `(world_offset.x + x + 0.5, world_offset.z + z + 0.5)` to obtain
+/// the surface height `h` (in world voxel units). The column is then
+/// materialized as:
+///
+/// - Voxels at `y < floor(h)`: solid with [`CornerVector::DEFAULT`].
+/// - Voxel at `y == floor(h)` (the topmost solid layer): solid with
+///   `CornerVector::Y == fractional(h)`. This pulls the voxel's
+///   owned `+++` corner from its default position at world Y
+///   `floor(h) + 0.5` to world Y `floor(h) + fractional(h) == h`, so
+///   the corner sits exactly on the surface.
+/// - Voxels at `y > floor(h)`: empty.
+///
+/// # Why this produces smooth slopes
+///
+/// A surface quad in the contour pass uses up to 8 voxel corners as
+/// its inputs. Adjacent columns have continuous heights (the heightmap
+/// is Lipschitz-bounded), so their topmost-voxel joins sit at slightly
+/// different world-Y positions. The contour pass averages these
+/// corners across cells, so the cell-center vertex moves smoothly
+/// between adjacent cells and the rendered surface follows the
+/// continuous height function as a tilted quad rather than a stepped
+/// terrace. This is the same join-placement principle [`smooth_terrain`]
+/// applies to incoherent per-voxel noise, applied here to a coherent
+/// continuous function — and that is what turns the wedge-and-ramp
+/// insight into visible ramps.
+///
+/// # Coordinate convention
+///
+/// Cluster-local voxel `(x, y, z)` is at world position
+/// `(world_offset.x + x, world_offset.y + y, world_offset.z + z)`.
+/// The cluster's local Y=0 corresponds to world Y=`world_offset.y`.
+///
+/// **Y-stacking is not implemented yet.** This function assumes
+/// `world_offset.y == 0` — the surface is expressed entirely within
+/// the cluster's local Y span. When Y-stacking is added in a later
+/// step, this function will gain the logic to handle surfaces that
+/// fall above or below the cluster's local Y range; until then,
+/// callers should pass `world_offset.y = 0`. The Y component is
+/// otherwise ignored.
+///
+/// # Cross-cluster seam continuity
+///
+/// Two adjacent clusters call this function with offsets differing by
+/// `CLUSTER_DIM` along one axis. Their boundary columns sample the
+/// heightmap at world coordinates that are exactly one voxel apart
+/// (e.g., cluster A at offset 0, column 255: world x=255.5; cluster
+/// B at offset 256, column 0: world x=256.5), and the heightmap is
+/// continuous, so the topmost-voxel joins from one cluster meet the
+/// next continuously **with no coordination by the contour pass**.
+/// That is the architectural payoff: cross-cluster correctness comes
+/// from sampling the same continuous function, not from a seam-time
+/// gate.
+///
+/// # Cliffs
+///
+/// The heightmap is smooth but not arbitrarily flat — adjacent columns
+/// can differ by more than one voxel where the field's gradient is
+/// steep. Those height jumps become standard vertical-face emissions
+/// by the contour pass; no special cliff-fill logic is needed here.
+///
+/// # Performance
+///
+/// Iterates every solid voxel and inserts an override (worst case
+/// ~8M inserts at base height 128). Same `HashMap`-bound cost as the
+/// other generators; tracked under the octree-storage TODO.
+#[must_use]
+pub fn heightmap_terrain_at(seed: u64, material: Material, world_offset: [f32; 3]) -> Cluster {
+    let mut c = Cluster::empty();
+    let solid_default = Voxel::new(CornerVector::DEFAULT, material);
+    let ox = world_offset[0];
+    let oz = world_offset[2];
+
+    for z in 0..CLUSTER_DIM {
+        for x in 0..CLUSTER_DIM {
+            let h = world_height_seeded(ox + x as f32 + 0.5, oz + z as f32 + 0.5, seed);
+            // The heightmap is finite by construction, but be defensive.
+            if !h.is_finite() {
+                continue;
+            }
+            // Surface entirely below the cluster floor: nothing solid.
+            if h <= 0.0 {
+                continue;
+            }
+
+            let top_y_i = h.floor() as i64;
+            // Clamp the topmost layer's index to the cluster ceiling.
+            // When the surface is at or above the ceiling, the whole
+            // column is solid with default joins (no in-cluster
+            // boundary layer to express).
+            let capped = top_y_i >= CLUSTER_DIM as i64;
+            let top_y = if capped {
+                CLUSTER_DIM - 1
+            } else {
+                top_y_i as u32
+            };
+
+            // Solid fill below the surface — default joins.
+            for y in 0..top_y {
+                c.set(LocalCoord::new(x, y, z).expect("in bounds"), solid_default);
+            }
+
+            // Topmost layer: corner Y positioned to express the
+            // fractional part of h. When capped, leave the default join.
+            let top_voxel = if capped {
+                solid_default
+            } else {
+                let fractional = h - top_y as f32;
+                Voxel::new(
+                    CornerVector::from_components(0.5, fractional, 0.5),
+                    material,
+                )
+            };
+            c.set(LocalCoord::new(x, top_y, z).expect("in bounds"), top_voxel);
+        }
+    }
+
+    c
+}
+
 /// Deterministic uniform integer hash in `[lo, hi)`, keyed by a
 /// `(seed, blob_idx, param_idx)` triple. Returns `lo` if `hi <= lo`.
 fn hash_in_range(seed: u32, blob_idx: u32, param_idx: u32, lo: u32, hi: u32) -> u32 {
@@ -893,6 +1028,230 @@ mod tests {
             .filter(|(coord, v)| coord.y() >= 150 && v.material() != Material::EMPTY)
             .count();
         assert!(cloud_voxels > 0, "expected cloud voxels above y=150");
+    }
+
+    // ---- heightmap_terrain ----
+
+    fn corner_y_of(c: &Cluster, x: u32, y: u32, z: u32) -> f32 {
+        c.get(LocalCoord::new(x, y, z).expect("in bounds"))
+            .corner()
+            .to_components()[1]
+    }
+
+    #[test]
+    fn heightmap_terrain_is_deterministic() {
+        let m = solid_material();
+        let a = heightmap_terrain(0xDEAD_BEEF_CAFE, m);
+        let b = heightmap_terrain(0xDEAD_BEEF_CAFE, m);
+        assert_eq!(a.override_count(), b.override_count());
+        // Spot-check a few coordinates: same voxel value in both.
+        for &(x, y, z) in &[(0u32, 0u32, 0u32), (128, 100, 128), (200, 50, 30)] {
+            let coord = LocalCoord::new(x, y, z).expect("in bounds");
+            assert_eq!(a.get(coord), b.get(coord));
+        }
+    }
+
+    #[test]
+    fn heightmap_terrain_top_voxel_join_matches_fractional_part() {
+        // For each of several columns the topmost solid voxel's corner-Y
+        // (decoded from its byte) should equal the heightmap's fractional
+        // part at that column's center, within the encoding's per-axis
+        // round-trip error of 1/255.
+        let seed = 0xABCD_1234_5678u64;
+        let m = solid_material();
+        let c = heightmap_terrain(seed, m);
+
+        let tolerance = 1.0 / 255.0 + 1e-6;
+        for &(x, z) in &[(5u32, 5u32), (50, 50), (128, 128), (200, 30), (250, 250)] {
+            let h = world_height_seeded(x as f32 + 0.5, z as f32 + 0.5, seed);
+            let top_y = h.floor() as u32;
+            let fractional = h - top_y as f32;
+
+            let actual = corner_y_of(&c, x, top_y, z);
+            assert!(
+                (actual - fractional).abs() <= tolerance,
+                "column ({x},{z}): top corner_y={actual}, want ≈ {fractional} (h={h}, top_y={top_y})"
+            );
+        }
+    }
+
+    #[test]
+    fn heightmap_terrain_lower_voxels_use_default_corner() {
+        // Voxels strictly below the topmost solid layer must carry the
+        // default corner. Sample several columns and inspect a voxel at
+        // y = top_y - 4 (well below the boundary layer).
+        let seed = 0x1357_2468_ACE0u64;
+        let m = solid_material();
+        let c = heightmap_terrain(seed, m);
+
+        for &(x, z) in &[(10u32, 10u32), (100, 100), (200, 50), (240, 240)] {
+            let h = world_height_seeded(x as f32 + 0.5, z as f32 + 0.5, seed);
+            let top_y = h.floor() as u32;
+            assert!(
+                top_y >= 4,
+                "expected top_y >= 4 for column ({x},{z}); got {top_y}"
+            );
+            let probe_y = top_y - 4;
+            let voxel = c.get(LocalCoord::new(x, probe_y, z).expect("in bounds"));
+            assert_eq!(
+                voxel.corner(),
+                CornerVector::DEFAULT,
+                "voxel ({x},{probe_y},{z}) carries non-default corner"
+            );
+            assert_ne!(
+                voxel.material(),
+                Material::EMPTY,
+                "voxel ({x},{probe_y},{z}) should be solid but is empty"
+            );
+        }
+    }
+
+    #[test]
+    fn heightmap_terrain_no_solid_above_top() {
+        // Voxels strictly above the topmost solid layer must be empty.
+        let seed = 0x9999_AAAA_BBBBu64;
+        let m = solid_material();
+        let c = heightmap_terrain(seed, m);
+
+        for &(x, z) in &[(0u32, 0u32), (60, 90), (128, 128), (255, 255)] {
+            let h = world_height_seeded(x as f32 + 0.5, z as f32 + 0.5, seed);
+            let top_y = h.floor() as u32;
+            let above = top_y + 1;
+            if above >= CLUSTER_DIM {
+                continue;
+            }
+            let voxel = c.get(LocalCoord::new(x, above, z).expect("in bounds"));
+            assert_eq!(
+                voxel.material(),
+                Material::EMPTY,
+                "voxel ({x},{above},{z}) above the surface should be empty"
+            );
+        }
+    }
+
+    #[test]
+    fn heightmap_terrain_produces_renderable_mesh() {
+        // Sanity end-to-end: the generator -> contour pipeline should
+        // produce a substantial mesh for the wave-field surface.
+        let m = solid_material();
+        let mesh = contour_cluster(&heightmap_terrain(0x42, m));
+        assert!(!mesh.is_empty());
+        assert!(
+            mesh.metadata().vertex_count > 10_000,
+            "expected a substantial mesh; got {} vertices",
+            mesh.metadata().vertex_count
+        );
+    }
+
+    // ---- heightmap_terrain_at ----
+
+    #[test]
+    fn heightmap_terrain_at_zero_offset_equals_heightmap_terrain() {
+        // The Step 2 convenience wrapper must remain byte-equivalent to
+        // an explicit zero-offset call.
+        let m = solid_material();
+        let seed = 0xDEAD_BEEF_BABE_F00D;
+        let zero = heightmap_terrain_at(seed, m, [0.0, 0.0, 0.0]);
+        let convenience = heightmap_terrain(seed, m);
+        assert_eq!(zero.override_count(), convenience.override_count());
+        // Spot-check a handful of voxels.
+        for &(x, y, z) in &[(0u32, 0u32, 0u32), (128, 100, 128), (200, 50, 30)] {
+            let coord = LocalCoord::new(x, y, z).expect("in bounds");
+            assert_eq!(zero.get(coord), convenience.get(coord));
+        }
+    }
+
+    #[test]
+    fn heightmap_terrain_at_world_offset_shifts_sample_coordinates() {
+        // A cluster at offset (CLUSTER_DIM, 0, 0) at its local column
+        // (lx, lz) must materialize the topmost join from the heightmap
+        // sampled at world (CLUSTER_DIM + lx + 0.5, lz + 0.5, seed).
+        let m = solid_material();
+        let seed = 0x1357_ACE0;
+        let offset_x = CLUSTER_DIM as f32;
+        let c = heightmap_terrain_at(seed, m, [offset_x, 0.0, 0.0]);
+
+        let tol = 1.0 / 255.0 + 1e-6;
+        for &(lx, lz) in &[(0u32, 5u32), (10, 200), (255, 128)] {
+            let world_x = offset_x + lx as f32 + 0.5;
+            let world_z = lz as f32 + 0.5;
+            let h = world_height_seeded(world_x, world_z, seed);
+            let top_y = h.floor() as u32;
+            let fractional = h - top_y as f32;
+
+            let actual = c
+                .get(LocalCoord::new(lx, top_y, lz).expect("in bounds"))
+                .corner()
+                .to_components()[1];
+            assert!(
+                (actual - fractional).abs() <= tol,
+                "offset-cluster column ({lx},{lz}) corner_y={actual}, want ≈ {fractional} (h={h})"
+            );
+        }
+    }
+
+    #[test]
+    fn adjacent_clusters_agree_at_seam() {
+        // The architectural payoff: two clusters at adjacent world
+        // offsets must produce continuous join positions at the seam
+        // — without any cross-cluster coordination.
+        //
+        // Cluster A's column 255 samples at world x=255.5.
+        // Cluster B (at offset CLUSTER_DIM=256) column 0 samples at
+        // world x=256.5. Each cluster's topmost-voxel corner-Y is the
+        // fractional part of the height sampled at its own world x;
+        // the world-space Y of those corners is then
+        // (floor(h) + corner_y) = h. So the world-space Y of both
+        // adjacent clusters' joins is exactly the heightmap value at
+        // their respective sample points — proving the world-offset
+        // arithmetic is correct.
+        let m = solid_material();
+        let seed = 0xCAFE_F00D_D15E_A5E5;
+        let a = heightmap_terrain_at(seed, m, [0.0, 0.0, 0.0]);
+        let b = heightmap_terrain_at(seed, m, [CLUSTER_DIM as f32, 0.0, 0.0]);
+
+        let tol = 1.0 / 255.0 + 1e-6;
+        for lz in (0u32..CLUSTER_DIM).step_by(13) {
+            let world_z = lz as f32 + 0.5;
+
+            // Cluster A's +X boundary column.
+            let h_a = world_height_seeded(255.5, world_z, seed);
+            let top_a = h_a.floor() as u32;
+            let frac_a = h_a - top_a as f32;
+            let cy_a = a
+                .get(LocalCoord::new(255, top_a, lz).expect("in bounds"))
+                .corner()
+                .to_components()[1];
+            assert!(
+                (cy_a - frac_a).abs() <= tol,
+                "cluster A col 255 z={lz} corner_y={cy_a} != frac {frac_a}"
+            );
+
+            // Cluster B's -X boundary column. Local lx = 0, world x = 256 + 0.5.
+            let h_b = world_height_seeded(256.5, world_z, seed);
+            let top_b = h_b.floor() as u32;
+            let frac_b = h_b - top_b as f32;
+            let cy_b = b
+                .get(LocalCoord::new(0, top_b, lz).expect("in bounds"))
+                .corner()
+                .to_components()[1];
+            assert!(
+                (cy_b - frac_b).abs() <= tol,
+                "cluster B col 0  z={lz} corner_y={cy_b} != frac {frac_b}"
+            );
+
+            // The heightmap is Lipschitz-continuous so heights at world
+            // x=255.5 and 256.5 (one voxel apart) cannot differ by much.
+            // The Step 1 continuity test bounded per-0.05-step delta at
+            // 0.5 voxels; per-1-voxel delta is therefore < 10 voxels in
+            // the worst case. A 10-voxel jump over one voxel is a steep
+            // cliff but legal under the wave parameters — assert a
+            // loose 20-voxel bound that confirms we're in the same band.
+            assert!(
+                (h_a - h_b).abs() < 20.0,
+                "seam discontinuity at z={lz}: h_A={h_a}, h_B={h_b}"
+            );
+        }
     }
 
     #[test]

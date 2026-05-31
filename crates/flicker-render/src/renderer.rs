@@ -278,6 +278,22 @@ impl Renderer {
         self.lines.push_box(min, max, color);
     }
 
+    /// Draw an arbitrary list of line segments this frame, all tinted
+    /// the same RGBA color. Uses the same line-list pipeline as
+    /// [`Renderer::draw_bounding_box`] — depth-tested against the 3D
+    /// scene but does not write depth. Immediate-mode, no handle, no
+    /// persistence.
+    ///
+    /// Each `(a, b)` entry is one segment in world coordinates. The
+    /// per-frame budget is governed by GPU bandwidth and the pipeline's
+    /// vertex buffer growth strategy; tens of thousands of segments
+    /// per frame are comfortable on modern hardware.
+    pub fn draw_lines(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
+        for &(a, b) in segments {
+            self.lines.push_segment(a, b, color);
+        }
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.

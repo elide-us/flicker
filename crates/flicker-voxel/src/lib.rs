@@ -32,19 +32,31 @@
 #![forbid(unsafe_code)]
 
 mod cluster;
+mod cluster_id;
+mod cluster_map;
 mod contour;
+mod contour_surface;
 mod corner_vector;
 pub mod generators;
+pub mod heightmap;
 mod local_coord;
 mod material;
+mod surface_boundary;
 mod voxel;
 
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
+pub use cluster_id::ClusterId;
+pub use cluster_map::ClusterMap;
 pub use contour::{
     contour_cluster, contour_cluster_lod, contour_cluster_lod_with_neighbors, CellMesh, Indices,
     Lod, MeshMetadata, NeighborContext, Vertex,
 };
+pub use contour_surface::contour_surface;
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
+pub use surface_boundary::{
+    classification_differs, is_surface_boundary_voxel, surface_boundary_segments,
+    SurfaceBoundarySegment,
+};
 pub use voxel::Voxel;

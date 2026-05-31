@@ -389,6 +389,22 @@ impl CellMesh {
     pub fn is_empty(&self) -> bool {
         self.vertices.is_empty()
     }
+
+    /// Construct a [`CellMesh`] from its parts. Crate-internal so
+    /// sibling contouring modules (e.g. [`crate::contour_surface`])
+    /// can build the same output shape without going through the
+    /// cell-based algorithm.
+    pub(crate) fn from_parts(
+        vertices: Vec<Vertex>,
+        indices: Indices,
+        metadata: MeshMetadata,
+    ) -> Self {
+        Self {
+            vertices,
+            indices,
+            metadata,
+        }
+    }
 }
 
 // ===== Internals =====
