@@ -39,7 +39,8 @@ pub mod generators;
 pub mod heightmap;
 mod local_coord;
 mod material;
-mod seam;
+mod neighbor;
+pub mod primitive;
 mod voxel;
 
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
@@ -48,5 +49,5 @@ pub use cluster_map::ClusterMap;
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
-pub use seam::{FaceDir, Lod, NeighborContext};
+pub use neighbor::{FaceDir, Lod, NeighborContext};
 pub use voxel::Voxel;
