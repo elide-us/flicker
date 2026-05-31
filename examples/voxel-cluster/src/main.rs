@@ -27,8 +27,17 @@
 //! Visual content:
 //!   * 3×3 = 9 clusters at LOD 0, each contoured independently. Total
 //!     ground footprint 768×768 voxels.
-//!   * Magenta/black checker tiles every surface. The mesh-edge
-//!     wireframe toggle adds a green per-triangle overlay.
+//!   * The water surface is depth-banded: navy in the troughs, paling
+//!     through blues to near-white at the crests. Each voxel carries
+//!     a primary/secondary material index pair plus an 8-bit blend
+//!     factor, and the shader interpolates between them — smooth
+//!     gradients across the height band without per-pixel mixing.
+//!   * About one in three clusters has a cumulonimbus formation
+//!     drifting at altitude 200–240 (flat anvil base, dark underbelly,
+//!     bright sunlit crown). About one in four has a thin cirrus wisp
+//!     at altitude 250+.
+//!   * The mesh-edge wireframe toggle adds a green per-triangle
+//!     overlay.
 //!   * The centroid wireframe (default OFF) adds a neon-green line
 //!     from each surface-boundary voxel's center to its owned join.
 //!     Adjacent clusters' lines should meet continuously at seams.
@@ -57,7 +66,7 @@ use flicker::render::{
 };
 use flicker_voxel::{
     contour_cluster, contour_surface, generators, heightmap, surface_boundary_segments, ClusterId,
-    ClusterMap, Material, CLUSTER_DIM,
+    ClusterMap, CLUSTER_DIM,
 };
 
 /// Edge length of the multi-cluster field, in clusters.
@@ -303,7 +312,6 @@ impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
         let seed = heightmap::seed_from_env();
         self.seed = seed;
-        let material = Material::new(7, 7, 7).expect("valid material");
 
         tracing::info!(
             seed = format!("0x{seed:016X}"),
@@ -316,10 +324,17 @@ impl App for VoxelCluster {
         // ~7M overrides per cluster). The octree storage rewrite will
         // dramatically speed this up later; for this step we accept
         // the wait.
+        //
+        // Each cluster's surface is depth-banded water; selected
+        // clusters also receive a cumulonimbus stamp at altitude 200–
+        // 240, and one or two get cirrus wisps at 250+. The seed
+        // selects which clusters get clouds via a hash, so the layout
+        // is fully reproducible.
         let mut map = ClusterMap::new();
         let total_clusters = (FIELD_SIZE as usize).pow(2);
         let mut generated = 0;
         let gen_start = std::time::Instant::now();
+        let seed32 = (seed as u32) ^ ((seed >> 32) as u32);
         for cz in 0..FIELD_SIZE {
             for cx in 0..FIELD_SIZE {
                 generated += 1;
@@ -329,7 +344,9 @@ impl App for VoxelCluster {
                     id = ?id,
                     "generating cluster {generated}/{total_clusters} at offset {offset:?} …"
                 );
-                let cluster = generators::heightmap_terrain_at(seed, material, offset);
+                let mut cluster =
+                    generators::heightmap_terrain_at_with_depth_materials(seed, offset);
+                stamp_atmospheric_features(&mut cluster, seed32, cx, cz);
                 map.insert(id, cluster);
             }
         }
@@ -500,7 +517,7 @@ impl App for VoxelCluster {
 
         // HUD text.
         renderer.draw_text(
-            "voxel cluster — 3×3 Navier-Stokes wave field — WASD move, R/F up/down, right-drag look",
+            "voxel cluster — depth-banded water + cumulonimbus + cirrus — WASD move, R/F up/down, right-drag look",
             Vec2::new(16.0, 16.0),
             22.0,
             [1.0, 1.0, 1.0, 1.0],
@@ -622,6 +639,73 @@ fn draw_checkbox(renderer: &mut Renderer, white: TextureHandle, rect: Rect, chec
         rect.size - Vec2::splat(inset * 2.0),
         inner_color,
     );
+}
+
+/// Stamp deterministic cumulonimbus and cirrus formations into
+/// `cluster` based on a hash of `(seed, cx, cz)`. About one in three
+/// clusters gets a cumulonimbus at altitude 200–240; about one in
+/// four gets a cirrus wisp at altitude 250+. The choice is
+/// reproducible — same seed and grid coordinates always yields the
+/// same set of clouds.
+fn stamp_atmospheric_features(cluster: &mut flicker_voxel::Cluster, seed32: u32, cx: u16, cz: u16) {
+    let cumulonimbus_key = mix_u32(seed32, cx as u32, cz as u32, 0xC10D_C10D);
+    let cirrus_key = mix_u32(seed32, cx as u32, cz as u32, 0xC1FF_C1FF);
+
+    // ~1/3 of clusters get a cumulonimbus.
+    if cumulonimbus_key.is_multiple_of(3) {
+        let cloud_seed = cumulonimbus_key;
+        // Interior placement, well away from the cluster boundary so
+        // the cauliflower spread does not clip out of frame on either
+        // side.
+        let margin: u32 = 60;
+        let inner_cx = margin + (cloud_seed % (CLUSTER_DIM - 2 * margin));
+        let inner_cz = margin + ((cloud_seed >> 8) % (CLUSTER_DIM - 2 * margin));
+        generators::cumulonimbus_at(
+            cluster,
+            cloud_seed,
+            inner_cx as i32,
+            inner_cz as i32,
+            /* base_y */ 200,
+            /* top_y */ 240,
+            /* max_radius */ 25,
+        );
+    }
+
+    // ~1/4 of clusters get a cirrus wisp.
+    if cirrus_key.is_multiple_of(4) {
+        let wisp_seed = cirrus_key;
+        let start = [
+            (wisp_seed % (CLUSTER_DIM - 80)) as i32 + 20,
+            252 + ((wisp_seed >> 16) % 4) as i32,
+            ((wisp_seed >> 8) % (CLUSTER_DIM - 80)) as i32 + 20,
+        ];
+        // Long-axis offset roughly along (+X, slight +Z), length ~140.
+        let dx = 140 + ((wisp_seed >> 4) % 30) as i32;
+        let dz = 30 + ((wisp_seed >> 12) % 50) as i32;
+        let end = [
+            (start[0] + dx).min(CLUSTER_DIM as i32 - 5),
+            start[1] + ((wisp_seed >> 20) % 4) as i32 - 1,
+            (start[2] + dz).min(CLUSTER_DIM as i32 - 5),
+        ];
+        generators::cirrus_wisp_at(cluster, wisp_seed, start, end, /* thickness */ 2);
+    }
+}
+
+/// Small deterministic mixer for the scene's cluster-level decisions.
+/// Not cryptographic — just enough to scatter the cumulonimbus and
+/// cirrus picks across different seed/grid combinations.
+fn mix_u32(a: u32, b: u32, c: u32, d: u32) -> u32 {
+    let mut h = a
+        .wrapping_mul(0x9E37_79B1)
+        .wrapping_add(b.wrapping_mul(0x85EB_CA77))
+        .wrapping_add(c.wrapping_mul(0xC2B2_AE3D))
+        .wrapping_add(d.wrapping_mul(0x27D4_EB2F));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7FEB_352D);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846C_A68B);
+    h ^= h >> 16;
+    h
 }
 
 fn main() -> Result<()> {

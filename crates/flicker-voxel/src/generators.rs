@@ -18,6 +18,26 @@ use crate::local_coord::LocalCoord;
 use crate::material::Material;
 use crate::voxel::Voxel;
 
+/// Demo material indices for the scene generators. **STUB** — there
+/// is no real material/contents system yet; these are stable indices
+/// the shader's `material_index_color` switches on. Replace when the
+/// real material system lands.
+///
+/// Indices `1..=5` cover the water depth band (deep → mid → shallow →
+/// crest → foam). Indices `6..=8` cover the cloud body band (dark →
+/// mid → light). Index `9` is cirrus.
+pub mod demo_materials {
+    pub const DEEP_WATER: u16 = 1;
+    pub const MID_WATER: u16 = 2;
+    pub const SHALLOW: u16 = 3;
+    pub const CREST: u16 = 4;
+    pub const FOAM: u16 = 5;
+    pub const CLOUD_DARK: u16 = 6;
+    pub const CLOUD_MID: u16 = 7;
+    pub const CLOUD_LIGHT: u16 = 8;
+    pub const CIRRUS: u16 = 9;
+}
+
 /// Generate a cluster representing a flat terrain slab: every voxel at
 /// `y < height` is solid with the given material, every voxel at
 /// `y >= height` is empty.
@@ -603,6 +623,361 @@ pub fn heightmap_terrain_at(seed: u64, material: Material, world_offset: [f32; 3
     }
 
     c
+}
+
+/// Generate a cluster from the world heightmap function at a given
+/// world offset, with each solid voxel's material keyed to its
+/// normalized Y position within the heightmap band — producing a
+/// smooth dark-to-light depth gradient across the surface.
+///
+/// Identical geometry to [`heightmap_terrain_at`]: same heightmap
+/// sampling, same fractional-Y top-corner placement. The only
+/// difference is material assignment.
+///
+/// # Banding
+///
+/// The heightmap band is `[BASE_HEIGHT - AMPLITUDE, BASE_HEIGHT +
+/// AMPLITUDE] = [64, 192]`. For each solid voxel at world Y `y`, we
+/// compute `t = (y - 64) / 128` clamped to `[0, 1]` and look up the
+/// `(primary, secondary, blend)` for that `t` via [`water_material_at`]:
+///
+/// | `t` range  | Transition                |
+/// | ---------- | ------------------------- |
+/// | `[0, 0.25)`  | `DEEP_WATER` → `MID_WATER` |
+/// | `[0.25, 0.55)` | `MID_WATER` → `SHALLOW`    |
+/// | `[0.55, 0.80)` | `SHALLOW` → `CREST`        |
+/// | `[0.80, 0.95)` | `CREST` → `FOAM`           |
+/// | `[0.95, 1.0]`  | `FOAM` solid               |
+///
+/// The blend factor encodes the *fractional* position within the
+/// current segment, so adjacent voxels at slightly different heights
+/// produce smoothly interpolated colors after the shader's `mix`.
+#[must_use]
+pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 3]) -> Cluster {
+    let mut c = Cluster::empty();
+    let ox = world_offset[0];
+    let oz = world_offset[2];
+
+    // The heightmap band edges in world Y (see `heightmap.rs`). Local
+    // Y equals world Y when `world_offset.y == 0` (the Y-stacking
+    // assumption documented on `heightmap_terrain_at`).
+    const BAND_LO: f32 = 64.0;
+    const BAND_HI: f32 = 192.0;
+    const BAND_SPAN: f32 = BAND_HI - BAND_LO;
+
+    for z in 0..CLUSTER_DIM {
+        for x in 0..CLUSTER_DIM {
+            let h = world_height_seeded(ox + x as f32 + 0.5, oz + z as f32 + 0.5, seed);
+            if !h.is_finite() {
+                continue;
+            }
+            if h <= 0.0 {
+                continue;
+            }
+
+            let top_y_i = h.floor() as i64;
+            let capped = top_y_i >= CLUSTER_DIM as i64;
+            let top_y = if capped {
+                CLUSTER_DIM - 1
+            } else {
+                top_y_i as u32
+            };
+
+            // Solid fill below the surface — default joins, material
+            // banded by each voxel's own world Y.
+            for y in 0..top_y {
+                let t = ((y as f32 - BAND_LO) / BAND_SPAN).clamp(0.0, 1.0);
+                let (p, s, b) = water_material_at(t);
+                let m = Material::new(p, s, b).expect("demo indices in range");
+                c.set(
+                    LocalCoord::new(x, y, z).expect("in bounds"),
+                    Voxel::new(CornerVector::DEFAULT, m),
+                );
+            }
+
+            // Topmost layer: corner Y positioned to express the
+            // fractional part of h (matches `heightmap_terrain_at`).
+            let t_top = ((top_y as f32 - BAND_LO) / BAND_SPAN).clamp(0.0, 1.0);
+            let (p, s, b) = water_material_at(t_top);
+            let m = Material::new(p, s, b).expect("demo indices in range");
+            let top_voxel = if capped {
+                Voxel::new(CornerVector::DEFAULT, m)
+            } else {
+                let fractional = h - top_y as f32;
+                Voxel::new(CornerVector::from_components(0.5, fractional, 0.5), m)
+            };
+            c.set(LocalCoord::new(x, top_y, z).expect("in bounds"), top_voxel);
+        }
+    }
+
+    c
+}
+
+/// Map a normalized vertical position `t ∈ [0, 1]` within the water
+/// heightmap band to `(primary, secondary, blend_byte)`. `t = 0`
+/// is the deepest trough; `t = 1` is the highest crest. The blend
+/// byte is the local segment fraction scaled into `[0, 255]`.
+fn water_material_at(t: f32) -> (u16, u16, u8) {
+    use demo_materials::*;
+    // Segment edges over `t`. Each entry is `(edge, primary, secondary)`
+    // — within `[prev_edge, edge)`, the voxel interpolates from
+    // `primary` to `secondary`.
+    let segments: [(f32, u16, u16); 4] = [
+        (0.25, DEEP_WATER, MID_WATER),
+        (0.55, MID_WATER, SHALLOW),
+        (0.80, SHALLOW, CREST),
+        (0.95, CREST, FOAM),
+    ];
+    let mut prev_edge = 0.0_f32;
+    for (edge, lo_idx, hi_idx) in segments {
+        if t < edge {
+            let local_t = ((t - prev_edge) / (edge - prev_edge)).clamp(0.0, 1.0);
+            return (lo_idx, hi_idx, (local_t * 255.0) as u8);
+        }
+        prev_edge = edge;
+    }
+    // Above all segment edges: solid FOAM.
+    (demo_materials::FOAM, demo_materials::FOAM, 0)
+}
+
+/// Map a normalized vertical position `t ∈ [0, 1]` within a cloud's
+/// vertical band to `(primary, secondary, blend_byte)`. `t = 0` is
+/// the cloud's flat anvil base (dark underbelly); `t = 1` is the
+/// sunlit crown.
+fn cloud_material_at(t: f32) -> (u16, u16, u8) {
+    use demo_materials::*;
+    let segments: [(f32, u16, u16); 2] = [
+        (0.30, CLOUD_DARK, CLOUD_MID),
+        (0.70, CLOUD_MID, CLOUD_LIGHT),
+    ];
+    let mut prev_edge = 0.0_f32;
+    for (edge, lo_idx, hi_idx) in segments {
+        if t < edge {
+            let local_t = ((t - prev_edge) / (edge - prev_edge)).clamp(0.0, 1.0);
+            return (lo_idx, hi_idx, (local_t * 255.0) as u8);
+        }
+        prev_edge = edge;
+    }
+    (demo_materials::CLOUD_LIGHT, demo_materials::CLOUD_LIGHT, 0)
+}
+
+/// Stamp a single sphere into `cluster` with per-voxel materials
+/// resolved by a caller-supplied closure. Voxels outside the cluster
+/// are skipped. Default corner vector throughout — the per-voxel
+/// material gives the cloud its gradient, no joint perturbation.
+///
+/// `material_for(world_y)` is called once per stamped voxel; for
+/// cloud generators it picks the right band via [`cloud_material_at`].
+fn add_solid_sphere_with<F>(
+    cluster: &mut Cluster,
+    cx: i32,
+    cy: i32,
+    cz: i32,
+    r: i32,
+    mut material_for: F,
+) where
+    F: FnMut(i32) -> Material,
+{
+    if r <= 0 {
+        return;
+    }
+    let r2 = r * r;
+    let lo = |c: i32| (c - r).max(0);
+    let hi = |c: i32| (c + r).min(CLUSTER_DIM as i32 - 1);
+
+    for z in lo(cz)..=hi(cz) {
+        let dz = z - cz;
+        let dz2 = dz * dz;
+        if dz2 > r2 {
+            continue;
+        }
+        for y in lo(cy)..=hi(cy) {
+            let dy = y - cy;
+            let dy2 = dy * dy;
+            if dy2 + dz2 > r2 {
+                continue;
+            }
+            let remaining = r2 - dy2 - dz2;
+            let m = material_for(y);
+            let voxel = Voxel::new(CornerVector::DEFAULT, m);
+            for x in lo(cx)..=hi(cx) {
+                let dx = x - cx;
+                if dx * dx <= remaining {
+                    cluster.set(
+                        LocalCoord::new(x as u32, y as u32, z as u32).expect("in bounds"),
+                        voxel,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Stamp a cumulonimbus-shaped cloud into `cluster`. The cloud sits
+/// in a vertical region `[base_y, top_y]` centered horizontally at
+/// `(cx, cz)`, with overall horizontal scale `max_radius`.
+///
+/// Structure (in order of stamping):
+///   1. Trunk: 4–8 large overlapping spheres along the central
+///      vertical axis, radius ≈ `0.6 * max_radius`.
+///   2. Body: 8–16 medium spheres scattered within a vertically-
+///      biased ellipsoid, radius ≈ `0.3 * max_radius`.
+///   3. Cauliflower top: 6–10 smaller spheres above ~70% height,
+///      radius ≈ `0.2 * max_radius`, spread out to ~`1.4 * max_radius`.
+///   4. Anvil base clip: every solid voxel below `base_y` within
+///      the cloud's bounding column is reset to empty, giving the
+///      sharp flat underside.
+///
+/// Material is assigned per voxel by normalized vertical position
+/// within `[base_y, top_y]` via [`cloud_material_at`]. `seed` controls
+/// sphere placement deterministically.
+pub fn cumulonimbus_at(
+    cluster: &mut Cluster,
+    seed: u32,
+    cx: i32,
+    cz: i32,
+    base_y: i32,
+    top_y: i32,
+    max_radius: i32,
+) {
+    if top_y <= base_y || max_radius <= 0 {
+        return;
+    }
+    let band_span = (top_y - base_y) as f32;
+    let material_for = |world_y: i32| -> Material {
+        let t = ((world_y - base_y) as f32 / band_span).clamp(0.0, 1.0);
+        let (p, s, b) = cloud_material_at(t);
+        Material::new(p, s, b).expect("demo indices in range")
+    };
+
+    let trunk_r = (max_radius as f32 * 0.6).round() as i32;
+    let body_r = (max_radius as f32 * 0.3).round() as i32;
+    let top_r = (max_radius as f32 * 0.2).round() as i32;
+
+    // ---- Trunk: 4..=8 spheres climbing the central axis. ----
+    let trunk_count = hash_in_range(seed, 0, 0, 4, 9); // [4, 9) = 4..=8
+    for i in 0..trunk_count {
+        // Distribute trunk centers across the lower 70% of the band.
+        let frac = if trunk_count > 1 {
+            i as f32 / (trunk_count - 1) as f32
+        } else {
+            0.5
+        };
+        let y = base_y + (frac * band_span * 0.7) as i32;
+        // Small lateral jitter so the trunk isn't a perfect vertical column.
+        let ox = hash_in_range(seed, i, 1, 0, 7) as i32 - 3;
+        let oz = hash_in_range(seed, i, 2, 0, 7) as i32 - 3;
+        let r = trunk_r + hash_in_range(seed, i, 3, 0, 4) as i32 - 1;
+        add_solid_sphere_with(cluster, cx + ox, y, cz + oz, r, material_for);
+    }
+
+    // ---- Body: 8..=15 mid-radius spheres scattered through the trunk band. ----
+    let body_count = hash_in_range(seed, 0, 10, 8, 16);
+    for i in 0..body_count {
+        let ox = hash_in_range(seed, i, 11, 0, (max_radius as u32) + 1) as i32 - (max_radius / 2);
+        let oz = hash_in_range(seed, i, 12, 0, (max_radius as u32) + 1) as i32 - (max_radius / 2);
+        // Body fills [10%, 75%] of the band.
+        let y_frac = 0.10 + hash_in_range(seed, i, 13, 0, 1001) as f32 / 1000.0 * 0.65;
+        let y = base_y + (y_frac * band_span) as i32;
+        let r = body_r + hash_in_range(seed, i, 14, 0, 4) as i32 - 1;
+        add_solid_sphere_with(cluster, cx + ox, y, cz + oz, r, material_for);
+    }
+
+    // ---- Cauliflower top: 6..=9 small spheres above 70% height, spread wider. ----
+    let top_count = hash_in_range(seed, 0, 20, 6, 10);
+    let spread = (max_radius as f32 * 1.4) as i32;
+    for i in 0..top_count {
+        let ox = hash_in_range(seed, i, 21, 0, (2 * spread as u32) + 1) as i32 - spread;
+        let oz = hash_in_range(seed, i, 22, 0, (2 * spread as u32) + 1) as i32 - spread;
+        // Top fills [0.7, 1.0] of the band.
+        let y_frac = 0.70 + hash_in_range(seed, i, 23, 0, 1001) as f32 / 1000.0 * 0.30;
+        let y = base_y + (y_frac * band_span) as i32;
+        let r = top_r + hash_in_range(seed, i, 24, 0, 3) as i32 - 1;
+        add_solid_sphere_with(cluster, cx + ox, y, cz + oz, r, material_for);
+    }
+
+    // ---- Anvil base clip: clear every *cloud* voxel below `base_y`
+    // in the cloud's horizontal footprint, producing the sharp flat
+    // underside. We restrict the clear to cloud-band materials so we
+    // do not punch a hole through the water surface or other terrain
+    // that happens to share the column underneath the cloud.
+    // The Y range only needs to cover where the trunk's lowest sphere
+    // could reach: `base_y - trunk_r` upward. The footprint is the
+    // cauliflower spread plus the trunk radius — comfortably larger
+    // than any sphere reaches.
+    let footprint = spread + trunk_r;
+    let x_lo = (cx - footprint).max(0) as u32;
+    let x_hi = (cx + footprint).min(CLUSTER_DIM as i32 - 1) as u32;
+    let z_lo = (cz - footprint).max(0) as u32;
+    let z_hi = (cz + footprint).min(CLUSTER_DIM as i32 - 1) as u32;
+    let y_clip_top = base_y.min(CLUSTER_DIM as i32 - 1).max(0) as u32;
+    // Trunk and body spheres can extend roughly `trunk_r + 1` below
+    // base_y. Clip a bit further to be safe.
+    let y_clip_bottom = (base_y - trunk_r - 2).max(0) as u32;
+    let empty = Voxel::EMPTY;
+    for z in z_lo..=z_hi {
+        for y in y_clip_bottom..y_clip_top {
+            for x in x_lo..=x_hi {
+                let coord = LocalCoord::new(x, y, z).expect("in bounds");
+                let primary = cluster.get(coord).material().primary();
+                if matches!(
+                    primary,
+                    demo_materials::CLOUD_DARK
+                        | demo_materials::CLOUD_MID
+                        | demo_materials::CLOUD_LIGHT
+                ) {
+                    cluster.set(coord, empty);
+                }
+            }
+        }
+    }
+}
+
+/// Stamp a thin elongated cirrus wisp into `cluster`. A series of
+/// small spheres along a roughly horizontal axis from `start` to
+/// `end`, with a gentle sinusoidal lateral curl. Single material
+/// (`CIRRUS`) throughout — no banding, no blending — so the wisp
+/// reads as a uniform pale streak.
+pub fn cirrus_wisp_at(
+    cluster: &mut Cluster,
+    seed: u32,
+    start: [i32; 3],
+    end: [i32; 3],
+    thickness: i32,
+) {
+    if thickness <= 0 {
+        return;
+    }
+    let cirrus = Material::new(demo_materials::CIRRUS, demo_materials::CIRRUS, 0)
+        .expect("demo indices in range");
+    let cirrus_for = |_y: i32| -> Material { cirrus };
+
+    // 10 sphere stamps along the parametric line.
+    let stamp_count: u32 = 10;
+    let dx = end[0] - start[0];
+    let dy = end[1] - start[1];
+    let dz = end[2] - start[2];
+
+    // Choose a curl-perpendicular axis in the XZ plane: rotate the
+    // (dx, dz) projection 90° so the wisp curls sideways, not up/down.
+    let perp_x = -dz as f32;
+    let perp_z = dx as f32;
+    let perp_len = (perp_x * perp_x + perp_z * perp_z).sqrt().max(1.0);
+    let perp_x = perp_x / perp_len;
+    let perp_z = perp_z / perp_len;
+
+    for i in 0..stamp_count {
+        let t = i as f32 / (stamp_count - 1).max(1) as f32;
+        // Curl amplitude: a few voxels, modulated along the wisp.
+        let curl = (t * std::f32::consts::PI * 2.0).sin() * (thickness as f32 * 1.5);
+        let x = start[0] + (dx as f32 * t) as i32 + (perp_x * curl) as i32;
+        let y = start[1] + (dy as f32 * t) as i32;
+        let z = start[2] + (dz as f32 * t) as i32 + (perp_z * curl) as i32;
+        // Per-stamp radius jitter for organic thickness variation.
+        let jitter = hash_in_range(seed, i, 0, 0, 3) as i32 - 1;
+        let r = (thickness + jitter).max(1);
+        add_solid_sphere_with(cluster, x, y, z, r, cirrus_for);
+    }
 }
 
 /// Deterministic uniform integer hash in `[lo, hi)`, keyed by a
