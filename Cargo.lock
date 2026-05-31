@@ -715,7 +715,6 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "flicker-core",
- "flicker-voxel",
  "glam",
  "glyphon",
  "image",

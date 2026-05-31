@@ -9,11 +9,7 @@ use glam::{Mat4, Vec3};
 
 /// One vertex of a 3D mesh.
 ///
-/// The byte layout (`28` bytes — `position[3] + normal[3] + material[1]`)
-/// mirrors `flicker_voxel::Vertex` exactly so a `flicker_voxel::CellMesh`
-/// can be uploaded with zero per-vertex copying via
-/// `Renderer::upload_voxel_mesh`. The compile-time assertion below
-/// catches accidental drift between the two layouts.
+/// Byte layout is `28` bytes — `position[3] + normal[3] + material[1]`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable, PartialEq)]
 pub struct MeshVertex {
@@ -21,21 +17,6 @@ pub struct MeshVertex {
     pub normal: [f32; 3],
     pub material: u32,
 }
-
-// Layout sanity: `MeshVertex` must be byte-for-byte equivalent to
-// `flicker_voxel::Vertex`. `Renderer::upload_voxel_mesh` relies on the
-// `bytemuck::cast_slice` from one to the other, which is sound only if
-// both size and alignment match.
-const _: () = {
-    assert!(
-        std::mem::size_of::<MeshVertex>() == std::mem::size_of::<flicker_voxel::Vertex>(),
-        "MeshVertex size must match flicker_voxel::Vertex"
-    );
-    assert!(
-        std::mem::align_of::<MeshVertex>() == std::mem::align_of::<flicker_voxel::Vertex>(),
-        "MeshVertex alignment must match flicker_voxel::Vertex"
-    );
-};
 
 /// Opaque handle to an uploaded mesh stored on the renderer. Meshes
 /// persist across frames; only the per-frame draw queue resets.

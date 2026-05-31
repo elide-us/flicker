@@ -199,19 +199,6 @@ impl Renderer {
         MeshHandle(id)
     }
 
-    /// Upload a [`flicker_voxel::CellMesh`] directly. The vertex slice
-    /// is reinterpreted in place as `[MeshVertex]` (no per-vertex copy)
-    /// thanks to the matching layouts asserted in `mesh.rs`; the index
-    /// buffer's `U16` / `U32` variant carries over.
-    pub fn upload_voxel_mesh(&mut self, mesh: &flicker_voxel::CellMesh) -> MeshHandle {
-        let vertices: &[MeshVertex] = bytemuck::cast_slice(mesh.vertices());
-        let indices = match mesh.indices() {
-            flicker_voxel::Indices::U16(v) => MeshIndices::U16(v.as_slice()),
-            flicker_voxel::Indices::U32(v) => MeshIndices::U32(v.as_slice()),
-        };
-        self.upload_mesh(vertices, indices)
-    }
-
     /// Reset all per-frame draw queues. Called by the runner at the start
     /// of every frame. Mesh **storage** (uploaded vertex/index buffers)
     /// is retained; only the per-frame mesh **draw queue** clears.
