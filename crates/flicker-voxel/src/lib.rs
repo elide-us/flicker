@@ -34,20 +34,29 @@
 mod cluster;
 mod cluster_id;
 mod cluster_map;
+mod contour;
 mod corner_vector;
 pub mod generators;
 pub mod heightmap;
 mod local_coord;
 mod material;
+mod mesh;
 mod neighbor;
 pub mod primitive;
+mod qef;
 mod voxel;
 
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
 pub use cluster_id::ClusterId;
 pub use cluster_map::ClusterMap;
+pub use contour::contour;
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
+pub use mesh::{mesh, ClusterMesh, ClusterVertex};
 pub use neighbor::{FaceDir, Lod, NeighborContext};
+pub use primitive::{
+    Cone, Cube, Cylinder, FlatField, HalfCylinder, HalfSphere, HeightField, Hermite, Primitive,
+    Scene, Sdf, Sphere,
+};
 pub use voxel::Voxel;

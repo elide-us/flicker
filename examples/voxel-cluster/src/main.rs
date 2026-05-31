@@ -19,8 +19,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState};
-use flicker::render::{Camera, Renderer, TextureHandle, Vec2, Vec3};
-use flicker_voxel::{Cluster, ClusterId, ClusterMap, CLUSTER_DIM};
+use flicker::render::{
+    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
+    Vec2, Vec3,
+};
+use flicker_voxel::{contour, ClusterId, ClusterMap, Material, Scene, CLUSTER_DIM};
 
 /// Axis-aligned rectangle in HUD pixel space. Retained as part of the
 /// sprite-UI capability (see `draw_checkbox`); no active widgets use it
@@ -45,6 +48,10 @@ struct VoxelCluster {
     #[allow(dead_code)]
     white: Option<TextureHandle>,
 
+    /// Uploaded mesh of the contoured cluster. Populated in `init` and
+    /// drawn each frame at the cluster's world offset.
+    mesh: Option<MeshHandle>,
+
     /// First-person camera state.
     position: Vec3,
     yaw: f32,
@@ -66,6 +73,7 @@ impl Default for VoxelCluster {
         Self {
             map: ClusterMap::new(),
             white: None,
+            mesh: None,
             position: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
@@ -103,10 +111,27 @@ impl VoxelCluster {
 
 impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
-        // One bare cluster at the origin. Empty: no overrides, no
-        // surface — just an addressable extent in the map.
+        // One cluster at the origin, contoured from the analytic-primitive
+        // gallery — six SDF shapes (sphere, cube, cylinder, cone, dome,
+        // half-cylinder) unioned in a single contour pass. The mesh-regen
+        // stage reads the contoured cluster back out as triangles.
+        let material = Material::new(1, 1, 0).expect("grey material is in-range");
+        let cluster = contour(&Scene::gallery(), material);
+
+        let cm = flicker_voxel::mesh(&cluster);
+        let verts: Vec<MeshVertex> = cm
+            .vertices
+            .iter()
+            .map(|v| MeshVertex {
+                position: v.position,
+                normal: v.normal,
+                material: v.material,
+            })
+            .collect();
+        self.mesh = Some(renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices)));
+
         let mut map = ClusterMap::new();
-        map.insert(ClusterId::new(0, 0, 0, 0), Cluster::empty());
+        map.insert(ClusterId::new(0, 0, 0, 0), cluster);
         self.map = map;
 
         // Spawn outside the cluster looking back at it, angled down so
@@ -178,8 +203,7 @@ impl App for VoxelCluster {
             far: 10000.0,
         });
 
-        // Draw each cluster's extent as a white wireframe box. With one
-        // empty cluster this is the entire scene.
+        // Draw each cluster's extent as a white wireframe box.
         for (id, _cluster) in self.map.iter() {
             let offset = id.world_offset();
             let min = Vec3::new(offset[0], offset[1], offset[2]);
@@ -187,9 +211,18 @@ impl App for VoxelCluster {
             renderer.draw_bounding_box(min, max, [1.0, 1.0, 1.0, 1.0]);
         }
 
+        // Draw the contoured cluster's mesh at its world offset. (For a
+        // single cluster at (0,0,0,0) the offset is zero; the translation
+        // is here so adding more clusters is a one-line change.)
+        if let Some(mesh) = self.mesh {
+            let o = ClusterId::new(0, 0, 0, 0).world_offset();
+            let model = Mat4::from_translation(Vec3::new(o[0], o[1], o[2]));
+            renderer.draw_mesh(mesh, model, MeshDrawOptions::default());
+        }
+
         // HUD text.
         renderer.draw_text(
-            "voxel cluster — single bare cluster — WASD move, R/F up/down, right-drag look",
+            "voxel cluster — primitive gallery — WASD move, R/F up/down, right-drag look",
             Vec2::new(16.0, 16.0),
             22.0,
             [1.0, 1.0, 1.0, 1.0],
