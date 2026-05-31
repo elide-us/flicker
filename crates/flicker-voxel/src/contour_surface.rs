@@ -1,28 +1,14 @@
 //! Surface-voxel direct contouring.
 //!
-//! # Why a second algorithm
-//!
-//! The cell-based [`contour_cluster`](crate::contour_cluster) in
-//! [`crate::contour`] places one vertex per 2×2×2 cell at the centroid
-//! of its 8 corner-voxels' owned `+++` corners. That centroid would
-//! be exactly correct if all 8 corners expressed the surface — but in
-//! practice only a subset do (the solid-surface voxels) and the rest
-//! are interior or far-air voxels at their default `+++` corner. The
-//! centroid averages the carefully-positioned surface joins with the
-//! default-positioned interior joins, attenuating any join
-//! displacement to roughly `1/8`. The heightmap generator
-//! ([`crate::generators::heightmap_terrain_at`]) now places topmost
-//! solid voxels' joins exactly on the surface, but that work is being
-//! diluted by the centroid average — which is why the rendered
-//! terrain still reads as cubic despite the joins being right.
-//!
-//! [`contour_surface`] inverts the algorithm: it walks **voxels**,
-//! not cells, and emits one vertex per solid voxel that participates
-//! in the surface (has at least one non-solid 6-neighbor). The
-//! vertex sits at the voxel's own `+++` corner — no averaging.
-//! Adjacent surface voxels with joins at slightly different world
-//! positions produce vertices at those slightly different positions,
-//! and the triangles connecting them are the surface slope directly.
+//! [`contour_surface`] walks **voxels**, not cells, and emits one
+//! vertex per solid voxel that participates in the surface (has at
+//! least one non-solid 6-neighbor). The vertex sits at the voxel's
+//! own `+++` corner — no averaging. Adjacent surface voxels with
+//! joins at slightly different world positions produce vertices at
+//! those slightly different positions, and the triangles connecting
+//! them are the surface slope directly. This is what couples the
+//! heightmap generator's per-column fractional-Y joins to a smoothly
+//! sloped rendered surface.
 //!
 //! # Quad assembly: sign-changing axis edges, orientation-free 3D search
 //!
@@ -80,11 +66,10 @@
 //! # Scope and simplification
 //!
 //! - **LOD 0 only.** Strided sampling is a follow-up.
-//! - **Single cluster only.** No `NeighborContext`. The function
-//!   operates identically to `contour_cluster(&cluster)` with
-//!   `NeighborContext::none()` in scope: cross-cluster correctness
-//!   comes from upstream (both clusters' generators sample the same
-//!   heightmap), not from this pass.
+//! - **Single cluster only.** No `NeighborContext`. Cross-cluster
+//!   correctness comes from upstream: both clusters' generators
+//!   sample the same heightmap, so adjacent clusters' boundary
+//!   columns agree at world-coordinate granularity.
 //! - **Solid side participates.** A boundary cell has a solid and an
 //!   air voxel; we keep only the solid side as the vertex source.
 //!   This mirrors [`crate::is_surface_boundary_voxel`] restricted to
@@ -100,12 +85,9 @@
 //! - **Search radius is bounded** ([`MAX_QUAD_SEARCH_RADIUS`]). On
 //!   gradients steeper than the cap, some quads are skipped — small
 //!   gaps rather than wildly stretched triangles.
-//!
-//! [`contour_cluster`](crate::contour_cluster) and the rest of the
-//! cell-based family remain in place. This module is additive.
 
 use crate::cluster::CLUSTER_DIM;
-use crate::contour::{CellMesh, Indices, MeshMetadata, Vertex};
+use crate::mesh::{CellMesh, Indices, MeshMetadata, Vertex};
 use crate::{Cluster, LocalCoord, Material, Voxel};
 
 /// Maximum 3D Manhattan-shell radius for the orientation-free
@@ -147,19 +129,15 @@ fn empty_surface_mesh() -> CellMesh {
 /// that voxel's owned `+++` corner. Quads from grid-adjacent surface
 /// voxels.
 ///
-/// This is the surface-first algorithm: the heightmap (or any other
-/// generator that places joins on the surface) is the source of
-/// truth, and this pass samples those joins directly without the
-/// cell-centroid averaging of
-/// [`contour_cluster`](crate::contour_cluster). Where adjacent
-/// columns sit at slightly different heights, the line between their
-/// joins becomes the surface slope — no smoothing pass required.
+/// The heightmap (or any other generator that places joins on the
+/// surface) is the source of truth, and this pass samples those joins
+/// directly. Where adjacent columns sit at slightly different
+/// heights, the line between their joins becomes the surface slope —
+/// no smoothing pass required.
 ///
 /// # Scope
 ///
-/// LOD 0 only. Single-cluster — no neighbor context. The existing
-/// [`contour_cluster`](crate::contour_cluster) family remains in
-/// place for compatibility during the transition.
+/// LOD 0 only. Single-cluster — no neighbor context.
 ///
 /// # Simplification
 ///
@@ -167,9 +145,7 @@ fn empty_surface_mesh() -> CellMesh {
 /// For height-field terrain this is correct. For free-standing solids
 /// (e.g. a 2×2×2 solid cube in air fixture) this is offset by one
 /// corner from where dual contouring would place vertices — a
-/// follow-up will address the full air-anchor case. The intent here
-/// is to verify the slope-correctness of the surface-first model on
-/// the active terrain scene.
+/// follow-up will address the full air-anchor case.
 #[must_use]
 pub fn contour_surface(cluster: &Cluster) -> CellMesh {
     let dim = CLUSTER_DIM as usize;
@@ -311,16 +287,14 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
     // and test for sign change (one solid, one not). For each
     // sign-changing edge, search the four perpendicular-plane
     // quadrants outward for the nearest emitted surface vertex. If
-    // all four quadrants return a vertex, emit one quad. Winding
-    // chosen by `push_oriented_quad` (face normal aligned with
-    // average vertex normal).
+    // all four quadrants return a vertex, emit one quad. Winding is
+    // chosen by `push_oriented_quad` (face normal aligned with the
+    // average of the four vertex normals).
     //
-    // This rule captures slopes and cliffs the previous 2×2-loop
-    // rule missed: at a height step, the corner voxel buried inside
-    // the taller column is interior (no vertex), so the 2×2 loop has
-    // only 3 of 4 corners and emits nothing. The quadrant search
-    // instead reaches *over* the interior voxel into the taller
-    // column's top, producing a tilted quad that bridges the step.
+    // At a height step the corner voxel buried inside the taller
+    // column is interior and emits no vertex; the quadrant search
+    // reaches over it into the taller column's top, producing the
+    // tilted quad that bridges the step.
     let mut indices_u32: Vec<u32> = Vec::new();
 
     // Search the 3D Manhattan-shell neighborhood around both edge
@@ -566,9 +540,8 @@ fn push_oriented_quad(indices: &mut Vec<u32>, vertices: &[Vertex], q: [u32; 4]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contour::contour_cluster;
     use crate::corner_vector::CornerVector;
-    use crate::generators::{heightmap_terrain, solid_slab};
+    use crate::generators::{heightmap_terrain_at_with_depth_materials, solid_slab};
     use crate::material::Material;
 
     fn coord(x: u32, y: u32, z: u32) -> LocalCoord {
@@ -762,88 +735,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn slope_contrasts_with_cell_based_centroid() {
-        // The dual contour algorithm in `contour_cluster` averages
-        // 8 corners per cell. The cell at (lx=0, ly=3, lz=128) sits
-        // across the column-0/column-1 slope and includes 6 solid
-        // corners + 2 empty corners; its centroid is at
-        // ((4·0.5 + 4·1.5)/8, (4·3.5 + 4·4.5)/8, (4·128.5 +
-        //  4·129.5)/8) = (1.0, 4.0, 129.0). The Y midpoint, not at
-        // either column's top. The contour_surface algorithm places
-        // vertices at the column tops (y=3.5 and y=4.5) — that's the
-        // demonstration the dilution is gone.
-        let c = build_slope_fixture();
-
-        let cell_mesh = contour_cluster(&c);
-        // Find the centroid vertex at (1.0, _, 129.0) — that's the
-        // dual-contour cell vertex straddling the column-0/column-1
-        // slope at z ≈ 128/129.
-        let centroid_v = cell_mesh
-            .vertices()
-            .iter()
-            .find(|v| (v.position[0] - 1.0).abs() < 0.05 && (v.position[2] - 129.0).abs() < 0.05)
-            .expect("the cell-based algorithm should emit a centroid vertex here");
-        assert!(
-            (centroid_v.position[1] - 4.0).abs() < 0.05,
-            "cell-based centroid Y is {}, expected ≈ 4.0 (the midpoint of the \
-             two column tops at 3.5 and 4.5)",
-            centroid_v.position[1]
-        );
-
-        // Confirm the surface algorithm places its vertices at the
-        // column tops, not at the midpoint. (Filter for Y ≥ 3 to
-        // skip the slope fixture's cluster-edge bottom/wall surface
-        // vertices that sit at the same X/Z as the column top.)
-        let surf_mesh = contour_surface(&c);
-        let surf_top_at = |x: f32| -> f32 {
-            surf_mesh
-                .vertices()
-                .iter()
-                .find(|v| {
-                    (v.position[0] - x).abs() < 0.05
-                        && (v.position[2] - 128.5).abs() < 0.05
-                        && v.position[1] >= 3.0
-                })
-                .unwrap_or_else(|| panic!("no top-row vertex at x≈{x}, z≈128.5"))
-                .position[1]
-        };
-        let surf_y_col0 = surf_top_at(0.5);
-        let surf_y_col1 = surf_top_at(1.5);
-        assert!(
-            (surf_y_col0 - 3.5).abs() < 0.05,
-            "surface alg col-0 Y = {}, expected 3.5",
-            surf_y_col0
-        );
-        assert!(
-            (surf_y_col1 - 4.5).abs() < 0.05,
-            "surface alg col-1 Y = {}, expected 4.5",
-            surf_y_col1
-        );
-    }
-
     // ---- heightmap sanity ----
 
     #[test]
     fn heightmap_terrain_produces_substantial_mesh() {
-        let mesh = contour_surface(&heightmap_terrain(0x42, Material::new(7, 7, 7).unwrap()));
+        // End-to-end sanity: the heightmap generator + contour pass
+        // produces a substantial mesh covering the wave field. The
+        // triangle threshold reflects the 3D orientation-free quadrant
+        // search's coverage on Lipschitz wave terrain — gaps remain
+        // only on the steepest crests where adjacent column heights
+        // differ by more than the search radius reaches.
+        let mesh = contour_surface(&heightmap_terrain_at_with_depth_materials(
+            0x42,
+            [0.0, 0.0, 0.0],
+        ));
         assert!(!mesh.is_empty());
         assert!(
             mesh.vertices().len() > 50_000,
             "expected > 50_000 vertices, got {}",
             mesh.vertices().len()
         );
-        // Triangle count: with the rotational-priority quad search
-        // finding 4 distinct cardinal neighbors at shell 1, the
-        // mesh is dense on gentle regions of the wave field. Gaps
-        // remain on the steep regions where the +X/-X cardinal
-        // search at the edge's two Y values doesn't reach the
-        // neighbor column's top (which sits at a Y the
-        // perpendicular-plane search doesn't traverse). Empirically
-        // ~50K triangles on this fixture, up from ~31K under the
-        // previous (diagonal-only) rule. Participation analysis in
-        // `heightmap_field_no_large_top_vertex_gaps` quantifies the
-        // remaining gap density.
         assert!(
             mesh.indices().triangle_count() > 40_000,
             "expected > 40_000 triangles, got {}",
@@ -867,8 +778,7 @@ mod tests {
 
     #[test]
     fn deterministic_on_heightmap_terrain() {
-        let m = Material::new(7, 7, 7).unwrap();
-        let c = heightmap_terrain(0x99, m);
+        let c = heightmap_terrain_at_with_depth_materials(0x99, [0.0, 0.0, 0.0]);
         let a = contour_surface(&c);
         let b = contour_surface(&c);
         assert_eq!(a.vertices(), b.vertices());
@@ -964,11 +874,11 @@ mod tests {
 
     #[test]
     fn flat_slab_top_face_is_meshed() {
-        // The new sign-changing-edge rule tessellates the half-slab's
-        // top face with diamond-pattern quads (one per interior Y-
-        // edge, with the four corners being adjacent diagonal column
-        // tops). Triangles strictly on the top face — every vertex
-        // at Y ≈ 127.5 — must be plentiful.
+        // The sign-changing-edge rule tessellates the half-slab's top
+        // face with diamond-pattern quads (one per interior Y-edge,
+        // with the four corners being adjacent diagonal column tops).
+        // Triangles strictly on the top face — every vertex at Y ≈
+        // 127.5 — must be plentiful.
         let m = solid_slab(128, Material::new(7, 7, 7).unwrap());
         let mesh = contour_surface(&m);
 
@@ -1052,33 +962,18 @@ mod tests {
 
     #[test]
     fn heightmap_field_no_large_top_vertex_gaps() {
-        // Qualitative: the majority of column-top vertices on the
-        // heightmap surface participate in at least one triangle.
-        //
-        // With the rotational-priority axis-adjacent search at shell
-        // 1, participation rose from ~68% (previous diagonal-only
-        // rule) to ~80% — a real improvement but still short of the
-        // 90%+ a fully meshed surface would have.
-        //
-        // The remaining ~20% gap comes from a deeper limitation of
-        // the perpendicular-plane-only search: when a Y-edge at
-        // column (vx, vz) has a neighbor column whose top is at a
-        // *different Y* than either edge endpoint (i.e., neighbor
-        // h_n = h-2 or lower, or h+2 or higher), the search at shell
-        // 1's (0, 1) and (1, 0) positions — which stay at Y = h-1
-        // or Y = h — doesn't reach the neighbor's top. Shell 2's
-        // (0, 2)/(2, 0) extend along perpendicular axes but stay at
-        // the same Y. Only shell 2's (1, 1) diagonal reaches across
-        // both perpendicular axes, and even then only at the same
-        // two Y values. A search that includes Y excursions — or a
-        // halo extension across cluster seams — would push this
-        // higher.
-        //
-        // Threshold set at ≥ 75% to anchor the rotational-priority
-        // improvement while flagging the remaining gap-density work
-        // as the next follow-up.
-        let m = Material::new(7, 7, 7).unwrap();
-        let mesh = contour_surface(&heightmap_terrain(0x42, m));
+        // Most column-top vertices on the heightmap surface participate
+        // in at least one triangle. Some gaps remain on the steepest
+        // wave crests where adjacent column heights differ by more
+        // than the 3D quadrant search reaches — accepted as a known
+        // limitation of the single-cluster contour pass; seam-halo
+        // extension will reduce it. Threshold ≥ 90% reflects the
+        // orientation-free 3D search's coverage on Lipschitz wave
+        // terrain.
+        let mesh = contour_surface(&heightmap_terrain_at_with_depth_materials(
+            0x42,
+            [0.0, 0.0, 0.0],
+        ));
 
         let mut used = std::collections::HashSet::<u32>::new();
         each_triangle(&mesh, |tri| {

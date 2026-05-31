@@ -1,13 +1,10 @@
 //! voxel-cluster: contour a 3×3 field of clusters materialized from
 //! the Navier-Stokes-inspired heightmap function, and fly through
-//! them with MMO-style first-person controls. Three clickable HUD
-//! checkboxes toggle a mesh-edge wireframe overlay, a centroid
-//! wireframe (a line from each surface-boundary voxel's center to its
-//! owned `+++` corner — the diagnostic for verifying that join
-//! positions agree across cluster seams), and the choice of contour
-//! algorithm: surface-first ([`contour_surface`]) by default, or
-//! legacy cell-centroid dual contouring ([`contour_cluster`]) for
-//! direct A/B comparison on the same scene.
+//! them with MMO-style first-person controls. Two clickable HUD
+//! checkboxes toggle a mesh-edge wireframe overlay and a centroid
+//! wireframe (a line from each surface-boundary voxel's center to
+//! its owned `+++` corner — the diagnostic for verifying that join
+//! positions agree across cluster seams).
 //!
 //! # Why a 3×3 field
 //!
@@ -43,18 +40,13 @@
 //!     Adjacent clusters' lines should meet continuously at seams.
 //!   * A white wireframe cube outlines every cluster's extent so the
 //!     3×3 layout is visible.
-//!   * Toggling the contour-algorithm checkbox re-contours every
-//!     cluster live; voxel data is generated once at startup and
-//!     reused across toggles (a few-second pause during the rebuild
-//!     is expected).
 //!
 //! Controls (rebindable via `Bindings`):
 //!   * WASD: move forward/back/strafe in the camera's facing.
 //!   * R / F: rise / descend (world Y up / down).
 //!   * Right-drag: free-look yaw + pitch.
 //!   * Mouse: free cursor. Click the HUD checkboxes to toggle the
-//!     mesh-edge wireframe, the centroid wireframe, or the contour
-//!     algorithm (surface-first vs cell-centroid).
+//!     mesh-edge wireframe or the centroid wireframe.
 //!   * Escape: quit.
 
 use std::time::Duration;
@@ -65,8 +57,8 @@ use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, Renderer, TextureHandle, Vec2, Vec3,
 };
 use flicker_voxel::{
-    contour_cluster, contour_surface, generators, heightmap, surface_boundary_segments, ClusterId,
-    ClusterMap, CLUSTER_DIM,
+    contour_surface, generators, heightmap, surface_boundary_segments, ClusterId, ClusterMap,
+    CLUSTER_DIM,
 };
 
 /// Edge length of the multi-cluster field, in clusters.
@@ -78,7 +70,7 @@ const SPAWN_EYE_HEIGHT: f32 = 11.0;
 
 /// Color for the centroid wireframe (lines from voxel centers to
 /// their `+++` corner joins). Neon green for high contrast against
-/// both the magenta/black checker and the green per-triangle
+/// the depth-banded water surface and the green per-triangle
 /// wireframe — they remain distinguishable when both are on.
 const CENTROID_LINE_COLOR: [f32; 4] = [0.0, 1.0, 0.4, 1.0];
 
@@ -111,16 +103,6 @@ fn wireframe_checkbox_rect() -> Rect {
 fn centroid_checkbox_rect() -> Rect {
     Rect {
         top_left: Vec2::new(16.0, 196.0),
-        size: Vec2::new(18.0, 18.0),
-    }
-}
-
-/// Contour-algorithm-toggle checkbox position. Sits below the centroid
-/// wireframe checkbox. ON = `contour_surface` (surface-first), OFF =
-/// `contour_cluster` (legacy cell-centroid dual contouring).
-fn contour_algo_checkbox_rect() -> Rect {
-    Rect {
-        top_left: Vec2::new(16.0, 224.0),
         size: Vec2::new(18.0, 18.0),
     }
 }
@@ -169,21 +151,6 @@ struct VoxelCluster {
 
     show_wireframe: bool,
     show_centroid_wireframe: bool,
-    /// Which contour algorithm to use. `true` = `contour_surface` (the
-    /// surface-first algorithm); `false` = `contour_cluster` (the
-    /// legacy cell-centroid dual contouring). Toggled by the HUD
-    /// checkbox; flipping it schedules a re-build via
-    /// [`Self::pending_rebuild`].
-    use_surface_contour: bool,
-    /// Set to `true` when the algorithm-toggle checkbox is clicked.
-    /// The actual re-contour + upload runs at the top of the next
-    /// `render` call (the only `App` callback that gets a mutable
-    /// `&mut Renderer`).
-    pending_rebuild: bool,
-    /// The generated voxel data, kept around so the algorithm toggle
-    /// can re-contour without re-generating clusters. `None` only
-    /// before `init` runs.
-    cluster_map: Option<ClusterMap>,
     should_quit: bool,
 }
 
@@ -207,9 +174,6 @@ impl Default for VoxelCluster {
             config: ControlConfig::default(),
             show_wireframe: true,
             show_centroid_wireframe: false,
-            use_surface_contour: true,
-            pending_rebuild: false,
-            cluster_map: None,
             should_quit: false,
         }
     }
@@ -236,75 +200,6 @@ impl VoxelCluster {
     fn move_forward(&self) -> Vec3 {
         let f = self.forward();
         Vec3::new(f.x, 0.0, f.z).normalize_or_zero()
-    }
-
-    /// Contour every cluster in `map` with the currently selected
-    /// algorithm, upload the meshes, and replace `self.clusters`. Also
-    /// refreshes the cached centroid wireframe segments (they describe
-    /// voxel-level data, not the mesh, so they don't depend on the
-    /// algorithm choice — but we recompute on each rebuild rather
-    /// than carrying duplicate state).
-    ///
-    /// # Mesh-handle leak (known follow-up)
-    ///
-    /// `flicker_render::Renderer` exposes `upload_voxel_mesh` but no
-    /// matching `free_mesh` / `drop_mesh` — uploaded vertex and index
-    /// buffers stay resident. Every algorithm-toggle leaks 9 meshes'
-    /// worth of GPU memory. That's a few MB per toggle on this scene,
-    /// fine for development; a `Renderer::free_mesh` addition is a
-    /// follow-up.
-    fn rebuild_meshes(&mut self, renderer: &mut Renderer, map: &ClusterMap) {
-        let mut total_v = 0usize;
-        let mut total_t = 0usize;
-        let mut total_s = 0usize;
-        let mut renders = Vec::with_capacity(map.len());
-        let build_start = std::time::Instant::now();
-        for (id, cluster) in map.iter() {
-            let mesh = if self.use_surface_contour {
-                contour_surface(cluster)
-            } else {
-                contour_cluster(cluster)
-            };
-            let meta = *mesh.metadata();
-            let handle = renderer.upload_voxel_mesh(&mesh);
-
-            let offset = id.world_offset();
-            let world_translate =
-                |p: [f32; 3]| Vec3::new(offset[0] + p[0], offset[1] + p[1], offset[2] + p[2]);
-            let segments: Vec<(Vec3, Vec3)> = surface_boundary_segments(cluster)
-                .into_iter()
-                .map(|(a, b)| (world_translate(a), world_translate(b)))
-                .collect();
-
-            total_v += meta.vertex_count;
-            total_t += meta.triangle_count;
-            total_s += segments.len();
-
-            renders.push(ClusterRender {
-                id,
-                mesh: handle,
-                centroid_segments: segments,
-            });
-        }
-        renders.sort_by_key(|r| r.id.bits());
-
-        self.clusters = renders;
-        self.total_vertex_count = total_v;
-        self.total_triangle_count = total_t;
-        self.total_segment_count = total_s;
-
-        tracing::info!(
-            algorithm = if self.use_surface_contour {
-                "contour_surface"
-            } else {
-                "contour_cluster"
-            },
-            elapsed_ms = build_start.elapsed().as_millis(),
-            vertices = self.total_vertex_count,
-            triangles = self.total_triangle_count,
-            segments = self.total_segment_count,
-            "rebuild_meshes complete"
-        );
     }
 }
 
@@ -355,18 +250,53 @@ impl App for VoxelCluster {
             "all clusters generated; contouring + uploading meshes …"
         );
 
-        // Stash the map for the algorithm-toggle path, then delegate
-        // contour + upload to `rebuild_meshes`. We `take()` the map
-        // out of the Option to avoid the simultaneous `&self.map` /
-        // `&mut self` borrow conflict, then put it back. The contour
-        // pass is single-cluster — no NeighborContext, no neighbor
-        // reads. Cross-cluster correctness comes from upstream (every
-        // cluster's generator sampled the same heightmap function).
-        self.cluster_map = Some(map);
-        let owned_map = self.cluster_map.take().expect("just inserted");
-        self.rebuild_meshes(renderer, &owned_map);
-        self.cluster_map = Some(owned_map);
-        tracing::info!(clusters = self.clusters.len(), "ready");
+        // Contour and upload each cluster. Single-cluster pass — no
+        // NeighborContext. Cross-cluster correctness comes from
+        // upstream (every cluster's generator sampled the same
+        // heightmap function).
+        let build_start = std::time::Instant::now();
+        let mut total_v = 0usize;
+        let mut total_t = 0usize;
+        let mut total_s = 0usize;
+        let mut renders = Vec::with_capacity(map.len());
+        for (id, cluster) in map.iter() {
+            let mesh = contour_surface(cluster);
+            let meta = *mesh.metadata();
+            let handle = renderer.upload_voxel_mesh(&mesh);
+
+            let offset = id.world_offset();
+            let world_translate =
+                |p: [f32; 3]| Vec3::new(offset[0] + p[0], offset[1] + p[1], offset[2] + p[2]);
+            let segments: Vec<(Vec3, Vec3)> = surface_boundary_segments(cluster)
+                .into_iter()
+                .map(|(a, b)| (world_translate(a), world_translate(b)))
+                .collect();
+
+            total_v += meta.vertex_count;
+            total_t += meta.triangle_count;
+            total_s += segments.len();
+
+            renders.push(ClusterRender {
+                id,
+                mesh: handle,
+                centroid_segments: segments,
+            });
+        }
+        renders.sort_by_key(|r| r.id.bits());
+
+        self.clusters = renders;
+        self.total_vertex_count = total_v;
+        self.total_triangle_count = total_t;
+        self.total_segment_count = total_s;
+
+        tracing::info!(
+            elapsed_ms = build_start.elapsed().as_millis(),
+            vertices = self.total_vertex_count,
+            triangles = self.total_triangle_count,
+            segments = self.total_segment_count,
+            clusters = self.clusters.len(),
+            "ready"
+        );
 
         // Spawn at field center, eye height above local ground.
         // Field XZ extent is `[0, FIELD_SIZE * CLUSTER_DIM]`; center is
@@ -434,15 +364,6 @@ impl App for VoxelCluster {
             if centroid_checkbox_rect().contains(input.mouse_position) {
                 self.show_centroid_wireframe = !self.show_centroid_wireframe;
             }
-            if contour_algo_checkbox_rect().contains(input.mouse_position) {
-                self.use_surface_contour = !self.use_surface_contour;
-                // Re-contour every cluster with the newly chosen
-                // algorithm. The `App::update` callback only gets an
-                // immutable `&Renderer` reference, so we cannot upload
-                // here — defer the rebuild to the top of the next
-                // `render` call, which has `&mut Renderer`.
-                self.pending_rebuild = true;
-            }
         }
     }
 
@@ -451,24 +372,8 @@ impl App for VoxelCluster {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        if self.clusters.is_empty() && !self.pending_rebuild {
+        if self.clusters.is_empty() {
             return;
-        }
-
-        // Deferred algorithm-toggle rebuild. The toggle was registered
-        // in `update`, which only sees an immutable `&Renderer`; the
-        // actual contour + upload happens here, where we have `&mut`.
-        // Take the map out of the Option so the borrow checker accepts
-        // `&mut self` alongside `&map`, then put it back. The rebuild
-        // is synchronous and noticeably slow (~10 s on a 3×3 field at
-        // these mesh sizes); a single frame stall on toggle is
-        // acceptable for an A/B comparison demo.
-        if self.pending_rebuild {
-            self.pending_rebuild = false;
-            if let Some(map) = self.cluster_map.take() {
-                self.rebuild_meshes(renderer, &map);
-                self.cluster_map = Some(map);
-            }
         }
 
         renderer.set_camera(&Camera {
@@ -533,15 +438,10 @@ impl App for VoxelCluster {
         );
         renderer.draw_text(
             &format!(
-                "clusters: {}   verts: {}   tris: {}   algo: {}   seed: 0x{:016X}",
+                "clusters: {}   verts: {}   tris: {}   seed: 0x{:016X}",
                 self.clusters.len(),
                 self.total_vertex_count,
                 self.total_triangle_count,
-                if self.use_surface_contour {
-                    "contour_surface"
-                } else {
-                    "contour_cluster"
-                },
                 self.seed,
             ),
             Vec2::new(16.0, 64.0),
@@ -583,13 +483,6 @@ impl App for VoxelCluster {
                 centroid_checkbox_rect(),
                 self.show_centroid_wireframe,
             );
-            // Contour-algorithm A/B checkbox.
-            draw_checkbox(
-                renderer,
-                white,
-                contour_algo_checkbox_rect(),
-                self.use_surface_contour,
-            );
         }
         renderer.draw_text(
             "wireframe overlay (click to toggle)",
@@ -603,19 +496,6 @@ impl App for VoxelCluster {
                 self.total_segment_count
             ),
             Vec2::new(40.0, 198.0),
-            14.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        renderer.draw_text(
-            &format!(
-                "surface contour [{}] (off = legacy cell-centroid)",
-                if self.use_surface_contour {
-                    "ON"
-                } else {
-                    "OFF"
-                },
-            ),
-            Vec2::new(40.0, 226.0),
             14.0,
             [0.75, 0.85, 0.95, 1.0],
         );

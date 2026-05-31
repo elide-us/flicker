@@ -20,20 +20,9 @@
 //!   cluster on the other side continuously, because both sides
 //!   sample the same global heightmap at the same world coordinates.
 //!
-//! # No cross-cluster gates
-//!
-//! The Pass-D code in history also exposed a `voxel_owns_boundary_wall`
-//! gate that picked which side of an inter-cluster cliff emitted its
-//! vertical face. That gate is **deliberately not part of the new
-//! architecture** — the contour pass operates on one cluster and knows
-//! nothing about its neighbors, so there is no cross-cluster boundary
-//! wall to attribute. Cross-cluster correctness comes from upstream
-//! (both sides sample the same heightmap), not from a seam-time gate.
-//! Do not re-introduce that function here.
-//!
-//! This module operates at **LOD 0 only**. Strided sampling lived in
-//! the Pass-D file but is not needed until LOD work resumes in a
-//! later step.
+//! Operates at **LOD 0 only** and reads only the cluster it is given
+//! — out-of-cluster neighbor reads fall back to the cluster's base
+//! voxel, matching the single-cluster contour pass.
 
 use crate::cluster::{Cluster, CLUSTER_DIM};
 use crate::local_coord::LocalCoord;
@@ -291,8 +280,8 @@ mod tests {
 
     #[test]
     fn segments_non_empty_for_heightmap_terrain() {
-        use crate::generators::heightmap_terrain;
-        let c = heightmap_terrain(0x42, Material::new(7, 7, 7).unwrap());
+        use crate::generators::heightmap_terrain_at_with_depth_materials;
+        let c = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
         let segs = surface_boundary_segments(&c);
         assert!(
             !segs.is_empty(),
