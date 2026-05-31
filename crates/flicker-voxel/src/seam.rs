@@ -7,11 +7,19 @@
 //! helper that consults `NeighborContext` when a voxel lookup falls
 //! outside the active cluster's bounds.
 //!
-//! The current [`crate::contour_surface`] algorithm does not use
-//! these yet — it operates single-cluster — but the seam-continuity
-//! work and the LOD work both will.
+//! [`NeighborHalo`] carries a slab of vertices contributed by a
+//! neighbor's boundary plane, in the **active** cluster's coordinate
+//! frame. The active cluster's contour pass consults its halos during
+//! quad assembly to fill quad slots that fall just past a face — that
+//! is how matched-LOD seams stitch into continuous geometry without
+//! cross-cluster index sharing. Each cluster materializes its own
+//! halos at contour time and intern-promotes the halo vertices it
+//! actually uses; both sides of a seam end up with coincident world
+//! positions for the shared boundary vertices, which is visually
+//! invisible (coplanar z-fighting is benign).
 
 use crate::cluster::CLUSTER_DIM;
+use crate::material::Material;
 use crate::{Cluster, LocalCoord, Voxel};
 
 /// Level of detail.
@@ -194,11 +202,205 @@ pub(crate) fn read_corner(
     src.get(LocalCoord::new(lx as u32, ly as u32, lz as u32).expect("in bounds"))
 }
 
+/// One vertex contributed by a neighbor cluster's boundary row.
+///
+/// Same shape as [`crate::Vertex`] but kept separate so the halo's
+/// role is explicit at type-check time: a `HaloVertex` is never
+/// directly an index into the active cluster's vertex buffer. The
+/// contour pass interns the halo vertices it actually uses into its
+/// own vertex buffer, at which point they become indistinguishable
+/// from in-cluster vertices to downstream consumers.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct HaloVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub material: u32,
+}
+
+/// Which face of the local cluster a halo represents. The local
+/// cluster's `PosX` face touches the neighbor's `NegX` face, etc.
+///
+/// This enum doubles as the `(FaceDir, perp_a, perp_b)` key for the
+/// contour pass's halo-vertex intern map.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FaceDir {
+    NegX,
+    PosX,
+    NegY,
+    PosY,
+    NegZ,
+    PosZ,
+}
+
+/// A slab of vertices contributed by a neighbor cluster's boundary
+/// row, ready for the contour pass to query at quad-search time.
+///
+/// `vertex_at(perp_a, perp_b)` returns `Some` if the neighbor emitted
+/// a surface vertex at the boundary-plane position, `None` otherwise.
+///
+/// Coordinates `(perp_a, perp_b)` are in the **active cluster's**
+/// frame projected onto the seam plane. For a `PosX` halo:
+/// `perp_a = vy`, `perp_b = vz`. The vertex's `position` is also in
+/// the active cluster's frame — for the `PosX` halo at neighbor voxel
+/// `(0, vy, vz)`, position reads `[CLUSTER_DIM + δx, vy + δy, vz +
+/// δz]`, one voxel past the active cluster's `+X` face.
+///
+/// At LOD 0 every `(perp_a, perp_b)` slot is sampled; at higher LODs
+/// the neighbor's stride is honored and intermediate slots return
+/// `None`, so the contour pass naturally accepts mismatched-LOD seams
+/// (with cracks at unsampled positions until T-junction fan emission
+/// lands).
+pub struct NeighborHalo {
+    face: FaceDir,
+    /// Flat row-major: `vertices[perp_b * CLUSTER_DIM + perp_a]`.
+    /// `None` slots indicate the neighbor did not emit a vertex there.
+    vertices: Vec<Option<HaloVertex>>,
+}
+
+impl NeighborHalo {
+    /// The face this halo represents (in the active cluster's frame).
+    #[must_use]
+    pub fn face(&self) -> FaceDir {
+        self.face
+    }
+
+    /// Look up the vertex at boundary-plane position `(perp_a, perp_b)`.
+    /// Both coords must be in `[0, CLUSTER_DIM)`; out-of-range queries
+    /// return `None`.
+    #[must_use]
+    pub fn vertex_at(&self, perp_a: u32, perp_b: u32) -> Option<&HaloVertex> {
+        if perp_a >= CLUSTER_DIM || perp_b >= CLUSTER_DIM {
+            return None;
+        }
+        let idx = perp_b as usize * (CLUSTER_DIM as usize) + perp_a as usize;
+        self.vertices.get(idx).and_then(|opt| opt.as_ref())
+    }
+}
+
+/// Build a halo from `neighbor` for the active cluster's `face`.
+///
+/// Walks the neighbor's boundary plane (its `x = 0` for `PosX`, its
+/// `x = CLUSTER_DIM - 1` for `NegX`, etc.). For each solid voxel on
+/// that plane whose 6-neighbor classifications include at least one
+/// non-solid, emits a halo vertex placed at the voxel's owned `+++`
+/// corner, with the position translated into the active cluster's
+/// frame by `±CLUSTER_DIM` on the across-seam axis.
+///
+/// Gradient and material come from the neighbor's own classification,
+/// with the neighbor's own OOB reads falling back to the neighbor's
+/// `base()`. The across-seam gradient component is therefore slightly
+/// imperfect (the neighbor sees its across-seam side as empty rather
+/// than as the active cluster's actual content), but on matched-
+/// heightmap scenes the error is small and a single vertex's normal
+/// contribution to a quad's winding decision is dominated by the
+/// other three vertices.
+///
+/// `lod` is honored as a stride through the neighbor's boundary
+/// plane — positions not on the stride leave their halo slot `None`.
+/// Stride-aware gradient computation is a follow-up; at LOD 0 this
+/// distinction does not matter.
+#[must_use]
+pub fn build_halo(neighbor: &Cluster, face: FaceDir, lod: Lod) -> NeighborHalo {
+    let dim = CLUSTER_DIM as usize;
+    let dim_i32 = CLUSTER_DIM as i32;
+    let stride = lod.stride() as usize;
+    let base_solid = neighbor.base().material() != Material::EMPTY;
+
+    let solid_at = |x: i32, y: i32, z: i32| -> bool {
+        if (0..dim_i32).contains(&x) && (0..dim_i32).contains(&y) && (0..dim_i32).contains(&z) {
+            neighbor
+                .get(LocalCoord::new(x as u32, y as u32, z as u32).expect("in bounds"))
+                .material()
+                != Material::EMPTY
+        } else {
+            base_solid
+        }
+    };
+
+    let (boundary_axis, boundary_value, shift_value): (usize, i32, f32) = match face {
+        FaceDir::PosX => (0, 0, CLUSTER_DIM as f32),
+        FaceDir::NegX => (0, dim_i32 - 1, -(dim_i32 as f32)),
+        FaceDir::PosY => (1, 0, CLUSTER_DIM as f32),
+        FaceDir::NegY => (1, dim_i32 - 1, -(dim_i32 as f32)),
+        FaceDir::PosZ => (2, 0, CLUSTER_DIM as f32),
+        FaceDir::NegZ => (2, dim_i32 - 1, -(dim_i32 as f32)),
+    };
+    let (perp_a_axis, perp_b_axis): (usize, usize) = match face {
+        FaceDir::NegX | FaceDir::PosX => (1, 2),
+        FaceDir::NegY | FaceDir::PosY => (0, 2),
+        FaceDir::NegZ | FaceDir::PosZ => (0, 1),
+    };
+
+    let mut vertices: Vec<Option<HaloVertex>> = vec![None; dim * dim];
+
+    let mut perp_b = 0usize;
+    while perp_b < dim {
+        let mut perp_a = 0usize;
+        while perp_a < dim {
+            let mut nv = [0i32; 3];
+            nv[boundary_axis] = boundary_value;
+            nv[perp_a_axis] = perp_a as i32;
+            nv[perp_b_axis] = perp_b as i32;
+
+            if solid_at(nv[0], nv[1], nv[2]) {
+                let nxn = solid_at(nv[0] - 1, nv[1], nv[2]);
+                let nxp = solid_at(nv[0] + 1, nv[1], nv[2]);
+                let nyn = solid_at(nv[0], nv[1] - 1, nv[2]);
+                let nyp = solid_at(nv[0], nv[1] + 1, nv[2]);
+                let nzn = solid_at(nv[0], nv[1], nv[2] - 1);
+                let nzp = solid_at(nv[0], nv[1], nv[2] + 1);
+                let any_nonsolid = !nxn || !nxp || !nyn || !nyp || !nzn || !nzp;
+                if any_nonsolid {
+                    let vox = neighbor.get(
+                        LocalCoord::new(nv[0] as u32, nv[1] as u32, nv[2] as u32)
+                            .expect("in bounds"),
+                    );
+                    let [dx, dy, dz] = vox.corner().to_components();
+                    let mut position = [nv[0] as f32 + dx, nv[1] as f32 + dy, nv[2] as f32 + dz];
+                    position[boundary_axis] += shift_value;
+
+                    let to_i = |b: bool| -> i32 {
+                        if b {
+                            1
+                        } else {
+                            0
+                        }
+                    };
+                    let gx = to_i(nxp) - to_i(nxn);
+                    let gy = to_i(nyp) - to_i(nyn);
+                    let gz = to_i(nzp) - to_i(nzn);
+                    let nxf = -(gx as f32);
+                    let nyf = -(gy as f32);
+                    let nzf = -(gz as f32);
+                    let len = (nxf * nxf + nyf * nyf + nzf * nzf).sqrt();
+                    let normal = if len > 0.0 {
+                        [nxf / len, nyf / len, nzf / len]
+                    } else {
+                        [0.0, 1.0, 0.0]
+                    };
+
+                    let idx = perp_b * dim + perp_a;
+                    vertices[idx] = Some(HaloVertex {
+                        position,
+                        normal,
+                        material: vox.material().raw(),
+                    });
+                }
+            }
+
+            perp_a += stride;
+        }
+        perp_b += stride;
+    }
+
+    NeighborHalo { face, vertices }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::corner_vector::CornerVector;
-    use crate::material::Material;
+    use crate::generators::solid_slab;
 
     fn solid_voxel() -> Voxel {
         Voxel::new(CornerVector::DEFAULT, Material::new(1, 0, 0).unwrap())
@@ -312,5 +514,52 @@ mod tests {
         // Two coords out of range — even with the matching face
         // neighbors set, the helper falls back to cluster.base().
         assert_eq!(read_corner(&cluster, &nc, -1, -1, 30), cluster.base());
+    }
+
+    // ---- build_halo ----
+
+    #[test]
+    fn halo_round_trips_neighbor_boundary_vertices() {
+        // The neighbor is a half-slab; for `FaceDir::PosX` the halo
+        // walks the neighbor's `x = 0` plane. At the topmost solid
+        // layer (vy = 127) every column has +Y empty → every
+        // `(vy=127, vz)` cell becomes a halo vertex.
+        let neighbor = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let halo = build_halo(&neighbor, FaceDir::PosX, Lod::ZERO);
+        assert_eq!(halo.face(), FaceDir::PosX);
+
+        let mut found = 0u32;
+        for vz in 0..CLUSTER_DIM {
+            if halo.vertex_at(127, vz).is_some() {
+                found += 1;
+            }
+        }
+        assert_eq!(
+            found, CLUSTER_DIM,
+            "expected halo vertex per z at vy=127; got {found}"
+        );
+
+        // Spot-check one halo vertex: position is in the active
+        // cluster's frame, so the across-seam axis sits one cluster
+        // beyond the active cluster's far face.
+        let hv = halo.vertex_at(127, 128).expect("vy=127, vz=128 surface");
+        assert!(
+            (hv.position[0] - (CLUSTER_DIM as f32 + 0.5)).abs() < 0.05,
+            "halo position[0] = {} expected ≈ {} (one voxel past +X face)",
+            hv.position[0],
+            CLUSTER_DIM as f32 + 0.5
+        );
+        // Material is the neighbor voxel's material.
+        let m = Material::new(7, 7, 7).unwrap();
+        assert_eq!(hv.material, m.raw());
+    }
+
+    #[test]
+    fn halo_out_of_range_query_returns_none() {
+        let neighbor = solid_slab(128, Material::new(7, 7, 7).unwrap());
+        let halo = build_halo(&neighbor, FaceDir::PosX, Lod::ZERO);
+        // Coordinates ≥ CLUSTER_DIM return None rather than panicking.
+        assert!(halo.vertex_at(CLUSTER_DIM, 0).is_none());
+        assert!(halo.vertex_at(0, CLUSTER_DIM).is_none());
     }
 }

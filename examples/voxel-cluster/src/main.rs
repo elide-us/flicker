@@ -13,13 +13,21 @@
 //! cluster has neighbors on all four XZ sides. Cross the seam, fly
 //! over it, look down at it — the surface should remain continuous,
 //! with no visible offset or jitter between adjacent clusters'
-//! meshes. The architectural payoff of the rollback is that this
-//! continuity comes from **upstream**: every cluster's generator
-//! samples the same global heightmap function at its world
-//! coordinates, so adjacent clusters' boundary columns sample the
-//! heightmap at world coordinates one voxel apart and the heightmap
-//! is Lipschitz-continuous, so the joins meet without coordination.
-//! The contour pass never reads neighbor voxels.
+//! meshes.
+//!
+//! Cross-cluster continuity comes from two layers working together.
+//! Upstream: every cluster's generator samples the same global
+//! heightmap function at its world coordinates, so adjacent clusters'
+//! boundary columns sample the heightmap at world coordinates one
+//! voxel apart with the same values. Contour-pass: each cluster
+//! receives a `NeighborContext` so its boundary voxels classify
+//! correctly against the neighbor's data, plus a `NeighborHalos` set
+//! carrying vertex slabs from each neighbor's boundary row. The
+//! quadrant search reaches across seams via these halos; halo
+//! vertices it uses get interned into the cluster's own vertex
+//! buffer. Adjacent clusters emit coincident geometry at the seam —
+//! z-buffer ties on coplanar geometry are visually invisible — and
+//! no cluster's mesh depends on another cluster's vertex indices.
 //!
 //! Visual content:
 //!   * 3×3 = 9 clusters at LOD 0, each contoured independently. Total
@@ -57,8 +65,8 @@ use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, Renderer, TextureHandle, Vec2, Vec3,
 };
 use flicker_voxel::{
-    contour_surface, generators, heightmap, surface_boundary_segments, ClusterId, ClusterMap,
-    CLUSTER_DIM,
+    build_halo, contour_surface_with_neighbors, generators, heightmap, surface_boundary_segments,
+    ClusterId, ClusterMap, FaceDir, Lod, NeighborContext, NeighborHalo, NeighborHalos, CLUSTER_DIM,
 };
 
 /// Edge length of the multi-cluster field, in clusters.
@@ -250,17 +258,30 @@ impl App for VoxelCluster {
             "all clusters generated; contouring + uploading meshes …"
         );
 
-        // Contour and upload each cluster. Single-cluster pass — no
-        // NeighborContext. Cross-cluster correctness comes from
-        // upstream (every cluster's generator sampled the same
-        // heightmap function).
+        // Contour and upload each cluster, supplying its 4 XZ-face
+        // neighbors so the contour pass classifies cluster-boundary
+        // voxels correctly and stitches cross-seam quads from each
+        // neighbor's boundary halo. The 3×3 grid has no Y neighbors
+        // — those stay `None`. Halos are built per-call from the
+        // adjacent cluster's voxel data; their cost is bounded by
+        // the CLUSTER_DIM² × 6 boundary slab.
         let build_start = std::time::Instant::now();
         let mut total_v = 0usize;
         let mut total_t = 0usize;
         let mut total_s = 0usize;
         let mut renders = Vec::with_capacity(map.len());
         for (id, cluster) in map.iter() {
-            let mesh = contour_surface(cluster);
+            let neighbors = build_neighbor_context(&map, id);
+            let halos_owned = build_halos(&neighbors);
+            let halos = NeighborHalos {
+                neg_x: halos_owned.neg_x.as_ref(),
+                pos_x: halos_owned.pos_x.as_ref(),
+                neg_y: halos_owned.neg_y.as_ref(),
+                pos_y: halos_owned.pos_y.as_ref(),
+                neg_z: halos_owned.neg_z.as_ref(),
+                pos_z: halos_owned.pos_z.as_ref(),
+            };
+            let mesh = contour_surface_with_neighbors(cluster, &neighbors, &halos);
             let meta = *mesh.metadata();
             let handle = renderer.upload_voxel_mesh(&mesh);
 
@@ -519,6 +540,56 @@ fn draw_checkbox(renderer: &mut Renderer, white: TextureHandle, rect: Rect, chec
         rect.size - Vec2::splat(inset * 2.0),
         inner_color,
     );
+}
+
+/// Build a [`NeighborContext`] for the cluster at `id` from the 3×3
+/// XZ grid. Looks up each of the four XZ-face neighbors; the Y faces
+/// stay `None` (the scene is a single Y layer). All neighbors share
+/// LOD 0 in this scene.
+fn build_neighbor_context<'a>(map: &'a ClusterMap, id: ClusterId) -> NeighborContext<'a> {
+    let lod = Lod::ZERO;
+    let cx = id.x();
+    let cy = id.y();
+    let cz = id.z();
+    let lookup = |nx: u16, nz: u16| -> Option<(&flicker_voxel::Cluster, Lod)> {
+        map.get(ClusterId::new(0, nx, cy, nz)).map(|c| (c, lod))
+    };
+    NeighborContext {
+        neg_x: if cx > 0 { lookup(cx - 1, cz) } else { None },
+        pos_x: lookup(cx + 1, cz),
+        neg_z: if cz > 0 { lookup(cx, cz - 1) } else { None },
+        pos_z: lookup(cx, cz + 1),
+        ..NeighborContext::none()
+    }
+}
+
+/// Owning container for the per-face halos built around a cluster.
+/// Holds the `NeighborHalo` values; the caller borrows them into a
+/// `NeighborHalos` for the contour call. Fields are `None` when the
+/// matching face has no neighbor.
+struct OwnedHalos {
+    neg_x: Option<NeighborHalo>,
+    pos_x: Option<NeighborHalo>,
+    neg_y: Option<NeighborHalo>,
+    pos_y: Option<NeighborHalo>,
+    neg_z: Option<NeighborHalo>,
+    pos_z: Option<NeighborHalo>,
+}
+
+/// Build halos for every present face neighbor in `neighbors`. Each
+/// halo is built at the neighbor's declared LOD.
+fn build_halos(neighbors: &NeighborContext<'_>) -> OwnedHalos {
+    let build = |face: FaceDir, n: Option<(&flicker_voxel::Cluster, Lod)>| {
+        n.map(|(c, lod)| build_halo(c, face, lod))
+    };
+    OwnedHalos {
+        neg_x: build(FaceDir::NegX, neighbors.neg_x),
+        pos_x: build(FaceDir::PosX, neighbors.pos_x),
+        neg_y: build(FaceDir::NegY, neighbors.neg_y),
+        pos_y: build(FaceDir::PosY, neighbors.pos_y),
+        neg_z: build(FaceDir::NegZ, neighbors.neg_z),
+        pos_z: build(FaceDir::PosZ, neighbors.pos_z),
+    }
 }
 
 /// Stamp deterministic cumulonimbus and cirrus formations into

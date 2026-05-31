@@ -66,10 +66,15 @@
 //! # Scope and simplification
 //!
 //! - **LOD 0 only.** Strided sampling is a follow-up.
-//! - **Single cluster only.** No `NeighborContext`. Cross-cluster
-//!   correctness comes from upstream: both clusters' generators
-//!   sample the same heightmap, so adjacent clusters' boundary
-//!   columns agree at world-coordinate granularity.
+//! - **Cross-cluster aware** via [`contour_surface_with_neighbors`].
+//!   The pass takes a [`NeighborContext`] for classification at the
+//!   cluster boundary (so a solid voxel at the seam sees its
+//!   neighbor's matching voxel rather than the empty base) and a
+//!   [`NeighborHalos`] set carrying vertex slabs from neighbor
+//!   boundary rows (so the 3D quadrant search can reach across seams
+//!   to fill quad slots). The bare [`contour_surface`] entry point is
+//!   a one-line wrapper that passes neither — same byte-identical
+//!   output as before when no neighbors are wired.
 //! - **Solid side participates.** A boundary cell has a solid and an
 //!   air voxel; we keep only the solid side as the vertex source.
 //!   This mirrors [`crate::is_surface_boundary_voxel`] restricted to
@@ -86,9 +91,27 @@
 //!   gradients steeper than the cap, some quads are skipped — small
 //!   gaps rather than wildly stretched triangles.
 
+use std::collections::HashMap;
+
 use crate::cluster::CLUSTER_DIM;
 use crate::mesh::{CellMesh, Indices, MeshMetadata, Vertex};
+use crate::seam::{read_corner, FaceDir, HaloVertex, NeighborContext, NeighborHalo};
 use crate::{Cluster, LocalCoord, Material, Voxel};
+
+/// Per-face references to neighbor halos, supplied to
+/// [`contour_surface_with_neighbors`] alongside [`NeighborContext`].
+/// Missing entries are equivalent to "no halo on that face" — the
+/// quad search treats halo-absent positions the same as missing
+/// vertices.
+#[derive(Default)]
+pub struct NeighborHalos<'a> {
+    pub neg_x: Option<&'a NeighborHalo>,
+    pub pos_x: Option<&'a NeighborHalo>,
+    pub neg_y: Option<&'a NeighborHalo>,
+    pub pos_y: Option<&'a NeighborHalo>,
+    pub neg_z: Option<&'a NeighborHalo>,
+    pub pos_z: Option<&'a NeighborHalo>,
+}
 
 /// Maximum 3D Manhattan-shell radius for the orientation-free
 /// quadrant search during quad assembly. Beyond this, sign-changing
@@ -124,6 +147,221 @@ fn empty_surface_mesh() -> CellMesh {
     )
 }
 
+/// Voxel array index for a cluster-local coordinate. Inlined helper
+/// shared by the contour pass's pre-classification and vertex-table
+/// reads.
+#[inline]
+fn voxel_idx(x: u32, y: u32, z: u32) -> usize {
+    let dim = CLUSTER_DIM as usize;
+    x as usize + y as usize * dim + z as usize * dim * dim
+}
+
+/// Map a single-axis-OOB search position to `(face, perp_a, perp_b)`.
+///
+/// Returns `Some` when exactly one of `(px, py, pz)` is OOB by
+/// exactly one voxel (`-1` or `dim`); returns `None` for multi-axis
+/// OOB (cluster edges/corners) or single-axis OOB further than one
+/// voxel (beyond the halo's known data). The two in-range coords
+/// become `(perp_a, perp_b)` per the face's axis convention.
+fn halo_query_coords(px: i32, py: i32, pz: i32, dim: i32) -> Option<(FaceDir, u32, u32)> {
+    let xo = !(0..dim).contains(&px);
+    let yo = !(0..dim).contains(&py);
+    let zo = !(0..dim).contains(&pz);
+    let oob = u8::from(xo) + u8::from(yo) + u8::from(zo);
+    if oob != 1 {
+        return None;
+    }
+    if xo {
+        let face = if px == -1 {
+            FaceDir::NegX
+        } else if px == dim {
+            FaceDir::PosX
+        } else {
+            return None;
+        };
+        Some((face, py as u32, pz as u32))
+    } else if yo {
+        let face = if py == -1 {
+            FaceDir::NegY
+        } else if py == dim {
+            FaceDir::PosY
+        } else {
+            return None;
+        };
+        Some((face, px as u32, pz as u32))
+    } else {
+        let face = if pz == -1 {
+            FaceDir::NegZ
+        } else if pz == dim {
+            FaceDir::PosZ
+        } else {
+            return None;
+        };
+        Some((face, px as u32, py as u32))
+    }
+}
+
+/// Promote a halo vertex into the cluster's vertex buffer on first
+/// use; return the assigned vertex index (cached in `halo_intern`).
+///
+/// Once interned, a halo vertex is indistinguishable from an
+/// in-cluster vertex to downstream consumers — it participates in
+/// quads via its assigned index, and its position widens the cluster
+/// mesh's bounds. The intern map is keyed by `(face, perp_a, perp_b)`
+/// so distinct halo positions get distinct indices and the
+/// degenerate-quad guard remains valid.
+#[allow(clippy::too_many_arguments)]
+fn intern_halo_vertex(
+    face: FaceDir,
+    perp_a: u32,
+    perp_b: u32,
+    hv: &HaloVertex,
+    halo_intern: &mut HashMap<(FaceDir, u32, u32), u32>,
+    vertices: &mut Vec<Vertex>,
+    bounds_min: &mut [f32; 3],
+    bounds_max: &mut [f32; 3],
+) -> u32 {
+    if let Some(&idx) = halo_intern.get(&(face, perp_a, perp_b)) {
+        return idx;
+    }
+    let idx = vertices.len() as u32;
+    vertices.push(Vertex {
+        position: hv.position,
+        normal: hv.normal,
+        material: hv.material,
+    });
+    halo_intern.insert((face, perp_a, perp_b), idx);
+    for ax in 0..3 {
+        if hv.position[ax] < bounds_min[ax] {
+            bounds_min[ax] = hv.position[ax];
+        }
+        if hv.position[ax] > bounds_max[ax] {
+            bounds_max[ax] = hv.position[ax];
+        }
+    }
+    idx
+}
+
+/// 3D Manhattan-shell quadrant search around a sign-changing axis
+/// edge. Each visited offset is classified into one of four quad
+/// slots by the signs of its perpendicular-axis components; the
+/// first vertex per slot wins. Returns `[v_mm, v_pm, v_pp, v_mp]`
+/// with `u32::MAX` for any slot that never filled.
+///
+/// In-cluster positions consult `voxel_to_vertex`. Single-axis OOB
+/// positions (`-1` or `dim` on one axis) consult the matching halo
+/// in `halos`; halo vertices are promoted into the cluster's vertex
+/// buffer via [`intern_halo_vertex`] on first hit.
+#[allow(clippy::too_many_arguments)]
+fn find_four_quadrant_vertices(
+    a: [i32; 3],
+    b: [i32; 3],
+    perp_axis_a: usize,
+    perp_axis_b: usize,
+    voxel_to_vertex: &[u32],
+    halos: &NeighborHalos<'_>,
+    halo_intern: &mut HashMap<(FaceDir, u32, u32), u32>,
+    vertices: &mut Vec<Vertex>,
+    bounds_min: &mut [f32; 3],
+    bounds_max: &mut [f32; 3],
+) -> [u32; 4] {
+    let dim_i32 = CLUSTER_DIM as i32;
+    let mut slots: [u32; 4] = [u32::MAX; 4];
+    for shell in 1..=MAX_QUAD_SEARCH_RADIUS {
+        for dx in -shell..=shell {
+            let rem_x = shell - dx.abs();
+            for dy in -rem_x..=rem_x {
+                let rem_y = shell - dx.abs() - dy.abs();
+                let dz_vals: [i32; 2] = if rem_y == 0 { [0, 0] } else { [rem_y, -rem_y] };
+                let dz_count = if rem_y == 0 { 1 } else { 2 };
+                for &dz in &dz_vals[..dz_count] {
+                    let offset = [dx, dy, dz];
+                    let sa = offset[perp_axis_a].signum();
+                    let sb = offset[perp_axis_b].signum();
+                    let slot = match (sa, sb) {
+                        (0, 0) => continue,
+                        (1, 1) => 2,
+                        (1, -1) => 1,
+                        (-1, 1) => 3,
+                        (-1, -1) => 0,
+                        (1, 0) => 2,
+                        (-1, 0) => 0,
+                        (0, 1) => 3,
+                        (0, -1) => 1,
+                        _ => continue,
+                    };
+                    if slots[slot] != u32::MAX {
+                        continue;
+                    }
+                    for ep in &[a, b] {
+                        let px = ep[0] + dx;
+                        let py = ep[1] + dy;
+                        let pz = ep[2] + dz;
+                        if (0..dim_i32).contains(&px)
+                            && (0..dim_i32).contains(&py)
+                            && (0..dim_i32).contains(&pz)
+                        {
+                            let v = voxel_to_vertex[voxel_idx(px as u32, py as u32, pz as u32)];
+                            if v != u32::MAX {
+                                slots[slot] = v;
+                                break;
+                            }
+                        } else if let Some((face, perp_a_c, perp_b_c)) =
+                            halo_query_coords(px, py, pz, dim_i32)
+                        {
+                            let halo_opt = match face {
+                                FaceDir::NegX => halos.neg_x,
+                                FaceDir::PosX => halos.pos_x,
+                                FaceDir::NegY => halos.neg_y,
+                                FaceDir::PosY => halos.pos_y,
+                                FaceDir::NegZ => halos.neg_z,
+                                FaceDir::PosZ => halos.pos_z,
+                            };
+                            if let Some(halo) = halo_opt {
+                                if let Some(hv) = halo.vertex_at(perp_a_c, perp_b_c) {
+                                    let idx = intern_halo_vertex(
+                                        face,
+                                        perp_a_c,
+                                        perp_b_c,
+                                        hv,
+                                        halo_intern,
+                                        vertices,
+                                        bounds_min,
+                                        bounds_max,
+                                    );
+                                    slots[slot] = idx;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if slots.iter().all(|&s| s != u32::MAX) {
+            return slots;
+        }
+    }
+    slots
+}
+
+/// Degenerate-quad guard: any pair of equal corners means the quad
+/// isn't actually a quad. Two of the four push_oriented_quad triangles
+/// would have a repeated vertex and render as nothing.
+fn any_pair_equal(q: [u32; 4]) -> bool {
+    let [a, b, c, d] = q;
+    a == b || a == c || a == d || b == c || b == d || c == d
+}
+
+/// Single-cluster contour. Equivalent to
+/// [`contour_surface_with_neighbors`] with no neighbor context and no
+/// halos — useful when contouring a stand-alone cluster or when
+/// running tests that should not depend on seam data.
+#[must_use]
+pub fn contour_surface(cluster: &Cluster) -> CellMesh {
+    contour_surface_with_neighbors(cluster, &NeighborContext::none(), &NeighborHalos::default())
+}
+
 /// Contour `cluster` into a [`CellMesh`] by walking surface-boundary
 /// voxels directly. One vertex per solid surface voxel, placed at
 /// that voxel's owned `+++` corner. Quads from grid-adjacent surface
@@ -135,9 +373,22 @@ fn empty_surface_mesh() -> CellMesh {
 /// heights, the line between their joins becomes the surface slope —
 /// no smoothing pass required.
 ///
+/// # Cross-cluster behavior
+///
+/// `neighbors` resolves OOB voxel classifications at cluster faces.
+/// A solid voxel at the seam sees its neighbor's matching voxel
+/// instead of the empty base, so it no longer mistakenly treats the
+/// seam face as a surface. `halos` carries vertex slabs from neighbor
+/// boundary rows; the 3D quadrant search consults them when the
+/// search visits a position just past a face, and any halo vertex it
+/// uses is promoted into this cluster's vertex buffer with an
+/// in-cluster index. Adjacent clusters that supply each other's
+/// halos emit coincident geometry at the seam — z-buffer ties on
+/// coplanar geometry are visually invisible.
+///
 /// # Scope
 ///
-/// LOD 0 only. Single-cluster — no neighbor context.
+/// LOD 0 only.
 ///
 /// # Simplification
 ///
@@ -147,7 +398,11 @@ fn empty_surface_mesh() -> CellMesh {
 /// corner from where dual contouring would place vertices — a
 /// follow-up will address the full air-anchor case.
 #[must_use]
-pub fn contour_surface(cluster: &Cluster) -> CellMesh {
+pub fn contour_surface_with_neighbors(
+    cluster: &Cluster,
+    neighbors: &NeighborContext<'_>,
+    halos: &NeighborHalos<'_>,
+) -> CellMesh {
     let dim = CLUSTER_DIM as usize;
     let dim_i32 = CLUSTER_DIM as i32;
     let base_solid = is_voxel_solid(cluster.base());
@@ -166,15 +421,9 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
 
     // --- Step 1: pre-classify every voxel in one O(dim³) scan. ---
     //
-    // Memory: `dim³` bytes = 16 MB. Same shape as `contour_cluster`'s
-    // pre-classification array. We start the buffer at `base_solid`
+    // Memory: `dim³` bytes = 16 MB. We start the buffer at `base_solid`
     // and stamp only the overrides — `cluster.overrides()` is
     // typically << dim³ entries.
-    let row_stride = dim;
-    let slab_stride = dim * dim;
-    let voxel_idx = |x: u32, y: u32, z: u32| -> usize {
-        x as usize + y as usize * row_stride + z as usize * slab_stride
-    };
     let mut is_solid = vec![base_solid; dim * dim * dim];
     for (coord, voxel) in cluster.overrides() {
         is_solid[voxel_idx(coord.x(), coord.y(), coord.z())] = is_voxel_solid(voxel);
@@ -183,7 +432,10 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
         if (0..dim_i32).contains(&x) && (0..dim_i32).contains(&y) && (0..dim_i32).contains(&z) {
             is_solid[voxel_idx(x as u32, y as u32, z as u32)]
         } else {
-            base_solid
+            // Single-axis OOB resolves through the matching face
+            // neighbor via `read_corner`; multi-axis OOB falls back
+            // to `cluster.base()`.
+            is_voxel_solid(read_corner(cluster, neighbors, x, y, z))
         }
     };
 
@@ -286,127 +538,22 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
     // For each axis (X, Y, Z) iterate every axis-aligned voxel pair
     // and test for sign change (one solid, one not). For each
     // sign-changing edge, search the four perpendicular-plane
-    // quadrants outward for the nearest emitted surface vertex. If
-    // all four quadrants return a vertex, emit one quad. Winding is
-    // chosen by `push_oriented_quad` (face normal aligned with the
-    // average of the four vertex normals).
+    // quadrants outward for the nearest emitted surface vertex via
+    // [`find_four_quadrant_vertices`]; if all four quadrants return a
+    // vertex, emit one quad. Winding is chosen by
+    // [`push_oriented_quad`] (face normal aligned with the average of
+    // the four vertex normals).
     //
     // At a height step the corner voxel buried inside the taller
     // column is interior and emits no vertex; the quadrant search
     // reaches over it into the taller column's top, producing the
-    // tilted quad that bridges the step.
+    // tilted quad that bridges the step. At a cluster seam, the
+    // quadrant search reaches OOB positions exactly one voxel past
+    // the face — those are answered by the relevant halo, with the
+    // halo vertex interned into this cluster's vertex buffer on
+    // first use.
     let mut indices_u32: Vec<u32> = Vec::new();
-
-    // Search the 3D Manhattan-shell neighborhood around both edge
-    // endpoints. Each visited position is classified by its
-    // perpendicular-axis sign components into one of four quad
-    // slots; the first vertex found per slot wins. Returns the full
-    // `[v_mm, v_pm, v_pp, v_mp]` tuple. Slots that never fill come
-    // back as `u32::MAX`.
-    //
-    // `a` and `b` are the two integer voxel endpoints of the edge.
-    // `perp_axis_a` and `perp_axis_b` index into the offset triple
-    // (`0=X, 1=Y, 2=Z`) identifying the two perpendicular axes; the
-    // third axis is the edge axis and is ignored for slot
-    // classification.
-    //
-    // # Slot indexing
-    //
-    //   0 = v_mm  ( (-perp_a, -perp_b) )
-    //   1 = v_pm  ( (+perp_a, -perp_b) )
-    //   2 = v_pp  ( (+perp_a, +perp_b) )
-    //   3 = v_mp  ( (-perp_a, +perp_b) )
-    //
-    // # Slot classification with the rotational tiebreak
-    //
-    //   (0, 0)   → skip (offset on edge axis only)
-    //   (+, +)   → 2 (v_pp)        (+, -)   → 1 (v_pm)
-    //   (-, +)   → 3 (v_mp)        (-, -)   → 0 (v_mm)
-    //   (+, 0)   → 2 (v_pp)        (-, 0)   → 0 (v_mm)
-    //   (0, +)   → 3 (v_mp)        (0, -)   → 1 (v_pm)
-    //
-    // The four perpendicular-axis-adjacent positions
-    // `(±1, 0)`/`(0, ±1)` map to four distinct slots via this
-    // rotation — that's what gives the dense flat-surface
-    // tessellation. Non-axis-adjacent positions (both perpendicular
-    // components nonzero) go to their natural quadrant.
-    //
-    // # Search order — deterministic
-    //
-    //   1. Manhattan shell `s` from 1 to `MAX_QUAD_SEARCH_RADIUS`.
-    //   2. Within a shell, iterate every triple `(dx, dy, dz)` with
-    //      `|dx| + |dy| + |dz| == s` in lex order:
-    //        - `dx` from `-s` to `+s`
-    //        - `dy` from `-(s - |dx|)` to `+(s - |dx|)`
-    //        - `dz` then ±(s - |dx| - |dy|), positive sign first
-    //          (or `0` when the residual is `0`).
-    //   3. For each offset, try endpoint `a` first, then `b`.
-    //   4. First vertex found per slot wins; subsequent finds in a
-    //      filled slot are ignored.
-    //   5. Stop early when all four slots are filled.
-    let find_four_quadrant_vertices =
-        |a: [i32; 3], b: [i32; 3], perp_axis_a: usize, perp_axis_b: usize| -> [u32; 4] {
-            let mut slots: [u32; 4] = [u32::MAX; 4];
-            for shell in 1..=MAX_QUAD_SEARCH_RADIUS {
-                for dx in -shell..=shell {
-                    let rem_x = shell - dx.abs();
-                    for dy in -rem_x..=rem_x {
-                        let rem_y = shell - dx.abs() - dy.abs();
-                        let dz_vals: [i32; 2] = if rem_y == 0 { [0, 0] } else { [rem_y, -rem_y] };
-                        let dz_count = if rem_y == 0 { 1 } else { 2 };
-                        for &dz in &dz_vals[..dz_count] {
-                            let offset = [dx, dy, dz];
-                            let sa = offset[perp_axis_a].signum();
-                            let sb = offset[perp_axis_b].signum();
-                            let slot = match (sa, sb) {
-                                (0, 0) => continue,
-                                (1, 1) => 2,
-                                (1, -1) => 1,
-                                (-1, 1) => 3,
-                                (-1, -1) => 0,
-                                (1, 0) => 2,
-                                (-1, 0) => 0,
-                                (0, 1) => 3,
-                                (0, -1) => 1,
-                                _ => continue,
-                            };
-                            if slots[slot] != u32::MAX {
-                                continue;
-                            }
-                            for ep in &[a, b] {
-                                let px = ep[0] + dx;
-                                let py = ep[1] + dy;
-                                let pz = ep[2] + dz;
-                                if (0..dim_i32).contains(&px)
-                                    && (0..dim_i32).contains(&py)
-                                    && (0..dim_i32).contains(&pz)
-                                {
-                                    let v =
-                                        voxel_to_vertex[voxel_idx(px as u32, py as u32, pz as u32)];
-                                    if v != u32::MAX {
-                                        slots[slot] = v;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if slots.iter().all(|&s| s != u32::MAX) {
-                    return slots;
-                }
-            }
-            slots
-        };
-
-    // Degenerate-quad guard: any pair of equal corners means the
-    // quad isn't actually a quad. Two of the four `push_oriented_quad`
-    // triangles would have a repeated vertex and render as nothing.
-    // Cheap to filter; cleaner than emitting phantom indices.
-    let any_pair_equal = |q: [u32; 4]| -> bool {
-        let [a, b, c, d] = q;
-        a == b || a == c || a == d || b == c || b == d || c == d
-    };
+    let mut halo_intern: HashMap<(FaceDir, u32, u32), u32> = HashMap::new();
 
     // X-axis edges: pair (vx, vy, vz)/(vx+1, vy, vz). Edge axis = 0
     // (X). Perpendicular axes = 1 (Y) and 2 (Z).
@@ -418,7 +565,18 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
                 if s0 == s1 {
                     continue;
                 }
-                let slots = find_four_quadrant_vertices([vx, vy, vz], [vx + 1, vy, vz], 1, 2);
+                let slots = find_four_quadrant_vertices(
+                    [vx, vy, vz],
+                    [vx + 1, vy, vz],
+                    1,
+                    2,
+                    &voxel_to_vertex,
+                    halos,
+                    &mut halo_intern,
+                    &mut vertices,
+                    &mut bounds_min,
+                    &mut bounds_max,
+                );
                 if slots.contains(&u32::MAX) {
                     continue;
                 }
@@ -440,7 +598,18 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
                 if s0 == s1 {
                     continue;
                 }
-                let slots = find_four_quadrant_vertices([vx, vy, vz], [vx, vy + 1, vz], 0, 2);
+                let slots = find_four_quadrant_vertices(
+                    [vx, vy, vz],
+                    [vx, vy + 1, vz],
+                    0,
+                    2,
+                    &voxel_to_vertex,
+                    halos,
+                    &mut halo_intern,
+                    &mut vertices,
+                    &mut bounds_min,
+                    &mut bounds_max,
+                );
                 if slots.contains(&u32::MAX) {
                     continue;
                 }
@@ -462,7 +631,18 @@ pub fn contour_surface(cluster: &Cluster) -> CellMesh {
                 if s0 == s1 {
                     continue;
                 }
-                let slots = find_four_quadrant_vertices([vx, vy, vz], [vx, vy, vz + 1], 0, 1);
+                let slots = find_four_quadrant_vertices(
+                    [vx, vy, vz],
+                    [vx, vy, vz + 1],
+                    0,
+                    1,
+                    &voxel_to_vertex,
+                    halos,
+                    &mut halo_intern,
+                    &mut vertices,
+                    &mut bounds_min,
+                    &mut bounds_max,
+                );
                 if slots.contains(&u32::MAX) {
                     continue;
                 }
@@ -543,6 +723,7 @@ mod tests {
     use crate::corner_vector::CornerVector;
     use crate::generators::{heightmap_terrain_at_with_depth_materials, solid_slab};
     use crate::material::Material;
+    use crate::seam::Lod;
 
     fn coord(x: u32, y: u32, z: u32) -> LocalCoord {
         LocalCoord::new(x, y, z).expect("in-range")
@@ -1184,5 +1365,114 @@ mod tests {
         let mut expected_sorted = expected.clone();
         expected_sorted.sort();
         assert_eq!(seen_positions, expected_sorted);
+    }
+
+    // ---- seam halo ----
+
+    #[test]
+    fn no_neighbors_matches_legacy_contour_surface() {
+        // The bare `contour_surface(c)` entry point is a one-line
+        // wrapper around `contour_surface_with_neighbors` with empty
+        // neighbor context and empty halos. The outputs must be
+        // byte-equal.
+        let c = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let a = contour_surface(&c);
+        let b = contour_surface_with_neighbors(
+            &c,
+            &crate::seam::NeighborContext::none(),
+            &NeighborHalos::default(),
+        );
+        assert_eq!(a.vertices(), b.vertices());
+        assert_eq!(a.indices(), b.indices());
+        assert_eq!(a.metadata(), b.metadata());
+    }
+
+    #[test]
+    fn matched_lod_seam_removes_boundary_walls() {
+        // Two adjacent clusters generated from the same heightmap at
+        // world offsets [0,0,0] and [256,0,0]. Without a neighbor,
+        // the +X face of the left cluster paints a wall of vertices
+        // with `position[0] ≈ 256` and `normal[0] > 0.8` — mid-column
+        // water voxels see their OOB +X side as empty and emit a
+        // surface there. With the +X neighbor wired through, those
+        // OOB reads classify as solid and the walls disappear.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+
+        let count_walls = |mesh: &CellMesh| -> usize {
+            mesh.vertices()
+                .iter()
+                .filter(|v| (v.position[0] - 256.0).abs() < 0.5 && v.normal[0] > 0.8)
+                .count()
+        };
+
+        let wall_alone = count_walls(&contour_surface(&left));
+        assert!(
+            wall_alone > 100,
+            "fixture sanity: alone-pass should emit many +X wall vertices; got {wall_alone}"
+        );
+
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, Lod::ZERO)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, Lod::ZERO);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let wall_with_neighbor =
+            count_walls(&contour_surface_with_neighbors(&left, &neighbors, &halos));
+
+        assert!(
+            wall_with_neighbor * 10 < wall_alone,
+            "expected +X wall count to drop ≥ 10× with halo; \
+             alone = {wall_alone}, with neighbor = {wall_with_neighbor}"
+        );
+    }
+
+    #[test]
+    fn matched_lod_seam_emits_cross_seam_quads() {
+        // With the +X halo wired in, the quadrant search around
+        // boundary Y-edges reaches OOB positions on +X and finds
+        // halo vertices to fill the missing slots. Those halo
+        // vertices are interned into the cluster's vertex buffer at
+        // `position[0] ≈ 256.5` (one voxel past the seam plane).
+        // Counting triangles that contain at least one such vertex
+        // measures the cross-seam stitching density.
+        use crate::seam::{build_halo, FaceDir, NeighborContext};
+        let left = heightmap_terrain_at_with_depth_materials(0x42, [0.0, 0.0, 0.0]);
+        let right = heightmap_terrain_at_with_depth_materials(0x42, [256.0, 0.0, 0.0]);
+        let neighbors = NeighborContext {
+            pos_x: Some((&right, Lod::ZERO)),
+            ..NeighborContext::none()
+        };
+        let halo_pos_x = build_halo(&right, FaceDir::PosX, Lod::ZERO);
+        let halos = NeighborHalos {
+            pos_x: Some(&halo_pos_x),
+            ..NeighborHalos::default()
+        };
+        let mesh = contour_surface_with_neighbors(&left, &neighbors, &halos);
+
+        let mut cross_seam = 0usize;
+        each_triangle(&mesh, |tri| {
+            for &idx in &tri {
+                if mesh.vertices()[idx as usize].position[0] > 256.0 {
+                    cross_seam += 1;
+                    break;
+                }
+            }
+        });
+        // The bulk of cross-seam quads come from top-of-column
+        // Y-edges in the vx≈255 row whose `(+X, ±Z)` slots fall onto
+        // the +X halo. Empirically that's a few hundred quads (~800
+        // triangles) on this heightmap seed; assert ≥ 500 to anchor
+        // the seam-stitching density without flaking on small
+        // surface-roughness variations.
+        assert!(
+            cross_seam > 500,
+            "expected substantial cross-seam quad emission; got {cross_seam}"
+        );
     }
 }

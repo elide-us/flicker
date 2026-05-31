@@ -48,12 +48,12 @@ mod voxel;
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
 pub use cluster_id::ClusterId;
 pub use cluster_map::ClusterMap;
-pub use contour_surface::contour_surface;
+pub use contour_surface::{contour_surface, contour_surface_with_neighbors, NeighborHalos};
 pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
 pub use mesh::{CellMesh, Indices, MeshMetadata, Vertex};
-pub use seam::{Lod, NeighborContext};
+pub use seam::{build_halo, FaceDir, HaloVertex, Lod, NeighborContext, NeighborHalo};
 pub use surface_boundary::{
     classification_differs, is_surface_boundary_voxel, surface_boundary_segments,
     SurfaceBoundarySegment,
