@@ -57,6 +57,8 @@ pub enum Key {
     // Number-row digits — useful for debug toggles in examples.
     Digit1,
     Digit2,
+    // Backslash — `\` key, used as another debug toggle.
+    Backslash,
 }
 
 /// Per-frame input snapshot. Held-state plus a small set of "just

@@ -33,13 +33,15 @@
 //! one sample past the cluster boundary; the primitive is global, so
 //! it answers the OOB sample queries directly, and the resulting QEF
 //! vertex is stored on the sample-aligned min-corner voxel
-//! `((sample_dim−1)·stride, …)`. The neighbor cluster on the high side
-//! reads this vertex across the seam at mesh time.
+//! `((sample_dim−1)·stride, …)`.
 //!
 //! Stored corners are in **cell-units** `[0, 1]`: `corner = (v − origin)
 //! /stride`. Mesh decodes back to cluster-local voxel coords by
 //! `origin + corner·stride`. At LOD 0 (`stride = 1`) the encode is the
 //! identity, so LOD-0 storage is byte-identical to the pre-§2 path.
+//!
+//! Cross-LOD seam handling lives in [`crate::mesh`] — contour is
+//! per-cluster and oblivious to neighbour LODs.
 
 use crate::cluster::Cluster;
 use crate::cluster_id::ClusterId;
@@ -104,9 +106,6 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
     let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 7] for intra-cluster contour");
     let stride = lod.stride() as i32;
     let sample_dim = lod.sample_dim() as usize;
-    // Precompute solidity over (sample_dim+1)³ samples so the +-seam
-    // shell's `+1` corners (at sample index `sample_dim`) are
-    // addressable. Row-major over (sample_dim+1).
     let span = sample_dim + 1;
     let idx = |x: usize, y: usize, z: usize| -> usize { (z * span + y) * span + x };
 
@@ -134,10 +133,6 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
                 let material_out = if s { material } else { Material::EMPTY };
                 let mut corner_out = CornerVector::DEFAULT;
 
-                // Every sample index in `[0, sample_dim)` is the owner
-                // of a cell — cells at sample_dim-1 are the +-seam
-                // shell whose `+1` corners reach the sample_dim plane
-                // (provided by the precompute's extra slab).
                 let mut corner_solid = [false; 8];
                 for (n, ofs) in CORNER_OFFSETS.iter().enumerate() {
                     corner_solid[n] = solid[idx(
@@ -150,70 +145,20 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
                 let any_solid = corner_solid.iter().any(|&b| b);
                 let all_solid = corner_solid.iter().all(|&b| b);
 
-                // Cluster-local voxel coord of the cell's min corner.
                 let cell_vx = i as i32 * stride;
                 let cell_vy = j as i32 * stride;
                 let cell_vz = k as i32 * stride;
 
                 if any_solid && !all_solid {
-                    let mut qef = Qef::new();
-                    let wx_cell = off_x + cell_vx;
-                    let wy_cell = off_y + cell_vy;
-                    let wz_cell = off_z + cell_vz;
-                    for &(a, b) in &EDGES {
-                        if corner_solid[a] == corner_solid[b] {
-                            continue;
-                        }
-                        let oa = CORNER_OFFSETS[a];
-                        let ob = CORNER_OFFSETS[b];
-                        let pa = [
-                            wx_cell + oa[0] * stride,
-                            wy_cell + oa[1] * stride,
-                            wz_cell + oa[2] * stride,
-                        ];
-                        let pb = [
-                            wx_cell + ob[0] * stride,
-                            wy_cell + ob[1] * stride,
-                            wz_cell + ob[2] * stride,
-                        ];
-                        let h = primitive.edge_hermite(pa, pb);
-                        // QEF in cluster-local voxel units (same
-                        // convention as LOD 0 — only the corner
-                        // encoding changes at higher LODs).
-                        let pos_local = [
-                            h.position[0] - off_x as f32,
-                            h.position[1] - off_y as f32,
-                            h.position[2] - off_z as f32,
-                        ];
-                        qef.add(pos_local, h.normal);
-                    }
-                    if qef.count() > 0 {
-                        let v = qef.solve(QEF_LAMBDA);
-                        // Clamp into this cell's AABB
-                        // `[cell_v, cell_v + stride]` and re-encode in
-                        // cell-units (`corner = (v − origin)/stride`).
-                        // At LOD 0 the divide-by-1 is the identity and
-                        // the encoded byte matches the pre-§2 path.
-                        let fx = cell_vx as f32;
-                        let fy = cell_vy as f32;
-                        let fz = cell_vz as f32;
-                        let fs = stride as f32;
-                        let vx = v[0].clamp(fx, fx + fs);
-                        let vy = v[1].clamp(fy, fy + fs);
-                        let vz = v[2].clamp(fz, fz + fs);
-                        corner_out = CornerVector::from_components(
-                            (vx - fx) / fs,
-                            (vy - fy) / fs,
-                            (vz - fz) / fs,
-                        );
-                    }
+                    corner_out = cell_qef_corner(
+                        primitive,
+                        &corner_solid,
+                        [cell_vx, cell_vy, cell_vz],
+                        [off_x, off_y, off_z],
+                        stride,
+                    );
                 }
 
-                // Empty voxels with the default corner round-trip
-                // through the cluster's base value; storing them would
-                // waste a HashMap entry. Everything else must be
-                // recorded on the sample-aligned min-corner voxel —
-                // including an empty voxel whose cell is active.
                 if material_out != Material::EMPTY || corner_out != CornerVector::DEFAULT {
                     let coord = LocalCoord::new(
                         cell_vx as u32,
@@ -228,6 +173,66 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
     }
 
     cluster
+}
+
+/// Compute the QEF dual vertex for a single cell and return its
+/// cell-units corner encoding. The cell spans `[cell_v, cell_v +
+/// stride]` in cluster-local voxel coords; the QEF runs in cluster-
+/// local voxel units (so LOD-0 byte path is unchanged), then re-encodes
+/// the result in `[0, 1]` cell-units. Returns the default corner when
+/// the cell has no sign-crossing edges (degenerate input).
+fn cell_qef_corner(
+    primitive: &dyn Primitive,
+    corner_solid: &[bool; 8],
+    cell_v: [i32; 3],
+    world_off: [i32; 3],
+    stride: i32,
+) -> CornerVector {
+    let wx_cell = world_off[0] + cell_v[0];
+    let wy_cell = world_off[1] + cell_v[1];
+    let wz_cell = world_off[2] + cell_v[2];
+
+    let mut qef = Qef::new();
+    for &(a, b) in &EDGES {
+        if corner_solid[a] == corner_solid[b] {
+            continue;
+        }
+        let oa = CORNER_OFFSETS[a];
+        let ob = CORNER_OFFSETS[b];
+        let pa = [
+            wx_cell + oa[0] * stride,
+            wy_cell + oa[1] * stride,
+            wz_cell + oa[2] * stride,
+        ];
+        let pb = [
+            wx_cell + ob[0] * stride,
+            wy_cell + ob[1] * stride,
+            wz_cell + ob[2] * stride,
+        ];
+        let h = primitive.edge_hermite(pa, pb);
+        let pos_local = [
+            h.position[0] - world_off[0] as f32,
+            h.position[1] - world_off[1] as f32,
+            h.position[2] - world_off[2] as f32,
+        ];
+        qef.add(pos_local, h.normal);
+    }
+    if qef.count() == 0 {
+        return CornerVector::DEFAULT;
+    }
+    let v = qef.solve(QEF_LAMBDA);
+    let fx = cell_v[0] as f32;
+    let fy = cell_v[1] as f32;
+    let fz = cell_v[2] as f32;
+    let fs = stride as f32;
+    let vx = v[0].clamp(fx, fx + fs);
+    let vy = v[1].clamp(fy, fy + fs);
+    let vz = v[2].clamp(fz, fz + fs);
+    CornerVector::from_components(
+        (vx - fx) / fs,
+        (vy - fy) / fs,
+        (vz - fz) / fs,
+    )
 }
 
 #[cfg(test)]

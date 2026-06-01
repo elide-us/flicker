@@ -198,6 +198,7 @@ fn translate_key(key: PhysicalKey) -> Option<Key> {
         KeyCode::ControlLeft => Key::LeftControl,
         KeyCode::Digit1 => Key::Digit1,
         KeyCode::Digit2 => Key::Digit2,
+        KeyCode::Backslash => Key::Backslash,
         _ => return None,
     })
 }

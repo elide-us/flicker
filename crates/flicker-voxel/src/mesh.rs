@@ -88,6 +88,43 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
     let stride = lod.stride() as i32;
     let sample_dim = lod.sample_dim() as i32;
 
+    // ±1 LOD adjacency. The cross-LOD seam approach assumes the
+    // transition between any two adjacent clusters is 2:1 or smaller —
+    // higher steps would need recursive transition rows we don't build.
+    // World-gen at the layer above is responsible for honouring this;
+    // panic loudly here so a violation is impossible to miss.
+    for axis in 0..3 {
+        for positive in [false, true] {
+            if let Some((_, nl)) = neighbor_at(neighbors, axis, positive) {
+                let diff = nl.level() as i32 - lod.level() as i32;
+                assert!(
+                    diff.abs() <= 1,
+                    "neighbor LOD {} differs from self LOD {} by more than 1",
+                    nl.level(),
+                    lod.level()
+                );
+            }
+        }
+    }
+
+    // Per-seam emission rule: each shared seam is emitted by exactly
+    // one cluster — the finer of the two, with low-side ownership as
+    // tiebreaker for uniform LOD (which keeps §1 byte-identical).
+    //
+    // The two rules below derive from that single principle:
+    //   • At the +-axis seam (self's +X/+Y/+Z face), self emits iff
+    //     self_lod ≤ +-axis-neighbor.lod  (finer-or-tie).
+    //   • At the −-axis seam (self's −X/−Y/−Z face), self emits iff
+    //     self_lod <  −-axis-neighbor.lod (strictly finer; ties go to
+    //     the −-axis neighbor as the low side).
+    let plus_neighbor_skip = |axis: usize| -> bool {
+        // Returns true when self is coarser than the +-axis neighbor —
+        // the finer neighbor will emit the seam from its −-axis face.
+        neighbor_at(neighbors, axis, true)
+            .map(|(_, nl)| nl.level() < lod.level())
+            .unwrap_or(false)
+    };
+
     for gz in 0..sample_dim {
         for gy in 0..sample_dim {
             for gx in 0..sample_dim {
@@ -100,11 +137,16 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                     n_sample[axis_a] += 1;
                     let n_voxel = sample_to_voxel(n_sample, stride);
 
-                    // Far endpoint: in-range sample → cluster.get; on
-                    // the high boundary (`n_sample[axis] == sample_dim`,
-                    // i.e. `n_voxel[axis] == CLUSTER_DIM`) with a
-                    // +-side neighbor → read_corner; boundary without
-                    // neighbor → skip.
+                    // At the +-axis seam crossing (n_sample[axis_a] ==
+                    // sample_dim), skip emission if self is coarser
+                    // than the +-axis neighbor — that neighbor (being
+                    // finer) owns the seam from its −-axis face.
+                    if n_sample[axis_a] == sample_dim
+                        && plus_neighbor_skip(axis_a)
+                    {
+                        continue;
+                    }
+
                     let s_n = if n_sample[axis_a] < sample_dim {
                         is_solid_in_range(cluster, n_voxel)
                     } else if has_face_neighbor(neighbors, axis_a, true) {
@@ -116,9 +158,6 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                         continue;
                     }
 
-                    // Four cells sharing the edge, in perimeter order
-                    // (sample indices). Decoding to voxel coords and
-                    // the corner·stride lookup happen in cell_vertex.
                     let cells = [
                         cell_coord(g_sample, axis_a, 0, 0),
                         cell_coord(g_sample, axis_a, -1, 0),
@@ -143,12 +182,161 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
         }
     }
 
+    // Cross-LOD takeover: when self is strictly finer than a −-axis
+    // neighbor, self emits the +-axis-crossing seam quads at that face
+    // (the work the coarser low-side neighbor would have done at
+    // uniform LOD). The boundary layer's iteration runs at the
+    // coarser stride; the 4 cells are all in the coarser neighbor
+    // (read via `read_corner`, decoded with §3a's per-neighbor stride).
+    for axis_a in 0..3 {
+        let Some((_, neighbor_lod)) = neighbor_at(neighbors, axis_a, false) else {
+            continue;
+        };
+        if neighbor_lod.level() <= lod.level() {
+            continue;
+        }
+        emit_neg_seam_takeover(&mut out, cluster, neighbors, lod, neighbor_lod, axis_a);
+    }
+
     out
+}
+
+/// Emit the +-axis-crossing seam quads on self's −-axis face when self
+/// is strictly finer than the −-axis neighbor. Iterates the in-axis
+/// directions at the coarser stride; the 4 cells around each seam
+/// edge all live in the coarser neighbor and are read via
+/// [`read_corner`] (§3a decode handles the per-neighbor stride).
+fn emit_neg_seam_takeover(
+    out: &mut ClusterMesh,
+    cluster: &Cluster,
+    neighbors: &NeighborContext<'_>,
+    self_lod: Lod,
+    neighbor_lod: Lod,
+    axis_a: usize,
+) {
+    let s_self = self_lod.stride() as i32;
+    let s_n = neighbor_lod.stride() as i32;
+    let n_n = neighbor_lod.sample_dim() as i32;
+    let coarse_step = s_n / s_self; // step in self's sample-index units
+
+    let b_axis = (axis_a + 1) % 3;
+    let c_axis = (axis_a + 2) % 3;
+
+    // Iterate the in-axis directions at coarse cadence. Skip the
+    // corners (j_b == 0 or j_c == 0) — those would have edge-neighbor
+    // cells (multi-axis OOB), which face-neighbor-only meshing
+    // doesn't handle.
+    for j_b in 1..n_n {
+        for j_c in 1..n_n {
+            // Edge endpoints (self-local voxel coords).
+            // near = self-side endpoint at voxel 0 on the OOB axis,
+            // far  = neighbor-side endpoint at voxel −s_n on the OOB axis.
+            let mut near_v = [0i32; 3];
+            near_v[axis_a] = 0;
+            near_v[b_axis] = j_b * s_n;
+            near_v[c_axis] = j_c * s_n;
+            let mut far_v = near_v;
+            far_v[axis_a] = -s_n;
+
+            // Solidity check: near is in self at a coarse-aligned slot.
+            let s_near = is_solid_in_range(cluster, near_v);
+            // Far is in the −-axis neighbor at its seam-shell row.
+            let s_far = is_solid_with_neighbors(cluster, neighbors, far_v);
+            if s_near == s_far {
+                continue;
+            }
+
+            // 4 cells around the +-axis-crossing edge, in perimeter
+            // order matching `cell_coord` with axis_a = face axis.
+            // All 4 are at self-sample coord −coarse_step on the face
+            // axis (which is voxel −s_n in self's frame, OOB → routes
+            // to the neighbor via read_corner).
+            let g_sample = {
+                let mut s = [0i32; 3];
+                s[axis_a] = 0;
+                s[b_axis] = j_b * coarse_step;
+                s[c_axis] = j_c * coarse_step;
+                s
+            };
+            let cells_coarse: [[i32; 3]; 4] = {
+                // Equivalent to cell_coord(g, axis_a, db, dc) with
+                // (db, dc) ∈ {(0,0), (-1,0), (-1,-1), (0,-1)} stepping
+                // in coarse-cadence units (= `coarse_step` in self's
+                // sample-index space).
+                let offsets = [(0, 0), (-1, 0), (-1, -1), (0, -1)];
+                let mut out_cells = [[0i32; 3]; 4];
+                for (i, &(db, dc)) in offsets.iter().enumerate() {
+                    let mut c = g_sample;
+                    c[axis_a] -= coarse_step; // step back to the −-side cell row
+                    c[b_axis] += db * coarse_step;
+                    c[c_axis] += dc * coarse_step;
+                    out_cells[i] = c;
+                }
+                out_cells
+            };
+
+            let Some(positions) = resolve_cell_vertices(
+                cluster,
+                neighbors,
+                &cells_coarse,
+                s_self,
+                self_lod.sample_dim() as i32,
+            ) else {
+                continue;
+            };
+
+            let mut expected_normal = [0.0_f32; 3];
+            expected_normal[axis_a] = if s_near { -1.0 } else { 1.0 };
+
+            let solid_endpoint = if s_near { near_v } else { far_v };
+            let material = solid_material(cluster, neighbors, solid_endpoint);
+
+            push_quad(out, positions, expected_normal, material);
+        }
+    }
 }
 
 #[inline]
 fn sample_to_voxel(s: [i32; 3], stride: i32) -> [i32; 3] {
     [s[0] * stride, s[1] * stride, s[2] * stride]
+}
+
+/// Face neighbor on the OOB side of `coord` (if any), as the stored
+/// `(cluster, lod)` pair. Caller is expected to have already ensured
+/// exactly one OOB axis; multi-axis OOB returns `None`.
+fn neighbor_at<'a>(
+    neighbors: &NeighborContext<'a>,
+    axis: usize,
+    positive: bool,
+) -> Option<(&'a Cluster, Lod)> {
+    match (axis, positive) {
+        (0, false) => neighbors.neg_x,
+        (0, true) => neighbors.pos_x,
+        (1, false) => neighbors.neg_y,
+        (1, true) => neighbors.pos_y,
+        (2, false) => neighbors.neg_z,
+        (2, true) => neighbors.pos_z,
+        _ => None,
+    }
+}
+
+/// LOD of the face neighbor on the OOB side of `coord`. Returns `None`
+/// when no axis is OOB or the matching face neighbor is absent. Used
+/// by [`cell_vertex`] to scale the decoded corner by the neighbor's
+/// stride (the corner is stored in the neighbor's cell-units, which
+/// differ from self's at a cross-LOD face).
+fn face_neighbor_lod(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> Option<Lod> {
+    let dim = CLUSTER_DIM as i32;
+    for axis in 0..3 {
+        let c = coord[axis];
+        if c < 0 {
+            return neighbor_at(neighbors, axis, false).map(|(_, l)| l);
+        }
+        if c >= dim {
+            return neighbor_at(neighbors, axis, true).map(|(_, l)| l);
+        }
+    }
+    None
 }
 
 /// Resolve the 4-cell gather (cells in sample-index space) to 4 vertex
@@ -243,26 +431,45 @@ fn cell_vertex(
         return None;
     }
 
-    // Cluster-local voxel coord of the cell's min corner. At LOD 0
-    // (stride=1) this is the sample index itself; at higher LODs it
-    // steps by stride. Out-of-cluster samples (`-1` or `sample_dim`)
-    // produce `-stride` or `CLUSTER_DIM`, which `read_corner` routes
-    // to the matching face neighbor.
-    let cell_voxel = sample_to_voxel(cell_sample, stride);
+    // Cluster-local voxel coord of the cell's min corner at self's
+    // stride. Out-of-cluster samples (`-1` or `sample_dim`) produce
+    // `-stride` or `CLUSTER_DIM`, which `read_corner` routes to the
+    // matching face neighbor.
+    let mut cell_voxel = sample_to_voxel(cell_sample, stride);
 
-    let voxel = if oob_count == 0 {
-        cluster.get(
+    let (voxel, decode_stride) = if oob_count == 0 {
+        let v = cluster.get(
             LocalCoord::new(cell_voxel[0] as u32, cell_voxel[1] as u32, cell_voxel[2] as u32)
                 .expect("in range"),
-        )
+        );
+        (v, stride)
     } else if !single_axis_face_neighbor_present(neighbors, cell_voxel) {
         return None;
     } else {
-        read_corner(cluster, neighbors, cell_voxel[0], cell_voxel[1], cell_voxel[2])
+        let neighbor_lod = face_neighbor_lod(neighbors, cell_voxel)
+            .expect("single-axis OOB + neighbor present implies a face neighbor");
+        let s_n = neighbor_lod.stride() as i32;
+        // Cross-LOD snap: when the neighbor is coarser, the data lives
+        // only at coarse-aligned voxel slots — and the stored corner is
+        // in cell-units relative to the *coarse* cell's min-corner.
+        // Floor cell_voxel to the coarser stride on every axis so:
+        //   • the read lands on the coarse cell that contains our query,
+        //   • the decode places the vertex at the coarse cell's actual
+        //     QEF position (cell_min + corner·s_coarse) rather than at
+        //     a non-aligned fine slot that holds nothing.
+        // At uniform LOD `s_n == stride`, the snap is a no-op.
+        let s_coarse = s_n.max(stride);
+        if s_coarse > stride {
+            for axis in 0..3 {
+                cell_voxel[axis] = cell_voxel[axis].div_euclid(s_coarse) * s_coarse;
+            }
+        }
+        let v = read_corner(cluster, neighbors, cell_voxel[0], cell_voxel[1], cell_voxel[2]);
+        (v, s_coarse)
     };
 
     let [dx, dy, dz] = voxel.corner().to_components();
-    let fs = stride as f32;
+    let fs = decode_stride as f32;
     Some([
         cell_voxel[0] as f32 + dx * fs,
         cell_voxel[1] as f32 + dy * fs,
@@ -277,15 +484,7 @@ fn cell_sample_in_range(s: i32, sample_dim: i32) -> bool {
 
 #[inline]
 fn has_face_neighbor(neighbors: &NeighborContext<'_>, axis: usize, positive: bool) -> bool {
-    match (axis, positive) {
-        (0, false) => neighbors.neg_x.is_some(),
-        (0, true) => neighbors.pos_x.is_some(),
-        (1, false) => neighbors.neg_y.is_some(),
-        (1, true) => neighbors.pos_y.is_some(),
-        (2, false) => neighbors.neg_z.is_some(),
-        (2, true) => neighbors.pos_z.is_some(),
-        _ => false,
-    }
+    neighbor_at(neighbors, axis, positive).is_some()
 }
 
 /// `true` iff `coord` has exactly one OOB axis AND the matching face
@@ -867,5 +1066,121 @@ mod tests {
             "LOD-2: interior 1-use edges (open mesh): {:?}",
             interior_unshared.iter().take(10).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "differs from self LOD")]
+    fn mesh_panics_on_two_level_lod_jump() {
+        // The ±1 adjacency assertion guards the cross-LOD seam approach:
+        // the transition is bounded to 2:1, never 4:1 or larger. A self
+        // at LOD 0 with an LOD-2 face neighbor must panic.
+        let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
+        let b = contour(&FlatField::at_half(), grey(), ClusterId::new(2, 1, 0, 0));
+        let neighbors = NeighborContext {
+            pos_x: Some((&b, Lod::new(2).unwrap())),
+            ..NeighborContext::none()
+        };
+        let _ = mesh(&a, &neighbors, Lod::ZERO);
+    }
+
+    #[test]
+    fn cross_lod_read_decodes_in_neighbors_stride() {
+        // A (fine, LOD 0) reads across its +X face to B (coarse, LOD 1).
+        // B's stored seam-shell corner at b-voxel (255, ...) is encoded
+        // in B's cell-units (relative to s_B=2). When A's mesh reads
+        // it across, the decode must scale the corner by B's stride,
+        // not A's — otherwise the resulting position is half what it
+        // should be. The check: a known B-corner of (0.5, 1.0, 0.5)
+        // decodes to a vertex one full B-cell up in y (a 2-voxel step,
+        // not 1), and offset by 1 voxel in X/Z.
+        let b_lod = Lod::new(1).unwrap();
+        let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
+        let b = contour(&FlatField::at_half(), grey(), ClusterId::new(1, 1, 0, 0));
+
+        // B's seam-shell cell at sample (sample_dim_B-1, 63, 0) =
+        // voxel (254, 126, 0); cell spans y=[126, 128] at LOD 1.
+        // Stored corner.y in cell-units ≈ 1.0 (on the +Y face = world
+        // y=128). Read it across from A at voxel (256, 126, 0) →
+        // wraps to B at (0, 126, 0)? No: A's read across goes to its
+        // +X neighbor — vx in A's frame at 256 maps to B's vx=0,
+        // but B's storage at the +X seam shell is at b-voxel (254, …),
+        // not (0, …). So we read B's +X face from A's perspective:
+        // A's cross-cluster read at the +-X seam is bx=0, not 254. The
+        // cell at sample 0 in B is B's interior `[0, 2]` cell. For a
+        // flat field at y=128 that cell is fully below — no QEF stored
+        // there. Instead, the meaningful cross-LOD slot is along Y/Z
+        // perpendicular reads. Easier to test via `cell_vertex` direct.
+        //
+        // Construct: A's cell at sample-index (256, 63, 0)? That'd be
+        // OOB on +X. cell_voxel = (256, 63, 0). Resolves via
+        // read_corner to B at (0, 63, 0). But sample y=63 isn't a B
+        // sample (B's samples are even y). Skip — use y=62 instead so
+        // it's a B sample (62/s_B = 31).
+        let neighbors = NeighborContext {
+            pos_x: Some((&b, b_lod)),
+            ..NeighborContext::none()
+        };
+        // Sample (256, 126, 0) — past A's +X face, lands on B at
+        // b-voxel (0, 126, 0). This is B's surface-straddling cell at
+        // sample (0, 63, 0) (y spans [126, 128]); B's contour stored a
+        // corner ≈ (0.5, 1.0, 0.5) here, on +Y face = world y=128.
+        let pos = cell_vertex(&a, &neighbors, [256, 126, 0], 1, 256);
+        let pos = pos.expect("read across to B should resolve");
+        // Decoded with B's stride (2), the cell_voxel = (256, 126, 0)
+        // in A's local frame, corner ≈ (0.5, 1.0, 0.5) → vertex
+        // (256 + 0.5*2, 126 + 1.0*2, 0 + 0.5*2) = (257, 128, 1).
+        // (Bytes encode 0.5 → ~0.504 etc., so allow a small tolerance.)
+        assert!(
+            (pos[0] - 257.0).abs() < 0.05,
+            "x={} should land at ~257 (cross-LOD decode using s=2)",
+            pos[0]
+        );
+        assert!(
+            (pos[1] - 128.0).abs() < 0.05,
+            "y={} should land on the surface plane",
+            pos[1]
+        );
+        assert!(
+            (pos[2] - 1.0).abs() < 0.05,
+            "z={} should land at ~1 (0 + 0.5*2)",
+            pos[2]
+        );
+    }
+
+    #[test]
+    fn uniform_lod_decode_unchanged_by_neighbor_stride_path() {
+        // Regression: at uniform LOD the cross-cluster decode path
+        // must still produce the same vertex positions §1's two-
+        // cluster byte-equal test guarantees. Re-running that scenario
+        // through `cell_vertex` should give A's seam-shell cell read
+        // (via cluster.get) and B's view (via read_corner) byte-equal
+        // world positions, since neighbor_lod == self_lod → same
+        // stride.
+        let a = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 0, 0, 0));
+        let b = contour(&FlatField::at_half(), grey(), ClusterId::new(0, 1, 0, 0));
+        let nb_b = NeighborContext {
+            neg_x: Some((&a, Lod::ZERO)),
+            ..NeighborContext::none()
+        };
+
+        // From A's side: cell at sample (255, 127, 100) — in-storage.
+        let v_a =
+            cell_vertex(&a, &NeighborContext::none(), [255, 127, 100], 1, 256).expect("in range");
+        // From B's side: cell at sample (-1, 127, 100) — read across.
+        let v_b = cell_vertex(&b, &nb_b, [-1, 127, 100], 1, 256).expect("read across");
+
+        // World positions: A's vertex is at v_a, B's vertex is at
+        // v_b + CLUSTER_DIM on X.
+        let v_b_world = [v_b[0] + CLUSTER_DIM as f32, v_b[1], v_b[2]];
+        // Byte-equal up to the byte encoding's resolution.
+        for axis in 0..3 {
+            assert!(
+                (v_a[axis] - v_b_world[axis]).abs() < 1e-3,
+                "uniform-LOD decode drifted on axis {}: a={} b_world={}",
+                axis,
+                v_a[axis],
+                v_b_world[axis],
+            );
+        }
     }
 }

@@ -30,7 +30,7 @@ use flicker::render::{
     Vec2, Vec3,
 };
 use flicker_voxel::{
-    contour, ClusterId, ClusterMap, CornerVector, Lod, Material, NeighborContext, Scene,
+    contour, Cluster, ClusterId, ClusterMap, CornerVector, Lod, Material, NeighborContext, Scene,
     CLUSTER_DIM,
 };
 
@@ -84,14 +84,24 @@ struct VoxelCluster {
     /// `2` toggles drawing corner-vector arrows (precomputed in `init`).
     /// Off by default.
     corner_arrows_on: bool,
-    /// Held-state on the previous frame for `1`/`2` so the toggles flip
-    /// on the press edge instead of every frame the key is down.
+    /// Held-state on the previous frame for `1`/`2`/`\` so the toggles
+    /// flip on the press edge instead of every frame the key is down.
     prev_key1: bool,
     prev_key2: bool,
+    prev_backslash: bool,
     /// Cached line segments: from each stored voxel's world grid coord
     /// to its decoded `CornerVector` tip, across all clusters in the
     /// field.
     corner_arrows: Vec<(Vec3, Vec3)>,
+
+    /// LOD level of the centre cluster of the 3×3 field. Toggled
+    /// between 0 (uniform with neighbours) and 1 (coarser than its
+    /// four lateral neighbours) on `\`. Other clusters stay at LOD 0.
+    center_lod_level: u8,
+    /// Set by `update` when `\` flips the centre LOD; consumed at the
+    /// top of `render` (which has `&mut Renderer`) to re-contour + re-
+    /// mesh the whole field.
+    needs_rebuild: bool,
 
     should_quit: bool,
 }
@@ -114,7 +124,10 @@ impl Default for VoxelCluster {
             corner_arrows_on: false,
             prev_key1: false,
             prev_key2: false,
+            prev_backslash: false,
             corner_arrows: Vec::new(),
+            center_lod_level: 0,
+            needs_rebuild: false,
             should_quit: false,
         }
     }
@@ -144,53 +157,53 @@ impl VoxelCluster {
     }
 }
 
-impl App for VoxelCluster {
-    fn init(&mut self, renderer: &mut Renderer) {
+impl VoxelCluster {
+    /// Rebuild every cluster's contour and mesh from scratch. Called
+    /// once at init and again on every `\` toggle. Cheaper than tracking
+    /// dirty bits here — the whole 9-cluster rebuild costs a couple
+    /// seconds and a `\` press is a deliberate debug action.
+    fn rebuild(&mut self, renderer: &mut Renderer) {
         let material = Material::new(1, 1, 0).expect("grey material is in-range");
+        let center_lod = self.center_lod_level;
 
-        // Contour `FIELD_DIM × FIELD_DIM` clusters at y=0. Each cluster
-        // gets its own `Scene::world_at(offset)` so the heightmap cache
-        // covers that cluster's XZ footprint; the analytic gallery
-        // primitives sit at fixed world coordinates and naturally
-        // appear only in the cluster that contains them. The heightmap
-        // is globally continuous because OOB cache hits fall through
-        // to the procedural sampler.
+        // Local LOD lookup that doesn't borrow `self`.
+        let lod_for = |x: u16, z: u16| -> u8 {
+            if x == 1 && z == 1 { center_lod } else { 0 }
+        };
+
+        self.map = ClusterMap::new();
+        self.meshes.clear();
+
         let ids: Vec<ClusterId> = (0..FIELD_DIM)
-            .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(0, x, 0, z)))
+            .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
             .collect();
+
+        // Contour every cluster at its LOD. Contour is per-cluster and
+        // oblivious to neighbour LODs; cross-LOD seam handling lives
+        // entirely in mesh.
         for id in &ids {
             let scene = Scene::world_at(id.world_offset());
             self.map.insert(*id, contour(&scene, material, *id));
         }
 
-        // Build per-cluster neighbor contexts and mesh each. Looking up
-        // by id rather than reordered index keeps this readable when
-        // FIELD_DIM grows. All references stay borrowed from
-        // `self.map`, which is alive for the whole `init` scope.
-        let lookup = |id: ClusterId| self.map.get(id);
+        // Build per-cluster neighbor contexts and mesh each. The
+        // neighbor's stored LOD is what mesh uses to drive cross-LOD
+        // stride adjustments at the boundary layer.
+        let mut new_meshes: Vec<(ClusterId, MeshHandle)> = Vec::new();
         for id in &ids {
             let x = id.x();
             let z = id.z();
-            let neg_x = if x > 0 {
-                lookup(ClusterId::new(0, x - 1, 0, z)).map(|c| (c, Lod::ZERO))
-            } else {
-                None
+            let nb = |xx: u16, zz: u16| -> Option<(&Cluster, Lod)> {
+                let lod = lod_for(xx, zz);
+                let cid = ClusterId::new(lod, xx, 0, zz);
+                self.map
+                    .get(cid)
+                    .map(|c| (c, Lod::new(lod).expect("valid lod")))
             };
-            let pos_x = if x + 1 < FIELD_DIM {
-                lookup(ClusterId::new(0, x + 1, 0, z)).map(|c| (c, Lod::ZERO))
-            } else {
-                None
-            };
-            let neg_z = if z > 0 {
-                lookup(ClusterId::new(0, x, 0, z - 1)).map(|c| (c, Lod::ZERO))
-            } else {
-                None
-            };
-            let pos_z = if z + 1 < FIELD_DIM {
-                lookup(ClusterId::new(0, x, 0, z + 1)).map(|c| (c, Lod::ZERO))
-            } else {
-                None
-            };
+            let neg_x = if x > 0 { nb(x - 1, z) } else { None };
+            let pos_x = if x + 1 < FIELD_DIM { nb(x + 1, z) } else { None };
+            let neg_z = if z > 0 { nb(x, z - 1) } else { None };
+            let pos_z = if z + 1 < FIELD_DIM { nb(x, z + 1) } else { None };
             let neighbors = NeighborContext {
                 neg_x,
                 pos_x,
@@ -199,8 +212,9 @@ impl App for VoxelCluster {
                 ..NeighborContext::none()
             };
 
-            let cluster = lookup(*id).expect("just inserted");
-            let cm = flicker_voxel::mesh(cluster, &neighbors, Lod::ZERO);
+            let cluster = self.map.get(*id).expect("just inserted");
+            let self_lod = Lod::new(id.lod()).expect("valid lod");
+            let cm = flicker_voxel::mesh(cluster, &neighbors, self_lod);
             let verts: Vec<MeshVertex> = cm
                 .vertices
                 .iter()
@@ -211,18 +225,17 @@ impl App for VoxelCluster {
                 })
                 .collect();
             let handle = renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices));
-            self.meshes.push((*id, handle));
+            new_meshes.push((*id, handle));
         }
+        self.meshes = new_meshes;
 
         // Corner-vector arrows: across the whole field, every stored
-        // voxel with a non-default corner contributes one segment. The
-        // arrow base is the voxel's WORLD grid coord (so adjacent
-        // clusters' arrows don't pile on top of each other).
+        // voxel with a non-default corner contributes one segment.
         let mut arrows: Vec<(Vec3, Vec3)> = Vec::new();
         for id in &ids {
             let off = id.world_offset();
             let origin_world = Vec3::new(off[0], off[1], off[2]);
-            let cluster = lookup(*id).expect("just inserted");
+            let cluster = self.map.get(*id).expect("just inserted");
             for (coord, voxel) in cluster.overrides() {
                 if voxel.corner() == CornerVector::DEFAULT {
                     continue;
@@ -235,6 +248,12 @@ impl App for VoxelCluster {
             }
         }
         self.corner_arrows = arrows;
+    }
+}
+
+impl App for VoxelCluster {
+    fn init(&mut self, renderer: &mut Renderer) {
+        self.rebuild(renderer);
 
         // Frame the whole field from outside its -Z face, angled down.
         let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
@@ -267,6 +286,16 @@ impl App for VoxelCluster {
             self.corner_arrows_on = !self.corner_arrows_on;
         }
         self.prev_key2 = cur2;
+
+        // `\` toggles the centre cluster's LOD between 0 and 1, exercising
+        // the cross-LOD seam (§3). The actual contour + mesh rebuild
+        // happens at the top of `render` (it needs `&mut Renderer`).
+        let cur_bs = input.key_down(Key::Backslash);
+        if cur_bs && !self.prev_backslash {
+            self.center_lod_level = if self.center_lod_level == 0 { 1 } else { 0 };
+            self.needs_rebuild = true;
+        }
+        self.prev_backslash = cur_bs;
 
         // Look: right-drag, with invert/sensitivity applied by config.
         if input.mouse_right {
@@ -310,6 +339,10 @@ impl App for VoxelCluster {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
+        if self.needs_rebuild {
+            self.needs_rebuild = false;
+            self.rebuild(renderer);
+        }
         renderer.set_camera(&Camera {
             position: self.position,
             target: self.position + self.forward(),
@@ -404,8 +437,17 @@ impl App for VoxelCluster {
             [0.85, 0.85, 0.7, 1.0],
         );
         renderer.draw_text(
-            "press Escape to quit",
+            &format!(
+                "[\\] centre LOD: {}  (other clusters: LOD 0)",
+                self.center_lod_level
+            ),
             Vec2::new(16.0, 124.0),
+            16.0,
+            [0.85, 0.85, 0.7, 1.0],
+        );
+        renderer.draw_text(
+            "press Escape to quit",
+            Vec2::new(16.0, 144.0),
             16.0,
             [0.75, 0.85, 0.95, 1.0],
         );
