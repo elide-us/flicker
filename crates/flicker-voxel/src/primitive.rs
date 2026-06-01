@@ -159,43 +159,47 @@ impl HeightField {
         Self::new(DEFAULT_SEED, offset)
     }
 
-    /// Surface height at column `(x, z)`. Cached for `(x, z)` in
-    /// `[0, CLUSTER_DIM)`; outside the cluster footprint, falls back to
-    /// [`world_height_seeded`] on the fly.
+    /// Surface height at **world**-coord column `(x, z)`. Translates by
+    /// the field's `offset` to find the local cache index; cache hits
+    /// return the cached value (origin-grid lookup), cache misses fall
+    /// through to [`world_height_seeded`] at the same world coords —
+    /// slow per call but continuous across cluster boundaries.
     #[must_use]
     pub fn height_at(&self, x: i32, z: i32) -> f32 {
+        let lx = x - self.offset[0] as i32;
+        let lz = z - self.offset[2] as i32;
         let dim = CLUSTER_DIM as i32;
-        if x >= 0 && x < dim && z >= 0 && z < dim {
+        if lx >= 0 && lx < dim && lz >= 0 && lz < dim {
             let stride = CLUSTER_DIM as usize;
-            self.heights[z as usize * stride + x as usize]
+            self.heights[lz as usize * stride + lx as usize]
         } else {
-            world_height_seeded(
-                self.offset[0] + x as f32,
-                self.offset[2] + z as f32,
-                self.seed,
-            )
+            world_height_seeded(x as f32, z as f32, self.seed)
         }
     }
 
-    /// Bilinearly-interpolated surface height at fractional `(x, z)`. Reads
-    /// only the cached 256² column grid — `world_height_seeded` rebuilds
-    /// the wave field per call and is far too slow for the union's
-    /// 16 M `is_solid` queries. Out-of-cache `(x, z)` clamps to the edge.
+    /// Bilinearly-interpolated surface height at fractional **world**-
+    /// coord `(x, z)`. Translates by `offset` to read the cached 256²
+    /// column grid (cheap); outside the cluster footprint, falls back
+    /// to [`world_height_seeded`] at world coords (per-call wave-field
+    /// rebuild — slow, but only the seam-shell boundary hits it).
     ///
-    /// The bilinear surface is `C0`-continuous and `C1`-discontinuous at
-    /// column boundaries — terrain normals will look bilinearly faceted,
-    /// which is fine; shading is deferred to texturing.
+    /// The bilinear surface is `C0`-continuous and `C1`-discontinuous
+    /// at column boundaries — terrain normals will look bilinearly
+    /// faceted, which is fine; shading is deferred to texturing.
     #[must_use]
     pub fn height_bilinear(&self, x: f32, z: f32) -> f32 {
+        let lx = x - self.offset[0];
+        let lz = z - self.offset[2];
         let max = (CLUSTER_DIM - 1) as f32;
-        let xc = x.clamp(0.0, max);
-        let zc = z.clamp(0.0, max);
-        let x0 = xc.floor() as i32;
-        let z0 = zc.floor() as i32;
+        if !(lx >= 0.0 && lx <= max && lz >= 0.0 && lz <= max) {
+            return world_height_seeded(x, z, self.seed);
+        }
+        let x0 = lx.floor() as i32;
+        let z0 = lz.floor() as i32;
         let x1 = (x0 + 1).min(CLUSTER_DIM as i32 - 1);
         let z1 = (z0 + 1).min(CLUSTER_DIM as i32 - 1);
-        let tx = xc - x0 as f32;
-        let tz = zc - z0 as f32;
+        let tx = lx - x0 as f32;
+        let tz = lz - z0 as f32;
         let stride = CLUSTER_DIM as usize;
         let h00 = self.heights[z0 as usize * stride + x0 as usize];
         let h10 = self.heights[z0 as usize * stride + x1 as usize];
@@ -509,12 +513,30 @@ impl Scene {
     /// above (centers at y ≈ 220) so the shapes float clear of the
     /// terrain peaks. Same XZ grid as [`Self::gallery`]. The default
     /// scene the example contours.
+    ///
+    /// Equivalent to [`Self::world_at`] with offset `[0, 0, 0]` — the
+    /// heightmap is cached at the origin cluster's footprint. For
+    /// multi-cluster contouring, use [`Self::world_at`] with each
+    /// cluster's own world offset so the heightmap cache covers that
+    /// cluster's XZ footprint.
     #[must_use]
     pub fn world() -> Self {
+        Self::world_at([0.0, 0.0, 0.0])
+    }
+
+    /// `world()` with the heightmap cache built at `offset`. The
+    /// analytic gallery primitives are at fixed world coordinates and
+    /// are unchanged; only the heightmap moves with the cluster the
+    /// scene is being contoured into. Out-of-cache queries (the seam
+    /// shell at the cluster border) fall through to the global
+    /// procedural sampler, so the heightmap remains continuous across
+    /// adjacent clusters.
+    #[must_use]
+    pub fn world_at(offset: [f32; 3]) -> Self {
         let cy = 220.0_f32;
         let parts: Vec<Box<dyn Sdf>> = vec![
             // Terrain — the cached wave field. Bilinear SDF inside.
-            Box::new(HeightField::from_default_seed([0.0, 0.0, 0.0])),
+            Box::new(HeightField::from_default_seed(offset)),
             // Row z=96: sphere, cube, cylinder.
             Box::new(Sphere {
                 center: [64.0, cy, 96.0],

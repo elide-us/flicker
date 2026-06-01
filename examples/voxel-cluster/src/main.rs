@@ -1,12 +1,14 @@
-//! voxel-cluster: the QEF-contouring playground — one cluster contoured
-//! from the split-scene world (procedural heightmap in the lower band,
-//! six analytic-primitive shapes floating above), flown through with
-//! MMO-style first-person controls.
+//! voxel-cluster: a 3×3 cluster field contoured from the split-scene
+//! world. Each cluster contours its own region against the shared
+//! global primitive; meshing closes the four internal seams (and the
+//! interior cluster's all four faces) via the low-side-owns convention
+//! in `flicker_voxel::mesh`.
 //!
-//! Pipeline: `Scene::world()` → `contour` → `Cluster` → `mesh` → upload.
-//! The cluster boundary is drawn as a white wireframe box. Two debug
-//! toggles let the user inspect the QEF result interactively (see the
-//! controls list below).
+//! Pipeline: 3×3 `ClusterId`s → `contour` per cluster → `ClusterMap`
+//! → per-cluster `NeighborContext` → `mesh` → upload one mesh handle
+//! per cluster, drawn at its `world_offset()`. The cluster boundary is
+//! drawn as a white wireframe box; two debug toggles let the user
+//! inspect the meshes interactively (see controls below).
 //!
 //! Controls (rebindable via `Bindings`):
 //!   * WASD: move forward/back/strafe in the camera's facing.
@@ -27,7 +29,16 @@ use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
 };
-use flicker_voxel::{contour, ClusterId, ClusterMap, CornerVector, Material, Scene, CLUSTER_DIM};
+use flicker_voxel::{
+    contour, ClusterId, ClusterMap, CornerVector, Lod, Material, NeighborContext, Scene,
+    CLUSTER_DIM,
+};
+
+/// Side length of the cluster field, in clusters. A 3×3 row in XZ
+/// gives one fully-interior cluster (all four lateral neighbors
+/// present), which is what actually exercises seam tangent stitching
+/// on every face simultaneously.
+const FIELD_DIM: u16 = 3;
 
 /// Axis-aligned rectangle in HUD pixel space. Retained as part of the
 /// sprite-UI capability (see `draw_checkbox`); no active widgets use it
@@ -40,9 +51,9 @@ struct Rect {
 }
 
 struct VoxelCluster {
-    /// The cluster map — data-context wiring retained even though the
-    /// scene holds a single empty cluster. The QEF work populates and
-    /// contours these.
+    /// The cluster map — populated with `FIELD_DIM × FIELD_DIM`
+    /// clusters at LOD 0, each contoured against the shared world
+    /// primitive at its own world offset.
     map: ClusterMap,
 
     /// A 1×1 white pixel uploaded once at `init`. The sprite shader
@@ -52,9 +63,9 @@ struct VoxelCluster {
     #[allow(dead_code)]
     white: Option<TextureHandle>,
 
-    /// Uploaded mesh of the contoured cluster. Populated in `init` and
-    /// drawn each frame at the cluster's world offset.
-    mesh: Option<MeshHandle>,
+    /// One mesh handle per cluster, paired with the cluster's id so
+    /// `render` can draw each at its world offset.
+    meshes: Vec<(ClusterId, MeshHandle)>,
 
     /// First-person camera state.
     position: Vec3,
@@ -77,9 +88,9 @@ struct VoxelCluster {
     /// on the press edge instead of every frame the key is down.
     prev_key1: bool,
     prev_key2: bool,
-    /// Cached line segments: from each stored voxel's grid coord to its
-    /// decoded `CornerVector` tip, for every voxel whose corner differs
-    /// from the default. Computed once per cluster (re)build in `init`.
+    /// Cached line segments: from each stored voxel's world grid coord
+    /// to its decoded `CornerVector` tip, across all clusters in the
+    /// field.
     corner_arrows: Vec<(Vec3, Vec3)>,
 
     should_quit: bool,
@@ -92,7 +103,7 @@ impl Default for VoxelCluster {
         Self {
             map: ClusterMap::new(),
             white: None,
-            mesh: None,
+            meshes: Vec::new(),
             position: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
@@ -135,59 +146,102 @@ impl VoxelCluster {
 
 impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
-        // One cluster at the origin, contoured from the split-scene world:
-        // the procedural heightmap fills the lower band and the six
-        // analytic-primitive shapes float clear of the terrain above. The
-        // mesh-regen stage reads the contoured cluster back out as
-        // triangles.
         let material = Material::new(1, 1, 0).expect("grey material is in-range");
-        let cluster = contour(&Scene::world(), material);
 
-        let cm = flicker_voxel::mesh(&cluster);
-        let verts: Vec<MeshVertex> = cm
-            .vertices
-            .iter()
-            .map(|v| MeshVertex {
-                position: v.position,
-                normal: v.normal,
-                material: v.material,
-            })
+        // Contour `FIELD_DIM × FIELD_DIM` clusters at y=0. Each cluster
+        // gets its own `Scene::world_at(offset)` so the heightmap cache
+        // covers that cluster's XZ footprint; the analytic gallery
+        // primitives sit at fixed world coordinates and naturally
+        // appear only in the cluster that contains them. The heightmap
+        // is globally continuous because OOB cache hits fall through
+        // to the procedural sampler.
+        let ids: Vec<ClusterId> = (0..FIELD_DIM)
+            .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(0, x, 0, z)))
             .collect();
-        self.mesh = Some(renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices)));
+        for id in &ids {
+            let scene = Scene::world_at(id.world_offset());
+            self.map.insert(*id, contour(&scene, material, *id));
+        }
 
-        // Precompute corner-vector arrows: from each stored voxel's grid
-        // coord (its integer min corner) to the decoded `CornerVector`
-        // tip. Voxels at the default corner (e.g. interior solid voxels
-        // whose cell isn't active) point at their own center; we skip
-        // them since the arrow would just be a half-voxel stub and we
-        // have ~8M solid voxels in the terrain. Active-cell min-corner
-        // voxels carry the QEF-placed dual vertex and produce the
-        // visually interesting arrows.
-        let cluster_offset = ClusterId::new(0, 0, 0, 0).world_offset();
-        let cluster_origin =
-            Vec3::new(cluster_offset[0], cluster_offset[1], cluster_offset[2]);
+        // Build per-cluster neighbor contexts and mesh each. Looking up
+        // by id rather than reordered index keeps this readable when
+        // FIELD_DIM grows. All references stay borrowed from
+        // `self.map`, which is alive for the whole `init` scope.
+        let lookup = |id: ClusterId| self.map.get(id);
+        for id in &ids {
+            let x = id.x();
+            let z = id.z();
+            let neg_x = if x > 0 {
+                lookup(ClusterId::new(0, x - 1, 0, z)).map(|c| (c, Lod::ZERO))
+            } else {
+                None
+            };
+            let pos_x = if x + 1 < FIELD_DIM {
+                lookup(ClusterId::new(0, x + 1, 0, z)).map(|c| (c, Lod::ZERO))
+            } else {
+                None
+            };
+            let neg_z = if z > 0 {
+                lookup(ClusterId::new(0, x, 0, z - 1)).map(|c| (c, Lod::ZERO))
+            } else {
+                None
+            };
+            let pos_z = if z + 1 < FIELD_DIM {
+                lookup(ClusterId::new(0, x, 0, z + 1)).map(|c| (c, Lod::ZERO))
+            } else {
+                None
+            };
+            let neighbors = NeighborContext {
+                neg_x,
+                pos_x,
+                neg_z,
+                pos_z,
+                ..NeighborContext::none()
+            };
+
+            let cluster = lookup(*id).expect("just inserted");
+            let cm = flicker_voxel::mesh(cluster, &neighbors, Lod::ZERO);
+            let verts: Vec<MeshVertex> = cm
+                .vertices
+                .iter()
+                .map(|v| MeshVertex {
+                    position: v.position,
+                    normal: v.normal,
+                    material: v.material,
+                })
+                .collect();
+            let handle = renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices));
+            self.meshes.push((*id, handle));
+        }
+
+        // Corner-vector arrows: across the whole field, every stored
+        // voxel with a non-default corner contributes one segment. The
+        // arrow base is the voxel's WORLD grid coord (so adjacent
+        // clusters' arrows don't pile on top of each other).
         let mut arrows: Vec<(Vec3, Vec3)> = Vec::new();
-        for (coord, voxel) in cluster.overrides() {
-            if voxel.corner() == CornerVector::DEFAULT {
-                continue;
+        for id in &ids {
+            let off = id.world_offset();
+            let origin_world = Vec3::new(off[0], off[1], off[2]);
+            let cluster = lookup(*id).expect("just inserted");
+            for (coord, voxel) in cluster.overrides() {
+                if voxel.corner() == CornerVector::DEFAULT {
+                    continue;
+                }
+                let base = origin_world
+                    + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
+                let [dx, dy, dz] = voxel.corner().to_components();
+                let tip = base + Vec3::new(dx, dy, dz);
+                arrows.push((base, tip));
             }
-            let origin = cluster_origin
-                + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
-            let [dx, dy, dz] = voxel.corner().to_components();
-            let tip = origin + Vec3::new(dx, dy, dz);
-            arrows.push((origin, tip));
         }
         self.corner_arrows = arrows;
 
-        let mut map = ClusterMap::new();
-        map.insert(ClusterId::new(0, 0, 0, 0), cluster);
-        self.map = map;
-
-        // Spawn outside the cluster looking back at it, angled down so
-        // the whole 256³ box frames on the first frame.
-        self.position = Vec3::new(128.0, 340.0, -180.0);
-        self.yaw = 0.0; // face +Z, toward the box.
-        self.pitch = -0.6; // look down at it.
+        // Frame the whole field from outside its -Z face, angled down.
+        let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
+        let center_x = field_extent * 0.5;
+        self.position = Vec3::new(center_x, field_extent * 1.1, -field_extent * 0.5);
+        self.yaw = 0.0; // face +Z, into the field.
+        self.pitch = -0.55; // look down at it.
 
         // 1×1 white pixel — tinted to build solid colored HUD quads.
         // Retained sprite-UI capability; no active widgets yet.
@@ -273,18 +327,14 @@ impl App for VoxelCluster {
             renderer.draw_bounding_box(min, max, [1.0, 1.0, 1.0, 1.0]);
         }
 
-        // Draw the contoured cluster's mesh at its world offset. (For a
-        // single cluster at (0,0,0,0) the offset is zero; the translation
-        // is here so adding more clusters is a one-line change.) When
-        // the wireframe toggle is on, re-issue the draw with
-        // `wireframe: true` for a fill+wires overlay (see mesh-smoke).
-        if let Some(mesh) = self.mesh {
-            let o = ClusterId::new(0, 0, 0, 0).world_offset();
+        // Draw each cluster's mesh at its world offset.
+        for (id, handle) in &self.meshes {
+            let o = id.world_offset();
             let model = Mat4::from_translation(Vec3::new(o[0], o[1], o[2]));
-            renderer.draw_mesh(mesh, model, MeshDrawOptions::default());
+            renderer.draw_mesh(*handle, model, MeshDrawOptions::default());
             if self.wireframe_on {
                 renderer.draw_mesh(
-                    mesh,
+                    *handle,
                     model,
                     MeshDrawOptions {
                         wireframe: true,
@@ -303,7 +353,10 @@ impl App for VoxelCluster {
 
         // HUD text.
         renderer.draw_text(
-            "voxel cluster — split scene — WASD move, R/F up/down, right-drag look",
+            &format!(
+                "voxel cluster — {}×{} field — WASD move, R/F up/down, right-drag look",
+                FIELD_DIM, FIELD_DIM
+            ),
             Vec2::new(16.0, 16.0),
             22.0,
             [1.0, 1.0, 1.0, 1.0],
@@ -319,7 +372,7 @@ impl App for VoxelCluster {
         );
         renderer.draw_text(
             &format!(
-                "clusters: {}   extent: {}³ voxels",
+                "clusters: {}   extent: {}³ voxels each",
                 self.map.len(),
                 CLUSTER_DIM
             ),

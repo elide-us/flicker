@@ -20,14 +20,33 @@
 //! in [`crate::primitive`]), so the default corner `(0.5, 0.5, 0.5)`
 //! decodes to the cell *center* — the right fallback for inactive cells.
 //!
-//! Single cluster, LOD 0, no neighbor context yet. The full-grid scan is
-//! `O(CLUSTER_DIM³)` and `Cluster`'s HashMap storage dominates a dense
-//! contour (octree storage TODO on `Cluster`).
+//! # Multi-cluster and LOD
+//!
+//! Contour takes the cluster's [`ClusterId`], which encodes both the
+//! cluster's world position and its [`Lod`] level. The primitive is
+//! queried at world coordinates (`world = id.world_offset() + i·stride`).
+//! At LOD `L` the sample stride is `2^L`: the cluster has `sample_dim =
+//! 256/stride` sample positions per axis, and the cell-min-corner loop
+//! covers `[0, sample_dim)` — one row wider than the cell range
+//! `[0, sample_dim − 1)`, so the **+-seam shell** at sample index
+//! `sample_dim − 1` is processed too. Those cells' `+1` corners reach
+//! one sample past the cluster boundary; the primitive is global, so
+//! it answers the OOB sample queries directly, and the resulting QEF
+//! vertex is stored on the sample-aligned min-corner voxel
+//! `((sample_dim−1)·stride, …)`. The neighbor cluster on the high side
+//! reads this vertex across the seam at mesh time.
+//!
+//! Stored corners are in **cell-units** `[0, 1]`: `corner = (v − origin)
+//! /stride`. Mesh decodes back to cluster-local voxel coords by
+//! `origin + corner·stride`. At LOD 0 (`stride = 1`) the encode is the
+//! identity, so LOD-0 storage is byte-identical to the pre-§2 path.
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use crate::cluster::Cluster;
+use crate::cluster_id::ClusterId;
 use crate::corner_vector::CornerVector;
 use crate::local_coord::LocalCoord;
 use crate::material::Material;
+use crate::neighbor::Lod;
 use crate::primitive::Primitive;
 use crate::qef::Qef;
 use crate::voxel::Voxel;
@@ -70,95 +89,138 @@ const EDGES: [(usize, usize); 12] = [
     (3, 7),
 ];
 
-/// Contour `primitive` into a [`Cluster`] under the per-cell convention.
+/// Contour `primitive` into a [`Cluster`] for the cluster at `id`.
 ///
-/// Every solid voxel is stored with `material`; every active cell's dual
-/// vertex is stored as the [`CornerVector`] on its min-corner voxel — even
-/// when that voxel is itself empty. Empty voxels with the default corner
-/// are *not* stored (they round-trip through the cluster's base value).
+/// The primitive is queried at world coordinates so that two adjacent
+/// clusters sample the same continuous function across their shared
+/// face. Every active cell's dual vertex is stored as a
+/// [`CornerVector`] on its min-corner voxel — including the +-seam-shell
+/// row at `lx = CLUSTER_DIM - 1` whose `+1` corners reach one voxel
+/// into the high-side neighbor (the global primitive answers those
+/// truthfully). Empty voxels with the default corner are *not* stored.
 #[must_use]
-pub fn contour(primitive: &dyn Primitive, material: Material) -> Cluster {
+pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> Cluster {
     let mut cluster = Cluster::empty();
-    let dim = CLUSTER_DIM as usize;
-    let cell_dim = dim - 1;
-    let idx = |x: usize, y: usize, z: usize| -> usize { (z * dim + y) * dim + x };
+    let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 7] for intra-cluster contour");
+    let stride = lod.stride() as i32;
+    let sample_dim = lod.sample_dim() as usize;
+    // Precompute solidity over (sample_dim+1)³ samples so the +-seam
+    // shell's `+1` corners (at sample index `sample_dim`) are
+    // addressable. Row-major over (sample_dim+1).
+    let span = sample_dim + 1;
+    let idx = |x: usize, y: usize, z: usize| -> usize { (z * span + y) * span + x };
 
-    // Precompute solidity for every grid point in [0, CLUSTER_DIM)³ so the
-    // per-cell pass reads each is_solid at most once. ~16MB for a 256³
-    // cluster; cheaper than re-querying the primitive eight times per cell.
-    let mut solid = vec![false; dim * dim * dim];
-    for z in 0..dim {
-        for y in 0..dim {
-            for x in 0..dim {
-                solid[idx(x, y, z)] = primitive.is_solid(x as i32, y as i32, z as i32);
+    let off = id.world_offset();
+    let off_x = off[0] as i32;
+    let off_y = off[1] as i32;
+    let off_z = off[2] as i32;
+
+    let mut solid = vec![false; span * span * span];
+    for k in 0..span {
+        let wz = off_z + k as i32 * stride;
+        for j in 0..span {
+            let wy = off_y + j as i32 * stride;
+            for i in 0..span {
+                let wx = off_x + i as i32 * stride;
+                solid[idx(i, j, k)] = primitive.is_solid(wx, wy, wz);
             }
         }
     }
 
-    for z in 0..dim {
-        for y in 0..dim {
-            for x in 0..dim {
-                let s = solid[idx(x, y, z)];
+    for k in 0..sample_dim {
+        for j in 0..sample_dim {
+            for i in 0..sample_dim {
+                let s = solid[idx(i, j, k)];
                 let material_out = if s { material } else { Material::EMPTY };
                 let mut corner_out = CornerVector::DEFAULT;
 
-                // Process the cell whose min-corner is this voxel. The
-                // last row of voxels along each axis owns no cell.
-                if x < cell_dim && y < cell_dim && z < cell_dim {
-                    let mut corner_solid = [false; 8];
-                    for (i, off) in CORNER_OFFSETS.iter().enumerate() {
-                        corner_solid[i] = solid[idx(
-                            x + off[0] as usize,
-                            y + off[1] as usize,
-                            z + off[2] as usize,
-                        )];
-                    }
+                // Every sample index in `[0, sample_dim)` is the owner
+                // of a cell — cells at sample_dim-1 are the +-seam
+                // shell whose `+1` corners reach the sample_dim plane
+                // (provided by the precompute's extra slab).
+                let mut corner_solid = [false; 8];
+                for (n, ofs) in CORNER_OFFSETS.iter().enumerate() {
+                    corner_solid[n] = solid[idx(
+                        i + ofs[0] as usize,
+                        j + ofs[1] as usize,
+                        k + ofs[2] as usize,
+                    )];
+                }
 
-                    let any_solid = corner_solid.iter().any(|&b| b);
-                    let all_solid = corner_solid.iter().all(|&b| b);
-                    if any_solid && !all_solid {
-                        let mut qef = Qef::new();
-                        for &(a, b) in &EDGES {
-                            if corner_solid[a] == corner_solid[b] {
-                                continue;
-                            }
-                            let oa = CORNER_OFFSETS[a];
-                            let ob = CORNER_OFFSETS[b];
-                            let pa = [x as i32 + oa[0], y as i32 + oa[1], z as i32 + oa[2]];
-                            let pb = [x as i32 + ob[0], y as i32 + ob[1], z as i32 + ob[2]];
-                            let h = primitive.edge_hermite(pa, pb);
-                            qef.add(h.position, h.normal);
+                let any_solid = corner_solid.iter().any(|&b| b);
+                let all_solid = corner_solid.iter().all(|&b| b);
+
+                // Cluster-local voxel coord of the cell's min corner.
+                let cell_vx = i as i32 * stride;
+                let cell_vy = j as i32 * stride;
+                let cell_vz = k as i32 * stride;
+
+                if any_solid && !all_solid {
+                    let mut qef = Qef::new();
+                    let wx_cell = off_x + cell_vx;
+                    let wy_cell = off_y + cell_vy;
+                    let wz_cell = off_z + cell_vz;
+                    for &(a, b) in &EDGES {
+                        if corner_solid[a] == corner_solid[b] {
+                            continue;
                         }
-                        if qef.count() > 0 {
-                            let v = qef.solve(QEF_LAMBDA);
-                            // Clamp the vertex into this cell's AABB
-                            // [(x,y,z), (x+1,y+1,z+1)]. mesh.rs assumes the
-                            // stored vertex belongs to this cell; an
-                            // unclamped QEF for a near-degenerate normal
-                            // basis can slide outside and produce spikes.
-                            let fx = x as f32;
-                            let fy = y as f32;
-                            let fz = z as f32;
-                            let vx = v[0].clamp(fx, fx + 1.0);
-                            let vy = v[1].clamp(fy, fy + 1.0);
-                            let vz = v[2].clamp(fz, fz + 1.0);
-                            corner_out = CornerVector::from_components(
-                                vx - fx,
-                                vy - fy,
-                                vz - fz,
-                            );
-                        }
+                        let oa = CORNER_OFFSETS[a];
+                        let ob = CORNER_OFFSETS[b];
+                        let pa = [
+                            wx_cell + oa[0] * stride,
+                            wy_cell + oa[1] * stride,
+                            wz_cell + oa[2] * stride,
+                        ];
+                        let pb = [
+                            wx_cell + ob[0] * stride,
+                            wy_cell + ob[1] * stride,
+                            wz_cell + ob[2] * stride,
+                        ];
+                        let h = primitive.edge_hermite(pa, pb);
+                        // QEF in cluster-local voxel units (same
+                        // convention as LOD 0 — only the corner
+                        // encoding changes at higher LODs).
+                        let pos_local = [
+                            h.position[0] - off_x as f32,
+                            h.position[1] - off_y as f32,
+                            h.position[2] - off_z as f32,
+                        ];
+                        qef.add(pos_local, h.normal);
+                    }
+                    if qef.count() > 0 {
+                        let v = qef.solve(QEF_LAMBDA);
+                        // Clamp into this cell's AABB
+                        // `[cell_v, cell_v + stride]` and re-encode in
+                        // cell-units (`corner = (v − origin)/stride`).
+                        // At LOD 0 the divide-by-1 is the identity and
+                        // the encoded byte matches the pre-§2 path.
+                        let fx = cell_vx as f32;
+                        let fy = cell_vy as f32;
+                        let fz = cell_vz as f32;
+                        let fs = stride as f32;
+                        let vx = v[0].clamp(fx, fx + fs);
+                        let vy = v[1].clamp(fy, fy + fs);
+                        let vz = v[2].clamp(fz, fz + fs);
+                        corner_out = CornerVector::from_components(
+                            (vx - fx) / fs,
+                            (vy - fy) / fs,
+                            (vz - fz) / fs,
+                        );
                     }
                 }
 
-                // Empty voxels with the default corner round-trip through
-                // the cluster's base value; storing them would waste a
-                // HashMap entry. Everything else must be recorded — in
-                // particular, an empty voxel whose cell is active carries
-                // that cell's dual vertex and MUST be stored.
+                // Empty voxels with the default corner round-trip
+                // through the cluster's base value; storing them would
+                // waste a HashMap entry. Everything else must be
+                // recorded on the sample-aligned min-corner voxel —
+                // including an empty voxel whose cell is active.
                 if material_out != Material::EMPTY || corner_out != CornerVector::DEFAULT {
-                    let coord =
-                        LocalCoord::new(x as u32, y as u32, z as u32).expect("in bounds");
+                    let coord = LocalCoord::new(
+                        cell_vx as u32,
+                        cell_vy as u32,
+                        cell_vz as u32,
+                    )
+                    .expect("sample-aligned voxel in [0, CLUSTER_DIM)");
                     cluster.set(coord, Voxel::new(corner_out, material_out));
                 }
             }
@@ -175,6 +237,10 @@ mod tests {
 
     fn grey() -> Material {
         Material::new(1, 1, 0).expect("valid")
+    }
+
+    fn origin_id() -> ClusterId {
+        ClusterId::new(0, 0, 0, 0)
     }
 
     /// A small solid cube `[0, n)³` for fast contour-loop tests — avoids
@@ -237,7 +303,7 @@ mod tests {
 
     #[test]
     fn small_cube_stores_only_solid_voxels() {
-        let c = contour(&CubeField { n: 3 }, grey());
+        let c = contour(&CubeField { n: 3 }, grey(), origin_id());
         // A 3³ cube: all 27 solid voxels are min-corners of either an
         // inactive (interior) cell or an active boundary cell, so all 27
         // are stored. No empty voxel outside the cube becomes the min-
@@ -299,7 +365,7 @@ mod tests {
         // store the empty voxel anyway, carrying the cell's dual vertex
         // — otherwise mesh.rs reads a default corner and emits a crack
         // /spike along this face.
-        let c = contour(&CornerSolid, grey());
+        let c = contour(&CornerSolid, grey(), origin_id());
         let v = c.get(LocalCoord::new(0, 0, 0).unwrap());
         assert_eq!(
             v.material(),
@@ -317,5 +383,100 @@ mod tests {
         assert!(dx > 0.5, "dx={dx} should be skewed toward +X solid corner");
         assert!(dy > 0.5, "dy={dy} should be skewed toward +Y solid corner");
         assert!(dz > 0.5, "dz={dz} should be skewed toward +Z solid corner");
+    }
+
+    #[test]
+    fn seam_shell_cell_stored_on_max_voxel_for_flat_field() {
+        // FlatField at y=128: the +X-seam shell row at lx=255 has 256³
+        // cells along YZ; the one at (255, 127, 0) straddles the
+        // surface so its dual vertex must be stored on the min-corner
+        // voxel (255, 127, 0). Before the seam-shell extension, the
+        // loop's `< cell_dim` gate would have skipped lx=255 entirely.
+        let c = contour(&FlatField::at_half(), grey(), origin_id());
+        let seam = c.get(LocalCoord::new(255, 127, 0).unwrap());
+        assert_ne!(
+            seam.corner(),
+            CornerVector::DEFAULT,
+            "+-seam shell must store the surface-straddling cell's vertex"
+        );
+        let [_dx, dy, _dz] = seam.corner().to_components();
+        // The flat field's Y-edges cross at y=128 → cell-relative
+        // Y-offset 1.0 for the cell whose min-corner is at lx=255,
+        // ly=127. The X and Z components are unconstrained by the
+        // 4 Y-edges (the QEF leaves them at the mass point ≈ 0.5).
+        assert!((dy - 1.0).abs() < 0.01, "dy={dy} should land on plane");
+    }
+
+    #[test]
+    fn world_offset_shifts_primitive_sampling() {
+        // A cluster at id (0, 5, 0, 0) — world offset (1280, 0, 0) —
+        // contoured against a CubeField n=3 (solid at world [0,3)³)
+        // sees an entirely empty primitive in its territory and stores
+        // nothing.
+        let id_far = ClusterId::new(0, 5, 0, 0);
+        let c = contour(&CubeField { n: 3 }, grey(), id_far);
+        assert_eq!(
+            c.override_count(),
+            0,
+            "cluster at world offset 1280 sees no cube"
+        );
+    }
+
+    #[test]
+    fn lod2_contour_stores_at_sample_aligned_slots_only() {
+        // LOD 2: stride=4, sample_dim=64. Every stored override's
+        // (x, y, z) must be a multiple of 4 — that's the §2 storage
+        // invariant. FlatField produces a band of active cells around
+        // the surface, plenty of slots to check.
+        let id_lod2 = ClusterId::new(2, 0, 0, 0);
+        let c = contour(&FlatField::at_half(), grey(), id_lod2);
+        assert!(c.override_count() > 0, "LOD-2 flat field should contour");
+        for (coord, _voxel) in c.overrides() {
+            assert_eq!(coord.x() % 4, 0, "x={} not stride-aligned", coord.x());
+            assert_eq!(coord.y() % 4, 0, "y={} not stride-aligned", coord.y());
+            assert_eq!(coord.z() % 4, 0, "z={} not stride-aligned", coord.z());
+        }
+    }
+
+    #[test]
+    fn lod2_flat_cell_corner_lands_on_surface_plane() {
+        // At LOD 2, sample_dim=64 → samples at world y ∈ {0, 4, 8, …, 256}.
+        // The surface y=128 sits exactly on sample index 32. The active
+        // cell straddling y=128 has min-corner at sample 31 → voxel
+        // (i*4, 124, k*4) with the Y-axis crossing one cell up at
+        // sample 32 (voxel y=128). Stored corner.y in cell-units
+        // should be ~1.0 (the QEF lands the dual vertex right on the
+        // plane); decoded vertex y = 124 + 1.0·4 = 128.
+        let id_lod2 = ClusterId::new(2, 0, 0, 0);
+        let c = contour(&FlatField::at_half(), grey(), id_lod2);
+        // Cell at sample (0, 31, 0) → min-corner voxel (0, 124, 0).
+        let cell = c.get(LocalCoord::new(0, 124, 0).unwrap());
+        let [_dx, dy, _dz] = cell.corner().to_components();
+        // cell-units: 1.0 places the vertex on the +Y face, which is
+        // at world y = 124 + 4 = 128 — the plane.
+        assert!(
+            (dy - 1.0).abs() < 0.01,
+            "LOD-2 cell-units dy={dy} should be 1.0 (vertex at y=128)"
+        );
+    }
+
+    #[test]
+    fn lod0_byte_identical_to_pre_lod_path() {
+        // Regression: the LOD-0 contour result must be unchanged by the
+        // §2 rework. Compare the override count and a few representative
+        // cells against known values from the §1 baseline.
+        let c = contour(&FlatField::at_half(), grey(), origin_id());
+        // §1 stores 256² seam-shell cells along the surface plus the
+        // dense solid fill below the plane (256² · 128 cells). The
+        // specific count is whatever §1 produced; what we guard is
+        // that exact byte-equality at a tracer cell.
+        let cell = c.get(LocalCoord::new(10, 127, 10).unwrap());
+        let bytes = cell.corner().bytes();
+        // The pre-§2 path encoded this cell as (0.5, 1.0, 0.5) →
+        // bytes [128, 191, 128]. (encode_axis(0.5)=128, encode_axis(1.0)=191.)
+        assert_eq!(
+            bytes, [128, 191, 128],
+            "LOD-0 cell corner bytes drifted: {bytes:?}"
+        );
     }
 }

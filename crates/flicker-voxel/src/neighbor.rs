@@ -155,7 +155,6 @@ impl NeighborContext<'_> {
 /// - Two or three coords out of range simultaneously (cluster edge or
 ///   corner): returns `cluster.base()`. Edge and corner neighbors are
 ///   intentionally not modeled.
-#[allow(dead_code)]
 pub(crate) fn read_corner(
     cluster: &Cluster,
     neighbors: &NeighborContext<'_>,
