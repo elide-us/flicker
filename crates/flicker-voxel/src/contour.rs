@@ -37,13 +37,35 @@
 //!
 //! Stored corners are in **cell-units** `[0, 1]`: `corner = (v − origin)
 //! /stride`. Mesh decodes back to cluster-local voxel coords by
-//! `origin + corner·stride`. At LOD 0 (`stride = 1`) the encode is the
+//! `voxel + corner·stride`. At LOD 0 (`stride = 1`) the encode is the
 //! identity, so LOD-0 storage is byte-identical to the pre-§2 path.
+//!
+//! # Per-voxel expansion at higher LOD
+//!
+//! At LOD `L > 0`, each LOD-cell's footprint is `stride³` voxels (4³ at
+//! LOD 1, 8³ at LOD 2, …). The contour writes voxel data at **every**
+//! voxel in the cluster — not just LOD-aligned ones — so that
+//! `cluster.get(any in-bounds coord)` returns the right value with no
+//! call-site snap. Two pieces of data go into every in-bounds voxel:
+//!
+//! - **Material**: the primitive's solidity at that exact voxel's
+//!   world coords.
+//! - **Corner**: for voxels inside an active LOD-cell's footprint, the
+//!   cell's QEF vertex re-encoded so that `voxel + corner·stride`
+//!   yields the same world position from every voxel in the footprint.
+//!   Voxels outside any active cell carry the default corner.
+//!
+//! Two-pass shape: (1) sample the primitive at every voxel and write
+//! solid-voxel materials; (2) for each active LOD-cell, expand its
+//! corner across the footprint, preserving the per-voxel materials
+//! written in pass 1.
 //!
 //! Cross-LOD seam handling lives in [`crate::mesh`] — contour is
 //! per-cluster and oblivious to neighbour LODs.
 
-use crate::cluster::Cluster;
+use std::collections::HashMap;
+
+use crate::cluster::{Cluster, CLUSTER_DIM};
 use crate::cluster_id::ClusterId;
 use crate::corner_vector::CornerVector;
 use crate::local_coord::LocalCoord;
@@ -95,78 +117,153 @@ const EDGES: [(usize, usize); 12] = [
 ///
 /// The primitive is queried at world coordinates so that two adjacent
 /// clusters sample the same continuous function across their shared
-/// face. Every active cell's dual vertex is stored as a
-/// [`CornerVector`] on its min-corner voxel — including the +-seam-shell
-/// row at `lx = CLUSTER_DIM - 1` whose `+1` corners reach one voxel
-/// into the high-side neighbor (the global primitive answers those
-/// truthfully). Empty voxels with the default corner are *not* stored.
+/// face. At LOD `L`, cells are dual-contoured on the `stride = 2^L`
+/// grid; each active cell's QEF vertex is then **expanded across the
+/// cell's `stride³` voxel footprint** so that decoding the corner via
+/// `voxel + corner·stride` from any voxel inside the cell returns the
+/// same world position. The +-seam shell at sample index `sample_dim −
+/// 1` is processed too: those cells' `+1` corners reach one stride past
+/// the cluster boundary, where the global primitive answers truthfully.
+///
+/// Materials are written at **every** in-bounds voxel using the
+/// primitive's per-voxel solidity (not just LOD-aligned ones), so
+/// `cluster.get(coord).material()` is correct at any in-bounds query —
+/// the mesh's boundary pass needs intermediate-voxel materials for
+/// sign-change detection at the fine override cadence.
 #[must_use]
 pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> Cluster {
     let mut cluster = Cluster::empty();
     let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 7] for intra-cluster contour");
     let stride = lod.stride() as i32;
+    let stride_us = stride as usize;
     let sample_dim = lod.sample_dim() as usize;
-    let span = sample_dim + 1;
-    let idx = |x: usize, y: usize, z: usize| -> usize { (z * span + y) * span + x };
+    let voxel_dim = CLUSTER_DIM as usize;
 
     let off = id.world_offset();
     let off_x = off[0] as i32;
     let off_y = off[1] as i32;
     let off_z = off[2] as i32;
 
-    let mut solid = vec![false; span * span * span];
-    for k in 0..span {
-        let wz = off_z + k as i32 * stride;
-        for j in 0..span {
-            let wy = off_y + j as i32 * stride;
-            for i in 0..span {
-                let wx = off_x + i as i32 * stride;
-                solid[idx(i, j, k)] = primitive.is_solid(wx, wy, wz);
+    // Per-voxel solidity table for the cluster, at stride 1 regardless
+    // of LOD. Used to (a) write per-voxel material into the cluster,
+    // and (b) sample the 8 LOD-aligned corners of each cell (the +-seam
+    // shell row of cells reaches one stride past the cluster — those
+    // OOB corners go through the primitive directly).
+    let v_idx = |x: usize, y: usize, z: usize| -> usize {
+        (z * voxel_dim + y) * voxel_dim + x
+    };
+    let mut solid_voxel = vec![false; voxel_dim * voxel_dim * voxel_dim];
+    for z in 0..voxel_dim {
+        let wz = off_z + z as i32;
+        for y in 0..voxel_dim {
+            let wy = off_y + y as i32;
+            for x in 0..voxel_dim {
+                let wx = off_x + x as i32;
+                solid_voxel[v_idx(x, y, z)] = primitive.is_solid(wx, wy, wz);
             }
         }
     }
 
+    // Corner solidity helper: hits the table for in-cluster voxels;
+    // queries the primitive at world coords for the seam-shell +1
+    // corners that reach past CLUSTER_DIM.
+    let corner_is_solid = |cx: i32, cy: i32, cz: i32| -> bool {
+        if (0..voxel_dim as i32).contains(&cx)
+            && (0..voxel_dim as i32).contains(&cy)
+            && (0..voxel_dim as i32).contains(&cz)
+        {
+            solid_voxel[v_idx(cx as usize, cy as usize, cz as usize)]
+        } else {
+            primitive.is_solid(off_x + cx, off_y + cy, off_z + cz)
+        }
+    };
+
+    // Per-cell QEF for active cells only. Keyed by LOD sample-index
+    // (i, j, k). Inactive cells (all-solid or all-empty corners) carry
+    // no entry.
+    let mut active_cell_qef: HashMap<(usize, usize, usize), CornerVector> = HashMap::new();
+
     for k in 0..sample_dim {
         for j in 0..sample_dim {
             for i in 0..sample_dim {
-                let s = solid[idx(i, j, k)];
-                let material_out = if s { material } else { Material::EMPTY };
-                let mut corner_out = CornerVector::DEFAULT;
-
-                let mut corner_solid = [false; 8];
-                for (n, ofs) in CORNER_OFFSETS.iter().enumerate() {
-                    corner_solid[n] = solid[idx(
-                        i + ofs[0] as usize,
-                        j + ofs[1] as usize,
-                        k + ofs[2] as usize,
-                    )];
-                }
-
-                let any_solid = corner_solid.iter().any(|&b| b);
-                let all_solid = corner_solid.iter().all(|&b| b);
-
                 let cell_vx = i as i32 * stride;
                 let cell_vy = j as i32 * stride;
                 let cell_vz = k as i32 * stride;
 
-                if any_solid && !all_solid {
-                    corner_out = cell_qef_corner(
-                        primitive,
-                        &corner_solid,
-                        [cell_vx, cell_vy, cell_vz],
-                        [off_x, off_y, off_z],
-                        stride,
+                let mut corner_solid = [false; 8];
+                for (n, ofs) in CORNER_OFFSETS.iter().enumerate() {
+                    corner_solid[n] = corner_is_solid(
+                        cell_vx + ofs[0] * stride,
+                        cell_vy + ofs[1] * stride,
+                        cell_vz + ofs[2] * stride,
                     );
                 }
 
-                if material_out != Material::EMPTY || corner_out != CornerVector::DEFAULT {
-                    let coord = LocalCoord::new(
-                        cell_vx as u32,
-                        cell_vy as u32,
-                        cell_vz as u32,
-                    )
-                    .expect("sample-aligned voxel in [0, CLUSTER_DIM)");
-                    cluster.set(coord, Voxel::new(corner_out, material_out));
+                let any_solid = corner_solid.iter().any(|&b| b);
+                let all_solid = corner_solid.iter().all(|&b| b);
+                if !any_solid || all_solid {
+                    continue;
+                }
+                let qef = cell_qef_corner(
+                    primitive,
+                    &corner_solid,
+                    [cell_vx, cell_vy, cell_vz],
+                    [off_x, off_y, off_z],
+                    stride,
+                );
+                if qef != CornerVector::DEFAULT {
+                    active_cell_qef.insert((i, j, k), qef);
+                }
+            }
+        }
+    }
+
+    // Pass 1: per-voxel material. Solid voxels become overrides with
+    // default corner (the corner is filled in by pass 2 if this voxel
+    // sits inside an active LOD-cell's footprint).
+    for vz in 0..voxel_dim {
+        for vy in 0..voxel_dim {
+            for vx in 0..voxel_dim {
+                if solid_voxel[v_idx(vx, vy, vz)] {
+                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
+                        .expect("in range");
+                    cluster.set(coord, Voxel::new(CornerVector::DEFAULT, material));
+                }
+            }
+        }
+    }
+
+    // Pass 2: per active LOD-cell, write the cell's QEF corner at every
+    // voxel in the cell's stride³ footprint. The same byte-encoded
+    // CornerVector goes into every footprint voxel so `cluster.get`
+    // returns identical bit patterns across the footprint. The mesh
+    // pipeline snaps the queried voxel to the LOD stride before decode
+    // (`snapped_voxel + corner·stride` = the cell's QEF world position
+    // — byte-equal from every footprint voxel, no encode-round drift
+    // from per-voxel re-quantization).
+    for ((ci, cj, ck), qef) in &active_cell_qef {
+        let cell_vx = ci * stride_us;
+        let cell_vy = cj * stride_us;
+        let cell_vz = ck * stride_us;
+        for dz in 0..stride_us {
+            let vz = cell_vz + dz;
+            if vz >= voxel_dim {
+                break;
+            }
+            for dy in 0..stride_us {
+                let vy = cell_vy + dy;
+                if vy >= voxel_dim {
+                    break;
+                }
+                for dx in 0..stride_us {
+                    let vx = cell_vx + dx;
+                    if vx >= voxel_dim {
+                        break;
+                    }
+                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
+                        .expect("in range");
+                    let existing = cluster.get(coord);
+                    cluster.set(coord, Voxel::new(*qef, existing.material()));
                 }
             }
         }
@@ -428,18 +525,33 @@ mod tests {
     }
 
     #[test]
-    fn lod2_contour_stores_at_sample_aligned_slots_only() {
-        // LOD 2: stride=4, sample_dim=64. Every stored override's
-        // (x, y, z) must be a multiple of 4 — that's the §2 storage
-        // invariant. FlatField produces a band of active cells around
-        // the surface, plenty of slots to check.
+    fn lod2_active_cell_corner_byte_equal_across_footprint() {
+        // LOD 2: stride=4, sample_dim=64. The §3 per-voxel expansion
+        // writes the **same** CornerVector at every voxel in the active
+        // cell's 4³ footprint — same byte pattern everywhere — so the
+        // mesh's snap-then-decode pipeline lands on byte-identical
+        // world positions from every footprint voxel.
         let id_lod2 = ClusterId::new(2, 0, 0, 0);
         let c = contour(&FlatField::at_half(), grey(), id_lod2);
-        assert!(c.override_count() > 0, "LOD-2 flat field should contour");
-        for (coord, _voxel) in c.overrides() {
-            assert_eq!(coord.x() % 4, 0, "x={} not stride-aligned", coord.x());
-            assert_eq!(coord.y() % 4, 0, "y={} not stride-aligned", coord.y());
-            assert_eq!(coord.z() % 4, 0, "z={} not stride-aligned", coord.z());
+        let stride: i32 = 4;
+        // Cell at sample (0, 31, 0) → min-corner voxel (0, 124, 0).
+        let cell_v = [0_i32, 124, 0];
+        let min_voxel = c.get(LocalCoord::new(0, 124, 0).unwrap());
+        for dz in 0..stride {
+            for dy in 0..stride {
+                for dx in 0..stride {
+                    let vx = (cell_v[0] + dx) as u32;
+                    let vy = (cell_v[1] + dy) as u32;
+                    let vz = (cell_v[2] + dz) as u32;
+                    let v = c.get(LocalCoord::new(vx, vy, vz).unwrap());
+                    assert_eq!(
+                        v.corner(),
+                        min_voxel.corner(),
+                        "footprint voxel ({}, {}, {}) corner drift",
+                        vx, vy, vz
+                    );
+                }
+            }
         }
     }
 

@@ -190,6 +190,15 @@ impl VoxelCluster {
         // neighbor's stored LOD is what mesh uses to drive cross-LOD
         // stride adjustments at the boundary layer.
         let mut new_meshes: Vec<(ClusterId, MeshHandle)> = Vec::new();
+        // Watertight diagnostic — accumulated across all clusters, logged
+        // at the end of rebuild. `total_unshared` mixes real gaps with
+        // legitimate world-boundary edges; `total_over_shared` is always
+        // a bug.
+        let mut total_edges = 0_usize;
+        let mut total_unshared = 0_usize;
+        let mut total_over_shared = 0_usize;
+        let mut sample_gaps: Vec<(ClusterId, [f32; 3], [f32; 3])> = Vec::new();
+        let mut sample_over: Vec<(ClusterId, [f32; 3], [f32; 3], u32)> = Vec::new();
         for id in &ids {
             let x = id.x();
             let z = id.z();
@@ -215,6 +224,38 @@ impl VoxelCluster {
             let cluster = self.map.get(*id).expect("just inserted");
             let self_lod = Lod::new(id.lod()).expect("valid lod");
             let cm = flicker_voxel::mesh(cluster, &neighbors, self_lod);
+
+            // Run the watertight check before upload (we need the
+            // CPU-side ClusterMesh and its position data).
+            let hist = cm.edge_use_histogram();
+            total_edges += hist.len();
+            let cluster_off = id.world_offset();
+            for (&(va, vb), &uses) in &hist {
+                match uses {
+                    0 => {}
+                    1 => {
+                        total_unshared += 1;
+                        if sample_gaps.len() < 8 {
+                            let pa = cm.vertices[va as usize].position;
+                            let pb = cm.vertices[vb as usize].position;
+                            let wa = [
+                                pa[0] + cluster_off[0],
+                                pa[1] + cluster_off[1],
+                                pa[2] + cluster_off[2],
+                            ];
+                            let wb = [
+                                pb[0] + cluster_off[0],
+                                pb[1] + cluster_off[1],
+                                pb[2] + cluster_off[2],
+                            ];
+                            sample_gaps.push((*id, wa, wb));
+                        }
+                    }
+                    2 => {}
+                    _ => total_over_shared += 1,
+                }
+            }
+
             let verts: Vec<MeshVertex> = cm
                 .vertices
                 .iter()
@@ -228,6 +269,22 @@ impl VoxelCluster {
             new_meshes.push((*id, handle));
         }
         self.meshes = new_meshes;
+
+        tracing::info!(
+            "rebuild: {} clusters, {} edges total, {} unshared (gaps + world-boundary), {} over-shared",
+            ids.len(),
+            total_edges,
+            total_unshared,
+            total_over_shared,
+        );
+        for (id, a, b) in &sample_gaps {
+            tracing::info!(
+                "  unshared edge in cluster ({}, {}, {}): ({:.2}, {:.2}, {:.2}) → ({:.2}, {:.2}, {:.2})",
+                id.x(), id.y(), id.z(),
+                a[0], a[1], a[2],
+                b[0], b[1], b[2],
+            );
+        }
 
         // Corner-vector arrows: across the whole field, every stored
         // voxel with a non-default corner contributes one segment.

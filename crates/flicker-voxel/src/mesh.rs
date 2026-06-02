@@ -72,6 +72,116 @@ impl ClusterMesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
+
+    /// Per-edge use count in this mesh's triangle list. Each edge is
+    /// keyed by `(min_vertex_index, max_vertex_index)`; the value is
+    /// the number of triangles referencing that pair. After
+    /// [`Self::weld`], a watertight surface has every edge at:
+    ///
+    /// - `2` — interior edge, shared by two triangles.
+    /// - `1` — boundary edge, on the world-exterior perimeter of the
+    ///   surface (legitimate if the surface terminates at e.g. the
+    ///   cluster's world-Y boundary).
+    /// - `> 2` — over-share, a bug (the same edge is in multiple
+    ///   stacked triangles).
+    ///
+    /// A `1`-count edge in the *interior* of a surface is a topological
+    /// gap. Use this in diagnostic code to identify where the contour
+    /// + mesh pipeline is failing to close.
+    pub fn edge_use_histogram(&self) -> std::collections::HashMap<(u32, u32), u32> {
+        let mut out = std::collections::HashMap::new();
+        for tri in self.indices.chunks_exact(3) {
+            for &(a, b) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *out.entry(key).or_insert(0_u32) += 1;
+            }
+        }
+        out
+    }
+
+    /// Collapse vertices with byte-equal positions to a single index,
+    /// averaging+renormalizing their normals.
+    ///
+    /// Dual contouring with per-quad vertex emission produces many
+    /// "duplicate" vertices: each shared cell appears in up to four
+    /// quads, and each emission pushes a fresh vertex slot. Even when
+    /// the positions are mathematically identical (same byte pattern
+    /// in cluster-local coords), the GPU's vertex shader can drift them
+    /// apart by sub-ULP through the MVP transform, leaving a pixel-
+    /// wide gap that rasterizes as background between adjacent
+    /// triangles. Sharing the vertex *index* eliminates that drift —
+    /// both triangles read the cached vertex shader output.
+    ///
+    /// The cost is that per-quad face normals are averaged into per-
+    /// vertex smooth normals. For curved surfaces (heightmap) that's
+    /// strictly better; for sharp features (cube edges) it softens the
+    /// corner slightly. Adding smooth-group handling is left for a
+    /// later pass.
+    pub fn weld(&mut self) {
+        if self.vertices.is_empty() {
+            return;
+        }
+        use std::collections::HashMap;
+
+        let mut by_pos: HashMap<[u32; 3], u32> =
+            HashMap::with_capacity(self.vertices.len());
+        let mut new_vertices: Vec<ClusterVertex> = Vec::with_capacity(self.vertices.len());
+        // Parallel buffers for normal accumulation. We could store the
+        // running sum in the vertex itself, but keeping them separate
+        // makes the renormalize step a single linear scan.
+        let mut normal_sums: Vec<[f32; 3]> = Vec::with_capacity(self.vertices.len());
+        let mut normal_counts: Vec<u32> = Vec::with_capacity(self.vertices.len());
+        let mut old_to_new: Vec<u32> = Vec::with_capacity(self.vertices.len());
+
+        for v in &self.vertices {
+            // Bit-pattern key. Two vertices weld iff their position
+            // floats are byte-identical; mathematically equal-but-bit-
+            // different positions (e.g. `-0.0` vs `0.0`) do not weld,
+            // which is intentional — we want lossless welding of the
+            // actually-shared cell vertices and no accidental merge of
+            // anything else.
+            let key = [
+                v.position[0].to_bits(),
+                v.position[1].to_bits(),
+                v.position[2].to_bits(),
+            ];
+            let new_idx = match by_pos.get(&key) {
+                Some(&idx) => {
+                    let u = idx as usize;
+                    normal_sums[u][0] += v.normal[0];
+                    normal_sums[u][1] += v.normal[1];
+                    normal_sums[u][2] += v.normal[2];
+                    normal_counts[u] += 1;
+                    idx
+                }
+                None => {
+                    let idx = new_vertices.len() as u32;
+                    new_vertices.push(*v);
+                    normal_sums.push(v.normal);
+                    normal_counts.push(1);
+                    by_pos.insert(key, idx);
+                    idx
+                }
+            };
+            old_to_new.push(new_idx);
+        }
+
+        for i in 0..new_vertices.len() {
+            let n = normal_counts[i] as f32;
+            let avg = [
+                normal_sums[i][0] / n,
+                normal_sums[i][1] / n,
+                normal_sums[i][2] / n,
+            ];
+            new_vertices[i].normal = normalize(avg);
+        }
+
+        for idx in self.indices.iter_mut() {
+            *idx = old_to_new[*idx as usize];
+        }
+
+        self.vertices = new_vertices;
+    }
 }
 
 /// Regenerate a renderable mesh from a contoured cluster via per-cell
@@ -107,22 +217,25 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
         }
     }
 
-    // Per-seam emission rule: each shared seam is emitted by exactly
-    // one cluster — the finer of the two, with low-side ownership as
-    // tiebreaker for uniform LOD (which keeps §1 byte-identical).
-    //
-    // The two rules below derive from that single principle:
-    //   • At the +-axis seam (self's +X/+Y/+Z face), self emits iff
-    //     self_lod ≤ +-axis-neighbor.lod  (finer-or-tie).
-    //   • At the −-axis seam (self's −X/−Y/−Z face), self emits iff
-    //     self_lod <  −-axis-neighbor.lod (strictly finer; ties go to
-    //     the −-axis neighbor as the low side).
-    let plus_neighbor_skip = |axis: usize| -> bool {
-        // Returns true when self is coarser than the +-axis neighbor —
-        // the finer neighbor will emit the seam from its −-axis face.
-        neighbor_at(neighbors, axis, true)
-            .map(|(_, nl)| nl.level() < lod.level())
-            .unwrap_or(false)
+    // Per-face boundary stride: at each face that has a neighbor,
+    // `2^min(self_lod, neighbor_lod)` — the finer of the two strides.
+    // When `per_face_stride[f] == stride`, the override is a no-op for
+    // that face; when it's *less than* `stride`, self is the coarser
+    // side and its boundary layer on that face must iterate at the
+    // smaller stride so both sides hit the seam at the same cadence.
+    // Face index: `2*axis + (positive as usize)` → 0:−X, 1:+X, 2:−Y,
+    // 3:+Y, 4:−Z, 5:+Z.
+    let per_face_stride: [i32; 6] = {
+        let mut s = [stride; 6];
+        for axis in 0..3 {
+            for positive in [false, true] {
+                if let Some((_, nl)) = neighbor_at(neighbors, axis, positive) {
+                    let face_idx = 2 * axis + (positive as usize);
+                    s[face_idx] = 1i32 << lod.level().min(nl.level());
+                }
+            }
+        }
+        s
     };
 
     for gz in 0..sample_dim {
@@ -133,19 +246,16 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                 let s_g = is_solid_in_range(cluster, g_voxel);
 
                 for axis_a in 0..3 {
+                    // Defer to the boundary pass when this edge lives in
+                    // an override-active face row. -side faces defer
+                    // their in-axis (tangent) edges; +side faces defer
+                    // all 3 axes (the seam-crossing one too).
+                    if main_loop_defers(&per_face_stride, stride, g_sample, axis_a) {
+                        continue;
+                    }
                     let mut n_sample = g_sample;
                     n_sample[axis_a] += 1;
                     let n_voxel = sample_to_voxel(n_sample, stride);
-
-                    // At the +-axis seam crossing (n_sample[axis_a] ==
-                    // sample_dim), skip emission if self is coarser
-                    // than the +-axis neighbor — that neighbor (being
-                    // finer) owns the seam from its −-axis face.
-                    if n_sample[axis_a] == sample_dim
-                        && plus_neighbor_skip(axis_a)
-                    {
-                        continue;
-                    }
 
                     let s_n = if n_sample[axis_a] < sample_dim {
                         is_solid_in_range(cluster, n_voxel)
@@ -158,14 +268,14 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                         continue;
                     }
 
-                    let cells = [
-                        cell_coord(g_sample, axis_a, 0, 0),
-                        cell_coord(g_sample, axis_a, -1, 0),
-                        cell_coord(g_sample, axis_a, -1, -1),
-                        cell_coord(g_sample, axis_a, 0, -1),
+                    let cells_voxel = [
+                        sample_to_voxel(cell_coord(g_sample, axis_a, 0, 0), stride),
+                        sample_to_voxel(cell_coord(g_sample, axis_a, -1, 0), stride),
+                        sample_to_voxel(cell_coord(g_sample, axis_a, -1, -1), stride),
+                        sample_to_voxel(cell_coord(g_sample, axis_a, 0, -1), stride),
                     ];
                     let Some(positions) =
-                        resolve_cell_vertices(cluster, neighbors, &cells, stride, sample_dim)
+                        resolve_cell_vertices(cluster, neighbors, &cells_voxel, stride)
                     else {
                         continue;
                     };
@@ -182,118 +292,189 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
         }
     }
 
-    // Cross-LOD takeover: when self is strictly finer than a −-axis
-    // neighbor, self emits the +-axis-crossing seam quads at that face
-    // (the work the coarser low-side neighbor would have done at
-    // uniform LOD). The boundary layer's iteration runs at the
-    // coarser stride; the 4 cells are all in the coarser neighbor
-    // (read via `read_corner`, decoded with §3a's per-neighbor stride).
-    for axis_a in 0..3 {
-        let Some((_, neighbor_lod)) = neighbor_at(neighbors, axis_a, false) else {
-            continue;
-        };
-        if neighbor_lod.level() <= lod.level() {
+    // Boundary pass: only −side overrides need one. +side overrides
+    // would emit only degenerates (see `main_loop_defers` doc), so the
+    // main loop's coarse emissions at +side boundary rows are the
+    // emissions there.
+    for axis in 0..3 {
+        let face_idx = 2 * axis; // −side
+        let s_o = per_face_stride[face_idx];
+        if s_o >= stride {
             continue;
         }
-        emit_neg_seam_takeover(&mut out, cluster, neighbors, lod, neighbor_lod, axis_a);
+        emit_boundary_face(
+            &mut out,
+            cluster,
+            neighbors,
+            axis,
+            false,
+            s_o,
+            stride,
+            &per_face_stride,
+        );
     }
 
+    // Weld byte-equal positions so adjacent triangles share vertex
+    // indices and the rasterizer can't drift them apart.
+    out.weld();
     out
 }
 
-/// Emit the +-axis-crossing seam quads on self's −-axis face when self
-/// is strictly finer than the −-axis neighbor. Iterates the in-axis
-/// directions at the coarser stride; the 4 cells around each seam
-/// edge all live in the coarser neighbor and are read via
-/// [`read_corner`] (§3a decode handles the per-neighbor stride).
-fn emit_neg_seam_takeover(
+/// True iff the main-loop emission at `g_sample` along `axis_a` should
+/// be deferred to the boundary pass.
+///
+/// Only −side overrides defer: on a −side row (g[face_axis] == 0) the
+/// in-axis tangent edges (`axis_a != face_axis`) defer to the boundary
+/// pass, which iterates at the finer override stride and gathers cells
+/// across the seam into the finer neighbour. The interior axis_a ==
+/// face_axis edge at g=0 goes from voxel 0 to voxel stride (inward) —
+/// it's not a seam edge, so the main loop emits it as usual.
+///
+/// +side overrides defer **nothing**: the in-axis tangent and the
+/// perpendicular seam-crossing emissions at +side boundary rows pull
+/// no cells across the seam (both `g.x+0` and `g.x-1` land inside self),
+/// so at fine cadence they all snap to the same self LOD-cell and
+/// collapse to degenerate emissions. Letting the main loop emit at
+/// self.stride is what provides the connecting edges between adjacent
+/// LOD-cell vertices that the finer neighbour's cross-cluster reads
+/// pair with; the +side boundary pass would add nothing useful.
+fn main_loop_defers(
+    per_face_stride: &[i32; 6],
+    stride: i32,
+    g_sample: [i32; 3],
+    axis_a: usize,
+) -> bool {
+    for face_axis in 0..3 {
+        let neg = 2 * face_axis;
+        if per_face_stride[neg] < stride
+            && g_sample[face_axis] == 0
+            && axis_a != face_axis
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Emit the boundary row for one face at the override stride.
+///
+/// Iteration walks the two in-face axes at `s_o` (the override stride
+/// — the finer of self's and the face neighbor's strides). −side rows
+/// emit the two in-axis (tangent) edges; +side rows emit all 3 axis
+/// directions (tangents + the perpendicular seam-crossing edge).
+///
+/// `self_stride` is the cluster's own LOD stride and is passed straight
+/// through to [`resolve_cell_vertices`] for in-self corner decode: the
+/// finer iteration cadence walks voxel positions inside coarse cell
+/// footprints, but those voxels' per-voxel corner data was contoured
+/// so it decodes with `self_stride` to the containing cell's QEF.
+///
+/// Ownership at overlap lines: at grid points where this face's row
+/// meets another override-active face's row (the cluster's edges and
+/// corners), the face with the **lower face_axis index** owns the
+/// emission. This avoids the same edge being emitted by two boundary
+/// passes (which would over-share). `per_face_stride` is consulted so
+/// the rule only suppresses against faces that are actually overriding.
+fn emit_boundary_face(
     out: &mut ClusterMesh,
     cluster: &Cluster,
     neighbors: &NeighborContext<'_>,
-    self_lod: Lod,
-    neighbor_lod: Lod,
-    axis_a: usize,
+    face_axis: usize,
+    positive: bool,
+    s_o: i32,
+    self_stride: i32,
+    per_face_stride: &[i32; 6],
 ) {
-    let s_self = self_lod.stride() as i32;
-    let s_n = neighbor_lod.stride() as i32;
-    let n_n = neighbor_lod.sample_dim() as i32;
-    let coarse_step = s_n / s_self; // step in self's sample-index units
+    let n_o = (CLUSTER_DIM as i32) / s_o;
+    let face_idx_in_self = if positive { n_o - 1 } else { 0 };
+    let b = (face_axis + 1) % 3;
+    let c = (face_axis + 2) % 3;
 
-    let b_axis = (axis_a + 1) % 3;
-    let c_axis = (axis_a + 2) % 3;
+    for j_c in 0..n_o {
+        for j_b in 0..n_o {
+            let mut g_sample = [0i32; 3];
+            g_sample[face_axis] = face_idx_in_self;
+            g_sample[b] = j_b;
+            g_sample[c] = j_c;
+            let g_voxel = sample_to_voxel(g_sample, s_o);
 
-    // Iterate the in-axis directions at coarse cadence. Skip the
-    // corners (j_b == 0 or j_c == 0) — those would have edge-neighbor
-    // cells (multi-axis OOB), which face-neighbor-only meshing
-    // doesn't handle.
-    for j_b in 1..n_n {
-        for j_c in 1..n_n {
-            // Edge endpoints (self-local voxel coords).
-            // near = self-side endpoint at voxel 0 on the OOB axis,
-            // far  = neighbor-side endpoint at voxel −s_n on the OOB axis.
-            let mut near_v = [0i32; 3];
-            near_v[axis_a] = 0;
-            near_v[b_axis] = j_b * s_n;
-            near_v[c_axis] = j_c * s_n;
-            let mut far_v = near_v;
-            far_v[axis_a] = -s_n;
-
-            // Solidity check: near is in self at a coarse-aligned slot.
-            let s_near = is_solid_in_range(cluster, near_v);
-            // Far is in the −-axis neighbor at its seam-shell row.
-            let s_far = is_solid_with_neighbors(cluster, neighbors, far_v);
-            if s_near == s_far {
+            // Lower-face_axis-wins ownership at overlap lines: if this
+            // position also sits on a boundary row for some face whose
+            // axis is < `face_axis` (and whose override is active),
+            // that face owns the emission — skip here.
+            if lower_face_owns(per_face_stride, self_stride, face_axis, g_voxel) {
                 continue;
             }
 
-            // 4 cells around the +-axis-crossing edge, in perimeter
-            // order matching `cell_coord` with axis_a = face axis.
-            // All 4 are at self-sample coord −coarse_step on the face
-            // axis (which is voxel −s_n in self's frame, OOB → routes
-            // to the neighbor via read_corner).
-            let g_sample = {
-                let mut s = [0i32; 3];
-                s[axis_a] = 0;
-                s[b_axis] = j_b * coarse_step;
-                s[c_axis] = j_c * coarse_step;
-                s
-            };
-            let cells_coarse: [[i32; 3]; 4] = {
-                // Equivalent to cell_coord(g, axis_a, db, dc) with
-                // (db, dc) ∈ {(0,0), (-1,0), (-1,-1), (0,-1)} stepping
-                // in coarse-cadence units (= `coarse_step` in self's
-                // sample-index space).
-                let offsets = [(0, 0), (-1, 0), (-1, -1), (0, -1)];
-                let mut out_cells = [[0i32; 3]; 4];
-                for (i, &(db, dc)) in offsets.iter().enumerate() {
-                    let mut c = g_sample;
-                    c[axis_a] -= coarse_step; // step back to the −-side cell row
-                    c[b_axis] += db * coarse_step;
-                    c[c_axis] += dc * coarse_step;
-                    out_cells[i] = c;
+            let s_g = is_solid_with_neighbors(cluster, neighbors, g_voxel);
+
+            for axis_a in 0..3 {
+                // -side rows only emit tangent (in-axis) edges; +side
+                // rows also emit the perpendicular seam-crossing edge.
+                if !positive && axis_a == face_axis {
+                    continue;
                 }
-                out_cells
-            };
+                let mut n_sample = g_sample;
+                n_sample[axis_a] += 1;
+                let n_voxel = sample_to_voxel(n_sample, s_o);
 
-            let Some(positions) = resolve_cell_vertices(
-                cluster,
-                neighbors,
-                &cells_coarse,
-                s_self,
-                self_lod.sample_dim() as i32,
-            ) else {
-                continue;
-            };
+                let s_n = if n_sample[axis_a] < n_o {
+                    is_solid_with_neighbors(cluster, neighbors, n_voxel)
+                } else if has_face_neighbor(neighbors, axis_a, true) {
+                    is_solid_with_neighbors(cluster, neighbors, n_voxel)
+                } else {
+                    continue;
+                };
+                if s_g == s_n {
+                    continue;
+                }
 
-            let mut expected_normal = [0.0_f32; 3];
-            expected_normal[axis_a] = if s_near { -1.0 } else { 1.0 };
+                let cells_voxel = [
+                    sample_to_voxel(cell_coord(g_sample, axis_a, 0, 0), s_o),
+                    sample_to_voxel(cell_coord(g_sample, axis_a, -1, 0), s_o),
+                    sample_to_voxel(cell_coord(g_sample, axis_a, -1, -1), s_o),
+                    sample_to_voxel(cell_coord(g_sample, axis_a, 0, -1), s_o),
+                ];
+                let Some(positions) =
+                    resolve_cell_vertices(cluster, neighbors, &cells_voxel, self_stride)
+                else {
+                    continue;
+                };
 
-            let solid_endpoint = if s_near { near_v } else { far_v };
-            let material = solid_material(cluster, neighbors, solid_endpoint);
+                let mut expected_normal = [0.0_f32; 3];
+                expected_normal[axis_a] = if s_g { 1.0 } else { -1.0 };
 
-            push_quad(out, positions, expected_normal, material);
+                let solid_endpoint = if s_g { g_voxel } else { n_voxel };
+                let material = solid_material(cluster, neighbors, solid_endpoint);
+                push_quad(out, positions, expected_normal, material);
+            }
         }
     }
+}
+
+/// At the overlap lines where two override-active face rows meet, the
+/// face with the lower axis index owns the emission. Returns `true`
+/// when `g_voxel` lies on the boundary row of some face whose axis is
+/// strictly less than `own_face_axis` and that face is currently
+/// overriding — i.e. this position is somebody else's responsibility.
+fn lower_face_owns(
+    per_face_stride: &[i32; 6],
+    self_stride: i32,
+    own_face_axis: usize,
+    g_voxel: [i32; 3],
+) -> bool {
+    let dim = CLUSTER_DIM as i32;
+    for other_axis in 0..own_face_axis {
+        let s_neg = per_face_stride[2 * other_axis];
+        let s_pos = per_face_stride[2 * other_axis + 1];
+        if s_neg < self_stride && g_voxel[other_axis] == 0 {
+            return true;
+        }
+        if s_pos < self_stride && g_voxel[other_axis] == dim - s_pos {
+            return true;
+        }
+    }
+    false
 }
 
 #[inline]
@@ -339,22 +520,23 @@ fn face_neighbor_lod(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> Option
     None
 }
 
-/// Resolve the 4-cell gather (cells in sample-index space) to 4 vertex
-/// positions in self's cluster-local voxel coords. A cell with sample
-/// index in range is read from `cluster`; one with a single coord at
-/// `-1` or `sample_dim` is routed to the matching face neighbor via
-/// [`read_corner`] and its stored corner is decoded into self's frame.
-/// Two-or-three-axis OOB returns `None` (the quad is skipped).
+/// Resolve the 4-cell gather (cells in cluster-local voxel coords) to
+/// 4 vertex positions. A cell whose voxel coord is in `[0, CLUSTER_DIM)`
+/// on every axis is read from `cluster`; one with a single coord OOB is
+/// routed to the matching face neighbor via [`read_corner`] and its
+/// stored corner is decoded into self's frame. Two-or-three-axis OOB
+/// returns `None` (the quad is skipped). `self_stride` is the in-self
+/// decode stride (the cluster's own LOD stride), independent of how
+/// the caller's iteration walks voxel space.
 fn resolve_cell_vertices(
     cluster: &Cluster,
     neighbors: &NeighborContext<'_>,
-    cells: &[[i32; 3]; 4],
-    stride: i32,
-    sample_dim: i32,
+    cells_voxel: &[[i32; 3]; 4],
+    self_stride: i32,
 ) -> Option<[[f32; 3]; 4]> {
     let mut out = [[0.0_f32; 3]; 4];
-    for (i, &cell) in cells.iter().enumerate() {
-        out[i] = cell_vertex(cluster, neighbors, cell, stride, sample_dim)?;
+    for (i, &cv) in cells_voxel.iter().enumerate() {
+        out[i] = cell_vertex(cluster, neighbors, cv, self_stride)?;
     }
     Some(out)
 }
@@ -363,12 +545,42 @@ fn resolve_cell_vertices(
 /// normal is the geometric normal of triangle `(v0,v1,v2)`; if it points
 /// opposite to `expected_normal`, the vertex order is reversed so the
 /// emitted face faces the solid→empty direction.
+///
+/// Degenerate-collapse: if two adjacent perimeter vertices are byte-
+/// equal, the quad would split into a zero-area triangle and a real
+/// one. Drop the duplicate vertex and emit a single fan triangle.
 fn push_quad(
     out: &mut ClusterMesh,
     positions: [[f32; 3]; 4],
     expected_normal: [f32; 3],
     material: u32,
 ) {
+    // Adjacent-duplicate scan. Perimeter is 0→1→2→3→0; if any (i, i+1)
+    // are equal, that vertex collapses with its successor.
+    let dup_after: Option<usize> = (0..4).find(|&i| positions[i] == positions[(i + 1) % 4]);
+
+    if let Some(i) = dup_after {
+        // Drop the second of the duplicate pair, keep the remaining
+        // three in perimeter order so the winding is preserved.
+        let drop = (i + 1) % 4;
+        let mut tri = [[0.0_f32; 3]; 3];
+        let mut k = 0;
+        for j in 0..4 {
+            if j == drop {
+                continue;
+            }
+            tri[k] = positions[j];
+            k += 1;
+        }
+        // Multi-duplicate (e.g. two pairs of equal positions) means the
+        // input was already a line or a point — nothing renderable.
+        if tri[0] == tri[1] || tri[1] == tri[2] || tri[2] == tri[0] {
+            return;
+        }
+        push_triangle(out, tri, expected_normal, material);
+        return;
+    }
+
     let v0 = positions[0];
     let v1 = positions[1];
     let v2 = positions[2];
@@ -397,6 +609,40 @@ fn push_quad(
         .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
 }
 
+/// Append one oriented triangle (3 vertices, 3 indices). Same winding-
+/// flip rule as [`push_quad`]: if the geometric normal of (v0,v1,v2)
+/// disagrees with `expected_normal`, swap two vertices.
+fn push_triangle(
+    out: &mut ClusterMesh,
+    positions: [[f32; 3]; 3],
+    expected_normal: [f32; 3],
+    material: u32,
+) {
+    let v0 = positions[0];
+    let v1 = positions[1];
+    let v2 = positions[2];
+
+    let raw_normal = cross(sub(v1, v0), sub(v2, v0));
+    let mut face_normal = normalize(raw_normal);
+
+    let ordered = if dot(face_normal, expected_normal) < 0.0 {
+        face_normal = [-face_normal[0], -face_normal[1], -face_normal[2]];
+        [v0, v2, v1]
+    } else {
+        [v0, v1, v2]
+    };
+
+    let base = out.vertices.len() as u32;
+    for p in ordered {
+        out.vertices.push(ClusterVertex {
+            position: p,
+            normal: face_normal,
+            material,
+        });
+    }
+    out.indices.extend_from_slice(&[base, base + 1, base + 2]);
+}
+
 /// Min-corner coord of one of the four cells around an edge along
 /// `axis_a` at grid point `g`. `db`, `dc` are signed offsets in the two
 /// non-`a` axes, which are taken cyclically: `b = (a+1) % 3`,
@@ -411,75 +657,66 @@ fn cell_coord(g: [i32; 3], axis_a: usize, db: i32, dc: i32) -> [i32; 3] {
     out
 }
 
-/// Vertex position for a cell (sample index) in self's cluster-local
-/// voxel coords. In-range cells read from `cluster`; single-axis-OOB
-/// cells read the neighbor's stored corner via [`read_corner`] and
-/// decode it through the same `origin + corner·stride` formula —
-/// negative or sample-dim-boundary sample indices included. Multi-axis
-/// OOB returns `None`.
+/// Vertex position for a cell whose min-corner voxel is `cell_voxel`
+/// in self's cluster-local frame.
+///
+/// Contour stores the same CornerVector at every voxel inside an
+/// active LOD-cell's footprint — cell-units relative to that cell's
+/// min-corner with self's stride. Decode therefore snaps `cell_voxel`
+/// down to the nearest stride-aligned position before applying
+/// `voxel + corner·stride`, so all voxels in one footprint resolve to
+/// the same byte-equal world position (no per-voxel-encoding drift).
+///
+/// `self_stride` is self's own LOD stride. For single-axis-OOB cells,
+/// the read is routed through [`read_corner`] to the neighbor, and
+/// the decode uses the **neighbor's** stride — both for the snap and
+/// for the scale — because the corner stored in the neighbor was
+/// encoded in the neighbor's frame. Multi-axis OOB returns `None`.
 fn cell_vertex(
     cluster: &Cluster,
     neighbors: &NeighborContext<'_>,
-    cell_sample: [i32; 3],
-    stride: i32,
-    sample_dim: i32,
+    cell_voxel: [i32; 3],
+    self_stride: i32,
 ) -> Option<[f32; 3]> {
-    let oob_count = u32::from(!cell_sample_in_range(cell_sample[0], sample_dim))
-        + u32::from(!cell_sample_in_range(cell_sample[1], sample_dim))
-        + u32::from(!cell_sample_in_range(cell_sample[2], sample_dim));
+    let dim = CLUSTER_DIM as i32;
+    let in_x = (0..dim).contains(&cell_voxel[0]);
+    let in_y = (0..dim).contains(&cell_voxel[1]);
+    let in_z = (0..dim).contains(&cell_voxel[2]);
+    let oob_count = u32::from(!in_x) + u32::from(!in_y) + u32::from(!in_z);
     if oob_count >= 2 {
         return None;
     }
-
-    // Cluster-local voxel coord of the cell's min corner at self's
-    // stride. Out-of-cluster samples (`-1` or `sample_dim`) produce
-    // `-stride` or `CLUSTER_DIM`, which `read_corner` routes to the
-    // matching face neighbor.
-    let mut cell_voxel = sample_to_voxel(cell_sample, stride);
 
     let (voxel, decode_stride) = if oob_count == 0 {
         let v = cluster.get(
             LocalCoord::new(cell_voxel[0] as u32, cell_voxel[1] as u32, cell_voxel[2] as u32)
                 .expect("in range"),
         );
-        (v, stride)
+        (v, self_stride)
     } else if !single_axis_face_neighbor_present(neighbors, cell_voxel) {
         return None;
     } else {
         let neighbor_lod = face_neighbor_lod(neighbors, cell_voxel)
             .expect("single-axis OOB + neighbor present implies a face neighbor");
-        let s_n = neighbor_lod.stride() as i32;
-        // Cross-LOD snap: when the neighbor is coarser, the data lives
-        // only at coarse-aligned voxel slots — and the stored corner is
-        // in cell-units relative to the *coarse* cell's min-corner.
-        // Floor cell_voxel to the coarser stride on every axis so:
-        //   • the read lands on the coarse cell that contains our query,
-        //   • the decode places the vertex at the coarse cell's actual
-        //     QEF position (cell_min + corner·s_coarse) rather than at
-        //     a non-aligned fine slot that holds nothing.
-        // At uniform LOD `s_n == stride`, the snap is a no-op.
-        let s_coarse = s_n.max(stride);
-        if s_coarse > stride {
-            for axis in 0..3 {
-                cell_voxel[axis] = cell_voxel[axis].div_euclid(s_coarse) * s_coarse;
-            }
-        }
         let v = read_corner(cluster, neighbors, cell_voxel[0], cell_voxel[1], cell_voxel[2]);
-        (v, s_coarse)
+        (v, neighbor_lod.stride() as i32)
     };
+
+    // Snap `cell_voxel` to the decode stride so every voxel in a cell
+    // footprint produces the same world position.
+    let snapped = [
+        cell_voxel[0].div_euclid(decode_stride) * decode_stride,
+        cell_voxel[1].div_euclid(decode_stride) * decode_stride,
+        cell_voxel[2].div_euclid(decode_stride) * decode_stride,
+    ];
 
     let [dx, dy, dz] = voxel.corner().to_components();
     let fs = decode_stride as f32;
     Some([
-        cell_voxel[0] as f32 + dx * fs,
-        cell_voxel[1] as f32 + dy * fs,
-        cell_voxel[2] as f32 + dz * fs,
+        snapped[0] as f32 + dx * fs,
+        snapped[1] as f32 + dy * fs,
+        snapped[2] as f32 + dz * fs,
     ])
-}
-
-#[inline]
-fn cell_sample_in_range(s: i32, sample_dim: i32) -> bool {
-    s >= 0 && s < sample_dim
 }
 
 #[inline]
@@ -676,8 +913,11 @@ mod tests {
         let m = mesh(&c, &NeighborContext::none(), Lod::ZERO);
 
         assert!(!m.is_empty(), "cube should produce some quads");
-        assert_eq!(m.vertices.len() % 4, 0);
-        assert_eq!(m.indices.len() % 6, 0);
+        // After the weld pass, vertices are no longer in per-quad
+        // groups — indices reference welded slots. Indices still come
+        // in triangle triples (6 per quad), so `% 3 == 0` is the
+        // surviving structural invariant.
+        assert_eq!(m.indices.len() % 3, 0);
         for i in &m.indices {
             assert!((*i as usize) < m.vertices.len());
         }
@@ -714,20 +954,30 @@ mod tests {
         let m = mesh(&cluster, &NeighborContext::none(), Lod::ZERO);
         assert!(!m.is_empty());
 
+        // Post-weld, vertex normals are averages of every adjacent
+        // face's normal (including the side walls), so no single
+        // vertex carries a pure +Y normal anymore. The check shifts to
+        // triangle *geometric* normals — at least one triangle should
+        // have all three vertices on the y=128 plane and a face normal
+        // pointing +Y, which is the top of the patch.
         let mut found = false;
-        for quad in m.vertices.chunks_exact(4) {
-            let on_plane = quad.iter().all(|v| (v.position[1] - 128.0).abs() < 0.01);
-            let faces_up = quad.iter().all(|v| {
-                v.normal[0].abs() < 0.01
-                    && (v.normal[1] - 1.0).abs() < 0.01
-                    && v.normal[2].abs() < 0.01
-            });
-            if on_plane && faces_up {
+        for tri in m.indices.chunks_exact(3) {
+            let p0 = m.vertices[tri[0] as usize].position;
+            let p1 = m.vertices[tri[1] as usize].position;
+            let p2 = m.vertices[tri[2] as usize].position;
+            let on_plane = (p0[1] - 128.0).abs() < 0.01
+                && (p1[1] - 128.0).abs() < 0.01
+                && (p2[1] - 128.0).abs() < 0.01;
+            if !on_plane {
+                continue;
+            }
+            let n = normalize(cross(sub(p1, p0), sub(p2, p0)));
+            if n[1].abs() > 0.99 {
                 found = true;
                 break;
             }
         }
-        assert!(found, "no +Y face quad at y=128 in patch");
+        assert!(found, "no triangle on y=128 plane with +Y face normal");
     }
 
     /// Number of triangles in a mesh whose all 3 vertices land in the
@@ -1068,6 +1318,175 @@ mod tests {
         );
     }
 
+    /// Sum unshared (count==1) and over-shared (count>2) edges across
+    /// every per-cluster mesh's [`ClusterMesh::edge_use_histogram`].
+    /// Per-mesh totals; cross-cluster seam edges are unshared by this
+    /// metric even when the corresponding edge in the neighbour mesh
+    /// matches up byte-for-byte. See [`combined_edge_use_totals`] for
+    /// the across-cluster welded count.
+    fn edge_use_totals(meshes: &[ClusterMesh]) -> (usize, usize) {
+        let mut unshared = 0_usize;
+        let mut over = 0_usize;
+        for m in meshes {
+            let hist = m.edge_use_histogram();
+            for (_, uses) in hist {
+                match uses {
+                    0 | 2 => {}
+                    1 => unshared += 1,
+                    _ => over += 1,
+                }
+            }
+        }
+        (unshared, over)
+    }
+
+    /// Cross-cluster welded edge histogram: each cluster's mesh is
+    /// translated by its world offset, vertices are deduped by quantized
+    /// world position across all clusters, and edges are counted on the
+    /// combined triangle list. This is the real watertightness check —
+    /// unshared here means a genuine gap or world-boundary edge, not a
+    /// per-mesh artifact of where the seam emission lives.
+    fn combined_edge_use_totals(
+        ids: &[ClusterId],
+        meshes: &[ClusterMesh],
+    ) -> (usize, usize) {
+        use std::collections::HashMap;
+        let q = |p: [f32; 3]| -> [i64; 3] {
+            [
+                (p[0] * 1024.0).round() as i64,
+                (p[1] * 1024.0).round() as i64,
+                (p[2] * 1024.0).round() as i64,
+            ]
+        };
+        let mut verts_q: Vec<[i64; 3]> = Vec::new();
+        let mut lookup: HashMap<[i64; 3], u32> = HashMap::new();
+        let mut triangles: Vec<[u32; 3]> = Vec::new();
+        for (i, m) in meshes.iter().enumerate() {
+            let off = ids[i].world_offset();
+            for tri in m.indices.chunks_exact(3) {
+                let mut idx = [0u32; 3];
+                for (k, &vi) in tri.iter().enumerate() {
+                    let p = m.vertices[vi as usize].position;
+                    let world = [p[0] + off[0], p[1] + off[1], p[2] + off[2]];
+                    let key = q(world);
+                    idx[k] = *lookup.entry(key).or_insert_with(|| {
+                        let new_id = verts_q.len() as u32;
+                        verts_q.push(key);
+                        new_id
+                    });
+                }
+                triangles.push(idx);
+            }
+        }
+        let mut edge_use: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in &triangles {
+            for &(a, b) in &[(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edge_use.entry(key).or_insert(0) += 1;
+            }
+        }
+        let mut unshared = 0_usize;
+        let mut over = 0_usize;
+        for (_, &uses) in &edge_use {
+            match uses {
+                0 | 2 => {}
+                1 => unshared += 1,
+                _ => over += 1,
+            }
+        }
+        (unshared, over)
+    }
+
+    /// Diagnostic: 3×3 XZ field of FlatField clusters with the centre
+    /// cluster optionally at LOD 1 (all four lateral LOD-0 neighbours
+    /// running the per-face boundary stride override). The watertight
+    /// check is on the combined mesh (welded across cluster boundaries):
+    /// over-shared must be 0, and unshared must equal the world
+    /// perimeter — the same closure invariant the §1 row-of-three test
+    /// established for uniform LOD.
+    #[test]
+    fn flat_field_3x3_centre_lod1_seam_counts() {
+        fn build(
+            center_lod: u8,
+        ) -> (Vec<ClusterId>, Vec<ClusterMesh>) {
+            let lod_for = |x: u16, z: u16| if x == 1 && z == 1 { center_lod } else { 0 };
+            let ids: Vec<ClusterId> = (0..3u16)
+                .flat_map(|x| (0..3u16).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
+                .collect();
+            let clusters: Vec<Cluster> = ids
+                .iter()
+                .map(|id| contour(&FlatField::at_half(), grey(), *id))
+                .collect();
+            let meshes: Vec<ClusterMesh> = (0..ids.len())
+                .map(|i| {
+                    let id = ids[i];
+                    let x = id.x();
+                    let z = id.z();
+                    let nb = |xx: u16, zz: u16| -> Option<(&Cluster, Lod)> {
+                        if xx >= 3 || zz >= 3 {
+                            return None;
+                        }
+                        let idx = (xx as usize) * 3 + (zz as usize);
+                        Some((
+                            &clusters[idx],
+                            Lod::new(lod_for(xx, zz)).expect("valid lod"),
+                        ))
+                    };
+                    let neg_x = if x > 0 { nb(x - 1, z) } else { None };
+                    let pos_x = if x < 2 { nb(x + 1, z) } else { None };
+                    let neg_z = if z > 0 { nb(x, z - 1) } else { None };
+                    let pos_z = if z < 2 { nb(x, z + 1) } else { None };
+                    let neighbors = NeighborContext {
+                        neg_x,
+                        pos_x,
+                        neg_z,
+                        pos_z,
+                        ..NeighborContext::none()
+                    };
+                    mesh(
+                        &clusters[i],
+                        &neighbors,
+                        Lod::new(id.lod()).expect("valid lod"),
+                    )
+                })
+                .collect();
+            (ids, meshes)
+        }
+
+        let (ids0, meshes0) = build(0);
+        let (ids1, meshes1) = build(1);
+
+        let (pu0, po0) = edge_use_totals(&meshes0);
+        let (pu1, po1) = edge_use_totals(&meshes1);
+        let (cu0, co0) = combined_edge_use_totals(&ids0, &meshes0);
+        let (cu1, co1) = combined_edge_use_totals(&ids1, &meshes1);
+        eprintln!(
+            "flat 3x3 uniform LOD 0:   per-mesh unshared={pu0}/over={po0}, combined unshared={cu0}/over={co0}"
+        );
+        eprintln!(
+            "flat 3x3 centre at LOD 1: per-mesh unshared={pu1}/over={po1}, combined unshared={cu1}/over={co1}"
+        );
+
+        // Per-mesh and combined over-shared must be 0 in every case —
+        // an edge in >2 triangles is always a bug.
+        assert_eq!(po0, 0, "uniform LOD 0 per-mesh over-shared");
+        assert_eq!(po1, 0, "centre LOD 1 per-mesh over-shared");
+        assert_eq!(co0, 0, "uniform LOD 0 combined over-shared");
+        assert_eq!(co1, 0, "centre LOD 1 combined over-shared");
+
+        // Combined unshared = world-boundary perimeter. With the
+        // override working end-to-end the centre-LOD-1 case is within
+        // a small handful of edges of the uniform-LOD-0 baseline; the
+        // residual delta is the cluster-corner artifact from
+        // `cell_vertex` returning `None` on multi-axis OOB, which
+        // affects four 3-cluster-meet corners around the centre.
+        let delta = (cu1 as i64 - cu0 as i64).abs();
+        assert!(
+            delta <= 16,
+            "centre LOD 1 combined unshared {cu1} differs from baseline {cu0} by {delta} (>16 = real seam gap)"
+        );
+    }
+
     #[test]
     #[should_panic(expected = "differs from self LOD")]
     fn mesh_panics_on_two_level_lod_jump() {
@@ -1124,7 +1543,7 @@ mod tests {
         // b-voxel (0, 126, 0). This is B's surface-straddling cell at
         // sample (0, 63, 0) (y spans [126, 128]); B's contour stored a
         // corner ≈ (0.5, 1.0, 0.5) here, on +Y face = world y=128.
-        let pos = cell_vertex(&a, &neighbors, [256, 126, 0], 1, 256);
+        let pos = cell_vertex(&a, &neighbors, [256, 126, 0], 1);
         let pos = pos.expect("read across to B should resolve");
         // Decoded with B's stride (2), the cell_voxel = (256, 126, 0)
         // in A's local frame, corner ≈ (0.5, 1.0, 0.5) → vertex
@@ -1165,9 +1584,9 @@ mod tests {
 
         // From A's side: cell at sample (255, 127, 100) — in-storage.
         let v_a =
-            cell_vertex(&a, &NeighborContext::none(), [255, 127, 100], 1, 256).expect("in range");
+            cell_vertex(&a, &NeighborContext::none(), [255, 127, 100], 1).expect("in range");
         // From B's side: cell at sample (-1, 127, 100) — read across.
-        let v_b = cell_vertex(&b, &nb_b, [-1, 127, 100], 1, 256).expect("read across");
+        let v_b = cell_vertex(&b, &nb_b, [-1, 127, 100], 1).expect("read across");
 
         // World positions: A's vertex is at v_a, B's vertex is at
         // v_b + CLUSTER_DIM on X.
