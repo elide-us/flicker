@@ -730,6 +730,7 @@ name = "flicker-script"
 version = "0.1.0"
 dependencies = [
  "flicker-core",
+ "glam",
  "mlua",
  "serde",
  "thiserror 2.0.18",

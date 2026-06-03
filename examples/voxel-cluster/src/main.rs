@@ -10,28 +10,36 @@
 //! drawn as a white wireframe box; two debug toggles let the user
 //! inspect the meshes interactively (see controls below).
 //!
-//! Controls (rebindable via `Bindings`):
+//! Camera controls (rebindable via `Bindings`):
 //!   * WASD: move forward/back/strafe in the camera's facing.
 //!   * R / F: rise / descend (world Y up / down).
 //!   * Right-drag: free-look yaw + pitch.
-//!   * `1`: toggle wireframe overlay on top of the solid mesh.
-//!   * `2`: toggle corner-vector arrows — for every stored voxel whose
+//!   * Escape: quit.
+//!
+//! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
+//! loaded at startup via `flicker-script`) — three clickable
+//! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
+//! handling:
+//!   * Wireframe overlay on top of the solid mesh.
+//!   * Corner-vector arrows — for every stored voxel whose
 //!     `CornerVector` differs from the default, draw a line from the
 //!     voxel's grid coord to the decoded corner tip. Visualizes where
 //!     the contour's QEF placed each active cell's dual vertex.
-//!   * Escape: quit.
+//!   * Center cluster LOD — flips the centre cluster of the 3×3 field
+//!     between LOD 0 and LOD 1, exercising the cross-LOD seam.
 
 use std::time::Duration;
 
 use anyhow::Result;
-use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState, Key};
+use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
 };
+use flicker::script::{HudCommand, ScriptHost};
 use flicker_voxel::{
-    contour, Cluster, ClusterId, ClusterMap, CornerVector, Lod, Material, NeighborContext, Scene,
-    CLUSTER_DIM,
+    contour, Cluster, ClusterId, ClusterMap, CornerVector, LocalCoord, Lod, Material,
+    NeighborContext, Scene, CLUSTER_DIM,
 };
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
@@ -39,16 +47,6 @@ use flicker_voxel::{
 /// present), which is what actually exercises seam tangent stitching
 /// on every face simultaneously.
 const FIELD_DIM: u16 = 3;
-
-/// Axis-aligned rectangle in HUD pixel space. Retained as part of the
-/// sprite-UI capability (see `draw_checkbox`); no active widgets use it
-/// in this minimal build.
-#[allow(dead_code)]
-#[derive(Copy, Clone, Debug)]
-struct Rect {
-    top_left: Vec2,
-    size: Vec2,
-}
 
 struct VoxelCluster {
     /// The cluster map — populated with `FIELD_DIM × FIELD_DIM`
@@ -58,9 +56,7 @@ struct VoxelCluster {
 
     /// A 1×1 white pixel uploaded once at `init`. The sprite shader
     /// multiplies it by a tint, so this is the "solid colored quad"
-    /// primitive for HUD widgets. Retained sprite-UI capability — no
-    /// active widgets draw it in this minimal build.
-    #[allow(dead_code)]
+    /// primitive used to draw the scripted HUD's checkbox rectangles.
     white: Option<TextureHandle>,
 
     /// One mesh handle per cluster, paired with the cluster's id so
@@ -78,17 +74,20 @@ struct VoxelCluster {
     bindings: Bindings,
     config: ControlConfig,
 
-    /// `1` toggles a wireframe-overlay second pass on top of the solid
-    /// mesh. Off by default.
+    /// The scripted HUD. Owns the three debug-toggle checkboxes; the
+    /// fields below are refreshed from it each frame. `None` only if
+    /// the script failed to load (the example still runs without it).
+    script: Option<ScriptHost>,
+
+    /// Wireframe-overlay second pass on top of the solid mesh. Mirrors
+    /// the script's `"wireframe"` checkbox, refreshed each `update`.
     wireframe_on: bool,
-    /// `2` toggles drawing corner-vector arrows (precomputed in `init`).
-    /// Off by default.
+    /// Draw corner-vector arrows (precomputed in `init`). Mirrors the
+    /// script's `"corner_arrows"` checkbox.
     corner_arrows_on: bool,
-    /// Held-state on the previous frame for `1`/`2`/`\` so the toggles
-    /// flip on the press edge instead of every frame the key is down.
-    prev_key1: bool,
-    prev_key2: bool,
-    prev_backslash: bool,
+    /// State of the script's `"center_lod"` checkbox on the previous
+    /// frame, so we rebuild the field only on the toggle edge.
+    prev_center_lod_on: bool,
     /// Cached line segments: from each stored voxel's world grid coord
     /// to its decoded `CornerVector` tip, across all clusters in the
     /// field.
@@ -96,12 +95,26 @@ struct VoxelCluster {
 
     /// LOD level of the centre cluster of the 3×3 field. Toggled
     /// between 0 (uniform with neighbours) and 1 (coarser than its
-    /// four lateral neighbours) on `\`. Other clusters stay at LOD 0.
+    /// four lateral neighbours) by the HUD's centre-LOD checkbox.
+    /// Other clusters stay at LOD 0.
     center_lod_level: u8,
-    /// Set by `update` when `\` flips the centre LOD; consumed at the
-    /// top of `render` (which has `&mut Renderer`) to re-contour + re-
-    /// mesh the whole field.
+    /// Set by `update` when the centre-LOD checkbox flips; consumed at
+    /// the top of `render` (which has `&mut Renderer`) to re-contour +
+    /// re-mesh the whole field.
     needs_rebuild: bool,
+
+    /// CPU-side world-space triangle data for ray-casting against the
+    /// rendered mesh. One entry per cluster: `(id, world vertex
+    /// positions, u32 indices)`. Populated alongside [`Self::meshes`]
+    /// in [`Self::rebuild`] — the uploaded `MeshHandle` alone isn't
+    /// enough for picking. Brute-force ray–triangle is fine at 9
+    /// clusters / a few hundred thousand triangles.
+    pick_meshes: Vec<(ClusterId, Vec<Vec3>, Vec<u32>)>,
+
+    /// Most recent pick: `(owning cluster, dual-cell center in
+    /// cluster-local grid coords)`. `None` until the first hit; sticky
+    /// thereafter.
+    selection: Option<(ClusterId, [i32; 3])>,
 
     should_quit: bool,
 }
@@ -120,20 +133,31 @@ impl Default for VoxelCluster {
             last_look_cursor: None,
             bindings: Bindings::wasd(),
             config: ControlConfig::default(),
+            script: None,
             wireframe_on: false,
             corner_arrows_on: false,
-            prev_key1: false,
-            prev_key2: false,
-            prev_backslash: false,
+            prev_center_lod_on: false,
             corner_arrows: Vec::new(),
             center_lod_level: 0,
             needs_rebuild: false,
+            pick_meshes: Vec::new(),
+            selection: None,
             should_quit: false,
         }
     }
 }
 
 impl VoxelCluster {
+    /// Build the example around an already-loaded HUD script. All other
+    /// state takes its placeholder values from [`Default`]; the camera
+    /// gets its real pose in [`App::init`].
+    fn new(script: ScriptHost) -> Self {
+        Self {
+            script: Some(script),
+            ..Self::default()
+        }
+    }
+
     /// Unit vector pointing where the camera is looking, derived from
     /// yaw/pitch. Right-handed Y-up.
     fn forward(&self) -> Vec3 {
@@ -157,6 +181,307 @@ impl VoxelCluster {
     }
 }
 
+/// Field-of-view used by [`VoxelCluster::render`]; mirrored here so the
+/// picking ray uses the exact same vertical FOV as the projection.
+const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
+
+/// Bounding rect of the scripted HUD's checkbox panel, in HUD pixels
+/// (origin top-left). Mirrors `scripts/hud.lua`'s `ORIGIN_X`/`ORIGIN_Y`
+/// /`ROW_H`/`BOX` plus the row of label text on the right. Generous on
+/// purpose: a click anywhere inside this rect is treated as the HUD's,
+/// not a world pick. Keep in sync with the Lua side if the layout
+/// moves.
+const HUD_PANEL_X0: f32 = 12.0;
+const HUD_PANEL_Y0: f32 = 152.0;
+const HUD_PANEL_X1: f32 = 280.0;
+const HUD_PANEL_Y1: f32 = 260.0;
+
+impl VoxelCluster {
+    /// `true` when the cursor sits on the scripted HUD's checkbox panel
+    /// — the script already consumes the click there (toggling a
+    /// checkbox), so we must not also fire a world pick on the same
+    /// press edge.
+    fn cursor_on_hud(cursor: Vec2) -> bool {
+        cursor.x >= HUD_PANEL_X0
+            && cursor.x <= HUD_PANEL_X1
+            && cursor.y >= HUD_PANEL_Y0
+            && cursor.y <= HUD_PANEL_Y1
+    }
+
+    /// Origin + direction of the picking ray for screen-space cursor
+    /// `cursor` on a viewport of pixel size `viewport`.
+    ///
+    /// Camera basis built to **match** the renderer's view matrix
+    /// (`glam::Mat4::look_at_rh` in [`flicker_render::Camera::view`]):
+    ///   * `r = f.cross(Y)` — same as `look_at_rh`'s internal right
+    ///     vector (`forward × up`). For the example's yaw-0/face-+Z
+    ///     pose this resolves to `(-1, 0, 0)`, which means world `+X`
+    ///     lands on the **left** half of the screen — counter-intuitive
+    ///     until you note that the camera looks *into* `+Z`. Build
+    ///     the picking ray with this same convention so screen-left
+    ///     clicks fire rays toward world `+X` and screen-right clicks
+    ///     toward world `-X`. (Implementing `Y.cross(f)` instead
+    ///     produces the inverse and visibly mirrors the pick.)
+    ///   * `u = r.cross(f)` — recomputed up; for a pitched-down camera
+    ///     this leans `+Y` toward `+Z` (top of view tilts forward),
+    ///     matching head-tilt intuition.
+    ///
+    /// NDC x runs left→right with the pixel x; NDC y runs bottom→top
+    /// because the mouse origin is top-left.
+    fn build_pick_ray(&self, cursor: Vec2, viewport: Vec2) -> (Vec3, Vec3) {
+        let f = self.forward();
+        let r = f.cross(Vec3::Y).normalize_or_zero();
+        let u = r.cross(f).normalize_or_zero();
+        let aspect = viewport.x / viewport.y;
+        let t = (PICK_FOV_Y_RADIANS * 0.5).tan();
+        // +0.5 so the ray passes through the pixel's centre, not its
+        // top-left corner — matters at low resolutions, harmless at
+        // high.
+        let ndc_x = 2.0 * (cursor.x + 0.5) / viewport.x - 1.0;
+        let ndc_y = 1.0 - 2.0 * (cursor.y + 0.5) / viewport.y;
+        let dir = (f + r * (ndc_x * aspect * t) + u * (ndc_y * t)).normalize_or_zero();
+        (self.position, dir)
+    }
+
+    /// Ray–triangle intersection (Möller–Trumbore). Returns the
+    /// parametric `t` along `(origin, dir)` for the front-face hit, or
+    /// `None` if the ray misses, hits the back face within numerical
+    /// tolerance, or lands behind the origin. The mesh emits oriented
+    /// quads, so back-face culling here matches what the renderer
+    /// shows.
+    fn ray_triangle(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+        let edge1 = b - a;
+        let edge2 = c - a;
+        let h = dir.cross(edge2);
+        let det = edge1.dot(h);
+        // Back-face / parallel-ray rejection. Positive det = ray
+        // hits the front face (CCW winding when viewed from
+        // `origin`); negative det = back face.
+        if det <= 1e-7 {
+            return None;
+        }
+        let inv_det = 1.0 / det;
+        let s = origin - a;
+        let bu = inv_det * s.dot(h);
+        if !(0.0..=1.0).contains(&bu) {
+            return None;
+        }
+        let q = s.cross(edge1);
+        let bv = inv_det * dir.dot(q);
+        if bv < 0.0 || bu + bv > 1.0 {
+            return None;
+        }
+        let t = inv_det * edge2.dot(q);
+        if t > 1e-4 {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// Walk every retained triangle and return the nearest front-face
+    /// hit as `(ClusterId, world point)`. Brute force over the field's
+    /// ~9 cluster meshes: fine for 9 × a few hundred thousand
+    /// triangles at click rate. Add spatial acceleration when the
+    /// field grows.
+    fn try_pick(&self, cursor: Vec2, viewport: Vec2) -> Option<(ClusterId, Vec3)> {
+        let (origin, dir) = self.build_pick_ray(cursor, viewport);
+        let mut best: Option<(f32, ClusterId)> = None;
+        for (id, verts, indices) in &self.pick_meshes {
+            for tri in indices.chunks_exact(3) {
+                let a = verts[tri[0] as usize];
+                let b = verts[tri[1] as usize];
+                let c = verts[tri[2] as usize];
+                if let Some(t) = Self::ray_triangle(origin, dir, a, b, c) {
+                    if best.map_or(true, |(bt, _)| t < bt) {
+                        best = Some((t, *id));
+                    }
+                }
+            }
+        }
+        best.map(|(t, id)| (id, origin + dir * t))
+    }
+
+    /// Snap a world-space hit point to the nearest dual-cell center
+    /// (lattice grid point) inside the owning cluster: subtract the
+    /// cluster's world offset, round each axis, clamp to `[0,
+    /// CLUSTER_DIM]`. The range is `[0, 256]` (inclusive both ends) so
+    /// hits exactly on a face plane resolve to the boundary grid
+    /// point.
+    fn hit_to_local_p(id: ClusterId, hit_world: Vec3) -> [i32; 3] {
+        let off = id.world_offset();
+        let dim = CLUSTER_DIM as i32;
+        let snap = |w: f32, o: f32| (w - o).round().clamp(0.0, dim as f32) as i32;
+        [
+            snap(hit_world.x, off[0]),
+            snap(hit_world.y, off[1]),
+            snap(hit_world.z, off[2]),
+        ]
+    }
+}
+
+// ---------- virtual-voxel viz layer (Stage 2 of the inspector) ----------
+//
+// A "virtual voxel" is the dual cell centred on a grid point `p` — a
+// cube whose 8 corners are the dual vertices of the 8 primal cells
+// meeting at `p`. Each corner is owned by a different voxel: the one
+// occupying that octant around `p`. We *read* each owner's stored
+// corner to place its octant; if the owner's storage is empty (no
+// override, or out of cluster bounds), the display defaults to the
+// owner's cell-centre, which puts the corner at `p ± 0.5` — the clean
+// unit lattice cube. The "weird shapes" appear at the surface where
+// stored corners pull the cube off-lattice.
+//
+// `Cluster::get` returns truth: stored override or `base`. Display
+// defaults belong here, in the viz layer, not on `Cluster`. (A prior
+// bug put LOD-stride filtering inside `get`; it returned `base` for
+// real data and cost a brutal debug detour. Never again — two
+// near-identical accessors where one lies by design is exactly the
+// trap.) Hence the free function `display_corner` and explicit
+// `VirtualVoxelCorner` struct that records both translations.
+
+/// Returns the owner voxel's stored corner if `m` lies inside the
+/// cluster's `[0, CLUSTER_DIM)³` range, else [`CornerVector::DEFAULT`].
+/// The in-range path goes through [`Cluster::get`] — the storage's one
+/// source of truth — and reads `.corner()`. The OOB path is the
+/// *display* default; v1 does not chase cross-cluster owners.
+///
+/// Deliberately a free function (not a `Cluster` method) — fabricated
+/// defaults on display-time queries must never be confused with the
+/// truthful in-storage accessor.
+fn display_corner(cluster: &Cluster, m: [i32; 3]) -> CornerVector {
+    let dim = CLUSTER_DIM as i32;
+    if (0..dim).contains(&m[0]) && (0..dim).contains(&m[1]) && (0..dim).contains(&m[2]) {
+        let coord = LocalCoord::new(m[0] as u32, m[1] as u32, m[2] as u32)
+            .expect("range checked");
+        cluster.get(coord).corner()
+    } else {
+        CornerVector::DEFAULT
+    }
+}
+
+/// One corner of a virtual voxel, with both coordinate frames kept
+/// explicit. `owner_relative` is the same value the owning voxel
+/// stores (the provenance/write-back handle, *if* editing ever
+/// arrives); `self_relative` is the same world point expressed from
+/// the dual cell's centre `p` — what the renderer and the math reason
+/// in. Same point, two frames; storing both keeps the bookkeeping
+/// visible while debugging.
+#[derive(Copy, Clone, Debug)]
+struct VirtualVoxelCorner {
+    /// Owning voxel's min-corner in cluster-local grid coords:
+    /// `m = p + (bx - 1, by - 1, bz - 1)` per the octant mapping.
+    owner_local: [i32; 3],
+    /// `V.to_components()`: corner offset from `m` (the owner's own
+    /// min corner), range `[-0.5, 1.5]`. The owner's default value of
+    /// `(0.5, 0.5, 0.5)` is its cell centre.
+    owner_relative: [f32; 3],
+    /// `(m - p) + V.to_components()`: same world point expressed from
+    /// `p`. For default owners this collapses to `(bx - 0.5, by - 0.5,
+    /// bz - 0.5)` → corner at `p ± 0.5`, the clean lattice cube.
+    self_relative: [f32; 3],
+    /// Absolute world-space corner position (`cluster_origin + m +
+    /// V`). The renderer consumes this; picking uses it for hit
+    /// outlines.
+    world: Vec3,
+}
+
+/// A virtual voxel: dual cell centred on a grid point `p` inside the
+/// given cluster, with its 8 corners' provenance and translations.
+#[derive(Clone, Debug)]
+struct VirtualVoxel {
+    /// Owning cluster (so callers can format the selection consistently
+    /// and so a later edit pass can find the storage).
+    cluster: ClusterId,
+    /// Cluster-local grid coord of the dual cell's centre.
+    center_local: [i32; 3],
+    /// Corners indexed by `o ∈ 0..8`, bits `(bx, by, bz) = (o & 1,
+    /// (o >> 1) & 1, (o >> 2) & 1)`. Bit `1` = the `+` side of `p` on
+    /// that axis; bit `0` = the `-` side. (The `---` corner `o = 0`
+    /// borrows the `p - (1, 1, 1)` voxel's `+++` reach — same world
+    /// point, two frames.)
+    corners: [VirtualVoxelCorner; 8],
+}
+
+impl VirtualVoxel {
+    /// Build the virtual voxel at lattice point `p` in `cluster` whose
+    /// world offset is `cluster_origin`. Eight reads from
+    /// `display_corner`, one per octant.
+    fn build(cluster_id: ClusterId, cluster: &Cluster, p: [i32; 3]) -> Self {
+        let off = cluster_id.world_offset();
+        let cluster_origin = Vec3::new(off[0], off[1], off[2]);
+        let mut corners = [VirtualVoxelCorner {
+            owner_local: [0; 3],
+            owner_relative: [0.0; 3],
+            self_relative: [0.0; 3],
+            world: Vec3::ZERO,
+        }; 8];
+        for o in 0..8 {
+            let bx = (o & 1) as i32;
+            let by = ((o >> 1) & 1) as i32;
+            let bz = ((o >> 2) & 1) as i32;
+            let m = [p[0] + bx - 1, p[1] + by - 1, p[2] + bz - 1];
+            let v = display_corner(cluster, m).to_components();
+            // self-relative = (m - p) + V = (bx - 1, by - 1, bz - 1) + V.
+            // For the default V = (0.5, 0.5, 0.5) this becomes
+            // (bx - 0.5, by - 0.5, bz - 0.5) → the corner sits at
+            // p ± 0.5 (clean axis-aligned unit cube around p).
+            let self_relative = [
+                (m[0] - p[0]) as f32 + v[0],
+                (m[1] - p[1]) as f32 + v[1],
+                (m[2] - p[2]) as f32 + v[2],
+            ];
+            let world = cluster_origin
+                + Vec3::new(m[0] as f32 + v[0], m[1] as f32 + v[1], m[2] as f32 + v[2]);
+            corners[o] = VirtualVoxelCorner {
+                owner_local: m,
+                owner_relative: v,
+                self_relative,
+                world,
+            };
+        }
+        Self {
+            cluster: cluster_id,
+            center_local: p,
+            corners,
+        }
+    }
+}
+
+/// The 12 cube edges as pairs of octant indices `(o0, o1)`, ordered by
+/// the axis the edge runs along (X = bit 0, Y = bit 1, Z = bit 2).
+/// Every pair differs in exactly one bit: that's the axis-aligned cube
+/// topology. The dual cell's mesh is just `corners[o0].world →
+/// corners[o1].world` for each entry.
+const CUBE_EDGES: [(usize, usize); 12] = [
+    // X-axis edges (toggle bit 0).
+    (0b000, 0b001),
+    (0b010, 0b011),
+    (0b100, 0b101),
+    (0b110, 0b111),
+    // Y-axis edges (toggle bit 1).
+    (0b000, 0b010),
+    (0b001, 0b011),
+    (0b100, 0b110),
+    (0b101, 0b111),
+    // Z-axis edges (toggle bit 2).
+    (0b000, 0b100),
+    (0b001, 0b101),
+    (0b010, 0b110),
+    (0b011, 0b111),
+];
+
+impl VoxelCluster {
+    /// Build the [`VirtualVoxel`] for the current selection, if any.
+    /// Cheap — eight `cluster.get` reads per call — so callers
+    /// recompute every frame instead of caching.
+    fn current_virtual_voxel(&self) -> Option<VirtualVoxel> {
+        let (id, p) = self.selection?;
+        let cluster = self.map.get(id)?;
+        Some(VirtualVoxel::build(id, cluster, p))
+    }
+}
+
 impl VoxelCluster {
     /// Rebuild every cluster's contour and mesh from scratch. Called
     /// once at init and again on every `\` toggle. Cheaper than tracking
@@ -173,6 +498,13 @@ impl VoxelCluster {
 
         self.map = ClusterMap::new();
         self.meshes.clear();
+        // CPU triangles for picking are regenerated alongside the
+        // uploaded meshes below; clear the stale entries first.
+        self.pick_meshes.clear();
+        // A rebuild discards every triangle the previous selection's
+        // pick was anchored to, so the selection no longer references
+        // anything coherent — drop it.
+        self.selection = None;
 
         let ids: Vec<ClusterId> = (0..FIELD_DIM)
             .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
@@ -267,6 +599,24 @@ impl VoxelCluster {
                 .collect();
             let handle = renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices));
             new_meshes.push((*id, handle));
+
+            // Snapshot world-space triangles for CPU ray-casting. The
+            // GPU buffer above is opaque to us; the picker needs raw
+            // positions in world coords (the same frame the camera ray
+            // lives in), so we apply the cluster's world offset here
+            // and stash positions + indices.
+            let pick_verts: Vec<Vec3> = cm
+                .vertices
+                .iter()
+                .map(|v| {
+                    Vec3::new(
+                        v.position[0] + cluster_off[0],
+                        v.position[1] + cluster_off[1],
+                        v.position[2] + cluster_off[2],
+                    )
+                })
+                .collect();
+            self.pick_meshes.push((*id, pick_verts, cm.indices.clone()));
         }
         self.meshes = new_meshes;
 
@@ -324,35 +674,57 @@ impl App for VoxelCluster {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _r: &Renderer) {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
         if input.action_active(&self.bindings, Action::Quit) {
             self.should_quit = true;
             return;
         }
         let dt_s = dt.as_secs_f32();
 
-        // Debug toggles: flip on the press edge so holding the key
-        // doesn't oscillate the bool every frame.
-        let cur1 = input.key_down(Key::Digit1);
-        if cur1 && !self.prev_key1 {
-            self.wireframe_on = !self.wireframe_on;
-        }
-        self.prev_key1 = cur1;
-        let cur2 = input.key_down(Key::Digit2);
-        if cur2 && !self.prev_key2 {
-            self.corner_arrows_on = !self.corner_arrows_on;
-        }
-        self.prev_key2 = cur2;
+        // Debug toggles now live in the HUD script: feed it the mouse +
+        // click edge, and mirror the checkbox states it reports back.
+        // (`as_ref().map(..)` releases the `self.script` borrow before we
+        // write the other fields below.)
+        if let Some(result) = self.script.as_ref().map(|s| s.update(input)) {
+            match result {
+                Ok(toggles) => {
+                    self.wireframe_on = toggles.is_on("wireframe");
+                    self.corner_arrows_on = toggles.is_on("corner_arrows");
 
-        // `\` toggles the centre cluster's LOD between 0 and 1, exercising
-        // the cross-LOD seam (§3). The actual contour + mesh rebuild
-        // happens at the top of `render` (it needs `&mut Renderer`).
-        let cur_bs = input.key_down(Key::Backslash);
-        if cur_bs && !self.prev_backslash {
-            self.center_lod_level = if self.center_lod_level == 0 { 1 } else { 0 };
-            self.needs_rebuild = true;
+                    // Re-contour + re-mesh only on the centre-LOD edge;
+                    // the rebuild itself happens in `render` (needs
+                    // `&mut Renderer`).
+                    let center_on = toggles.is_on("center_lod");
+                    if center_on != self.prev_center_lod_on {
+                        self.center_lod_level = if center_on { 1 } else { 0 };
+                        self.needs_rebuild = true;
+                    }
+                    self.prev_center_lod_on = center_on;
+                }
+                Err(e) => tracing::error!("HUD script update failed: {e}"),
+            }
         }
-        self.prev_backslash = cur_bs;
+
+        // Left-click → world pick (inspector). The HUD script consumes
+        // the press edge for its own checkbox toggling above, but it
+        // does so without telling us — so we re-check the press edge
+        // here and gate it on "cursor outside the HUD panel" to avoid
+        // double-firing on a checkbox click. Right-drag is for look;
+        // left-click is for pick. No conflict.
+        if input.mouse_left_pressed && !Self::cursor_on_hud(input.mouse_position) {
+            if let Some((id, hit_world)) =
+                self.try_pick(input.mouse_position, renderer.size())
+            {
+                let p = Self::hit_to_local_p(id, hit_world);
+                tracing::info!(
+                    "pick: cluster ({}, {}, {}, lod {}) → world ({:.2}, {:.2}, {:.2}) → p ({}, {}, {})",
+                    id.x(), id.y(), id.z(), id.lod(),
+                    hit_world.x, hit_world.y, hit_world.z,
+                    p[0], p[1], p[2],
+                );
+                self.selection = Some((id, p));
+            }
+        }
 
         // Look: right-drag, with invert/sensitivity applied by config.
         if input.mouse_right {
@@ -482,53 +854,133 @@ impl App for VoxelCluster {
             16.0,
             [0.75, 0.85, 0.95, 1.0],
         );
+        // Diagnostics the checkboxes don't convey on their own.
         renderer.draw_text(
             &format!(
-                "[1] wireframe: {}    [2] corner arrows: {} ({} stored)",
-                if self.wireframe_on { "ON " } else { "off" },
-                if self.corner_arrows_on { "ON " } else { "off" },
+                "corner arrows stored: {}   centre LOD: {}  (other clusters: LOD 0)",
                 self.corner_arrows.len(),
+                self.center_lod_level,
             ),
             Vec2::new(16.0, 104.0),
             16.0,
-            [0.85, 0.85, 0.7, 1.0],
-        );
-        renderer.draw_text(
-            &format!(
-                "[\\] centre LOD: {}  (other clusters: LOD 0)",
-                self.center_lod_level
-            ),
-            Vec2::new(16.0, 124.0),
-            16.0,
-            [0.85, 0.85, 0.7, 1.0],
+            [0.75, 0.85, 0.95, 1.0],
         );
         renderer.draw_text(
             "press Escape to quit",
-            Vec2::new(16.0, 144.0),
+            Vec2::new(16.0, 124.0),
             16.0,
             [0.75, 0.85, 0.95, 1.0],
         );
-    }
-}
+        // Current pick — the inspector's selection state. `None` until
+        // the first left-click lands on a meshed face.
+        let pick_line = match self.selection {
+            Some((id, p)) => format!(
+                "pick: ({}, {}, {}, lod {}) p = ({}, {}, {})",
+                id.x(), id.y(), id.z(), id.lod(), p[0], p[1], p[2]
+            ),
+            None => "pick: (none — left-click a face)".to_string(),
+        };
+        renderer.draw_text(
+            &pick_line,
+            Vec2::new(16.0, 144.0),
+            16.0,
+            [0.95, 0.85, 0.60, 1.0],
+        );
 
-/// Render a checkbox at `rect`. Filled neon green when `checked`, dark
-/// grey when not. Retained sprite-UI capability — the widget future
-/// HUD controls reuse; no active widgets call it in this minimal build.
-#[allow(dead_code)]
-fn draw_checkbox(renderer: &mut Renderer, white: TextureHandle, rect: Rect, checked: bool) {
-    renderer.draw_sprite(white, rect.top_left, rect.size, [1.0, 1.0, 1.0, 1.0]);
-    let inset = 2.0_f32;
-    let inner_color = if checked {
-        [0.2, 0.9, 0.4, 1.0]
-    } else {
-        [0.15, 0.15, 0.18, 1.0]
-    };
-    renderer.draw_sprite(
-        white,
-        rect.top_left + Vec2::splat(inset),
-        rect.size - Vec2::splat(inset * 2.0),
-        inner_color,
-    );
+        // Virtual-voxel inspector: 12-edge wireframe of the dual cell
+        // at the selected lattice point, plus a per-corner readout of
+        // both translation frames (owner-relative `V` as the owner
+        // voxel stores it, and self-relative — same world point
+        // expressed from `p`). Inspect-only; both frames are kept so
+        // the bookkeeping is visible while debugging.
+        if let Some(vv) = self.current_virtual_voxel() {
+            let mut segments: Vec<(Vec3, Vec3)> = Vec::with_capacity(12);
+            for &(o0, o1) in &CUBE_EDGES {
+                segments.push((vv.corners[o0].world, vv.corners[o1].world));
+            }
+            // Darker than the bright-white cluster bounding box so the
+            // dual cell reads as a distinct overlay rather than a
+            // sub-box of the cluster.
+            renderer.draw_lines(&segments, [0.7, 0.7, 0.75, 1.0]);
+
+            // Per-corner readout. Anchored to the right side of the
+            // screen so it doesn't fight the left-column diagnostics
+            // or the scripted HUD's checkbox panel. The leading
+            // (-/+ -/+ -/+) tag is the octant bit pattern decoded
+            // back into per-axis sign, matching the brief's table.
+            let surface_w = renderer.size().x;
+            let panel_w = 620.0;
+            let panel_x = (surface_w - panel_w - 16.0).max(16.0);
+            renderer.draw_text(
+                &format!(
+                    "virt voxel  cluster ({}, {}, {}, lod {})  p = ({}, {}, {})",
+                    vv.cluster.x(),
+                    vv.cluster.y(),
+                    vv.cluster.z(),
+                    vv.cluster.lod(),
+                    vv.center_local[0],
+                    vv.center_local[1],
+                    vv.center_local[2]
+                ),
+                Vec2::new(panel_x, 16.0),
+                16.0,
+                [0.95, 0.85, 0.60, 1.0],
+            );
+            for o in 0..8 {
+                let c = &vv.corners[o];
+                let bx = (o & 1) as i32;
+                let by = ((o >> 1) & 1) as i32;
+                let bz = ((o >> 2) & 1) as i32;
+                let tag = |b: i32| if b == 1 { '+' } else { '-' };
+                let line = format!(
+                    "o={} ({}{}{})  m=({:>3},{:>3},{:>3})  V=({:+.3},{:+.3},{:+.3})  self=({:+.3},{:+.3},{:+.3})",
+                    o,
+                    tag(bx), tag(by), tag(bz),
+                    c.owner_local[0], c.owner_local[1], c.owner_local[2],
+                    c.owner_relative[0], c.owner_relative[1], c.owner_relative[2],
+                    c.self_relative[0], c.self_relative[1], c.self_relative[2],
+                );
+                renderer.draw_text(
+                    &line,
+                    Vec2::new(panel_x, 40.0 + (o as f32) * 18.0),
+                    13.0,
+                    [0.82, 0.86, 0.92, 1.0],
+                );
+            }
+        }
+
+        // The scripted HUD: the Lua side returns plain draw commands,
+        // which we turn into sprite (rect) and text calls. Rects are
+        // drawn with the 1×1 white texture tinted by the command color.
+        if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
+            match script.draw() {
+                Ok(commands) => {
+                    for command in commands {
+                        match command {
+                            HudCommand::Rect { x, y, w, h, color } => {
+                                renderer.draw_sprite(
+                                    white,
+                                    Vec2::new(x, y),
+                                    Vec2::new(w, h),
+                                    color,
+                                );
+                            }
+                            HudCommand::Text {
+                                x,
+                                y,
+                                text,
+                                size,
+                                color,
+                            } => {
+                                renderer.draw_text(&text, Vec2::new(x, y), size, color);
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::error!("HUD script draw failed: {e}"),
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -540,6 +992,17 @@ fn main() -> Result<()> {
         )
         .init();
 
-    run(VoxelCluster::default())?;
+    // Load the HUD script at startup. The path is resolved against this
+    // crate's source dir, so the example finds it regardless of the
+    // working directory `cargo run` is launched from; editing the .lua
+    // file then takes effect on the next run, no recompile needed.
+    let script_path = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
+    // `ScriptError` carries an `mlua::Error`, which is not `Send`, so it
+    // can't auto-convert into `anyhow::Error`; format it to a message.
+    let script = ScriptHost::from_file(script_path)
+        .map_err(|e| anyhow::anyhow!("failed to load HUD script: {e}"))?;
+    tracing::info!("loaded HUD script from {script_path}");
+
+    run(VoxelCluster::new(script))?;
     Ok(())
 }

@@ -10,3 +10,7 @@ mlua.workspace = true
 serde.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# Used only by tests to construct `InputState::mouse_position`.
+glam.workspace = true

@@ -30,8 +30,14 @@
 //!
 //! The summation is normalized so its value is in `[-1, 1]`, mapped to
 //! voxel heights in `[BASE_HEIGHT − AMPLITUDE, BASE_HEIGHT + AMPLITUDE]`
-//! ≈ `[64, 192]` — centered in a 256-voxel cluster with headroom above
-//! and below.
+//! ≈ `[96, 160]` — centered in a 256-voxel cluster with generous
+//! headroom above and below. The amplitude is intentionally modest:
+//! steeper terrain triggers corner-sign dual-contouring's tangential-
+//! cell blind spot (cells whose volume the surface clips through but
+//! whose 8 sample corners all land on one side), which produces
+//! "dapple" holes in the mesh on near-vertical slopes. Halving the
+//! amplitude roughly halves the worst-case gradient and cuts the
+//! incidence of those holes dramatically.
 //!
 //! # Seeding
 //!
@@ -52,9 +58,11 @@ pub const DEFAULT_SEED: u64 = 0xCAFE_F00D_D15E_A5E5;
 /// Center of the output height band, in voxels.
 const BASE_HEIGHT: f32 = 128.0;
 
-/// Maximum deviation from [`BASE_HEIGHT`], in voxels. Base 128 ±64 puts
-/// the surface in `[64, 192]` within a 256-voxel cluster.
-const AMPLITUDE: f32 = 64.0;
+/// Maximum deviation from [`BASE_HEIGHT`], in voxels. Base 128 ±32
+/// puts the surface in `[96, 160]` within a 256-voxel cluster — gentle
+/// enough to stay well clear of dual-contouring's tangential-cell
+/// blind spot on steep slopes. (See the module doc.)
+const AMPLITUDE: f32 = 32.0;
 
 /// Wavelength of the coarsest (octave 0) terrain wave, in voxels.
 /// Picked so the dominant ridge spacing spans roughly two clusters.
@@ -192,7 +200,7 @@ impl WaveField {
 /// back to [`DEFAULT_SEED`].
 ///
 /// Always finite and in `[BASE_HEIGHT − AMPLITUDE, BASE_HEIGHT +
-/// AMPLITUDE]` ≈ `[64, 192]`.
+/// AMPLITUDE]` ≈ `[96, 160]`.
 #[must_use]
 pub fn world_height(x: f32, z: f32) -> f32 {
     default_field().sample(x, z)
