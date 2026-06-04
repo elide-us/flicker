@@ -38,10 +38,203 @@
 //! No graphics dependency: the output [`ClusterVertex`] is field-for-
 //! field convertible to `flicker-render`'s `MeshVertex`, but mapping
 //! happens in the consumer (see `examples/voxel-cluster`).
+//!
+//! # Conformance role — CPU-meshing fallback (Memory & Resource Architecture spec)
+//!
+//! This CPU dual-contour mesher is the **`MESH-1` / §7 `FALLBACK-1`
+//! CPU-meshing fallback**, explicitly labeled as such. It produces
+//! CPU-side geometry that the renderer uploads (`Renderer::upload_mesh`)
+//! before drawing — a CPU-mesh → upload → render path. That path is *not*
+//! the steady-state target: per `MESH-1` the per-cell contour/QEF work
+//! should target a GPU-compute pass emitting `DeviceResident` output that
+//! feeds rendering with no CPU round trip (and no upload). The fallback
+//! is kept expressible per `FALLBACK-1` and is the only path built today;
+//! the label is here so a conformance pass reads it as the deferred
+//! fallback, not an accidental steady-state CPU→upload path.
+//!
+//! # Read surface
+//!
+//! All voxel/field reads in this module go through a single
+//! [`FieldReader`]. It is the one place that decides self-vs-neighbor
+//! routing; emission code never holds a bare `&Cluster`, so a
+//! coarse-local (self-only) sample is not expressible. This enforces
+//! `MESH-3` (coarse-side seam geometry reads the finer neighbor via the
+//! routed read, never a coarse-local sample) *structurally* — by what is
+//! in scope — rather than by reviewer vigilance.
+//!
+//! # Known limitation — cluster edge/corner seam gap (deferred)
+//!
+//! A seam quad whose 4-cell gather reaches a cluster **edge** (2 axes
+//! OOB) or **corner** (3 axes OOB) hits [`FieldReader::cell_vertex`]'s
+//! multi-axis-OOB `None` and is dropped, because [`NeighborContext`]
+//! models only the 6 face neighbors — not the 12 edge or 8 corner
+//! neighbors. Observed symptom: two adjacent cells across such an edge
+//! fail to agree on the connecting quad, leaving a visible gap (this is
+//! the residual `delta <= 16` slack tolerated in
+//! `flat_field_3x3_centre_lod1_seam_counts`). Closing it requires
+//! extending the neighbor data model and is deferred to a future spec;
+//! it is deliberately **not** addressed here. Navigation is unaffected:
+//! nav derives from the dense state field (see [`crate::nav`]), not from
+//! this mesh, so it never inherits these holes.
 
 use crate::cluster::{Cluster, CLUSTER_DIM};
 use crate::local_coord::LocalCoord;
 use crate::neighbor::{read_corner, Lod, NeighborContext};
+
+/// The single neighbor-aware read surface for the mesher.
+///
+/// Every voxel/field read in this module goes through a `FieldReader`.
+/// It wraps the cluster being meshed plus its [`NeighborContext`], and
+/// every method routes out-of-range coordinates through [`read_corner`]
+/// — whose in-bounds branch is exactly `Cluster::get`, so the routed
+/// read is also the fast path for interior coords, at no extra cost.
+///
+/// # Why this is the *only* read surface (MESH-3)
+///
+/// On the coarse side of a cross-LOD boundary, seam geometry must read
+/// the finer neighbor across the seam via the routed read — never a
+/// coarse-local, self-only sample (the locked `MESH-3` invariant). By
+/// exposing only routed reads, and by never handing a bare `&Cluster` to
+/// emission code, "read from self only" is not something a call site can
+/// express: the invariant is enforced by what is in scope, not by
+/// reviewer vigilance. There is deliberately no `cluster()` accessor and
+/// no coarse-local sampling method.
+// FUTURE: `crate::nav` does its own routed reads through `read_corner`;
+// migrating it onto a shared `FieldReader` is possible but out of scope
+// for this pass (kept contained to the mesher).
+#[derive(Copy, Clone)]
+struct FieldReader<'a> {
+    cluster: &'a Cluster,
+    neighbors: &'a NeighborContext<'a>,
+}
+
+impl<'a> FieldReader<'a> {
+    #[inline]
+    fn new(cluster: &'a Cluster, neighbors: &'a NeighborContext<'a>) -> Self {
+        Self { cluster, neighbors }
+    }
+
+    /// Solidity at an arbitrary voxel, OOB routed through the
+    /// `NeighborContext`. No neighbor on the relevant face (or multi-axis
+    /// OOB) reads as `false` — the world-boundary-is-empty default. NB:
+    /// `false` here means "empty", *not* "do not emit"; the world-edge
+    /// skip decision lives at the call site (see `mesh`).
+    #[inline]
+    fn solid(&self, g: [i32; 3]) -> bool {
+        read_corner(self.cluster, self.neighbors, g[0], g[1], g[2])
+            .state()
+            .is_filled()
+    }
+
+    /// Solidity at a voxel the caller asserts is in `[0, CLUSTER_DIM)` on
+    /// every axis. Debug-asserts the precondition (the "interior loop
+    /// stays interior" guardrail the old `is_solid_in_range` enforced
+    /// with a panic), then reads through the *same* routed path as
+    /// [`Self::solid`]. For an in-range coord `read_corner` takes its
+    /// `Cluster::get` branch, so the result is identical — no
+    /// coarse-local capability is introduced.
+    #[inline]
+    fn solid_in_range(&self, g: [i32; 3]) -> bool {
+        let dim = CLUSTER_DIM as i32;
+        debug_assert!(
+            (0..dim).contains(&g[0]) && (0..dim).contains(&g[1]) && (0..dim).contains(&g[2]),
+            "solid_in_range called with out-of-range coord {g:?}; the interior loop must stay interior"
+        );
+        self.solid(g)
+    }
+
+    /// Raw material of the (solid) endpoint voxel, OOB routed through
+    /// neighbors.
+    #[inline]
+    fn material(&self, endpoint: [i32; 3]) -> u32 {
+        read_corner(
+            self.cluster,
+            self.neighbors,
+            endpoint[0],
+            endpoint[1],
+            endpoint[2],
+        )
+        .material()
+        .raw()
+    }
+
+    /// `true` iff a face neighbor is present on the given face. A
+    /// presence check, not a field read — it reads no voxel data, so it
+    /// does not reopen the coarse-local path. Lets the boundary pass take
+    /// only a `&FieldReader`.
+    #[inline]
+    fn has_face_neighbor(&self, axis: usize, positive: bool) -> bool {
+        has_face_neighbor(self.neighbors, axis, positive)
+    }
+
+    /// Vertex position for a cell whose min-corner voxel is `cell_voxel`
+    /// in self's cluster-local frame.
+    ///
+    /// Contour stores the same `CornerVector` at every voxel inside an
+    /// active LOD-cell's footprint — cell-units relative to that cell's
+    /// min-corner with self's stride. Decode snaps `cell_voxel` down to
+    /// the nearest stride-aligned position before applying
+    /// `voxel + corner·stride`, so all voxels in one footprint resolve to
+    /// the same byte-equal world position.
+    ///
+    /// `self_stride` is self's own LOD stride. A single-axis-OOB cell is
+    /// routed through [`read_corner`] to the neighbor and decoded with
+    /// the **neighbor's** stride (the corner was encoded in the
+    /// neighbor's frame). Two-or-three-axis OOB returns `None` — the
+    /// cluster edge/corner seam gap documented at the module level; it is
+    /// left as-is here (not a watertightness fix).
+    fn cell_vertex(&self, cell_voxel: [i32; 3], self_stride: i32) -> Option<[f32; 3]> {
+        let dim = CLUSTER_DIM as i32;
+        let in_x = (0..dim).contains(&cell_voxel[0]);
+        let in_y = (0..dim).contains(&cell_voxel[1]);
+        let in_z = (0..dim).contains(&cell_voxel[2]);
+        let oob_count = u32::from(!in_x) + u32::from(!in_y) + u32::from(!in_z);
+        if oob_count >= 2 {
+            return None;
+        }
+
+        let (voxel, decode_stride) = if oob_count == 0 {
+            let v = self.cluster.get(
+                LocalCoord::new(
+                    cell_voxel[0] as u32,
+                    cell_voxel[1] as u32,
+                    cell_voxel[2] as u32,
+                )
+                .expect("in range"),
+            );
+            (v, self_stride)
+        } else if !single_axis_face_neighbor_present(self.neighbors, cell_voxel) {
+            return None;
+        } else {
+            let neighbor_lod = face_neighbor_lod(self.neighbors, cell_voxel)
+                .expect("single-axis OOB + neighbor present implies a face neighbor");
+            let v = read_corner(
+                self.cluster,
+                self.neighbors,
+                cell_voxel[0],
+                cell_voxel[1],
+                cell_voxel[2],
+            );
+            (v, neighbor_lod.stride() as i32)
+        };
+
+        // Snap `cell_voxel` to the decode stride so every voxel in a cell
+        // footprint produces the same world position.
+        let snapped = [
+            cell_voxel[0].div_euclid(decode_stride) * decode_stride,
+            cell_voxel[1].div_euclid(decode_stride) * decode_stride,
+            cell_voxel[2].div_euclid(decode_stride) * decode_stride,
+        ];
+
+        let [dx, dy, dz] = voxel.corner().to_components();
+        let fs = decode_stride as f32;
+        Some([
+            snapped[0] as f32 + dx * fs,
+            snapped[1] as f32 + dy * fs,
+            snapped[2] as f32 + dz * fs,
+        ])
+    }
+}
 
 /// One flat-shaded mesh vertex in cluster-local voxel units. Field-for-
 /// field convertible to `flicker-render`'s `MeshVertex` — the example does
@@ -123,8 +316,7 @@ impl ClusterMesh {
         }
         use std::collections::HashMap;
 
-        let mut by_pos: HashMap<[u32; 3], u32> =
-            HashMap::with_capacity(self.vertices.len());
+        let mut by_pos: HashMap<[u32; 3], u32> = HashMap::with_capacity(self.vertices.len());
         let mut new_vertices: Vec<ClusterVertex> = Vec::with_capacity(self.vertices.len());
         // Parallel buffers for normal accumulation. We could store the
         // running sum in the vertex itself, but keeping them separate
@@ -195,6 +387,12 @@ impl ClusterMesh {
 #[must_use]
 pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> ClusterMesh {
     let mut out = ClusterMesh::default();
+    // The single read surface: every voxel/field read below goes through
+    // this, so emission code never holds a bare `&Cluster` and can't take
+    // a coarse-local sample (see `FieldReader` — MESH-3). `neighbors` is
+    // still read directly for *neighbor-LOD config* (the adjacency assert
+    // and `per_face_stride`), which are not field reads.
+    let reader = FieldReader::new(cluster, neighbors);
     let stride = lod.stride() as i32;
     let sample_dim = lod.sample_dim() as i32;
 
@@ -243,7 +441,7 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
             for gx in 0..sample_dim {
                 let g_sample = [gx, gy, gz];
                 let g_voxel = sample_to_voxel(g_sample, stride);
-                let s_g = is_solid_in_range(cluster, g_voxel);
+                let s_g = reader.solid_in_range(g_voxel);
 
                 for axis_a in 0..3 {
                     // Defer to the boundary pass when this edge lives in
@@ -258,10 +456,13 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                     let n_voxel = sample_to_voxel(n_sample, stride);
 
                     let s_n = if n_sample[axis_a] < sample_dim {
-                        is_solid_in_range(cluster, n_voxel)
+                        reader.solid_in_range(n_voxel)
                     } else if has_face_neighbor(neighbors, axis_a, true) {
-                        is_solid_with_neighbors(cluster, neighbors, n_voxel)
+                        reader.solid(n_voxel)
                     } else {
+                        // +neighbor is OOB and there is no face neighbor:
+                        // a true world edge — leave it open (do NOT read,
+                        // which would return empty and spuriously close it).
                         continue;
                     };
                     if s_g == s_n {
@@ -274,8 +475,7 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                         sample_to_voxel(cell_coord(g_sample, axis_a, -1, -1), stride),
                         sample_to_voxel(cell_coord(g_sample, axis_a, 0, -1), stride),
                     ];
-                    let Some(positions) =
-                        resolve_cell_vertices(cluster, neighbors, &cells_voxel, stride)
+                    let Some(positions) = resolve_cell_vertices(&reader, &cells_voxel, stride)
                     else {
                         continue;
                     };
@@ -284,7 +484,7 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
                     expected_normal[axis_a] = if s_g { 1.0 } else { -1.0 };
 
                     let solid_endpoint = if s_g { g_voxel } else { n_voxel };
-                    let material = solid_material(cluster, neighbors, solid_endpoint);
+                    let material = reader.material(solid_endpoint);
 
                     push_quad(&mut out, positions, expected_normal, material);
                 }
@@ -304,8 +504,7 @@ pub fn mesh(cluster: &Cluster, neighbors: &NeighborContext<'_>, lod: Lod) -> Clu
         }
         emit_boundary_face(
             &mut out,
-            cluster,
-            neighbors,
+            &reader,
             axis,
             false,
             s_o,
@@ -346,10 +545,7 @@ fn main_loop_defers(
 ) -> bool {
     for face_axis in 0..3 {
         let neg = 2 * face_axis;
-        if per_face_stride[neg] < stride
-            && g_sample[face_axis] == 0
-            && axis_a != face_axis
-        {
+        if per_face_stride[neg] < stride && g_sample[face_axis] == 0 && axis_a != face_axis {
             return true;
         }
     }
@@ -377,8 +573,7 @@ fn main_loop_defers(
 /// the rule only suppresses against faces that are actually overriding.
 fn emit_boundary_face(
     out: &mut ClusterMesh,
-    cluster: &Cluster,
-    neighbors: &NeighborContext<'_>,
+    reader: &FieldReader,
     face_axis: usize,
     positive: bool,
     s_o: i32,
@@ -406,7 +601,7 @@ fn emit_boundary_face(
                 continue;
             }
 
-            let s_g = is_solid_with_neighbors(cluster, neighbors, g_voxel);
+            let s_g = reader.solid(g_voxel);
 
             for axis_a in 0..3 {
                 // -side rows only emit tangent (in-axis) edges; +side
@@ -419,10 +614,11 @@ fn emit_boundary_face(
                 let n_voxel = sample_to_voxel(n_sample, s_o);
 
                 let s_n = if n_sample[axis_a] < n_o {
-                    is_solid_with_neighbors(cluster, neighbors, n_voxel)
-                } else if has_face_neighbor(neighbors, axis_a, true) {
-                    is_solid_with_neighbors(cluster, neighbors, n_voxel)
+                    reader.solid(n_voxel)
+                } else if reader.has_face_neighbor(axis_a, true) {
+                    reader.solid(n_voxel)
                 } else {
+                    // True world edge (no neighbor): leave it open.
                     continue;
                 };
                 if s_g == s_n {
@@ -435,8 +631,7 @@ fn emit_boundary_face(
                     sample_to_voxel(cell_coord(g_sample, axis_a, -1, -1), s_o),
                     sample_to_voxel(cell_coord(g_sample, axis_a, 0, -1), s_o),
                 ];
-                let Some(positions) =
-                    resolve_cell_vertices(cluster, neighbors, &cells_voxel, self_stride)
+                let Some(positions) = resolve_cell_vertices(reader, &cells_voxel, self_stride)
                 else {
                     continue;
                 };
@@ -445,7 +640,7 @@ fn emit_boundary_face(
                 expected_normal[axis_a] = if s_g { 1.0 } else { -1.0 };
 
                 let solid_endpoint = if s_g { g_voxel } else { n_voxel };
-                let material = solid_material(cluster, neighbors, solid_endpoint);
+                let material = reader.material(solid_endpoint);
                 push_quad(out, positions, expected_normal, material);
             }
         }
@@ -521,22 +716,21 @@ fn face_neighbor_lod(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> Option
 }
 
 /// Resolve the 4-cell gather (cells in cluster-local voxel coords) to
-/// 4 vertex positions. A cell whose voxel coord is in `[0, CLUSTER_DIM)`
-/// on every axis is read from `cluster`; one with a single coord OOB is
-/// routed to the matching face neighbor via [`read_corner`] and its
+/// 4 vertex positions, all reads going through `reader`. A cell in
+/// `[0, CLUSTER_DIM)` on every axis reads self's storage; one with a
+/// single coord OOB is routed to the matching face neighbor and its
 /// stored corner is decoded into self's frame. Two-or-three-axis OOB
 /// returns `None` (the quad is skipped). `self_stride` is the in-self
 /// decode stride (the cluster's own LOD stride), independent of how
 /// the caller's iteration walks voxel space.
 fn resolve_cell_vertices(
-    cluster: &Cluster,
-    neighbors: &NeighborContext<'_>,
+    reader: &FieldReader,
     cells_voxel: &[[i32; 3]; 4],
     self_stride: i32,
 ) -> Option<[[f32; 3]; 4]> {
     let mut out = [[0.0_f32; 3]; 4];
     for (i, &cv) in cells_voxel.iter().enumerate() {
-        out[i] = cell_vertex(cluster, neighbors, cv, self_stride)?;
+        out[i] = reader.cell_vertex(cv, self_stride)?;
     }
     Some(out)
 }
@@ -657,68 +851,6 @@ fn cell_coord(g: [i32; 3], axis_a: usize, db: i32, dc: i32) -> [i32; 3] {
     out
 }
 
-/// Vertex position for a cell whose min-corner voxel is `cell_voxel`
-/// in self's cluster-local frame.
-///
-/// Contour stores the same CornerVector at every voxel inside an
-/// active LOD-cell's footprint — cell-units relative to that cell's
-/// min-corner with self's stride. Decode therefore snaps `cell_voxel`
-/// down to the nearest stride-aligned position before applying
-/// `voxel + corner·stride`, so all voxels in one footprint resolve to
-/// the same byte-equal world position (no per-voxel-encoding drift).
-///
-/// `self_stride` is self's own LOD stride. For single-axis-OOB cells,
-/// the read is routed through [`read_corner`] to the neighbor, and
-/// the decode uses the **neighbor's** stride — both for the snap and
-/// for the scale — because the corner stored in the neighbor was
-/// encoded in the neighbor's frame. Multi-axis OOB returns `None`.
-fn cell_vertex(
-    cluster: &Cluster,
-    neighbors: &NeighborContext<'_>,
-    cell_voxel: [i32; 3],
-    self_stride: i32,
-) -> Option<[f32; 3]> {
-    let dim = CLUSTER_DIM as i32;
-    let in_x = (0..dim).contains(&cell_voxel[0]);
-    let in_y = (0..dim).contains(&cell_voxel[1]);
-    let in_z = (0..dim).contains(&cell_voxel[2]);
-    let oob_count = u32::from(!in_x) + u32::from(!in_y) + u32::from(!in_z);
-    if oob_count >= 2 {
-        return None;
-    }
-
-    let (voxel, decode_stride) = if oob_count == 0 {
-        let v = cluster.get(
-            LocalCoord::new(cell_voxel[0] as u32, cell_voxel[1] as u32, cell_voxel[2] as u32)
-                .expect("in range"),
-        );
-        (v, self_stride)
-    } else if !single_axis_face_neighbor_present(neighbors, cell_voxel) {
-        return None;
-    } else {
-        let neighbor_lod = face_neighbor_lod(neighbors, cell_voxel)
-            .expect("single-axis OOB + neighbor present implies a face neighbor");
-        let v = read_corner(cluster, neighbors, cell_voxel[0], cell_voxel[1], cell_voxel[2]);
-        (v, neighbor_lod.stride() as i32)
-    };
-
-    // Snap `cell_voxel` to the decode stride so every voxel in a cell
-    // footprint produces the same world position.
-    let snapped = [
-        cell_voxel[0].div_euclid(decode_stride) * decode_stride,
-        cell_voxel[1].div_euclid(decode_stride) * decode_stride,
-        cell_voxel[2].div_euclid(decode_stride) * decode_stride,
-    ];
-
-    let [dx, dy, dz] = voxel.corner().to_components();
-    let fs = decode_stride as f32;
-    Some([
-        snapped[0] as f32 + dx * fs,
-        snapped[1] as f32 + dy * fs,
-        snapped[2] as f32 + dz * fs,
-    ])
-}
-
 #[inline]
 fn has_face_neighbor(neighbors: &NeighborContext<'_>, axis: usize, positive: bool) -> bool {
     neighbor_at(neighbors, axis, positive).is_some()
@@ -727,10 +859,7 @@ fn has_face_neighbor(neighbors: &NeighborContext<'_>, axis: usize, positive: boo
 /// `true` iff `coord` has exactly one OOB axis AND the matching face
 /// neighbor is present. (Caller is expected to have already filtered
 /// out multi-axis OOB.)
-fn single_axis_face_neighbor_present(
-    neighbors: &NeighborContext<'_>,
-    coord: [i32; 3],
-) -> bool {
+fn single_axis_face_neighbor_present(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> bool {
     let dim = CLUSTER_DIM as i32;
     for axis in 0..3 {
         let c = coord[axis];
@@ -744,37 +873,6 @@ fn single_axis_face_neighbor_present(
     // No axis OOB — caller used this incorrectly, but treat as "yes,
     // a read is possible" (it's all self-storage).
     true
-}
-
-/// Solidity test for an arbitrary voxel, routing OOB through
-/// [`NeighborContext`]. With no neighbor on the relevant face, returns
-/// `false` (matches the historical world-boundary-is-empty default).
-fn is_solid_with_neighbors(
-    cluster: &Cluster,
-    neighbors: &NeighborContext<'_>,
-    g: [i32; 3],
-) -> bool {
-    read_corner(cluster, neighbors, g[0], g[1], g[2])
-        .state()
-        .is_filled()
-}
-
-#[inline]
-fn is_solid_in_range(cluster: &Cluster, g: [i32; 3]) -> bool {
-    let coord = LocalCoord::new(g[0] as u32, g[1] as u32, g[2] as u32)
-        .expect("caller verified range");
-    cluster.get(coord).state().is_filled()
-}
-
-/// Material of the solid endpoint, with OOB routed through neighbors.
-fn solid_material(
-    cluster: &Cluster,
-    neighbors: &NeighborContext<'_>,
-    endpoint: [i32; 3],
-) -> u32 {
-    read_corner(cluster, neighbors, endpoint[0], endpoint[1], endpoint[2])
-        .material()
-        .raw()
 }
 
 #[inline]
@@ -926,10 +1024,9 @@ mod tests {
             assert!((*i as usize) < m.vertices.len());
         }
         for v in &m.vertices {
-            let len = (v.normal[0] * v.normal[0]
-                + v.normal[1] * v.normal[1]
-                + v.normal[2] * v.normal[2])
-                .sqrt();
+            let len =
+                (v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2])
+                    .sqrt();
             assert!(
                 (len - 1.0).abs() < 1e-3,
                 "normal not unit-length: {:?}",
@@ -990,9 +1087,8 @@ mod tests {
         m.indices
             .chunks_exact(3)
             .filter(|t| {
-                t.iter().all(|i| {
-                    (m.vertices[*i as usize].position[0] - wx).abs() < tol
-                })
+                t.iter()
+                    .all(|i| (m.vertices[*i as usize].position[0] - wx).abs() < tol)
             })
             .count()
     }
@@ -1065,11 +1161,7 @@ mod tests {
         assert_eq!(voxel_via_b.corner(), v_a.corner());
 
         let b_local = [-1.0 + dx, 127.0 + dy, 100.0 + dz];
-        let b_world = [
-            CLUSTER_DIM as f32 + b_local[0],
-            b_local[1],
-            b_local[2],
-        ];
+        let b_world = [CLUSTER_DIM as f32 + b_local[0], b_local[1], b_local[2]];
         // Both world positions byte-equal.
         assert_eq!(world_a, b_world);
     }
@@ -1206,8 +1298,8 @@ mod tests {
             interior_unshared.iter().take(10).collect::<Vec<_>>()
         );
         // Expected perimeter: 2*255 z-runs + 2*767 x-runs = 2044.
-        let expected_perimeter = 2 * (CLUSTER_DIM as usize - 1)
-            + 2 * (3 * CLUSTER_DIM as usize - 1);
+        let expected_perimeter =
+            2 * (CLUSTER_DIM as usize - 1) + 2 * (3 * CLUSTER_DIM as usize - 1);
         assert_eq!(
             boundary_count, expected_perimeter,
             "world-perimeter edge count mismatch"
@@ -1251,8 +1343,7 @@ mod tests {
             ]
         };
         let mut verts_q: Vec<[i64; 3]> = Vec::new();
-        let mut lookup: std::collections::HashMap<[i64; 3], u32> =
-            std::collections::HashMap::new();
+        let mut lookup: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
         let mut triangles: Vec<[u32; 3]> = Vec::new();
         for tri in m.indices.chunks_exact(3) {
             let mut idx = [0u32; 3];
@@ -1350,10 +1441,7 @@ mod tests {
     /// combined triangle list. This is the real watertightness check —
     /// unshared here means a genuine gap or world-boundary edge, not a
     /// per-mesh artifact of where the seam emission lives.
-    fn combined_edge_use_totals(
-        ids: &[ClusterId],
-        meshes: &[ClusterMesh],
-    ) -> (usize, usize) {
+    fn combined_edge_use_totals(ids: &[ClusterId], meshes: &[ClusterMesh]) -> (usize, usize) {
         use std::collections::HashMap;
         let q = |p: [f32; 3]| -> [i64; 3] {
             [
@@ -1410,9 +1498,7 @@ mod tests {
     /// established for uniform LOD.
     #[test]
     fn flat_field_3x3_centre_lod1_seam_counts() {
-        fn build(
-            center_lod: u8,
-        ) -> (Vec<ClusterId>, Vec<ClusterMesh>) {
+        fn build(center_lod: u8) -> (Vec<ClusterId>, Vec<ClusterMesh>) {
             let lod_for = |x: u16, z: u16| if x == 1 && z == 1 { center_lod } else { 0 };
             let ids: Vec<ClusterId> = (0..3u16)
                 .flat_map(|x| (0..3u16).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
@@ -1547,7 +1633,7 @@ mod tests {
         // b-voxel (0, 126, 0). This is B's surface-straddling cell at
         // sample (0, 63, 0) (y spans [126, 128]); B's contour stored a
         // corner ≈ (0.5, 1.0, 0.5) here, on +Y face = world y=128.
-        let pos = cell_vertex(&a, &neighbors, [256, 126, 0], 1);
+        let pos = FieldReader::new(&a, &neighbors).cell_vertex([256, 126, 0], 1);
         let pos = pos.expect("read across to B should resolve");
         // Decoded with B's stride (2), the cell_voxel = (256, 126, 0)
         // in A's local frame, corner ≈ (0.5, 1.0, 0.5) → vertex
@@ -1587,10 +1673,13 @@ mod tests {
         };
 
         // From A's side: cell at sample (255, 127, 100) — in-storage.
-        let v_a =
-            cell_vertex(&a, &NeighborContext::none(), [255, 127, 100], 1).expect("in range");
+        let v_a = FieldReader::new(&a, &NeighborContext::none())
+            .cell_vertex([255, 127, 100], 1)
+            .expect("in range");
         // From B's side: cell at sample (-1, 127, 100) — read across.
-        let v_b = cell_vertex(&b, &nb_b, [-1, 127, 100], 1).expect("read across");
+        let v_b = FieldReader::new(&b, &nb_b)
+            .cell_vertex([-1, 127, 100], 1)
+            .expect("read across");
 
         // World positions: A's vertex is at v_a, B's vertex is at
         // v_b + CLUSTER_DIM on X.

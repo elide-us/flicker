@@ -42,6 +42,7 @@ pub mod heightmap;
 mod local_coord;
 mod material;
 mod mesh;
+mod nav;
 mod neighbor;
 pub mod primitive;
 mod qef;
@@ -57,6 +58,7 @@ pub use corner_vector::CornerVector;
 pub use local_coord::LocalCoord;
 pub use material::Material;
 pub use mesh::{mesh, ClusterMesh, ClusterVertex};
+pub use nav::{cluster_center_world, in_nav_rings, ClusterNav, NAV_DIM, NAV_RING_OUTER_FT};
 pub use neighbor::{FaceDir, Lod, NeighborContext};
 pub use primitive::{
     Cone, Cube, Cylinder, FlatField, HalfCylinder, HalfSphere, HeightField, Hermite, Primitive,

@@ -17,7 +17,7 @@
 //!   * Escape: quit.
 //!
 //! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
-//! loaded at startup via `flicker-script`) — three clickable
+//! loaded at startup via `flicker-script`) — four clickable
 //! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
 //! handling:
 //!   * Wireframe overlay on top of the solid mesh.
@@ -27,6 +27,8 @@
 //!     the contour's QEF placed each active cell's dual vertex.
 //!   * Center cluster LOD — flips the centre cluster of the 3×3 field
 //!     between LOD 0 and LOD 1, exercising the cross-LOD seam.
+//!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
+//!     floor-to-floor links between walkable-adjacent columns.
 
 use std::time::Duration;
 
@@ -38,8 +40,9 @@ use flicker::render::{
 };
 use flicker::script::{HudCommand, ScriptHost};
 use flicker_voxel::{
-    contour, BakedCluster, Cluster, ClusterId, ClusterMap, CornerVector, LocalCoord, Lod, Material,
-    NeighborContext, Scene, CLUSTER_DIM,
+    cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
+    ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext, Scene,
+    CLUSTER_DIM, NAV_DIM,
 };
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
@@ -62,6 +65,14 @@ struct VoxelCluster {
     /// One mesh handle per cluster, paired with the cluster's id so
     /// `render` can draw each at its world offset.
     meshes: Vec<(ClusterId, MeshHandle)>,
+
+    /// LOD2 walkable surface per cluster, derived on the load path
+    /// alongside the mesh and gated to rings 0–2 (§4.6). Nothing
+    /// consumes it yet — the walking camera is follow-up work — so it
+    /// is retained here purely to keep nav on the existing load path,
+    /// ready to drop onto the ring scheduler's worker queue unchanged
+    /// when that lands.
+    navs: Vec<(ClusterId, ClusterNav)>,
 
     /// First-person camera state.
     position: Vec3,
@@ -88,10 +99,18 @@ struct VoxelCluster {
     /// State of the script's `"center_lod"` checkbox on the previous
     /// frame, so we rebuild the field only on the toggle edge.
     prev_center_lod_on: bool,
+    /// Draw the LOD2 navmesh as a magenta wireframe. Mirrors the
+    /// script's `"navmesh"` checkbox, refreshed each `update`.
+    navmesh_on: bool,
     /// Cached line segments: from each stored voxel's world grid coord
     /// to its decoded `CornerVector` tip, across all clusters in the
     /// field.
     corner_arrows: Vec<(Vec3, Vec3)>,
+    /// Cached navmesh wireframe: one world-space segment per pair of
+    /// walkable-linked adjacent columns, across all clusters. Rebuilt in
+    /// [`Self::rebuild`] alongside the per-cluster navs (`floor_at` +
+    /// `linked`); drawn each frame when `navmesh_on`.
+    navmesh_segments: Vec<(Vec3, Vec3)>,
 
     /// LOD level of the centre cluster of the 3×3 field. Toggled
     /// between 0 (uniform with neighbours) and 1 (coarser than its
@@ -127,6 +146,7 @@ impl Default for VoxelCluster {
             map: ClusterMap::new(),
             white: None,
             meshes: Vec::new(),
+            navs: Vec::new(),
             position: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
@@ -137,7 +157,9 @@ impl Default for VoxelCluster {
             wireframe_on: false,
             corner_arrows_on: false,
             prev_center_lod_on: false,
+            navmesh_on: false,
             corner_arrows: Vec::new(),
+            navmesh_segments: Vec::new(),
             center_lod_level: 0,
             needs_rebuild: false,
             pick_meshes: Vec::new(),
@@ -194,7 +216,9 @@ const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 const HUD_PANEL_X0: f32 = 12.0;
 const HUD_PANEL_Y0: f32 = 152.0;
 const HUD_PANEL_X1: f32 = 280.0;
-const HUD_PANEL_Y1: f32 = 260.0;
+// Four checkbox rows: the Lua panel's last box bottom is
+// `ORIGIN_Y + 3*ROW_H + BOX = 180 + 78 + 18 = 276`; pad to ~10px.
+const HUD_PANEL_Y1: f32 = 286.0;
 
 impl VoxelCluster {
     /// `true` when the cursor sits on the scripted HUD's checkbox panel
@@ -553,6 +577,16 @@ impl VoxelCluster {
         // neighbor's stored LOD is what mesh uses to drive cross-LOD
         // stride adjustments at the boundary layer.
         let mut new_meshes: Vec<(ClusterId, MeshHandle)> = Vec::new();
+        // LOD2 nav surfaces, derived on this same load path (§4.7) and
+        // gated to rings 0–2 (§4.6). The camera position at rebuild time
+        // is the ring origin; in this 3×3 field every cluster falls
+        // inside ring 2 so all of them get nav.
+        let mut new_navs: Vec<(ClusterId, ClusterNav)> = Vec::new();
+        // Magenta navmesh wireframe segments, accumulated across clusters
+        // as each nav is derived; drawn when the HUD's navmesh toggle is on.
+        let mut new_navmesh_segments: Vec<(Vec3, Vec3)> = Vec::new();
+        let camera = [self.position.x, self.position.y, self.position.z];
+        let mut total_walkable_cols = 0_usize;
         // Watertight diagnostic — accumulated across all clusters, logged
         // at the end of rebuild. `total_unshared` mixes real gaps with
         // legitimate world-boundary edges; `total_over_shared` is always
@@ -561,7 +595,6 @@ impl VoxelCluster {
         let mut total_unshared = 0_usize;
         let mut total_over_shared = 0_usize;
         let mut sample_gaps: Vec<(ClusterId, [f32; 3], [f32; 3])> = Vec::new();
-        let mut sample_over: Vec<(ClusterId, [f32; 3], [f32; 3], u32)> = Vec::new();
         for id in &ids {
             let x = id.x();
             let z = id.z();
@@ -587,6 +620,21 @@ impl VoxelCluster {
             let cluster = self.map.get(*id).expect("just inserted");
             let self_lod = Lod::new(id.lod()).expect("valid lod");
             let cm = flicker_voxel::mesh(cluster, &neighbors, self_lod);
+
+            // Derive the LOD2 walkable surface from the state field
+            // (never the mesh) for clusters inside rings 0–2. compute_nav
+            // is pure and runs after meshing only to sit on the existing
+            // load path; it does not read `cm`. Nothing consumes the
+            // result yet — it is stashed for the walking-camera follow-up.
+            if in_nav_rings(camera, cluster_center_world(*id)) {
+                let nav = ClusterNav::compute_nav(cluster, &neighbors);
+                total_walkable_cols += (0..NAV_DIM as u8)
+                    .flat_map(|x| (0..NAV_DIM as u8).map(move |z| (x, z)))
+                    .filter(|&(x, z)| nav.floor_at(x, z).is_some())
+                    .count();
+                append_navmesh_segments(&nav, *id, cluster, &neighbors, &mut new_navmesh_segments);
+                new_navs.push((*id, nav));
+            }
 
             // Run the watertight check before upload (we need the
             // CPU-side ClusterMesh and its position data).
@@ -650,6 +698,8 @@ impl VoxelCluster {
             self.pick_meshes.push((*id, pick_verts, cm.indices.clone()));
         }
         self.meshes = new_meshes;
+        self.navs = new_navs;
+        self.navmesh_segments = new_navmesh_segments;
 
         tracing::info!(
             "rebuild: {} clusters, {} edges total, {} unshared (gaps + world-boundary), {} over-shared",
@@ -657,6 +707,12 @@ impl VoxelCluster {
             total_edges,
             total_unshared,
             total_over_shared,
+        );
+        tracing::info!(
+            "nav: derived LOD2 surfaces for {} of {} clusters (rings 0–2), {} walkable columns total",
+            self.navs.len(),
+            ids.len(),
+            total_walkable_cols,
         );
         for (id, a, b) in &sample_gaps {
             tracing::info!(
@@ -686,6 +742,93 @@ impl VoxelCluster {
             }
         }
         self.corner_arrows = arrows;
+    }
+}
+
+/// Voxel-space lift applied to navmesh wireframe segments so the magenta
+/// grid hovers just clear of the grey surface mesh instead of z-fighting
+/// it. 1 voxel = 6 inches; tune up if it reads as buried.
+const NAVMESH_VIZ_LIFT: f32 = 1.0;
+
+/// World-space position of nav column `(x, z)` at floor index `floor` in
+/// the cluster whose local origin is `origin`: the LOD2 sample position
+/// horizontally (`origin + sample * stride`), the floor height
+/// vertically (`origin_y + floor * stride`), lifted clear of the mesh.
+///
+/// `x`/`z` may be `NAV_DIM` (64) — the sample one step past a `+X`/`+Z`
+/// boundary, which lands exactly on the neighbour's near edge in *this*
+/// cluster's own frame. That is how a seam segment's far endpoint is
+/// placed without ever consulting the neighbour's origin.
+fn nav_column_point(origin: Vec3, x: u8, z: u8, floor: u8) -> Vec3 {
+    // LOD2 sample stride in voxels: CLUSTER_DIM / NAV_DIM = 256 / 64 = 4.
+    let stride = CLUSTER_DIM as f32 / NAV_DIM as f32;
+    origin
+        + Vec3::new(
+            x as f32 * stride,
+            floor as f32 * stride + NAVMESH_VIZ_LIFT,
+            z as f32 * stride,
+        )
+}
+
+/// Append this cluster's complete navmesh wireframe to `out`: one
+/// segment per pair of walkable-linked 4-adjacent columns, interior
+/// **and** across cluster boundaries. Only each column's `+X` and `+Z`
+/// neighbour is visited, so every link is emitted exactly once — the
+/// same low-side-owns convention the mesher uses for seam quads.
+///
+/// Boundary links are read through `neighbors`, this cluster's own
+/// references to its neighbours' state fields, via
+/// [`ClusterNav::linked_across`] / [`ClusterNav::floor_across`] — exactly
+/// how the mesher reads neighbour voxels while meshing. The far endpoint
+/// is placed at the sample one past the boundary (`NAV_DIM`) in *this*
+/// cluster's frame, which lands on the neighbour's near edge. So the seam
+/// is generated correctly in this single pass, never stitched together
+/// from independently-built per-cluster navs.
+fn append_navmesh_segments(
+    nav: &ClusterNav,
+    id: ClusterId,
+    cluster: &Cluster,
+    neighbors: &NeighborContext<'_>,
+    out: &mut Vec<(Vec3, Vec3)>,
+) {
+    let off = id.world_offset();
+    let origin = Vec3::new(off[0], off[1], off[2]);
+    let dim = NAV_DIM as u8; // 64
+    let last = dim - 1; // 63
+    for x in 0..dim {
+        for z in 0..dim {
+            let Some(f) = nav.floor_at(x, z) else {
+                continue;
+            };
+            let here = nav_column_point(origin, x, z, f);
+
+            // Interior +X / +Z links. `linked` is true only when both
+            // columns have a floor, so the neighbour lookup is infallible.
+            if x + 1 < dim && nav.linked((x, z), (x + 1, z)) {
+                let fx = nav.floor_at(x + 1, z).expect("linked implies a floor");
+                out.push((here, nav_column_point(origin, x + 1, z, fx)));
+            }
+            if z + 1 < dim && nav.linked((x, z), (x, z + 1)) {
+                let fz = nav.floor_at(x, z + 1).expect("linked implies a floor");
+                out.push((here, nav_column_point(origin, x, z + 1, fz)));
+            }
+
+            // Seam +X / +Z links at the cluster's far edge: read the
+            // neighbour column through our references and place its
+            // endpoint at the virtual sample `dim` in our own frame.
+            if x == last && nav.linked_across(cluster, neighbors, (x, z), FaceDir::PosX) {
+                let nf = nav
+                    .floor_across(cluster, neighbors, (x, z), FaceDir::PosX)
+                    .expect("linked_across implies a neighbour floor");
+                out.push((here, nav_column_point(origin, dim, z, nf)));
+            }
+            if z == last && nav.linked_across(cluster, neighbors, (x, z), FaceDir::PosZ) {
+                let nf = nav
+                    .floor_across(cluster, neighbors, (x, z), FaceDir::PosZ)
+                    .expect("linked_across implies a neighbour floor");
+                out.push((here, nav_column_point(origin, x, dim, nf)));
+            }
+        }
     }
 }
 
@@ -721,6 +864,7 @@ impl App for VoxelCluster {
                 Ok(toggles) => {
                     self.wireframe_on = toggles.is_on("wireframe");
                     self.corner_arrows_on = toggles.is_on("corner_arrows");
+                    self.navmesh_on = toggles.is_on("navmesh");
 
                     // Re-contour + re-mesh only on the centre-LOD edge;
                     // the rebuild itself happens in `render` (needs
@@ -844,6 +988,13 @@ impl App for VoxelCluster {
             renderer.draw_lines(&self.corner_arrows, [1.0, 0.6, 0.15, 1.0]);
         }
 
+        // Navmesh wireframe: the LOD2 walkable surface as floor-to-floor
+        // links between walkable-adjacent columns. Magenta so it reads
+        // against both the grey mesh and the orange corner arrows.
+        if self.navmesh_on && !self.navmesh_segments.is_empty() {
+            renderer.draw_lines(&self.navmesh_segments, [1.0, 0.0, 1.0, 1.0]);
+        }
+
         // HUD text.
         renderer.draw_text(
             &format!(
@@ -888,9 +1039,10 @@ impl App for VoxelCluster {
         // Diagnostics the checkboxes don't convey on their own.
         renderer.draw_text(
             &format!(
-                "corner arrows stored: {}   centre LOD: {}  (other clusters: LOD 0)",
+                "corner arrows stored: {}   centre LOD: {}  (other clusters: LOD 0)   nav clusters (rings 0–2): {}",
                 self.corner_arrows.len(),
                 self.center_lod_level,
+                self.navs.len(),
             ),
             Vec2::new(16.0, 104.0),
             16.0,

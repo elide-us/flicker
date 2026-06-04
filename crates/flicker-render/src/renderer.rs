@@ -192,6 +192,15 @@ impl Renderer {
     /// Upload a 3D mesh and return a handle. The mesh persists across
     /// frames; subsequent `draw_mesh(handle, ...)` calls reuse the same
     /// GPU buffers.
+    ///
+    /// **Conformance role (Memory & Resource Architecture spec):** this is
+    /// the upload step of the CPU-mesh → upload → render path — the
+    /// `MESH-1` / §7 `FALLBACK-1` CPU-meshing fallback, explicitly labeled
+    /// as such. It is *not* the steady-state target: per `MESH-1` the
+    /// per-cell contour/QEF should run as a GPU-compute pass producing
+    /// `DeviceResident` geometry that renders with no CPU round trip (and
+    /// no `upload_mesh`). This fallback is the only path built today and is
+    /// kept expressible per `FALLBACK-1`.
     pub fn upload_mesh(&mut self, vertices: &[MeshVertex], indices: MeshIndices<'_>) -> MeshHandle {
         let loaded = self.mesh.upload(&self.device, vertices, indices);
         let id = self.meshes.len() as u32;
