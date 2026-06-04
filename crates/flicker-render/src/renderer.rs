@@ -21,6 +21,7 @@ use winit::window::Window;
 use glam::Vec3;
 
 use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
+use crate::pipeline_billboard::BillboardPipeline;
 use crate::pipeline_lines::LinesPipeline;
 use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline};
 use crate::pipeline_sprite::SpritePipeline;
@@ -48,6 +49,7 @@ pub struct Renderer {
     text: TextPipeline,
     mesh: MeshPipeline,
     lines: LinesPipeline,
+    billboard: BillboardPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -126,6 +128,7 @@ impl Renderer {
         let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
+        let billboard = BillboardPipeline::new(&device, surface_format);
 
         Ok(Self {
             window,
@@ -140,6 +143,7 @@ impl Renderer {
             text,
             mesh,
             lines,
+            billboard,
             depth_texture,
             depth_view,
             textures: Vec::new(),
@@ -175,7 +179,7 @@ impl Renderer {
     /// Upload an RGBA8 image and return a handle. The pixel buffer length
     /// must equal `width * height * 4`.
     pub fn load_texture(&mut self, pixels: &[u8], width: u32, height: u32) -> TextureHandle {
-        let tex = LoadedTexture::from_rgba8(
+        let mut tex = LoadedTexture::from_rgba8(
             &self.device,
             &self.queue,
             &self.sprite.sampler,
@@ -184,6 +188,23 @@ impl Renderer {
             width,
             height,
         );
+        // Also build a bind group for the billboard pipeline so this
+        // texture can be drawn as a world-space billboard atlas.
+        tex.billboard_bind_group =
+            Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("flicker.billboard.texture.bind_group"),
+                layout: &self.billboard.texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&tex.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.billboard.sampler),
+                    },
+                ],
+            }));
         let id = self.textures.len() as u32;
         self.textures.push(tex);
         TextureHandle(id)
@@ -217,6 +238,7 @@ impl Renderer {
         self.text.clear();
         self.mesh.clear();
         self.lines.clear();
+        self.billboard.clear();
     }
 
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
@@ -290,6 +312,27 @@ impl Renderer {
         }
     }
 
+    /// Queue a camera-facing world-space billboard this frame.
+    ///
+    /// `world_position` is the quad centre in world coordinates; `world_size`
+    /// is its full width/height in world units. The quad always faces the
+    /// camera (oriented from the camera's right/up basis) and stays a
+    /// constant world size. `uv_min`/`uv_max` select a region of `texture`
+    /// (full quad is `(0,0)`–`(1,1)`); `color` tints the sampled texel.
+    /// Depth-tested against the 3D scene, so terrain in front occludes it.
+    pub fn draw_billboard(
+        &mut self,
+        texture: TextureHandle,
+        world_position: Vec3,
+        world_size: Vec2,
+        uv_min: Vec2,
+        uv_max: Vec2,
+        color: [f32; 4],
+    ) {
+        self.billboard
+            .push(texture, world_position, world_size, uv_min, uv_max, color);
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
@@ -303,6 +346,8 @@ impl Renderer {
             };
             self.mesh
                 .set_camera_matrix(&self.queue, cam.view_projection(aspect));
+            self.billboard
+                .set_camera(&self.queue, cam.view(), cam.view_projection(aspect));
         }
 
         // Upload buffered geometry/text.
@@ -310,6 +355,7 @@ impl Renderer {
         self.sprite.prepare(&self.device, &self.queue);
         self.mesh.prepare(&self.device, &self.queue);
         self.lines.prepare(&self.device, &self.queue);
+        self.billboard.prepare(&self.device, &self.queue);
         self.text
             .prepare(
                 &self.device,
@@ -371,6 +417,9 @@ impl Renderer {
             // writing); then 2D overlays on top.
             self.mesh.render(&mut pass, &self.meshes);
             self.lines.render(&mut pass);
+            // World-space, depth-tested billboards layer with the 3D scene
+            // (occluded by terrain in front); 2D overlays still draw on top.
+            self.billboard.render(&mut pass, &self.textures);
             self.triangle.render(&mut pass);
             self.sprite.render(&mut pass, &self.textures);
             self.text.render(&mut pass).context("text render failed")?;

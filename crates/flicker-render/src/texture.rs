@@ -14,9 +14,12 @@ pub struct TextureHandle(pub(crate) u32);
 pub(crate) struct LoadedTexture {
     #[allow(dead_code)]
     pub texture: wgpu::Texture,
-    #[allow(dead_code)]
     pub view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
+    /// Bind group for the billboard pipeline's texture layout, built by
+    /// `Renderer::load_texture` so any texture can be used as a billboard
+    /// atlas. `None` until set.
+    pub billboard_bind_group: Option<wgpu::BindGroup>,
     #[allow(dead_code)]
     pub size: (u32, u32),
 }
@@ -80,6 +83,7 @@ impl LoadedTexture {
             texture,
             view,
             bind_group,
+            billboard_bind_group: None,
             size: (width, height),
         }
     }

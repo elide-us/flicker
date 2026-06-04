@@ -17,7 +17,7 @@
 //!   * Escape: quit.
 //!
 //! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
-//! loaded at startup via `flicker-script`) — four clickable
+//! loaded at startup via `flicker-script`) — six clickable
 //! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
 //! handling:
 //!   * Wireframe overlay on top of the solid mesh.
@@ -29,6 +29,11 @@
 //!     between LOD 0 and LOD 1, exercising the cross-LOD seam.
 //!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
 //!     floor-to-floor links between walkable-adjacent columns.
+//!   * Camera-driven LOD — each cluster's LOD follows its distance from
+//!     the camera (smoothed to the mesher's ±1 adjacency invariant),
+//!     re-meshing on a swap. Supersedes the manual centre-LOD toggle.
+//!   * LOD billboards — a digit per cluster, on the navmesh surface at
+//!     the cluster centre, showing that cluster's current LOD.
 
 use std::time::Duration;
 
@@ -112,6 +117,21 @@ struct VoxelCluster {
     /// `linked`); drawn each frame when `navmesh_on`.
     navmesh_segments: Vec<(Vec3, Vec3)>,
 
+    /// Mirrors the script's `"camera_lod"` checkbox: when on, camera
+    /// distance drives each cluster's LOD (see `target_lod_for_cluster`),
+    /// superseding the manual centre-LOD toggle.
+    camera_lod_on: bool,
+    /// Mirrors the script's `"lod_billboards"` checkbox: draw a per-cluster
+    /// LOD-digit billboard on the navmesh surface at the cluster centre.
+    lod_billboards_on: bool,
+    /// Currently-applied per-cluster LOD for the 3×3 field, already smoothed
+    /// to the mesher's ±1 cross-LOD adjacency invariant. `rebuild` meshes to
+    /// this and the billboards display it; recomputed each `update`.
+    lod_field: [[u8; FIELD_DIM as usize]; FIELD_DIM as usize],
+    /// Digit-glyph atlas (digits 0–7) for the LOD billboards, uploaded once
+    /// in `init`.
+    digit_atlas: Option<TextureHandle>,
+
     /// LOD level of the centre cluster of the 3×3 field. Toggled
     /// between 0 (uniform with neighbours) and 1 (coarser than its
     /// four lateral neighbours) by the HUD's centre-LOD checkbox.
@@ -160,6 +180,10 @@ impl Default for VoxelCluster {
             navmesh_on: false,
             corner_arrows: Vec::new(),
             navmesh_segments: Vec::new(),
+            camera_lod_on: false,
+            lod_billboards_on: false,
+            lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
+            digit_atlas: None,
             center_lod_level: 0,
             needs_rebuild: false,
             pick_meshes: Vec::new(),
@@ -216,9 +240,9 @@ const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 const HUD_PANEL_X0: f32 = 12.0;
 const HUD_PANEL_Y0: f32 = 152.0;
 const HUD_PANEL_X1: f32 = 280.0;
-// Four checkbox rows: the Lua panel's last box bottom is
-// `ORIGIN_Y + 3*ROW_H + BOX = 180 + 78 + 18 = 276`; pad to ~10px.
-const HUD_PANEL_Y1: f32 = 286.0;
+// Six checkbox rows: the Lua panel's last box bottom is
+// `ORIGIN_Y + 5*ROW_H + BOX = 180 + 130 + 18 = 328`; pad to ~10px.
+const HUD_PANEL_Y1: f32 = 338.0;
 
 impl VoxelCluster {
     /// `true` when the cursor sits on the scripted HUD's checkbox panel
@@ -376,8 +400,7 @@ impl VoxelCluster {
 fn display_corner(cluster: &Cluster, m: [i32; 3]) -> CornerVector {
     let dim = CLUSTER_DIM as i32;
     if (0..dim).contains(&m[0]) && (0..dim).contains(&m[1]) && (0..dim).contains(&m[2]) {
-        let coord = LocalCoord::new(m[0] as u32, m[1] as u32, m[2] as u32)
-            .expect("range checked");
+        let coord = LocalCoord::new(m[0] as u32, m[1] as u32, m[2] as u32).expect("range checked");
         cluster.get(coord).corner()
     } else {
         CornerVector::DEFAULT
@@ -513,12 +536,12 @@ impl VoxelCluster {
     /// seconds and a `\` press is a deliberate debug action.
     fn rebuild(&mut self, renderer: &mut Renderer) {
         let material = Material::new(1, 1, 0).expect("grey material is in-range");
-        let center_lod = self.center_lod_level;
 
-        // Local LOD lookup that doesn't borrow `self`.
-        let lod_for = |x: u16, z: u16| -> u8 {
-            if x == 1 && z == 1 { center_lod } else { 0 }
-        };
+        // Per-cluster LOD comes from the smoothed `lod_field` (driven by the
+        // camera when "camera_lod" is on, else the manual centre-LOD toggle —
+        // see `update`). Copied out so the closure doesn't borrow `self`.
+        let lod_field = self.lod_field;
+        let lod_for = |x: u16, z: u16| -> u8 { lod_field[x as usize][z as usize] };
 
         self.map = ClusterMap::new();
         self.meshes.clear();
@@ -606,9 +629,17 @@ impl VoxelCluster {
                     .map(|c| (c, Lod::new(lod).expect("valid lod")))
             };
             let neg_x = if x > 0 { nb(x - 1, z) } else { None };
-            let pos_x = if x + 1 < FIELD_DIM { nb(x + 1, z) } else { None };
+            let pos_x = if x + 1 < FIELD_DIM {
+                nb(x + 1, z)
+            } else {
+                None
+            };
             let neg_z = if z > 0 { nb(x, z - 1) } else { None };
-            let pos_z = if z + 1 < FIELD_DIM { nb(x, z + 1) } else { None };
+            let pos_z = if z + 1 < FIELD_DIM {
+                nb(x, z + 1)
+            } else {
+                None
+            };
             let neighbors = NeighborContext {
                 neg_x,
                 pos_x,
@@ -734,8 +765,8 @@ impl VoxelCluster {
                 if voxel.corner() == CornerVector::DEFAULT {
                     continue;
                 }
-                let base = origin_world
-                    + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
+                let base =
+                    origin_world + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
                 let [dx, dy, dz] = voxel.corner().to_components();
                 let tip = base + Vec3::new(dx, dy, dz);
                 arrows.push((base, tip));
@@ -832,6 +863,154 @@ fn append_navmesh_segments(
     }
 }
 
+// ===== Camera-driven LOD policy =====
+
+/// Base distance (voxel units) for the per-cluster LOD policy: a cluster
+/// `2^n` of these from the camera gets LOD `n` (clamped 0–7). Tuned small
+/// (~half a cluster edge) so the 9-cluster field shows visible swaps as the
+/// camera moves — the field is too small to exercise a wide LOD range
+/// otherwise. A bigger field (more clusters) is the follow-up that exercises
+/// the policy properly.
+const LOD_BASE_DISTANCE: f32 = 128.0;
+
+/// Per-cluster target LOD from the camera's world-space distance to the
+/// cluster centre. Lower = finer. `clamp(floor(log2(dist / base)), 0, 7)`,
+/// reusing `flicker_voxel::cluster_center_world` for the centre.
+fn target_lod_for_cluster(camera: Vec3, id: ClusterId) -> u8 {
+    let c = cluster_center_world(id);
+    let distance = (camera - Vec3::new(c[0], c[1], c[2])).length().max(1.0);
+    let raw = (distance / LOD_BASE_DISTANCE).log2().floor() as i32;
+    raw.clamp(0, Lod::MAX.level() as i32) as u8
+}
+
+/// Relax a 3×3 per-cluster LOD field so no 4-adjacent pair differs by more
+/// than one level — the mesher's locked cross-LOD adjacency invariant
+/// (`flicker_voxel::mesh` panics otherwise). Iterates to a fixed point,
+/// raising (coarsening) the finer side of any over-steep pair. Values only
+/// increase and are bounded by the field's max, so it always converges.
+fn smooth_lod_field(field: &mut [[u8; FIELD_DIM as usize]; FIELD_DIM as usize]) {
+    let dim = FIELD_DIM as usize;
+    loop {
+        let mut changed = false;
+        for x in 0..dim {
+            for z in 0..dim {
+                for (nx, nz) in [(x + 1, z), (x, z + 1)] {
+                    if nx >= dim || nz >= dim {
+                        continue;
+                    }
+                    let here = field[x][z];
+                    let there = field[nx][nz];
+                    if here.abs_diff(there) > 1 {
+                        // Raise the finer (lower-LOD) side to one below the
+                        // coarser side, closing the gap to exactly 1.
+                        if here < there {
+                            field[x][z] = there - 1;
+                        } else {
+                            field[nx][nz] = here - 1;
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+// ===== LOD-digit billboard atlas (world-space, on the navmesh surface) =====
+
+/// World-space edge length (voxels) of the LOD-digit billboards.
+const BILLBOARD_SIZE: f32 = 32.0;
+
+// Tiny 5×7 bitmap font for digits 0–7, baked into a texture atlas.
+const GLYPH_W: usize = 5;
+const GLYPH_H: usize = 7;
+const DIGITS: [[u8; GLYPH_H]; 8] = [
+    // 0
+    [
+        0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+    ],
+    // 1
+    [
+        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+    ],
+    // 2
+    [
+        0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+    ],
+    // 3
+    [
+        0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110,
+    ],
+    // 4
+    [
+        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+    ],
+    // 5
+    [
+        0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+    ],
+    // 6
+    [
+        0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+    ],
+    // 7
+    [
+        0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+    ],
+];
+
+const CELL_W: usize = 32;
+const CELL_H: usize = 40;
+const ATLAS_W: usize = CELL_W * 8;
+const ATLAS_H: usize = CELL_H;
+
+/// Build the RGBA8 digit atlas: 8 cells (digits 0–7) side by side, each a
+/// scaled-up white glyph on transparent black.
+fn build_digit_atlas() -> Vec<u8> {
+    const SCALE: usize = 4;
+    let glyph_px_w = GLYPH_W * SCALE;
+    let glyph_px_h = GLYPH_H * SCALE;
+    let margin_x = (CELL_W - glyph_px_w) / 2;
+    let margin_y = (CELL_H - glyph_px_h) / 2;
+
+    let mut pixels = vec![0u8; ATLAS_W * ATLAS_H * 4];
+    for (digit_idx, rows) in DIGITS.iter().enumerate() {
+        let cell_x0 = digit_idx * CELL_W + margin_x;
+        let cell_y0 = margin_y;
+        for (row_idx, &row_bits) in rows.iter().enumerate() {
+            for col in 0..GLYPH_W {
+                let bit = (row_bits >> (GLYPH_W - 1 - col)) & 1;
+                if bit == 0 {
+                    continue;
+                }
+                for dy in 0..SCALE {
+                    for dx in 0..SCALE {
+                        let px = cell_x0 + col * SCALE + dx;
+                        let py = cell_y0 + row_idx * SCALE + dy;
+                        let i = (py * ATLAS_W + px) * 4;
+                        pixels[i] = 0xff;
+                        pixels[i + 1] = 0xff;
+                        pixels[i + 2] = 0xff;
+                        pixels[i + 3] = 0xff;
+                    }
+                }
+            }
+        }
+    }
+    pixels
+}
+
+/// UV sub-rect of the atlas for digit `d` (0–7).
+fn digit_uv_rect(d: u8) -> (Vec2, Vec2) {
+    let cell_w_uv = 1.0 / 8.0;
+    let u0 = d as f32 * cell_w_uv;
+    let u1 = u0 + cell_w_uv;
+    (Vec2::new(u0, 0.0), Vec2::new(u1, 1.0))
+}
+
 impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
         self.rebuild(renderer);
@@ -846,6 +1025,10 @@ impl App for VoxelCluster {
         // 1×1 white pixel — tinted to build solid colored HUD quads.
         // Retained sprite-UI capability; no active widgets yet.
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+
+        // Digit-glyph atlas for the LOD billboards (digits 0–7).
+        self.digit_atlas =
+            Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
@@ -865,16 +1048,41 @@ impl App for VoxelCluster {
                     self.wireframe_on = toggles.is_on("wireframe");
                     self.corner_arrows_on = toggles.is_on("corner_arrows");
                     self.navmesh_on = toggles.is_on("navmesh");
+                    self.camera_lod_on = toggles.is_on("camera_lod");
+                    self.lod_billboards_on = toggles.is_on("lod_billboards");
 
-                    // Re-contour + re-mesh only on the centre-LOD edge;
-                    // the rebuild itself happens in `render` (needs
-                    // `&mut Renderer`).
+                    // Track the manual centre-LOD toggle (used when
+                    // camera-driven LOD is off).
                     let center_on = toggles.is_on("center_lod");
                     if center_on != self.prev_center_lod_on {
                         self.center_lod_level = if center_on { 1 } else { 0 };
-                        self.needs_rebuild = true;
                     }
                     self.prev_center_lod_on = center_on;
+
+                    // Decide the desired per-cluster LOD field: camera-driven
+                    // (smoothed to the mesher's ±1 adjacency invariant) when
+                    // enabled, else the manual centre-LOD field. A change
+                    // triggers a synchronous re-mesh in `render`; the swap
+                    // hitch is the cost of synchronous re-contour — the async
+                    // worker queue that removes it is the next slice.
+                    let mut desired = [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize];
+                    if self.camera_lod_on {
+                        for x in 0..FIELD_DIM {
+                            for z in 0..FIELD_DIM {
+                                desired[x as usize][z as usize] = target_lod_for_cluster(
+                                    self.position,
+                                    ClusterId::new(0, x, 0, z),
+                                );
+                            }
+                        }
+                        smooth_lod_field(&mut desired);
+                    } else {
+                        desired[1][1] = self.center_lod_level;
+                    }
+                    if desired != self.lod_field {
+                        self.lod_field = desired;
+                        self.needs_rebuild = true;
+                    }
                 }
                 Err(e) => tracing::error!("HUD script update failed: {e}"),
             }
@@ -887,9 +1095,7 @@ impl App for VoxelCluster {
         // double-firing on a checkbox click. Right-drag is for look;
         // left-click is for pick. No conflict.
         if input.mouse_left_pressed && !Self::cursor_on_hud(input.mouse_position) {
-            if let Some((id, hit_world)) =
-                self.try_pick(input.mouse_position, renderer.size())
-            {
+            if let Some((id, hit_world)) = self.try_pick(input.mouse_position, renderer.size()) {
                 let p = Self::hit_to_local_p(id, hit_world);
                 tracing::info!(
                     "pick: cluster ({}, {}, {}, lod {}) → world ({:.2}, {:.2}, {:.2}) → p ({}, {}, {})",
@@ -995,6 +1201,44 @@ impl App for VoxelCluster {
             renderer.draw_lines(&self.navmesh_segments, [1.0, 0.0, 1.0, 1.0]);
         }
 
+        // LOD billboards: a digit per cluster, sitting on the navmesh surface
+        // at the cluster centre, showing that cluster's current LOD. World-
+        // space and depth-tested, so terrain in front occludes them.
+        if self.lod_billboards_on {
+            if let Some(atlas) = self.digit_atlas {
+                let half_col = (NAV_DIM / 2) as u8; // centre column of the 64² nav grid
+                let stride = CLUSTER_DIM as f32 / NAV_DIM as f32; // 4 voxels / LOD2 cell
+                let half_edge = CLUSTER_DIM as f32 * 0.5; // cluster-centre offset
+                for (id, nav) in &self.navs {
+                    let off = id.world_offset();
+                    // Surface height from the navmesh centre column; fall back
+                    // to the cluster's volume centre if that column has no floor.
+                    let surface_y = match nav.floor_at(half_col, half_col) {
+                        Some(f) => off[1] + f as f32 * stride,
+                        None => off[1] + half_edge,
+                    };
+                    // Lift the centre by half the quad height so the
+                    // billboard's bottom edge rests on the surface rather than
+                    // its midline (which buries the lower half in the mesh).
+                    let pos = Vec3::new(
+                        off[0] + half_edge,
+                        surface_y + BILLBOARD_SIZE * 0.5,
+                        off[2] + half_edge,
+                    );
+                    let lod = self.lod_field[id.x() as usize][id.z() as usize];
+                    let (uv_min, uv_max) = digit_uv_rect(lod);
+                    renderer.draw_billboard(
+                        atlas,
+                        pos,
+                        Vec2::splat(BILLBOARD_SIZE),
+                        uv_min,
+                        uv_max,
+                        [1.0, 0.95, 0.4, 1.0],
+                    );
+                }
+            }
+        }
+
         // HUD text.
         renderer.draw_text(
             &format!(
@@ -1059,7 +1303,13 @@ impl App for VoxelCluster {
         let pick_line = match self.selection {
             Some((id, p)) => format!(
                 "pick: ({}, {}, {}, lod {}) p = ({}, {}, {})",
-                id.x(), id.y(), id.z(), id.lod(), p[0], p[1], p[2]
+                id.x(),
+                id.y(),
+                id.z(),
+                id.lod(),
+                p[0],
+                p[1],
+                p[2]
             ),
             None => "pick: (none — left-click a face)".to_string(),
         };
@@ -1286,9 +1536,8 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Hand-parse argv — one flag, no need for a CLI crate.
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    // Hand-parse argv — at most one flag, no need for a CLI crate.
+    if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
             "--bake" => return run_bake_mode(),
             "--help" | "-h" => {
