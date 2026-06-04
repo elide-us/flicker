@@ -74,6 +74,7 @@ use crate::neighbor::Lod;
 use crate::primitive::Primitive;
 use crate::qef::Qef;
 use crate::voxel::Voxel;
+use crate::voxel_state::VoxelState;
 
 /// QEF regularization strength toward the mass point. Small enough to leave
 /// well-constrained axes essentially exact, large enough to keep the solve
@@ -218,16 +219,25 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
         }
     }
 
-    // Pass 1: per-voxel material. Solid voxels become overrides with
-    // default corner (the corner is filled in by pass 2 if this voxel
-    // sits inside an active LOD-cell's footprint).
+    // The cluster's bulk-fill material is what every interior solid
+    // voxel reports — set it once here so pass 1 doesn't have to
+    // touch the sparse map.
+    cluster.set_default_material(material);
+
+    // Pass 1: flip the dense state bit for every solid voxel.
+    // Previously this inserted ~8 M HashMap entries (one per solid
+    // voxel) so the mesh's sign-change check could read `material`
+    // at sub-stride positions. The 2-bit state field replaces that
+    // entirely — same physical-state information, ~250× less storage
+    // and ~no allocation. `set_state` is the bit-level fast path; no
+    // surface-map work happens here.
     for vz in 0..voxel_dim {
         for vy in 0..voxel_dim {
             for vx in 0..voxel_dim {
                 if solid_voxel[v_idx(vx, vy, vz)] {
                     let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
                         .expect("in range");
-                    cluster.set(coord, Voxel::new(CornerVector::DEFAULT, material));
+                    cluster.set_state(coord, VoxelState::Solid);
                 }
             }
         }
@@ -241,6 +251,10 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
     // (`snapped_voxel + corner·stride` = the cell's QEF world position
     // — byte-equal from every footprint voxel, no encode-round drift
     // from per-voxel re-quantization).
+    //
+    // Each set call here writes a real surface override (corner is
+    // non-default), so it does insert into the sparse map — but only
+    // ~65 k entries for a heightfield cluster, not 8 M.
     for ((ci, cj, ck), qef) in &active_cell_qef {
         let cell_vx = ci * stride_us;
         let cell_vy = cj * stride_us;
@@ -263,7 +277,10 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
                     let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
                         .expect("in range");
                     let existing = cluster.get(coord);
-                    cluster.set(coord, Voxel::new(*qef, existing.material()));
+                    cluster.set(
+                        coord,
+                        Voxel::new(existing.state(), *qef, existing.material()),
+                    );
                 }
             }
         }
@@ -404,22 +421,40 @@ mod tests {
     }
 
     #[test]
-    fn small_cube_stores_only_solid_voxels() {
+    fn small_cube_state_field_marks_solid_voxels() {
+        // 3³ cube. Solidity is encoded in the dense state field
+        // (set bits at the 27 interior voxel positions) — not in the
+        // sparse override map. The sparse map carries only surface
+        // overrides at the active LOD-0 cells whose QEF lands off the
+        // cell centre; that's a much smaller set than 27.
+        //
+        // What we check here is the **state** + **material** the
+        // cluster reports at solid vs empty positions, which is what
+        // any downstream consumer (mesh, water cycle, query API)
+        // actually cares about.
         let c = contour(&CubeField { n: 3 }, grey(), origin_id());
-        // A 3³ cube: all 27 solid voxels are min-corners of either an
-        // inactive (interior) cell or an active boundary cell, so all 27
-        // are stored. No empty voxel outside the cube becomes the min-
-        // corner of an active cell (active cells live within {0,1,2}³),
-        // so nothing else is stored.
-        assert_eq!(c.override_count(), 27);
-        assert_ne!(
-            c.get(LocalCoord::new(1, 1, 1).unwrap()).material(),
-            Material::EMPTY
-        );
-        assert_eq!(
-            c.get(LocalCoord::new(5, 5, 5).unwrap()).material(),
-            Material::EMPTY
-        );
+        // Every voxel inside the cube reads as `Solid` + the
+        // cluster's default material; every voxel outside reads
+        // `Empty` + `Material::EMPTY`.
+        for x in 0..3u32 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    let v = c.get(LocalCoord::new(x, y, z).unwrap());
+                    assert_eq!(v.state(), VoxelState::Solid, "({x},{y},{z}) should be solid");
+                    assert_ne!(v.material(), Material::EMPTY);
+                }
+            }
+        }
+        // Spot-check a clearly-empty voxel.
+        let outside = c.get(LocalCoord::new(5, 5, 5).unwrap());
+        assert_eq!(outside.state(), VoxelState::Empty);
+        assert_eq!(outside.material(), Material::EMPTY);
+        // Sparse override count is bounded by the cube's surface
+        // cells (the boundary-spanning LOD-0 cells whose QEF is
+        // non-default). It's nonzero — the cube has a surface — but
+        // small relative to the solid-voxel count (which is 27).
+        assert!(c.override_count() > 0);
+        assert!(c.override_count() < 27);
     }
 
     #[test]

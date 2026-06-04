@@ -38,7 +38,7 @@ use flicker::render::{
 };
 use flicker::script::{HudCommand, ScriptHost};
 use flicker_voxel::{
-    contour, Cluster, ClusterId, ClusterMap, CornerVector, LocalCoord, Lod, Material,
+    contour, BakedCluster, Cluster, ClusterId, ClusterMap, CornerVector, LocalCoord, Lod, Material,
     NeighborContext, Scene, CLUSTER_DIM,
 };
 
@@ -510,12 +510,43 @@ impl VoxelCluster {
             .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
             .collect();
 
-        // Contour every cluster at its LOD. Contour is per-cluster and
-        // oblivious to neighbour LODs; cross-LOD seam handling lives
-        // entirely in mesh.
-        for id in &ids {
-            let scene = Scene::world_at(id.world_offset());
-            self.map.insert(*id, contour(&scene, material, *id));
+        // Source of voxel data per cluster, in priority order:
+        //   1. Bake on disk (LOD-0 only) — fast startup, no procedural
+        //      re-evaluation.
+        //   2. Contour from the primitive — fallback when the bake is
+        //      missing, stale, or this rebuild requested a non-zero
+        //      LOD that the LOD-0 bake can't satisfy.
+        //
+        // The centre-LOD HUD checkbox still drives a re-contour today
+        // because the contour itself encodes LOD into the cluster
+        // (see `crates/flicker-voxel/src/contour.rs` — per-voxel
+        // expansion is sized to the LOD's cell footprint). When the
+        // mesh refactor lands and stride becomes a render-time
+        // parameter, the bake will satisfy every rebuild.
+        let bake_dir = bake_dir_path();
+        let all_lod_zero = ids.iter().all(|id| id.lod() == 0);
+        let mut loaded_from_bake = false;
+        if all_lod_zero {
+            if let Some(loaded) = try_load_bake_field(&bake_dir, &ids) {
+                tracing::info!(
+                    "loaded {} clusters from bake at {}",
+                    loaded.len(),
+                    bake_dir.display()
+                );
+                for (id, cluster) in loaded {
+                    self.map.insert(id, cluster);
+                }
+                loaded_from_bake = true;
+            }
+        }
+        if !loaded_from_bake {
+            // Contour every cluster at its LOD. Contour is per-cluster
+            // and oblivious to neighbour LODs; cross-LOD seam handling
+            // lives entirely in mesh.
+            for id in &ids {
+                let scene = Scene::world_at(id.world_offset());
+                self.map.insert(*id, contour(&scene, material, *id));
+            }
         }
 
         // Build per-cluster neighbor contexts and mesh each. The
@@ -983,6 +1014,117 @@ impl App for VoxelCluster {
     }
 }
 
+/// Directory the example reads bake files from on startup and writes
+/// bake files to in `--bake` mode. Resolved against this crate's
+/// source dir so `cargo run` finds it from any working directory.
+fn bake_dir_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/bake"))
+}
+
+/// Filename for a freshly-written cluster bake. The on-disk file
+/// stores LOD-0 data only (LOD is a render concern) and is gzip-
+/// compressed compact JSON, so the canonical extension is
+/// `.json.gz`. The cluster's spatial address is the rest of the name
+/// — `lod` is omitted because it's always `0` here.
+fn bake_filename(x: u16, y: u16, z: u16) -> String {
+    format!("cluster_{x}_{y}_{z}.json.gz")
+}
+
+/// Legacy filename for uncompressed cluster bakes — what `--bake`
+/// wrote before the gzip wiring landed. Used as a fallback by the
+/// loader so existing hand-decompressed or pre-gzip bakes still
+/// load without a forced re-bake.
+fn bake_filename_legacy(x: u16, y: u16, z: u16) -> String {
+    format!("cluster_{x}_{y}_{z}.json")
+}
+
+/// Try to load every cluster in `ids` from `dir`. Returns `Some(vec)`
+/// only if **all** loads succeed; partial loads fall back to
+/// contour-from-primitive (no point starting up with a half-baked
+/// field). Reads are best-effort: any error path logs at warn level
+/// and yields `None`. The compressed name (`.json.gz`) is tried
+/// first; if it isn't present, the legacy uncompressed name
+/// (`.json`) is tried as a fallback.
+fn try_load_bake_field(
+    dir: &std::path::Path,
+    ids: &[ClusterId],
+) -> Option<Vec<(ClusterId, Cluster)>> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let compressed_path = dir.join(bake_filename(id.x(), id.y(), id.z()));
+        let legacy_path = dir.join(bake_filename_legacy(id.x(), id.y(), id.z()));
+        let (path, bytes) = if let Ok(bytes) = std::fs::read(&compressed_path) {
+            (compressed_path, bytes)
+        } else if let Ok(bytes) = std::fs::read(&legacy_path) {
+            (legacy_path, bytes)
+        } else {
+            return None; // neither file present → fall back to contour
+        };
+        let baked = match BakedCluster::from_bytes(&bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("bake load failed for {}: {e}", path.display());
+                return None;
+            }
+        };
+        // The bake's on-disk id should match what we asked for. If it
+        // doesn't, the file was hand-edited or copied incorrectly —
+        // refuse to trust it.
+        if baked.id.bits() != id.bits() {
+            tracing::warn!(
+                "bake at {} carries id {:?}, expected {:?}; skipping bake load",
+                path.display(),
+                baked.id,
+                id,
+            );
+            return None;
+        }
+        out.push((baked.id, baked.cluster));
+    }
+    Some(out)
+}
+
+/// Bake every cluster in the 3×3 field to disk at LOD 0, then exit.
+/// Triggered by `--bake` on the command line; the demo's renderer
+/// never spins up in this mode. Files are written
+/// `bake/cluster_{x}_{y}_{z}.json.gz` (compact JSON, gzip-
+/// compressed). To inspect a file, `gunzip -c cluster_*.json.gz |
+/// jq .` — round-trips through `BakedCluster::from_bytes` either
+/// way.
+fn run_bake_mode() -> Result<()> {
+    let dir = bake_dir_path();
+    std::fs::create_dir_all(&dir)?;
+    let material = Material::new(1, 1, 0).expect("grey material is in-range");
+    let mut written = 0_usize;
+    let mut total_bytes = 0_u64;
+    for x in 0..FIELD_DIM {
+        for z in 0..FIELD_DIM {
+            let id = ClusterId::new(0, x, 0, z);
+            let scene = Scene::world_at(id.world_offset());
+            let cluster = contour(&scene, material, id);
+            let baked = BakedCluster::from_cluster(id, cluster);
+            // Compact JSON, gzipped — the dense state field's 4 MB of
+            // packed bytes and the long runs of identical material
+            // bytes both compress 5–10× under default gzip. A
+            // typical 3×3 demo cluster lands around 10 MB on disk.
+            let bytes = baked
+                .to_disk_bytes()
+                .map_err(|e| anyhow::anyhow!("serialize cluster ({x}, 0, {z}): {e}"))?;
+            let path = dir.join(bake_filename(id.x(), id.y(), id.z()));
+            std::fs::write(&path, &bytes)?;
+            tracing::info!("wrote {} ({} bytes)", path.display(), bytes.len());
+            written += 1;
+            total_bytes += bytes.len() as u64;
+        }
+    }
+    tracing::info!(
+        "baked {written} clusters ({} MB total) to {}",
+        total_bytes / (1024 * 1024),
+        dir.display()
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -991,6 +1133,22 @@ fn main() -> Result<()> {
             }),
         )
         .init();
+
+    // Hand-parse argv — one flag, no need for a CLI crate.
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--bake" => return run_bake_mode(),
+            "--help" | "-h" => {
+                println!("voxel-cluster — flicker voxel demo");
+                println!("Usage:");
+                println!("  voxel-cluster           run the demo (loads bake/ if present, else contours)");
+                println!("  voxel-cluster --bake    contour the 3×3 field and write bake/cluster_*.json, then exit");
+                return Ok(());
+            }
+            other => anyhow::bail!("unknown argument: {other}"),
+        }
+    }
 
     // Load the HUD script at startup. The path is resolved against this
     // crate's source dir, so the example finds it regardless of the

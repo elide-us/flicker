@@ -151,9 +151,9 @@ impl NeighborContext<'_> {
 ///   `vx = -1` reads `neg_x` at `vx = CLUSTER_DIM - 1`, and
 ///   `vx = CLUSTER_DIM` reads `pos_x` at `vx = 0`).
 /// - Exactly one coord out of range, no matching neighbor: returns
-///   `cluster.base()`.
+///   `Voxel::default()`.
 /// - Two or three coords out of range simultaneously (cluster edge or
-///   corner): returns `cluster.base()`. Edge and corner neighbors are
+///   corner): returns `Voxel::default()`. Edge and corner neighbors are
 ///   intentionally not modeled.
 pub(crate) fn read_corner(
     cluster: &Cluster,
@@ -171,7 +171,7 @@ pub(crate) fn read_corner(
     }
     let oob_count = u32::from(!in_x) + u32::from(!in_y) + u32::from(!in_z);
     if oob_count >= 2 {
-        return cluster.base();
+        return Voxel::default();
     }
     let (src, lx, ly, lz) = if !in_x {
         let n = if vx < 0 {
@@ -181,7 +181,7 @@ pub(crate) fn read_corner(
         };
         match n {
             Some((src, _)) => (src, vx.rem_euclid(dim), vy, vz),
-            None => return cluster.base(),
+            None => return Voxel::default(),
         }
     } else if !in_y {
         let n = if vy < 0 {
@@ -191,7 +191,7 @@ pub(crate) fn read_corner(
         };
         match n {
             Some((src, _)) => (src, vx, vy.rem_euclid(dim), vz),
-            None => return cluster.base(),
+            None => return Voxel::default(),
         }
     } else {
         let n = if vz < 0 {
@@ -201,7 +201,7 @@ pub(crate) fn read_corner(
         };
         match n {
             Some((src, _)) => (src, vx, vy, vz.rem_euclid(dim)),
-            None => return cluster.base(),
+            None => return Voxel::default(),
         }
     };
     src.get(LocalCoord::new(lx as u32, ly as u32, lz as u32).expect("in bounds"))
@@ -212,9 +212,14 @@ mod tests {
     use super::*;
     use crate::corner_vector::CornerVector;
     use crate::material::Material;
+    use crate::voxel_state::VoxelState;
 
     fn solid_voxel() -> Voxel {
-        Voxel::new(CornerVector::DEFAULT, Material::new(1, 0, 0).unwrap())
+        Voxel::new(
+            VoxelState::Solid,
+            CornerVector::DEFAULT,
+            Material::new(1, 0, 0).unwrap(),
+        )
     }
 
     // ---- Lod ----
@@ -295,9 +300,11 @@ mod tests {
         c.set(LocalCoord::new(10, 20, 30).unwrap(), solid_voxel());
         let nc = NeighborContext::none();
         assert_eq!(read_corner(&c, &nc, 10, 20, 30), solid_voxel());
-        // An out-of-cluster read with no neighbor returns the base
-        // (empty Voxel for an empty cluster).
-        assert_eq!(read_corner(&c, &nc, -1, 20, 30), c.base());
+        // An out-of-cluster read with no neighbor returns the
+        // empty-voxel sentinel (the cluster has no "base" voxel
+        // anymore — state is dense, materials are sparse, and
+        // multi-axis OOB outside the field returns `Voxel::default()`).
+        assert_eq!(read_corner(&c, &nc, -1, 20, 30), Voxel::default());
     }
 
     #[test]
@@ -323,7 +330,7 @@ mod tests {
             ..NeighborContext::none()
         };
         // Two coords out of range — even with the matching face
-        // neighbors set, the helper falls back to cluster.base().
-        assert_eq!(read_corner(&cluster, &nc, -1, -1, 30), cluster.base());
+        // neighbors set, the helper falls back to Voxel::default().
+        assert_eq!(read_corner(&cluster, &nc, -1, -1, 30), Voxel::default());
     }
 }

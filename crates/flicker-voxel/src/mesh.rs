@@ -9,7 +9,8 @@
 //! are duplicated per quad (four fresh ones each, all carrying the oriented
 //! face normal) so the result is flat-shaded with crisp facets.
 //!
-//! Solidity is `voxel.material() != Material::EMPTY`. Coordinates outside
+//! Solidity is `voxel.state().is_filled()` (anything that isn't `Empty`).
+//! Coordinates outside
 //! `[0, CLUSTER_DIM)` are looked up through the [`NeighborContext`]: a
 //! single-axis-OOB voxel routes to the matching face neighbor (so the
 //! quad emits at the seam); two or three coords OOB falls back to the
@@ -40,7 +41,6 @@
 
 use crate::cluster::{Cluster, CLUSTER_DIM};
 use crate::local_coord::LocalCoord;
-use crate::material::Material;
 use crate::neighbor::{read_corner, Lod, NeighborContext};
 
 /// One flat-shaded mesh vertex in cluster-local voxel units. Field-for-
@@ -754,14 +754,16 @@ fn is_solid_with_neighbors(
     neighbors: &NeighborContext<'_>,
     g: [i32; 3],
 ) -> bool {
-    read_corner(cluster, neighbors, g[0], g[1], g[2]).material() != Material::EMPTY
+    read_corner(cluster, neighbors, g[0], g[1], g[2])
+        .state()
+        .is_filled()
 }
 
 #[inline]
 fn is_solid_in_range(cluster: &Cluster, g: [i32; 3]) -> bool {
     let coord = LocalCoord::new(g[0] as u32, g[1] as u32, g[2] as u32)
         .expect("caller verified range");
-    cluster.get(coord).material() != Material::EMPTY
+    cluster.get(coord).state().is_filled()
 }
 
 /// Material of the solid endpoint, with OOB routed through neighbors.
@@ -810,8 +812,10 @@ mod tests {
     use crate::cluster_id::ClusterId;
     use crate::contour::contour;
     use crate::corner_vector::CornerVector;
+    use crate::material::Material;
     use crate::primitive::{FlatField, Hermite, Primitive};
     use crate::voxel::Voxel;
+    use crate::voxel_state::VoxelState;
 
     fn grey() -> Material {
         Material::new(1, 1, 0).expect("valid")
@@ -947,7 +951,7 @@ mod tests {
         for x in 1..=2u32 {
             for z in 1..=2u32 {
                 let c = LocalCoord::new(x, 127, z).expect("in range");
-                cluster.set(c, Voxel::new(corner, mat));
+                cluster.set(c, Voxel::new(VoxelState::Solid, corner, mat));
             }
         }
 

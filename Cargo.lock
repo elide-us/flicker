@@ -688,6 +688,7 @@ name = "flicker-core"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "flate2",
  "glam",
  "thiserror 2.0.18",
  "tracing",
@@ -742,6 +743,9 @@ name = "flicker-voxel"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "flicker-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

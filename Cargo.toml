@@ -48,6 +48,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 
+# Compression — gzip for cluster bakes, wire packets, asset blobs.
+# `rust_backend` keeps it pure-Rust (no zlib system dep); fine for our
+# 5–100 KB chunks and small enough binary impact.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -31,6 +31,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bake;
 mod cluster;
 mod cluster_id;
 mod cluster_map;
@@ -45,7 +46,9 @@ mod neighbor;
 pub mod primitive;
 mod qef;
 mod voxel;
+mod voxel_state;
 
+pub use bake::{find_horizon_voxel, BakeError, BakedCluster, BAKE_VERSION};
 pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
 pub use cluster_id::ClusterId;
 pub use cluster_map::ClusterMap;
@@ -60,3 +63,4 @@ pub use primitive::{
     Scene, Sdf, Sphere,
 };
 pub use voxel::Voxel;
+pub use voxel_state::{StateField, VoxelState, STATE_FIELD_WORDS};

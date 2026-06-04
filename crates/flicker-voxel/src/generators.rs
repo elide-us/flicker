@@ -17,6 +17,7 @@ use crate::heightmap::world_height_seeded;
 use crate::local_coord::LocalCoord;
 use crate::material::Material;
 use crate::voxel::Voxel;
+use crate::voxel_state::VoxelState;
 
 /// Demo material indices for the scene generators. **STUB** — there
 /// is no real material/contents system yet; these are stable indices
@@ -58,7 +59,7 @@ pub fn solid_slab(height: u32, material: Material) -> Cluster {
     if h == 0 {
         return c;
     }
-    let v = Voxel::new(CornerVector::DEFAULT, material);
+    let v = Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, material);
     for z in 0..CLUSTER_DIM {
         for y in 0..h {
             for x in 0..CLUSTER_DIM {
@@ -139,7 +140,7 @@ pub fn solid_slab(height: u32, material: Material) -> Cluster {
 #[must_use]
 pub fn heightmap_terrain_at(seed: u64, material: Material, world_offset: [f32; 3]) -> Cluster {
     let mut c = Cluster::empty();
-    let solid_default = Voxel::new(CornerVector::DEFAULT, material);
+    let solid_default = Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, material);
     let ox = world_offset[0];
     let oz = world_offset[2];
 
@@ -179,6 +180,7 @@ pub fn heightmap_terrain_at(seed: u64, material: Material, world_offset: [f32; 3
             } else {
                 let fractional = h - top_y as f32;
                 Voxel::new(
+                    VoxelState::Solid,
                     CornerVector::from_components(0.5, fractional, 0.5),
                     material,
                 )
@@ -256,7 +258,7 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
                 let m = Material::new(p, s, b).expect("demo indices in range");
                 c.set(
                     LocalCoord::new(x, y, z).expect("in bounds"),
-                    Voxel::new(CornerVector::DEFAULT, m),
+                    Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, m),
                 );
             }
 
@@ -266,10 +268,10 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
             let (p, s, b) = water_material_at(t_top);
             let m = Material::new(p, s, b).expect("demo indices in range");
             let top_voxel = if capped {
-                Voxel::new(CornerVector::DEFAULT, m)
+                Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, m)
             } else {
                 let fractional = h - top_y as f32;
-                Voxel::new(CornerVector::from_components(0.5, fractional, 0.5), m)
+                Voxel::new(VoxelState::Solid, CornerVector::from_components(0.5, fractional, 0.5), m)
             };
             c.set(LocalCoord::new(x, top_y, z).expect("in bounds"), top_voxel);
         }
