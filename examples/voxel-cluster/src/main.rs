@@ -14,7 +14,7 @@
 //!   * WASD: move forward/back/strafe in the camera's facing.
 //!   * R / F: rise / descend (world Y up / down).
 //!   * Right-drag: free-look yaw + pitch.
-//!   * Escape: quit.
+//!   * Escape: open the pause menu (Resume / Quit).
 //!
 //! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
 //! loaded at startup via `flicker-script`) — six clickable
@@ -27,9 +27,10 @@
 //!     the contour's QEF placed each active cell's dual vertex.
 //!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
 //!     floor-to-floor links between walkable-adjacent columns.
-//!   * Surface walk — switch to surface-walk locomotion, which generates
-//!     the nav surface around the player. Fly mode (the default) generates
-//!     no nav and produces no collisions.
+//!   * Surface walk — switch to surface-walk locomotion: WASD walks in the
+//!     XZ plane under gravity with a ground-clamp against the nav surface
+//!     (consumed by `walk_step`/`ground_height_at`). Fly mode (the default)
+//!     is free 6-DOF and generates no nav.
 //!   * Camera-driven LOD — each cluster's LOD follows its distance from
 //!     the camera (smoothed to the mesher's ±1 adjacency invariant),
 //!     re-meshing on a swap.
@@ -41,7 +42,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState};
+use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState, Key};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
@@ -54,11 +55,22 @@ use flicker_voxel::{
 };
 use flicker_worker::WorkerPool;
 
+mod ui;
+
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
 /// present), which is what actually exercises seam tangent stitching
 /// on every face simultaneously.
 const FIELD_DIM: u16 = 3;
+
+/// Top-level application state. Today the in-world `Playing` mode and the
+/// `Paused` modal; the handoff's Startup → MainMenu → Loading states slot in
+/// here next (each gating which subsystems `update`/`render` touch).
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum AppState {
+    Playing,
+    Paused,
+}
 
 struct VoxelCluster {
     /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
@@ -95,11 +107,10 @@ struct VoxelCluster {
     meshes: Vec<(ClusterId, MeshHandle)>,
 
     /// LOD2 walkable surface per cluster, derived on the load path
-    /// alongside the mesh and gated to rings 0–2 (§4.6). Nothing
-    /// consumes it yet — the walking camera is follow-up work — so it
-    /// is retained here purely to keep nav on the existing load path,
-    /// ready to drop onto the ring scheduler's worker queue unchanged
-    /// when that lands.
+    /// alongside the mesh and gated to rings 0–2 (§4.6). Consumed by
+    /// `walk_step`/`ground_height_at` in surface-walk mode to ground-clamp
+    /// the camera; empty in fly mode. Ready to drop onto the ring
+    /// scheduler's worker queue unchanged when that lands.
     navs: Vec<(ClusterId, ClusterNav)>,
 
     /// First-person camera state.
@@ -145,11 +156,11 @@ struct VoxelCluster {
     /// LOD-digit billboard on the navmesh surface at the cluster centre.
     lod_billboards_on: bool,
     /// Locomotion mode, mirroring the script's `"surface_walk"` checkbox.
-    /// `false` = fly mode (the only real mode today): **no NavMesh is
-    /// generated and the engine produces no collisions**. `true` =
+    /// `false` = fly mode: free 6-DOF, no nav generated. `true` =
     /// surface-walk mode, which generates the LOD2 nav surface around the
-    /// player so it can be inspected (and walked, once collision lands).
-    /// See `docs/architecture.md` "Mesh & navigation generation".
+    /// player and walks on it (`walk_step`): WASD in the XZ plane with
+    /// gravity + a ground-clamp. See `docs/architecture.md` "Mesh &
+    /// navigation generation".
     locomotion_walk: bool,
     /// Currently-applied per-cluster LOD for the 3×3 field, already smoothed
     /// to the mesher's ±1 cross-LOD adjacency invariant. `rebuild` meshes to
@@ -171,6 +182,30 @@ struct VoxelCluster {
     /// cluster-local grid coords)`. `None` until the first hit; sticky
     /// thereafter.
     selection: Option<(ClusterId, [i32; 3])>,
+
+    /// Vertical velocity (voxels/s) for surface-walk gravity. Integrated
+    /// each frame while `locomotion_walk` is on and zeroed by the
+    /// ground-clamp on contact. Unused in fly mode.
+    vy: f32,
+    /// Whether the walking camera is currently resting on the surface (vs
+    /// airborne/falling). Drives the HUD readout; the clamp sets it.
+    grounded: bool,
+    /// Set on a fly→walk toggle: the camera snaps down onto the surface
+    /// beneath it on the first frame the nav under it is available (nav is
+    /// generated asynchronously, so the snap waits for it).
+    walk_needs_snap: bool,
+
+    /// Top-level app state: `Playing` (world live) or `Paused` (modal up,
+    /// gameplay frozen). Escape toggles it.
+    state: AppState,
+    /// Previous-frame Escape key level, for press-edge detection (only the
+    /// mouse exposes a ready-made edge flag).
+    escape_prev: bool,
+    /// Uploaded gothic UI theme (pause-modal art). `None` until `init`.
+    ui: Option<ui::Theme>,
+    /// Which pause button the cursor is over, mirrored from `update` so
+    /// `render` can light it. `None` when not paused or nothing is hovered.
+    pause_hover: Option<ui::PauseButton>,
 
     should_quit: bool,
 }
@@ -208,6 +243,13 @@ impl Default for VoxelCluster {
             digit_atlas: None,
             pick_meshes: Vec::new(),
             selection: None,
+            vy: 0.0,
+            grounded: false,
+            walk_needs_snap: false,
+            state: AppState::Playing,
+            escape_prev: false,
+            ui: None,
+            pause_hover: None,
             should_quit: false,
         }
     }
@@ -1021,6 +1063,169 @@ fn digit_uv_rect(d: u8) -> (Vec2, Vec2) {
     (Vec2::new(u0, 0.0), Vec2::new(u1, 1.0))
 }
 
+// ===== Walk locomotion (surface-walk mode) =====
+
+/// Camera eye height above the walkable surface, in voxels. 12 voxels ×
+/// 0.5 ft/voxel = 6 ft, a standing eye line. The ground-clamp parks the
+/// camera here above the nav floor beneath it.
+const EYE_HEIGHT: f32 = 12.0;
+
+/// Downward acceleration while walking, in voxels/s². 64 voxels × 0.5 ft =
+/// 32 ft/s², Earth gravity. Integrated into `vy` each frame; the
+/// ground-clamp zeroes it on contact.
+const WALK_GRAVITY: f32 = 64.0;
+
+/// Largest surface rise (voxels) a single horizontal step may climb before
+/// it is blocked — the nav's walkable-slope gate expressed as a height
+/// delta. The nav links LOD2 columns whose floor indices differ by ≤ 2
+/// cells, and one cell is `CLUSTER_DIM / NAV_DIM` = 4 voxels, so 2 cells =
+/// 8 voxels. A height-delta stand-in for `ClusterNav::linked`, used because
+/// the applied navs (`self.navs`) don't retain the `NeighborContext` that
+/// `linked_across` would need to consult across a cluster seam. Stepping
+/// *down* any distance is allowed (you walk off the ledge and fall).
+const MAX_STEP_UP: f32 = 8.0;
+
+/// Ground speed while walking, in voxels/s. 24 voxels × 0.5 ft = 12 ft/s, a
+/// brisk jog — deliberately ~5× slower than the fly `move_speed` (120) so
+/// the surface reads at a human pace. Tune to taste.
+const WALK_SPEED: f32 = 24.0;
+
+impl VoxelCluster {
+    /// World-space surface height (camera-frame Y, voxels) of the walkable
+    /// nav under world position `(x, z)`, or `None` when no applied nav
+    /// covers that column — outside the field, or a column with no floor.
+    /// Reads `self.navs` (the LOD2 surfaces applied by `drain_and_apply`),
+    /// populated only in surface-walk mode for clusters in the nav rings,
+    /// so this returns `None` in fly mode.
+    fn ground_height_at(&self, x: f32, z: f32) -> Option<f32> {
+        let dim = CLUSTER_DIM as f32;
+        let cxf = (x / dim).floor();
+        let czf = (z / dim).floor();
+        if cxf < 0.0 || czf < 0.0 {
+            return None;
+        }
+        let (cx, cz) = (cxf as u16, czf as u16);
+        let (id, nav) = self
+            .navs
+            .iter()
+            .find(|(id, _)| id.x() == cx && id.z() == cz)?;
+        // LOD2 cell size in voxels: CLUSTER_DIM / NAV_DIM = 256 / 64 = 4.
+        let stride = dim / NAV_DIM as f32;
+        let last = (NAV_DIM - 1) as f32;
+        let nx = ((x - cxf * dim) / stride).floor().clamp(0.0, last) as u8;
+        let nz = ((z - czf * dim) / stride).floor().clamp(0.0, last) as u8;
+        let floor = nav.floor_at(nx, nz)?;
+        // Cluster y-origin (0 in this field) + floor height in voxels.
+        Some(id.world_offset()[1] + floor as f32 * stride)
+    }
+
+    /// One frame of surface-walk locomotion: WASD in the XZ plane, gravity
+    /// integrated on `vy`, and a ground-clamp that parks the eye
+    /// `EYE_HEIGHT` above the nav floor under the camera. A horizontal step
+    /// that would climb more than `MAX_STEP_UP` (a wall/cliff) or leave the
+    /// meshed nav is blocked; stepping down a ledge is allowed (you fall).
+    /// On the first frame after fly→walk it snaps the camera onto the
+    /// surface below it, once the (asynchronously generated) nav arrives. If
+    /// the camera was parked off the field (it spawns looking in from
+    /// outside), the snap recenters it over the field first. While the snap
+    /// is pending, gravity and movement are frozen so the camera can't fall
+    /// into the void before there's a surface to land on.
+    fn walk_step(&mut self, dt_s: f32, input: &InputState) {
+        if self.walk_needs_snap {
+            if let Some(g) = self.ground_height_at(self.position.x, self.position.z) {
+                self.position.y = g + EYE_HEIGHT;
+                self.vy = 0.0;
+                self.grounded = true;
+                self.walk_needs_snap = false;
+            } else if !self.navs.is_empty() {
+                // Nav has arrived but the camera isn't over it (spawned
+                // outside the field). Recenter over the field centre so the
+                // next frame's snap lands on the surface.
+                let center = FIELD_DIM as f32 * 0.5 * CLUSTER_DIM as f32;
+                self.position.x = center;
+                self.position.z = center;
+            }
+            // Either the nav hasn't arrived yet, or we just recentered: skip
+            // gravity/movement this frame and try the snap again next frame.
+            if self.walk_needs_snap {
+                return;
+            }
+        }
+
+        // Horizontal intent, flattened to the XZ plane (R/F are inert while
+        // walking).
+        let mut horizontal = Vec3::ZERO;
+        if input.action_active(&self.bindings, Action::MoveForward) {
+            horizontal += self.move_forward();
+        }
+        if input.action_active(&self.bindings, Action::MoveBackward) {
+            horizontal -= self.move_forward();
+        }
+        if input.action_active(&self.bindings, Action::StrafeRight) {
+            horizontal += self.move_right();
+        }
+        if input.action_active(&self.bindings, Action::StrafeLeft) {
+            horizontal -= self.move_right();
+        }
+        let step = horizontal.normalize_or_zero() * WALK_SPEED * dt_s;
+        let new_x = self.position.x + step.x;
+        let new_z = self.position.z + step.z;
+
+        // Slope/edge gate: block a step that would climb steeper than the
+        // nav's walkable slope, or walk off the meshed nav.
+        let cur_ground = self.ground_height_at(self.position.x, self.position.z);
+        let dst_ground = self.ground_height_at(new_x, new_z);
+        let allow = match (cur_ground, dst_ground) {
+            (Some(c), Some(d)) => d - c <= MAX_STEP_UP,
+            (None, _) => true,        // airborne / off-grid: don't constrain XZ
+            (Some(_), None) => false, // would step off the nav edge: block
+        };
+        if allow {
+            self.position.x = new_x;
+            self.position.z = new_z;
+        }
+
+        // Vertical: integrate gravity, then clamp to the surface under the
+        // resolved XZ. At/under it → grounded (snap up, zero vy); above it →
+        // airborne, keep falling.
+        self.vy -= WALK_GRAVITY * dt_s;
+        self.position.y += self.vy * dt_s;
+        if let Some(g) = self.ground_height_at(self.position.x, self.position.z) {
+            let target = g + EYE_HEIGHT;
+            if self.position.y <= target {
+                self.position.y = target;
+                self.vy = 0.0;
+                self.grounded = true;
+            } else {
+                self.grounded = false;
+            }
+        }
+    }
+
+    /// Pause-modal interaction: Escape resumes; otherwise track which button
+    /// the cursor is over and act on a click (Resume → play, Quit → exit).
+    /// Gameplay is frozen while this runs (see `update`).
+    fn update_pause_menu(&mut self, input: &InputState, renderer: &Renderer, esc_pressed: bool) {
+        if esc_pressed {
+            self.state = AppState::Playing;
+            self.pause_hover = None;
+            return;
+        }
+        let layout = ui::pause_layout(renderer.size());
+        self.pause_hover = layout.hover(input.mouse_position);
+        if input.mouse_left_pressed {
+            match self.pause_hover {
+                Some(ui::PauseButton::Resume) => {
+                    self.state = AppState::Playing;
+                    self.pause_hover = None;
+                }
+                Some(ui::PauseButton::Quit) => self.should_quit = true,
+                None => {}
+            }
+        }
+    }
+}
+
 impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
         // Stand up the worker pool + result channel, populate the LOD-0
@@ -1047,14 +1252,33 @@ impl App for VoxelCluster {
         // Digit-glyph atlas for the LOD billboards (digits 0–7).
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
+
+        // Gothic UI theme (pause modal). Reuses the 1×1 white pixel above for
+        // the scrim / hover sheen / outlines.
+        let white = self.white.expect("white pixel uploaded above");
+        self.ui = Some(ui::Theme::load(renderer, white));
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
-        if input.action_active(&self.bindings, Action::Quit) {
-            self.should_quit = true;
+        let dt_s = dt.as_secs_f32();
+
+        // Escape edge (we track the level ourselves — only the mouse exposes a
+        // ready-made press flag) toggles the pause modal.
+        let esc_down = input.key_down(Key::Escape);
+        let esc_pressed = esc_down && !self.escape_prev;
+        self.escape_prev = esc_down;
+
+        // Paused: only the modal is live; gameplay is frozen.
+        if matches!(self.state, AppState::Paused) {
+            self.update_pause_menu(input, renderer, esc_pressed);
             return;
         }
-        let dt_s = dt.as_secs_f32();
+        // Playing: Escape opens the modal (skip the rest of this frame).
+        if esc_pressed {
+            self.state = AppState::Paused;
+            self.pause_hover = None;
+            return;
+        }
 
         // Debug toggles now live in the HUD script: feed it the mouse +
         // click edge, and mirror the checkbox states it reports back.
@@ -1075,6 +1299,12 @@ impl App for VoxelCluster {
                     let walk = toggles.is_on("surface_walk");
                     if walk != self.locomotion_walk {
                         self.locomotion_walk = walk;
+                        // Entering walk: re-mesh to generate nav, then snap the
+                        // camera onto the surface once that nav arrives.
+                        if walk {
+                            self.walk_needs_snap = true;
+                            self.vy = 0.0;
+                        }
                         self.submit_field_jobs();
                     }
 
@@ -1136,28 +1366,33 @@ impl App for VoxelCluster {
             self.last_look_cursor = None;
         }
 
-        // Movement: query actions, not keys.
-        let mut motion = Vec3::ZERO;
-        if input.action_active(&self.bindings, Action::MoveForward) {
-            motion += self.move_forward();
-        }
-        if input.action_active(&self.bindings, Action::MoveBackward) {
-            motion -= self.move_forward();
-        }
-        if input.action_active(&self.bindings, Action::StrafeRight) {
-            motion += self.move_right();
-        }
-        if input.action_active(&self.bindings, Action::StrafeLeft) {
-            motion -= self.move_right();
-        }
-        if input.action_active(&self.bindings, Action::MoveUp) {
-            motion += Vec3::Y;
-        }
-        if input.action_active(&self.bindings, Action::MoveDown) {
-            motion -= Vec3::Y;
-        }
-        if motion.length_squared() > 0.0 {
-            self.position += motion.normalize() * self.config.move_speed * dt_s;
+        // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp),
+        // per the surface-walk locomotion mode.
+        if self.locomotion_walk {
+            self.walk_step(dt_s, input);
+        } else {
+            let mut motion = Vec3::ZERO;
+            if input.action_active(&self.bindings, Action::MoveForward) {
+                motion += self.move_forward();
+            }
+            if input.action_active(&self.bindings, Action::MoveBackward) {
+                motion -= self.move_forward();
+            }
+            if input.action_active(&self.bindings, Action::StrafeRight) {
+                motion += self.move_right();
+            }
+            if input.action_active(&self.bindings, Action::StrafeLeft) {
+                motion -= self.move_right();
+            }
+            if input.action_active(&self.bindings, Action::MoveUp) {
+                motion += Vec3::Y;
+            }
+            if input.action_active(&self.bindings, Action::MoveDown) {
+                motion -= Vec3::Y;
+            }
+            if motion.length_squared() > 0.0 {
+                self.position += motion.normalize() * self.config.move_speed * dt_s;
+            }
         }
     }
 
@@ -1259,11 +1494,13 @@ impl App for VoxelCluster {
         }
 
         // HUD text.
+        let controls = if self.locomotion_walk {
+            "walk — WASD on surface, gravity, right-drag look"
+        } else {
+            "fly — WASD move, R/F up/down, right-drag look"
+        };
         renderer.draw_text(
-            &format!(
-                "voxel cluster — {}×{} field — WASD move, R/F up/down, right-drag look",
-                FIELD_DIM, FIELD_DIM
-            ),
+            &format!("voxel cluster — {FIELD_DIM}×{FIELD_DIM} field — {controls}"),
             Vec2::new(16.0, 16.0),
             22.0,
             [1.0, 1.0, 1.0, 1.0],
@@ -1337,6 +1574,24 @@ impl App for VoxelCluster {
             16.0,
             [0.95, 0.85, 0.60, 1.0],
         );
+        // Walk readout (surface-walk mode only): grounded/airborne, the nav
+        // surface height under the camera, and vertical velocity.
+        if self.locomotion_walk {
+            let ground = self
+                .ground_height_at(self.position.x, self.position.z)
+                .map_or_else(|| "—".to_string(), |g| format!("{g:.0}"));
+            renderer.draw_text(
+                &format!(
+                    "walk: {}   ground y: {}   vy: {:+.1}",
+                    if self.grounded { "grounded" } else { "airborne" },
+                    ground,
+                    self.vy,
+                ),
+                Vec2::new(16.0, 164.0),
+                16.0,
+                [0.6, 0.95, 0.7, 1.0],
+            );
+        }
 
         // Virtual-voxel inspector: 12-edge wireframe of the dual cell
         // at the selected lattice point, plus a per-corner readout of
@@ -1429,6 +1684,15 @@ impl App for VoxelCluster {
                     }
                 }
                 Err(e) => tracing::error!("HUD script draw failed: {e}"),
+            }
+        }
+
+        // Pause modal on top of everything (the scrim dims the world + HUD).
+        if matches!(self.state, AppState::Paused) {
+            if let Some(theme) = self.ui.as_ref() {
+                let screen = renderer.size();
+                let layout = ui::pause_layout(screen);
+                theme.draw_pause(renderer, screen, &layout, self.pause_hover);
             }
         }
     }

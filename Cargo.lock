@@ -3376,6 +3376,7 @@ dependencies = [
  "flicker-voxel",
  "flicker-worker",
  "glam",
+ "image",
  "tracing",
  "tracing-subscriber",
 ]
