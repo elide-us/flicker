@@ -9,6 +9,8 @@
 //! `flicker-ui` later: the palette/theme here is game-specific, while the
 //! canvas, panel/button generators, layout, and hit-testing are generic.
 
+use std::f32::consts::{PI, TAU};
+
 use flicker::render::{Renderer, TextureHandle, Vec2};
 
 // ===== palette =====
@@ -21,8 +23,13 @@ const PLATE_TOP: Rgb = (48, 52, 60);
 const PLATE_BOT: Rgb = (27, 30, 37);
 const SILVER: Rgb = (150, 156, 166);
 const GOLD: Rgb = (160, 126, 66);
-const GOLD_BRIGHT: Rgb = (200, 164, 96);
-const RUST: Rgb = (150, 60, 42);
+/// Patina shadow for the tarnished-gold filigree (flat 2-tone with `GOLD`).
+const GOLD_DK: Rgb = (96, 78, 44);
+/// Carved slate for the stone frame: deep base + cool highlight; a faint
+/// tone for the hairline weathering.
+const SLATE_DK: Rgb = (32, 35, 40);
+const SLATE_HI: Rgb = (104, 111, 121);
+const SLATE_CRACK: Rgb = (22, 24, 28);
 const INK: Rgb = (8, 9, 11);
 
 /// Tarnished-gold title text.
@@ -33,21 +40,28 @@ const COL_LABEL: [f32; 4] = [0.78, 0.81, 0.86, 1.0];
 const COL_LABEL_HOVER: [f32; 4] = [0.96, 0.80, 0.42, 1.0];
 /// Hovered button outline (gold).
 const COL_GOLD_LINE: [f32; 4] = [0.85, 0.66, 0.32, 0.95];
-/// Full-screen dim behind the modal.
+/// Full-screen dim behind a modal (translucent over a frozen game).
 const COL_SCRIM: [f32; 4] = [0.02, 0.02, 0.03, 0.64];
+/// Opaque dark backdrop for a full-screen menu (nothing behind it).
+const COL_BACKDROP: [f32; 4] = [0.035, 0.04, 0.05, 1.0];
 /// Gold sheen overlaid on a hovered button.
 const COL_SHEEN: [f32; 4] = [0.85, 0.66, 0.34, 0.15];
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
-const PANEL_W: u32 = 460;
-const PANEL_H: u32 = 300;
+const PANEL_W: u32 = 520;
+const PANEL_H: u32 = 384;
+/// Stone-frame thickness (px) around the recessed content well.
+const FRAME: u32 = 38;
 const BUTTON_W: u32 = 264;
 const BUTTON_H: u32 = 54;
 
 /// Rough proportional-font advance as a fraction of font size, used to
 /// estimate a label's width for centring (glyphon exposes no measure API).
 const GLYPH_ADVANCE: f32 = 0.56;
+
+/// Stroke width (px) for the gold filigree curves.
+const FIL_STROKE: f32 = 2.0;
 
 // ===== pixel canvas =====
 
@@ -78,6 +92,19 @@ impl Canvas {
         self.px[i + 3] = a;
     }
 
+    /// Add `d` to each RGB channel of an existing pixel (signed, clamped) —
+    /// shades a bevel into already-painted stone without touching alpha.
+    fn shade_px(&mut self, x: i32, y: i32, d: i32) {
+        if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
+            return;
+        }
+        let i = (y as usize * self.w + x as usize) * 4;
+        let f = |v: u8| (v as i32 + d).clamp(0, 255) as u8;
+        self.px[i] = f(self.px[i]);
+        self.px[i + 1] = f(self.px[i + 1]);
+        self.px[i + 2] = f(self.px[i + 2]);
+    }
+
     fn hline(&mut self, x0: usize, x1: usize, y: usize, c: Rgb, a: u8) {
         for x in x0..x1 {
             self.put(x as i32, y as i32, c, a);
@@ -91,7 +118,14 @@ impl Canvas {
     }
 
     /// `t`-thick rectangle outline at `origin` of size `(w, h)`.
-    fn rect_outline(&mut self, origin: (usize, usize), size: (usize, usize), c: Rgb, a: u8, t: usize) {
+    fn rect_outline(
+        &mut self,
+        origin: (usize, usize),
+        size: (usize, usize),
+        c: Rgb,
+        a: u8,
+        t: usize,
+    ) {
         let ((x, y), (w, h)) = (origin, size);
         for i in 0..t {
             self.hline(x, x + w, y + i, c, a);
@@ -108,14 +142,158 @@ impl Canvas {
         }
     }
 
-    /// Filled diamond (rotated square) of radius `r` centred on `(cx, cy)` —
-    /// a small gothic stud/rivet ornament.
-    fn diamond(&mut self, cx: i32, cy: i32, r: i32, c: Rgb, a: u8) {
-        for dy in -r..=r {
-            let span = r - dy.abs();
-            for dx in -span..=span {
-                self.put(cx + dx, cy + dy, c, a);
+    /// Flat slate fill with only a gentle large-scale value drift — simpler
+    /// and less metallic than fine noise (subtle blended rock is enough).
+    fn stone_fill(&mut self) {
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let n = vnoise(x as f32 / 34.0, y as f32 / 30.0);
+                self.put(
+                    x as i32,
+                    y as i32,
+                    lerp_rgb(SLATE_DK, SLATE_HI, 0.32 + 0.18 * n),
+                    255,
+                );
             }
+        }
+    }
+
+    /// Shade a raised 3D bevel into the outermost `width` px: lit on the
+    /// top/left rim, shadowed on the bottom/right, with a noisy falloff so the
+    /// chamfer reads as irregular chiselled stone rather than a clean CAD edge.
+    /// `strength` is the peak per-channel shift.
+    fn outer_bevel(&mut self, width: i32, strength: f32) {
+        let (wi, hi) = (self.w as i32, self.h as i32);
+        for y in 0..hi {
+            for x in 0..wi {
+                let top = (width - y).max(0);
+                let left = (width - x).max(0);
+                let bot = (width - (hi - 1 - y)).max(0);
+                let right = (width - (wi - 1 - x)).max(0);
+                let net = (top + left - bot - right) as f32;
+                if net == 0.0 {
+                    continue;
+                }
+                let jitter = 0.55 + 0.9 * vnoise(x as f32 / 6.0, y as f32 / 6.0);
+                let d = (net / width as f32 * strength * jitter) as i32;
+                if d != 0 {
+                    self.shade_px(x, y, d);
+                }
+            }
+        }
+    }
+
+    /// A faint jagged hairline crack walking from `start` along `dir`.
+    fn crack(&mut self, seed: u32, start: (i32, i32), dir: f32, len: i32) {
+        let (mut x, mut y) = (start.0 as f32, start.1 as f32);
+        let mut a = dir;
+        for i in 0..len {
+            let (px, py) = (x.round() as i32, y.round() as i32);
+            self.put(px, py, SLATE_CRACK, 255);
+            a += (hash01(seed as i32 * 31 + i, px ^ py) - 0.5) * 0.9;
+            x += a.cos();
+            y += a.sin();
+        }
+    }
+
+    /// Stamp a filled disc of diameter ~`t` — the brush for curved strokes.
+    fn dot(&mut self, x: f32, y: f32, t: f32, col: Rgb) {
+        let rad = t * 0.5;
+        let r = rad.ceil() as i32;
+        let (ix, iy) = (x.round() as i32, y.round() as i32);
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if (dx * dx + dy * dy) as f32 <= rad * rad + 0.4 {
+                    self.put(ix + dx, iy + dy, col, 255);
+                }
+            }
+        }
+    }
+
+    /// Stroke a circular arc (`a0`→`a1` radians, radius `radius`) about `c`.
+    fn arc(&mut self, c: (f32, f32), radius: f32, a0: f32, a1: f32, t: f32, col: Rgb) {
+        let steps = ((a1 - a0).abs() * radius).max(12.0) as i32;
+        for i in 0..=steps {
+            let a = a0 + (a1 - a0) * i as f32 / steps as f32;
+            self.dot(c.0 + radius * a.cos(), c.1 + radius * a.sin(), t, col);
+        }
+    }
+
+    /// Stroke an Archimedean spiral about `c` (radius `radii.0`→`radii.1`
+    /// over `sweep`).
+    fn spiral(&mut self, c: (f32, f32), radii: (f32, f32), a0: f32, sweep: f32, t: f32, col: Rgb) {
+        let (r0, r1) = radii;
+        let steps = (sweep.abs() * r0.max(r1)).max(16.0) as i32;
+        for i in 0..=steps {
+            let f = i as f32 / steps as f32;
+            let a = a0 + sweep * f;
+            let r = r0 + (r1 - r0) * f;
+            self.dot(c.0 + r * a.cos(), c.1 + r * a.sin(), t, col);
+        }
+    }
+
+    /// Flat two-tone gold arc: a `GOLD_DK` shadow offset under a `GOLD` stroke.
+    fn g_arc(&mut self, c: (f32, f32), radius: f32, a0: f32, a1: f32) {
+        self.arc((c.0 + 1.0, c.1 + 1.5), radius, a0, a1, FIL_STROKE, GOLD_DK);
+        self.arc(c, radius, a0, a1, FIL_STROKE, GOLD);
+    }
+
+    /// Flat two-tone gold spiral (shadow under stroke).
+    fn g_spiral(&mut self, c: (f32, f32), r0: f32, r1: f32, a0: f32, sweep: f32) {
+        self.spiral(
+            (c.0 + 1.0, c.1 + 1.5),
+            (r0, r1),
+            a0,
+            sweep,
+            FIL_STROKE,
+            GOLD_DK,
+        );
+        self.spiral(c, (r0, r1), a0, sweep, FIL_STROKE, GOLD);
+    }
+
+    /// A flat gold frame line at `origin`/`size` over a thin inner shadow.
+    fn g_frame(&mut self, origin: (usize, usize), size: (usize, usize)) {
+        self.rect_outline(origin, size, GOLD, 255, 1);
+        self.rect_outline(
+            (origin.0 + 1, origin.1 + 1),
+            (size.0 - 2, size.1 - 2),
+            GOLD_DK,
+            220,
+            1,
+        );
+    }
+
+    /// A corner scroll/curl rooted at panel-corner `(x, y)`; `(sx, sy)` point
+    /// inward (toward the centre) and mirror the handedness across corners.
+    fn corner_scroll(&mut self, x: f32, y: f32, sx: f32, sy: f32) {
+        let cen = (x + sx * 15.0, y + sy * 15.0);
+        let base = (-sy).atan2(-sx); // spiral centre → the corner
+        self.g_spiral(cen, 13.0, 2.5, base, -(sx * sy) * 1.55 * TAU);
+        self.g_arc(
+            (x + sx * 46.0, y + sy * 22.0),
+            28.0,
+            base,
+            base + sx * sy * 0.6,
+        );
+        self.g_arc(
+            (x + sx * 22.0, y + sy * 46.0),
+            28.0,
+            base,
+            base - sx * sy * 0.6,
+        );
+    }
+
+    /// A symmetric twin-curl crest at an edge midpoint `(x, y)`. `horiz` = the
+    /// edge runs horizontally (top/bottom rail), else vertical (left/right).
+    fn center_flourish(&mut self, x: f32, y: f32, horiz: bool) {
+        if horiz {
+            self.g_spiral((x - 12.0, y), 7.0, 1.5, 0.0, 1.45 * TAU);
+            self.g_spiral((x + 12.0, y), 7.0, 1.5, PI, -1.45 * TAU);
+            self.g_arc((x, y + 13.0), 14.0, 1.18 * PI, 1.82 * PI);
+        } else {
+            self.g_spiral((x, y - 12.0), 7.0, 1.5, 0.5 * PI, 1.45 * TAU);
+            self.g_spiral((x, y + 12.0), 7.0, 1.5, -0.5 * PI, -1.45 * TAU);
+            self.g_arc((x + 13.0, y), 14.0, 0.68 * PI, 1.32 * PI);
         }
     }
 
@@ -127,7 +305,9 @@ impl Canvas {
 // ===== color helpers =====
 
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t).round().clamp(0.0, 255.0) as u8
+    (a as f32 + (b as f32 - a as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 fn lerp_rgb(a: Rgb, b: Rgb, t: f32) -> Rgb {
@@ -160,6 +340,31 @@ fn grain(x: usize, y: usize, amp: i32) -> i32 {
     ((h & 0xff) as i32 - 128) * amp / 128
 }
 
+/// Hashed lattice value in `0.0..=1.0` at integer point `(x, y)`.
+fn hash01(x: i32, y: i32) -> f32 {
+    let mut h = (x as u32)
+        .wrapping_mul(374_761_393)
+        .wrapping_add((y as u32).wrapping_mul(668_265_263));
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0xffff) as f32 / 65_535.0
+}
+
+/// Smooth value noise in `0.0..=1.0` — bilinear-interpolated lattice hash,
+/// for the mottled carved-stone grain.
+fn vnoise(x: f32, y: f32) -> f32 {
+    let (xi, yi) = (x.floor() as i32, y.floor() as i32);
+    let (fx, fy) = (x - xi as f32, y - yi as f32);
+    let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (ux, uy) = (smooth(fx), smooth(fy));
+    let a = hash01(xi, yi);
+    let b = hash01(xi + 1, yi);
+    let cc = hash01(xi, yi + 1);
+    let d = hash01(xi + 1, yi + 1);
+    let top = a + (b - a) * ux;
+    let bot = cc + (d - cc) * ux;
+    top + (bot - top) * uy
+}
+
 // ===== procedural textures =====
 
 /// The modal panel: weathered dark-metal field with a vignette, a double
@@ -167,42 +372,57 @@ fn grain(x: usize, y: usize, amp: i32) -> i32 {
 /// gold rule under the title band.
 fn build_panel() -> Vec<u8> {
     let (w, h) = (PANEL_W as usize, PANEL_H as usize);
+    let f = FRAME as usize;
     let mut c = Canvas::new(w, h);
-    // Weathered dark-metal field with a deep vignette (candlelit-crypt feel).
-    for y in 0..h {
-        let base = lerp_rgb(SURFACE_TOP, SURFACE_BOT, y as f32 / (h - 1) as f32);
-        for x in 0..w {
-            let edge = (x.min(w - 1 - x)).min(y.min(h - 1 - y)) as f32;
-            let vig = 0.46 + 0.54 * (edge / 60.0).min(1.0);
-            c.put(x as i32, y as i32, scale(shade(base, grain(x, y, 7)), vig), 255);
+
+    // 1. Flat slate frame with a gentle drift + a couple of faint cracks.
+    c.stone_fill();
+    c.crack(7, (118, 0), 1.85, 120);
+    c.crack(41, (w as i32 - 36, h as i32), -1.9, 120);
+
+    // 2. Raised 3D bevel on the outer edge (lit top/left, shadowed bottom/
+    //    right) with an irregular chiselled falloff for depth.
+    c.outer_bevel(8, 16.0);
+
+    // 3. Recessed content well: flat dark field with a soft vignette.
+    let (cw, ch) = (w - 2 * f, h - 2 * f);
+    for yy in 0..ch {
+        let base = lerp_rgb(SURFACE_TOP, SURFACE_BOT, yy as f32 / (ch - 1) as f32);
+        for xx in 0..cw {
+            let edge = (xx.min(cw - 1 - xx)).min(yy.min(ch - 1 - yy)) as f32;
+            let vig = 0.7 + 0.3 * (edge / 40.0).min(1.0);
+            c.put((f + xx) as i32, (f + yy) as i32, scale(base, vig), 255);
         }
     }
-    // Raised outer bezel: lit top/left, shadowed bottom/right.
-    c.hline(0, w, 0, SILVER, 90);
-    c.vline(0, h, 0, SILVER, 90);
-    c.hline(0, w, h - 1, INK, 165);
-    c.vline(0, h, w - 1, INK, 165);
-    // Double frame: a rust band, then a tarnished-gold hairline.
-    c.rect_outline((4, 4), (w - 8, h - 8), RUST, 255, 3);
-    c.rect_outline((11, 11), (w - 22, h - 22), GOLD, 235, 1);
+    c.rect_outline((f - 2, f - 2), (cw + 4, ch + 4), INK, 150, 2); // recess shadow lip
 
-    // Title cartouche: a recessed darker band framed by gold rules, where the
-    // runtime draws "PAUSED" (`pause_layout::title_y` lands inside it).
-    let (band_y, band_h) = (24usize, 58usize);
-    c.fill_rect((14, band_y), (w - 28, band_h), shade(SURFACE_BOT, -7), 255);
-    c.hline(14, w - 14, band_y, GOLD, 220);
-    c.hline(14, w - 14, band_y + band_h, GOLD, 220);
+    // 4. Tarnished-gold filigree: a thin frame line, corner scrolls, and a
+    //    twin-curl crest centred on each edge.
+    c.g_frame((f - 7, f - 7), (cw + 14, ch + 14));
+    let (x0, y0) = ((f - 7) as f32, (f - 7) as f32);
+    let (x1, y1) = ((w - f + 6) as f32, (h - f + 6) as f32);
+    c.corner_scroll(x0, y0, 1.0, 1.0);
+    c.corner_scroll(x1, y0, -1.0, 1.0);
+    c.corner_scroll(x0, y1, 1.0, -1.0);
+    c.corner_scroll(x1, y1, -1.0, -1.0);
+    let (mx, my) = (w as f32 * 0.5, h as f32 * 0.5);
+    c.center_flourish(mx, (f / 2) as f32, true);
+    c.center_flourish(mx, (h - f / 2) as f32, true);
+    c.center_flourish((f / 2) as f32, my, false);
+    c.center_flourish((w - f / 2) as f32, my, false);
 
-    // Corner studs (gold diamonds with a dark centre) on the gold frame.
-    for &(cx, cy) in &[
-        (11i32, 11i32),
-        (w as i32 - 12, 11),
-        (11, h as i32 - 12),
-        (w as i32 - 12, h as i32 - 12),
-    ] {
-        c.diamond(cx, cy, 5, GOLD_BRIGHT, 255);
-        c.put(cx, cy, INK, 255);
-    }
+    // 5. Title cartouche inside the well, framed by flat gold rules — the
+    //    runtime draws "PAUSED" here (`pause_layout::title_y` lands inside it).
+    let (band_x, band_w) = (f + 6, cw - 12);
+    let (band_y, band_h) = (f + 10, 60usize);
+    c.fill_rect(
+        (band_x, band_y),
+        (band_w, band_h),
+        shade(SURFACE_BOT, -8),
+        255,
+    );
+    c.hline(band_x, band_x + band_w, band_y, GOLD, 255);
+    c.hline(band_x, band_x + band_w, band_y + band_h, GOLD, 255);
     c.into_pixels()
 }
 
@@ -217,7 +437,12 @@ fn build_button() -> Vec<u8> {
         let from_centre = (y as f32 / (h - 1) as f32 - 0.5).abs(); // 0 centre .. 0.5 edge
         let recess = -11 + (from_centre * 22.0) as i32;
         for x in 0..w {
-            c.put(x as i32, y as i32, shade(base, grain(x + 7, y + 13, 6) + recess), 255);
+            c.put(
+                x as i32,
+                y as i32,
+                shade(base, grain(x + 7, y + 13, 6) + recess),
+                255,
+            );
         }
     }
     // Bevel: bright top/left, dark bottom/right.
@@ -235,9 +460,9 @@ fn build_button() -> Vec<u8> {
 // ===== layout + widgets =====
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub enum PauseButton {
-    Resume,
-    Quit,
+pub enum ModalButton {
+    Top,
+    Bottom,
 }
 
 #[derive(Copy, Clone)]
@@ -254,60 +479,64 @@ impl Rect {
     }
 }
 
-/// Screen-space placement of the pause modal, recomputed from the viewport
-/// each frame so `update` (hit-testing) and `render` (drawing) agree.
-pub struct PauseLayout {
+/// Screen-space placement of a centred panel with two stacked buttons,
+/// recomputed from the viewport each frame so `update` (hit-testing) and
+/// `render` (drawing) agree.
+pub struct ModalLayout {
     panel: Rect,
     title_y: f32,
-    resume: Rect,
-    quit: Rect,
+    top: Rect,
+    bottom: Rect,
 }
 
-/// Centre the fixed-size modal on the screen and stack its buttons.
-pub fn pause_layout(screen: Vec2) -> PauseLayout {
+/// Centre the fixed-size panel on the screen and stack its two buttons.
+pub fn modal_layout(screen: Vec2) -> ModalLayout {
     let (pw, ph) = (PANEL_W as f32, PANEL_H as f32);
     let px = ((screen.x - pw) * 0.5).round();
     let py = ((screen.y - ph) * 0.5).round();
+    let frame = FRAME as f32;
     let (bw, bh) = (BUTTON_W as f32, BUTTON_H as f32);
     let bx = px + (pw - bw) * 0.5;
-    PauseLayout {
+    ModalLayout {
         panel: Rect {
             x: px,
             y: py,
             w: pw,
             h: ph,
         },
-        title_y: py + 44.0,
-        resume: Rect {
+        title_y: py + frame + 22.0,
+        top: Rect {
             x: bx,
-            y: py + 134.0,
+            y: py + frame + 108.0,
             w: bw,
             h: bh,
         },
-        quit: Rect {
+        bottom: Rect {
             x: bx,
-            y: py + 204.0,
+            y: py + frame + 184.0,
             w: bw,
             h: bh,
         },
     }
 }
 
-impl PauseLayout {
+impl ModalLayout {
     /// Which button (if any) the cursor is over.
     #[must_use]
-    pub fn hover(&self, cursor: Vec2) -> Option<PauseButton> {
-        if self.resume.contains(cursor) {
-            Some(PauseButton::Resume)
-        } else if self.quit.contains(cursor) {
-            Some(PauseButton::Quit)
+    pub fn hover(&self, cursor: Vec2) -> Option<ModalButton> {
+        if self.top.contains(cursor) {
+            Some(ModalButton::Top)
+        } else if self.bottom.contains(cursor) {
+            Some(ModalButton::Bottom)
         } else {
             None
         }
     }
 }
 
-/// Uploaded UI textures, built once at init.
+/// Uploaded UI textures — just handles, so `Theme` is `Copy` and cheap to
+/// share between scenes (the textures are uploaded once and never freed).
+#[derive(Copy, Clone)]
 pub struct Theme {
     panel: TextureHandle,
     button: TextureHandle,
@@ -315,9 +544,10 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Generate + upload the gothic raster art. `white` is the shared 1×1
-    /// white pixel (reused for the scrim, hover sheen, and outlines).
-    pub fn load(renderer: &mut Renderer, white: TextureHandle) -> Self {
+    /// Generate + upload the gothic raster art, including the shared 1×1 white
+    /// pixel (reused for scrim, backdrop, hover sheen, and outlines).
+    pub fn build(renderer: &mut Renderer) -> Self {
+        let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
         let panel = renderer.load_texture(&build_panel(), PANEL_W, PANEL_H);
         let button = renderer.load_texture(&build_button(), BUTTON_W, BUTTON_H);
         Self {
@@ -327,25 +557,41 @@ impl Theme {
         }
     }
 
-    /// Draw the pause modal: scrim, panel, title, and the two buttons with
-    /// hover lighting.
-    pub fn draw_pause(
+    /// Translucent full-screen scrim — dims a frozen scene behind a modal.
+    pub fn scrim(&self, r: &mut Renderer, screen: Vec2) {
+        r.draw_sprite(self.white, Vec2::ZERO, screen, COL_SCRIM);
+    }
+
+    /// Opaque full-screen dark backdrop — for a menu with nothing behind it.
+    pub fn backdrop(&self, r: &mut Renderer, screen: Vec2) {
+        r.draw_sprite(self.white, Vec2::ZERO, screen, COL_BACKDROP);
+    }
+
+    /// Draw the gothic panel: `title` in the cartouche and two labelled
+    /// buttons (`labels.0` over `labels.1`) with hover lighting. The caller
+    /// draws the backdrop/scrim first (see [`Self::scrim`] / [`Self::backdrop`]).
+    pub fn draw_panel(
         &self,
         r: &mut Renderer,
-        screen: Vec2,
-        layout: &PauseLayout,
-        hover: Option<PauseButton>,
+        layout: &ModalLayout,
+        title: &str,
+        labels: (&str, &str),
+        hover: Option<ModalButton>,
     ) {
-        r.draw_sprite(self.white, Vec2::ZERO, screen, COL_SCRIM);
         r.draw_sprite(
             self.panel,
             Vec2::new(layout.panel.x, layout.panel.y),
             Vec2::new(layout.panel.w, layout.panel.h),
             [1.0, 1.0, 1.0, 1.0],
         );
-        centered_text(r, "PAUSED", layout.panel, layout.title_y, 34.0, COL_TITLE);
-        self.draw_button(r, &layout.resume, "RESUME", hover == Some(PauseButton::Resume));
-        self.draw_button(r, &layout.quit, "QUIT", hover == Some(PauseButton::Quit));
+        centered_text(r, title, layout.panel, layout.title_y, 34.0, COL_TITLE);
+        self.draw_button(r, &layout.top, labels.0, hover == Some(ModalButton::Top));
+        self.draw_button(
+            r,
+            &layout.bottom,
+            labels.1,
+            hover == Some(ModalButton::Bottom),
+        );
     }
 
     fn draw_button(&self, r: &mut Renderer, rect: &Rect, label: &str, hovered: bool) {
@@ -372,7 +618,14 @@ impl Theme {
 
 /// Estimate the label width and draw it horizontally centred in `container`,
 /// with its top-left at `y`.
-fn centered_text(r: &mut Renderer, text: &str, container: Rect, y: f32, size: f32, color: [f32; 4]) {
+fn centered_text(
+    r: &mut Renderer,
+    text: &str,
+    container: Rect,
+    y: f32,
+    size: f32,
+    color: [f32; 4],
+) {
     let est_w = text.chars().count() as f32 * size * GLYPH_ADVANCE;
     let x = (container.x + (container.w - est_w) * 0.5).max(container.x);
     r.draw_text(text, Vec2::new(x, y), size, color);
@@ -380,14 +633,24 @@ fn centered_text(r: &mut Renderer, text: &str, container: Rect, y: f32, size: f3
 
 /// Draw a `t`-thick rectangle outline with the white texture (screen space).
 fn outline(r: &mut Renderer, white: TextureHandle, rect: &Rect, t: f32, color: [f32; 4]) {
-    r.draw_sprite(white, Vec2::new(rect.x, rect.y), Vec2::new(rect.w, t), color);
+    r.draw_sprite(
+        white,
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(rect.w, t),
+        color,
+    );
     r.draw_sprite(
         white,
         Vec2::new(rect.x, rect.y + rect.h - t),
         Vec2::new(rect.w, t),
         color,
     );
-    r.draw_sprite(white, Vec2::new(rect.x, rect.y), Vec2::new(t, rect.h), color);
+    r.draw_sprite(
+        white,
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(t, rect.h),
+        color,
+    );
     r.draw_sprite(
         white,
         Vec2::new(rect.x + rect.w - t, rect.y),
@@ -403,8 +666,11 @@ mod tests {
 
     fn save(name: &str, w: u32, h: u32, px: Vec<u8>) {
         let img: ImageBuffer<Rgba<u8>, _> = ImageBuffer::from_raw(w, h, px).expect("size matches");
-        // Temp dir so the preview never lands in the repo working tree.
-        let path = std::env::temp_dir().join(name);
+        // Workspace `target/` (already git-ignored) so the preview never lands
+        // in the tracked tree.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(name);
         img.save(&path).expect("write png");
         eprintln!("wrote {}", path.display());
     }

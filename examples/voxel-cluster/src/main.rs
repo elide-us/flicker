@@ -42,16 +42,17 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use flicker::app::{run, Action, App, Bindings, ControlConfig, InputState, Key};
+use flicker::app::{run, Action, Bindings, ControlConfig, InputState, Key};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
 };
+use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{HudCommand, ScriptHost};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
-    ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext, Scene,
-    CLUSTER_DIM, NAV_DIM,
+    ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext,
+    Scene as WorldScene, CLUSTER_DIM, NAV_DIM,
 };
 use flicker_worker::WorkerPool;
 
@@ -63,16 +64,7 @@ mod ui;
 /// on every face simultaneously.
 const FIELD_DIM: u16 = 3;
 
-/// Top-level application state. Today the in-world `Playing` mode and the
-/// `Paused` modal; the handoff's Startup → MainMenu → Loading states slot in
-/// here next (each gating which subsystems `update`/`render` touch).
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum AppState {
-    Playing,
-    Paused,
-}
-
-struct VoxelCluster {
+struct GameScene {
     /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
     /// QEF corners + dense state for each cluster at full resolution.
     /// Populated once (bake or contour) and never re-derived at runtime;
@@ -195,22 +187,15 @@ struct VoxelCluster {
     /// generated asynchronously, so the snap waits for it).
     walk_needs_snap: bool,
 
-    /// Top-level app state: `Playing` (world live) or `Paused` (modal up,
-    /// gameplay frozen). Escape toggles it.
-    state: AppState,
     /// Previous-frame Escape key level, for press-edge detection (only the
-    /// mouse exposes a ready-made edge flag).
+    /// mouse exposes a ready-made edge flag). A press pushes the pause overlay.
     escape_prev: bool,
-    /// Uploaded gothic UI theme (pause-modal art). `None` until `init`.
-    ui: Option<ui::Theme>,
-    /// Which pause button the cursor is over, mirrored from `update` so
-    /// `render` can light it. `None` when not paused or nothing is hovered.
-    pause_hover: Option<ui::PauseButton>,
-
-    should_quit: bool,
+    /// Gothic UI theme for the pause overlay, built once in `enter` and handed
+    /// to each `PauseScene` this game pushes (so pausing never re-uploads).
+    pause_theme: Option<ui::Theme>,
 }
 
-impl Default for VoxelCluster {
+impl Default for GameScene {
     fn default() -> Self {
         // Camera gets its real pose in `init`. The placeholders here
         // just satisfy the Default bound; nothing renders before init.
@@ -246,22 +231,33 @@ impl Default for VoxelCluster {
             vy: 0.0,
             grounded: false,
             walk_needs_snap: false,
-            state: AppState::Playing,
             escape_prev: false,
-            ui: None,
-            pause_hover: None,
-            should_quit: false,
+            pause_theme: None,
         }
     }
 }
 
-impl VoxelCluster {
-    /// Build the example around an already-loaded HUD script. All other
-    /// state takes its placeholder values from [`Default`]; the camera
-    /// gets its real pose in [`App::init`].
-    fn new(script: ScriptHost) -> Self {
+/// Path to the HUD script, resolved against this crate's source dir so the
+/// example finds it regardless of the working directory `cargo run` uses.
+const HUD_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
+
+impl GameScene {
+    /// Build the game scene, loading the HUD script best-effort (it still runs
+    /// without it). Other state takes its placeholder values from [`Default`];
+    /// the world + camera come up in [`Scene::enter`].
+    fn new() -> Self {
+        let script = match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+            Ok(s) => {
+                tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
+                Some(s)
+            }
+            Err(e) => {
+                tracing::error!("HUD script load failed (continuing without it): {e}");
+                None
+            }
+        };
         Self {
-            script: Some(script),
+            script,
             ..Self::default()
         }
     }
@@ -289,7 +285,7 @@ impl VoxelCluster {
     }
 }
 
-/// Field-of-view used by [`VoxelCluster::render`]; mirrored here so the
+/// Field-of-view used by [`GameScene::render`]; mirrored here so the
 /// picking ray uses the exact same vertical FOV as the projection.
 const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 
@@ -306,7 +302,7 @@ const HUD_PANEL_X1: f32 = 280.0;
 // `ORIGIN_Y + 5*ROW_H + BOX = 180 + 130 + 18 = 328`; pad to ~10px.
 const HUD_PANEL_Y1: f32 = 338.0;
 
-impl VoxelCluster {
+impl GameScene {
     /// `true` when the cursor sits on the scripted HUD's checkbox panel
     /// — the script already consumes the click there (toggling a
     /// checkbox), so we must not also fire a world pick on the same
@@ -580,7 +576,7 @@ const CUBE_EDGES: [(usize, usize); 12] = [
     (0b011, 0b111),
 ];
 
-impl VoxelCluster {
+impl GameScene {
     /// Build the [`VirtualVoxel`] for the current selection, if any.
     /// Cheap — eight `cluster.get` reads per call — so callers
     /// recompute every frame instead of caching.
@@ -594,7 +590,7 @@ impl VoxelCluster {
     }
 }
 
-impl VoxelCluster {
+impl GameScene {
     /// Rebuild every cluster's contour and mesh from scratch. Called
     /// once at init and again on every `\` toggle. Cheaper than tracking
     /// dirty bits here — the whole 9-cluster rebuild costs a couple
@@ -624,7 +620,7 @@ impl VoxelCluster {
             return;
         }
         for id in &lod0_ids {
-            let scene = Scene::world_at(id.world_offset());
+            let scene = WorldScene::world_at(id.world_offset());
             source.insert(*id, contour(&scene, material, *id));
         }
     }
@@ -1090,7 +1086,7 @@ const MAX_STEP_UP: f32 = 8.0;
 /// the surface reads at a human pace. Tune to taste.
 const WALK_SPEED: f32 = 24.0;
 
-impl VoxelCluster {
+impl GameScene {
     /// World-space surface height (camera-frame Y, voxels) of the walkable
     /// nav under world position `(x, z)`, or `None` when no applied nav
     /// covers that column — outside the field, or a column with no floor.
@@ -1201,33 +1197,10 @@ impl VoxelCluster {
             }
         }
     }
-
-    /// Pause-modal interaction: Escape resumes; otherwise track which button
-    /// the cursor is over and act on a click (Resume → play, Quit → exit).
-    /// Gameplay is frozen while this runs (see `update`).
-    fn update_pause_menu(&mut self, input: &InputState, renderer: &Renderer, esc_pressed: bool) {
-        if esc_pressed {
-            self.state = AppState::Playing;
-            self.pause_hover = None;
-            return;
-        }
-        let layout = ui::pause_layout(renderer.size());
-        self.pause_hover = layout.hover(input.mouse_position);
-        if input.mouse_left_pressed {
-            match self.pause_hover {
-                Some(ui::PauseButton::Resume) => {
-                    self.state = AppState::Playing;
-                    self.pause_hover = None;
-                }
-                Some(ui::PauseButton::Quit) => self.should_quit = true,
-                None => {}
-            }
-        }
-    }
 }
 
-impl App for VoxelCluster {
-    fn init(&mut self, renderer: &mut Renderer) {
+impl Scene for GameScene {
+    fn enter(&mut self, renderer: &mut Renderer) {
         // Stand up the worker pool + result channel, populate the LOD-0
         // source once, and submit the initial field build. Meshes appear over
         // the next frame or two as jobs complete (drained in `render`).
@@ -1253,31 +1226,23 @@ impl App for VoxelCluster {
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
 
-        // Gothic UI theme (pause modal). Reuses the 1×1 white pixel above for
-        // the scrim / hover sheen / outlines.
-        let white = self.white.expect("white pixel uploaded above");
-        self.ui = Some(ui::Theme::load(renderer, white));
+        // Gothic UI theme for the pause overlay — built once and handed to
+        // each PauseScene we push, so pausing never re-uploads textures.
+        self.pause_theme = Some(ui::Theme::build(renderer));
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         let dt_s = dt.as_secs_f32();
 
         // Escape edge (we track the level ourselves — only the mouse exposes a
-        // ready-made press flag) toggles the pause modal.
+        // ready-made press flag) pushes the pause overlay. The scene manager
+        // then freezes us, so no gameplay runs until it pops.
         let esc_down = input.key_down(Key::Escape);
         let esc_pressed = esc_down && !self.escape_prev;
         self.escape_prev = esc_down;
-
-        // Paused: only the modal is live; gameplay is frozen.
-        if matches!(self.state, AppState::Paused) {
-            self.update_pause_menu(input, renderer, esc_pressed);
-            return;
-        }
-        // Playing: Escape opens the modal (skip the rest of this frame).
         if esc_pressed {
-            self.state = AppState::Paused;
-            self.pause_hover = None;
-            return;
+            let theme = self.pause_theme.expect("pause theme built in enter");
+            return Transition::Push(Box::new(PauseScene::new(theme)));
         }
 
         // Debug toggles now live in the HUD script: feed it the mouse +
@@ -1394,10 +1359,8 @@ impl App for VoxelCluster {
                 self.position += motion.normalize() * self.config.move_speed * dt_s;
             }
         }
-    }
 
-    fn should_quit(&self) -> bool {
-        self.should_quit
+        Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
@@ -1583,7 +1546,11 @@ impl App for VoxelCluster {
             renderer.draw_text(
                 &format!(
                     "walk: {}   ground y: {}   vy: {:+.1}",
-                    if self.grounded { "grounded" } else { "airborne" },
+                    if self.grounded {
+                        "grounded"
+                    } else {
+                        "airborne"
+                    },
                     ground,
                     self.vy,
                 ),
@@ -1686,15 +1653,106 @@ impl App for VoxelCluster {
                 Err(e) => tracing::error!("HUD script draw failed: {e}"),
             }
         }
+    }
+}
 
-        // Pause modal on top of everything (the scrim dims the world + HUD).
-        if matches!(self.state, AppState::Paused) {
-            if let Some(theme) = self.ui.as_ref() {
-                let screen = renderer.size();
-                let layout = ui::pause_layout(screen);
-                theme.draw_pause(renderer, screen, &layout, self.pause_hover);
+// ===== Front-end scenes (menu + pause overlay) =====
+
+/// Main menu: the gothic panel with START / QUIT over an opaque backdrop.
+/// START replaces this scene with the game; QUIT exits.
+struct MenuScene {
+    theme: Option<ui::Theme>,
+    hover: Option<ui::ModalButton>,
+}
+
+impl MenuScene {
+    fn new() -> Self {
+        Self {
+            theme: None,
+            hover: None,
+        }
+    }
+}
+
+impl Scene for MenuScene {
+    fn enter(&mut self, renderer: &mut Renderer) {
+        self.theme = Some(ui::Theme::build(renderer));
+    }
+
+    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        let layout = ui::modal_layout(renderer.size());
+        self.hover = layout.hover(input.mouse_position);
+        if input.mouse_left_pressed {
+            match self.hover {
+                Some(ui::ModalButton::Top) => {
+                    return Transition::Replace(Box::new(GameScene::new()))
+                }
+                Some(ui::ModalButton::Bottom) => return Transition::Quit,
+                None => {}
             }
         }
+        Transition::None
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        let Some(theme) = self.theme else { return };
+        let screen = renderer.size();
+        let layout = ui::modal_layout(screen);
+        theme.backdrop(renderer, screen);
+        theme.draw_panel(renderer, &layout, "FLICKER", ("START", "QUIT"), self.hover);
+    }
+}
+
+/// Pause overlay pushed over the frozen game. Resume (or Escape) pops back to
+/// the game; Quit exits. Reuses the game's already-uploaded [`ui::Theme`].
+struct PauseScene {
+    theme: ui::Theme,
+    hover: Option<ui::ModalButton>,
+    escape_prev: bool,
+}
+
+impl PauseScene {
+    fn new(theme: ui::Theme) -> Self {
+        // Escape is held at the instant the game pushes us; start `escape_prev`
+        // true so the opening press doesn't immediately pop us back.
+        Self {
+            theme,
+            hover: None,
+            escape_prev: true,
+        }
+    }
+}
+
+impl Scene for PauseScene {
+    fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        let esc_down = input.key_down(Key::Escape);
+        let esc_pressed = esc_down && !self.escape_prev;
+        self.escape_prev = esc_down;
+        if esc_pressed {
+            return Transition::Pop; // resume
+        }
+        let layout = ui::modal_layout(renderer.size());
+        self.hover = layout.hover(input.mouse_position);
+        if input.mouse_left_pressed {
+            match self.hover {
+                Some(ui::ModalButton::Top) => return Transition::Pop, // resume
+                Some(ui::ModalButton::Bottom) => return Transition::Quit,
+                None => {}
+            }
+        }
+        Transition::None
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        let screen = renderer.size();
+        let layout = ui::modal_layout(screen);
+        self.theme.scrim(renderer, screen);
+        self.theme
+            .draw_panel(renderer, &layout, "PAUSED", ("RESUME", "QUIT"), self.hover);
     }
 }
 
@@ -1784,7 +1842,7 @@ fn run_bake_mode() -> Result<()> {
     for x in 0..FIELD_DIM {
         for z in 0..FIELD_DIM {
             let id = ClusterId::new(0, x, 0, z);
-            let scene = Scene::world_at(id.world_offset());
+            let scene = WorldScene::world_at(id.world_offset());
             let cluster = contour(&scene, material, id);
             let baked = BakedCluster::from_cluster(id, cluster);
             // Compact JSON, gzipped — the dense state field's 4 MB of
@@ -1833,17 +1891,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // Load the HUD script at startup. The path is resolved against this
-    // crate's source dir, so the example finds it regardless of the
-    // working directory `cargo run` is launched from; editing the .lua
-    // file then takes effect on the next run, no recompile needed.
-    let script_path = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
-    // `ScriptError` carries an `mlua::Error`, which is not `Send`, so it
-    // can't auto-convert into `anyhow::Error`; format it to a message.
-    let script = ScriptHost::from_file(script_path)
-        .map_err(|e| anyhow::anyhow!("failed to load HUD script: {e}"))?;
-    tracing::info!("loaded HUD script from {script_path}");
-
-    run(VoxelCluster::new(script))?;
+    // Start on the main menu; the scene manager drives menu → game → pause.
+    run(SceneManager::new(Box::new(MenuScene::new())))?;
     Ok(())
 }

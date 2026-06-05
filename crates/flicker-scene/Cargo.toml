@@ -1,0 +1,9 @@
+[package]
+name = "flicker-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flicker-app.workspace = true
+flicker-render.workspace = true

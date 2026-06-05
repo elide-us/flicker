@@ -9,6 +9,7 @@ members = [
     "crates/flicker-script",
     "crates/flicker-net",
     "crates/flicker-app",
+    "crates/flicker-scene",
     "crates/flicker-voxel",
     "crates/flicker-worker",
     "crates/flicker",
@@ -82,6 +83,7 @@ flicker-2d = { version = "0.1.0", path = "crates/flicker-2d" }
 flicker-script = { version = "0.1.0", path = "crates/flicker-script" }
 flicker-net = { version = "0.1.0", path = "crates/flicker-net" }
 flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
+flicker-scene = { version = "0.1.0", path = "crates/flicker-scene" }
 flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "crates/flicker-worker" }
 

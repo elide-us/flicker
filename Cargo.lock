@@ -659,6 +659,7 @@ dependencies = [
  "flicker-core",
  "flicker-net",
  "flicker-render",
+ "flicker-scene",
  "flicker-script",
 ]
 
@@ -735,6 +736,14 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "flicker-scene"
+version = "0.1.0"
+dependencies = [
+ "flicker-app",
+ "flicker-render",
 ]
 
 [[package]]
