@@ -17,7 +17,7 @@
 //!   * Escape: quit.
 //!
 //! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
-//! loaded at startup via `flicker-script`) — five clickable
+//! loaded at startup via `flicker-script`) — six clickable
 //! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
 //! handling:
 //!   * Wireframe overlay on top of the solid mesh.
@@ -27,6 +27,9 @@
 //!     the contour's QEF placed each active cell's dual vertex.
 //!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
 //!     floor-to-floor links between walkable-adjacent columns.
+//!   * Surface walk — switch to surface-walk locomotion, which generates
+//!     the nav surface around the player. Fly mode (the default) generates
+//!     no nav and produces no collisions.
 //!   * Camera-driven LOD — each cluster's LOD follows its distance from
 //!     the camera (smoothed to the mesher's ±1 adjacency invariant),
 //!     re-meshing on a swap.
@@ -141,6 +144,13 @@ struct VoxelCluster {
     /// Mirrors the script's `"lod_billboards"` checkbox: draw a per-cluster
     /// LOD-digit billboard on the navmesh surface at the cluster centre.
     lod_billboards_on: bool,
+    /// Locomotion mode, mirroring the script's `"surface_walk"` checkbox.
+    /// `false` = fly mode (the only real mode today): **no NavMesh is
+    /// generated and the engine produces no collisions**. `true` =
+    /// surface-walk mode, which generates the LOD2 nav surface around the
+    /// player so it can be inspected (and walked, once collision lands).
+    /// See `docs/architecture.md` "Mesh & navigation generation".
+    locomotion_walk: bool,
     /// Currently-applied per-cluster LOD for the 3×3 field, already smoothed
     /// to the mesher's ±1 cross-LOD adjacency invariant. `rebuild` meshes to
     /// this and the billboards display it; recomputed each `update`.
@@ -193,6 +203,7 @@ impl Default for VoxelCluster {
             navmesh_segments: Vec::new(),
             camera_lod_on: false,
             lod_billboards_on: false,
+            locomotion_walk: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
             pick_meshes: Vec::new(),
@@ -249,9 +260,9 @@ const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 const HUD_PANEL_X0: f32 = 12.0;
 const HUD_PANEL_Y0: f32 = 152.0;
 const HUD_PANEL_X1: f32 = 280.0;
-// Five checkbox rows: the Lua panel's last box bottom is
-// `ORIGIN_Y + 4*ROW_H + BOX = 180 + 104 + 18 = 302`; pad to ~10px.
-const HUD_PANEL_Y1: f32 = 312.0;
+// Six checkbox rows: the Lua panel's last box bottom is
+// `ORIGIN_Y + 5*ROW_H + BOX = 180 + 130 + 18 = 328`; pad to ~10px.
+const HUD_PANEL_Y1: f32 = 338.0;
 
 impl VoxelCluster {
     /// `true` when the cursor sits on the scripted HUD's checkbox panel
@@ -590,13 +601,14 @@ impl VoxelCluster {
         };
         let lod_field = self.lod_field;
         let camera = [self.position.x, self.position.y, self.position.z];
+        let walk = self.locomotion_walk;
         for x in 0..FIELD_DIM {
             for z in 0..FIELD_DIM {
                 let source = Arc::clone(&self.source);
                 let tx = tx.clone();
                 pool.submit(move || {
                     let src = source.read().expect("source lock poisoned");
-                    let build = build_cluster(&src, x, z, lod_field, camera, generation);
+                    let build = build_cluster(&src, x, z, lod_field, camera, walk, generation);
                     let _ = tx.send(build);
                 });
             }
@@ -767,6 +779,7 @@ fn build_cluster(
     z: u16,
     lod_field: [[u8; FIELD_DIM as usize]; FIELD_DIM as usize],
     camera: [f32; 3],
+    walk: bool,
     generation: u64,
 ) -> ClusterBuild {
     let lod_for = |xx: u16, zz: u16| lod_field[xx as usize][zz as usize];
@@ -804,10 +817,13 @@ fn build_cluster(
     let origin = Vec3::new(off[0], off[1], off[2]);
     let cm = flicker_voxel::mesh(&self_c, &neighbors, self_lod);
 
-    // Nav (LOD2 walkable surface) for clusters in rings 0–2. State is
-    // LOD-independent (derive copies it verbatim), so this matches the source.
+    // Nav (LOD2 walkable surface) for clusters in rings 0–2 — but only in
+    // surface-walk mode. In fly mode (the default and only locomotion today)
+    // no nav is generated and the engine produces no collisions; nav exists
+    // solely for walking/collision, which fly mode does not use. State is
+    // LOD-independent (derive copies it verbatim), so it matches the source.
     let mut navmesh_segments = Vec::new();
-    let nav = if in_nav_rings(camera, cluster_center_world(id)) {
+    let nav = if walk && in_nav_rings(camera, cluster_center_world(id)) {
         let nav = ClusterNav::compute_nav(&self_c, &neighbors);
         append_navmesh_segments(&nav, id, &self_c, &neighbors, &mut navmesh_segments);
         Some(nav)
@@ -1052,6 +1068,15 @@ impl App for VoxelCluster {
                     self.navmesh_on = toggles.is_on("navmesh");
                     self.camera_lod_on = toggles.is_on("camera_lod");
                     self.lod_billboards_on = toggles.is_on("lod_billboards");
+
+                    // Locomotion mode: surface-walk generates the nav surface;
+                    // fly mode generates none (and no collision). A change
+                    // re-meshes the field so nav appears/disappears with it.
+                    let walk = toggles.is_on("surface_walk");
+                    if walk != self.locomotion_walk {
+                        self.locomotion_walk = walk;
+                        self.submit_field_jobs();
+                    }
 
                     // Desired per-cluster LOD field: the camera-driven
                     // distance policy (smoothed to the mesher's ±1 adjacency

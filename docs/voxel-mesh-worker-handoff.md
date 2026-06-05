@@ -93,11 +93,16 @@ awaited.
     and each job re-derives its 4 neighbours — both fine at 9 clusters, both worth
     optimising at scale (changed∪neighbours only; share derived clusters across jobs).
     corner-arrows are now source-LOD-0 (a debug-viz simplification).
-- **W4 — Streaming + nav (later).** Enqueue jobs as the player *moves* (load near,
-  evict far), not only on LOD change. Generate **NavMesh dynamically around the player
-  — gated by locomotion mode**: in **fly mode (the only mode today) no nav is generated
-  and no collision is produced**; a UI toggle enables a surface-walking mode for
-  nav/collision testing. (See `docs/architecture.md` "Mesh & navigation generation".)
+- **W4a — Locomotion nav gate. ✅ DONE.** `build_cluster` now generates nav only in
+  surface-walk mode; **fly mode (the default and only locomotion today) generates no nav
+  and produces no collision** — exactly the `architecture.md` invariant, now enforced in
+  code, not just documented. A `"surface_walk"` HUD checkbox toggles the mode and
+  re-submits the field so nav appears/disappears. (Walk mode only *generates* nav for
+  now — actual walking/collision movement is unimplemented.)
+- **W4b — Streaming (deferred, larger feature).** Enqueue/evict jobs as the player
+  *moves* across a world larger than the fixed 3×3 field — load near, drop far — instead
+  of only re-meshing the static field on LOD change. This turns the demo's fixed field
+  into a dynamic window and is its own slice; not started.
 
 ## Open decisions
 
