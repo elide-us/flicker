@@ -48,7 +48,7 @@ use flicker::render::{
     Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
-use flicker::script::{HudCommand, ScriptHost, TextAlign};
+use flicker::script::{HudCommand, ScriptHost, TextAlign, ValueMap};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
     ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext,
@@ -1233,6 +1233,59 @@ impl GameScene {
             (self.pending.len() as f32 / field as f32).clamp(0.0, 1.0)
         }
     }
+
+    /// The engine data model published to the scripted HUD each frame
+    /// (`scripts/hud.lua` renders the left-column stats from these named
+    /// values via the `Model` global). Plain scalars only — the boundary
+    /// contract. The deep virtual-voxel inspector is *not* here; it stays Rust.
+    fn hud_model(&self) -> ValueMap {
+        let mut m = ValueMap::new()
+            .with("walk", self.locomotion_walk)
+            .with("field_dim", u32::from(FIELD_DIM))
+            .with("cluster_dim", CLUSTER_DIM)
+            .with("cluster_count", self.meshes.len())
+            .with("pos_x", self.position.x)
+            .with("pos_y", self.position.y)
+            .with("pos_z", self.position.z)
+            .with("yaw", self.yaw)
+            .with("pitch", self.pitch)
+            .with("move_speed", self.config.move_speed)
+            .with("look_sens", self.config.look_sensitivity)
+            .with("invert_y", self.config.invert_pitch)
+            .with("invert_x", self.config.invert_yaw)
+            .with("corner_arrows", self.corner_arrows.len())
+            .with("nav_count", self.navs.len());
+
+        // Pick selection (None until a face is clicked): a flag + components so
+        // the script formats the line itself.
+        match self.selection {
+            Some((id, p)) => {
+                m.set("has_pick", true);
+                m.set("pick_cx", i64::from(id.x()));
+                m.set("pick_cy", i64::from(id.y()));
+                m.set("pick_cz", i64::from(id.z()));
+                m.set("pick_lod", i64::from(id.lod()));
+                m.set("pick_px", i64::from(p[0]));
+                m.set("pick_py", i64::from(p[1]));
+                m.set("pick_pz", i64::from(p[2]));
+            }
+            None => m.set("has_pick", false),
+        }
+
+        // Walk readout (surface-walk mode only).
+        if self.locomotion_walk {
+            m.set("grounded", self.grounded);
+            m.set("vy", self.vy);
+            match self.ground_height_at(self.position.x, self.position.z) {
+                Some(g) => {
+                    m.set("has_ground", true);
+                    m.set("ground_y", g);
+                }
+                None => m.set("has_ground", false),
+            }
+        }
+        m
+    }
 }
 
 impl Scene for GameScene {
@@ -1533,108 +1586,13 @@ impl Scene for GameScene {
             }
         }
 
-        // HUD text.
-        let controls = if self.locomotion_walk {
-            "walk — WASD on surface, gravity, right-drag look"
-        } else {
-            "fly — WASD move, R/F up/down, right-drag look"
-        };
-        renderer.draw_text(
-            &format!("voxel cluster — {FIELD_DIM}×{FIELD_DIM} field — {controls}"),
-            Vec2::new(16.0, 16.0),
-            22.0,
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        renderer.draw_text(
-            &format!(
-                "pos: ({:.0}, {:.0}, {:.0})  yaw: {:.2}  pitch: {:.2}",
-                self.position.x, self.position.y, self.position.z, self.yaw, self.pitch
-            ),
-            Vec2::new(16.0, 44.0),
-            16.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        renderer.draw_text(
-            &format!(
-                "clusters: {}   extent: {}³ voxels each",
-                self.meshes.len(),
-                CLUSTER_DIM
-            ),
-            Vec2::new(16.0, 64.0),
-            16.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        renderer.draw_text(
-            &format!(
-                "config — speed: {:.0}  sens: {:.4}  invert-Y: {}  invert-X: {}",
-                self.config.move_speed,
-                self.config.look_sensitivity,
-                self.config.invert_pitch,
-                self.config.invert_yaw,
-            ),
-            Vec2::new(16.0, 84.0),
-            16.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        // Diagnostics the checkboxes don't convey on their own.
-        renderer.draw_text(
-            &format!(
-                "corner arrows stored: {}   nav clusters (rings 0–2): {}",
-                self.corner_arrows.len(),
-                self.navs.len(),
-            ),
-            Vec2::new(16.0, 104.0),
-            16.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        renderer.draw_text(
-            "press Escape to quit",
-            Vec2::new(16.0, 124.0),
-            16.0,
-            [0.75, 0.85, 0.95, 1.0],
-        );
-        // Current pick — the inspector's selection state. `None` until
-        // the first left-click lands on a meshed face.
-        let pick_line = match self.selection {
-            Some((id, p)) => format!(
-                "pick: ({}, {}, {}, lod {}) p = ({}, {}, {})",
-                id.x(),
-                id.y(),
-                id.z(),
-                id.lod(),
-                p[0],
-                p[1],
-                p[2]
-            ),
-            None => "pick: (none — left-click a face)".to_string(),
-        };
-        renderer.draw_text(
-            &pick_line,
-            Vec2::new(16.0, 144.0),
-            16.0,
-            [0.95, 0.85, 0.60, 1.0],
-        );
-        // Walk readout (surface-walk mode only): grounded/airborne, the nav
-        // surface height under the camera, and vertical velocity.
-        if self.locomotion_walk {
-            let ground = self
-                .ground_height_at(self.position.x, self.position.z)
-                .map_or_else(|| "—".to_string(), |g| format!("{g:.0}"));
-            renderer.draw_text(
-                &format!(
-                    "walk: {}   ground y: {}   vy: {:+.1}",
-                    if self.grounded {
-                        "grounded"
-                    } else {
-                        "airborne"
-                    },
-                    ground,
-                    self.vy,
-                ),
-                Vec2::new(16.0, 164.0),
-                16.0,
-                [0.6, 0.95, 0.7, 1.0],
-            );
+        // Left-column HUD stats: published as the engine data model and
+        // rendered by `scripts/hud.lua` (see `hud_model`). The script also owns
+        // the feature checkboxes; both come back through `render_hud` below.
+        if let Some(script) = self.script.as_ref() {
+            if let Err(e) = script.set_model(&self.hud_model()) {
+                tracing::error!("HUD model publish failed: {e}");
+            }
         }
 
         // Virtual-voxel inspector: 12-edge wireframe of the dual cell
@@ -2370,4 +2328,68 @@ fn main() -> Result<()> {
     // pause.
     run(SceneManager::new(Box::new(LogoScene::new())))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod script_smoke {
+    //! Load the *real* HUD/menu scripts and run a frame against a representative
+    //! data model, so a Lua syntax/runtime error (or a model key the script
+    //! reads but the host forgot to publish) fails the build rather than only
+    //! showing up in the running app. This is the build-time validation that
+    //! keeps the engine↔Lua contract honest without an external bindings step.
+    use super::*;
+
+    /// A model exercising every branch `hud.lua` reads (walk on, a pick, a
+    /// known ground height).
+    fn full_model() -> ValueMap {
+        ValueMap::new()
+            .with("walk", true)
+            .with("field_dim", 3u32)
+            .with("cluster_dim", 256u32)
+            .with("cluster_count", 9u32)
+            .with("pos_x", 1.0_f32)
+            .with("pos_y", 2.0_f32)
+            .with("pos_z", 3.0_f32)
+            .with("yaw", 0.5_f32)
+            .with("pitch", -0.25_f32)
+            .with("move_speed", 60.0_f32)
+            .with("look_sens", 0.0025_f32)
+            .with("invert_y", false)
+            .with("invert_x", true)
+            .with("corner_arrows", 12u32)
+            .with("nav_count", 5u32)
+            .with("has_pick", true)
+            .with("pick_cx", 1_i64)
+            .with("pick_cy", 0_i64)
+            .with("pick_cz", -2_i64)
+            .with("pick_lod", 0_i64)
+            .with("pick_px", 10_i64)
+            .with("pick_py", 20_i64)
+            .with("pick_pz", 30_i64)
+            .with("grounded", true)
+            .with("vy", -1.5_f32)
+            .with("has_ground", true)
+            .with("ground_y", 128.0_f32)
+    }
+
+    #[test]
+    fn hud_script_runs_with_model() {
+        let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud.lua");
+        host.set_model(&full_model()).expect("publish model");
+        let input = InputState::new();
+        host.update(&input, 1920.0, 1080.0).expect("hud update");
+        let cmds = host.draw(1920.0, 1080.0).expect("hud draw");
+        assert!(!cmds.is_empty(), "hud emits stat + checkbox commands");
+    }
+
+    #[test]
+    fn menu_script_runs() {
+        let host = ScriptHost::from_file(MENU_SCRIPT_PATH).expect("load menu.lua");
+        host.set_texture_ids(&[("white", 0), ("panel", 1), ("button", 2)])
+            .expect("register textures");
+        let input = InputState::new();
+        host.update(&input, 1920.0, 1080.0).expect("menu update");
+        let cmds = host.draw(1920.0, 1080.0).expect("menu draw");
+        assert!(!cmds.is_empty(), "menu emits panel + button commands");
+    }
 }

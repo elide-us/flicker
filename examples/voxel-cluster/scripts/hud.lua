@@ -37,6 +37,107 @@ local function point_in(px, py, x, y, w, h)
   return px >= x and px <= x + w and py >= y and py <= y + h
 end
 
+-- Left-column engine stats, read from the `Model` global the host publishes
+-- each frame (flicker-script's data-model channel). These lines used to be
+-- hardcoded `draw_text` in Rust; owning them here means the layout/formatting
+-- is editable without a recompile. Colours/positions mirror the old readout.
+local DIM = { 0.75, 0.85, 0.95 }
+local function stats(cmds)
+  if not Model then
+    return
+  end
+  local function line(y, size, c, text)
+    cmds[#cmds + 1] =
+      { kind = "text", x = 16, y = y, text = text, size = size, r = c[1], g = c[2], b = c[3] }
+  end
+
+  local controls
+  if Model.walk then
+    controls = "walk — WASD on surface, gravity, right-drag look"
+  else
+    controls = "fly — WASD move, R/F up/down, right-drag look"
+  end
+  line(
+    16,
+    22,
+    { 1, 1, 1 },
+    string.format("voxel cluster — %.0f×%.0f field — %s", Model.field_dim, Model.field_dim, controls)
+  )
+  line(
+    44,
+    16,
+    DIM,
+    string.format(
+      "pos: (%.0f, %.0f, %.0f)  yaw: %.2f  pitch: %.2f",
+      Model.pos_x,
+      Model.pos_y,
+      Model.pos_z,
+      Model.yaw,
+      Model.pitch
+    )
+  )
+  line(
+    64,
+    16,
+    DIM,
+    string.format("clusters: %.0f   extent: %.0f³ voxels each", Model.cluster_count, Model.cluster_dim)
+  )
+  line(
+    84,
+    16,
+    DIM,
+    string.format(
+      "config — speed: %.0f  sens: %.4f  invert-Y: %s  invert-X: %s",
+      Model.move_speed,
+      Model.look_sens,
+      tostring(Model.invert_y),
+      tostring(Model.invert_x)
+    )
+  )
+  line(
+    104,
+    16,
+    DIM,
+    string.format(
+      "corner arrows stored: %.0f   nav clusters (rings 0–2): %.0f",
+      Model.corner_arrows,
+      Model.nav_count
+    )
+  )
+  line(124, 16, DIM, "press Escape to quit")
+
+  local pick
+  if Model.has_pick then
+    pick = string.format(
+      "pick: (%.0f, %.0f, %.0f, lod %.0f) p = (%.0f, %.0f, %.0f)",
+      Model.pick_cx,
+      Model.pick_cy,
+      Model.pick_cz,
+      Model.pick_lod,
+      Model.pick_px,
+      Model.pick_py,
+      Model.pick_pz
+    )
+  else
+    pick = "pick: (none — left-click a face)"
+  end
+  line(144, 16, { 0.95, 0.85, 0.60 }, pick)
+
+  if Model.walk then
+    local ground = "—"
+    if Model.has_ground then
+      ground = string.format("%.0f", Model.ground_y)
+    end
+    local grounded = Model.grounded and "grounded" or "airborne"
+    line(
+      164,
+      16,
+      { 0.6, 0.95, 0.7 },
+      string.format("walk: %s   ground y: %s   vy: %+.1f", grounded, ground, Model.vy)
+    )
+  end
+end
+
 -- Per-frame: flip a checkbox if the click landed on its square, then
 -- report every toggle's state back to the engine.
 function M.update(mx, my, clicked)
@@ -59,6 +160,9 @@ end
 -- Per-frame: describe the panel as draw commands the engine renders.
 function M.draw()
   local cmds = {}
+
+  -- Left-column engine stats (from Model), then the checkbox panel below.
+  stats(cmds)
 
   cmds[#cmds + 1] = {
     kind = "text",

@@ -93,11 +93,29 @@ a refactor of *where the UI is defined*, not new UI capability.
 > `Theme::lua_textures`; `MenuScene` is now a thin shell that loads the script,
 > renders its commands, and routes the `start`/`quit` momentary actions to
 > `Transition`s. Verified: builds clean, `flicker-script` tests green, and the
-> menu renders + QUIT works in the running app. **Still Rust (next):** the
-> settings dropdowns (still a Rust `SettingsPanel`), and the pause/logo/loading
-> screens — port them next using the same surface. Toggles double as momentary
-> actions, so no separate events channel was needed. The original design
-> discussion below is kept for context.
+> menu renders + QUIT works in the running app.
+>
+> **✅ Value channel + formal boundary contract (this session).** Generalised
+> the seam into a strict, plain-data contract (see `flicker-script`'s module
+> docs "Boundary contract" + `docs/ui.md`): a typed `Value` (bool/number/text)
+> currency and a `ValueMap` used **both** directions — engine→Lua **data model**
+> (`ScriptHost::set_model` → `Model` global) and Lua→engine **results** (`update`
+> now returns `ValueMap`, superseding `Toggles`; `is_on`/`number`/`text`
+> getters). `mlua` stays confined to `flicker-script` — the contract types are
+> the entire surface, never a renderer handle. Validated at build time by
+> `model_round_trip` (flicker-script) + `script_smoke` (example loads the real
+> `hud.lua`/`menu.lua` and runs a frame), which is why **no external
+> binding-generation CI step is needed** yet (parked task). **Debug-stat
+> readouts migrated:** the left-column stats (`pos`/clusters/config/diagnostics/
+> pick/walk) are now rendered by `hud.lua` from the `Model` (`GameScene::hud_model`
+> publishes them); the deep virtual-voxel inspector + 3D wireframes stay Rust.
+>
+> **Still Rust (next):** the settings dropdowns (Rust `SettingsPanel`) and the
+> pause/logo/loading screens — port on the same surface. **Next interactive
+> widgets:** sliders + value boxes (data-model-in shows the current value;
+> results-out reports the new value — the value channel above already supports
+> both). These become the controls for the upcoming lighting / time-of-day work.
+> The original design discussion below is kept for context.
 
 **The seam problem.** Today Lua is one-way (emit `Rect`/`Text`, read `Toggles`).
 Interactive widgets (buttons, dropdowns) need a **two-way** protocol: Lua

@@ -1,29 +1,46 @@
 //! flicker-script: a minimal client-only Luau scripting layer.
 //!
-//! The host embeds a Luau VM (via [`mlua`]) and runs a single Lua
-//! *module* that owns a small piece of HUD state — currently a set of
-//! interactive checkboxes. Each frame the engine:
+//! The host embeds a Luau VM (via [`mlua`]) and runs Lua *modules* that own
+//! pieces of UI logic — the in-game HUD (debug stats + feature checkboxes), the
+//! front-end menu, and so on. Lua owns layout/state/interaction; the engine
+//! owns rendering and data. This is the seam between them.
 //!
-//! 1. feeds the input snapshot to the script ([`ScriptHost::update`]),
-//!    which hit-tests clicks and flips its own checkbox state, then
-//!    returns the resulting named [`Toggles`];
-//! 2. asks the script for its HUD draw list ([`ScriptHost::draw`]),
-//!    which the engine renders.
+//! ## Boundary contract (engine ↔ script) — strictly enforced
 //!
-//! ## Layering
+//! **This crate is the *only* place the engine and Lua meet.** `mlua` is
+//! confined here; no other crate in the workspace depends on it or touches the
+//! VM. The types in this module are the **entire** contract surface, and every
+//! value crossing the boundary is plain data — named scalars, draw commands,
+//! the input snapshot — **never** an engine handle, GPU resource, or borrow.
+//! (Consequently this crate deliberately does **not** depend on
+//! `flicker-render`; it depends on `flicker-core` only for the engine's
+//! [`InputState`] snapshot.) Treat this boundary as load-bearing: widen it only
+//! by adding to these contract types, never by reaching across it elsewhere.
 //!
-//! This crate deliberately does **not** depend on `flicker-render`.
-//! Scripts never touch the GPU; they emit plain-data [`HudCommand`]s
-//! describing rectangles and text in HUD-pixel space, and the
-//! consumer (which owns the renderer) turns those into draw calls.
-//! That keeps UI *logic* in the script and UI *rendering* in the
-//! engine, with the data structs here as the only contract between
-//! them. The crate does depend on `flicker-core` for the engine's
-//! [`InputState`] — the input snapshot, not the renderer.
+//! Three channels, all in named-value / plain-data terms:
 //!
-//! The Lua side is plain Lua (no Luau-specific syntax) so the same
-//! script would run on any Lua 5.x; it just happens to execute on the
-//! configured Luau VM.
+//! 1. **Input** (engine → script): the interaction snapshot — mouse position,
+//!    the left-click *edge*, and screen size — passed to
+//!    [`update`](ScriptHost::update) / [`draw`](ScriptHost::draw).
+//! 2. **Data model** (engine → script): a [`ValueMap`] of named engine values
+//!    (fps, positions, counts, a setting's current value, …) published each
+//!    frame via [`ScriptHost::set_model`] and read by the script as the `Model`
+//!    global. This is how a script renders live stats, or shows a slider's
+//!    current value. The static `Textures` global
+//!    ([`ScriptHost::set_texture_ids`]) is a sibling: name → engine texture id.
+//! 3. **Results + draw** (script → engine): [`update`](ScriptHost::update)
+//!    returns a [`ValueMap`] of named results (toggles, momentary actions,
+//!    slider / value-box values); [`draw`](ScriptHost::draw) returns a
+//!    `Vec<`[`HudCommand`]`>` the consumer renders.
+//!
+//! [`Value`] (bool / number / text) is the only currency crossing in either
+//! direction. The boundary is validated at build time by this crate's
+//! round-trip test (`model_round_trip`), which is why a strongly-typed Rust
+//! contract here suffices and **no external binding-generation step is needed**
+//! while the boundary stays Rust-internal (see `docs/ui.md`).
+//!
+//! The Lua side is plain Lua (no Luau-specific syntax) so the same script would
+//! run on any Lua 5.x; it just happens to execute on the configured Luau VM.
 //!
 //! ## Script contract
 //!
@@ -31,14 +48,14 @@
 //!
 //! ```lua
 //! local M = {}
-//! -- Called once per frame. Hit-test the click, flip state, and return a
-//! -- table of {name = bool} states (persistent toggles, or momentary
-//! -- actions that are true only on the firing frame). `sw`/`sh` are the
-//! -- screen size for responsive layout.
+//! -- Called once per frame. Read engine data from the `Model` global, hit-test
+//! -- the click, and return a `{name = value}` table of results (bool / number /
+//! -- text) — persistent toggles, momentary actions (true only on the firing
+//! -- frame), or widget values. `sw`/`sh` are the screen size.
 //! function M.update(mouse_x, mouse_y, clicked, sw, sh) ... return { ... } end
-//! -- Called once per frame. Return a sequence of draw-command tables;
-//! -- see HudCommand for the recognised shapes ("rect"/"sprite"/"text").
-//! -- `Textures` (a global set by the host) maps names to sprite ids.
+//! -- Called once per frame. Return a sequence of draw-command tables; see
+//! -- HudCommand for the recognised shapes ("rect"/"sprite"/"text"). Globals:
+//! -- `Model` (engine data this frame) and `Textures` (name → sprite id).
 //! function M.draw(sw, sh) return { ... } end
 //! return M
 //! ```
@@ -120,19 +137,109 @@ pub enum HudCommand {
     },
 }
 
-/// The set of named boolean toggles a HUD script exposes after an
-/// [`update`](ScriptHost::update). Names are defined by the script
-/// (e.g. `"wireframe"`); the consumer queries the ones it cares about.
-#[derive(Clone, Debug, Default)]
-pub struct Toggles {
-    map: HashMap<String, bool>,
+/// A single value crossing the engine↔script boundary — the *only* value
+/// currency the [boundary contract](crate#boundary-contract-engine--script-—-strictly-enforced)
+/// permits in either direction. Plain scalars only; no handles or references.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Value {
+    Bool(bool),
+    /// All Lua numbers (and integers) marshal through `f64`.
+    Number(f64),
+    Text(String),
 }
 
-impl Toggles {
-    /// The state of the named toggle, or `false` if the script does
-    /// not define it.
+impl From<bool> for Value {
+    fn from(v: bool) -> Self {
+        Value::Bool(v)
+    }
+}
+impl From<f64> for Value {
+    fn from(v: f64) -> Self {
+        Value::Number(v)
+    }
+}
+impl From<f32> for Value {
+    fn from(v: f32) -> Self {
+        Value::Number(v as f64)
+    }
+}
+impl From<i64> for Value {
+    fn from(v: i64) -> Self {
+        Value::Number(v as f64)
+    }
+}
+impl From<u32> for Value {
+    fn from(v: u32) -> Self {
+        Value::Number(v as f64)
+    }
+}
+impl From<usize> for Value {
+    fn from(v: usize) -> Self {
+        Value::Number(v as f64)
+    }
+}
+impl From<&str> for Value {
+    fn from(v: &str) -> Self {
+        Value::Text(v.to_string())
+    }
+}
+impl From<String> for Value {
+    fn from(v: String) -> Self {
+        Value::Text(v)
+    }
+}
+
+/// A named-value map: the contract type for both the inbound **data model**
+/// (engine → script, [`ScriptHost::set_model`]) and the outbound **results**
+/// (script → engine, returned by [`ScriptHost::update`]). Names are defined by
+/// whichever side fills it; the other side queries the names it cares about.
+#[derive(Clone, Debug, Default)]
+pub struct ValueMap {
+    map: HashMap<String, Value>,
+}
+
+impl ValueMap {
+    /// An empty map (to populate with [`set`](ValueMap::set)).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert/replace a named value. Chains, so a model can be built inline:
+    /// `ValueMap::new().with("fps", 60.0).with("name", "hi")`.
+    pub fn with(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.map.insert(name.into(), value.into());
+        self
+    }
+
+    /// Insert/replace a named value in place.
+    pub fn set(&mut self, name: impl Into<String>, value: impl Into<Value>) {
+        self.map.insert(name.into(), value.into());
+    }
+
+    /// The raw value for `name`, if present.
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.map.get(name)
+    }
+
+    /// `true` iff `name` is present and `Bool(true)` — the toggle/action query.
     pub fn is_on(&self, name: &str) -> bool {
-        self.map.get(name).copied().unwrap_or(false)
+        matches!(self.map.get(name), Some(Value::Bool(true)))
+    }
+
+    /// The number for `name`, if present and numeric.
+    pub fn number(&self, name: &str) -> Option<f64> {
+        match self.map.get(name) {
+            Some(Value::Number(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// The text for `name`, if present and textual.
+    pub fn text(&self, name: &str) -> Option<&str> {
+        match self.map.get(name) {
+            Some(Value::Text(t)) => Some(t),
+            _ => None,
+        }
     }
 }
 
@@ -188,18 +295,38 @@ impl ScriptHost {
         Ok(())
     }
 
+    /// Publish the engine's per-frame **data model** to the script as the
+    /// `Model` global (`{ name = value }`), so scripts can render live stats or
+    /// show a widget's current value. Each [`Value`] marshals to its natural Lua
+    /// type (bool / number / string). Call once per frame before
+    /// [`update`](Self::update) / [`draw`](Self::draw); replaces the previous
+    /// frame's `Model`.
+    pub fn set_model(&self, model: &ValueMap) -> Result<(), ScriptError> {
+        let table = self.lua.create_table()?;
+        for (name, value) in &model.map {
+            match value {
+                Value::Bool(b) => table.set(name.as_str(), *b)?,
+                Value::Number(n) => table.set(name.as_str(), *n)?,
+                Value::Text(t) => table.set(name.as_str(), t.as_str())?,
+            }
+        }
+        self.lua.globals().set("Model", table)?;
+        Ok(())
+    }
+
     /// Run the script's per-frame `update`, feeding it the current mouse
     /// position, whether the left button was *pressed this frame* (the click
     /// edge), and the screen size in pixels (so scripts can lay out
-    /// responsively). Returns the script's named toggle states — which double
-    /// as momentary "actions" a screen can fire (e.g. `start = true` only on
-    /// the click frame).
+    /// responsively). Returns the script's named results ([`ValueMap`]) — which
+    /// double as toggles, momentary actions (e.g. `start = true` only on the
+    /// click frame), and widget values (a slider's number). Engine data the
+    /// script reads comes from the `Model` global ([`Self::set_model`]).
     pub fn update(
         &self,
         input: &InputState,
         screen_w: f32,
         screen_h: f32,
-    ) -> Result<Toggles, ScriptError> {
+    ) -> Result<ValueMap, ScriptError> {
         let update: Function = self.module.get("update")?;
         let mouse = input.mouse_position;
         let states: Table = update.call((
@@ -211,11 +338,24 @@ impl ScriptHost {
         ))?;
 
         let mut map = HashMap::new();
-        for pair in states.pairs::<String, bool>() {
-            let (name, on) = pair?;
-            map.insert(name, on);
+        for pair in states.pairs::<String, mlua::Value>() {
+            let (name, value) = pair?;
+            let value = match value {
+                mlua::Value::Boolean(b) => Value::Bool(b),
+                mlua::Value::Integer(i) => Value::Number(i as f64),
+                mlua::Value::Number(n) => Value::Number(n),
+                mlua::Value::String(s) => Value::Text(s.to_str()?.to_string()),
+                other => {
+                    tracing::warn!(
+                        "script returned unsupported result type for '{name}': {}",
+                        other.type_name()
+                    );
+                    continue;
+                }
+            };
+            map.insert(name, value);
         }
-        Ok(Toggles { map })
+        Ok(ValueMap { map })
     }
 
     /// Run the script's per-frame `draw` (given the screen size) and collect
@@ -436,5 +576,51 @@ mod tests {
                 },
             ]
         );
+    }
+
+    // Echoes engine model values straight back as results, so a Rust assertion
+    // validates the whole boundary round-trip: ValueMap → `Model` global → Lua
+    // reads it → returns a result table → ValueMap, with types preserved.
+    const ECHO_SCRIPT: &str = r#"
+        local M = {}
+        function M.update(mx, my, clicked, sw, sh)
+            return { fps = Model.fps, label = Model.label, ready = Model.ready,
+                     doubled = Model.fps * 2 }
+        end
+        function M.draw(sw, sh) return {} end
+        return M
+    "#;
+
+    #[test]
+    fn model_round_trip() {
+        let host = ScriptHost::new(ECHO_SCRIPT, "echo").unwrap();
+        let model = ValueMap::new()
+            .with("fps", 60.0_f32)
+            .with("label", "hello")
+            .with("ready", true);
+        host.set_model(&model).unwrap();
+
+        let out = host
+            .update(&input_at(0.0, 0.0, false), 800.0, 600.0)
+            .unwrap();
+        assert_eq!(out.number("fps"), Some(60.0)); // number survives the trip
+        assert_eq!(out.text("label"), Some("hello")); // text survives
+        assert!(out.is_on("ready")); // bool survives
+        assert_eq!(out.number("doubled"), Some(120.0)); // Lua computed on the model
+        assert_eq!(out.number("label"), None); // typed getters don't coerce
+        assert!(!out.is_on("missing")); // absent → false
+    }
+
+    #[test]
+    fn value_map_typed_accessors() {
+        let m = ValueMap::new()
+            .with("on", true)
+            .with("n", 3.5_f64)
+            .with("s", "x".to_string());
+        assert!(m.is_on("on"));
+        assert_eq!(m.number("n"), Some(3.5));
+        assert_eq!(m.text("s"), Some("x"));
+        assert_eq!(m.number("on"), None);
+        assert!(!m.is_on("n"));
     }
 }

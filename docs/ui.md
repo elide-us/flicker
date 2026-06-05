@@ -89,14 +89,41 @@ The settings panel (`SettingsPanel`) is two stacked dropdowns (Mode,
 Resolution) anchored top-right with an inset (`SETTINGS_INSET`) — top-left is
 reserved for gameplay bars. Drawn at ~half the menu's scale.
 
-## Planned: move the front-end UI into the Lua layer
+## The Lua UI layer + boundary contract
 
-Today the menus/pause/loading/settings are **hardcoded in Rust**. The Lua layer
-(`flicker-script`, `scripts/hud.lua`) currently only drives the in-game debug
-checkboxes — it returns `Rect`/`Text` draw-commands and reads `Toggles`. The
-next step (tracked separately) is to let Lua define the front-end UI
-data-drivenly through a generic Rust 2D interface: Lua owns layout / labels /
-interaction; Rust provides the gothic textures, `measure_text`, and the draw
-primitives. The `ui.rs` widgets are split so the generic machinery (canvas,
-panel/button/dropdown, layout, hit-testing) can promote to a `flicker-ui` crate,
-leaving the game-specific theme behind.
+UI logic increasingly lives in Lua (`flicker-script` + `scripts/*.lua`): Lua owns
+layout / labels / interaction; the engine owns rendering and data. Built so far:
+the in-game debug **checkboxes** *and* the **stat readouts** (`scripts/hud.lua`)
+and the **main menu** (`scripts/menu.lua`). Still Rust: logo / loading / pause /
+confirm / the settings dropdowns (ported next, on the same surface).
+
+**The boundary is strict and is the project's only Lua↔Rust seam.** `mlua` is
+confined to `flicker-script`; no other crate depends on it. The contract is a
+small set of plain-data types in that crate — nothing else crosses, never a
+renderer handle or GPU resource. Three channels, all named-value / plain-data:
+
+- **Input** (engine → script): the interaction snapshot (mouse, click edge,
+  screen size), passed to `update`/`draw`.
+- **Data model** (engine → script): a `ValueMap` of named engine values (fps,
+  positions, counts, a setting's current value) published each frame via
+  `ScriptHost::set_model` and read by the script as the `Model` global. This is
+  how `hud.lua` renders live stats and how a slider will show its current value.
+  Sibling: the static `Textures` global (`set_texture_ids`) — name → engine
+  texture id, for `sprite` draw commands.
+- **Results + draw** (script → engine): `update` returns a `ValueMap` of named
+  results (toggles, momentary actions, widget values); `draw` returns
+  `HudCommand`s (`rect`/`sprite`/`text`, each with a painter's-order `layer` and
+  optional centre alignment) that the consumer's shared `render_hud` turns into
+  draw calls.
+
+`Value` (bool / number / text) is the only currency in either direction. The
+contract is **validated at build time** by `flicker-script`'s `model_round_trip`
+test and the example's `script_smoke` tests (which load the real scripts and run
+a frame). That in-Rust validation is why **no external binding-generation /
+codegen step is needed** while the boundary stays Rust-internal; if Lua scripts
+ever version or ship independently of the engine, revisit with a generated
+contract + CI check (parked).
+
+The `ui.rs` widgets remain example-local; the generic machinery (canvas,
+panel/button/dropdown, layout, hit-testing) can still promote to a `flicker-ui`
+crate once the widget set settles, leaving the game-specific gothic theme behind.
