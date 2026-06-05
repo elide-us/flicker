@@ -64,6 +64,14 @@ mod ui;
 /// on every face simultaneously.
 const FIELD_DIM: u16 = 3;
 
+/// The game's run phase. `Booting` covers world generation (physics off, the
+/// 3D clipmap not drawn — just the loading widget); `Active` is live play.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum GamePhase {
+    Booting,
+    Active,
+}
+
 struct GameScene {
     /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
     /// QEF corners + dense state for each cluster at full resolution.
@@ -190,9 +198,18 @@ struct GameScene {
     /// Previous-frame Escape key level, for press-edge detection (only the
     /// mouse exposes a ready-made edge flag). A press pushes the pause overlay.
     escape_prev: bool,
-    /// Gothic UI theme for the pause overlay, built once in `enter` and handed
-    /// to each `PauseScene` this game pushes (so pausing never re-uploads).
-    pause_theme: Option<ui::Theme>,
+    /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
+    /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
+    /// `enter`.
+    ui_theme: Option<ui::Theme>,
+
+    /// Boot gate: `Booting` (world cooking — physics off, clipmap not drawn,
+    /// loading widget up) until the nav range is meshed + nav-ready, then
+    /// `Active` (live play).
+    phase: GamePhase,
+    /// Number of clusters in the local nav range; the boot gate waits for this
+    /// many nav surfaces (plus a fully meshed field) before going `Active`.
+    nav_ready_target: usize,
 }
 
 impl Default for GameScene {
@@ -232,7 +249,9 @@ impl Default for GameScene {
             grounded: false,
             walk_needs_snap: false,
             escape_prev: false,
-            pause_theme: None,
+            ui_theme: None,
+            phase: GamePhase::Booting,
+            nav_ready_target: 0,
         }
     }
 }
@@ -639,7 +658,9 @@ impl GameScene {
         };
         let lod_field = self.lod_field;
         let camera = [self.position.x, self.position.y, self.position.z];
-        let walk = self.locomotion_walk;
+        // Generate nav while Booting (the readiness gate needs it) as well as in
+        // surface-walk mode.
+        let walk = self.locomotion_walk || matches!(self.phase, GamePhase::Booting);
         for x in 0..FIELD_DIM {
             for z in 0..FIELD_DIM {
                 let source = Arc::clone(&self.source);
@@ -1199,24 +1220,51 @@ impl GameScene {
     }
 }
 
+impl GameScene {
+    /// Fraction (0..=1) of the spawn field meshed so far, for the loading bar.
+    /// `pending` fills as workers report; it snaps to 1.0 once the full set is
+    /// applied into `meshes`.
+    fn boot_progress(&self) -> f32 {
+        let field = (FIELD_DIM as usize) * (FIELD_DIM as usize);
+        if self.meshes.len() == field {
+            1.0
+        } else {
+            (self.pending.len() as f32 / field as f32).clamp(0.0, 1.0)
+        }
+    }
+}
+
 impl Scene for GameScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        // Stand up the worker pool + result channel, populate the LOD-0
-        // source once, and submit the initial field build. Meshes appear over
-        // the next frame or two as jobs complete (drained in `render`).
+        // Frame the whole field from outside its -Z face, angled down. Done
+        // before generation so the nav-ring gate (and the boot readiness
+        // target) use the real camera pose.
+        let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
+        let center_x = field_extent * 0.5;
+        self.position = Vec3::new(center_x, field_extent * 1.1, -field_extent * 0.5);
+        self.yaw = 0.0; // face +Z, into the field.
+        self.pitch = -0.55; // look down at it.
+
+        // How many clusters fall in the local nav range — the boot gate waits
+        // for all of them to be meshed *and* to have a nav surface (§ user's
+        // loading spec) before going Active.
+        let cam = [self.position.x, self.position.y, self.position.z];
+        self.nav_ready_target = (0..FIELD_DIM)
+            .flat_map(|x| (0..FIELD_DIM).map(move |z| (x, z)))
+            .filter(|&(x, z)| in_nav_rings(cam, cluster_center_world(ClusterId::new(0, x, 0, z))))
+            .count();
+
+        // Stand up the worker pool + result channel, populate the LOD-0 source
+        // once, and submit the initial field build (with nav, since we're
+        // Booting). Meshes/nav appear over the next frames as jobs complete
+        // (drained in `render`); the loading widget shows until the nav range
+        // is ready.
         let (tx, rx) = mpsc::channel::<ClusterBuild>();
         self.build_tx = Some(tx);
         self.build_rx = Some(rx);
         self.pool = Some(WorkerPool::with_default_size());
         self.ensure_source();
         self.submit_field_jobs();
-
-        // Frame the whole field from outside its -Z face, angled down.
-        let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
-        let center_x = field_extent * 0.5;
-        self.position = Vec3::new(center_x, field_extent * 1.1, -field_extent * 0.5);
-        self.yaw = 0.0; // face +Z, into the field.
-        self.pitch = -0.55; // look down at it.
 
         // 1×1 white pixel — tinted to build solid colored HUD quads.
         // Retained sprite-UI capability; no active widgets yet.
@@ -1226,13 +1274,25 @@ impl Scene for GameScene {
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
 
-        // Gothic UI theme for the pause overlay — built once and handed to
-        // each PauseScene we push, so pausing never re-uploads textures.
-        self.pause_theme = Some(ui::Theme::build(renderer));
+        // Gothic UI theme — drawn as the loading widget while Booting, and
+        // handed to each PauseScene we push (so pausing never re-uploads).
+        self.ui_theme = Some(ui::Theme::build(renderer));
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         let dt_s = dt.as_secs_f32();
+
+        // Booting: the world is still cooking — ignore input and just poll for
+        // readiness. Go Active once the whole field is meshed and every
+        // nav-range cluster has a nav surface (then physics + the clipmap turn
+        // on); until then `render` shows the loading widget, not the 3D view.
+        if matches!(self.phase, GamePhase::Booting) {
+            let field = (FIELD_DIM as usize) * (FIELD_DIM as usize);
+            if self.meshes.len() == field && self.navs.len() >= self.nav_ready_target {
+                self.phase = GamePhase::Active;
+            }
+            return Transition::None;
+        }
 
         // Escape edge (we track the level ourselves — only the mouse exposes a
         // ready-made press flag) pushes the pause overlay. The scene manager
@@ -1241,7 +1301,7 @@ impl Scene for GameScene {
         let esc_pressed = esc_down && !self.escape_prev;
         self.escape_prev = esc_down;
         if esc_pressed {
-            let theme = self.pause_theme.expect("pause theme built in enter");
+            let theme = self.ui_theme.expect("pause theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(theme)));
         }
 
@@ -1365,8 +1425,19 @@ impl Scene for GameScene {
 
     fn render(&mut self, renderer: &mut Renderer) {
         // Apply any completed mesh builds (uploads happen here — `render` owns
-        // `&mut Renderer`). A no-op until a full field generation has arrived.
+        // `&mut Renderer`). Runs while Booting too, so the world cooks under the
+        // loading widget.
         self.drain_and_apply(renderer);
+
+        // Booting: draw the loading widget instead of the 3D clipmap.
+        if matches!(self.phase, GamePhase::Booting) {
+            if let Some(theme) = self.ui_theme {
+                let screen = renderer.size();
+                theme.draw_loading(renderer, screen, self.boot_progress());
+            }
+            return;
+        }
+
         renderer.set_camera(&Camera {
             position: self.position,
             target: self.position + self.forward(),
@@ -1656,7 +1727,51 @@ impl Scene for GameScene {
     }
 }
 
-// ===== Front-end scenes (menu + pause overlay) =====
+// ===== Front-end scenes (logo, menu, pause overlay) =====
+
+/// How long the logo splash shows before auto-advancing to the menu.
+const LOGO_DURATION: Duration = Duration::from_millis(2200);
+
+/// Logo splash: a large wordmark over the gothic backdrop. Auto-advances to
+/// the menu after [`LOGO_DURATION`], or immediately on click / Space / Escape.
+struct LogoScene {
+    theme: Option<ui::Theme>,
+    elapsed: Duration,
+}
+
+impl LogoScene {
+    fn new() -> Self {
+        Self {
+            theme: None,
+            elapsed: Duration::ZERO,
+        }
+    }
+}
+
+impl Scene for LogoScene {
+    fn enter(&mut self, renderer: &mut Renderer) {
+        self.theme = Some(ui::Theme::build(renderer));
+    }
+
+    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
+        self.elapsed += dt;
+        let skip =
+            input.mouse_left_pressed || input.key_down(Key::Space) || input.key_down(Key::Escape);
+        if self.elapsed >= LOGO_DURATION || skip {
+            return Transition::Replace(Box::new(MenuScene::new()));
+        }
+        Transition::None
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        let Some(theme) = self.theme else {
+            return;
+        };
+        let screen = renderer.size();
+        theme.backdrop(renderer, screen);
+        theme.wordmark(renderer, screen, "FLICKER");
+    }
+}
 
 /// Main menu: the gothic panel with START / QUIT over an opaque backdrop.
 /// START replaces this scene with the game; QUIT exits.
@@ -1891,7 +2006,8 @@ fn main() -> Result<()> {
         }
     }
 
-    // Start on the main menu; the scene manager drives menu → game → pause.
-    run(SceneManager::new(Box::new(MenuScene::new())))?;
+    // Start on the logo splash; the scene manager drives logo → menu → game →
+    // pause.
+    run(SceneManager::new(Box::new(LogoScene::new())))?;
     Ok(())
 }

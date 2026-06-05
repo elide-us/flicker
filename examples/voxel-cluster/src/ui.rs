@@ -2,8 +2,8 @@
 //! "gothic horror" toolkit (Dark Souls-ish palette: tarnished gold and
 //! rust-red lines on silver/black/grey surfaces). The raster art is
 //! generated procedurally (no binary assets, deterministic, tunable, in the
-//! spirit of `build_digit_atlas`); the only widget so far is the Escape
-//! pause modal.
+//! spirit of `build_digit_atlas`). It backs the front-end scenes: the logo
+//! wordmark, the main menu, the loading widget, and the pause modal.
 //!
 //! Example-local for now, but split so it can promote to a reusable
 //! `flicker-ui` later: the palette/theme here is game-specific, while the
@@ -46,6 +46,9 @@ const COL_SCRIM: [f32; 4] = [0.02, 0.02, 0.03, 0.64];
 const COL_BACKDROP: [f32; 4] = [0.035, 0.04, 0.05, 1.0];
 /// Gold sheen overlaid on a hovered button.
 const COL_SHEEN: [f32; 4] = [0.85, 0.66, 0.34, 0.15];
+/// Loading-bar track (recessed dark) and tarnished-gold fill.
+const COL_BAR_TRACK: [f32; 4] = [0.05, 0.06, 0.07, 1.0];
+const COL_BAR_FILL: [f32; 4] = [0.63, 0.49, 0.26, 1.0];
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
@@ -613,6 +616,66 @@ impl Theme {
         let col = if hovered { COL_LABEL_HOVER } else { COL_LABEL };
         let size = 22.0;
         centered_text(r, label, *rect, rect.y + (rect.h - size) * 0.5, size, col);
+    }
+
+    /// Draw the loading screen: opaque backdrop, the gothic panel titled
+    /// "LOADING", and a tarnished-gold progress bar filled to `progress`
+    /// (0..=1) in the panel's content well.
+    pub fn draw_loading(&self, r: &mut Renderer, screen: Vec2, progress: f32) {
+        let layout = modal_layout(screen);
+        self.backdrop(r, screen);
+        r.draw_sprite(
+            self.panel,
+            Vec2::new(layout.panel.x, layout.panel.y),
+            Vec2::new(layout.panel.w, layout.panel.h),
+            [1.0, 1.0, 1.0, 1.0],
+        );
+        centered_text(r, "LOADING", layout.panel, layout.title_y, 34.0, COL_TITLE);
+
+        let p = layout.panel;
+        let frame = FRAME as f32;
+        let bar = Rect {
+            x: p.x + frame + 22.0,
+            y: p.y + p.h * 0.52,
+            w: p.w - 2.0 * (frame + 22.0),
+            h: 22.0,
+        };
+        r.draw_sprite(
+            self.white,
+            Vec2::new(bar.x, bar.y),
+            Vec2::new(bar.w, bar.h),
+            COL_BAR_TRACK,
+        );
+        let fill = (bar.w * progress.clamp(0.0, 1.0)).round();
+        if fill > 0.0 {
+            r.draw_sprite(
+                self.white,
+                Vec2::new(bar.x, bar.y),
+                Vec2::new(fill, bar.h),
+                COL_BAR_FILL,
+            );
+        }
+        outline(r, self.white, &bar, 2.0, COL_GOLD_LINE);
+    }
+
+    /// Draw a large centred wordmark (the logo splash) over the current
+    /// backdrop — no panel.
+    pub fn wordmark(&self, r: &mut Renderer, screen: Vec2, text: &str) {
+        let size = 72.0;
+        let container = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: screen.x,
+            h: screen.y,
+        };
+        centered_text(
+            r,
+            text,
+            container,
+            screen.y * 0.5 - size * 0.5,
+            size,
+            COL_TITLE,
+        );
     }
 }
 
