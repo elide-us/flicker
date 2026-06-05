@@ -12,6 +12,8 @@ anyhow.workspace = true
 glam.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 # Used only by the `ui` preview test to encode the procedural UI textures

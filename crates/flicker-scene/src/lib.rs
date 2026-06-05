@@ -163,7 +163,13 @@ impl App for SceneManager {
         // here, then draw the visible slice bottom-up.
         self.apply_pending(renderer);
         let start = self.visible_start();
-        for scene in &mut self.stack[start..] {
+        for (offset, scene) in self.stack[start..].iter_mut().enumerate() {
+            // Each scene draws at a 2D layer = its absolute stack position, so an
+            // overlay's sprites *and* text sort above the scene beneath it (a
+            // pushed pause/confirm modal cleanly covers the frozen scene's text,
+            // not just its panels). A scene can offset from `renderer.layer()`
+            // for sub-ordering within itself.
+            renderer.set_layer((start + offset) as f32);
             scene.render(renderer);
         }
     }

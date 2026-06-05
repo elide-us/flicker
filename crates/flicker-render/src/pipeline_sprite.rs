@@ -1,9 +1,15 @@
 //! Textured-quad ("sprite") pipeline.
 //!
 //! Each [`Renderer::draw_sprite`](crate::Renderer::draw_sprite) call appends six
-//! vertices for one quad. Quads are grouped by texture so that all quads
-//! sharing a texture render in a single draw call. Pixel coordinates are
-//! converted to NDC at vertex-push time.
+//! vertices for one quad tagged with a `layer` (the painter's-order sort key
+//! shared by every 2D pipeline). Pixel coordinates are converted to NDC at
+//! vertex-push time. In `prepare` the quads are stably sorted by layer
+//! (submission order preserved within a layer) and coalesced into [`Run`]s that
+//! break on a layer *or* texture change, so quads sharing a texture within a
+//! layer still render in one draw call. The renderer draws each layer's runs
+//! interleaved with the triangle/text bands of the same layer
+//! (`Renderer::end_frame`) — 2D ordering is pure CPU painter's order, the depth
+//! buffer is never used (mirrors DirectXTK's `DepthNone` `SpriteBatch` default).
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
@@ -38,13 +44,26 @@ pub struct SpritePipeline {
     pub sampler: wgpu::Sampler,
     vertex_buffer: wgpu::Buffer,
     vertex_buffer_capacity: u64,
-    /// Flat vertex list, in submission order. Grouped into draw ranges via `runs`.
-    vertices: Vec<Vertex>,
-    /// One run per contiguous block of quads sharing the same texture.
+    /// Submitted quads, in submission order, each tagged with its layer.
+    quads: Vec<Quad>,
+    /// Scratch built in `prepare`: `quads` flattened to vertices, ordered by
+    /// layer. Retained across frames to avoid reallocating.
+    upload: Vec<Vertex>,
+    /// One run per contiguous block of quads sharing a layer *and* texture.
     runs: Vec<Run>,
+    /// Distinct layers present this frame, ascending.
+    layer_set: Vec<f32>,
+}
+
+/// One quad awaiting draw: its six vertices, texture, and sort layer.
+struct Quad {
+    layer: f32,
+    texture: TextureHandle,
+    verts: [Vertex; 6],
 }
 
 struct Run {
+    layer: f32,
     texture: TextureHandle,
     vertex_offset: u32,
     vertex_count: u32,
@@ -146,18 +165,22 @@ impl SpritePipeline {
             sampler,
             vertex_buffer,
             vertex_buffer_capacity: initial_capacity,
-            vertices: Vec::new(),
+            quads: Vec::new(),
+            upload: Vec::new(),
             runs: Vec::new(),
+            layer_set: Vec::new(),
         }
     }
 
     pub fn clear(&mut self) {
-        self.vertices.clear();
+        self.quads.clear();
+        self.upload.clear();
         self.runs.clear();
+        self.layer_set.clear();
     }
 
     /// Push one quad at `position` (top-left in pixels) with the given pixel `size`,
-    /// multiplied by `color` (RGBA in 0..1) in the fragment shader.
+    /// multiplied by `color` (RGBA in 0..1) in the fragment shader, sorting at `layer`.
     pub fn push(
         &mut self,
         screen: Vec2,
@@ -165,6 +188,7 @@ impl SpritePipeline {
         position: Vec2,
         size: Vec2,
         color: [f32; 4],
+        layer: f32,
     ) {
         let to_ndc =
             |p: Vec2| -> [f32; 2] { [(p.x / screen.x) * 2.0 - 1.0, 1.0 - (p.y / screen.y) * 2.0] };
@@ -174,61 +198,88 @@ impl SpritePipeline {
         let bl = position + Vec2::new(0.0, size.y);
         let br = position + size;
 
-        let vertex_offset = self.vertices.len() as u32;
-        let verts = [
-            Vertex {
-                position: to_ndc(tl),
-                uv: [0.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: to_ndc(bl),
-                uv: [0.0, 1.0],
-                color,
-            },
-            Vertex {
-                position: to_ndc(br),
-                uv: [1.0, 1.0],
-                color,
-            },
-            Vertex {
-                position: to_ndc(tl),
-                uv: [0.0, 0.0],
-                color,
-            },
-            Vertex {
-                position: to_ndc(br),
-                uv: [1.0, 1.0],
-                color,
-            },
-            Vertex {
-                position: to_ndc(tr),
-                uv: [1.0, 0.0],
-                color,
-            },
-        ];
-        self.vertices.extend_from_slice(&verts);
+        self.quads.push(Quad {
+            layer,
+            texture,
+            verts: [
+                Vertex {
+                    position: to_ndc(tl),
+                    uv: [0.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: to_ndc(bl),
+                    uv: [0.0, 1.0],
+                    color,
+                },
+                Vertex {
+                    position: to_ndc(br),
+                    uv: [1.0, 1.0],
+                    color,
+                },
+                Vertex {
+                    position: to_ndc(tl),
+                    uv: [0.0, 0.0],
+                    color,
+                },
+                Vertex {
+                    position: to_ndc(br),
+                    uv: [1.0, 1.0],
+                    color,
+                },
+                Vertex {
+                    position: to_ndc(tr),
+                    uv: [1.0, 0.0],
+                    color,
+                },
+            ],
+        });
+    }
 
-        // Coalesce with the previous run if same texture, else start a new run.
-        match self.runs.last_mut() {
-            Some(run) if run.texture == texture => {
-                run.vertex_count += 6;
-            }
-            _ => {
-                self.runs.push(Run {
-                    texture,
-                    vertex_offset,
-                    vertex_count: 6,
-                });
-            }
-        }
+    /// The distinct layers present this frame, ascending.
+    pub fn layers(&self) -> impl Iterator<Item = f32> + '_ {
+        self.layer_set.iter().copied()
     }
 
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.vertices.is_empty() {
+        self.upload.clear();
+        self.runs.clear();
+        self.layer_set.clear();
+        if self.quads.is_empty() {
             return;
         }
-        let needed = (self.vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+
+        // Stable-sort by layer so quads group into ascending bands while
+        // preserving submission order (hence blend order) within a layer.
+        let mut order: Vec<usize> = (0..self.quads.len()).collect();
+        order.sort_by(|&a, &b| self.quads[a].layer.total_cmp(&self.quads[b].layer));
+
+        for &i in &order {
+            let quad = &self.quads[i];
+            let vertex_offset = self.upload.len() as u32;
+            self.upload.extend_from_slice(&quad.verts);
+
+            // Coalesce with the previous run only when both layer and texture
+            // match; a layer change always starts a new run (and a new band).
+            match self.runs.last_mut() {
+                Some(run) if run.layer == quad.layer && run.texture == quad.texture => {
+                    run.vertex_count += 6;
+                }
+                _ => {
+                    if self.layer_set.last() != Some(&quad.layer) {
+                        self.layer_set.push(quad.layer);
+                    }
+                    self.runs.push(Run {
+                        layer: quad.layer,
+                        texture: quad.texture,
+                        vertex_offset,
+                        vertex_count: 6,
+                    });
+                }
+            }
+        }
+
+        let needed = (self.upload.len() * std::mem::size_of::<Vertex>()) as u64;
         if needed > self.vertex_buffer_capacity {
             let new_capacity = needed.next_power_of_two();
             self.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -239,21 +290,23 @@ impl SpritePipeline {
             });
             self.vertex_buffer_capacity = new_capacity;
         }
-        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.upload));
     }
 
-    pub fn render<'a>(
+    /// Draw only the quads submitted at `layer` (no-op if none).
+    pub fn render_layer<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
+        layer: f32,
         textures: &'a [crate::texture::LoadedTexture],
     ) {
-        if self.runs.is_empty() {
+        if self.runs.iter().all(|r| r.layer != layer) {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        let bytes = (self.vertices.len() * std::mem::size_of::<Vertex>()) as u64;
+        let bytes = (self.upload.len() * std::mem::size_of::<Vertex>()) as u64;
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
-        for run in &self.runs {
+        for run in self.runs.iter().filter(|r| r.layer == layer) {
             let Some(tex) = textures.get(run.texture.0 as usize) else {
                 continue;
             };

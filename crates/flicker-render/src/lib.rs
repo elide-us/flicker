@@ -7,8 +7,12 @@
 //! frames (only the per-frame mesh draw queue clears).
 //!
 //! 3D meshes render first in the main pass with a `Depth32Float`
-//! attachment; 2D primitives render after with depth disabled, so they
-//! always layer on top.
+//! attachment; 2D primitives render after with depth disabled. Within 2D,
+//! draws carry an ambient `layer` ([`Renderer::set_layer`]) and are drawn in
+//! ascending-layer painter's order — triangle → sprite → text per layer —
+//! across all three 2D pipelines, so a higher-layer overlay's sprites *and*
+//! text cover a lower layer's text. The depth buffer is never used for 2D
+//! (mirrors DirectXTK's `DepthNone` `SpriteBatch` default).
 
 mod mesh;
 mod pipeline_billboard;
@@ -19,6 +23,9 @@ mod pipeline_text;
 mod pipeline_triangle;
 mod renderer;
 mod texture;
+
+#[cfg(test)]
+mod layering_test;
 
 pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
 pub use renderer::Renderer;

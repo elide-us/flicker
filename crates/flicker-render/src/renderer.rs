@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec2};
-use winit::window::Window;
+use winit::dpi::PhysicalSize;
+use winit::window::{Fullscreen, Window};
 
 use glam::Vec3;
 
@@ -72,6 +73,12 @@ pub struct Renderer {
     /// camera set this frame" — `draw_mesh` still works but the matrix
     /// from the previous `set_camera` carries over.
     camera: Option<Camera>,
+    /// Ambient 2D layer applied to every `draw_sprite`/`draw_text`/
+    /// `draw_triangle` until changed (the painter's-order sort key — higher
+    /// draws on top). Reset to `0.0` each `begin_frame`; the scene manager
+    /// raises it per scene so overlays sort above the scene beneath. See
+    /// [`Renderer::set_layer`].
+    current_layer: f32,
 }
 
 impl Renderer {
@@ -157,12 +164,69 @@ impl Renderer {
             meshes: Vec::new(),
             free_mesh_slots: Vec::new(),
             camera: None,
+            current_layer: 0.0,
         })
     }
 
     /// Return the underlying winit window — useful for cursor/title changes.
     pub fn window(&self) -> &Window {
         &self.window
+    }
+
+    /// Current monitor's physical size `(width, height)` in pixels, if the
+    /// window is on a known monitor — for building a resolution list.
+    pub fn monitor_size(&self) -> Option<(u32, u32)> {
+        self.window.current_monitor().map(|m| {
+            let s = m.size();
+            (s.width, s.height)
+        })
+    }
+
+    /// `true` when the window is in any fullscreen mode (borderless or
+    /// exclusive); `false` when windowed.
+    pub fn is_fullscreen(&self) -> bool {
+        self.window.fullscreen().is_some()
+    }
+
+    /// Switch to a windowed view at the given physical size. The actual resize
+    /// arrives as a later `Resized` event (handled by [`Self::resize`]).
+    pub fn set_windowed(&self, width: u32, height: u32) {
+        self.window.set_fullscreen(None);
+        let _ = self
+            .window
+            .request_inner_size(PhysicalSize::new(width, height));
+    }
+
+    /// Borderless (desktop-resolution) fullscreen on the current monitor.
+    pub fn set_borderless_fullscreen(&self) {
+        self.window
+            .set_fullscreen(Some(Fullscreen::Borderless(None)));
+    }
+
+    /// Exclusive fullscreen at `(width, height)` if the current monitor has a
+    /// matching video mode; otherwise falls back to borderless fullscreen.
+    /// Returns `true` if an exact exclusive mode was selected.
+    pub fn set_exclusive_fullscreen(&self, width: u32, height: u32) -> bool {
+        let Some(monitor) = self.window.current_monitor() else {
+            self.window
+                .set_fullscreen(Some(Fullscreen::Borderless(None)));
+            return false;
+        };
+        let mode = monitor.video_modes().find(|m| {
+            let s = m.size();
+            s.width == width && s.height == height
+        });
+        match mode {
+            Some(m) => {
+                self.window.set_fullscreen(Some(Fullscreen::Exclusive(m)));
+                true
+            }
+            None => {
+                self.window
+                    .set_fullscreen(Some(Fullscreen::Borderless(Some(monitor))));
+                false
+            }
+        }
     }
 
     /// Reconfigure the surface, update cached screen size, and recreate
@@ -271,12 +335,31 @@ impl Renderer {
         self.mesh.clear();
         self.lines.clear();
         self.billboard.clear();
+        self.current_layer = 0.0;
+    }
+
+    /// Set the ambient 2D layer for subsequent `draw_sprite`/`draw_text`/
+    /// `draw_triangle` calls. Higher layers draw on top; ties break by
+    /// submission order. 2D ordering is pure painter's order — the depth buffer
+    /// is never used for 2D (mirrors DirectXTK's `DepthNone` `SpriteBatch`
+    /// default). Reset to `0.0` each `begin_frame`. The scene manager sets this
+    /// per scene (= stack position), so overlays sort above the scene beneath
+    /// with no per-widget bookkeeping; within a scene, offset from
+    /// [`Renderer::layer`] to stack sub-elements (e.g. a dropdown over a panel).
+    pub fn set_layer(&mut self, layer: f32) {
+        self.current_layer = layer;
+    }
+
+    /// The current ambient 2D layer (see [`Renderer::set_layer`]).
+    pub fn layer(&self) -> f32 {
+        self.current_layer
     }
 
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
     /// origin at the top-left.
     pub fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
-        self.triangle.push(self.screen, a, b, c, color);
+        self.triangle
+            .push(self.screen, a, b, c, color, self.current_layer);
     }
 
     /// Submit a textured quad. `position` is the top-left in pixels; `size` is in pixels;
@@ -289,14 +372,35 @@ impl Renderer {
         size: Vec2,
         color: [f32; 4],
     ) {
-        self.sprite
-            .push(self.screen, texture, position, size, color);
+        self.sprite.push(
+            self.screen,
+            texture,
+            position,
+            size,
+            color,
+            self.current_layer,
+        );
     }
 
     /// Submit a string of text. `position` is the top-left baseline in pixels; `size`
     /// is the font size in pixels; `color` is RGBA in 0..1.
     pub fn draw_text(&mut self, text: &str, position: Vec2, size: f32, color: [f32; 4]) {
-        self.text.push(text, position.x, position.y, size, color);
+        self.text.push(
+            text,
+            position.x,
+            position.y,
+            size,
+            color,
+            self.current_layer,
+        );
+    }
+
+    /// Measure `text` at font `size`, returning its rendered size (max line
+    /// width, total height) in pixels. For laying out UI before drawing —
+    /// shapes a throwaway buffer, no upload.
+    pub fn measure_text(&mut self, text: &str, size: f32) -> Vec2 {
+        let (w, h) = self.text.measure(text, size);
+        Vec2::new(w, h)
     }
 
     /// Set the 3D camera used for subsequent `draw_mesh` calls. Typically
@@ -452,9 +556,26 @@ impl Renderer {
             // World-space, depth-tested billboards layer with the 3D scene
             // (occluded by terrain in front); 2D overlays still draw on top.
             self.billboard.render(&mut pass, &self.textures);
-            self.triangle.render(&mut pass);
-            self.sprite.render(&mut pass, &self.textures);
-            self.text.render(&mut pass).context("text render failed")?;
+
+            // 2D in painter's order: walk the union of layers used by the three
+            // 2D pipelines, ascending, drawing triangle → sprite → text within
+            // each layer. A higher-layer overlay's sprites *and* text therefore
+            // cover a lower layer's text (which a single all-text-last pass
+            // could not). With everything at the default layer 0 this is exactly
+            // triangle → sprite → text, identical to the prior fixed order.
+            let mut layers: Vec<f32> = Vec::new();
+            layers.extend(self.triangle.layers());
+            layers.extend(self.sprite.layers());
+            layers.extend(self.text.layers());
+            layers.sort_by(f32::total_cmp);
+            layers.dedup();
+            for &layer in &layers {
+                self.triangle.render_layer(&mut pass, layer);
+                self.sprite.render_layer(&mut pass, layer, &self.textures);
+                self.text
+                    .render_layer(&mut pass, layer)
+                    .context("text render failed")?;
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

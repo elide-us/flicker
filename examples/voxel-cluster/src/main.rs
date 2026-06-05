@@ -56,6 +56,7 @@ use flicker_voxel::{
 };
 use flicker_worker::WorkerPool;
 
+mod display;
 mod ui;
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
@@ -1751,6 +1752,10 @@ impl LogoScene {
 impl Scene for LogoScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.theme = Some(ui::Theme::build(renderer));
+        // Apply the persisted (or default) display setting now the window
+        // exists — so a saved fullscreen/resolution choice takes effect at
+        // launch.
+        display::current().apply(renderer);
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
@@ -1773,11 +1778,237 @@ impl Scene for LogoScene {
     }
 }
 
+// ===== settings panel (display mode + resolution dropdowns, top-right) =====
+
+/// Inset (px) of the settings panel from the top-right corner. Top-left is
+/// reserved for gameplay bars (health/mana/stamina); top-right is system UI.
+const SETTINGS_INSET: f32 = 24.0;
+
+/// Seconds the confirm overlay waits before auto-reverting a display change.
+const CONFIRM_SECS: f32 = 15.0;
+
+/// A selection made in the settings dropdowns.
+enum DisplayChange {
+    Mode(display::DisplayMode),
+    Res(display::Resolution),
+}
+
+/// Apply `change` to the window immediately and record it as current. Returns
+/// `Some(previous)` when the change should be confirmed-or-reverted (any
+/// resolution change, or switching to exclusive fullscreen); `None` when it is
+/// safe to apply outright (windowed / borderless toggles).
+fn apply_display_change(
+    change: DisplayChange,
+    renderer: &Renderer,
+) -> Option<display::DisplaySetting> {
+    let prev = display::current();
+    let (next, confirm) = match change {
+        DisplayChange::Mode(m) => (
+            display::DisplaySetting {
+                mode: m,
+                res: prev.res,
+            },
+            matches!(m, display::DisplayMode::ExclusiveFullscreen),
+        ),
+        DisplayChange::Res(r) => (
+            display::DisplaySetting {
+                mode: prev.mode,
+                res: r,
+            },
+            true,
+        ),
+    };
+    next.apply(renderer);
+    display::set_current(next);
+    confirm.then_some(prev)
+}
+
+/// Two stacked dropdowns (mode + resolution) anchored top-right. Shown on the
+/// menu and pause overlay; hidden during active gameplay.
+struct SettingsPanel {
+    mode_dd: ui::Dropdown,
+    res_dd: ui::Dropdown,
+    width: f32,
+    res_options: Vec<display::Resolution>,
+    res_labels: Vec<String>,
+    mode_labels: Vec<String>,
+    last_cursor: Vec2,
+}
+
+impl SettingsPanel {
+    fn new(renderer: &mut Renderer) -> Self {
+        let monitor = renderer.monitor_size();
+        let res_options = display::resolution_options(monitor);
+        let res_labels: Vec<String> = res_options
+            .iter()
+            .map(|&r| display::resolution_label(r, monitor))
+            .collect();
+        let mode_labels: Vec<String> = display::DisplayMode::ALL
+            .iter()
+            .map(|m| m.label().to_string())
+            .collect();
+        // Width = widest label across both dropdowns + room for the text inset
+        // and the caret, measured with the real font.
+        let widest = |labels: &[String], renderer: &mut Renderer| {
+            labels
+                .iter()
+                .map(|l| renderer.measure_text(l, ui::DD_LABEL_SIZE).x)
+                .fold(0.0_f32, f32::max)
+        };
+        let width = widest(&res_labels, renderer).max(widest(&mode_labels, renderer)) + 46.0;
+        Self {
+            mode_dd: ui::Dropdown::new(),
+            res_dd: ui::Dropdown::new(),
+            width,
+            res_options,
+            res_labels,
+            mode_labels,
+            last_cursor: Vec2::ZERO,
+        }
+    }
+
+    /// Top-left anchors of the two stacked dropdowns at the current screen size
+    /// (resolution sits below the mode dropdown, accounting for its open rows).
+    fn anchors(&self, screen: Vec2) -> (Vec2, Vec2) {
+        let x = screen.x - SETTINGS_INSET - self.width;
+        let mode_anchor = Vec2::new(x, SETTINGS_INSET);
+        let res_y = mode_anchor.y + self.mode_dd.height(self.mode_labels.len()) + 8.0;
+        (mode_anchor, Vec2::new(x, res_y))
+    }
+
+    /// Process a click; return a requested display change, if any.
+    fn update(&mut self, input: &InputState, renderer: &Renderer) -> Option<DisplayChange> {
+        self.last_cursor = input.mouse_position;
+        if !input.mouse_left_pressed {
+            return None;
+        }
+        let (mode_anchor, res_anchor) = self.anchors(renderer.size());
+        let cursor = input.mouse_position;
+        if let Some(i) = self
+            .mode_dd
+            .click(mode_anchor, self.width, self.mode_labels.len(), cursor)
+        {
+            return Some(DisplayChange::Mode(display::DisplayMode::ALL[i]));
+        }
+        if let Some(i) = self
+            .res_dd
+            .click(res_anchor, self.width, self.res_options.len(), cursor)
+        {
+            return Some(DisplayChange::Res(self.res_options[i]));
+        }
+        None
+    }
+
+    fn draw(&self, theme: &ui::Theme, renderer: &mut Renderer) {
+        let (mode_anchor, res_anchor) = self.anchors(renderer.size());
+        let current = display::current();
+        let mode_sel = display::DisplayMode::ALL
+            .iter()
+            .position(|&m| m == current.mode)
+            .unwrap_or(0);
+        let res_sel = self
+            .res_options
+            .iter()
+            .position(|&r| r == current.res)
+            .unwrap_or(0);
+        self.res_dd.draw(
+            theme,
+            renderer,
+            (res_anchor, self.width),
+            &self.res_labels,
+            res_sel,
+            self.last_cursor,
+        );
+        self.mode_dd.draw(
+            theme,
+            renderer,
+            (mode_anchor, self.width),
+            &self.mode_labels,
+            mode_sel,
+            self.last_cursor,
+        );
+    }
+}
+
+/// Confirm-or-revert overlay shown after a resolution / exclusive-fullscreen
+/// change: the change is already applied, and this waits up to [`CONFIRM_SECS`]
+/// for the player to Keep it — auto-reverting to `previous` on Revert or
+/// timeout. Pushed as an overlay (same mechanism as the pause menu), so it
+/// works over the menu or the pause screen.
+struct ConfirmDisplayScene {
+    theme: ui::Theme,
+    previous: display::DisplaySetting,
+    remaining: f32,
+    hover: Option<ui::ModalButton>,
+}
+
+impl ConfirmDisplayScene {
+    fn new(theme: ui::Theme, previous: display::DisplaySetting) -> Self {
+        Self {
+            theme,
+            previous,
+            remaining: CONFIRM_SECS,
+            hover: None,
+        }
+    }
+
+    fn revert(&self, renderer: &Renderer) {
+        self.previous.apply(renderer);
+        display::set_current(self.previous);
+    }
+}
+
+impl Scene for ConfirmDisplayScene {
+    fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        self.remaining -= dt.as_secs_f32();
+        if self.remaining <= 0.0 {
+            self.revert(renderer);
+            return Transition::Pop;
+        }
+        let layout = ui::modal_layout(renderer.size());
+        self.hover = layout.hover(input.mouse_position);
+        if input.mouse_left_pressed {
+            match self.hover {
+                Some(ui::ModalButton::Top) => return Transition::Pop, // Keep
+                Some(ui::ModalButton::Bottom) => {
+                    self.revert(renderer);
+                    return Transition::Pop;
+                }
+                None => {}
+            }
+        }
+        Transition::None
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        let screen = renderer.size();
+        let layout = ui::modal_layout(screen);
+        // A light 25% dim (not the heavy modal scrim) so the new resolution
+        // stays visible behind the dialog, which still blocks all interaction
+        // beneath it (it's the top scene; the manager freezes the rest).
+        self.theme.dim(renderer, screen, 0.25);
+        let note = format!("Reverting in {}s", self.remaining.ceil().max(0.0) as i32);
+        self.theme.draw_panel(
+            renderer,
+            &layout,
+            "KEEP DISPLAY?",
+            Some(&note),
+            ("KEEP", "REVERT"),
+            self.hover,
+        );
+    }
+}
+
 /// Main menu: the gothic panel with START / QUIT over an opaque backdrop.
 /// START replaces this scene with the game; QUIT exits.
 struct MenuScene {
     theme: Option<ui::Theme>,
     hover: Option<ui::ModalButton>,
+    settings: Option<SettingsPanel>,
 }
 
 impl MenuScene {
@@ -1785,6 +2016,7 @@ impl MenuScene {
         Self {
             theme: None,
             hover: None,
+            settings: None,
         }
     }
 }
@@ -1792,9 +2024,21 @@ impl MenuScene {
 impl Scene for MenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.theme = Some(ui::Theme::build(renderer));
+        self.settings = Some(SettingsPanel::new(renderer));
     }
 
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        // Settings dropdowns (top-right). A confirmable change pushes the
+        // confirm overlay; safe changes apply instantly.
+        if let Some(panel) = self.settings.as_mut() {
+            if let Some(change) = panel.update(input, renderer) {
+                if let Some(prev) = apply_display_change(change, renderer) {
+                    let theme = self.theme.expect("theme built in enter");
+                    return Transition::Push(Box::new(ConfirmDisplayScene::new(theme, prev)));
+                }
+                return Transition::None;
+            }
+        }
         let layout = ui::modal_layout(renderer.size());
         self.hover = layout.hover(input.mouse_position);
         if input.mouse_left_pressed {
@@ -1814,7 +2058,17 @@ impl Scene for MenuScene {
         let screen = renderer.size();
         let layout = ui::modal_layout(screen);
         theme.backdrop(renderer, screen);
-        theme.draw_panel(renderer, &layout, "FLICKER", ("START", "QUIT"), self.hover);
+        theme.draw_panel(
+            renderer,
+            &layout,
+            "FLICKER",
+            None,
+            ("START", "QUIT"),
+            self.hover,
+        );
+        if let Some(panel) = self.settings.as_ref() {
+            panel.draw(&theme, renderer);
+        }
     }
 }
 
@@ -1824,6 +2078,7 @@ struct PauseScene {
     theme: ui::Theme,
     hover: Option<ui::ModalButton>,
     escape_prev: bool,
+    settings: Option<SettingsPanel>,
 }
 
 impl PauseScene {
@@ -1834,6 +2089,7 @@ impl PauseScene {
             theme,
             hover: None,
             escape_prev: true,
+            settings: None,
         }
     }
 }
@@ -1843,12 +2099,26 @@ impl Scene for PauseScene {
         true
     }
 
+    fn enter(&mut self, renderer: &mut Renderer) {
+        self.settings = Some(SettingsPanel::new(renderer));
+    }
+
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         let esc_down = input.key_down(Key::Escape);
         let esc_pressed = esc_down && !self.escape_prev;
         self.escape_prev = esc_down;
         if esc_pressed {
             return Transition::Pop; // resume
+        }
+        // Settings dropdowns (top-right) — resolution is allowed on the pause
+        // screen. A confirmable change pushes the confirm overlay.
+        if let Some(panel) = self.settings.as_mut() {
+            if let Some(change) = panel.update(input, renderer) {
+                if let Some(prev) = apply_display_change(change, renderer) {
+                    return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
+                }
+                return Transition::None;
+            }
         }
         let layout = ui::modal_layout(renderer.size());
         self.hover = layout.hover(input.mouse_position);
@@ -1866,8 +2136,17 @@ impl Scene for PauseScene {
         let screen = renderer.size();
         let layout = ui::modal_layout(screen);
         self.theme.scrim(renderer, screen);
-        self.theme
-            .draw_panel(renderer, &layout, "PAUSED", ("RESUME", "QUIT"), self.hover);
+        self.theme.draw_panel(
+            renderer,
+            &layout,
+            "PAUSED",
+            None,
+            ("RESUME", "QUIT"),
+            self.hover,
+        );
+        if let Some(panel) = self.settings.as_ref() {
+            panel.draw(&self.theme, renderer);
+        }
     }
 }
 
@@ -2005,6 +2284,10 @@ fn main() -> Result<()> {
             other => anyhow::bail!("unknown argument: {other}"),
         }
     }
+
+    // Restore persisted display settings (if any) before the window opens; the
+    // logo scene applies them once the renderer exists.
+    display::load_from_disk();
 
     // Start on the logo splash; the scene manager drives logo → menu → game →
     // pause.

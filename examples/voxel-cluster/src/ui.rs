@@ -49,6 +49,9 @@ const COL_SHEEN: [f32; 4] = [0.85, 0.66, 0.34, 0.15];
 /// Loading-bar track (recessed dark) and tarnished-gold fill.
 const COL_BAR_TRACK: [f32; 4] = [0.05, 0.06, 0.07, 1.0];
 const COL_BAR_FILL: [f32; 4] = [0.63, 0.49, 0.26, 1.0];
+/// Dropdown cell fill (resting) and hovered fill.
+const COL_DD_FILL: [f32; 4] = [0.10, 0.11, 0.13, 0.97];
+const COL_DD_HOT: [f32; 4] = [0.17, 0.19, 0.22, 0.98];
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
@@ -59,9 +62,10 @@ const FRAME: u32 = 38;
 const BUTTON_W: u32 = 264;
 const BUTTON_H: u32 = 54;
 
-/// Rough proportional-font advance as a fraction of font size, used to
-/// estimate a label's width for centring (glyphon exposes no measure API).
-const GLYPH_ADVANCE: f32 = 0.56;
+/// Dropdown row height (px) — about half the menu button — and label size, for
+/// the compact settings dropdowns.
+pub const DD_ROW_H: f32 = 26.0;
+pub const DD_LABEL_SIZE: f32 = 15.0;
 
 /// Stroke width (px) for the gold filigree curves.
 const FIL_STROKE: f32 = 2.0;
@@ -570,6 +574,12 @@ impl Theme {
         r.draw_sprite(self.white, Vec2::ZERO, screen, COL_BACKDROP);
     }
 
+    /// A light full-screen black dim at `alpha` (0..1) — keeps the scene behind
+    /// visible (e.g. to preview a resolution change before confirming it).
+    pub fn dim(&self, r: &mut Renderer, screen: Vec2, alpha: f32) {
+        r.draw_sprite(self.white, Vec2::ZERO, screen, [0.0, 0.0, 0.0, alpha]);
+    }
+
     /// Draw the gothic panel: `title` in the cartouche and two labelled
     /// buttons (`labels.0` over `labels.1`) with hover lighting. The caller
     /// draws the backdrop/scrim first (see [`Self::scrim`] / [`Self::backdrop`]).
@@ -578,6 +588,7 @@ impl Theme {
         r: &mut Renderer,
         layout: &ModalLayout,
         title: &str,
+        subtitle: Option<&str>,
         labels: (&str, &str),
         hover: Option<ModalButton>,
     ) {
@@ -588,6 +599,9 @@ impl Theme {
             [1.0, 1.0, 1.0, 1.0],
         );
         centered_text(r, title, layout.panel, layout.title_y, 34.0, COL_TITLE);
+        if let Some(sub) = subtitle {
+            centered_text(r, sub, layout.panel, layout.title_y + 40.0, 18.0, COL_LABEL);
+        }
         self.draw_button(r, &layout.top, labels.0, hover == Some(ModalButton::Top));
         self.draw_button(
             r,
@@ -689,8 +703,8 @@ fn centered_text(
     size: f32,
     color: [f32; 4],
 ) {
-    let est_w = text.chars().count() as f32 * size * GLYPH_ADVANCE;
-    let x = (container.x + (container.w - est_w) * 0.5).max(container.x);
+    let w = r.measure_text(text, size).x;
+    let x = (container.x + (container.w - w) * 0.5).max(container.x);
     r.draw_text(text, Vec2::new(x, y), size, color);
 }
 
@@ -720,6 +734,156 @@ fn outline(r: &mut Renderer, white: TextureHandle, rect: &Rect, t: f32, color: [
         Vec2::new(t, rect.h),
         color,
     );
+}
+
+// ===== compact dropdown widget (settings panel) =====
+
+/// A compact dropdown: a header showing the current choice that expands to a
+/// list of rows. Drawn with primitives (no baked texture), so it sizes to any
+/// row count. State is just open/closed; the selected index and the labels live
+/// with the caller (e.g. the settings panel).
+pub struct Dropdown {
+    open: bool,
+}
+
+impl Dropdown {
+    #[must_use]
+    pub fn new() -> Self {
+        Self { open: false }
+    }
+
+    /// Screen height the dropdown occupies right now (just the header, plus the
+    /// rows when open) — for stacking widgets beneath it.
+    #[must_use]
+    pub fn height(&self, items: usize) -> f32 {
+        if self.open {
+            DD_ROW_H * (items as f32 + 1.0)
+        } else {
+            DD_ROW_H
+        }
+    }
+
+    /// Handle a click at `cursor`. `anchor` is the header's top-left, `width`
+    /// the box width, `items` the row count. A header click toggles open; a row
+    /// click returns `Some(index)` and closes; any other click closes.
+    pub fn click(&mut self, anchor: Vec2, width: f32, items: usize, cursor: Vec2) -> Option<usize> {
+        let (header, rows) = dd_layout(anchor, width, items);
+        if header.contains(cursor) {
+            self.open = !self.open;
+            return None;
+        }
+        if self.open {
+            for (i, row) in rows.iter().enumerate() {
+                if row.contains(cursor) {
+                    self.open = false;
+                    return Some(i);
+                }
+            }
+            self.open = false;
+        }
+        None
+    }
+
+    /// Draw the dropdown: a header showing `items[selected]` plus a caret, and —
+    /// when open — the rows (the active one lit, the hovered one highlighted).
+    pub fn draw(
+        &self,
+        theme: &Theme,
+        r: &mut Renderer,
+        place: (Vec2, f32),
+        items: &[String],
+        selected: usize,
+        cursor: Vec2,
+    ) {
+        let (anchor, width) = place;
+        let (header, rows) = dd_layout(anchor, width, items.len());
+        dd_cell(theme, r, &header, false);
+        if let Some(label) = items.get(selected) {
+            dd_label(r, label, &header, COL_LABEL);
+        }
+        dd_caret(r, &header, self.open);
+        if self.open {
+            for (i, row) in rows.iter().enumerate() {
+                let hot = row.contains(cursor);
+                dd_cell(theme, r, row, hot);
+                let col = if i == selected {
+                    COL_LABEL_HOVER
+                } else {
+                    COL_LABEL
+                };
+                dd_label(r, &items[i], row, col);
+            }
+        }
+    }
+}
+
+impl Default for Dropdown {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Header rect + one rect per row for a dropdown at `anchor`.
+fn dd_layout(anchor: Vec2, width: f32, items: usize) -> (Rect, Vec<Rect>) {
+    let header = Rect {
+        x: anchor.x,
+        y: anchor.y,
+        w: width,
+        h: DD_ROW_H,
+    };
+    let rows = (0..items)
+        .map(|i| Rect {
+            x: anchor.x,
+            y: anchor.y + DD_ROW_H * (i as f32 + 1.0),
+            w: width,
+            h: DD_ROW_H,
+        })
+        .collect();
+    (header, rows)
+}
+
+/// A dropdown cell: slate fill (lit when `hot`) + a thin gold border.
+fn dd_cell(theme: &Theme, r: &mut Renderer, rect: &Rect, hot: bool) {
+    let fill = if hot { COL_DD_HOT } else { COL_DD_FILL };
+    r.draw_sprite(
+        theme.white,
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(rect.w, rect.h),
+        fill,
+    );
+    outline(r, theme.white, rect, 1.0, COL_GOLD_LINE);
+}
+
+/// Left-aligned dropdown label, vertically centred in `rect`.
+fn dd_label(r: &mut Renderer, text: &str, rect: &Rect, color: [f32; 4]) {
+    r.draw_text(
+        text,
+        Vec2::new(rect.x + 10.0, rect.y + (rect.h - DD_LABEL_SIZE) * 0.5),
+        DD_LABEL_SIZE,
+        color,
+    );
+}
+
+/// A small gold caret at the right of a dropdown header (down = closed,
+/// up = open), drawn as a filled triangle so it needs no glyph.
+fn dd_caret(r: &mut Renderer, header: &Rect, open: bool) {
+    let cx = header.x + header.w - 14.0;
+    let cy = header.y + header.h * 0.5;
+    let s = 4.0;
+    let (a, b, c) = if open {
+        (
+            Vec2::new(cx - s, cy + s * 0.6),
+            Vec2::new(cx + s, cy + s * 0.6),
+            Vec2::new(cx, cy - s * 0.6),
+        )
+    } else {
+        (
+            Vec2::new(cx - s, cy - s * 0.6),
+            Vec2::new(cx + s, cy - s * 0.6),
+            Vec2::new(cx, cy + s * 0.6),
+        )
+    };
+    r.draw_triangle(a, b, c, COL_GOLD_LINE);
 }
 
 #[cfg(test)]

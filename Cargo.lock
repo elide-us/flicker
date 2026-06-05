@@ -3386,6 +3386,8 @@ dependencies = [
  "flicker-worker",
  "glam",
  "image",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
