@@ -75,6 +75,30 @@ a refactor of *where the UI is defined*, not new UI capability.
 
 ## Task 1 — Lua-driven front-end UI
 
+> **✅ In progress — protocol foundation + main menu ported.** The seam already
+> had the right shape (Lua owns layout/state/hit-testing; the engine renders
+> plain-data commands and reads back named values — the XNA model in miniature),
+> so we took the **Option-B-flavoured** path: *enrich the framework surface Lua
+> calls* rather than impose a Rust widget tree. Landed in `flicker-script`:
+> per-command `layer`, a `Sprite` command (engine textures referenced by id via
+> the host-set `Textures` global / `ScriptHost::set_texture_ids`), `Text` with
+> `align="center"` (the consumer measures + centres at draw time — keeps
+> `measure_text` in Rust where `&mut Renderer` lives), and screen size passed
+> into `update`/`draw` for responsive layout. The consumer has one shared
+> `render_hud` path (used by every Lua screen) that maps commands → renderer
+> calls and applies each command's `layer` relative to the scene's base.
+> **Main menu ported:** `examples/voxel-cluster/scripts/menu.lua` owns the
+> layout/labels/hit-testing (mirroring the old `modal_layout`/`draw_panel`
+> pixel-for-pixel) and emits sprite/text commands using the gothic
+> `Theme::lua_textures`; `MenuScene` is now a thin shell that loads the script,
+> renders its commands, and routes the `start`/`quit` momentary actions to
+> `Transition`s. Verified: builds clean, `flicker-script` tests green, and the
+> menu renders + QUIT works in the running app. **Still Rust (next):** the
+> settings dropdowns (still a Rust `SettingsPanel`), and the pause/logo/loading
+> screens — port them next using the same surface. Toggles double as momentary
+> actions, so no separate events channel was needed. The original design
+> discussion below is kept for context.
+
 **The seam problem.** Today Lua is one-way (emit `Rect`/`Text`, read `Toggles`).
 Interactive widgets (buttons, dropdowns) need a **two-way** protocol: Lua
 declares widgets (with stable ids + state like "open"); Rust hit-tests against

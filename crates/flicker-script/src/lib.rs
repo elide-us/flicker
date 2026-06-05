@@ -31,12 +31,15 @@
 //!
 //! ```lua
 //! local M = {}
-//! -- Called once per frame. Hit-test the click, flip state, and
-//! -- return a table of {name = bool} toggle states.
-//! function M.update(mouse_x, mouse_y, clicked) ... return { ... } end
+//! -- Called once per frame. Hit-test the click, flip state, and return a
+//! -- table of {name = bool} states (persistent toggles, or momentary
+//! -- actions that are true only on the firing frame). `sw`/`sh` are the
+//! -- screen size for responsive layout.
+//! function M.update(mouse_x, mouse_y, clicked, sw, sh) ... return { ... } end
 //! -- Called once per frame. Return a sequence of draw-command tables;
-//! -- see HudCommand for the recognised shapes.
-//! function M.draw() return { ... } end
+//! -- see HudCommand for the recognised shapes ("rect"/"sprite"/"text").
+//! -- `Textures` (a global set by the host) maps names to sprite ids.
+//! function M.draw(sw, sh) return { ... } end
 //! return M
 //! ```
 
@@ -61,12 +64,27 @@ pub enum ScriptError {
     Lua(#[from] mlua::Error),
 }
 
+/// Horizontal alignment for a [`HudCommand::Text`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    /// `x` is the text's left edge (the default).
+    #[default]
+    Left,
+    /// `x` is the text's horizontal *center*; the consumer measures the
+    /// string and offsets it left by half its width. Used for centring
+    /// titles/labels without the script needing font metrics.
+    Center,
+}
+
 /// A draw command emitted by a HUD script for the engine to render.
 ///
 /// Coordinates are in HUD pixel space (origin top-left), matching the
-/// renderer's 2D conventions. Colors are RGBA in `0.0..=1.0`. These
-/// map directly onto the renderer's `draw_sprite` (for [`Self::Rect`],
-/// using a 1×1 white texture tinted by `color`) and `draw_text`.
+/// renderer's 2D conventions. Colors are RGBA in `0.0..=1.0`. `layer` is the
+/// painter's-order sort key (higher draws on top), applied *relative* to the
+/// scene's base layer by the consumer. These map onto the renderer's
+/// `draw_sprite` ([`Self::Rect`] uses a 1×1 white texture tinted by `color`;
+/// [`Self::Sprite`] uses an engine texture the host exposed via
+/// [`ScriptHost::set_texture_ids`]) and `draw_text`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HudCommand {
     /// A solid filled rectangle.
@@ -76,14 +94,29 @@ pub enum HudCommand {
         w: f32,
         h: f32,
         color: [f32; 4],
+        layer: f32,
     },
-    /// A line of text with its top-left at `(x, y)`.
+    /// A textured quad drawn from an engine texture, referenced by the `id`
+    /// the host registered with [`ScriptHost::set_texture_ids`]. `color`
+    /// tints the sampled texel (`[1; 4]` for none).
+    Sprite {
+        tex: u32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+        layer: f32,
+    },
+    /// A line of text positioned at `(x, y)` per `align`.
     Text {
         x: f32,
         y: f32,
         text: String,
         size: f32,
         color: [f32; 4],
+        layer: f32,
+        align: TextAlign,
     },
 }
 
@@ -140,14 +173,42 @@ impl ScriptHost {
         Self::new(&source, &path.display().to_string())
     }
 
-    /// Run the script's per-frame `update`, feeding it the current
-    /// mouse position and whether the left button was *pressed this
-    /// frame* (the click edge). Returns the script's named toggle
-    /// states.
-    pub fn update(&self, input: &InputState) -> Result<Toggles, ScriptError> {
+    /// Expose engine textures to the script as a global `Textures` table
+    /// (`{ name = id, ... }`), so scripts can emit
+    /// [`HudCommand::Sprite`]s referencing them by name (e.g.
+    /// `Textures.panel`). `id` is whatever the host uses to look the
+    /// texture back up when rendering. Call once after load (and again if
+    /// the set changes, e.g. on theme rebuild).
+    pub fn set_texture_ids(&self, ids: &[(&str, u32)]) -> Result<(), ScriptError> {
+        let table = self.lua.create_table()?;
+        for (name, id) in ids {
+            table.set(*name, *id)?;
+        }
+        self.lua.globals().set("Textures", table)?;
+        Ok(())
+    }
+
+    /// Run the script's per-frame `update`, feeding it the current mouse
+    /// position, whether the left button was *pressed this frame* (the click
+    /// edge), and the screen size in pixels (so scripts can lay out
+    /// responsively). Returns the script's named toggle states — which double
+    /// as momentary "actions" a screen can fire (e.g. `start = true` only on
+    /// the click frame).
+    pub fn update(
+        &self,
+        input: &InputState,
+        screen_w: f32,
+        screen_h: f32,
+    ) -> Result<Toggles, ScriptError> {
         let update: Function = self.module.get("update")?;
         let mouse = input.mouse_position;
-        let states: Table = update.call((mouse.x, mouse.y, input.mouse_left_pressed))?;
+        let states: Table = update.call((
+            mouse.x,
+            mouse.y,
+            input.mouse_left_pressed,
+            screen_w,
+            screen_h,
+        ))?;
 
         let mut map = HashMap::new();
         for pair in states.pairs::<String, bool>() {
@@ -157,12 +218,12 @@ impl ScriptHost {
         Ok(Toggles { map })
     }
 
-    /// Run the script's per-frame `draw` and collect its HUD commands.
-    /// Unrecognised command kinds are skipped with a warning rather
-    /// than failing the frame.
-    pub fn draw(&self) -> Result<Vec<HudCommand>, ScriptError> {
+    /// Run the script's per-frame `draw` (given the screen size) and collect
+    /// its HUD commands. Unrecognised command kinds are skipped with a warning
+    /// rather than failing the frame.
+    pub fn draw(&self, screen_w: f32, screen_h: f32) -> Result<Vec<HudCommand>, ScriptError> {
         let draw: Function = self.module.get("draw")?;
-        let list: Table = draw.call(())?;
+        let list: Table = draw.call((screen_w, screen_h))?;
 
         let mut commands = Vec::new();
         for item in list.sequence_values::<Table>() {
@@ -175,6 +236,16 @@ impl ScriptHost {
                     w: cmd.get("w")?,
                     h: cmd.get("h")?,
                     color: read_color(&cmd)?,
+                    layer: read_layer(&cmd)?,
+                }),
+                "sprite" => commands.push(HudCommand::Sprite {
+                    tex: cmd.get("tex")?,
+                    x: cmd.get("x")?,
+                    y: cmd.get("y")?,
+                    w: cmd.get("w")?,
+                    h: cmd.get("h")?,
+                    color: read_color(&cmd)?,
+                    layer: read_layer(&cmd)?,
                 }),
                 "text" => commands.push(HudCommand::Text {
                     x: cmd.get("x")?,
@@ -182,6 +253,8 @@ impl ScriptHost {
                     text: cmd.get("text")?,
                     size: cmd.get::<Option<f32>>("size")?.unwrap_or(16.0),
                     color: read_color(&cmd)?,
+                    layer: read_layer(&cmd)?,
+                    align: read_align(&cmd)?,
                 }),
                 other => tracing::warn!("hud script emitted unknown command kind '{other}'"),
             }
@@ -202,6 +275,20 @@ fn read_color(cmd: &Table) -> mlua::Result<[f32; 4]> {
     ])
 }
 
+/// Read a command's `layer` (painter's-order key), defaulting to `0.0`.
+fn read_layer(cmd: &Table) -> mlua::Result<f32> {
+    Ok(cmd.get::<Option<f32>>("layer")?.unwrap_or(0.0))
+}
+
+/// Read a text command's `align` (`"center"` → [`TextAlign::Center`]; anything
+/// else, including omitted, → [`TextAlign::Left`]).
+fn read_align(cmd: &Table) -> mlua::Result<TextAlign> {
+    Ok(match cmd.get::<Option<String>>("align")?.as_deref() {
+        Some("center") => TextAlign::Center,
+        _ => TextAlign::Left,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,13 +296,13 @@ mod tests {
     const SCRIPT: &str = r#"
         local M = {}
         local checked = false
-        function M.update(mx, my, clicked)
+        function M.update(mx, my, clicked, sw, sh)
             if clicked and mx >= 0 and mx <= 10 and my >= 0 and my <= 10 then
                 checked = not checked
             end
             return { box = checked }
         end
-        function M.draw()
+        function M.draw(sw, sh)
             return {
                 { kind = "rect", x = 0, y = 0, w = 10, h = 10, r = 1, g = 1, b = 1 },
                 { kind = "text", x = 12, y = 0, text = "hi", size = 14 },
@@ -245,33 +332,43 @@ mod tests {
         let host = ScriptHost::new(SCRIPT, "test").unwrap();
 
         // No click: off.
-        let toggles = host.update(&input_at(5.0, 5.0, false)).unwrap();
+        let toggles = host
+            .update(&input_at(5.0, 5.0, false), 800.0, 600.0)
+            .unwrap();
         assert!(!toggles.is_on("box"));
 
         // Click inside the box: on.
-        let toggles = host.update(&input_at(5.0, 5.0, true)).unwrap();
+        let toggles = host
+            .update(&input_at(5.0, 5.0, true), 800.0, 600.0)
+            .unwrap();
         assert!(toggles.is_on("box"));
 
         // Click outside leaves it on (no flip).
-        let toggles = host.update(&input_at(50.0, 50.0, true)).unwrap();
+        let toggles = host
+            .update(&input_at(50.0, 50.0, true), 800.0, 600.0)
+            .unwrap();
         assert!(toggles.is_on("box"));
 
         // Click inside again flips it back off.
-        let toggles = host.update(&input_at(5.0, 5.0, true)).unwrap();
+        let toggles = host
+            .update(&input_at(5.0, 5.0, true), 800.0, 600.0)
+            .unwrap();
         assert!(!toggles.is_on("box"));
     }
 
     #[test]
     fn unknown_toggle_is_off() {
         let host = ScriptHost::new(SCRIPT, "test").unwrap();
-        let toggles = host.update(&input_at(0.0, 0.0, false)).unwrap();
+        let toggles = host
+            .update(&input_at(0.0, 0.0, false), 800.0, 600.0)
+            .unwrap();
         assert!(!toggles.is_on("nope"));
     }
 
     #[test]
     fn draw_returns_rect_and_text() {
         let host = ScriptHost::new(SCRIPT, "test").unwrap();
-        let cmds = host.draw().unwrap();
+        let cmds = host.draw(800.0, 600.0).unwrap();
         assert_eq!(
             cmds,
             vec![
@@ -281,6 +378,7 @@ mod tests {
                     w: 10.0,
                     h: 10.0,
                     color: [1.0, 1.0, 1.0, 1.0],
+                    layer: 0.0,
                 },
                 HudCommand::Text {
                     x: 12.0,
@@ -288,6 +386,53 @@ mod tests {
                     text: "hi".to_string(),
                     size: 14.0,
                     color: [1.0, 1.0, 1.0, 1.0],
+                    layer: 0.0,
+                    align: TextAlign::Left,
+                },
+            ]
+        );
+    }
+
+    const SCREEN_SCRIPT: &str = r#"
+        local M = {}
+        function M.update(mx, my, clicked, sw, sh) return {} end
+        function M.draw(sw, sh)
+            return {
+                { kind = "sprite", tex = Textures.panel, x = 4, y = 5, w = 6, h = 7,
+                  layer = 2, a = 0.5 },
+                { kind = "text", x = sw * 0.5, y = sh - 10, text = "FLICKER", size = 30,
+                  align = "center", layer = 3 },
+            }
+        end
+        return M
+    "#;
+
+    #[test]
+    fn sprite_layer_and_align_parse() {
+        let host = ScriptHost::new(SCREEN_SCRIPT, "screen").unwrap();
+        host.set_texture_ids(&[("panel", 1), ("button", 2), ("white", 0)])
+            .unwrap();
+        let cmds = host.draw(800.0, 600.0).unwrap();
+        assert_eq!(
+            cmds,
+            vec![
+                HudCommand::Sprite {
+                    tex: 1,
+                    x: 4.0,
+                    y: 5.0,
+                    w: 6.0,
+                    h: 7.0,
+                    color: [1.0, 1.0, 1.0, 0.5],
+                    layer: 2.0,
+                },
+                HudCommand::Text {
+                    x: 400.0,
+                    y: 590.0,
+                    text: "FLICKER".to_string(),
+                    size: 30.0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    layer: 3.0,
+                    align: TextAlign::Center,
                 },
             ]
         );

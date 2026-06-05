@@ -48,7 +48,7 @@ use flicker::render::{
     Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
-use flicker::script::{HudCommand, ScriptHost};
+use flicker::script::{HudCommand, ScriptHost, TextAlign};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
     ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext,
@@ -1307,10 +1307,15 @@ impl Scene for GameScene {
         }
 
         // Debug toggles now live in the HUD script: feed it the mouse +
-        // click edge, and mirror the checkbox states it reports back.
-        // (`as_ref().map(..)` releases the `self.script` borrow before we
+        // click edge + screen size, and mirror the checkbox states it reports
+        // back. (`as_ref().map(..)` releases the `self.script` borrow before we
         // write the other fields below.)
-        if let Some(result) = self.script.as_ref().map(|s| s.update(input)) {
+        let screen = renderer.size();
+        if let Some(result) = self
+            .script
+            .as_ref()
+            .map(|s| s.update(input, screen.x, screen.y))
+        {
             match result {
                 Ok(toggles) => {
                     self.wireframe_on = toggles.is_on("wireframe");
@@ -1694,38 +1699,79 @@ impl Scene for GameScene {
             }
         }
 
-        // The scripted HUD: the Lua side returns plain draw commands,
-        // which we turn into sprite (rect) and text calls. Rects are
-        // drawn with the 1×1 white texture tinted by the command color.
+        // The scripted HUD: the Lua side returns plain draw commands, which the
+        // shared `render_hud` helper turns into renderer calls. This HUD uses
+        // only rects/text (no engine textures), so it registers none.
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
-            match script.draw() {
-                Ok(commands) => {
-                    for command in commands {
-                        match command {
-                            HudCommand::Rect { x, y, w, h, color } => {
-                                renderer.draw_sprite(
-                                    white,
-                                    Vec2::new(x, y),
-                                    Vec2::new(w, h),
-                                    color,
-                                );
-                            }
-                            HudCommand::Text {
-                                x,
-                                y,
-                                text,
-                                size,
-                                color,
-                            } => {
-                                renderer.draw_text(&text, Vec2::new(x, y), size, color);
-                            }
-                        }
-                    }
-                }
+            let screen = renderer.size();
+            match script.draw(screen.x, screen.y) {
+                Ok(commands) => render_hud(renderer, &commands, white, &[]),
                 Err(e) => tracing::error!("HUD script draw failed: {e}"),
             }
         }
     }
+}
+
+/// Render a Lua HUD command list with the engine. The single draw path shared
+/// by every Lua-driven screen: `Rect` uses the 1×1 `white` texture tinted by
+/// its color; `Sprite` looks its texture up in `textures` by the id the script
+/// got from the `Textures` global; `Text` with [`TextAlign::Center`] is
+/// measured and offset so `x` is its center. Each command's `layer` is applied
+/// relative to the scene's current base layer, so a script can stack its own
+/// sub-layers (e.g. a dropdown over a panel) without knowing its scene depth.
+fn render_hud(
+    renderer: &mut Renderer,
+    commands: &[HudCommand],
+    white: TextureHandle,
+    textures: &[TextureHandle],
+) {
+    let base = renderer.layer();
+    for command in commands {
+        match command {
+            HudCommand::Rect {
+                x,
+                y,
+                w,
+                h,
+                color,
+                layer,
+            } => {
+                renderer.set_layer(base + layer);
+                renderer.draw_sprite(white, Vec2::new(*x, *y), Vec2::new(*w, *h), *color);
+            }
+            HudCommand::Sprite {
+                tex,
+                x,
+                y,
+                w,
+                h,
+                color,
+                layer,
+            } => {
+                if let Some(&handle) = textures.get(*tex as usize) {
+                    renderer.set_layer(base + layer);
+                    renderer.draw_sprite(handle, Vec2::new(*x, *y), Vec2::new(*w, *h), *color);
+                }
+            }
+            HudCommand::Text {
+                x,
+                y,
+                text,
+                size,
+                color,
+                layer,
+                align,
+            } => {
+                renderer.set_layer(base + layer);
+                let left = match align {
+                    TextAlign::Center => x - renderer.measure_text(text, *size).x * 0.5,
+                    TextAlign::Left => *x,
+                };
+                renderer.draw_text(text, Vec2::new(left, *y), *size, *color);
+            }
+        }
+    }
+    renderer.set_layer(base);
 }
 
 // ===== Front-end scenes (logo, menu, pause overlay) =====
@@ -2003,11 +2049,20 @@ impl Scene for ConfirmDisplayScene {
     }
 }
 
-/// Main menu: the gothic panel with START / QUIT over an opaque backdrop.
-/// START replaces this scene with the game; QUIT exits.
+/// Path to the Lua main-menu screen (panel/title/buttons + hit-testing).
+const MENU_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/menu.lua");
+
+/// Main menu: a thin shell over the Lua-driven menu screen (`menu.lua`). The
+/// script owns the layout/labels/hit-testing and emits draw commands; this
+/// scene just renders them, routes the `start`/`quit` actions to transitions,
+/// and keeps the (still Rust) settings dropdowns. The gothic textures come from
+/// [`ui::Theme`] and are handed to the script by name.
 struct MenuScene {
     theme: Option<ui::Theme>,
-    hover: Option<ui::ModalButton>,
+    script: Option<ScriptHost>,
+    /// Engine textures the script references by id (index = id). `[0]` is the
+    /// white pixel used for `rect` fills.
+    textures: Vec<TextureHandle>,
     settings: Option<SettingsPanel>,
 }
 
@@ -2015,7 +2070,8 @@ impl MenuScene {
     fn new() -> Self {
         Self {
             theme: None,
-            hover: None,
+            script: None,
+            textures: Vec::new(),
             settings: None,
         }
     }
@@ -2023,7 +2079,28 @@ impl MenuScene {
 
 impl Scene for MenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        self.theme = Some(ui::Theme::build(renderer));
+        let theme = ui::Theme::build(renderer);
+        let entries = theme.lua_textures();
+        self.textures = entries.iter().map(|(_, handle)| *handle).collect();
+        // Load the Lua menu and tell it the texture ids (index = id).
+        self.script = match ScriptHost::from_file(MENU_SCRIPT_PATH) {
+            Ok(script) => {
+                let ids: Vec<(&str, u32)> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| (*name, i as u32))
+                    .collect();
+                if let Err(e) = script.set_texture_ids(&ids) {
+                    tracing::error!("menu script texture registration failed: {e}");
+                }
+                Some(script)
+            }
+            Err(e) => {
+                tracing::error!("menu script load failed: {e}");
+                None
+            }
+        };
+        self.theme = Some(theme);
         self.settings = Some(SettingsPanel::new(renderer));
     }
 
@@ -2039,15 +2116,19 @@ impl Scene for MenuScene {
                 return Transition::None;
             }
         }
-        let layout = ui::modal_layout(renderer.size());
-        self.hover = layout.hover(input.mouse_position);
-        if input.mouse_left_pressed {
-            match self.hover {
-                Some(ui::ModalButton::Top) => {
-                    return Transition::Replace(Box::new(GameScene::new()))
+        // The Lua menu hit-tests the buttons and fires momentary actions.
+        if let Some(script) = self.script.as_ref() {
+            let screen = renderer.size();
+            match script.update(input, screen.x, screen.y) {
+                Ok(actions) => {
+                    if actions.is_on("start") {
+                        return Transition::Replace(Box::new(GameScene::new()));
+                    }
+                    if actions.is_on("quit") {
+                        return Transition::Quit;
+                    }
                 }
-                Some(ui::ModalButton::Bottom) => return Transition::Quit,
-                None => {}
+                Err(e) => tracing::error!("menu script update failed: {e}"),
             }
         }
         Transition::None
@@ -2055,17 +2136,13 @@ impl Scene for MenuScene {
 
     fn render(&mut self, renderer: &mut Renderer) {
         let Some(theme) = self.theme else { return };
-        let screen = renderer.size();
-        let layout = ui::modal_layout(screen);
-        theme.backdrop(renderer, screen);
-        theme.draw_panel(
-            renderer,
-            &layout,
-            "FLICKER",
-            None,
-            ("START", "QUIT"),
-            self.hover,
-        );
+        if let Some(script) = self.script.as_ref() {
+            let screen = renderer.size();
+            match script.draw(screen.x, screen.y) {
+                Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
+                Err(e) => tracing::error!("menu script draw failed: {e}"),
+            }
+        }
         if let Some(panel) = self.settings.as_ref() {
             panel.draw(&theme, renderer);
         }

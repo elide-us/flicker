@@ -564,6 +564,20 @@ impl Theme {
         }
     }
 
+    /// The engine textures this theme exposes to a Lua screen, as
+    /// `(name, handle)` in id order — the index is the id the script references
+    /// via `Textures.<name>` (see [`ScriptHost::set_texture_ids`] and the
+    /// consumer's `render_hud`). `white` is id 0 so it doubles as the rect fill.
+    ///
+    /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
+    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 3] {
+        [
+            ("white", self.white),
+            ("panel", self.panel),
+            ("button", self.button),
+        ]
+    }
+
     /// Translucent full-screen scrim — dims a frozen scene behind a modal.
     pub fn scrim(&self, r: &mut Renderer, screen: Vec2) {
         r.draw_sprite(self.white, Vec2::ZERO, screen, COL_SCRIM);
