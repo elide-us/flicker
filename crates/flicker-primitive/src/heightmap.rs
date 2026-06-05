@@ -50,7 +50,7 @@
 
 use std::sync::OnceLock;
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
 
 /// Seed used when `FLICKER_SEED` is unset or unparseable.
 pub const DEFAULT_SEED: u64 = 0xCAFE_F00D_D15E_A5E5;

@@ -19,7 +19,8 @@
 //! approach 16 M. Both ends work; storage scales with how much
 //! information is actually per-voxel meaningful.
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
+
 use crate::local_coord::LocalCoord;
 
 /// Per-voxel physics state. The 2-bit `repr` is the in-storage

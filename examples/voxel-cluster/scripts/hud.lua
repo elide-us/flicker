@@ -1,4 +1,4 @@
--- voxel-cluster HUD: six interactive checkboxes that drive the
+-- voxel-cluster HUD: five interactive checkboxes that drive the
 -- engine's debug toggles, replacing the old `1`/`2`/`\` key handling.
 --
 -- This is plain Lua (no Luau-specific syntax). The host runs it once
@@ -11,12 +11,11 @@
 local M = {}
 
 -- The toggles, in draw order. `key` is the name the engine queries
--- (VoxelCluster reads "wireframe" / "corner_arrows" / "center_lod" /
+-- (VoxelCluster reads "wireframe" / "corner_arrows" /
 -- "navmesh" / "camera_lod" / "lod_billboards").
 local checkboxes = {
   { key = "wireframe",     label = "Wireframe overlay",          checked = false },
   { key = "corner_arrows", label = "Corner-vector arrows",       checked = false },
-  { key = "center_lod",    label = "Center cluster: LOD 1",       checked = false },
   { key = "navmesh",       label = "Navmesh wireframe",          checked = false },
   { key = "camera_lod",    label = "Camera-driven LOD",          checked = false },
   { key = "lod_billboards",label = "LOD billboards",             checked = false },

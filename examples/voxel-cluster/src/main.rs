@@ -17,7 +17,7 @@
 //!   * Escape: quit.
 //!
 //! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
-//! loaded at startup via `flicker-script`) — six clickable
+//! loaded at startup via `flicker-script`) — five clickable
 //! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
 //! handling:
 //!   * Wireframe overlay on top of the solid mesh.
@@ -25,16 +25,16 @@
 //!     `CornerVector` differs from the default, draw a line from the
 //!     voxel's grid coord to the decoded corner tip. Visualizes where
 //!     the contour's QEF placed each active cell's dual vertex.
-//!   * Center cluster LOD — flips the centre cluster of the 3×3 field
-//!     between LOD 0 and LOD 1, exercising the cross-LOD seam.
 //!   * Navmesh wireframe — the LOD2 walkable surface drawn magenta as
 //!     floor-to-floor links between walkable-adjacent columns.
 //!   * Camera-driven LOD — each cluster's LOD follows its distance from
 //!     the camera (smoothed to the mesher's ±1 adjacency invariant),
-//!     re-meshing on a swap. Supersedes the manual centre-LOD toggle.
+//!     re-meshing on a swap.
 //!   * LOD billboards — a digit per cluster, on the navmesh surface at
 //!     the cluster centre, showing that cluster's current LOD.
 
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -49,6 +49,7 @@ use flicker_voxel::{
     ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext, Scene,
     CLUSTER_DIM, NAV_DIM,
 };
+use flicker_worker::WorkerPool;
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
@@ -57,10 +58,29 @@ use flicker_voxel::{
 const FIELD_DIM: u16 = 3;
 
 struct VoxelCluster {
-    /// The cluster map — populated with `FIELD_DIM × FIELD_DIM`
-    /// clusters at LOD 0, each contoured against the shared world
-    /// primitive at its own world offset.
-    map: ClusterMap,
+    /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
+    /// QEF corners + dense state for each cluster at full resolution.
+    /// Populated once (bake or contour) and never re-derived at runtime;
+    /// edits (a later slice) will mutate this. Keyed by LOD-0 `ClusterId`s.
+    ///
+    /// Wrapped in `Arc<RwLock<…>>` ahead of the mesh-worker slice: workers
+    /// will hold a clone and *read* it to derive meshes off-thread, while
+    /// edits take the write lock. Today only `rebuild` touches it.
+    source: Arc<RwLock<ClusterMap>>,
+
+    /// Background worker pool: per-cluster derive+mesh jobs run here off the
+    /// main thread (see `build_cluster`). `None` until `init` creates it.
+    pool: Option<WorkerPool>,
+    /// Result channel for completed [`ClusterBuild`]s. Jobs hold a clone of
+    /// the sender; `render` drains the receiver and applies fresh results.
+    build_tx: Option<Sender<ClusterBuild>>,
+    build_rx: Option<Receiver<ClusterBuild>>,
+    /// Monotonic field generation, bumped on every LOD change. Jobs carry it
+    /// so stale (superseded) results are dropped on arrival — best-effort.
+    generation: u64,
+    /// Current-generation results collected so far; applied as a set once the
+    /// whole field has reported in (see `drain_and_apply`).
+    pending: Vec<ClusterBuild>,
 
     /// A 1×1 white pixel uploaded once at `init`. The sprite shader
     /// multiplies it by a tint, so this is the "solid colored quad"
@@ -101,9 +121,6 @@ struct VoxelCluster {
     /// Draw corner-vector arrows (precomputed in `init`). Mirrors the
     /// script's `"corner_arrows"` checkbox.
     corner_arrows_on: bool,
-    /// State of the script's `"center_lod"` checkbox on the previous
-    /// frame, so we rebuild the field only on the toggle edge.
-    prev_center_lod_on: bool,
     /// Draw the LOD2 navmesh as a magenta wireframe. Mirrors the
     /// script's `"navmesh"` checkbox, refreshed each `update`.
     navmesh_on: bool,
@@ -118,8 +135,8 @@ struct VoxelCluster {
     navmesh_segments: Vec<(Vec3, Vec3)>,
 
     /// Mirrors the script's `"camera_lod"` checkbox: when on, camera
-    /// distance drives each cluster's LOD (see `target_lod_for_cluster`),
-    /// superseding the manual centre-LOD toggle.
+    /// distance drives each cluster's LOD (see `target_lod_for_cluster`).
+    /// When off, every cluster renders at LOD 0.
     camera_lod_on: bool,
     /// Mirrors the script's `"lod_billboards"` checkbox: draw a per-cluster
     /// LOD-digit billboard on the navmesh surface at the cluster centre.
@@ -131,16 +148,6 @@ struct VoxelCluster {
     /// Digit-glyph atlas (digits 0–7) for the LOD billboards, uploaded once
     /// in `init`.
     digit_atlas: Option<TextureHandle>,
-
-    /// LOD level of the centre cluster of the 3×3 field. Toggled
-    /// between 0 (uniform with neighbours) and 1 (coarser than its
-    /// four lateral neighbours) by the HUD's centre-LOD checkbox.
-    /// Other clusters stay at LOD 0.
-    center_lod_level: u8,
-    /// Set by `update` when the centre-LOD checkbox flips; consumed at
-    /// the top of `render` (which has `&mut Renderer`) to re-contour +
-    /// re-mesh the whole field.
-    needs_rebuild: bool,
 
     /// CPU-side world-space triangle data for ray-casting against the
     /// rendered mesh. One entry per cluster: `(id, world vertex
@@ -163,7 +170,12 @@ impl Default for VoxelCluster {
         // Camera gets its real pose in `init`. The placeholders here
         // just satisfy the Default bound; nothing renders before init.
         Self {
-            map: ClusterMap::new(),
+            source: Arc::new(RwLock::new(ClusterMap::new())),
+            pool: None,
+            build_tx: None,
+            build_rx: None,
+            generation: 0,
+            pending: Vec::new(),
             white: None,
             meshes: Vec::new(),
             navs: Vec::new(),
@@ -176,7 +188,6 @@ impl Default for VoxelCluster {
             script: None,
             wireframe_on: false,
             corner_arrows_on: false,
-            prev_center_lod_on: false,
             navmesh_on: false,
             corner_arrows: Vec::new(),
             navmesh_segments: Vec::new(),
@@ -184,8 +195,6 @@ impl Default for VoxelCluster {
             lod_billboards_on: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
-            center_lod_level: 0,
-            needs_rebuild: false,
             pick_meshes: Vec::new(),
             selection: None,
             should_quit: false,
@@ -240,9 +249,9 @@ const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 const HUD_PANEL_X0: f32 = 12.0;
 const HUD_PANEL_Y0: f32 = 152.0;
 const HUD_PANEL_X1: f32 = 280.0;
-// Six checkbox rows: the Lua panel's last box bottom is
-// `ORIGIN_Y + 5*ROW_H + BOX = 180 + 130 + 18 = 328`; pad to ~10px.
-const HUD_PANEL_Y1: f32 = 338.0;
+// Five checkbox rows: the Lua panel's last box bottom is
+// `ORIGIN_Y + 4*ROW_H + BOX = 180 + 104 + 18 = 302`; pad to ~10px.
+const HUD_PANEL_Y1: f32 = 312.0;
 
 impl VoxelCluster {
     /// `true` when the cursor sits on the scripted HUD's checkbox panel
@@ -524,7 +533,10 @@ impl VoxelCluster {
     /// recompute every frame instead of caching.
     fn current_virtual_voxel(&self) -> Option<VirtualVoxel> {
         let (id, p) = self.selection?;
-        let cluster = self.map.get(id)?;
+        // The render map is gone (meshing is async); read the LOD-0 source for
+        // the inspector. (Pick is temporary — see the input-controls work.)
+        let source = self.source.read().ok()?;
+        let cluster = source.get(ClusterId::new(0, id.x(), 0, id.z()))?;
         Some(VirtualVoxel::build(id, cluster, p))
     }
 }
@@ -534,245 +546,103 @@ impl VoxelCluster {
     /// once at init and again on every `\` toggle. Cheaper than tracking
     /// dirty bits here — the whole 9-cluster rebuild costs a couple
     /// seconds and a `\` press is a deliberate debug action.
-    fn rebuild(&mut self, renderer: &mut Renderer) {
+    /// Populate the LOD-0 source of truth once — from the on-disk bake if
+    /// present, else by contouring the primitive. Never re-derived at runtime
+    /// (see `docs/architecture.md`); edits (a later slice) mutate it directly.
+    fn ensure_source(&mut self) {
+        let mut source = self.source.write().expect("source lock poisoned");
+        if !source.is_empty() {
+            return;
+        }
         let material = Material::new(1, 1, 0).expect("grey material is in-range");
+        let bake_dir = bake_dir_path();
+        let lod0_ids: Vec<ClusterId> = (0..FIELD_DIM)
+            .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(0, x, 0, z)))
+            .collect();
+        if let Some(loaded) = try_load_bake_field(&bake_dir, &lod0_ids) {
+            tracing::info!(
+                "loaded {} LOD-0 source clusters from bake at {}",
+                loaded.len(),
+                bake_dir.display()
+            );
+            for (id, cluster) in loaded {
+                source.insert(id, cluster);
+            }
+            return;
+        }
+        for id in &lod0_ids {
+            let scene = Scene::world_at(id.world_offset());
+            source.insert(*id, contour(&scene, material, *id));
+        }
+    }
 
-        // Per-cluster LOD comes from the smoothed `lod_field` (driven by the
-        // camera when "camera_lod" is on, else the manual centre-LOD toggle —
-        // see `update`). Copied out so the closure doesn't borrow `self`.
+    /// Re-mesh the whole field on the worker pool: bump the generation and
+    /// submit one `build_cluster` job per cell, each holding a clone of the
+    /// source `Arc` and the result sender. Returns immediately — completed
+    /// builds are applied later by `drain_and_apply`.
+    fn submit_field_jobs(&mut self) {
+        self.generation += 1;
+        let generation = self.generation;
+        // Results collected for the previous generation are now stale.
+        self.pending.clear();
+        let (Some(pool), Some(tx)) = (self.pool.as_ref(), self.build_tx.as_ref()) else {
+            return;
+        };
         let lod_field = self.lod_field;
-        let lod_for = |x: u16, z: u16| -> u8 { lod_field[x as usize][z as usize] };
+        let camera = [self.position.x, self.position.y, self.position.z];
+        for x in 0..FIELD_DIM {
+            for z in 0..FIELD_DIM {
+                let source = Arc::clone(&self.source);
+                let tx = tx.clone();
+                pool.submit(move || {
+                    let src = source.read().expect("source lock poisoned");
+                    let build = build_cluster(&src, x, z, lod_field, camera, generation);
+                    let _ = tx.send(build);
+                });
+            }
+        }
+    }
 
-        self.map = ClusterMap::new();
-        self.meshes.clear();
-        // CPU triangles for picking are regenerated alongside the
-        // uploaded meshes below; clear the stale entries first.
+    /// Drain completed builds; once the whole field of the current generation
+    /// has reported in, apply it as a set — free the old mesh slots, upload
+    /// the new geometry into recycled slots, and rebuild the per-frame draw
+    /// data (mesh handles, pick triangles, nav, navmesh + corner-arrow
+    /// segments). Stale (superseded-generation) results are dropped.
+    fn drain_and_apply(&mut self, renderer: &mut Renderer) {
+        if let Some(rx) = self.build_rx.as_ref() {
+            while let Ok(build) = rx.try_recv() {
+                if build.generation == self.generation {
+                    self.pending.push(build);
+                }
+            }
+        }
+        let field = (FIELD_DIM as usize) * (FIELD_DIM as usize);
+        if self.pending.len() < field {
+            return;
+        }
+
+        let builds = std::mem::take(&mut self.pending);
+        // Free the previous field's mesh slots so the renderer recycles them.
+        for (_, handle) in self.meshes.drain(..) {
+            renderer.free_mesh(handle);
+        }
         self.pick_meshes.clear();
-        // A rebuild discards every triangle the previous selection's
-        // pick was anchored to, so the selection no longer references
-        // anything coherent — drop it.
+        self.navs.clear();
+        self.navmesh_segments.clear();
+        self.corner_arrows.clear();
+        // The selection was anchored to the old triangles; drop it.
         self.selection = None;
 
-        let ids: Vec<ClusterId> = (0..FIELD_DIM)
-            .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(lod_for(x, z), x, 0, z)))
-            .collect();
-
-        // Source of voxel data per cluster, in priority order:
-        //   1. Bake on disk (LOD-0 only) — fast startup, no procedural
-        //      re-evaluation.
-        //   2. Contour from the primitive — fallback when the bake is
-        //      missing, stale, or this rebuild requested a non-zero
-        //      LOD that the LOD-0 bake can't satisfy.
-        //
-        // The centre-LOD HUD checkbox still drives a re-contour today
-        // because the contour itself encodes LOD into the cluster
-        // (see `crates/flicker-voxel/src/contour.rs` — per-voxel
-        // expansion is sized to the LOD's cell footprint). When the
-        // mesh refactor lands and stride becomes a render-time
-        // parameter, the bake will satisfy every rebuild.
-        let bake_dir = bake_dir_path();
-        let all_lod_zero = ids.iter().all(|id| id.lod() == 0);
-        let mut loaded_from_bake = false;
-        if all_lod_zero {
-            if let Some(loaded) = try_load_bake_field(&bake_dir, &ids) {
-                tracing::info!(
-                    "loaded {} clusters from bake at {}",
-                    loaded.len(),
-                    bake_dir.display()
-                );
-                for (id, cluster) in loaded {
-                    self.map.insert(id, cluster);
-                }
-                loaded_from_bake = true;
+        for b in builds {
+            let handle = renderer.upload_mesh(&b.vertices, MeshIndices::U32(&b.indices));
+            self.meshes.push((b.id, handle));
+            self.pick_meshes.push((b.id, b.pick_positions, b.indices));
+            if let Some(nav) = b.nav {
+                self.navs.push((b.id, nav));
             }
+            self.navmesh_segments.extend(b.navmesh_segments);
+            self.corner_arrows.extend(b.arrows);
         }
-        if !loaded_from_bake {
-            // Contour every cluster at its LOD. Contour is per-cluster
-            // and oblivious to neighbour LODs; cross-LOD seam handling
-            // lives entirely in mesh.
-            for id in &ids {
-                let scene = Scene::world_at(id.world_offset());
-                self.map.insert(*id, contour(&scene, material, *id));
-            }
-        }
-
-        // Build per-cluster neighbor contexts and mesh each. The
-        // neighbor's stored LOD is what mesh uses to drive cross-LOD
-        // stride adjustments at the boundary layer.
-        let mut new_meshes: Vec<(ClusterId, MeshHandle)> = Vec::new();
-        // LOD2 nav surfaces, derived on this same load path (§4.7) and
-        // gated to rings 0–2 (§4.6). The camera position at rebuild time
-        // is the ring origin; in this 3×3 field every cluster falls
-        // inside ring 2 so all of them get nav.
-        let mut new_navs: Vec<(ClusterId, ClusterNav)> = Vec::new();
-        // Magenta navmesh wireframe segments, accumulated across clusters
-        // as each nav is derived; drawn when the HUD's navmesh toggle is on.
-        let mut new_navmesh_segments: Vec<(Vec3, Vec3)> = Vec::new();
-        let camera = [self.position.x, self.position.y, self.position.z];
-        let mut total_walkable_cols = 0_usize;
-        // Watertight diagnostic — accumulated across all clusters, logged
-        // at the end of rebuild. `total_unshared` mixes real gaps with
-        // legitimate world-boundary edges; `total_over_shared` is always
-        // a bug.
-        let mut total_edges = 0_usize;
-        let mut total_unshared = 0_usize;
-        let mut total_over_shared = 0_usize;
-        let mut sample_gaps: Vec<(ClusterId, [f32; 3], [f32; 3])> = Vec::new();
-        for id in &ids {
-            let x = id.x();
-            let z = id.z();
-            let nb = |xx: u16, zz: u16| -> Option<(&Cluster, Lod)> {
-                let lod = lod_for(xx, zz);
-                let cid = ClusterId::new(lod, xx, 0, zz);
-                self.map
-                    .get(cid)
-                    .map(|c| (c, Lod::new(lod).expect("valid lod")))
-            };
-            let neg_x = if x > 0 { nb(x - 1, z) } else { None };
-            let pos_x = if x + 1 < FIELD_DIM {
-                nb(x + 1, z)
-            } else {
-                None
-            };
-            let neg_z = if z > 0 { nb(x, z - 1) } else { None };
-            let pos_z = if z + 1 < FIELD_DIM {
-                nb(x, z + 1)
-            } else {
-                None
-            };
-            let neighbors = NeighborContext {
-                neg_x,
-                pos_x,
-                neg_z,
-                pos_z,
-                ..NeighborContext::none()
-            };
-
-            let cluster = self.map.get(*id).expect("just inserted");
-            let self_lod = Lod::new(id.lod()).expect("valid lod");
-            let cm = flicker_voxel::mesh(cluster, &neighbors, self_lod);
-
-            // Derive the LOD2 walkable surface from the state field
-            // (never the mesh) for clusters inside rings 0–2. compute_nav
-            // is pure and runs after meshing only to sit on the existing
-            // load path; it does not read `cm`. Nothing consumes the
-            // result yet — it is stashed for the walking-camera follow-up.
-            if in_nav_rings(camera, cluster_center_world(*id)) {
-                let nav = ClusterNav::compute_nav(cluster, &neighbors);
-                total_walkable_cols += (0..NAV_DIM as u8)
-                    .flat_map(|x| (0..NAV_DIM as u8).map(move |z| (x, z)))
-                    .filter(|&(x, z)| nav.floor_at(x, z).is_some())
-                    .count();
-                append_navmesh_segments(&nav, *id, cluster, &neighbors, &mut new_navmesh_segments);
-                new_navs.push((*id, nav));
-            }
-
-            // Run the watertight check before upload (we need the
-            // CPU-side ClusterMesh and its position data).
-            let hist = cm.edge_use_histogram();
-            total_edges += hist.len();
-            let cluster_off = id.world_offset();
-            for (&(va, vb), &uses) in &hist {
-                match uses {
-                    0 => {}
-                    1 => {
-                        total_unshared += 1;
-                        if sample_gaps.len() < 8 {
-                            let pa = cm.vertices[va as usize].position;
-                            let pb = cm.vertices[vb as usize].position;
-                            let wa = [
-                                pa[0] + cluster_off[0],
-                                pa[1] + cluster_off[1],
-                                pa[2] + cluster_off[2],
-                            ];
-                            let wb = [
-                                pb[0] + cluster_off[0],
-                                pb[1] + cluster_off[1],
-                                pb[2] + cluster_off[2],
-                            ];
-                            sample_gaps.push((*id, wa, wb));
-                        }
-                    }
-                    2 => {}
-                    _ => total_over_shared += 1,
-                }
-            }
-
-            let verts: Vec<MeshVertex> = cm
-                .vertices
-                .iter()
-                .map(|v| MeshVertex {
-                    position: v.position,
-                    normal: v.normal,
-                    material: v.material,
-                })
-                .collect();
-            let handle = renderer.upload_mesh(&verts, MeshIndices::U32(&cm.indices));
-            new_meshes.push((*id, handle));
-
-            // Snapshot world-space triangles for CPU ray-casting. The
-            // GPU buffer above is opaque to us; the picker needs raw
-            // positions in world coords (the same frame the camera ray
-            // lives in), so we apply the cluster's world offset here
-            // and stash positions + indices.
-            let pick_verts: Vec<Vec3> = cm
-                .vertices
-                .iter()
-                .map(|v| {
-                    Vec3::new(
-                        v.position[0] + cluster_off[0],
-                        v.position[1] + cluster_off[1],
-                        v.position[2] + cluster_off[2],
-                    )
-                })
-                .collect();
-            self.pick_meshes.push((*id, pick_verts, cm.indices.clone()));
-        }
-        self.meshes = new_meshes;
-        self.navs = new_navs;
-        self.navmesh_segments = new_navmesh_segments;
-
-        tracing::info!(
-            "rebuild: {} clusters, {} edges total, {} unshared (gaps + world-boundary), {} over-shared",
-            ids.len(),
-            total_edges,
-            total_unshared,
-            total_over_shared,
-        );
-        tracing::info!(
-            "nav: derived LOD2 surfaces for {} of {} clusters (rings 0–2), {} walkable columns total",
-            self.navs.len(),
-            ids.len(),
-            total_walkable_cols,
-        );
-        for (id, a, b) in &sample_gaps {
-            tracing::info!(
-                "  unshared edge in cluster ({}, {}, {}): ({:.2}, {:.2}, {:.2}) → ({:.2}, {:.2}, {:.2})",
-                id.x(), id.y(), id.z(),
-                a[0], a[1], a[2],
-                b[0], b[1], b[2],
-            );
-        }
-
-        // Corner-vector arrows: across the whole field, every stored
-        // voxel with a non-default corner contributes one segment.
-        let mut arrows: Vec<(Vec3, Vec3)> = Vec::new();
-        for id in &ids {
-            let off = id.world_offset();
-            let origin_world = Vec3::new(off[0], off[1], off[2]);
-            let cluster = self.map.get(*id).expect("just inserted");
-            for (coord, voxel) in cluster.overrides() {
-                if voxel.corner() == CornerVector::DEFAULT {
-                    continue;
-                }
-                let base =
-                    origin_world + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
-                let [dx, dy, dz] = voxel.corner().to_components();
-                let tip = base + Vec3::new(dx, dy, dz);
-                arrows.push((base, tip));
-            }
-        }
-        self.corner_arrows = arrows;
     }
 }
 
@@ -863,6 +733,125 @@ fn append_navmesh_segments(
     }
 }
 
+// ===== Async per-cluster build (runs on the worker pool) =====
+
+/// Everything `render` needs to display one cluster, produced off the main
+/// thread by a worker from the LOD-0 source. Self-contained so a job can
+/// build it with only a read lock on the source — no `self`, no renderer.
+struct ClusterBuild {
+    id: ClusterId,
+    /// Generation tag for best-effort application: a result is applied only
+    /// if it still matches the field's current generation (else a newer LOD
+    /// request superseded it and this one is dropped).
+    generation: u64,
+    vertices: Vec<MeshVertex>,
+    indices: Vec<u32>,
+    /// World-space triangle positions for the (temporary) CPU ray-pick.
+    pick_positions: Vec<Vec3>,
+    /// This cluster's orange corner-vector arrow segments.
+    arrows: Vec<(Vec3, Vec3)>,
+    /// This cluster's magenta navmesh wireframe segments.
+    navmesh_segments: Vec<(Vec3, Vec3)>,
+    /// LOD2 walkable surface, present iff the cluster is in the nav rings.
+    nav: Option<ClusterNav>,
+}
+
+/// Derive cluster `(x, z)` at its render LOD from the LOD-0 `source`, mesh it
+/// against its (also-derived) neighbours, and bundle everything `render`
+/// needs. **Pure** — no `self`, no renderer, no GPU — so a worker thread runs
+/// it with only a read lock on `source`. This is the work that used to run
+/// synchronously in `render`; moving it here is what removes the swap hitch.
+fn build_cluster(
+    source: &ClusterMap,
+    x: u16,
+    z: u16,
+    lod_field: [[u8; FIELD_DIM as usize]; FIELD_DIM as usize],
+    camera: [f32; 3],
+    generation: u64,
+) -> ClusterBuild {
+    let lod_for = |xx: u16, zz: u16| lod_field[xx as usize][zz as usize];
+    let derive = |xx: u16, zz: u16| -> (Cluster, Lod) {
+        let lod = Lod::new(lod_for(xx, zz)).expect("valid lod");
+        let src = source
+            .get(ClusterId::new(0, xx, 0, zz))
+            .expect("LOD-0 source populated");
+        (flicker_voxel::derive_lod(src, lod), lod)
+    };
+
+    let (self_c, self_lod) = derive(x, z);
+    let neg_x = if x > 0 { Some(derive(x - 1, z)) } else { None };
+    let pos_x = if x + 1 < FIELD_DIM {
+        Some(derive(x + 1, z))
+    } else {
+        None
+    };
+    let neg_z = if z > 0 { Some(derive(x, z - 1)) } else { None };
+    let pos_z = if z + 1 < FIELD_DIM {
+        Some(derive(x, z + 1))
+    } else {
+        None
+    };
+    let neighbors = NeighborContext {
+        neg_x: neg_x.as_ref().map(|(c, l)| (c, *l)),
+        pos_x: pos_x.as_ref().map(|(c, l)| (c, *l)),
+        neg_z: neg_z.as_ref().map(|(c, l)| (c, *l)),
+        pos_z: pos_z.as_ref().map(|(c, l)| (c, *l)),
+        ..NeighborContext::none()
+    };
+
+    let id = ClusterId::new(self_lod.level(), x, 0, z);
+    let off = id.world_offset();
+    let origin = Vec3::new(off[0], off[1], off[2]);
+    let cm = flicker_voxel::mesh(&self_c, &neighbors, self_lod);
+
+    // Nav (LOD2 walkable surface) for clusters in rings 0–2. State is
+    // LOD-independent (derive copies it verbatim), so this matches the source.
+    let mut navmesh_segments = Vec::new();
+    let nav = if in_nav_rings(camera, cluster_center_world(id)) {
+        let nav = ClusterNav::compute_nav(&self_c, &neighbors);
+        append_navmesh_segments(&nav, id, &self_c, &neighbors, &mut navmesh_segments);
+        Some(nav)
+    } else {
+        None
+    };
+
+    let vertices: Vec<MeshVertex> = cm
+        .vertices
+        .iter()
+        .map(|v| MeshVertex {
+            position: v.position,
+            normal: v.normal,
+            material: v.material,
+        })
+        .collect();
+    let pick_positions: Vec<Vec3> = cm
+        .vertices
+        .iter()
+        .map(|v| origin + Vec3::new(v.position[0], v.position[1], v.position[2]))
+        .collect();
+
+    let mut arrows = Vec::new();
+    for (coord, voxel) in self_c.overrides() {
+        if voxel.corner() == CornerVector::DEFAULT {
+            continue;
+        }
+        let base = origin + Vec3::new(coord.x() as f32, coord.y() as f32, coord.z() as f32);
+        let [dx, dy, dz] = voxel.corner().to_components();
+        arrows.push((base, base + Vec3::new(dx, dy, dz)));
+    }
+
+    ClusterBuild {
+        id,
+        generation,
+        vertices,
+        indices: cm.indices,
+        pick_positions,
+        arrows,
+        navmesh_segments,
+        nav,
+    }
+}
+
 // ===== Camera-driven LOD policy =====
 
 /// Base distance (voxel units) for the per-cluster LOD policy: a cluster
@@ -880,7 +869,12 @@ fn target_lod_for_cluster(camera: Vec3, id: ClusterId) -> u8 {
     let c = cluster_center_world(id);
     let distance = (camera - Vec3::new(c[0], c[1], c[2])).length().max(1.0);
     let raw = (distance / LOD_BASE_DISTANCE).log2().floor() as i32;
-    raw.clamp(0, Lod::MAX.level() as i32) as u8
+    // Cap the demo at LOD 7. The 3×3 field never gets far enough to need the
+    // LOD-8 single-vector level, and `derive_lod`'s footprint expansion at
+    // stride 256 would rewrite the whole cluster for a single cell — wasteful
+    // until that expansion is replaced by a snap-on-read in the mesher. Lift
+    // to `Lod::MAX.level()` then.
+    raw.clamp(0, 7) as u8
 }
 
 /// Relax a 3×3 per-cluster LOD field so no 4-adjacent pair differs by more
@@ -1013,7 +1007,15 @@ fn digit_uv_rect(d: u8) -> (Vec2, Vec2) {
 
 impl App for VoxelCluster {
     fn init(&mut self, renderer: &mut Renderer) {
-        self.rebuild(renderer);
+        // Stand up the worker pool + result channel, populate the LOD-0
+        // source once, and submit the initial field build. Meshes appear over
+        // the next frame or two as jobs complete (drained in `render`).
+        let (tx, rx) = mpsc::channel::<ClusterBuild>();
+        self.build_tx = Some(tx);
+        self.build_rx = Some(rx);
+        self.pool = Some(WorkerPool::with_default_size());
+        self.ensure_source();
+        self.submit_field_jobs();
 
         // Frame the whole field from outside its -Z face, angled down.
         let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
@@ -1051,20 +1053,12 @@ impl App for VoxelCluster {
                     self.camera_lod_on = toggles.is_on("camera_lod");
                     self.lod_billboards_on = toggles.is_on("lod_billboards");
 
-                    // Track the manual centre-LOD toggle (used when
-                    // camera-driven LOD is off).
-                    let center_on = toggles.is_on("center_lod");
-                    if center_on != self.prev_center_lod_on {
-                        self.center_lod_level = if center_on { 1 } else { 0 };
-                    }
-                    self.prev_center_lod_on = center_on;
-
-                    // Decide the desired per-cluster LOD field: camera-driven
-                    // (smoothed to the mesher's ±1 adjacency invariant) when
-                    // enabled, else the manual centre-LOD field. A change
-                    // triggers a synchronous re-mesh in `render`; the swap
-                    // hitch is the cost of synchronous re-contour — the async
-                    // worker queue that removes it is the next slice.
+                    // Desired per-cluster LOD field: the camera-driven
+                    // distance policy (smoothed to the mesher's ±1 adjacency
+                    // invariant) when enabled, else all clusters at LOD 0. A
+                    // change triggers a re-derive + re-mesh of the changed
+                    // clusters in `render` — cheap (render-time stride, no
+                    // re-contour); the worker pool will move it off-thread.
                     let mut desired = [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize];
                     if self.camera_lod_on {
                         for x in 0..FIELD_DIM {
@@ -1076,12 +1070,10 @@ impl App for VoxelCluster {
                             }
                         }
                         smooth_lod_field(&mut desired);
-                    } else {
-                        desired[1][1] = self.center_lod_level;
                     }
                     if desired != self.lod_field {
                         self.lod_field = desired;
-                        self.needs_rebuild = true;
+                        self.submit_field_jobs();
                     }
                 }
                 Err(e) => tracing::error!("HUD script update failed: {e}"),
@@ -1149,10 +1141,9 @@ impl App for VoxelCluster {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        if self.needs_rebuild {
-            self.needs_rebuild = false;
-            self.rebuild(renderer);
-        }
+        // Apply any completed mesh builds (uploads happen here — `render` owns
+        // `&mut Renderer`). A no-op until a full field generation has arrived.
+        self.drain_and_apply(renderer);
         renderer.set_camera(&Camera {
             position: self.position,
             target: self.position + self.forward(),
@@ -1162,12 +1153,15 @@ impl App for VoxelCluster {
             far: 10000.0,
         });
 
-        // Draw each cluster's extent as a white wireframe box.
-        for (id, _cluster) in self.map.iter() {
-            let offset = id.world_offset();
-            let min = Vec3::new(offset[0], offset[1], offset[2]);
-            let max = min + Vec3::splat(CLUSTER_DIM as f32);
-            renderer.draw_bounding_box(min, max, [1.0, 1.0, 1.0, 1.0]);
+        // Draw each cluster's extent as a white wireframe box. The extent is
+        // LOD-independent, so iterate the grid positions directly.
+        for x in 0..FIELD_DIM {
+            for z in 0..FIELD_DIM {
+                let offset = ClusterId::new(0, x, 0, z).world_offset();
+                let min = Vec3::new(offset[0], offset[1], offset[2]);
+                let max = min + Vec3::splat(CLUSTER_DIM as f32);
+                renderer.draw_bounding_box(min, max, [1.0, 1.0, 1.0, 1.0]);
+            }
         }
 
         // Draw each cluster's mesh at its world offset.
@@ -1261,7 +1255,7 @@ impl App for VoxelCluster {
         renderer.draw_text(
             &format!(
                 "clusters: {}   extent: {}³ voxels each",
-                self.map.len(),
+                self.meshes.len(),
                 CLUSTER_DIM
             ),
             Vec2::new(16.0, 64.0),
@@ -1283,9 +1277,8 @@ impl App for VoxelCluster {
         // Diagnostics the checkboxes don't convey on their own.
         renderer.draw_text(
             &format!(
-                "corner arrows stored: {}   centre LOD: {}  (other clusters: LOD 0)   nav clusters (rings 0–2): {}",
+                "corner arrows stored: {}   nav clusters (rings 0–2): {}",
                 self.corner_arrows.len(),
-                self.center_lod_level,
                 self.navs.len(),
             ),
             Vec2::new(16.0, 104.0),

@@ -9,7 +9,7 @@
 //! rejected cleanly via `Option`. Accessors widen back to `u32` for
 //! ergonomics in caller arithmetic.
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
 
 /// A validated `(x, y, z)` coordinate inside a 256³ cluster.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

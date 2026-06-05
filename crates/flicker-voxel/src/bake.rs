@@ -47,7 +47,9 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use clayengine::CLUSTER_DIM;
+
+use crate::cluster::Cluster;
 use crate::cluster_id::ClusterId;
 use crate::corner_vector::CornerVector;
 use crate::local_coord::LocalCoord;
@@ -427,8 +429,8 @@ impl std::error::Error for BakeError {
 mod tests {
     use super::*;
     use crate::contour::contour;
-    use crate::primitive::FlatField;
     use crate::voxel_state::VoxelState;
+    use flicker_primitive::FlatField;
 
     fn grey() -> Material {
         Material::new(1, 1, 0).expect("valid material")

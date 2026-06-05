@@ -15,7 +15,8 @@
 //! as the first known-correct contour input: it should contour to a flat
 //! surface at its height with every vertex normal pointing straight up.
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
+
 use crate::heightmap::{world_height_seeded, DEFAULT_SEED};
 
 /// Surface height of the flat stub field, in voxel units: the cluster's

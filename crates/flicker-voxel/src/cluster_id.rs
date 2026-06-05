@@ -19,20 +19,23 @@
 //!
 //! Total `4 + 10 + 8 + 10 = 32` bits — exactly one `u32`.
 //!
-//! # LOD semantics (locked, only LOD 0 exercised in this step)
+//! # LOD semantics
 //!
-//! LOD `0..=7` are intra-cluster — the `(x, y, z)` addresses a single
-//! physical cluster; LOD selects which sample-stride representation
-//! of that same cluster. LOD `8..=15` are inter-cluster aggregation
-//! (one address represents a 2^(LOD−7) cube of clusters).
+//! LOD `0..=8` select a sample-stride representation of a single
+//! physical cluster: `(x, y, z)` addresses that cluster and the LOD
+//! picks the stride (`2^LOD`). LOD 0 is full resolution; LOD 8 is the
+//! single-vector representation of the whole cluster (see
+//! [`crate::lod::Lod`]). LOD values above 8 are unused — the field
+//! is 4 bits wide so the bit-pack stays fixed, but no cross-cluster
+//! merging is defined for them (clusters are large enough that the
+//! per-cluster ladder reaches the horizon on its own).
 //!
-//! This step (multi-cluster, all LOD 0) only constructs LOD-0 ids
-//! with `y = 0`, but the bit-pack is locked for all 32 bits so future
-//! LOD work plugs in without breaking the substrate.
+//! The bit-pack is fixed for all 32 bits so future LOD work plugs in
+//! without breaking the substrate.
 
 use std::fmt;
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
 
 /// Cluster address: `(LOD, x, y, z)` packed into a single `u32`.
 ///
@@ -124,11 +127,10 @@ impl ClusterId {
     /// World-space origin of this cluster's `(0, 0, 0)` local corner,
     /// in voxel units: `[x, y, z] * CLUSTER_DIM`.
     ///
-    /// At LOD 0 this is the straightforward translation a cluster's
-    /// mesh draw matrix uses. Higher-LOD semantics are deferred to
-    /// later steps — they may want different offset behavior (e.g.
-    /// inter-cluster aggregation at LOD ≥ 8 spans multiple clusters'
-    /// worth of voxels), but for LOD 0 the result is well-defined.
+    /// The offset is the same at every LOD — LOD only changes the
+    /// sample stride *within* the cluster, not where the cluster sits
+    /// in the world — so the cluster's mesh draw matrix uses this same
+    /// translation at LOD 0 and at LOD 8 alike.
     #[inline]
     #[must_use]
     pub fn world_offset(self) -> [f32; 3] {

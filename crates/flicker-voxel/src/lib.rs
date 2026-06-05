@@ -37,32 +37,36 @@ mod cluster_id;
 mod cluster_map;
 mod contour;
 mod corner_vector;
+mod derive_lod;
 pub mod generators;
-pub mod heightmap;
 mod local_coord;
+mod lod;
 mod material;
 mod mesh;
 mod nav;
 mod neighbor;
-pub mod primitive;
 mod qef;
 mod voxel;
 mod voxel_state;
 
 pub use bake::{find_horizon_voxel, BakeError, BakedCluster, BAKE_VERSION};
-pub use cluster::{Cluster, CLUSTER_DIM, VOXEL_COUNT};
+pub use clayengine::{CLUSTER_DIM, VOXEL_COUNT};
+pub use cluster::Cluster;
 pub use cluster_id::ClusterId;
 pub use cluster_map::ClusterMap;
 pub use contour::contour;
 pub use corner_vector::CornerVector;
-pub use local_coord::LocalCoord;
-pub use material::Material;
-pub use mesh::{mesh, ClusterMesh, ClusterVertex};
-pub use nav::{cluster_center_world, in_nav_rings, ClusterNav, NAV_DIM, NAV_RING_OUTER_FT};
-pub use neighbor::{FaceDir, Lod, NeighborContext};
-pub use primitive::{
+pub use derive_lod::derive_lod;
+pub use flicker_primitive::heightmap;
+pub use flicker_primitive::{
     Cone, Cube, Cylinder, FlatField, HalfCylinder, HalfSphere, HeightField, Hermite, Primitive,
     Scene, Sdf, Sphere,
 };
+pub use local_coord::LocalCoord;
+pub use lod::Lod;
+pub use material::Material;
+pub use mesh::{mesh, ClusterMesh, ClusterVertex};
+pub use nav::{cluster_center_world, in_nav_rings, ClusterNav, NAV_DIM, NAV_RING_OUTER_FT};
+pub use neighbor::{FaceDir, NeighborContext};
 pub use voxel::Voxel;
 pub use voxel_state::{StateField, VoxelState, STATE_FIELD_WORDS};

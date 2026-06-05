@@ -77,9 +77,12 @@
 //! nav derives from the dense state field (see [`crate::nav`]), not from
 //! this mesh, so it never inherits these holes.
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use clayengine::CLUSTER_DIM;
+
+use crate::cluster::Cluster;
 use crate::local_coord::LocalCoord;
-use crate::neighbor::{read_corner, Lod, NeighborContext};
+use crate::lod::Lod;
+use crate::neighbor::{read_corner, NeighborContext};
 
 /// The single neighbor-aware read surface for the mesher.
 ///
@@ -911,9 +914,9 @@ mod tests {
     use crate::contour::contour;
     use crate::corner_vector::CornerVector;
     use crate::material::Material;
-    use crate::primitive::{FlatField, Hermite, Primitive};
     use crate::voxel::Voxel;
     use crate::voxel_state::VoxelState;
+    use flicker_primitive::{FlatField, Hermite, Primitive};
 
     fn grey() -> Material {
         Material::new(1, 1, 0).expect("valid")

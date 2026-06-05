@@ -40,9 +40,12 @@
 //! [`Option<u8>`] to a span list; the structure here does not preclude
 //! that but does not implement it.
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use clayengine::{CLUSTER_DIM, FEET_PER_VOXEL};
+
+use crate::cluster::Cluster;
 use crate::cluster_id::ClusterId;
-use crate::neighbor::{read_corner, FaceDir, Lod, NeighborContext};
+use crate::lod::Lod;
+use crate::neighbor::{read_corner, FaceDir, NeighborContext};
 
 /// LOD level nav samples at — LOD2: `stride = 4`, 2 ft cells, 64
 /// samples/axis. Locked by spec; nav is *only* meaningful at LOD2 and
@@ -75,12 +78,6 @@ const CLEARANCE_CELLS: i32 = 3;
 /// counts as walkable-linked: ≤ 2 cells (a 2-cell rise over a 2 ft run
 /// = 63.4°, the locked max slope). A delta ≥ 3 breaks the link.
 const MAX_LINK_DELTA: u8 = 2;
-
-/// Feet per LOD0 voxel — 6-inch voxels. The engine's world space is
-/// voxel units (a cluster draws at `world_offset()` in voxel units and
-/// spans `CLUSTER_DIM` of them), so the ring gate works in voxel units
-/// and converts the spec's feet-denominated boundary once, here.
-const FEET_PER_VOXEL: f32 = 0.5;
 
 /// Outer boundary of ring 2 in feet. From the locked ring table the
 /// outer boundary of ring `n` is `256 × (2^(n+1) − 1)` ft; ring 2 gives

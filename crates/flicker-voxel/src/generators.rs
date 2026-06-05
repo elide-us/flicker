@@ -11,9 +11,11 @@
 //! See the module-level doc on [`crate::cluster`] for the storage
 //! trade-off discussion this references.
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use clayengine::CLUSTER_DIM;
+use flicker_primitive::heightmap::world_height_seeded;
+
+use crate::cluster::Cluster;
 use crate::corner_vector::CornerVector;
-use crate::heightmap::world_height_seeded;
 use crate::local_coord::LocalCoord;
 use crate::material::Material;
 use crate::voxel::Voxel;

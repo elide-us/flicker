@@ -1,0 +1,11 @@
+[package]
+name = "clayengine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# ClayEngine is the foundation layer of the voxel world: the lowest crate
+# in the stack, holding the fundamental constants and types that every
+# layer above (storage, primitives, contouring, meshing) shares. It has no
+# dependencies — nothing sits below it.
+[dependencies]

@@ -1,0 +1,12 @@
+[package]
+name = "flicker-primitive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The primitive (stampable shape) layer: the source geometry the contour
+# pipeline turns into voxel data, and the shapes the editor stamps into the
+# world. Depends only on the `clayengine` foundation — never on voxel
+# storage — so storage and primitives remain peers, neither owning the other.
+[dependencies]
+clayengine = { path = "../clayengine" }

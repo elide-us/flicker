@@ -1,0 +1,12 @@
+[package]
+name = "flicker-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# A small, generic thread pool for off-main-thread calculating tasks — mesh
+# derivation today, nav / physics / streaming later. Pure std, no external
+# deps. Jobs are self-contained closures that capture their own inputs and
+# route their own outputs (e.g. by sending on a channel they captured), so
+# the pool never has to know a task's input or result type.
+[dependencies]

@@ -432,12 +432,12 @@ impl MeshPipeline {
     /// Issue the queued draws. Wireframe draws bind the line-list
     /// pipeline + the edge index buffer; filled draws bind the
     /// triangle-list pipeline + the triangle index buffer.
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, meshes: &'a [LoadedMesh]) {
+    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, meshes: &'a [Option<LoadedMesh>]) {
         if self.queued.is_empty() {
             return;
         }
         for (i, draw) in self.queued.iter().enumerate() {
-            let Some(mesh) = meshes.get(draw.handle.0 as usize) else {
+            let Some(mesh) = meshes.get(draw.handle.0 as usize).and_then(|s| s.as_ref()) else {
                 continue;
             };
             let offset = (i as u32) * self.per_draw_stride;

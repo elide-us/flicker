@@ -302,6 +302,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "clayengine"
+version = "0.1.0"
+
+[[package]]
 name = "codespan-reporting"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -710,6 +714,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-primitive"
+version = "0.1.0"
+dependencies = [
+ "clayengine",
+]
+
+[[package]]
 name = "flicker-render"
 version = "0.1.0"
 dependencies = [
@@ -743,10 +754,16 @@ name = "flicker-voxel"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "clayengine",
  "flicker-core",
+ "flicker-primitive",
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "flicker-worker"
+version = "0.1.0"
 
 [[package]]
 name = "foldhash"
@@ -3357,6 +3374,7 @@ dependencies = [
  "anyhow",
  "flicker",
  "flicker-voxel",
+ "flicker-worker",
  "glam",
  "tracing",
  "tracing-subscriber",

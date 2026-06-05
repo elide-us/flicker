@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 flicker = { path = "../../crates/flicker" }
 flicker-voxel.workspace = true
+flicker-worker.workspace = true
 anyhow.workspace = true
 glam.workspace = true
 tracing.workspace = true

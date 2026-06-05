@@ -38,12 +38,6 @@ use crate::material::Material;
 use crate::voxel::Voxel;
 use crate::voxel_state::{StateField, VoxelState};
 
-/// Side length of a cluster in voxels.
-pub const CLUSTER_DIM: u32 = 256;
-
-/// Total voxel count in a cluster (`CLUSTER_DIM³`).
-pub const VOXEL_COUNT: usize = (CLUSTER_DIM as usize).pow(3);
-
 /// A 256³ voxel volume — dense state per voxel + sparse surface overrides.
 pub struct Cluster {
     /// Dense 2-bit-per-voxel physics state. Always present, 4 MB fixed.
@@ -263,6 +257,7 @@ impl ExactSizeIterator for Overrides<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clayengine::{CLUSTER_DIM, VOXEL_COUNT};
 
     fn coord(x: u32, y: u32, z: u32) -> LocalCoord {
         LocalCoord::new(x, y, z).expect("in-range")

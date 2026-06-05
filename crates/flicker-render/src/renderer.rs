@@ -59,7 +59,14 @@ pub struct Renderer {
     depth_view: wgpu::TextureView,
 
     textures: Vec<LoadedTexture>,
-    meshes: Vec<LoadedMesh>,
+    /// Uploaded meshes, indexed by `MeshHandle`. A `None` slot is a freed
+    /// entry available for reuse (see `free_mesh_slots`): storage is a slot
+    /// pool, not append-only, so an evicted LOD mesh returns its slot and
+    /// its GPU buffers (dropped here; wgpu frees them once the GPU is done
+    /// reading). This bounds storage by the number of *live* meshes.
+    meshes: Vec<Option<LoadedMesh>>,
+    /// Indices into `meshes` that are `None` and ready to reuse.
+    free_mesh_slots: Vec<u32>,
     /// Current camera (cached so the runner can request the aspect-
     /// dependent view-projection in `end_frame`). `None` means "no
     /// camera set this frame" — `draw_mesh` still works but the matrix
@@ -148,6 +155,7 @@ impl Renderer {
             depth_view,
             textures: Vec::new(),
             meshes: Vec::new(),
+            free_mesh_slots: Vec::new(),
             camera: None,
         })
     }
@@ -224,9 +232,33 @@ impl Renderer {
     /// kept expressible per `FALLBACK-1`.
     pub fn upload_mesh(&mut self, vertices: &[MeshVertex], indices: MeshIndices<'_>) -> MeshHandle {
         let loaded = self.mesh.upload(&self.device, vertices, indices);
-        let id = self.meshes.len() as u32;
-        self.meshes.push(loaded);
+        // Reuse a freed slot if one is available, else append. Reuse keeps
+        // mesh storage bounded by the number of *live* meshes rather than
+        // the number ever uploaded — LOD swaps recycle slots instead of
+        // leaking one set of buffers per swap.
+        let id = if let Some(slot) = self.free_mesh_slots.pop() {
+            self.meshes[slot as usize] = Some(loaded);
+            slot
+        } else {
+            let slot = self.meshes.len() as u32;
+            self.meshes.push(Some(loaded));
+            slot
+        };
         MeshHandle(id)
+    }
+
+    /// Free a previously uploaded mesh, returning its slot to the reuse
+    /// pool. Dropping the [`LoadedMesh`] drops its GPU buffers; wgpu defers
+    /// the actual GPU-memory free until the device finishes reading them, so
+    /// this is safe to call the same frame the mesh was last drawn — no
+    /// fence, no frames-in-flight bookkeeping. A handle that is already free
+    /// (or never existed) is ignored.
+    pub fn free_mesh(&mut self, handle: MeshHandle) {
+        if let Some(slot) = self.meshes.get_mut(handle.0 as usize) {
+            if slot.take().is_some() {
+                self.free_mesh_slots.push(handle.0);
+            }
+        }
     }
 
     /// Reset all per-frame draw queues. Called by the runner at the start

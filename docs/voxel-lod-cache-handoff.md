@@ -86,6 +86,13 @@ vector; extend the existing model." Verified reality:
 
 ## Recommended design
 
+> **Superseded in part — read the resolved "Deeper direction" below first.** Per the source-of-truth
+> invariant (`docs/architecture.md`), point **#1 is rejected** (no runtime contour cache — the LOD-0
+> cluster file *is the data*). Points **#2 (mesh recycling)** and **#3 (hysteresis)** stand as written
+> and are this slice. Points **#4/#5** keep their mechanics but drop the "pull contour from the cache /
+> hit ⇒ no re-contour" assumption: coarse LODs mesh from the existing cluster data at stride
+> (render-time stride), they do not re-contour.
+
 1. **Promote `ClusterMap` into a bounded LOD-residency cache.** Keyed by `ClusterId` (LOD incl.);
    holds contoured `Cluster`s; per-entry retention metadata (last-used frame/tick; optionally
    distance/ring). A budget; a `get_or_contour`-style accessor; evict lowest-value entries when over
@@ -106,13 +113,23 @@ vector; extend the existing model." Verified reality:
    changed (neighbors included because of the seam dependency), pulling the contour from the cache
    (hit ⇒ no re-contour), re-uploading into recycled slots.
 
-### Deeper direction (note, not this slice)
-Because the state field is LOD-independent (finding A), the "right" long-term fix is **render-time
-stride**: contour each cluster's state field *once*, mesh at any LOD on demand. That makes swaps
-need no re-contour at all and largely obviates a multi-LOD contour cache. It's the deferred
-mesh-pipeline refactor ("when stride becomes a render-time parameter, the bake satisfies every
-rebuild"). A fresh session should consciously weigh "cache per-(cluster,LOD) contours" vs. "pursue
-render-time stride" — they're somewhat alternative.
+### Deeper direction — RESOLVED to render-time stride (see the source-of-truth invariant)
+This was posed as "cache per-(cluster,LOD) contours **vs.** render-time stride." That is a false
+binary, now resolved against the **source-of-truth invariant** in `docs/architecture.md`: the LOD-0
+cluster file *is the data*; contour output is the saved source of truth, **not** a derive-cache, and
+runtime must **never re-contour**. So:
+- **Reject** "cache per-(cluster,LOD) contours" (Recommended-design #1's `get_or_contour`/evict
+  framing) — it treats the source of truth as an ephemeral cache and bakes runtime re-contour into
+  the design. Wrong layer.
+- **The cache is the ephemeral mesh** (Recommended-design #2 — layer 3). Hot/cold/recycled, lazy GC.
+- **Coarse LODs are meshed by the same unified, LOD-agnostic mesher** self-striding the stored
+  cluster vector data through the field reader (self corner + neighbor corners across seams) — the
+  mesh **output path is unchanged**; only the **input source** changes (stored cluster data, not a
+  re-contoured primitive). `CornerVector` is stored cell-relative (decoded `voxel + corner·stride`),
+  so sourcing a coarse LOD's corners is a small per-cell derive from the finer stored corners (or a
+  stride-independent corner representation for a literal passthrough) — a fraction of re-contour cost.
+  This is the render-time-stride refactor: it *removes* the runtime re-contour rather than caching
+  around it. Its own slice; the runtime re-contour is a labeled bridge until it lands.
 
 ## Conformance checklist (Memory & Resource Architecture spec)
 - `PRIN-1`: no `uma/unified/integrated/discrete/device_type` branches (grep stays clean).
@@ -139,7 +156,11 @@ render-time stride" — they're somewhat alternative.
    residency table keyed by cluster grid position.
 3. **LOD8 instant-draw vector:** implement it now (draw coarse while finer contours) or use
    coarsest-cached-LOD as a placeholder? (It's not in the data model today.)
-4. **Cache contours per-(cluster,LOD) vs. pursue render-time stride** (finding A / Deeper direction).
+4. ~~**Cache contours per-(cluster,LOD) vs. pursue render-time stride**~~ — **RESOLVED.** Not a real
+   fork. The LOD-0 cluster file *is the data* (source-of-truth invariant, `docs/architecture.md`):
+   never cache/re-derive contours at runtime. The cache is the ephemeral mesh; coarse LODs are meshed
+   from the existing cluster data at stride (render-time stride), which removes the re-contour. See
+   the resolved "Deeper direction" above.
 
 ## Verification (for the implementing session)
 - `cargo build`/`clippy`/`fmt`; `cargo test -p flicker-voxel` stays green (142).

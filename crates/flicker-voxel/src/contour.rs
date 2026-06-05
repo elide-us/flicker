@@ -17,7 +17,7 @@
 //! what `mesh.rs` reads back to avoid cracks/spikes on sloped surfaces.
 //!
 //! Grid samples sit at integer voxel **origins** (the convention pinned
-//! in [`crate::primitive`]), so the default corner `(0.5, 0.5, 0.5)`
+//! in [`flicker_primitive`]), so the default corner `(0.5, 0.5, 0.5)`
 //! decodes to the cell *center* — the right fallback for inactive cells.
 //!
 //! # Multi-cluster and LOD
@@ -65,13 +65,15 @@
 
 use std::collections::HashMap;
 
-use crate::cluster::{Cluster, CLUSTER_DIM};
+use clayengine::CLUSTER_DIM;
+use flicker_primitive::Primitive;
+
+use crate::cluster::Cluster;
 use crate::cluster_id::ClusterId;
 use crate::corner_vector::CornerVector;
 use crate::local_coord::LocalCoord;
+use crate::lod::Lod;
 use crate::material::Material;
-use crate::neighbor::Lod;
-use crate::primitive::Primitive;
 use crate::qef::Qef;
 use crate::voxel::Voxel;
 use crate::voxel_state::VoxelState;
@@ -134,7 +136,7 @@ const EDGES: [(usize, usize); 12] = [
 #[must_use]
 pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> Cluster {
     let mut cluster = Cluster::empty();
-    let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 7] for intra-cluster contour");
+    let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 8] for intra-cluster contour");
     let stride = lod.stride() as i32;
     let stride_us = stride as usize;
     let sample_dim = lod.sample_dim() as usize;
@@ -352,7 +354,7 @@ fn cell_qef_corner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::{FlatField, Hermite};
+    use flicker_primitive::{FlatField, Hermite};
 
     fn grey() -> Material {
         Material::new(1, 1, 0).expect("valid")

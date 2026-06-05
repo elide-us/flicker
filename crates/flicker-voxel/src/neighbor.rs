@@ -13,81 +13,10 @@
 //! neighbor's authoritative data directly (see the contour pipeline
 //! spec), not from materializing redundant per-cluster halo slabs.
 
-use crate::cluster::CLUSTER_DIM;
+use clayengine::CLUSTER_DIM;
+
+use crate::lod::Lod;
 use crate::{Cluster, LocalCoord, Voxel};
-
-/// Level of detail.
-///
-/// LOD `L` reads every `2^L`-th voxel along each axis when contouring.
-/// Valid range is `0..=7`:
-///
-/// | level | stride | sample_dim | cell_dim |
-/// | ----: | -----: | ---------: | -------: |
-/// |   0   |    1   |    256     |   255    |
-/// |   1   |    2   |    128     |   127    |
-/// |   2   |    4   |     64     |    63    |
-/// |   3   |    8   |     32     |    31    |
-/// |   4   |   16   |     16     |    15    |
-/// |   5   |   32   |      8     |     7    |
-/// |   6   |   64   |      4     |     3    |
-/// |   7   |  128   |      2     |     1    |
-///
-/// The sample sets are nested: positions sampled at LOD `L+1` are a strict
-/// subset of positions sampled at LOD `L`, by construction. This is what
-/// makes inter-LOD geometry consistent in later phases.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Lod(u8);
-
-impl Lod {
-    /// LOD 0 — full resolution.
-    pub const ZERO: Lod = Lod(0);
-
-    /// Maximum allowed LOD. At LOD 7 the cluster reduces to a `2³`
-    /// sample grid (1 cell), the smallest non-degenerate sample set.
-    pub const MAX: Lod = Lod(7);
-
-    /// Construct an LOD from a level. Returns `None` if `level > 7`.
-    #[inline]
-    #[must_use]
-    pub const fn new(level: u8) -> Option<Lod> {
-        if level > Self::MAX.0 {
-            None
-        } else {
-            Some(Lod(level))
-        }
-    }
-
-    /// The LOD level (`0..=7`).
-    #[inline]
-    #[must_use]
-    pub const fn level(self) -> u8 {
-        self.0
-    }
-
-    /// The voxel stride at this LOD (`2^level`). Always a power of two in
-    /// `[1, 128]`.
-    #[inline]
-    #[must_use]
-    pub const fn stride(self) -> u32 {
-        1u32 << self.0
-    }
-
-    /// The effective sample dimension at this LOD: `256 / stride`. Always
-    /// in `[2, 256]`.
-    #[inline]
-    #[must_use]
-    pub const fn sample_dim(self) -> u32 {
-        CLUSTER_DIM >> self.0
-    }
-
-    /// The effective cell dimension at this LOD: `sample_dim - 1`. Always
-    /// in `[1, 255]`.
-    #[inline]
-    #[must_use]
-    pub const fn cell_dim(self) -> u32 {
-        (CLUSTER_DIM >> self.0) - 1
-    }
-}
 
 /// Which face of the local cluster a neighbor sits across. The local
 /// cluster's `PosX` face touches the neighbor's `NegX` face, etc.
@@ -220,54 +149,6 @@ mod tests {
             CornerVector::DEFAULT,
             Material::new(1, 0, 0).unwrap(),
         )
-    }
-
-    // ---- Lod ----
-
-    #[test]
-    fn lod_new_accepts_0_through_7() {
-        for level in 0..=7u8 {
-            assert!(
-                Lod::new(level).is_some(),
-                "Lod::new({level}) should be Some"
-            );
-        }
-        assert!(Lod::new(8).is_none());
-        assert!(Lod::new(255).is_none());
-    }
-
-    #[test]
-    fn lod_zero_constants() {
-        assert_eq!(Lod::ZERO.level(), 0);
-        assert_eq!(Lod::ZERO.stride(), 1);
-        assert_eq!(Lod::ZERO.sample_dim(), 256);
-        assert_eq!(Lod::ZERO.cell_dim(), 255);
-    }
-
-    #[test]
-    fn lod_max_constants() {
-        assert_eq!(Lod::MAX.level(), 7);
-        assert_eq!(Lod::MAX.stride(), 128);
-        assert_eq!(Lod::MAX.sample_dim(), 2);
-        assert_eq!(Lod::MAX.cell_dim(), 1);
-    }
-
-    #[test]
-    fn lod_dim_relationships_at_every_level() {
-        for level in 0..=7u8 {
-            let lod = Lod::new(level).unwrap();
-            assert_eq!(lod.stride(), 1u32 << level, "stride at LOD {level}");
-            assert_eq!(
-                lod.sample_dim(),
-                256 / lod.stride(),
-                "sample_dim at LOD {level}"
-            );
-            assert_eq!(
-                lod.cell_dim(),
-                lod.sample_dim() - 1,
-                "cell_dim at LOD {level}"
-            );
-        }
     }
 
     // ---- NeighborContext ----
