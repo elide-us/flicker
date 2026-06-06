@@ -32,7 +32,8 @@ end
 -- Day/night cycle panel (lower-right). Lays out a 3-unit-wide grid, two rows:
 -- row 1 = Sun (1 unit) + Moon (2 units); row 2 = Year (full 3-unit span).
 -- Anchored to the bottom-right via the screen size so it tracks resolution.
--- Returns the config plus the three slider rects, the backdrop panel rect, and
+-- Three rows: Sun + Moon, then Year (full span), then Speed (full span).
+-- Returns the config plus the four slider rects, the backdrop panel rect, and
 -- the label anchor points.
 local function lighting_rects(sw, sh)
   local L = UI.hud.lighting
@@ -45,21 +46,25 @@ local function lighting_rects(sw, sh)
   local row1_track_dy = row1_label_dy + label_h
   local row2_label_dy = row1_track_dy + th + L.row_gap
   local row2_track_dy = row2_label_dy + label_h
-  local panel_h = row2_track_dy + th + pad * 2
+  local row3_label_dy = row2_track_dy + th + L.row_gap
+  local row3_track_dy = row3_label_dy + label_h
+  local panel_h = row3_track_dy + th + pad * 2
   local px = sw - L.margin_x - panel_w
   local py = sh - L.margin_y - panel_h
   local cx, cy = px + pad, py + pad
   local sun = { x = cx, y = cy + row1_track_dy, w = unit, h = th }
   local moon = { x = cx + unit + gap, y = cy + row1_track_dy, w = unit * 2, h = th }
   local year = { x = cx, y = cy + row2_track_dy, w = total_w, h = th }
+  local speed = { x = cx, y = cy + row3_track_dy, w = total_w, h = th }
   local panel = { x = px, y = py, w = panel_w, h = panel_h }
   local labels = {
     header = { x = cx, y = cy },
     sun = { x = sun.x, y = cy + row1_label_dy },
     moon = { x = moon.x, y = cy + row1_label_dy },
     year = { x = year.x, y = cy + row2_label_dy },
+    speed = { x = speed.x, y = cy + row3_label_dy },
   }
-  return L, sun, moon, year, panel, labels
+  return L, sun, moon, year, speed, panel, labels
 end
 
 local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
@@ -77,6 +82,13 @@ end
 
 local function fmt_moon(w)
   return string.format("%s · wk %.1f", MOON_PHASES[math.floor(w) % 4 + 1], w)
+end
+
+local function fmt_speed(v)
+  if v <= 0 then
+    return "paused"
+  end
+  return string.format("%.0f min/s", v)
 end
 
 -- The i-th checkbox's clickable square, from the JSON geometry.
@@ -140,13 +152,27 @@ function M.update(mx, my, clicked, sw, sh, down)
     -- year (season). Wide tracks + absolute drag, so a click/touch sets the
     -- handle where the cursor is — fine control, no big jumps.
     if UI.hud.lighting then
-      local L, sun, moon, year, panel = lighting_rects(sw, sh)
+      local L, sun, moon, year, speed, panel = lighting_rects(sw, sh)
       states.time_of_day =
         Widgets.slider_update(widget_state, "sun", sun, mx, my, clicked, down, Model.time_of_day or 12, L.sun.min, L.sun.max)
       states.moon_phase =
         Widgets.slider_update(widget_state, "moon", moon, mx, my, clicked, down, Model.moon_phase or 0, L.moon.min, L.moon.max)
       states.year_month =
         Widgets.slider_update(widget_state, "year", year, mx, my, clicked, down, Model.year_month or 6, L.year.min, L.year.max)
+      -- Speed (sim min / real sec); 0 = paused. Distinct id from the move-speed
+      -- slider's "speed" so their drag flags don't collide.
+      states.sim_speed = Widgets.slider_update(
+        widget_state,
+        "cycle_speed",
+        speed,
+        mx,
+        my,
+        clicked,
+        down,
+        Model.sim_speed or 0,
+        L.speed.min,
+        L.speed.max
+      )
       -- Tell the engine the pointer is over this panel so it suppresses the
       -- world-pick on the same press (the static top-left HUD guard in Rust
       -- doesn't know this screen-relative, lower-right panel).
@@ -317,7 +343,7 @@ local function lighting(cmds, sw, sh)
   if not (Model and Widgets and UI.hud.lighting) then
     return
   end
-  local L, sun, moon, year, panel, labels = lighting_rects(sw, sh)
+  local L, sun, moon, year, speed, panel, labels = lighting_rects(sw, sh)
   local st = L.style
 
   local bg = L.backdrop
@@ -370,6 +396,7 @@ local function lighting(cmds, sw, sh)
   row(labels.sun, L.sun.label, Model.time_of_day or 12, fmt_clock, sun, L.sun)
   row(labels.moon, L.moon.label, Model.moon_phase or 0, fmt_moon, moon, L.moon)
   row(labels.year, L.year.label, Model.year_month or 6, fmt_month, year, L.year)
+  row(labels.speed, L.speed.label, Model.sim_speed or 0, fmt_speed, speed, L.speed)
 end
 
 function M.draw(sw, sh)

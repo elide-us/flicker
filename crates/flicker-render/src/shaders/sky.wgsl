@@ -73,11 +73,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let below = clamp(-up * 4.0, 0.0, 1.0);
     col = mix(col, sky.horizon.rgb * 0.30, below);
 
-    // Faked sun scattering: a wide Rayleigh wash + a tight Mie core, both
-    // tinted by the cycle-driven sun colour — so the glow warms at dawn/dusk
-    // and vanishes once the sun sets.
+    // Faked sun scattering: a wide, dim Rayleigh wash (reads as sky glow, not
+    // body) + a tight Mie core that hugs the disc, so the sun's *body* reads at
+    // its disc size instead of ballooning to ~2× — both tinted by the cycle's
+    // sun colour, so the glow warms at dawn/dusk and vanishes once it sets.
     let sd = max(dot(dir, sky.sun_dir.xyz), 0.0);
-    let sun_glow = pow(sd, 6.0) * 0.5 + pow(sd, 320.0) * 1.6;
+    let sun_glow = pow(sd, 8.0) * 0.30 + pow(sd, 1600.0) * 1.0;
     col += sky.sun_color.rgb * sun_glow;
 
     // Cooler, dimmer moon glow — visible mainly at night, when the sun colour
@@ -88,18 +89,28 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // --- Celestial discs ---------------------------------------------------
     // A sun disc and a phase-shaded moon disc, the moon painted last so it
-    // eclipses the sun when they align. Both the same angular size, so a
-    // perfect alignment is a clean total eclipse. `disc_r`/`edge` tune to taste.
-    let disc_r = 0.040; // angular radius of both discs (rad) — stylized, ~10× real
+    // eclipses the sun when they align. The moon is a touch larger than the sun
+    // (as in a real total eclipse) so it cleanly swallows it, and so the two
+    // bodies read as comparable rather than the sun's bloom dwarfing the moon.
+    let sun_r = 0.038;   // sun angular radius (rad) — stylized, ~10× real
+    let moon_r = 0.047; // moon a hair larger (matches the sun's bloomed body)
     let edge = 0.004;   // soft-edge width for an anti-aliased rim
-    let sr = sin(disc_r);
+    let sr = sin(moon_r);
 
     let sun_ang = acos(clamp(dot(dir, sky.sun_dir.xyz), -1.0, 1.0));
     let moon_ang = acos(clamp(dot(dir, sky.moon_dir.xyz), -1.0, 1.0));
 
+    // Eclipse strength = how much the moon covers the sun (disc overlap), gated
+    // to the sun being up. Computed once here: it keeps the daytime moon solid
+    // while it's eclipsing and drives the corona below.
+    let align = max(dot(sky.sun_dir.xyz, sky.moon_dir.xyz), 0.0);
+    let separation = acos(clamp(align, -1.0, 1.0));
+    let coverage = 1.0 - smoothstep(moon_r - sun_r, moon_r + sun_r, separation);
+    let eclipse = coverage * smoothstep(-0.02, 0.02, sky.sun_dir.y);
+
     // Sun disc: a flat bright disc tinted by the cycle's sun colour, so it
     // warms at dusk and is simply gone at night. Fades out below the horizon.
-    let sun_mask = (1.0 - smoothstep(disc_r - edge, disc_r + edge, sun_ang))
+    let sun_mask = (1.0 - smoothstep(sun_r - edge, sun_r + edge, sun_ang))
         * smoothstep(-0.02, 0.02, sky.sun_dir.y);
     let sun_disc = sky.sun_color.rgb * 3.5;
 
@@ -118,21 +129,30 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let m_normal = m_right * mu + m_top * mv - mc * mz; // outward; −mc at the centre
     let lit = smoothstep(-0.08, 0.08, dot(m_normal, sky.sun_dir.xyz));
     let moon_disc = mix(vec3<f32>(0.02, 0.025, 0.045), vec3<f32>(0.60, 0.65, 0.74), lit);
-    let moon_mask = (1.0 - smoothstep(disc_r - edge, disc_r + edge, moon_ang))
+    let moon_geom = (1.0 - smoothstep(moon_r - edge, moon_r + edge, moon_ang))
         * smoothstep(-0.05, 0.02, mc.y);
+    // Wash the shadow limb into the local sky so the unlit side never reads as
+    // a hard disc whose black mismatches the sky behind it. Only the lit sliver
+    // stays solid. Exception: where the moon covers the sun it must stay opaque
+    // to eclipse it (`1 - sun_mask`).
+    let wash = (1.0 - lit) * (1.0 - sun_mask);
+    // The daytime moon is faint — the bright sky overwhelms it — so fade the
+    // whole disc as the day brightens. Held solid while it's eclipsing the sun
+    // (`1 - eclipse`) and returns in full at night.
+    let day_hide = smoothstep(0.0, 0.25, sky.sun_dir.y) * (1.0 - eclipse);
+    let moon_mask = moon_geom * (1.0 - wash) * (1.0 - day_hide * 0.85);
 
     // Sun first, then the moon over it — the moon's silhouette occludes the sun.
     col = mix(col, sun_disc, sun_mask);
     col = mix(col, moon_disc, moon_mask);
 
-    // Eclipse corona: when the moon is aligned in front of the sun, a bright
-    // ring hugging just outside the moon's rim — the dramatic part. Gated to
-    // alignment and to the sun being above the horizon.
-    let align = max(dot(sky.sun_dir.xyz, sky.moon_dir.xyz), 0.0);
-    let eclipse = smoothstep(0.985, 0.9999, align) * smoothstep(-0.02, 0.02, sky.sun_dir.y);
-    let outside = smoothstep(disc_r - edge, disc_r + edge, moon_ang);
-    let rim = exp(-pow((moon_ang - disc_r) / 0.012, 2.0)) * outside;
-    col += (sky.sun_color.rgb + vec3<f32>(0.35)) * (rim * eclipse * 1.4);
+    // Eclipse corona: a bright ring hugging just outside the moon's rim — the
+    // dramatic part. Uses the `eclipse` coverage from above (the same the
+    // terrain darkens by, so sky and ground peak together). A fixed white base
+    // keeps the ring blazing once `sun_color` has dimmed out under the moon.
+    let outside = smoothstep(moon_r - edge, moon_r + edge, moon_ang);
+    let rim = exp(-pow((moon_ang - moon_r) / 0.012, 2.0)) * outside;
+    col += (sky.sun_color.rgb + vec3<f32>(0.6)) * (rim * eclipse * 1.8);
 
     return vec4<f32>(col, 1.0);
 }

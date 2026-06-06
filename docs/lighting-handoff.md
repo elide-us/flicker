@@ -76,21 +76,57 @@ mood events** (Part 3).
 - **Procedural sun + moon discs + eclipse** (all in `sky.wgsl`, no asset): a
   flat sun disc tinted by `sun_color` (gone at night) and a moon disc with an
   **analytic phase terminator** — the visible sphere point's outward normal lit
-  by the sun, so the moon waxes/wanes as the phase slider moves. Both the same
-  angular size (`disc_r = 0.040`); the moon is composited last so it **eclipses
-  the sun** when aligned, with a corona ring (`eclipse` gated on
-  `dot(sun_dir, moon_dir)` + sun above horizon). **Emergent "right time of year":**
-  the season tilt offsets the moon's arc from the sun's except near the
-  equinoxes, so a *total* eclipse needs `year ≈ 3 or 9` **and** `moon ≈ 0/4`
-  (new) with the sun up — the Advent recipe, for free.
+  by the sun, so the moon waxes/wanes as the phase slider moves. The moon
+  (`moon_r = 0.047`) is a hair larger than the sun (`sun_r = 0.038`) — matched
+  to the sun's bloomed *apparent* body (the bloom is kept tight via
+  `pow(sd, 1600)` so the disc doesn't balloon) and still large enough to swallow
+  the sun at totality. The shadow limb always washes into the local sky (day *or*
+  night, opaque only where it covers the sun) so the unlit side never reads as a
+  hard mismatched disc; and the **whole moon fades by daylight**
+  (`day_hide = smoothstep(0,0.25,sun.y)·(1−eclipse)`) so it's a night body —
+  faint by day, full at night, held solid only while eclipsing. The moon is
+  composited last so it **eclipses the sun** when aligned. **Emergent "right
+  time of year":** the season tilt offsets the moon's arc from the sun's except
+  near the equinoxes, so a *total* eclipse needs `year ≈ 3 or 9` **and**
+  `moon ≈ 0/4` (new) with the sun up — the Advent recipe, for free.
 
+- **The Advent world-reaction** (the eclipse darkens the *ground*, not just the
+  sky): both `compute_scene` (example) and `sky.wgsl` compute an `eclipse`
+  factor from **disc overlap** — `coverage = 1 − smoothstep(moon_r−sun_r,
+  moon_r+sun_r, separation)`, gated on the sun being up — using the **shared
+  disc radii** (`SUN_DISC_R` / `MOON_DISC_R` in `main.rs`, mirrored in the
+  shader). As coverage rises: the direct sun on the terrain is killed
+  (`sun_color *= 1 − eclipse`), and ambient + sky sink into a **dim desaturated
+  blood-shadow** (lerps toward `~(0.07, 0.02, 0.03)`) — cool/dark/mystical, not
+  a bold red. The corona uses the same `coverage` with a fixed white base so it
+  blazes against the darkened sky. So at a true Advent the whole world goes
+  dark together. Full LUT/post grade is still the parked path; this is the
+  forward, asset-free version.
+
+- **Time simulation (auto-advance)**: a fourth cycle-panel row — a **Speed**
+  slider in **sim-minutes per real-second**, `0 = paused` (`UI.hud.lighting.speed`,
+  `GameScene.sim_speed`). When > 0, `update` advances `time_of_day` and drifts
+  `moon_phase` (28-day month) + `year_month` (360-day year) at their natural
+  cadence via `rem_euclid`, so the sky evolves and eclipses recur on their own —
+  for running/recording the motion. Manual scrub still wins the frame it's
+  dragged. Distinct widget id `cycle_speed` (vs the move-speed slider's `speed`).
 **Next increments the user flagged (not yet built):**
+- **Distance fog** — the one remaining Part 2 piece: forward fog in `mesh.wgsl`
+  (`mix(shaded, fog_color, 1 − exp(−density·dist))`, `dist` from `camera_pos`),
+  with `fog_color` tied to the sky horizon so fog melts into the sky. Uniform
+  fields (`fog_color`/`fog_density`) already exist, inert. Pairs with a
+  morning-fog curve off `time_of_day` + a manual fog slider.
+- **Full LUT/post colour grade** — the parked richer path (offscreen target +
+  fullscreen pass); the forward eclipse darkening already covers the Advent.
+- **"Alien" mood events** — low-strength desaturated psychedelic grade presets
+  the cycle blends toward (Part 3 flavour).
 - **Scene selector** (orthogonal, its own track): `--bake <name>` →
   `bake/<name>/…`, a `scenes` dropdown, and a source-reload path
   (`source` swap + `generation` bump + `submit_field_jobs`).
 
-The sections below are the **original** plan/contract; treat Part 1 + the sky as
-implemented and Parts 2–3 (fog, grade, eclipse, alien events) as remaining.
+The sections below are the **original** plan/contract; treat Part 1 + the sky +
+the eclipse world-reaction as implemented, and fog + the richer grade/alien
+events as remaining.
 
 ## Destination
 

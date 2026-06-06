@@ -137,6 +137,13 @@ struct GameScene {
     time_of_day: f32,
     moon_phase: f32,
     year_month: f32,
+    /// Auto-advance rate for the cycle, in **simulated minutes per real
+    /// second**, from the lower-right "Speed" slider. `0.0` = paused (manual
+    /// scrub). When positive, `update` advances `time_of_day` and drifts
+    /// `moon_phase` / `year_month` at their natural cadence (28-day lunar
+    /// month, 360-day year) so the sky genuinely evolves — eclipses recur on
+    /// their own. Lets the motion run for recording at a chosen speed.
+    sim_speed: f32,
 
     /// The scripted HUD. Owns the three debug-toggle checkboxes; the
     /// fields below are refreshed from it each frame. `None` only if
@@ -256,6 +263,7 @@ impl Default for GameScene {
             time_of_day: 9.5,
             moon_phase: 1.0,
             year_month: 6.0,
+            sim_speed: 0.0, // paused — the Speed slider starts it
             script: None,
             wireframe_on: false,
             corner_arrows_on: false,
@@ -1286,6 +1294,7 @@ impl GameScene {
             .with("time_of_day", self.time_of_day)
             .with("moon_phase", self.moon_phase)
             .with("year_month", self.year_month)
+            .with("sim_speed", self.sim_speed)
             .with("corner_arrows", self.corner_arrows.len())
             .with("nav_count", self.navs.len());
 
@@ -1441,6 +1450,9 @@ impl Scene for GameScene {
                     if let Some(v) = toggles.number("year_month") {
                         self.year_month = v as f32;
                     }
+                    if let Some(v) = toggles.number("sim_speed") {
+                        self.sim_speed = v as f32;
+                    }
 
                     // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
                     // 2 = Walk). Surface-walk generates the nav surface; fly mode
@@ -1485,6 +1497,20 @@ impl Scene for GameScene {
                 }
                 Err(e) => tracing::error!("HUD script update failed: {e}"),
             }
+        }
+
+        // Auto-advance the day/night cycle when the Speed slider is above zero.
+        // One real second = `sim_speed` simulated minutes; the moon and year
+        // drift at their natural cadence (28-day lunar month, 360-day year), so
+        // the whole sky evolves and eclipses recur on their own as it runs.
+        // (Runs after the slider reads above, so a manual drag still wins that
+        // frame and the motion simply continues from the new value.)
+        if self.sim_speed > 0.0 {
+            let d_hours = dt_s * self.sim_speed / 60.0;
+            let d_days = d_hours / 24.0;
+            self.time_of_day = (self.time_of_day + d_hours).rem_euclid(24.0);
+            self.moon_phase = (self.moon_phase + d_days / 7.0).rem_euclid(4.0);
+            self.year_month = (self.year_month + d_days / 30.0).rem_euclid(12.0);
         }
 
         // Left-click → world pick (inspector). The HUD script consumes
@@ -1830,6 +1856,18 @@ fn cross_marker(center: Vec3, half: f32) -> [(Vec3, Vec3); 3] {
     ]
 }
 
+/// Angular radii of the celestial discs, **mirrored in `sky.wgsl`**. The
+/// world's eclipse darkening is driven by the same disc-overlap geometry the
+/// sky uses for its corona, so the ground and sky go dark together.
+const SUN_DISC_R: f32 = 0.038;
+const MOON_DISC_R: f32 = 0.047;
+
+/// Hermite smoothstep: `0` at/below `e0`, `1` at/above `e1`, smooth between.
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Map the three day/night-cycle controls to the frame-global
 /// [`SceneLighting`] the mesh shader consumes. A pure function of the slider
 /// values — no per-frame state — so scrubbing a slider *is* the whole
@@ -1873,6 +1911,25 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLig
     // sun-colour glow in the sky shader, so only the band near the sun warms.
     let sky_zenith = Vec3::new(0.012, 0.016, 0.030).lerp(Vec3::new(0.09, 0.15, 0.30), sun_amt);
     let sky_horizon = Vec3::new(0.030, 0.040, 0.085).lerp(Vec3::new(0.42, 0.49, 0.58), sun_amt);
+
+    // The Advent — the world reacts. When the moon covers the sun (needs the
+    // equinox arc alignment + a new moon + the sun up), it blocks the direct
+    // sun on the ground and ambient + sky sink into a dim, desaturated
+    // blood-shadow: cool/dark/mystical, not a bold red. Driven by the same
+    // disc-overlap geometry as the sky's corona (`coverage`), so the ground and
+    // sky go dark in step — and the sliders only line this up at a true Advent.
+    let separation = sun_dir.dot(moon_dir).clamp(-1.0, 1.0).acos();
+    let coverage = 1.0
+        - smoothstep(
+            MOON_DISC_R - SUN_DISC_R,
+            MOON_DISC_R + SUN_DISC_R,
+            separation,
+        );
+    let eclipse = coverage * smoothstep(-0.02, 0.05, sun_dir.y);
+    let sun_color = sun_color * (1.0 - eclipse);
+    let ambient = ambient.lerp(Vec3::new(0.07, 0.022, 0.028), eclipse);
+    let sky_zenith = sky_zenith.lerp(Vec3::new(0.035, 0.014, 0.022), eclipse);
+    let sky_horizon = sky_horizon.lerp(Vec3::new(0.10, 0.030, 0.042), eclipse);
 
     SceneLighting {
         sun_dir,
@@ -2762,6 +2819,7 @@ mod script_smoke {
             .with("time_of_day", 9.5_f32)
             .with("moon_phase", 1.0_f32)
             .with("year_month", 6.0_f32)
+            .with("sim_speed", 12.0_f32)
     }
 
     #[test]

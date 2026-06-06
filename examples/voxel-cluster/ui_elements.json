@@ -164,6 +164,7 @@
       "sun": { "label": "Sun", "min": 0.0, "max": 24.0, "ticks": 12 },
       "moon": { "label": "Moon", "min": 0.0, "max": 4.0, "ticks": 4 },
       "year": { "label": "Year", "min": 0.0, "max": 12.0, "ticks": 12 },
+      "speed": { "label": "Speed (sim min/s · 0 = paused)", "min": 0.0, "max": 120.0, "ticks": 12 },
       "style": {
         "track": [0.09, 0.10, 0.12, 0.96],
         "fill": [0.55, 0.43, 0.23, 1.0],
