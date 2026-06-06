@@ -269,6 +269,8 @@ impl GameScene {
         let script = match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
                 tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
+                expose_ui_elements(&s); // HUD layout lives in ui_elements.json (`UI.hud`)
+                load_widgets(&s); // slider / stepper / dropdown toolkit
                 Some(s)
             }
             Err(e) => {
@@ -1377,10 +1379,24 @@ impl Scene for GameScene {
                     self.camera_lod_on = toggles.is_on("camera_lod");
                     self.lod_billboards_on = toggles.is_on("lod_billboards");
 
-                    // Locomotion mode: surface-walk generates the nav surface;
-                    // fly mode generates none (and no collision). A change
-                    // re-meshes the field so nav appears/disappears with it.
-                    let walk = toggles.is_on("surface_walk");
+                    // Interactive HUD controls report their values back: the
+                    // move-speed slider and the sensitivity stepper feed the
+                    // control config live (the slider returns the current value
+                    // unchanged when not dragging, so this is idempotent).
+                    if let Some(v) = toggles.number("move_speed") {
+                        self.config.move_speed = v as f32;
+                    }
+                    if let Some(v) = toggles.number("look_sens") {
+                        self.config.look_sensitivity = v as f32;
+                    }
+
+                    // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
+                    // 2 = Walk). Surface-walk generates the nav surface; fly mode
+                    // generates none. A change re-meshes the field so nav
+                    // appears/disappears with it.
+                    let walk = toggles
+                        .number("locomotion")
+                        .map_or(self.locomotion_walk, |sel| sel >= 1.5);
                     if walk != self.locomotion_walk {
                         self.locomotion_walk = walk;
                         // Entering walk: re-mesh to generate nav, then snap the
@@ -1739,15 +1755,20 @@ const LOGO_DURATION: Duration = Duration::from_millis(2200);
 
 /// Logo splash: a large wordmark over the gothic backdrop. Auto-advances to
 /// the menu after [`LOGO_DURATION`], or immediately on click / Space / Escape.
+/// Lua-driven logo splash (`scripts/logo.lua`, `UI.logo`).
+const LOGO_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/logo.lua");
+
 struct LogoScene {
-    theme: Option<ui::Theme>,
+    script: Option<ScriptHost>,
+    textures: Vec<TextureHandle>,
     elapsed: Duration,
 }
 
 impl LogoScene {
     fn new() -> Self {
         Self {
-            theme: None,
+            script: None,
+            textures: Vec::new(),
             elapsed: Duration::ZERO,
         }
     }
@@ -1755,7 +1776,10 @@ impl LogoScene {
 
 impl Scene for LogoScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        self.theme = Some(ui::Theme::build(renderer));
+        let theme = ui::Theme::build(renderer);
+        let (script, textures) = load_ui_script(LOGO_SCRIPT_PATH, &theme);
+        self.script = script;
+        self.textures = textures;
         // Apply the persisted (or default) display setting now the window
         // exists — so a saved fullscreen/resolution choice takes effect at
         // launch.
@@ -1773,12 +1797,14 @@ impl Scene for LogoScene {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let Some(theme) = self.theme else {
+        let Some(script) = self.script.as_ref() else {
             return;
         };
-        let screen = renderer.size();
-        theme.backdrop(renderer, screen);
-        theme.wordmark(renderer, screen, "FLICKER");
+        let size = renderer.size();
+        match script.draw(size.x, size.y) {
+            Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
+            Err(e) => tracing::error!("logo script draw failed: {e}"),
+        }
     }
 }
 
@@ -1940,25 +1966,28 @@ impl SettingsPanel {
 /// timeout. Pushed as an overlay (same mechanism as the pause menu), so it
 /// works over the menu or the pause screen.
 struct ConfirmDisplayScene {
-    theme: ui::Theme,
+    modal: ModalUi,
     previous: display::DisplaySetting,
     remaining: f32,
-    hover: Option<ui::ModalButton>,
 }
 
 impl ConfirmDisplayScene {
     fn new(theme: ui::Theme, previous: display::DisplaySetting) -> Self {
         Self {
-            theme,
+            modal: ModalUi::new(&theme),
             previous,
             remaining: CONFIRM_SECS,
-            hover: None,
         }
     }
 
     fn revert(&self, renderer: &Renderer) {
         self.previous.apply(renderer);
         display::set_current(self.previous);
+    }
+
+    /// The countdown subtitle the modal renders under the title.
+    fn subtitle(&self) -> String {
+        format!("Reverting in {}s", self.remaining.ceil().max(0.0) as i32)
     }
 }
 
@@ -1973,54 +2002,163 @@ impl Scene for ConfirmDisplayScene {
             self.revert(renderer);
             return Transition::Pop;
         }
-        let layout = ui::modal_layout(renderer.size());
-        self.hover = layout.hover(input.mouse_position);
-        if input.mouse_left_pressed {
-            match self.hover {
-                Some(ui::ModalButton::Top) => return Transition::Pop, // Keep
-                Some(ui::ModalButton::Bottom) => {
-                    self.revert(renderer);
-                    return Transition::Pop;
-                }
-                None => {}
-            }
+        // The shared modal's `confirm` screen — its `[0,0,0,0.25]` overlay is the
+        // light dim that keeps the new resolution visible behind the dialog.
+        let actions = self.modal.update(input, renderer, "confirm", None);
+        if actions.is_on("keep") {
+            return Transition::Pop;
+        }
+        if actions.is_on("revert") {
+            self.revert(renderer);
+            return Transition::Pop;
         }
         Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let screen = renderer.size();
-        let layout = ui::modal_layout(screen);
-        // A light 25% dim (not the heavy modal scrim) so the new resolution
-        // stays visible behind the dialog, which still blocks all interaction
-        // beneath it (it's the top scene; the manager freezes the rest).
-        self.theme.dim(renderer, screen, 0.25);
-        let note = format!("Reverting in {}s", self.remaining.ceil().max(0.0) as i32);
-        self.theme.draw_panel(
-            renderer,
-            &layout,
-            "KEEP DISPLAY?",
-            Some(&note),
-            ("KEEP", "REVERT"),
-            self.hover,
-        );
+        let subtitle = self.subtitle();
+        self.modal.render(renderer, "confirm", Some(&subtitle));
     }
 }
 
 /// Path to the Lua main-menu screen (panel/title/buttons + hit-testing).
-const MENU_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/menu.lua");
+/// Shared gothic-modal script: renders the menu, pause, and confirm screens
+/// (selected per frame by the `screen` model value) — see `scripts/modal.lua`.
+const MODAL_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/modal.lua");
 
-/// Main menu: a thin shell over the Lua-driven menu screen (`menu.lua`). The
-/// script owns the layout/labels/hit-testing and emits draw commands; this
-/// scene just renders them, routes the `start`/`quit` actions to transitions,
-/// and keeps the (still Rust) settings dropdowns. The gothic textures come from
-/// [`ui::Theme`] and are handed to the script by name.
+/// Path to the declarative UI layout (named elements + their position/size/
+/// colour) the Lua front-end reads from.
+const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
+
+/// Parse `ui_elements.json` and expose it to `script` as the `UI` global, so a
+/// screen reads its layout from named elements (`UI.modal.panel.w`) instead of
+/// hardcoded constants. Logs and continues on failure (scripts guard
+/// `if not UI`). Calling again hot-reloads the layout after an edit.
+fn expose_ui_elements(script: &ScriptHost) {
+    match std::fs::read_to_string(UI_ELEMENTS_PATH) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(ui) => {
+                if let Err(e) = script.set_global_json("UI", &ui) {
+                    tracing::error!("UI elements exposure failed: {e}");
+                }
+            }
+            Err(e) => tracing::error!("ui_elements.json parse failed: {e}"),
+        },
+        Err(e) => tracing::error!("ui_elements.json read failed: {e}"),
+    }
+}
+
+/// Path to the reusable Lua widget toolkit (slider / stepper / dropdown).
+const WIDGETS_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/widgets.lua");
+
+/// Expose `widgets.lua` to `script` as the `Widgets` global, so screens can use
+/// the shared immediate-mode widgets. Best-effort; logs on failure.
+fn load_widgets(script: &ScriptHost) {
+    match std::fs::read_to_string(WIDGETS_SCRIPT_PATH) {
+        Ok(source) => {
+            if let Err(e) = script.set_lua_module("Widgets", &source, "widgets.lua") {
+                tracing::error!("widgets module load failed: {e}");
+            }
+        }
+        Err(e) => tracing::error!("widgets.lua read failed: {e}"),
+    }
+}
+
+/// Load a UI script from `path`, register the theme's textures by name (index =
+/// id), expose `ui_elements.json` as the `UI` global, and the `Widgets` toolkit.
+/// Best-effort: a load failure logs and yields `(None, textures)` so the scene
+/// degrades gracefully. The shared front-door for every Lua-driven screen.
+fn load_ui_script(path: &str, theme: &ui::Theme) -> (Option<ScriptHost>, Vec<TextureHandle>) {
+    let entries = theme.lua_textures();
+    let textures = entries.iter().map(|(_, handle)| *handle).collect();
+    let script = match ScriptHost::from_file(path) {
+        Ok(script) => {
+            let ids: Vec<(&str, u32)> = entries
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _))| (*name, i as u32))
+                .collect();
+            if let Err(e) = script.set_texture_ids(&ids) {
+                tracing::error!("texture registration failed for {path}: {e}");
+            }
+            expose_ui_elements(&script);
+            load_widgets(&script);
+            Some(script)
+        }
+        Err(e) => {
+            tracing::error!("script load failed ({path}): {e}");
+            None
+        }
+    };
+    (script, textures)
+}
+
+/// A loaded `modal.lua` plus the theme textures it draws with — the shared
+/// machinery behind every gothic-modal scene (menu / pause / confirm). The
+/// scene picks which screen to show by name and supplies an optional dynamic
+/// subtitle; this routes the per-frame `Model` (`screen` + `subtitle`) in, runs
+/// the script, and renders its commands. Each scene keeps its own transitions.
+struct ModalUi {
+    script: Option<ScriptHost>,
+    textures: Vec<TextureHandle>,
+}
+
+impl ModalUi {
+    /// Load `modal.lua` + expose the theme textures and UI layout.
+    fn new(theme: &ui::Theme) -> Self {
+        let (script, textures) = load_ui_script(MODAL_SCRIPT_PATH, theme);
+        Self { script, textures }
+    }
+
+    /// The per-frame model selecting the screen + its optional dynamic subtitle.
+    fn model(screen: &str, subtitle: Option<&str>) -> ValueMap {
+        let mut model = ValueMap::new().with("screen", screen);
+        if let Some(text) = subtitle {
+            model.set("subtitle", text);
+        }
+        model
+    }
+
+    /// Run the script's `update` for `screen`; returns the fired actions
+    /// (`is_on("start")` etc.). Empty if the script failed to load.
+    fn update(
+        &self,
+        input: &InputState,
+        renderer: &Renderer,
+        screen: &str,
+        subtitle: Option<&str>,
+    ) -> ValueMap {
+        let Some(script) = self.script.as_ref() else {
+            return ValueMap::new();
+        };
+        let _ = script.set_model(&Self::model(screen, subtitle));
+        let size = renderer.size();
+        script.update(input, size.x, size.y).unwrap_or_else(|e| {
+            tracing::error!("modal update failed: {e}");
+            ValueMap::new()
+        })
+    }
+
+    /// Render `screen` via `render_hud`.
+    fn render(&self, renderer: &mut Renderer, screen: &str, subtitle: Option<&str>) {
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let _ = script.set_model(&Self::model(screen, subtitle));
+        let size = renderer.size();
+        match script.draw(size.x, size.y) {
+            Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
+            Err(e) => tracing::error!("modal draw failed: {e}"),
+        }
+    }
+}
+
+/// Main menu: a thin shell over the shared modal (`screen = "menu"`). The script
+/// owns layout/labels/hit-testing; this scene routes the `start`/`quit` actions
+/// to transitions and keeps the (still Rust) settings dropdowns.
 struct MenuScene {
     theme: Option<ui::Theme>,
-    script: Option<ScriptHost>,
-    /// Engine textures the script references by id (index = id). `[0]` is the
-    /// white pixel used for `rect` fills.
-    textures: Vec<TextureHandle>,
+    modal: Option<ModalUi>,
     settings: Option<SettingsPanel>,
 }
 
@@ -2028,8 +2166,7 @@ impl MenuScene {
     fn new() -> Self {
         Self {
             theme: None,
-            script: None,
-            textures: Vec::new(),
+            modal: None,
             settings: None,
         }
     }
@@ -2038,26 +2175,7 @@ impl MenuScene {
 impl Scene for MenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         let theme = ui::Theme::build(renderer);
-        let entries = theme.lua_textures();
-        self.textures = entries.iter().map(|(_, handle)| *handle).collect();
-        // Load the Lua menu and tell it the texture ids (index = id).
-        self.script = match ScriptHost::from_file(MENU_SCRIPT_PATH) {
-            Ok(script) => {
-                let ids: Vec<(&str, u32)> = entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (name, _))| (*name, i as u32))
-                    .collect();
-                if let Err(e) = script.set_texture_ids(&ids) {
-                    tracing::error!("menu script texture registration failed: {e}");
-                }
-                Some(script)
-            }
-            Err(e) => {
-                tracing::error!("menu script load failed: {e}");
-                None
-            }
-        };
+        self.modal = Some(ModalUi::new(&theme));
         self.theme = Some(theme);
         self.settings = Some(SettingsPanel::new(renderer));
     }
@@ -2074,19 +2192,14 @@ impl Scene for MenuScene {
                 return Transition::None;
             }
         }
-        // The Lua menu hit-tests the buttons and fires momentary actions.
-        if let Some(script) = self.script.as_ref() {
-            let screen = renderer.size();
-            match script.update(input, screen.x, screen.y) {
-                Ok(actions) => {
-                    if actions.is_on("start") {
-                        return Transition::Replace(Box::new(GameScene::new()));
-                    }
-                    if actions.is_on("quit") {
-                        return Transition::Quit;
-                    }
-                }
-                Err(e) => tracing::error!("menu script update failed: {e}"),
+        // The shared modal hit-tests the buttons and fires momentary actions.
+        if let Some(modal) = self.modal.as_ref() {
+            let actions = modal.update(input, renderer, "menu", None);
+            if actions.is_on("start") {
+                return Transition::Replace(Box::new(GameScene::new()));
+            }
+            if actions.is_on("quit") {
+                return Transition::Quit;
             }
         }
         Transition::None
@@ -2094,12 +2207,8 @@ impl Scene for MenuScene {
 
     fn render(&mut self, renderer: &mut Renderer) {
         let Some(theme) = self.theme else { return };
-        if let Some(script) = self.script.as_ref() {
-            let screen = renderer.size();
-            match script.draw(screen.x, screen.y) {
-                Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
-                Err(e) => tracing::error!("menu script draw failed: {e}"),
-            }
+        if let Some(modal) = self.modal.as_ref() {
+            modal.render(renderer, "menu", None);
         }
         if let Some(panel) = self.settings.as_ref() {
             panel.draw(&theme, renderer);
@@ -2111,7 +2220,7 @@ impl Scene for MenuScene {
 /// the game; Quit exits. Reuses the game's already-uploaded [`ui::Theme`].
 struct PauseScene {
     theme: ui::Theme,
-    hover: Option<ui::ModalButton>,
+    modal: ModalUi,
     escape_prev: bool,
     settings: Option<SettingsPanel>,
 }
@@ -2121,8 +2230,8 @@ impl PauseScene {
         // Escape is held at the instant the game pushes us; start `escape_prev`
         // true so the opening press doesn't immediately pop us back.
         Self {
+            modal: ModalUi::new(&theme),
             theme,
-            hover: None,
             escape_prev: true,
             settings: None,
         }
@@ -2155,30 +2264,18 @@ impl Scene for PauseScene {
                 return Transition::None;
             }
         }
-        let layout = ui::modal_layout(renderer.size());
-        self.hover = layout.hover(input.mouse_position);
-        if input.mouse_left_pressed {
-            match self.hover {
-                Some(ui::ModalButton::Top) => return Transition::Pop, // resume
-                Some(ui::ModalButton::Bottom) => return Transition::Quit,
-                None => {}
-            }
+        let actions = self.modal.update(input, renderer, "pause", None);
+        if actions.is_on("resume") {
+            return Transition::Pop;
+        }
+        if actions.is_on("quit") {
+            return Transition::Quit;
         }
         Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let screen = renderer.size();
-        let layout = ui::modal_layout(screen);
-        self.theme.scrim(renderer, screen);
-        self.theme.draw_panel(
-            renderer,
-            &layout,
-            "PAUSED",
-            None,
-            ("RESUME", "QUIT"),
-            self.hover,
-        );
+        self.modal.render(renderer, "pause", None);
         if let Some(panel) = self.settings.as_ref() {
             panel.draw(&self.theme, renderer);
         }
@@ -2375,21 +2472,61 @@ mod script_smoke {
     #[test]
     fn hud_script_runs_with_model() {
         let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud.lua");
+        expose_ui_elements(&host); // HUD layout from ui_elements.json (`UI.hud`)
+        load_widgets(&host); // slider / stepper / dropdown
         host.set_model(&full_model()).expect("publish model");
         let input = InputState::new();
         host.update(&input, 1920.0, 1080.0).expect("hud update");
         let cmds = host.draw(1920.0, 1080.0).expect("hud draw");
         assert!(!cmds.is_empty(), "hud emits stat + checkbox commands");
+
+        // Exercise the widgets' interaction paths: a held drag near the slider
+        // and an open-then-select on the dropdown must run without error and the
+        // slider must report a numeric `move_speed` back.
+        let mut drag = InputState::new();
+        drag.mouse_position = Vec2::new(150.0, 346.0);
+        drag.mouse_left = true;
+        drag.mouse_left_pressed = true;
+        let out = host.update(&drag, 1920.0, 1080.0).expect("hud drag update");
+        assert!(out.number("move_speed").is_some(), "slider reports a value");
+        host.draw(1920.0, 1080.0)
+            .expect("hud draw after interaction");
     }
 
     #[test]
-    fn menu_script_runs() {
-        let host = ScriptHost::from_file(MENU_SCRIPT_PATH).expect("load menu.lua");
+    fn modal_script_runs_every_screen() {
+        let host = ScriptHost::from_file(MODAL_SCRIPT_PATH).expect("load modal.lua");
         host.set_texture_ids(&[("white", 0), ("panel", 1), ("button", 2)])
             .expect("register textures");
+        // Loads the real ui_elements.json — so a malformed layout, or a screen
+        // the script reads but `screens.*` lacks, fails this test.
+        expose_ui_elements(&host);
         let input = InputState::new();
-        host.update(&input, 1920.0, 1080.0).expect("menu update");
-        let cmds = host.draw(1920.0, 1080.0).expect("menu draw");
-        assert!(!cmds.is_empty(), "menu emits panel + button commands");
+        // Every modal instance must render from its shared style + screen data.
+        for screen in ["menu", "pause", "confirm"] {
+            let mut model = ValueMap::new().with("screen", screen);
+            if screen == "confirm" {
+                model.set("subtitle", "Reverting in 9s");
+            }
+            host.set_model(&model).expect("publish screen");
+            host.update(&input, 1920.0, 1080.0).expect("modal update");
+            let cmds = host.draw(1920.0, 1080.0).expect("modal draw");
+            assert!(
+                !cmds.is_empty(),
+                "modal screen '{screen}' emits overlay + panel + button commands"
+            );
+        }
+    }
+
+    #[test]
+    fn logo_script_runs() {
+        let host = ScriptHost::from_file(LOGO_SCRIPT_PATH).expect("load logo.lua");
+        host.set_texture_ids(&[("white", 0), ("panel", 1), ("button", 2)])
+            .expect("register textures");
+        expose_ui_elements(&host);
+        let input = InputState::new();
+        host.update(&input, 1920.0, 1080.0).expect("logo update");
+        let cmds = host.draw(1920.0, 1080.0).expect("logo draw");
+        assert!(!cmds.is_empty(), "logo emits backdrop + wordmark");
     }
 }

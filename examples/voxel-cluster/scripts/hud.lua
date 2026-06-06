@@ -1,54 +1,105 @@
--- voxel-cluster HUD: six interactive checkboxes that drive the
--- engine's debug toggles, replacing the old `1`/`2`/`\` key handling.
---
--- This is plain Lua (no Luau-specific syntax). The host runs it once
--- at startup; the returned module exposes:
---   * update(mouse_x, mouse_y, clicked) -> { name = bool, ... }
---   * draw() -> { <command>, ... }
--- where each command is a table with a `kind` of "rect" or "text".
--- See flicker-script's HudCommand for the recognised fields.
+-- In-game HUD, driven by Lua + `ui_elements.json` (the `UI.hud` section) and the
+-- engine `Model` (live values published each frame). Layout / colours / labels
+-- live in the JSON; this script owns only behaviour: formatting the stat strings
+-- from the Model, and the checkbox click-state the engine queries. Edit
+-- ui_elements.json to move / restyle the HUD — no recompile. Plain Lua.
 
 local M = {}
 
--- The toggles, in draw order. `key` is the name the engine queries
--- (VoxelCluster reads "wireframe" / "corner_arrows" / "navmesh" /
--- "surface_walk" / "camera_lod" / "lod_billboards").
-local checkboxes = {
-  { key = "wireframe",     label = "Wireframe overlay",          checked = false },
-  { key = "corner_arrows", label = "Corner-vector arrows",       checked = false },
-  { key = "navmesh",       label = "Navmesh wireframe",          checked = false },
-  { key = "surface_walk",  label = "Surface walk (gen nav)",     checked = false },
-  { key = "camera_lod",    label = "Camera-driven LOD",          checked = false },
-  { key = "lod_billboards",label = "LOD billboards",             checked = false },
-}
+-- Persistent checkbox state, keyed by each checkbox's `key` (the names the
+-- engine queries). Starts empty → nil reads as off; toggled on click.
+local checked = {}
 
--- Panel layout, in HUD pixels (origin top-left).
-local ORIGIN_X = 16
-local ORIGIN_Y = 180
-local ROW_H = 26
-local BOX = 18
+-- Transient widget interaction state (slider drag / dropdown open), keyed by a
+-- stable widget id — see widgets.lua. Values themselves live in the Model.
+local widget_state = {}
 
--- Top-left corner + size of the i-th checkbox's clickable square.
+-- The interactive controls' widget rects, from UI.hud.controls (label on the
+-- left, widget at `widget_x`).
+local function control_rects()
+  local c = UI.hud.controls
+  return c, {
+    speed = { x = c.widget_x, y = c.speed.y, w = c.speed.w, h = c.speed.h },
+    sens = { x = c.widget_x, y = c.sens.y, w = c.sens.w, h = c.sens.h },
+    loco = { x = c.widget_x, y = c.locomotion.y, w = c.locomotion.w, h = c.locomotion.h },
+  }
+end
+
+local function checkbox_items()
+  return UI.hud.checkboxes.items
+end
+
+-- The i-th checkbox's clickable square, from the JSON geometry.
 local function box_rect(i)
-  return ORIGIN_X, ORIGIN_Y + (i - 1) * ROW_H, BOX, BOX
+  local cb = UI.hud.checkboxes
+  return { x = cb.origin[1], y = cb.origin[2] + (i - 1) * cb.row_h, w = cb.box, h = cb.box }
 end
 
-local function point_in(px, py, x, y, w, h)
-  return px >= x and px <= x + w and py >= y and py <= y + h
+local function point_in(px, py, r)
+  return px >= r.x and px <= r.x + r.w and py >= r.y and py <= r.y + r.h
 end
 
--- Left-column engine stats, read from the `Model` global the host publishes
--- each frame (flicker-script's data-model channel). These lines used to be
--- hardcoded `draw_text` in Rust; owning them here means the layout/formatting
--- is editable without a recompile. Colours/positions mirror the old readout.
-local DIM = { 0.75, 0.85, 0.95 }
+function M.update(mx, my, clicked, sw, sh, down)
+  if not UI then
+    return {}
+  end
+  if clicked then
+    for i, item in ipairs(checkbox_items()) do
+      if point_in(mx, my, box_rect(i)) then
+        checked[item.key] = not checked[item.key]
+      end
+    end
+  end
+  local states = {}
+  for _, item in ipairs(checkbox_items()) do
+    states[item.key] = checked[item.key] or false
+  end
+
+  -- Interactive controls (slider / stepper / dropdown), wired two-way: the
+  -- current value comes from the Model, the new value goes back in `states`,
+  -- and the host applies it (so next frame the Model reflects it).
+  if Model and Widgets then
+    local c, r = control_rects()
+    states.move_speed = Widgets.slider_update(
+      widget_state,
+      "speed",
+      r.speed,
+      mx,
+      my,
+      clicked,
+      down,
+      Model.move_speed or 0,
+      c.speed.min,
+      c.speed.max
+    )
+    states.look_sens = Widgets.stepper_update(
+      r.sens,
+      mx,
+      my,
+      clicked,
+      Model.look_sens or 0,
+      c.sens.step,
+      c.sens.min,
+      c.sens.max
+    )
+    local current = (Model.walk and 2) or 1
+    states.locomotion =
+      Widgets.dropdown_update(widget_state, "loco", r.loco, mx, my, clicked, #c.locomotion.options, current)
+  end
+  return states
+end
+
+-- Stat readouts: each named line's style (y / size / colour) comes from
+-- UI.hud.stats.<id>; the text is formatted here from the engine Model.
 local function stats(cmds)
   if not Model then
     return
   end
-  local function line(y, size, c, text)
+  local s = UI.hud.stats
+  local function line(spec, text)
+    local c = spec.color
     cmds[#cmds + 1] =
-      { kind = "text", x = 16, y = y, text = text, size = size, r = c[1], g = c[2], b = c[3] }
+      { kind = "text", x = s.x, y = spec.y, text = text, size = spec.size, r = c[1], g = c[2], b = c[3], a = c[4] }
   end
 
   local controls
@@ -57,16 +108,9 @@ local function stats(cmds)
   else
     controls = "fly — WASD move, R/F up/down, right-drag look"
   end
+  line(s.title, string.format("voxel cluster — %.0f×%.0f field — %s", Model.field_dim, Model.field_dim, controls))
   line(
-    16,
-    22,
-    { 1, 1, 1 },
-    string.format("voxel cluster — %.0f×%.0f field — %s", Model.field_dim, Model.field_dim, controls)
-  )
-  line(
-    44,
-    16,
-    DIM,
+    s.pos,
     string.format(
       "pos: (%.0f, %.0f, %.0f)  yaw: %.2f  pitch: %.2f",
       Model.pos_x,
@@ -76,16 +120,9 @@ local function stats(cmds)
       Model.pitch
     )
   )
+  line(s.clusters, string.format("clusters: %.0f   extent: %.0f³ voxels each", Model.cluster_count, Model.cluster_dim))
   line(
-    64,
-    16,
-    DIM,
-    string.format("clusters: %.0f   extent: %.0f³ voxels each", Model.cluster_count, Model.cluster_dim)
-  )
-  line(
-    84,
-    16,
-    DIM,
+    s.config,
     string.format(
       "config — speed: %.0f  sens: %.4f  invert-Y: %s  invert-X: %s",
       Model.move_speed,
@@ -95,16 +132,10 @@ local function stats(cmds)
     )
   )
   line(
-    104,
-    16,
-    DIM,
-    string.format(
-      "corner arrows stored: %.0f   nav clusters (rings 0–2): %.0f",
-      Model.corner_arrows,
-      Model.nav_count
-    )
+    s.diag,
+    string.format("corner arrows stored: %.0f   nav clusters (rings 0–2): %.0f", Model.corner_arrows, Model.nav_count)
   )
-  line(124, 16, DIM, "press Escape to quit")
+  line(s.escape, "press Escape to quit")
 
   local pick
   if Model.has_pick then
@@ -121,7 +152,7 @@ local function stats(cmds)
   else
     pick = "pick: (none — left-click a face)"
   end
-  line(144, 16, { 0.95, 0.85, 0.60 }, pick)
+  line(s.pick, pick)
 
   if Model.walk then
     local ground = "—"
@@ -129,76 +160,97 @@ local function stats(cmds)
       ground = string.format("%.0f", Model.ground_y)
     end
     local grounded = Model.grounded and "grounded" or "airborne"
-    line(
-      164,
-      16,
-      { 0.6, 0.95, 0.7 },
-      string.format("walk: %s   ground y: %s   vy: %+.1f", grounded, ground, Model.vy)
-    )
+    line(s.walk, string.format("walk: %s   ground y: %s   vy: %+.1f", grounded, ground, Model.vy))
   end
 end
 
--- Per-frame: flip a checkbox if the click landed on its square, then
--- report every toggle's state back to the engine.
-function M.update(mx, my, clicked)
-  if clicked then
-    for i, cb in ipairs(checkboxes) do
-      local x, y, w, h = box_rect(i)
-      if point_in(mx, my, x, y, w, h) then
-        cb.checked = not cb.checked
-      end
-    end
-  end
-
-  local states = {}
-  for _, cb in ipairs(checkboxes) do
-    states[cb.key] = cb.checked
-  end
-  return states
-end
-
--- Per-frame: describe the panel as draw commands the engine renders.
-function M.draw()
-  local cmds = {}
-
-  -- Left-column engine stats (from Model), then the checkbox panel below.
-  stats(cmds)
-
+-- The feature-toggle checkbox panel, from UI.hud.checkboxes.
+local function checkboxes(cmds)
+  local cb = UI.hud.checkboxes
+  local h = cb.header
   cmds[#cmds + 1] = {
     kind = "text",
-    x = ORIGIN_X, y = ORIGIN_Y - 24,
-    text = "HUD (scripted) - click to toggle",
-    size = 16,
-    r = 0.85, g = 0.85, b = 0.70,
+    x = cb.origin[1],
+    y = cb.origin[2] - 24,
+    text = h.text,
+    size = h.size,
+    r = h.color[1],
+    g = h.color[2],
+    b = h.color[3],
+    a = h.color[4],
   }
-
-  for i, cb in ipairs(checkboxes) do
-    local x, y, w, h = box_rect(i)
-
-    -- White border box.
-    cmds[#cmds + 1] = { kind = "rect", x = x, y = y, w = w, h = h, r = 1, g = 1, b = 1 }
-
-    -- Inner fill: neon green when checked, dark grey when not.
-    local fr, fg, fb = 0.15, 0.15, 0.18
-    if cb.checked then
-      fr, fg, fb = 0.20, 0.90, 0.40
-    end
+  for i, item in ipairs(checkbox_items()) do
+    local r = box_rect(i)
+    local bc = cb.border_color
+    cmds[#cmds + 1] =
+      { kind = "rect", x = r.x, y = r.y, w = r.w, h = r.h, r = bc[1], g = bc[2], b = bc[3], a = bc[4] }
+    local fill = checked[item.key] and cb.fill_on or cb.fill_off
     cmds[#cmds + 1] = {
       kind = "rect",
-      x = x + 2, y = y + 2, w = w - 4, h = h - 4,
-      r = fr, g = fg, b = fb,
+      x = r.x + 2,
+      y = r.y + 2,
+      w = r.w - 4,
+      h = r.h - 4,
+      r = fill[1],
+      g = fill[2],
+      b = fill[3],
+      a = fill[4],
     }
-
-    -- Label to the right of the box.
+    local lc = cb.label_color
     cmds[#cmds + 1] = {
       kind = "text",
-      x = x + w + 10, y = y + 1,
-      text = cb.label,
-      size = 16,
-      r = 0.90, g = 0.90, b = 0.90,
+      x = r.x + r.w + 10,
+      y = r.y + 1,
+      text = item.label,
+      size = cb.label_size,
+      r = lc[1],
+      g = lc[2],
+      b = lc[3],
+      a = lc[4],
+    }
+  end
+end
+
+-- Interactive controls: a move-speed slider, a sensitivity stepper, and a
+-- locomotion dropdown — drawn from the Widgets toolkit, styled from JSON, with
+-- live values from the Model.
+local function controls(cmds)
+  if not (Model and Widgets) then
+    return
+  end
+  local c, r = control_rects()
+  local lc = c.label_color
+  local function lbl(spec)
+    cmds[#cmds + 1] = {
+      kind = "text",
+      x = c.label_x,
+      y = spec.y,
+      text = spec.label,
+      size = c.label_size,
+      r = lc[1],
+      g = lc[2],
+      b = lc[3],
+      a = lc[4],
     }
   end
 
+  lbl(c.speed)
+  Widgets.slider_draw(cmds, r.speed, Model.move_speed or 0, c.speed.min, c.speed.max, c.slider_style)
+  lbl(c.sens)
+  Widgets.stepper_draw(cmds, r.sens, Model.look_sens or 0, c.stepper_style, c.sens.fmt)
+  lbl(c.locomotion)
+  local current = (Model.walk and 2) or 1
+  Widgets.dropdown_draw(cmds, widget_state, "loco", r.loco, c.locomotion.options, current, c.dropdown_style)
+end
+
+function M.draw(sw, sh)
+  if not UI then
+    return {}
+  end
+  local cmds = {}
+  stats(cmds)
+  checkboxes(cmds)
+  controls(cmds)
   return cmds
 end
 

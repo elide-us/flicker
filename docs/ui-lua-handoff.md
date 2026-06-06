@@ -110,12 +110,47 @@ a refactor of *where the UI is defined*, not new UI capability.
 > pick/walk) are now rendered by `hud.lua` from the `Model` (`GameScene::hud_model`
 > publishes them); the deep virtual-voxel inspector + 3D wireframes stay Rust.
 >
-> **Still Rust (next):** the settings dropdowns (Rust `SettingsPanel`) and the
-> pause/logo/loading screens — port on the same surface. **Next interactive
-> widgets:** sliders + value boxes (data-model-in shows the current value;
-> results-out reports the new value — the value channel above already supports
-> both). These become the controls for the upcoming lighting / time-of-day work.
-> The original design discussion below is kept for context.
+> **✅ Declarative UI layout (`ui_elements.json`).** Added a fourth boundary
+> channel — `ScriptHost::set_global_json` recursively marshals a JSON tree into a
+> Lua global (objects→tables, arrays→1-indexed). `examples/voxel-cluster/
+> ui_elements.json` is a **named element tree** (`UI.menu.panel`, `.title`,
+> `.buttons`, `.items[]`); `menu.lua` is now **fully data-driven** from it +
+> `Textures` (texture names resolve to ids) — edit the JSON to move/resize/
+> restyle/relabel the menu with no code change (relaunch to apply; re-calling
+> `set_global_json` hot-reloads — a file-watch/keybind is the obvious next add).
+> Validated by `set_global_json_marshals_nested_tree` + the example smoke tests.
+>
+> **✅ Full transition + first component type (this session).** Every screen now
+> reads its layout from `ui_elements.json`. A shared **`modal.lua` component**
+> renders the **menu / pause / confirm** (one script + `UI.modal` style +
+> per-screen `UI.screens.*` instances, selected by `Model.screen`; the Rust
+> scenes are thin shells over a `ModalUi` helper). The **HUD** (`hud.lua`:
+> `UI.hud.stats` styles + `UI.hud.checkboxes`) and the **logo** (`logo.lua`:
+> `UI.logo`) are ported too. This retired the Rust modal/menu/logo drawing from
+> `ui.rs` (`draw_panel`/`draw_button`/`scrim`/`dim`/`wordmark`/`ModalButton` +
+> the modal hit-test); `ui.rs` now mainly bakes the gothic textures the Lua
+> screens draw with. Smoke tests (`modal_script_runs_every_screen`,
+> `hud_script_runs_with_model`, `logo_script_runs`) load the real scripts + JSON
+> and run a frame. **Still Rust:** the **loading** widget (data in `UI.loading`,
+> render port pending — entangled in the boot gate) and the **settings
+> dropdowns** (`SettingsPanel`).
+>
+> **✅ Interactive widgets (`scripts/widgets.lua`).** A reusable immediate-mode
+> toolkit — **slider**, **stepper** (value box), **dropdown** — loaded as the
+> `Widgets` global (`ScriptHost::set_lua_module`). `*_update` / `*_draw` split;
+> values live in the `Model` (two-way), only transient drag/open state is kept
+> script-side. The input contract gained a **held** mouse state (`down`, appended
+> so older scripts are unaffected) for dragging. Demonstrated in the HUD
+> (`UI.hud.controls`): a move-speed **slider**, a sensitivity **stepper**, and a
+> locomotion **dropdown**, each wired to a real config value through the value
+> channel (`hud_script_runs_with_model` now exercises a drag + the dropdown).
+>
+> **Next:** port the **settings dropdowns** to Lua on `Widgets.dropdown` (the
+> last Rust UI screen, plus the loading widget); **keyboard text entry** for the
+> stepper/value box. Then the **lighting controls** (time-of-day slider,
+> moon/season alignment) drop onto this widget set. The JSON layer is the
+> substrate for an eventual editor/tooling pass. The original design discussion
+> below is kept for context.
 
 **The seam problem.** Today Lua is one-way (emit `Rect`/`Text`, read `Toggles`).
 Interactive widgets (buttons, dropdowns) need a **two-way** protocol: Lua

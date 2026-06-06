@@ -2,12 +2,15 @@
 //! "gothic horror" toolkit (Dark Souls-ish palette: tarnished gold and
 //! rust-red lines on silver/black/grey surfaces). The raster art is
 //! generated procedurally (no binary assets, deterministic, tunable, in the
-//! spirit of `build_digit_atlas`). It backs the front-end scenes: the logo
-//! wordmark, the main menu, the loading widget, and the pause modal.
+//! spirit of `build_digit_atlas`). Its main job now is to **bake the gothic
+//! textures** (panel / button / white) that the Lua-driven screens draw with
+//! (`Theme::lua_textures` hands them over by name); it also still renders the
+//! Rust loading widget and the settings dropdowns. The menu / pause / confirm
+//! / logo screens moved to Lua + `ui_elements.json`.
 //!
 //! Example-local for now, but split so it can promote to a reusable
 //! `flicker-ui` later: the palette/theme here is game-specific, while the
-//! canvas, panel/button generators, layout, and hit-testing are generic.
+//! canvas + panel/button generators are generic.
 
 use std::f32::consts::{PI, TAU};
 
@@ -34,18 +37,14 @@ const INK: Rgb = (8, 9, 11);
 
 /// Tarnished-gold title text.
 pub const COL_TITLE: [f32; 4] = [0.83, 0.67, 0.39, 1.0];
-/// Resting button label (cold silver).
+/// Resting label (cold silver) — used by the settings dropdowns.
 const COL_LABEL: [f32; 4] = [0.78, 0.81, 0.86, 1.0];
-/// Hovered button label (lit gold).
+/// Hovered label (lit gold) — used by the settings dropdowns.
 const COL_LABEL_HOVER: [f32; 4] = [0.96, 0.80, 0.42, 1.0];
 /// Hovered button outline (gold).
 const COL_GOLD_LINE: [f32; 4] = [0.85, 0.66, 0.32, 0.95];
-/// Full-screen dim behind a modal (translucent over a frozen game).
-const COL_SCRIM: [f32; 4] = [0.02, 0.02, 0.03, 0.64];
 /// Opaque dark backdrop for a full-screen menu (nothing behind it).
 const COL_BACKDROP: [f32; 4] = [0.035, 0.04, 0.05, 1.0];
-/// Gold sheen overlaid on a hovered button.
-const COL_SHEEN: [f32; 4] = [0.85, 0.66, 0.34, 0.15];
 /// Loading-bar track (recessed dark) and tarnished-gold fill.
 const COL_BAR_TRACK: [f32; 4] = [0.05, 0.06, 0.07, 1.0];
 const COL_BAR_FILL: [f32; 4] = [0.63, 0.49, 0.26, 1.0];
@@ -466,12 +465,6 @@ fn build_button() -> Vec<u8> {
 
 // ===== layout + widgets =====
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum ModalButton {
-    Top,
-    Bottom,
-}
-
 #[derive(Copy, Clone)]
 struct Rect {
     x: f32,
@@ -481,29 +474,26 @@ struct Rect {
 }
 
 impl Rect {
+    /// Point-in-rect test — used by the settings-dropdown hit-testing.
     fn contains(&self, p: Vec2) -> bool {
         p.x >= self.x && p.x <= self.x + self.w && p.y >= self.y && p.y <= self.y + self.h
     }
 }
 
-/// Screen-space placement of a centred panel with two stacked buttons,
-/// recomputed from the viewport each frame so `update` (hit-testing) and
-/// `render` (drawing) agree.
+/// Screen-space placement of the centred gothic panel — used by the loading
+/// widget (the menu/pause/confirm modals are now Lua-driven). Recomputed from
+/// the viewport each frame.
 pub struct ModalLayout {
     panel: Rect,
     title_y: f32,
-    top: Rect,
-    bottom: Rect,
 }
 
-/// Centre the fixed-size panel on the screen and stack its two buttons.
+/// Centre the fixed-size panel on the screen.
 pub fn modal_layout(screen: Vec2) -> ModalLayout {
     let (pw, ph) = (PANEL_W as f32, PANEL_H as f32);
     let px = ((screen.x - pw) * 0.5).round();
     let py = ((screen.y - ph) * 0.5).round();
     let frame = FRAME as f32;
-    let (bw, bh) = (BUTTON_W as f32, BUTTON_H as f32);
-    let bx = px + (pw - bw) * 0.5;
     ModalLayout {
         panel: Rect {
             x: px,
@@ -512,32 +502,6 @@ pub fn modal_layout(screen: Vec2) -> ModalLayout {
             h: ph,
         },
         title_y: py + frame + 22.0,
-        top: Rect {
-            x: bx,
-            y: py + frame + 108.0,
-            w: bw,
-            h: bh,
-        },
-        bottom: Rect {
-            x: bx,
-            y: py + frame + 184.0,
-            w: bw,
-            h: bh,
-        },
-    }
-}
-
-impl ModalLayout {
-    /// Which button (if any) the cursor is over.
-    #[must_use]
-    pub fn hover(&self, cursor: Vec2) -> Option<ModalButton> {
-        if self.top.contains(cursor) {
-            Some(ModalButton::Top)
-        } else if self.bottom.contains(cursor) {
-            Some(ModalButton::Bottom)
-        } else {
-            None
-        }
     }
 }
 
@@ -578,72 +542,9 @@ impl Theme {
         ]
     }
 
-    /// Translucent full-screen scrim — dims a frozen scene behind a modal.
-    pub fn scrim(&self, r: &mut Renderer, screen: Vec2) {
-        r.draw_sprite(self.white, Vec2::ZERO, screen, COL_SCRIM);
-    }
-
     /// Opaque full-screen dark backdrop — for a menu with nothing behind it.
     pub fn backdrop(&self, r: &mut Renderer, screen: Vec2) {
         r.draw_sprite(self.white, Vec2::ZERO, screen, COL_BACKDROP);
-    }
-
-    /// A light full-screen black dim at `alpha` (0..1) — keeps the scene behind
-    /// visible (e.g. to preview a resolution change before confirming it).
-    pub fn dim(&self, r: &mut Renderer, screen: Vec2, alpha: f32) {
-        r.draw_sprite(self.white, Vec2::ZERO, screen, [0.0, 0.0, 0.0, alpha]);
-    }
-
-    /// Draw the gothic panel: `title` in the cartouche and two labelled
-    /// buttons (`labels.0` over `labels.1`) with hover lighting. The caller
-    /// draws the backdrop/scrim first (see [`Self::scrim`] / [`Self::backdrop`]).
-    pub fn draw_panel(
-        &self,
-        r: &mut Renderer,
-        layout: &ModalLayout,
-        title: &str,
-        subtitle: Option<&str>,
-        labels: (&str, &str),
-        hover: Option<ModalButton>,
-    ) {
-        r.draw_sprite(
-            self.panel,
-            Vec2::new(layout.panel.x, layout.panel.y),
-            Vec2::new(layout.panel.w, layout.panel.h),
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        centered_text(r, title, layout.panel, layout.title_y, 34.0, COL_TITLE);
-        if let Some(sub) = subtitle {
-            centered_text(r, sub, layout.panel, layout.title_y + 40.0, 18.0, COL_LABEL);
-        }
-        self.draw_button(r, &layout.top, labels.0, hover == Some(ModalButton::Top));
-        self.draw_button(
-            r,
-            &layout.bottom,
-            labels.1,
-            hover == Some(ModalButton::Bottom),
-        );
-    }
-
-    fn draw_button(&self, r: &mut Renderer, rect: &Rect, label: &str, hovered: bool) {
-        r.draw_sprite(
-            self.button,
-            Vec2::new(rect.x, rect.y),
-            Vec2::new(rect.w, rect.h),
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        if hovered {
-            r.draw_sprite(
-                self.white,
-                Vec2::new(rect.x, rect.y),
-                Vec2::new(rect.w, rect.h),
-                COL_SHEEN,
-            );
-            outline(r, self.white, rect, 2.0, COL_GOLD_LINE);
-        }
-        let col = if hovered { COL_LABEL_HOVER } else { COL_LABEL };
-        let size = 22.0;
-        centered_text(r, label, *rect, rect.y + (rect.h - size) * 0.5, size, col);
     }
 
     /// Draw the loading screen: opaque backdrop, the gothic panel titled
@@ -684,26 +585,6 @@ impl Theme {
             );
         }
         outline(r, self.white, &bar, 2.0, COL_GOLD_LINE);
-    }
-
-    /// Draw a large centred wordmark (the logo splash) over the current
-    /// backdrop — no panel.
-    pub fn wordmark(&self, r: &mut Renderer, screen: Vec2, text: &str) {
-        let size = 72.0;
-        let container = Rect {
-            x: 0.0,
-            y: 0.0,
-            w: screen.x,
-            h: screen.y,
-        };
-        centered_text(
-            r,
-            text,
-            container,
-            screen.y * 0.5 - size * 0.5,
-            size,
-            COL_TITLE,
-        );
     }
 }
 

@@ -20,8 +20,12 @@
 //! Three channels, all in named-value / plain-data terms:
 //!
 //! 1. **Input** (engine → script): the interaction snapshot — mouse position,
-//!    the left-click *edge*, and screen size — passed to
-//!    [`update`](ScriptHost::update) / [`draw`](ScriptHost::draw).
+//!    the left-click *edge* (`clicked`) and *held* state (`down`, for dragging),
+//!    and screen size — passed to [`update`](ScriptHost::update) /
+//!    [`draw`](ScriptHost::draw). (The host may also bind shared Lua library
+//!    modules via [`set_lua_module`](ScriptHost::set_lua_module) — e.g. a
+//!    reusable widgets toolkit — which is code, not data, but still confined to
+//!    the VM.)
 //! 2. **Data model** (engine → script): a [`ValueMap`] of named engine values
 //!    (fps, positions, counts, a setting's current value, …) published each
 //!    frame via [`ScriptHost::set_model`] and read by the script as the `Model`
@@ -314,13 +318,50 @@ impl ScriptHost {
         Ok(())
     }
 
-    /// Run the script's per-frame `update`, feeding it the current mouse
-    /// position, whether the left button was *pressed this frame* (the click
-    /// edge), and the screen size in pixels (so scripts can lay out
-    /// responsively). Returns the script's named results ([`ValueMap`]) — which
-    /// double as toggles, momentary actions (e.g. `start = true` only on the
-    /// click frame), and widget values (a slider's number). Engine data the
-    /// script reads comes from the `Model` global ([`Self::set_model`]).
+    /// Expose a JSON value to the script as the global `name`, recursively
+    /// marshalled into Lua (objects → tables, arrays → 1-indexed tables,
+    /// numbers/bools/strings → their Lua equivalents, null → nil). This is the
+    /// **layout / config** inbound channel: it carries static, plain-data trees
+    /// like `ui_elements.json` — still only data (no handles), so it honours the
+    /// [boundary contract](crate#boundary-contract-engine--script-—-strictly-enforced).
+    /// Typically called once at load (call again to hot-reload). Example:
+    /// `host.set_global_json("UI", &serde_json::from_str(text)?)` lets scripts
+    /// read `UI.menu.panel.w`.
+    pub fn set_global_json(
+        &self,
+        name: &str,
+        value: &serde_json::Value,
+    ) -> Result<(), ScriptError> {
+        let marshalled = json_to_lua(&self.lua, value)?;
+        self.lua.globals().set(name, marshalled)?;
+        Ok(())
+    }
+
+    /// Evaluate a shared Lua module (`source` must return a value, typically a
+    /// table) and bind it to the global `name`, so screens can use it like a
+    /// library — e.g. a reusable widgets toolkit (`Widgets.slider(...)`). The
+    /// module is plain Lua and stays inside the VM, so it doesn't widen the
+    /// data boundary. `chunk_name` labels it in errors. Call once at load.
+    pub fn set_lua_module(
+        &self,
+        name: &str,
+        source: &str,
+        chunk_name: &str,
+    ) -> Result<(), ScriptError> {
+        let module: mlua::Value = self.lua.load(source).set_name(chunk_name).eval()?;
+        self.lua.globals().set(name, module)?;
+        Ok(())
+    }
+
+    /// Run the script's per-frame `update`, calling the Lua
+    /// `update(mouse_x, mouse_y, clicked, sw, sh, down)`: the cursor position,
+    /// the left-click *edge* (`clicked`), the screen size, and the *held* button
+    /// state (`down`, for dragging — sliders etc.). `down` is last so older
+    /// scripts that take only `(mx, my, clicked, sw, sh)` keep working. Returns
+    /// the script's named results ([`ValueMap`]) — toggles, momentary actions
+    /// (e.g. `start = true` only on the click frame), and widget values (a
+    /// slider's number). Engine data the script reads comes from the `Model`
+    /// global ([`Self::set_model`]).
     pub fn update(
         &self,
         input: &InputState,
@@ -335,6 +376,7 @@ impl ScriptHost {
             input.mouse_left_pressed,
             screen_w,
             screen_h,
+            input.mouse_left,
         ))?;
 
         let mut map = HashMap::new();
@@ -426,6 +468,33 @@ fn read_align(cmd: &Table) -> mlua::Result<TextAlign> {
     Ok(match cmd.get::<Option<String>>("align")?.as_deref() {
         Some("center") => TextAlign::Center,
         _ => TextAlign::Left,
+    })
+}
+
+/// Recursively convert a JSON value into a Lua value (used by
+/// [`ScriptHost::set_global_json`]). Arrays become 1-indexed tables so scripts
+/// read `color[1]`; objects become string-keyed tables.
+fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value> {
+    use serde_json::Value as J;
+    Ok(match value {
+        J::Null => mlua::Value::Nil,
+        J::Bool(b) => mlua::Value::Boolean(*b),
+        J::Number(n) => mlua::Value::Number(n.as_f64().unwrap_or(0.0)),
+        J::String(s) => mlua::Value::String(lua.create_string(s)?),
+        J::Array(items) => {
+            let table = lua.create_table()?;
+            for (i, item) in items.iter().enumerate() {
+                table.set(i + 1, json_to_lua(lua, item)?)?;
+            }
+            mlua::Value::Table(table)
+        }
+        J::Object(fields) => {
+            let table = lua.create_table()?;
+            for (key, val) in fields {
+                table.set(key.as_str(), json_to_lua(lua, val)?)?;
+            }
+            mlua::Value::Table(table)
+        }
     })
 }
 
@@ -622,5 +691,42 @@ mod tests {
         assert_eq!(m.text("s"), Some("x"));
         assert_eq!(m.number("on"), None);
         assert!(!m.is_on("n"));
+    }
+
+    // Reads a nested JSON layout (objects, an array color, mixed types) back
+    // out, validating set_global_json marshals the whole tree faithfully.
+    const UI_SCRIPT: &str = r#"
+        local M = {}
+        function M.update(mx, my, clicked, sw, sh)
+            return {
+                w = UI.menu.panel.w,
+                label = UI.menu.start.label,
+                title_r = UI.menu.title.color[1],
+                title_a = UI.menu.title.color[4],
+            }
+        end
+        function M.draw(sw, sh) return {} end
+        return M
+    "#;
+
+    #[test]
+    fn set_global_json_marshals_nested_tree() {
+        let host = ScriptHost::new(UI_SCRIPT, "ui").unwrap();
+        let json = serde_json::json!({
+            "menu": {
+                "panel": { "w": 520, "h": 384 },
+                "title": { "color": [0.83, 0.67, 0.39, 1.0] },
+                "start": { "label": "START" },
+            }
+        });
+        host.set_global_json("UI", &json).unwrap();
+
+        let out = host
+            .update(&input_at(0.0, 0.0, false), 800.0, 600.0)
+            .unwrap();
+        assert_eq!(out.number("w"), Some(520.0)); // nested object number
+        assert_eq!(out.text("label"), Some("START")); // nested object string
+        assert_eq!(out.number("title_r"), Some(0.83)); // array is 1-indexed
+        assert_eq!(out.number("title_a"), Some(1.0)); // 4th array element
     }
 }

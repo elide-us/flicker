@@ -91,16 +91,53 @@ reserved for gameplay bars. Drawn at ~half the menu's scale.
 
 ## The Lua UI layer + boundary contract
 
-UI logic increasingly lives in Lua (`flicker-script` + `scripts/*.lua`): Lua owns
-layout / labels / interaction; the engine owns rendering and data. Built so far:
-the in-game debug **checkboxes** *and* the **stat readouts** (`scripts/hud.lua`)
-and the **main menu** (`scripts/menu.lua`). Still Rust: logo / loading / pause /
-confirm / the settings dropdowns (ported next, on the same surface).
+Almost all UI now lives in Lua (`flicker-script` + `scripts/*.lua`): Lua owns
+layout / labels / interaction; the engine owns rendering and data. Every screen
+reads its layout from `ui_elements.json` (the `UI` global). Ported:
+
+- **`scripts/modal.lua`** — one shared gothic-modal **component** renders the
+  **menu**, **pause**, and **confirm** screens, differing only by their
+  `UI.screens.*` instance (overlay / title / button items) + the `Model.screen`
+  the scene selects (and `Model.subtitle` for the confirm countdown). The Rust
+  scenes (`MenuScene` / `PauseScene` / `ConfirmDisplayScene`) are thin shells
+  over a shared `ModalUi` helper — they keep only their transitions.
+- **`scripts/hud.lua`** — the in-game debug **stat readouts** (styled from
+  `UI.hud.stats`, content formatted from `Model`) + the feature **checkboxes**
+  (`UI.hud.checkboxes`).
+- **`scripts/logo.lua`** — the logo splash (`UI.logo`).
+
+This retired the Rust modal/menu/logo drawing from `ui.rs` (`draw_panel`,
+`draw_button`, `scrim`, `dim`, `wordmark`, `ModalButton`, the modal hit-test);
+`ui.rs` now mainly **bakes the gothic textures** the Lua screens draw with
+(`Theme::lua_textures` hands them over by name).
+
+### Interactive widgets (`scripts/widgets.lua`)
+
+A reusable immediate-mode widget toolkit — **slider**, **stepper** (numeric
+value box), **dropdown** — loaded into every screen's VM as the `Widgets` global
+(`ScriptHost::set_lua_module`). Each widget splits into `*_update` (hit-test +
+interaction, from the script's `update`) and `*_draw` (emit commands). Widget
+*values* are not stored in Lua — they live in the engine `Model` (two-way): the
+update returns the new value, the host applies it, and next frame the `Model`
+carries it back for the draw. Only transient interaction (a slider's drag flag,
+a dropdown's open flag) is kept script-side, keyed by widget id. Styles come
+from JSON. The slider needs the **held** mouse state — `update` now also gets
+`down` (appended after the existing args, so older scripts are unaffected).
+
+These are demonstrated in the in-game HUD (`UI.hud.controls`): a **move-speed
+slider**, a **sensitivity stepper**, and a **locomotion dropdown**, each wired
+to a real config value through the value channel. They are the building blocks
+for the upcoming lighting controls (time-of-day slider, moon/season alignment).
+
+**Still Rust:** the **loading** widget (data in `UI.loading`, render port pending
+— entangled in the game-boot gate) and the **settings dropdowns**
+(`SettingsPanel`) — the latter can now port to Lua on the `Widgets.dropdown`.
+Keyboard text entry for the stepper/value box is a planned enhancement.
 
 **The boundary is strict and is the project's only Lua↔Rust seam.** `mlua` is
 confined to `flicker-script`; no other crate depends on it. The contract is a
 small set of plain-data types in that crate — nothing else crosses, never a
-renderer handle or GPU resource. Three channels, all named-value / plain-data:
+renderer handle or GPU resource. Four channels, all named-value / plain-data:
 
 - **Input** (engine → script): the interaction snapshot (mouse, click edge,
   screen size), passed to `update`/`draw`.
@@ -110,19 +147,30 @@ renderer handle or GPU resource. Three channels, all named-value / plain-data:
   how `hud.lua` renders live stats and how a slider will show its current value.
   Sibling: the static `Textures` global (`set_texture_ids`) — name → engine
   texture id, for `sprite` draw commands.
+- **Layout / config** (engine → script): a JSON tree exposed as a global via
+  `ScriptHost::set_global_json` (objects → tables, arrays → 1-indexed tables).
+  `ui_elements.json` is the first use: a **named element tree** (`UI.menu.panel.w`,
+  `UI.menu.title.color`, `UI.menu.items[]`) the host parses and hands to the
+  scripts, so a screen reads its layout from data instead of hardcoded constants.
+  `menu.lua` is fully driven this way — edit the JSON to move / resize / restyle
+  the menu (relaunch to apply; calling `set_global_json` again hot-reloads). It's
+  the "describe the UI as data" layer — not HTML/CSS, but the same idea, kept
+  deliberately thin.
 - **Results + draw** (script → engine): `update` returns a `ValueMap` of named
   results (toggles, momentary actions, widget values); `draw` returns
   `HudCommand`s (`rect`/`sprite`/`text`, each with a painter's-order `layer` and
   optional centre alignment) that the consumer's shared `render_hud` turns into
   draw calls.
 
-`Value` (bool / number / text) is the only currency in either direction. The
-contract is **validated at build time** by `flicker-script`'s `model_round_trip`
-test and the example's `script_smoke` tests (which load the real scripts and run
-a frame). That in-Rust validation is why **no external binding-generation /
-codegen step is needed** while the boundary stays Rust-internal; if Lua scripts
-ever version or ship independently of the engine, revisit with a generated
-contract + CI check (parked).
+`Value` (bool / number / text) is the only scalar currency; the JSON channel adds
+nested tables/arrays of those. The contract is **validated at build time** by
+`flicker-script`'s `model_round_trip` + `set_global_json_marshals_nested_tree`
+tests and the example's `script_smoke` tests (which load the real scripts *and*
+`ui_elements.json` and run a frame — so a malformed layout or a name the script
+reads but the data lacks fails the build). That in-Rust validation is why **no
+external binding-generation / codegen step is needed** while the boundary stays
+Rust-internal; if Lua scripts ever version or ship independently of the engine,
+revisit with a generated contract + CI check (parked).
 
 The `ui.rs` widgets remain example-local; the generic machinery (canvas,
 panel/button/dropdown, layout, hit-testing) can still promote to a `flicker-ui`
