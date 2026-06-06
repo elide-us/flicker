@@ -169,6 +169,11 @@ struct GameScene {
     /// Mirrors the script's `"lod_billboards"` checkbox: draw a per-cluster
     /// LOD-digit billboard on the navmesh surface at the cluster centre.
     lod_billboards_on: bool,
+    /// Mirrors the script's `"celestial_paths"` checkbox: draw the sun's and
+    /// moon's full orbital arcs (wireframe rings) plus a marker at each body's
+    /// current position, so you can see when the sliders bring them into
+    /// alignment for "The Advent".
+    celestial_paths_on: bool,
     /// Locomotion mode, mirroring the script's `"surface_walk"` checkbox.
     /// `false` = fly mode: free 6-DOF, no nav generated. `true` =
     /// surface-walk mode, which generates the LOD2 nav surface around the
@@ -259,6 +264,7 @@ impl Default for GameScene {
             navmesh_segments: Vec::new(),
             camera_lod_on: false,
             lod_billboards_on: false,
+            celestial_paths_on: false,
             locomotion_walk: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
@@ -1409,6 +1415,7 @@ impl Scene for GameScene {
                     self.navmesh_on = toggles.is_on("navmesh");
                     self.camera_lod_on = toggles.is_on("camera_lod");
                     self.lod_billboards_on = toggles.is_on("lod_billboards");
+                    self.celestial_paths_on = toggles.is_on("celestial_paths");
 
                     // Interactive HUD controls report their values back: the
                     // move-speed slider and the sensitivity stepper feed the
@@ -1622,6 +1629,30 @@ impl Scene for GameScene {
             renderer.draw_lines(&self.navmesh_segments, [1.0, 0.0, 1.0, 1.0]);
         }
 
+        // Celestial paths: the sun's and moon's full orbital arcs as wireframe
+        // rings around the camera, each with a cross marker at the body's
+        // current position. Watch the moon ring + marker converge onto the
+        // sun's as the moon phase nears new (0/4 wk) — the alignment that
+        // makes "The Advent". Depth-tested, so terrain occludes the parts of
+        // the rings dipping below the horizon. Built from the same
+        // `sun_direction`/`moon_direction` that drive the lighting.
+        if self.celestial_paths_on {
+            const ARC_R: f32 = 4000.0;
+            let eye = self.position;
+            let sun_ring = celestial_arc(eye, ARC_R, |t| sun_direction(t, self.year_month));
+            let moon_ring = celestial_arc(eye, ARC_R, |t| {
+                moon_direction(t, self.moon_phase, self.year_month)
+            });
+            renderer.draw_lines(&sun_ring, [0.95, 0.66, 0.28, 0.85]); // warm amber
+            renderer.draw_lines(&moon_ring, [0.50, 0.60, 0.90, 0.85]); // cool blue
+
+            let sun_now = eye + sun_direction(self.time_of_day, self.year_month) * ARC_R;
+            let moon_now =
+                eye + moon_direction(self.time_of_day, self.moon_phase, self.year_month) * ARC_R;
+            renderer.draw_lines(&cross_marker(sun_now, 90.0), [1.0, 0.85, 0.45, 1.0]);
+            renderer.draw_lines(&cross_marker(moon_now, 90.0), [0.72, 0.84, 1.0, 1.0]);
+        }
+
         // LOD billboards: a digit per cluster, sitting on the navmesh surface
         // at the cluster centre, showing that cluster's current LOD. World-
         // space and depth-tested, so terrain in front occludes them.
@@ -1744,6 +1775,61 @@ impl Scene for GameScene {
     }
 }
 
+/// Seasonal tilt of the celestial arc: `0` at the equinoxes, leaning to
+/// `±0.25` at the solstices (`-1` deep winter at months `0`/`12`, `+1` high
+/// summer at month `6`). Kept subtle so the arc *leans*, never flips.
+fn season_tilt(year_month: f32) -> f32 {
+    use std::f32::consts::TAU;
+    0.25 * -((year_month / 12.0) * TAU).cos()
+}
+
+/// Direction toward the sun for a time of day + season. A circle in the
+/// east–up–west–down plane, phased so 06:00 is the eastern horizon, noon is
+/// overhead, 18:00 the western horizon. **The shared source of truth** for the
+/// lighting (`compute_scene`) and the celestial-path overlay, so the drawn arc
+/// and the actual light can never disagree.
+fn sun_direction(time_of_day: f32, year_month: f32) -> Vec3 {
+    use std::f32::consts::TAU;
+    let a = ((time_of_day - 6.0) / 24.0) * TAU;
+    Vec3::new(a.cos(), a.sin(), season_tilt(year_month)).normalize()
+}
+
+/// Direction toward the moon: the sun's arc offset by the lunar phase (one
+/// full turn per `0..4`-week cycle), with a slight opposite seasonal lean. At
+/// phase `0`/`4` (new moon) it coincides with the sun — the alignment that
+/// makes "The Advent".
+fn moon_direction(time_of_day: f32, moon_phase: f32, year_month: f32) -> Vec3 {
+    use std::f32::consts::TAU;
+    let a = ((time_of_day - 6.0) / 24.0) * TAU + (moon_phase / 4.0) * TAU;
+    Vec3::new(a.cos(), a.sin(), -season_tilt(year_month) * 0.5).normalize()
+}
+
+/// Sample a body's direction across a full day (`dir_at(time_of_day)`) into a
+/// closed ring of world-space line segments at a fixed radius around `eye` —
+/// the wireframe orbit the celestial-path overlay draws. Anchored to the eye
+/// so it reads as a sky dome; depth-testing clips the parts behind terrain.
+fn celestial_arc(eye: Vec3, radius: f32, dir_at: impl Fn(f32) -> Vec3) -> Vec<(Vec3, Vec3)> {
+    const STEPS: usize = 96;
+    let mut segs = Vec::with_capacity(STEPS);
+    let mut prev = eye + dir_at(0.0) * radius;
+    for i in 1..=STEPS {
+        let t = i as f32 / STEPS as f32 * 24.0;
+        let p = eye + dir_at(t) * radius;
+        segs.push((prev, p));
+        prev = p;
+    }
+    segs
+}
+
+/// A small 3-axis cross marking a body's current position on its arc.
+fn cross_marker(center: Vec3, half: f32) -> [(Vec3, Vec3); 3] {
+    [
+        (center - Vec3::X * half, center + Vec3::X * half),
+        (center - Vec3::Y * half, center + Vec3::Y * half),
+        (center - Vec3::Z * half, center + Vec3::Z * half),
+    ]
+}
+
 /// Map the three day/night-cycle controls to the frame-global
 /// [`SceneLighting`] the mesh shader consumes. A pure function of the slider
 /// values — no per-frame state — so scrubbing a slider *is* the whole
@@ -1762,15 +1848,8 @@ impl Scene for GameScene {
 fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLighting {
     use std::f32::consts::TAU;
 
-    // Seasonal tilt of the arc: -1 at deep winter (months 0/12), +1 at high
-    // summer (month 6). Kept subtle so it reads as a lean, not a flip.
-    let season = -((year_month / 12.0) * TAU).cos();
-    let tilt = 0.25 * season;
-
-    // Sun: a circle in the east–up–west–down plane, phased so 06:00 is the
-    // eastern horizon, 12:00 overhead, 18:00 the western horizon.
-    let sun_a = ((time_of_day - 6.0) / 24.0) * TAU;
-    let sun_dir = Vec3::new(sun_a.cos(), sun_a.sin(), tilt).normalize();
+    // Sun position + how high it sits drives intensity and warmth.
+    let sun_dir = sun_direction(time_of_day, year_month);
     let sun_up = sun_dir.y.max(0.0); // 0 at/below horizon → 1 overhead
     let sun_amt = (sun_dir.y * 3.0).clamp(0.0, 1.0); // short twilight ramp
                                                      // Warm at the horizon (dawn/dusk), white when high.
@@ -1778,10 +1857,9 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLig
     let sun_hue = Vec3::new(1.0, 0.98, 0.92).lerp(Vec3::new(1.0, 0.52, 0.22), warmth * 0.85);
     let sun_color = sun_hue * (sun_amt * 0.95);
 
-    // Moon: same arc, offset by the phase; brightness is the lit fraction of
-    // the disc (0 at new moon, 1 at full) gated by how high it sits.
-    let moon_a = sun_a + (moon_phase / 4.0) * TAU;
-    let moon_dir = Vec3::new(moon_a.cos(), moon_a.sin(), -tilt * 0.5).normalize();
+    // Moon: same arc offset by the phase; brightness is the lit fraction of the
+    // disc (0 at new moon, 1 at full) gated by how high it sits.
+    let moon_dir = moon_direction(time_of_day, moon_phase, year_month);
     let moon_amt = (moon_dir.y * 3.0).clamp(0.0, 1.0);
     let illum = 0.5 - 0.5 * ((moon_phase / 4.0) * TAU).cos();
     let moon_color = Vec3::new(0.34, 0.42, 0.66) * (moon_amt * illum * 0.55);

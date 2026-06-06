@@ -64,15 +64,27 @@ mood events** (Part 3).
   calls it each active frame. Validated by `sky_pipeline_compiles_shader`.
 - **Cycle sliders doubled** (`UI.hud.lighting`): `unit` 96→192, `track_h`
   16→32, `handle_w` 12→24, text bumped — ruler ticks/handle scale off the track.
+- **Celestial-path overlay** ("The Advent" alignment viz): a `"celestial_paths"`
+  HUD checkbox draws the sun's and moon's full orbital arcs as wireframe rings
+  (`celestial_arc` + `draw_lines`, depth-tested) plus a `cross_marker` at each
+  body's current position. The moon ring converges onto the sun's as the phase
+  nears new (0/4 wk) = eclipse alignment. Subsumes the separate "light-source
+  markers" idea below. The sun/moon geometry was refactored into shared
+  `season_tilt` / `sun_direction` / `moon_direction` helpers so the drawn arc
+  and the actual light are one source of truth.
+
+- **Procedural sun + moon discs + eclipse** (all in `sky.wgsl`, no asset): a
+  flat sun disc tinted by `sun_color` (gone at night) and a moon disc with an
+  **analytic phase terminator** — the visible sphere point's outward normal lit
+  by the sun, so the moon waxes/wanes as the phase slider moves. Both the same
+  angular size (`disc_r = 0.040`); the moon is composited last so it **eclipses
+  the sun** when aligned, with a corona ring (`eclipse` gated on
+  `dot(sun_dir, moon_dir)` + sun above horizon). **Emergent "right time of year":**
+  the season tilt offsets the moon's arc from the sun's except near the
+  equinoxes, so a *total* eclipse needs `year ≈ 3 or 9` **and** `moon ≈ 0/4`
+  (new) with the sun up — the Advent recipe, for free.
 
 **Next increments the user flagged (not yet built):**
-- **Procedural sun/moon discs with moon phase** — generated *in the sky shader*
-  (no asset): a bright sun disc (`smoothstep` on `dot(ray, sun_dir)`) and a moon
-  disc with a phase terminator cut from the sun–moon angle. The natural next
-  step now that the sky pass exists.
-- **Light-source debug markers** — a HUD checkbox that draws a cross at
-  `camera_pos + sun_dir·R` / `+ moon_dir·R` via `draw_lines` (warm/cool), to
-  verify the lighting direction. Small.
 - **Scene selector** (orthogonal, its own track): `--bake <name>` →
   `bake/<name>/…`, a `scenes` dropdown, and a source-reload path
   (`source` swap + `generation` bump + `submit_field_jobs`).

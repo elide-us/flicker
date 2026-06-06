@@ -99,7 +99,8 @@
         { "key": "corner_arrows", "label": "Corner-vector arrows" },
         { "key": "navmesh", "label": "Navmesh wireframe" },
         { "key": "camera_lod", "label": "Camera-driven LOD" },
-        { "key": "lod_billboards", "label": "LOD billboards" }
+        { "key": "lod_billboards", "label": "LOD billboards" },
+        { "key": "celestial_paths", "label": "Celestial paths (Advent)" }
       ]
     },
     "controls": {
