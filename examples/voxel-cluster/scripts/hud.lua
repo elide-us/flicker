@@ -29,6 +29,56 @@ local function checkbox_items()
   return UI.hud.checkboxes.items
 end
 
+-- Day/night cycle panel (lower-right). Lays out a 3-unit-wide grid, two rows:
+-- row 1 = Sun (1 unit) + Moon (2 units); row 2 = Year (full 3-unit span).
+-- Anchored to the bottom-right via the screen size so it tracks resolution.
+-- Returns the config plus the three slider rects, the backdrop panel rect, and
+-- the label anchor points.
+local function lighting_rects(sw, sh)
+  local L = UI.hud.lighting
+  local unit, gap, pad, th = L.unit, L.gap, L.pad, L.track_h
+  local total_w = unit * 3 + gap
+  local panel_w = total_w + pad * 2
+  local label_h = L.label_size + 6
+  -- Vertical stack inside the content box (offsets from the content top).
+  local row1_label_dy = L.header_h
+  local row1_track_dy = row1_label_dy + label_h
+  local row2_label_dy = row1_track_dy + th + L.row_gap
+  local row2_track_dy = row2_label_dy + label_h
+  local panel_h = row2_track_dy + th + pad * 2
+  local px = sw - L.margin_x - panel_w
+  local py = sh - L.margin_y - panel_h
+  local cx, cy = px + pad, py + pad
+  local sun = { x = cx, y = cy + row1_track_dy, w = unit, h = th }
+  local moon = { x = cx + unit + gap, y = cy + row1_track_dy, w = unit * 2, h = th }
+  local year = { x = cx, y = cy + row2_track_dy, w = total_w, h = th }
+  local panel = { x = px, y = py, w = panel_w, h = panel_h }
+  local labels = {
+    header = { x = cx, y = cy },
+    sun = { x = sun.x, y = cy + row1_label_dy },
+    moon = { x = moon.x, y = cy + row1_label_dy },
+    year = { x = year.x, y = cy + row2_label_dy },
+  }
+  return L, sun, moon, year, panel, labels
+end
+
+local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+local MOON_PHASES = { "New", "Waxing", "Full", "Waning" }
+
+local function fmt_clock(t)
+  local hh = math.floor(t) % 24
+  local mm = math.floor((t - math.floor(t)) * 60)
+  return string.format("%02d:%02d", hh, mm)
+end
+
+local function fmt_month(m)
+  return MONTHS[math.floor(m) % 12 + 1]
+end
+
+local function fmt_moon(w)
+  return string.format("%s · wk %.1f", MOON_PHASES[math.floor(w) % 4 + 1], w)
+end
+
 -- The i-th checkbox's clickable square, from the JSON geometry.
 local function box_rect(i)
   local cb = UI.hud.checkboxes
@@ -85,6 +135,23 @@ function M.update(mx, my, clicked, sw, sh, down)
     local current = (Model.walk and 2) or 1
     states.locomotion =
       Widgets.dropdown_update(widget_state, "loco", r.loco, mx, my, clicked, #c.locomotion.options, current)
+
+    -- Day/night cycle sliders (lower-right): sun (time of day), moon (phase),
+    -- year (season). Wide tracks + absolute drag, so a click/touch sets the
+    -- handle where the cursor is — fine control, no big jumps.
+    if UI.hud.lighting then
+      local L, sun, moon, year, panel = lighting_rects(sw, sh)
+      states.time_of_day =
+        Widgets.slider_update(widget_state, "sun", sun, mx, my, clicked, down, Model.time_of_day or 12, L.sun.min, L.sun.max)
+      states.moon_phase =
+        Widgets.slider_update(widget_state, "moon", moon, mx, my, clicked, down, Model.moon_phase or 0, L.moon.min, L.moon.max)
+      states.year_month =
+        Widgets.slider_update(widget_state, "year", year, mx, my, clicked, down, Model.year_month or 6, L.year.min, L.year.max)
+      -- Tell the engine the pointer is over this panel so it suppresses the
+      -- world-pick on the same press (the static top-left HUD guard in Rust
+      -- doesn't know this screen-relative, lower-right panel).
+      states.lighting_capture = point_in(mx, my, panel)
+    end
   end
   return states
 end
@@ -243,6 +310,68 @@ local function controls(cmds)
   Widgets.dropdown_draw(cmds, widget_state, "loco", r.loco, c.locomotion.options, current, c.dropdown_style)
 end
 
+-- Day/night cycle panel: a backdrop, a header, and three ruler sliders (Sun /
+-- Moon / Year) with a live value readout, anchored to the lower-right corner.
+-- Values come from the Model; the host applies the returned values next frame.
+local function lighting(cmds, sw, sh)
+  if not (Model and Widgets and UI.hud.lighting) then
+    return
+  end
+  local L, sun, moon, year, panel, labels = lighting_rects(sw, sh)
+  local st = L.style
+
+  local bg = L.backdrop
+  cmds[#cmds + 1] =
+    { kind = "rect", x = panel.x, y = panel.y, w = panel.w, h = panel.h, r = bg[1], g = bg[2], b = bg[3], a = bg[4] }
+
+  local h = L.header
+  cmds[#cmds + 1] = {
+    kind = "text",
+    x = labels.header.x,
+    y = labels.header.y,
+    text = h.text,
+    size = h.size,
+    r = h.color[1],
+    g = h.color[2],
+    b = h.color[3],
+    a = h.color[4],
+  }
+
+  -- One labelled, ruled slider per cycle control. The name sits at the track's
+  -- left edge; the formatted value is centred over the track.
+  local function row(anchor, name, value, fmt, r, spec)
+    local lc, vc = L.label_color, L.value_color
+    cmds[#cmds + 1] = {
+      kind = "text",
+      x = anchor.x,
+      y = anchor.y,
+      text = name,
+      size = L.label_size,
+      r = lc[1],
+      g = lc[2],
+      b = lc[3],
+      a = lc[4],
+    }
+    cmds[#cmds + 1] = {
+      kind = "text",
+      x = r.x + r.w * 0.5,
+      y = anchor.y,
+      text = fmt(value),
+      size = L.label_size,
+      align = "center",
+      r = vc[1],
+      g = vc[2],
+      b = vc[3],
+      a = vc[4],
+    }
+    Widgets.slider_draw(cmds, r, value, spec.min, spec.max, st, spec.ticks)
+  end
+
+  row(labels.sun, L.sun.label, Model.time_of_day or 12, fmt_clock, sun, L.sun)
+  row(labels.moon, L.moon.label, Model.moon_phase or 0, fmt_moon, moon, L.moon)
+  row(labels.year, L.year.label, Model.year_month or 6, fmt_month, year, L.year)
+end
+
 function M.draw(sw, sh)
   if not UI then
     return {}
@@ -251,6 +380,7 @@ function M.draw(sw, sh)
   stats(cmds)
   checkboxes(cmds)
   controls(cmds)
+  lighting(cmds, sw, sh)
   return cmds
 end
 

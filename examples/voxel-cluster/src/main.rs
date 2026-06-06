@@ -44,8 +44,8 @@ use std::time::Duration;
 use anyhow::Result;
 use flicker::app::{run, Action, Bindings, ControlConfig, InputState, Key};
 use flicker::render::{
-    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
-    Vec2, Vec3,
+    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
+    TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{HudCommand, ScriptHost, TextAlign, ValueMap};
@@ -124,6 +124,19 @@ struct GameScene {
 
     bindings: Bindings,
     config: ControlConfig,
+
+    /// Day/night cycle controls, scrubbed by the three lower-right sliders
+    /// (`scripts/hud.lua` → `UI.hud.lighting`) and fed back through the value
+    /// channel. Together they drive the frame-global `SceneLighting`
+    /// (`compute_scene`) the mesh shader uses — sun/moon directions + colours,
+    /// ambient, and (later slices) fog + grade + the eclipse.
+    ///
+    /// `time_of_day` in hours `0..24` (sun arc); `moon_phase` in weeks `0..4`
+    /// (one lunar month — phase offset from the sun); `year_month` in months
+    /// `0..12` (seasonal tilt of the sun arc + the eclipse "time of year").
+    time_of_day: f32,
+    moon_phase: f32,
+    year_month: f32,
 
     /// The scripted HUD. Owns the three debug-toggle checkboxes; the
     /// fields below are refreshed from it each frame. `None` only if
@@ -233,6 +246,11 @@ impl Default for GameScene {
             last_look_cursor: None,
             bindings: Bindings::wasd(),
             config: ControlConfig::default(),
+            // Mid-morning, a young waxing moon, early summer — an angled warm
+            // sun that shows the matte shading well the moment the demo opens.
+            time_of_day: 9.5,
+            moon_phase: 1.0,
+            year_month: 6.0,
             script: None,
             wireframe_on: false,
             corner_arrows_on: false,
@@ -625,7 +643,11 @@ impl GameScene {
         if !source.is_empty() {
             return;
         }
-        let material = Material::new(1, 1, 0).expect("grey material is in-range");
+        // Index 10 = STONE: a neutral matte surface (see `mesh.wgsl` palette)
+        // chosen so the day/night lighting, fog, and colour grading read
+        // cleanly against it. Was index 1 (DEEP_WATER navy), which biased the
+        // scene blue and swallowed dim light.
+        let material = Material::new(10, 10, 0).expect("stone material is in-range");
         let bake_dir = bake_dir_path();
         let lod0_ids: Vec<ClusterId> = (0..FIELD_DIM)
             .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(0, x, 0, z)))
@@ -1255,6 +1277,9 @@ impl GameScene {
             .with("look_sens", self.config.look_sensitivity)
             .with("invert_y", self.config.invert_pitch)
             .with("invert_x", self.config.invert_yaw)
+            .with("time_of_day", self.time_of_day)
+            .with("moon_phase", self.moon_phase)
+            .with("year_month", self.year_month)
             .with("corner_arrows", self.corner_arrows.len())
             .with("nav_count", self.navs.len());
 
@@ -1366,6 +1391,11 @@ impl Scene for GameScene {
         // back. (`as_ref().map(..)` releases the `self.script` borrow before we
         // write the other fields below.)
         let screen = renderer.size();
+        // Set when the cursor is over a script-owned panel that consumes the
+        // click itself (the lower-right lighting sliders), so we don't also
+        // fire a world pick on the same press — the static `cursor_on_hud`
+        // guard only covers the top-left checkbox panel.
+        let mut hud_pointer_captured = false;
         if let Some(result) = self
             .script
             .as_ref()
@@ -1373,6 +1403,7 @@ impl Scene for GameScene {
         {
             match result {
                 Ok(toggles) => {
+                    hud_pointer_captured = toggles.is_on("lighting_capture");
                     self.wireframe_on = toggles.is_on("wireframe");
                     self.corner_arrows_on = toggles.is_on("corner_arrows");
                     self.navmesh_on = toggles.is_on("navmesh");
@@ -1388,6 +1419,20 @@ impl Scene for GameScene {
                     }
                     if let Some(v) = toggles.number("look_sens") {
                         self.config.look_sensitivity = v as f32;
+                    }
+
+                    // Day/night cycle sliders (lower-right): scrub the sun arc,
+                    // moon phase, and season. Idempotent when not dragging (each
+                    // slider returns its current value unchanged), so this just
+                    // mirrors the Model back into our state for `compute_scene`.
+                    if let Some(v) = toggles.number("time_of_day") {
+                        self.time_of_day = v as f32;
+                    }
+                    if let Some(v) = toggles.number("moon_phase") {
+                        self.moon_phase = v as f32;
+                    }
+                    if let Some(v) = toggles.number("year_month") {
+                        self.year_month = v as f32;
                     }
 
                     // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
@@ -1439,9 +1484,13 @@ impl Scene for GameScene {
         // the press edge for its own checkbox toggling above, but it
         // does so without telling us — so we re-check the press edge
         // here and gate it on "cursor outside the HUD panel" to avoid
-        // double-firing on a checkbox click. Right-drag is for look;
-        // left-click is for pick. No conflict.
-        if input.mouse_left_pressed && !Self::cursor_on_hud(input.mouse_position) {
+        // double-firing on a checkbox click. The lower-right lighting panel
+        // reports its own capture (`hud_pointer_captured`) since it isn't in
+        // the static guard. Right-drag is for look; left-click is for pick.
+        if input.mouse_left_pressed
+            && !Self::cursor_on_hud(input.mouse_position)
+            && !hud_pointer_captured
+        {
             if let Some((id, hit_world)) = self.try_pick(input.mouse_position, renderer.size()) {
                 let p = Self::hit_to_local_p(id, hit_world);
                 tracing::info!(
@@ -1521,6 +1570,15 @@ impl Scene for GameScene {
             near: 0.1,
             far: 10000.0,
         });
+
+        // Drive the frame-global lighting from the day/night cycle sliders,
+        // and paint the procedural sky behind the terrain from the same state.
+        renderer.set_scene(compute_scene(
+            self.time_of_day,
+            self.moon_phase,
+            self.year_month,
+        ));
+        renderer.draw_sky();
 
         // Draw each cluster's extent as a white wireframe box. The extent is
         // LOD-independent, so iterate the grid positions directly.
@@ -1683,6 +1741,70 @@ impl Scene for GameScene {
                 Err(e) => tracing::error!("HUD script draw failed: {e}"),
             }
         }
+    }
+}
+
+/// Map the three day/night-cycle controls to the frame-global
+/// [`SceneLighting`] the mesh shader consumes. A pure function of the slider
+/// values — no per-frame state — so scrubbing a slider *is* the whole
+/// animation. Slice 1 covers the sun/moon directional lights + ambient; fog,
+/// colour grade, and the eclipse layer onto the same struct in later slices.
+///
+/// * `time_of_day` (hours, `0..24`) sweeps the sun around a day arc: eastern
+///   horizon at 06:00, overhead at noon, western horizon at 18:00, below the
+///   horizon at night (its colour fades to black there, so no night branch is
+///   needed in the shader).
+/// * `moon_phase` (weeks, `0..4`) offsets the moon from the sun by one lunar
+///   month: new moon (≈ aligned with the sun, unlit) at `0`/`4`, full moon
+///   (opposite the sun, brightest) at `2`.
+/// * `year_month` (months, `0..12`) tilts the sun arc north/south with the
+///   season; the eclipse "time of year" gate will hang off this later.
+fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLighting {
+    use std::f32::consts::TAU;
+
+    // Seasonal tilt of the arc: -1 at deep winter (months 0/12), +1 at high
+    // summer (month 6). Kept subtle so it reads as a lean, not a flip.
+    let season = -((year_month / 12.0) * TAU).cos();
+    let tilt = 0.25 * season;
+
+    // Sun: a circle in the east–up–west–down plane, phased so 06:00 is the
+    // eastern horizon, 12:00 overhead, 18:00 the western horizon.
+    let sun_a = ((time_of_day - 6.0) / 24.0) * TAU;
+    let sun_dir = Vec3::new(sun_a.cos(), sun_a.sin(), tilt).normalize();
+    let sun_up = sun_dir.y.max(0.0); // 0 at/below horizon → 1 overhead
+    let sun_amt = (sun_dir.y * 3.0).clamp(0.0, 1.0); // short twilight ramp
+                                                     // Warm at the horizon (dawn/dusk), white when high.
+    let warmth = (1.0 - sun_up).clamp(0.0, 1.0);
+    let sun_hue = Vec3::new(1.0, 0.98, 0.92).lerp(Vec3::new(1.0, 0.52, 0.22), warmth * 0.85);
+    let sun_color = sun_hue * (sun_amt * 0.95);
+
+    // Moon: same arc, offset by the phase; brightness is the lit fraction of
+    // the disc (0 at new moon, 1 at full) gated by how high it sits.
+    let moon_a = sun_a + (moon_phase / 4.0) * TAU;
+    let moon_dir = Vec3::new(moon_a.cos(), moon_a.sin(), -tilt * 0.5).normalize();
+    let moon_amt = (moon_dir.y * 3.0).clamp(0.0, 1.0);
+    let illum = 0.5 - 0.5 * ((moon_phase / 4.0) * TAU).cos();
+    let moon_color = Vec3::new(0.34, 0.42, 0.66) * (moon_amt * illum * 0.55);
+
+    // Ambient: cool skylight by day, collapsing to a deep blue night.
+    let ambient = Vec3::new(0.05, 0.06, 0.09).lerp(Vec3::new(0.30, 0.33, 0.40), sun_amt);
+
+    // Procedural-sky palette by time of day. Desaturated and dim to match the
+    // gothic tone: a deep blue-black night lifting to a cold slate day. The
+    // dawn/dusk warmth isn't baked in here — it comes *directionally* from the
+    // sun-colour glow in the sky shader, so only the band near the sun warms.
+    let sky_zenith = Vec3::new(0.012, 0.016, 0.030).lerp(Vec3::new(0.09, 0.15, 0.30), sun_amt);
+    let sky_horizon = Vec3::new(0.030, 0.040, 0.085).lerp(Vec3::new(0.42, 0.49, 0.58), sun_amt);
+
+    SceneLighting {
+        sun_dir,
+        sun_color,
+        moon_dir,
+        moon_color,
+        ambient,
+        sky_zenith,
+        sky_horizon,
+        ..SceneLighting::default()
     }
 }
 
@@ -2453,7 +2575,8 @@ fn try_load_bake_field(
 fn run_bake_mode() -> Result<()> {
     let dir = bake_dir_path();
     std::fs::create_dir_all(&dir)?;
-    let material = Material::new(1, 1, 0).expect("grey material is in-range");
+    // Index 10 = STONE matte neutral (see `mesh.wgsl`); matches `ensure_source`.
+    let material = Material::new(10, 10, 0).expect("stone material is in-range");
     let mut written = 0_usize;
     let mut total_bytes = 0_u64;
     for x in 0..FIELD_DIM {
@@ -2558,6 +2681,9 @@ mod script_smoke {
             .with("vy", -1.5_f32)
             .with("has_ground", true)
             .with("ground_y", 128.0_f32)
+            .with("time_of_day", 9.5_f32)
+            .with("moon_phase", 1.0_f32)
+            .with("year_month", 6.0_f32)
     }
 
     #[test]

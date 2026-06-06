@@ -133,3 +133,61 @@ impl Default for Camera {
         }
     }
 }
+
+/// Frame-global lighting & atmosphere — the day/night cycle state the mesh
+/// shader uses. Set once per frame with [`crate::Renderer::set_scene`];
+/// the renderer fills in the camera position itself (for fog distance), so
+/// callers only supply the lights, ambient, fog, and grade.
+///
+/// Two directional lights (`sun` + `moon`) each contribute a matte
+/// Lambertian term; `*_dir` points **toward** the light and should be
+/// normalized. A light below the horizon is faded by handing it a near-black
+/// colour (no explicit night branch in the shader). `fog_*` and `grade_*`
+/// are reserved for the fog / colour-grade slices and default to inert.
+#[derive(Copy, Clone, Debug)]
+pub struct SceneLighting {
+    /// Direction toward the sun (normalized).
+    pub sun_dir: Vec3,
+    /// Sun radiance (linear RGB). Black ⇒ the sun is effectively off.
+    pub sun_color: Vec3,
+    /// Direction toward the moon (normalized).
+    pub moon_dir: Vec3,
+    /// Moon radiance (linear RGB). Black ⇒ the moon is effectively off.
+    pub moon_color: Vec3,
+    /// Flat ambient floor added before the directional terms.
+    pub ambient: Vec3,
+    /// Procedural-sky colour straight up (linear RGB). Used by the sky pass
+    /// ([`crate::Renderer::draw_sky`]); ignored when no sky is requested.
+    pub sky_zenith: Vec3,
+    /// Procedural-sky colour at the horizon band (linear RGB). The sky pass
+    /// gradients `sky_horizon`→`sky_zenith` by view elevation.
+    pub sky_horizon: Vec3,
+    /// Distance-fog colour (linear RGB). Reserved — applied in a later slice.
+    pub fog_color: Vec3,
+    /// Distance-fog density. `0.0` ⇒ no fog. Reserved for a later slice.
+    pub fog_density: f32,
+    /// Colour-grade tint (linear RGB). Reserved for a later slice.
+    pub grade: Vec3,
+    /// Colour-grade strength in `0..1`. `0.0` ⇒ no grade. Later slice.
+    pub grade_strength: f32,
+}
+
+impl Default for SceneLighting {
+    /// Matches the renderer's seeded default — the pre-uniform hardcoded
+    /// look: a warm-white sun over a `0.3` ambient, no moon, no fog/grade.
+    fn default() -> Self {
+        Self {
+            sun_dir: Vec3::new(0.5, 1.0, 0.3).normalize(),
+            sun_color: Vec3::splat(0.7),
+            moon_dir: Vec3::Y,
+            moon_color: Vec3::ZERO,
+            ambient: Vec3::splat(0.3),
+            sky_zenith: Vec3::new(0.012, 0.016, 0.030),
+            sky_horizon: Vec3::new(0.030, 0.040, 0.085),
+            fog_color: Vec3::ZERO,
+            fog_density: 0.0,
+            grade: Vec3::ZERO,
+            grade_strength: 0.0,
+        }
+    }
+}

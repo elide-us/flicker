@@ -18,6 +18,7 @@ mod mesh;
 mod pipeline_billboard;
 mod pipeline_lines;
 mod pipeline_mesh;
+mod pipeline_sky;
 mod pipeline_sprite;
 mod pipeline_text;
 mod pipeline_triangle;
@@ -27,7 +28,7 @@ mod texture;
 #[cfg(test)]
 mod layering_test;
 
-pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
+pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
 pub use renderer::Renderer;
 pub use texture::TextureHandle;
 

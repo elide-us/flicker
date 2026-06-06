@@ -75,6 +75,47 @@ struct PerDraw {
 
 const PER_DRAW_RAW_SIZE: u64 = std::mem::size_of::<PerDraw>() as u64;
 
+/// CPU-side mirror of the WGSL `Scene` uniform — the frame-global
+/// lighting/atmosphere state (sun + moon directional lights, ambient,
+/// and the fog/grade fields used by later slices). Laid out as `[f32; 4]`
+/// lanes to match the shader's `vec4` fields exactly (16-byte aligned, no
+/// implicit std140 padding). The `.w` lanes pack scalars: `fog_color[3]`
+/// is fog density, `grade[3]` is grade strength.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+pub struct SceneUniform {
+    pub sun_dir: [f32; 4],
+    pub sun_color: [f32; 4],
+    pub moon_dir: [f32; 4],
+    pub moon_color: [f32; 4],
+    pub ambient: [f32; 4],
+    pub camera_pos: [f32; 4],
+    pub fog_color: [f32; 4],
+    pub grade: [f32; 4],
+}
+
+const SCENE_UNIFORM_SIZE: u64 = std::mem::size_of::<SceneUniform>() as u64;
+
+impl Default for SceneUniform {
+    /// Reproduces the pre-uniform hardcoded look: a single warm-white sun
+    /// at `normalize(0.5, 1.0, 0.3)` scaled to `0.7`, over a `0.3` ambient,
+    /// no moon, no fog, no grade — i.e. `base * (0.3 + 0.7 * lambert)`.
+    fn default() -> Self {
+        // normalize(0.5, 1.0, 0.3)
+        let sun = [0.4319, 0.8638, 0.2591, 0.0];
+        Self {
+            sun_dir: sun,
+            sun_color: [0.7, 0.7, 0.7, 0.0],
+            moon_dir: [0.0, 1.0, 0.0, 0.0],
+            moon_color: [0.0, 0.0, 0.0, 0.0],
+            ambient: [0.3, 0.3, 0.3, 0.0],
+            camera_pos: [0.0, 0.0, 0.0, 0.0],
+            fog_color: [0.0, 0.0, 0.0, 0.0],
+            grade: [0.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
 /// One persistent GPU-side mesh. Holds both a triangle index buffer
 /// (for filled draws) and an edge index buffer (for line-list wireframe
 /// draws). Both reference the same vertex buffer.
@@ -104,6 +145,10 @@ pub struct MeshPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     camera_buf: wgpu::Buffer,
+    /// Frame-global lighting/atmosphere uniform (sun/moon/ambient/fog/grade),
+    /// written each frame by [`MeshPipeline::set_scene_uniform`]. Lives in the
+    /// same bind group as the camera and per-draw uniforms.
+    scene_buf: wgpu::Buffer,
     per_draw_buf: wgpu::Buffer,
     /// Maximum number of per-draw entries the current `per_draw_buf` can
     /// hold. Grown lazily in `prepare`.
@@ -150,6 +195,18 @@ impl MeshPipeline {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
                         min_binding_size: NonZeroU64::new(PER_DRAW_RAW_SIZE),
+                    },
+                    count: None,
+                },
+                // Frame-global lighting/atmosphere — fragment-only, one value
+                // per frame (no dynamic offset).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(SCENE_UNIFORM_SIZE),
                     },
                     count: None,
                 },
@@ -253,6 +310,14 @@ impl MeshPipeline {
             mapped_at_creation: false,
         });
 
+        // Seed the scene uniform with the default look so the first frames
+        // (before any `set_scene`) match the former hardcoded lighting.
+        let scene_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flicker.mesh.scene_uniform"),
+            contents: bytemuck::bytes_of(&SceneUniform::default()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         let initial_capacity: u32 = 64;
         let per_draw_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flicker.mesh.per_draw_uniform"),
@@ -261,7 +326,13 @@ impl MeshPipeline {
             mapped_at_creation: false,
         });
 
-        let bind_group = make_bind_group(device, &bind_group_layout, &camera_buf, &per_draw_buf);
+        let bind_group = make_bind_group(
+            device,
+            &bind_group_layout,
+            &camera_buf,
+            &scene_buf,
+            &per_draw_buf,
+        );
 
         Self {
             triangle_pipeline,
@@ -269,6 +340,7 @@ impl MeshPipeline {
             bind_group_layout,
             bind_group,
             camera_buf,
+            scene_buf,
             per_draw_buf,
             per_draw_capacity: initial_capacity,
             per_draw_stride,
@@ -383,6 +455,13 @@ impl MeshPipeline {
         &self.camera_buf
     }
 
+    /// Update the frame-global lighting/atmosphere uniform for the rest of
+    /// this frame. Mirrors [`MeshPipeline::set_camera_matrix`] — the renderer
+    /// calls it once per frame from `end_frame`.
+    pub fn set_scene_uniform(&mut self, queue: &wgpu::Queue, scene: SceneUniform) {
+        queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&scene));
+    }
+
     /// Queue a mesh for rendering this frame.
     pub fn push(&mut self, handle: MeshHandle, model: Mat4, tint: [f32; 4], wireframe: bool) {
         self.queued.push(MeshDraw {
@@ -415,6 +494,7 @@ impl MeshPipeline {
                 device,
                 &self.bind_group_layout,
                 &self.camera_buf,
+                &self.scene_buf,
                 &self.per_draw_buf,
             );
         }
@@ -509,6 +589,7 @@ fn make_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     camera_buf: &wgpu::Buffer,
+    scene_buf: &wgpu::Buffer,
     per_draw_buf: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -526,6 +607,10 @@ fn make_bind_group(
                     offset: 0,
                     size: NonZeroU64::new(PER_DRAW_RAW_SIZE),
                 }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: scene_buf.as_entire_binding(),
             },
         ],
     })
@@ -562,4 +647,48 @@ pub fn create_depth_view(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build the mesh pipeline under a validation error scope. Creating the
+    /// render pipelines compiles `mesh.wgsl` and checks it against the bind-
+    /// group layout (camera + per-draw + the `Scene` uniform at binding 2), so
+    /// a malformed shader or a struct/layout mismatch fails here rather than at
+    /// app launch. Skips cleanly on a machine without a GPU adapter.
+    #[test]
+    fn mesh_pipeline_compiles_shader() {
+        let instance = wgpu::Instance::default();
+        let Some(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            }))
+        else {
+            eprintln!("mesh_pipeline_compiles_shader: no GPU adapter — skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("flicker.mesh_test.device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+            },
+            None,
+        ))
+        .expect("request device");
+
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let align = device.limits().min_uniform_buffer_offset_alignment;
+        let mut pipeline = MeshPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, align);
+        // Exercise the scene-uniform upload path too (writes binding 2).
+        pipeline.set_scene_uniform(&queue, SceneUniform::default());
+        device.poll(wgpu::Maintain::Wait);
+        let err = pollster::block_on(device.pop_error_scope());
+        assert!(err.is_none(), "mesh.wgsl failed validation: {err:?}");
+    }
 }

@@ -10,11 +10,12 @@
 // blend values, not from per-pixel interpolation of indices.
 //
 // Fragment stage:
-//   * solid mode (`flags.x == 0.0`): Lambertian shading on a fixed
-//     directional light, with the base color resolved from the packed
-//     material — primary in low 12 bits, secondary in next 12, blend
-//     factor in top 8 — by indexing a small color table and `mix`ing
-//     primary→secondary by `blend / 255`.
+//   * solid mode (`flags.x == 0.0`): Lambertian shading from two
+//     directional lights (sun + moon) over a flat ambient, all driven
+//     by the frame-global `Scene` uniform (`Renderer::set_scene`); the
+//     base color is resolved from the packed material — primary in low
+//     12 bits, secondary in next 12, blend factor in top 8 — by indexing
+//     a small color table and `mix`ing primary→secondary by `blend / 255`.
 //   * wireframe mode (`flags.x == 1.0`): emit the fixed wireframe
 //     color directly. The renderer enters this branch only when it
 //     issues a line-list draw against a separately built edge index
@@ -32,8 +33,26 @@ struct PerDraw {
     flags: vec4<f32>,
 };
 
+// Frame-global lighting / atmosphere. One uniform carries the whole
+// day/night cycle: two directional lights (sun + moon), a flat ambient,
+// plus fog + colour-grade fields used by later slices. Laid out as
+// `vec4`s so std140 alignment is trivially correct (each field is 16-byte
+// aligned, no implicit padding); the `.w` lanes pack the two scalars.
+// Mirrored CPU-side by `SceneUniform` in `pipeline_mesh.rs`.
+struct Scene {
+    sun_dir: vec4<f32>,     // xyz = direction toward the sun (normalized); w unused
+    sun_color: vec4<f32>,   // rgb = sun radiance; w unused
+    moon_dir: vec4<f32>,    // xyz = direction toward the moon (normalized); w unused
+    moon_color: vec4<f32>,  // rgb = moon radiance; w unused
+    ambient: vec4<f32>,     // rgb = ambient floor; w unused
+    camera_pos: vec4<f32>,  // xyz = world camera position (fog distance, later)
+    fog_color: vec4<f32>,   // rgb = fog colour; w = fog density (later)
+    grade: vec4<f32>,       // rgb = colour-grade tint; w = grade strength (later)
+};
+
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> per_draw: PerDraw;
+@group(0) @binding(2) var<uniform> scene: Scene;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -83,6 +102,13 @@ fn material_index_color(index: u32) -> vec3<f32> {
         // ---- atmospheric ----
         case 9u: { return vec3<f32>(0.80, 0.82, 0.86); } // CIRRUS       wispy pale
 
+        // ---- matte test surface ----
+        // Neutral mid-value stone, faintly warm. Deliberately desaturated and
+        // ~0.45 so it reads Lambertian gradients, fog, and colour grading
+        // cleanly without fighting them — the surface the lighting cycle is
+        // assessed against. Used by the voxel-cluster field (`Material::new(10..)`).
+        case 10u: { return vec3<f32>(0.46, 0.44, 0.42); } // STONE        matte neutral
+
         // Fallback for unknown materials (also the EMPTY=0 case).
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
@@ -108,9 +134,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.2, 0.9, 0.4, 1.0);
     }
 
-    let light_dir = normalize(vec3<f32>(0.5, 1.0, 0.3));
-    let lambert = max(dot(in.world_normal, light_dir), 0.0);
     let base = material_color(in.material);
-    let shaded = base * (0.3 + 0.7 * lambert);
+    // Two directional lights (sun + moon) with per-light colour, over a
+    // flat ambient floor. Each light contributes a matte Lambertian term;
+    // below-horizon lights fade by carrying a near-zero colour from the
+    // example-side day-arc math, so no explicit night branch is needed.
+    let sun = scene.sun_color.rgb * max(dot(in.world_normal, scene.sun_dir.xyz), 0.0);
+    let moon = scene.moon_color.rgb * max(dot(in.world_normal, scene.moon_dir.xyz), 0.0);
+    let shaded = base * (scene.ambient.rgb + sun + moon);
     return vec4<f32>(shaded, 1.0) * per_draw.tint;
 }

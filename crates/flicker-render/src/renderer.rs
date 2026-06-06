@@ -21,10 +21,11 @@ use winit::window::{Fullscreen, Window};
 
 use glam::Vec3;
 
-use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex};
+use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
 use crate::pipeline_billboard::BillboardPipeline;
 use crate::pipeline_lines::LinesPipeline;
-use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline};
+use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline, SceneUniform};
+use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
@@ -51,6 +52,7 @@ pub struct Renderer {
     mesh: MeshPipeline,
     lines: LinesPipeline,
     billboard: BillboardPipeline,
+    sky: SkyPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -73,6 +75,15 @@ pub struct Renderer {
     /// camera set this frame" — `draw_mesh` still works but the matrix
     /// from the previous `set_camera` carries over.
     camera: Option<Camera>,
+    /// Current frame-global lighting/atmosphere (sun/moon/ambient/fog/grade),
+    /// uploaded in `end_frame`. Defaults to the pre-uniform hardcoded look, so
+    /// a scene that never calls [`Renderer::set_scene`] renders unchanged.
+    scene: SceneLighting,
+    /// Whether to draw the procedural sky behind the 3D scene this frame.
+    /// Reset to `false` each [`Renderer::begin_frame`] and raised by
+    /// [`Renderer::draw_sky`], so menus/loading (no 3D) keep their flat
+    /// `clear_color` while the game requests a sky each active frame.
+    draw_sky: bool,
     /// Ambient 2D layer applied to every `draw_sprite`/`draw_text`/
     /// `draw_triangle` until changed (the painter's-order sort key — higher
     /// draws on top). Reset to `0.0` each `begin_frame`; the scene manager
@@ -143,6 +154,7 @@ impl Renderer {
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
+        let sky = SkyPipeline::new(&device, surface_format);
 
         Ok(Self {
             window,
@@ -158,12 +170,15 @@ impl Renderer {
             mesh,
             lines,
             billboard,
+            sky,
             depth_texture,
             depth_view,
             textures: Vec::new(),
             meshes: Vec::new(),
             free_mesh_slots: Vec::new(),
             camera: None,
+            scene: SceneLighting::default(),
+            draw_sky: false,
             current_layer: 0.0,
         })
     }
@@ -335,6 +350,7 @@ impl Renderer {
         self.mesh.clear();
         self.lines.clear();
         self.billboard.clear();
+        self.draw_sky = false;
         self.current_layer = 0.0;
     }
 
@@ -409,6 +425,28 @@ impl Renderer {
         self.camera = Some(*camera);
     }
 
+    /// Set the frame-global lighting & atmosphere (sun/moon directional
+    /// lights, ambient, fog, colour grade) for the 3D mesh pass. Cached and
+    /// uploaded in [`Renderer::end_frame`], mirroring [`Renderer::set_camera`];
+    /// the camera position is injected automatically (for fog distance), so
+    /// callers supply only the lights/ambient/fog/grade. Persists until the
+    /// next call — set it once per frame. A scene that never calls this renders
+    /// with the default (former hardcoded) lighting.
+    pub fn set_scene(&mut self, scene: SceneLighting) {
+        self.scene = scene;
+    }
+
+    /// Request the procedural sky behind the 3D scene this frame. Fakes
+    /// atmospheric scattering from the current [`SceneLighting`] (sun/moon
+    /// directions + colours and the `sky_zenith`/`sky_horizon` palette) — a
+    /// fullscreen pass drawn first, so terrain, lines, billboards, and the 2D
+    /// UI all layer on top. Per-frame, like `draw_mesh`: call it each frame
+    /// you want a sky; omit it (menus/loading) to keep the flat `clear_color`.
+    /// A no-op unless a camera is also set this frame (it needs the view ray).
+    pub fn draw_sky(&mut self) {
+        self.draw_sky = true;
+    }
+
     /// Queue a mesh for rendering this frame.
     ///
     /// `model` is the cluster-local-to-world transform; the camera (set
@@ -473,18 +511,34 @@ impl Renderer {
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
     pub fn end_frame(&mut self) -> Result<()> {
-        // Update camera-derived view-projection (if a camera is set).
+        // Update camera-derived view-projection (if a camera is set). The sky
+        // needs the *inverse* view-projection to turn each pixel back into a
+        // world-space view ray; it's a no-op without a camera.
+        let camera_pos = self.camera.map(|c| c.position).unwrap_or(Vec3::ZERO);
+        let sky_this_frame = self.draw_sky && self.camera.is_some();
         if let Some(cam) = self.camera {
             let aspect = if self.screen.y > 0.0 {
                 self.screen.x / self.screen.y
             } else {
                 1.0
             };
-            self.mesh
-                .set_camera_matrix(&self.queue, cam.view_projection(aspect));
+            let view_projection = cam.view_projection(aspect);
+            self.mesh.set_camera_matrix(&self.queue, view_projection);
             self.billboard
-                .set_camera(&self.queue, cam.view(), cam.view_projection(aspect));
+                .set_camera(&self.queue, cam.view(), view_projection);
+            if sky_this_frame {
+                self.sky.set_uniform(
+                    &self.queue,
+                    scene_to_sky_uniform(&self.scene, view_projection.inverse(), camera_pos),
+                );
+            }
         }
+
+        // Upload the frame-global lighting/atmosphere uniform. The camera
+        // position is injected here (for distance fog) so callers of
+        // `set_scene` don't have to thread it through themselves.
+        self.mesh
+            .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
 
         // Upload buffered geometry/text.
         self.triangle.prepare(&self.device, &self.queue);
@@ -548,6 +602,12 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
+            // Procedural sky behind everything (fullscreen, no depth write),
+            // so the mesh paints over it wherever terrain exists.
+            if sky_this_frame {
+                self.sky.render(&mut pass);
+            }
+
             // 3D mesh first; immediate-mode lines layer on top of the
             // mesh (still in 3D space, depth-tested but not depth-
             // writing); then 2D overlays on top.
@@ -585,5 +645,39 @@ impl Renderer {
         self.text.atlas.trim();
 
         Ok(())
+    }
+}
+
+/// Convert the friendly [`SceneLighting`] (Vec3 fields) into the GPU's
+/// `vec4`-padded [`SceneUniform`], injecting the camera world position and
+/// packing the two scalars into the reserved `.w` lanes (`fog_color.w` =
+/// density, `grade.w` = strength).
+fn scene_to_uniform(s: &SceneLighting, camera_pos: Vec3) -> SceneUniform {
+    SceneUniform {
+        sun_dir: [s.sun_dir.x, s.sun_dir.y, s.sun_dir.z, 0.0],
+        sun_color: [s.sun_color.x, s.sun_color.y, s.sun_color.z, 0.0],
+        moon_dir: [s.moon_dir.x, s.moon_dir.y, s.moon_dir.z, 0.0],
+        moon_color: [s.moon_color.x, s.moon_color.y, s.moon_color.z, 0.0],
+        ambient: [s.ambient.x, s.ambient.y, s.ambient.z, 0.0],
+        camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
+        fog_color: [s.fog_color.x, s.fog_color.y, s.fog_color.z, s.fog_density],
+        grade: [s.grade.x, s.grade.y, s.grade.z, s.grade_strength],
+    }
+}
+
+/// Build the procedural-sky uniform from the scene lighting plus this frame's
+/// inverse view-projection and camera position. Shares the sun/moon and the
+/// `sky_zenith`/`sky_horizon` palette with the mesh lighting so the sky and
+/// the lit terrain read as one atmosphere.
+fn scene_to_sky_uniform(s: &SceneLighting, inv_view_proj: Mat4, camera_pos: Vec3) -> SkyUniform {
+    SkyUniform {
+        inv_view_proj: inv_view_proj.to_cols_array_2d(),
+        camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
+        sun_dir: [s.sun_dir.x, s.sun_dir.y, s.sun_dir.z, 0.0],
+        sun_color: [s.sun_color.x, s.sun_color.y, s.sun_color.z, 0.0],
+        moon_dir: [s.moon_dir.x, s.moon_dir.y, s.moon_dir.z, 0.0],
+        moon_color: [s.moon_color.x, s.moon_color.y, s.moon_color.z, 0.0],
+        zenith: [s.sky_zenith.x, s.sky_zenith.y, s.sky_zenith.z, 0.0],
+        horizon: [s.sky_horizon.x, s.sky_horizon.y, s.sky_horizon.z, 0.0],
     }
 }

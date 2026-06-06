@@ -143,6 +143,33 @@
         "label": [0.9, 0.9, 0.9, 1.0],
         "label_size": 13
       }
+    },
+
+    "lighting": {
+      "_comment": "Day/night cycle sliders, anchored to the lower-right corner. A 3-unit-wide grid, two rows: row 1 = Sun (1 unit) + Moon (2 units); row 2 = Year (full 3-unit span). `unit` is one grid unit in px; the sliders scale with it. Each slider's `ticks` is its ruler division count. Values flow both ways through the engine Model (time_of_day 0-24h, moon_phase 0-4wk, year_month 0-12mo).",
+      "margin_x": 24,
+      "margin_y": 22,
+      "unit": 192,
+      "gap": 18,
+      "row_gap": 52,
+      "track_h": 32,
+      "pad": 20,
+      "header_h": 30,
+      "backdrop": [0.035, 0.04, 0.055, 0.74],
+      "header": { "text": "CELESTIAL CYCLE", "size": 20, "color": [0.83, 0.67, 0.39, 1.0] },
+      "label_size": 16,
+      "label_color": [0.74, 0.77, 0.83, 1.0],
+      "value_color": [0.86, 0.70, 0.40, 1.0],
+      "sun": { "label": "Sun", "min": 0.0, "max": 24.0, "ticks": 12 },
+      "moon": { "label": "Moon", "min": 0.0, "max": 4.0, "ticks": 4 },
+      "year": { "label": "Year", "min": 0.0, "max": 12.0, "ticks": 12 },
+      "style": {
+        "track": [0.09, 0.10, 0.12, 0.96],
+        "fill": [0.55, 0.43, 0.23, 1.0],
+        "handle": [0.85, 0.66, 0.32, 0.98],
+        "handle_w": 24,
+        "tick": [0.52, 0.50, 0.45, 0.85]
+      }
     }
   }
 }

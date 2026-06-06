@@ -59,10 +59,21 @@ function W.slider_update(state, id, r, mx, my, clicked, down, value, min, max)
   return value
 end
 
-function W.slider_draw(cmds, r, value, min, max, s)
+-- `ticks` (optional): draw an N-division ruler behind the handle — N+1 marks
+-- across the track, the two ends slightly taller. Older callers omit it and
+-- get a plain slider. Tick colour is `s.tick` (falls back to the handle).
+function W.slider_draw(cmds, r, value, min, max, s, ticks)
   local t = clamp((value - min) / (max - min), 0, 1)
   rect(cmds, r.x, r.y, r.w, r.h, s.track)
   rect(cmds, r.x, r.y, r.w * t, r.h, s.fill)
+  if ticks and ticks > 0 then
+    local tc = s.tick or s.handle
+    for i = 0, ticks do
+      local edge = (i == 0 or i == ticks)
+      local th = r.h + (edge and 12 or 6)
+      rect(cmds, r.x + r.w * (i / ticks) - 1, r.y - (th - r.h) * 0.5, 2, th, tc)
+    end
+  end
   local hw = s.handle_w
   rect(cmds, r.x + r.w * t - hw * 0.5, r.y - 4, hw, r.h + 8, s.handle)
 end
