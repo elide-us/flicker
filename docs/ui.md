@@ -104,7 +104,13 @@ reads its layout from `ui_elements.json` (the `UI` global). Ported:
 - **`scripts/hud.lua`** — the in-game debug **stat readouts** (styled from
   `UI.hud.stats`, content formatted from `Model`) + the feature **checkboxes**
   (`UI.hud.checkboxes`).
-- **`scripts/logo.lua`** — the logo splash (`UI.logo`).
+- **`scripts/logo.lua`** — the intro splash: a **sequence of full-screen logos**
+  (business → engine, from `assets/*.png`) that each fade in / hold / fade out
+  before the menu. The script owns the timeline + fade from `UI.logo`
+  (`fade`/`hold`/`fit`/`images`) + `Model.elapsed`, and reports `done`; the
+  `LogoScene` decodes the PNGs (the `image` crate), exposes them as textures,
+  and advances on `done` (or click / Space / Escape). The hold-time is future
+  room to stream the menu's background scene.
 
 This retired the Rust modal/menu/logo drawing from `ui.rs` (`draw_panel`,
 `draw_button`, `scrim`, `dim`, `wordmark`, `ModalButton`, the modal hit-test);

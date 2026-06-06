@@ -126,7 +126,9 @@ a refactor of *where the UI is defined*, not new UI capability.
 > per-screen `UI.screens.*` instances, selected by `Model.screen`; the Rust
 > scenes are thin shells over a `ModalUi` helper). The **HUD** (`hud.lua`:
 > `UI.hud.stats` styles + `UI.hud.checkboxes`) and the **logo** (`logo.lua`:
-> `UI.logo`) are ported too. This retired the Rust modal/menu/logo drawing from
+> `UI.logo` — now a **two-logo fade-in/hold/fade-out intro sequence** from
+> `assets/*.png`, `LogoScene` decoding the PNGs and the script owning the
+> timeline) are ported too. This retired the Rust modal/menu/logo drawing from
 > `ui.rs` (`draw_panel`/`draw_button`/`scrim`/`dim`/`wordmark`/`ModalButton` +
 > the modal hit-test); `ui.rs` now mainly bakes the gothic textures the Lua
 > screens draw with. Smoke tests (`modal_script_runs_every_screen`,

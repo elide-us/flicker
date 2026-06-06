@@ -1751,16 +1751,56 @@ fn render_hud(
 // ===== Front-end scenes (logo, menu, pause overlay) =====
 
 /// How long the logo splash shows before auto-advancing to the menu.
-const LOGO_DURATION: Duration = Duration::from_millis(2200);
-
-/// Logo splash: a large wordmark over the gothic backdrop. Auto-advances to
-/// the menu after [`LOGO_DURATION`], or immediately on click / Space / Escape.
-/// Lua-driven logo splash (`scripts/logo.lua`, `UI.logo`).
+/// Lua-driven intro splash (`scripts/logo.lua`, `UI.logo`): a sequence of
+/// full-screen logos that fade in / hold / fade out before the menu.
 const LOGO_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/logo.lua");
 
+/// Intro logo images, in play order (business then engine), exposed to the
+/// script as the `Textures` names in `UI.logo.images`.
+const LOGO_IMAGES: [(&str, &str); 2] = [
+    (
+        "elideus",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/elideus_productions_yellow.png"
+        ),
+    ),
+    (
+        "clay",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/clay_engine_infinity_grey.png"
+        ),
+    ),
+];
+
+/// Decode a PNG/JPEG off disk and upload it as a texture, returning the handle
+/// and its pixel size. Logs and yields `None` on failure (the splash degrades
+/// to its backdrop rather than crashing).
+fn load_image_texture(renderer: &mut Renderer, path: &str) -> Option<(TextureHandle, u32, u32)> {
+    match image::open(path) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            Some((renderer.load_texture(&rgba, w, h), w, h))
+        }
+        Err(e) => {
+            tracing::error!("failed to load logo image {path}: {e}");
+            None
+        }
+    }
+}
+
+/// Intro splash: plays the logo sequence (timeline + fade in `logo.lua`), then
+/// replaces itself with the menu — also skippable with click / Space / Escape.
+/// The hold-time is, in future, room to stream the menu's background scene.
 struct LogoScene {
     script: Option<ScriptHost>,
+    /// `[white, <logos…>]` — index = the texture id the script references.
     textures: Vec<TextureHandle>,
+    /// Each logo's native pixel size, parallel to `UI.logo.images`, so the
+    /// script can fit + centre them.
+    sizes: Vec<(u32, u32)>,
     elapsed: Duration,
 }
 
@@ -1769,28 +1809,77 @@ impl LogoScene {
         Self {
             script: None,
             textures: Vec::new(),
+            sizes: Vec::new(),
             elapsed: Duration::ZERO,
         }
+    }
+
+    /// Per-frame model: elapsed seconds + each logo's native size (`img1_w`…).
+    fn model(&self) -> ValueMap {
+        let mut model = ValueMap::new().with("elapsed", self.elapsed.as_secs_f32());
+        for (i, &(w, h)) in self.sizes.iter().enumerate() {
+            model.set(format!("img{}_w", i + 1), w);
+            model.set(format!("img{}_h", i + 1), h);
+        }
+        model
     }
 }
 
 impl Scene for LogoScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        let theme = ui::Theme::build(renderer);
-        let (script, textures) = load_ui_script(LOGO_SCRIPT_PATH, &theme);
-        self.script = script;
+        // id 0 is the white pixel (rect fills / backdrop); the logos follow.
+        let mut textures = vec![renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1)];
+        let mut ids: Vec<(&str, u32)> = vec![("white", 0)];
+        let mut sizes = Vec::new();
+        for (name, path) in LOGO_IMAGES {
+            if let Some((handle, w, h)) = load_image_texture(renderer, path) {
+                ids.push((name, textures.len() as u32));
+                textures.push(handle);
+                sizes.push((w, h));
+            } else {
+                sizes.push((1, 1)); // keep `imgN` indices aligned if a load fails
+            }
+        }
+        self.script = match ScriptHost::from_file(LOGO_SCRIPT_PATH) {
+            Ok(script) => {
+                if let Err(e) = script.set_texture_ids(&ids) {
+                    tracing::error!("logo texture registration failed: {e}");
+                }
+                expose_ui_elements(&script);
+                load_widgets(&script);
+                Some(script)
+            }
+            Err(e) => {
+                tracing::error!("logo script load failed: {e}");
+                None
+            }
+        };
         self.textures = textures;
+        self.sizes = sizes;
         // Apply the persisted (or default) display setting now the window
         // exists — so a saved fullscreen/resolution choice takes effect at
         // launch.
         display::current().apply(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         self.elapsed += dt;
         let skip =
             input.mouse_left_pressed || input.key_down(Key::Space) || input.key_down(Key::Escape);
-        if self.elapsed >= LOGO_DURATION || skip {
+        // The script owns the timeline and reports `done` once it has played.
+        let done = match self.script.as_ref() {
+            Some(script) => {
+                let model = self.model();
+                let _ = script.set_model(&model);
+                let size = renderer.size();
+                script
+                    .update(input, size.x, size.y)
+                    .map(|r| r.is_on("done"))
+                    .unwrap_or(true)
+            }
+            None => true,
+        };
+        if skip || done {
             return Transition::Replace(Box::new(MenuScene::new()));
         }
         Transition::None
@@ -1800,6 +1889,8 @@ impl Scene for LogoScene {
         let Some(script) = self.script.as_ref() else {
             return;
         };
+        let model = self.model();
+        let _ = script.set_model(&model);
         let size = renderer.size();
         match script.draw(size.x, size.y) {
             Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
@@ -2521,12 +2612,33 @@ mod script_smoke {
     #[test]
     fn logo_script_runs() {
         let host = ScriptHost::from_file(LOGO_SCRIPT_PATH).expect("load logo.lua");
-        host.set_texture_ids(&[("white", 0), ("panel", 1), ("button", 2)])
+        host.set_texture_ids(&[("white", 0), ("elideus", 1), ("clay", 2)])
             .expect("register textures");
         expose_ui_elements(&host);
+        let sizes = |elapsed: f32| {
+            ValueMap::new()
+                .with("elapsed", elapsed)
+                .with("img1_w", 1920u32)
+                .with("img1_h", 1080u32)
+                .with("img2_w", 1672u32)
+                .with("img2_h", 941u32)
+        };
         let input = InputState::new();
-        host.update(&input, 1920.0, 1080.0).expect("logo update");
+
+        // Mid first fade-in: the sequence is playing (not done) and draws the
+        // backdrop + the first image.
+        host.set_model(&sizes(0.3)).expect("publish model");
+        let out = host.update(&input, 1920.0, 1080.0).expect("logo update");
+        assert!(!out.is_on("done"), "sequence still playing at t=0.3");
         let cmds = host.draw(1920.0, 1080.0).expect("logo draw");
-        assert!(!cmds.is_empty(), "logo emits backdrop + wordmark");
+        assert!(cmds.len() >= 2, "logo emits backdrop + first image");
+
+        // After the whole sequence has played, it reports done so the scene
+        // advances to the menu.
+        host.set_model(&sizes(99.0)).expect("publish model");
+        let out = host
+            .update(&input, 1920.0, 1080.0)
+            .expect("logo update done");
+        assert!(out.is_on("done"), "sequence done after it plays out");
     }
 }

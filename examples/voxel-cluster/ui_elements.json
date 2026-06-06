@@ -47,10 +47,11 @@
   },
 
   "logo": {
-    "backdrop": [0.035, 0.04, 0.05, 1.0],
-    "text": "FLICKER",
-    "size": 72,
-    "color": [0.83, 0.67, 0.39, 1.0]
+    "backdrop": [0.0, 0.0, 0.0, 1.0],
+    "fade": 0.6,
+    "hold": 1.2,
+    "fit": 0.9,
+    "images": ["elideus", "clay"]
   },
 
   "loading": {
