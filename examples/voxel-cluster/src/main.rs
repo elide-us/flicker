@@ -149,6 +149,16 @@ struct GameScene {
     /// horizon, so the haze melts into the sky) with a gentle "thicker when the
     /// sun is low" weather curve on top.
     fog: f32,
+    /// Observer latitude in **degrees** `0..90` from the "Latitude" slider
+    /// (`0` = equator, `90` = north pole). Tilts the whole celestial sphere —
+    /// sun, moon, and stars — so the sun's arc drops toward a horizon-grazing
+    /// wheel near the pole. Converted to radians for `compute_scene`.
+    latitude: f32,
+    /// Orbital epoch in **Earth years** for the planet positions — a continuous
+    /// clock so the planets sweep their orbits without the `year_month` wrap
+    /// snap. Driven by the "Epoch" slider and bumped +1 whenever the cycle's
+    /// year rolls over, so the auto-sim stays continuous across years.
+    epoch: f32,
 
     /// The scripted HUD. Owns the three debug-toggle checkboxes; the
     /// fields below are refreshed from it each frame. `None` only if
@@ -186,6 +196,20 @@ struct GameScene {
     /// current position, so you can see when the sliders bring them into
     /// alignment for "The Advent".
     celestial_paths_on: bool,
+    /// Mirrors the script's `"constellations"` checkbox: draw the generated
+    /// star map (14 constellations, ~84 bright stars + connecting figures) on
+    /// the celestial sphere at night, rotating with time + latitude.
+    constellations_on: bool,
+    /// The generated constellation star map (sky-fixed unit directions, each
+    /// constellation an ordered chain). Built once; drawn rotated each frame.
+    constellations: Vec<Vec<Vec3>>,
+    /// Mirrors the script's `"planets"` checkbox: draw the six other planets as
+    /// coloured markers wandering the ecliptic (geocentric apparent longitude
+    /// from circular orbits → real retrograde) plus the ecliptic track.
+    planets_on: bool,
+    /// A small soft-disc texture (radial alpha), tinted per planet to draw the
+    /// pinhead planet icons as billboards. Uploaded once in `enter`.
+    planet_disc: Option<TextureHandle>,
     /// Locomotion mode, mirroring the script's `"surface_walk"` checkbox.
     /// `false` = fly mode: free 6-DOF, no nav generated. `true` =
     /// surface-walk mode, which generates the LOD2 nav surface around the
@@ -270,6 +294,8 @@ impl Default for GameScene {
             year_month: 6.0,
             sim_speed: 0.0, // paused — the Speed slider starts it
             fog: 0.2,       // a light haze on by default, so the effect is visible
+            latitude: 0.0,  // equator — sun overhead at noon (the prior behaviour)
+            epoch: 0.0,
             script: None,
             wireframe_on: false,
             corner_arrows_on: false,
@@ -279,6 +305,10 @@ impl Default for GameScene {
             camera_lod_on: false,
             lod_billboards_on: false,
             celestial_paths_on: false,
+            constellations_on: false,
+            constellations: generate_constellations(),
+            planets_on: false,
+            planet_disc: None,
             locomotion_walk: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
@@ -1302,6 +1332,8 @@ impl GameScene {
             .with("year_month", self.year_month)
             .with("sim_speed", self.sim_speed)
             .with("fog", self.fog)
+            .with("latitude", self.latitude)
+            .with("epoch", self.epoch)
             .with("corner_arrows", self.corner_arrows.len())
             .with("nav_count", self.navs.len());
 
@@ -1377,6 +1409,9 @@ impl Scene for GameScene {
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
 
+        // Soft disc for the pinhead planet billboards (tinted per planet).
+        self.planet_disc = Some(renderer.load_texture(&build_disc_texture(), 16, 16));
+
         // Gothic UI theme — drawn as the loading widget while Booting, and
         // handed to each PauseScene we push (so pausing never re-uploads).
         self.ui_theme = Some(ui::Theme::build(renderer));
@@ -1432,6 +1467,8 @@ impl Scene for GameScene {
                     self.camera_lod_on = toggles.is_on("camera_lod");
                     self.lod_billboards_on = toggles.is_on("lod_billboards");
                     self.celestial_paths_on = toggles.is_on("celestial_paths");
+                    self.constellations_on = toggles.is_on("constellations");
+                    self.planets_on = toggles.is_on("planets");
 
                     // Interactive HUD controls report their values back: the
                     // move-speed slider and the sensitivity stepper feed the
@@ -1462,6 +1499,12 @@ impl Scene for GameScene {
                     }
                     if let Some(v) = toggles.number("fog") {
                         self.fog = v as f32;
+                    }
+                    if let Some(v) = toggles.number("latitude") {
+                        self.latitude = v as f32;
+                    }
+                    if let Some(v) = toggles.number("epoch") {
+                        self.epoch = v as f32;
                     }
 
                     // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
@@ -1520,7 +1563,11 @@ impl Scene for GameScene {
             let d_days = d_hours / 24.0;
             self.time_of_day = (self.time_of_day + d_hours).rem_euclid(24.0);
             self.moon_phase = (self.moon_phase + d_days / 7.0).rem_euclid(4.0);
-            self.year_month = (self.year_month + d_days / 30.0).rem_euclid(12.0);
+            let new_year = (self.year_month + d_days / 30.0).rem_euclid(12.0);
+            if new_year < self.year_month {
+                self.epoch += 1.0; // year rolled over → keep the planet epoch continuous
+            }
+            self.year_month = new_year;
         }
 
         // Left-click → world pick (inspector). The HUD script consumes
@@ -1621,6 +1668,7 @@ impl Scene for GameScene {
             self.moon_phase,
             self.year_month,
             self.fog,
+            self.latitude.to_radians(),
         ));
         renderer.draw_sky();
 
@@ -1676,18 +1724,97 @@ impl Scene for GameScene {
         if self.celestial_paths_on {
             const ARC_R: f32 = 4000.0;
             let eye = self.position;
-            let sun_ring = celestial_arc(eye, ARC_R, |t| sun_direction(t, self.year_month));
+            let lat = self.latitude.to_radians();
+            let sun_ring = celestial_arc(eye, ARC_R, |t| sun_direction(t, self.year_month, lat));
             let moon_ring = celestial_arc(eye, ARC_R, |t| {
-                moon_direction(t, self.moon_phase, self.year_month)
+                moon_direction(t, self.moon_phase, self.year_month, lat)
             });
             renderer.draw_lines(&sun_ring, [0.95, 0.66, 0.28, 0.85]); // warm amber
             renderer.draw_lines(&moon_ring, [0.50, 0.60, 0.90, 0.85]); // cool blue
 
-            let sun_now = eye + sun_direction(self.time_of_day, self.year_month) * ARC_R;
-            let moon_now =
-                eye + moon_direction(self.time_of_day, self.moon_phase, self.year_month) * ARC_R;
+            let sun_now = eye + sun_direction(self.time_of_day, self.year_month, lat) * ARC_R;
+            let moon_now = eye
+                + moon_direction(self.time_of_day, self.moon_phase, self.year_month, lat) * ARC_R;
             renderer.draw_lines(&cross_marker(sun_now, 90.0), [1.0, 0.85, 0.45, 1.0]);
             renderer.draw_lines(&cross_marker(moon_now, 90.0), [0.72, 0.84, 1.0, 1.0]);
+        }
+
+        // Constellations: the generated star map, drawn on the celestial sphere
+        // and rotated by the same time + latitude transform as the sun/moon, so
+        // it wheels overhead correctly. Fades in at night (alpha from the sun's
+        // depth below the horizon); depth-tested, so terrain occludes the part
+        // below the horizon.
+        if self.constellations_on {
+            const SKY_R: f32 = 4200.0;
+            let lat = self.latitude.to_radians();
+            let sun_y = sun_direction(self.time_of_day, self.year_month, lat).y;
+            let night = 1.0 - smoothstep(-0.12, 0.06, sun_y);
+            if night > 0.02 {
+                let m = latitude_mat(lat) * Mat4::from_rotation_z(day_angle(self.time_of_day));
+                let to_sky = |d: Vec3| self.position + m.transform_vector3(d) * SKY_R;
+                let mut figures: Vec<(Vec3, Vec3)> = Vec::new();
+                let mut stars: Vec<(Vec3, Vec3)> = Vec::new();
+                for cons in &self.constellations {
+                    for pair in cons.windows(2) {
+                        figures.push((to_sky(pair[0]), to_sky(pair[1])));
+                    }
+                    for &s in cons {
+                        stars.extend(cross_marker(to_sky(s), 45.0));
+                    }
+                }
+                renderer.draw_lines(&figures, [0.50, 0.58, 0.82, 0.45 * night]);
+                renderer.draw_lines(&stars, [0.94, 0.96, 1.0, (0.95 * night).min(1.0)]);
+            }
+        }
+
+        // Planets: the six other worlds (we're the seventh), riding the
+        // ecliptic as pinhead billboard discs (tinted by their colour, gas
+        // giants a touch larger). Each apparent direction is a *geocentric*
+        // solve — `normalize(heliocentric_planet − heliocentric_earth)`, both on
+        // circular orbits — so they wander and go retrograde as time advances.
+        // Driven by the continuous `epoch` (+ the within-year season), so they
+        // sweep their orbits smoothly across years (no wrap snap).
+        if let (true, Some(tex)) = (self.planets_on, self.planet_disc) {
+            use std::f32::consts::TAU;
+            const SKY_R: f32 = 4100.0;
+            let lat = self.latitude.to_radians();
+            let m = latitude_mat(lat) * Mat4::from_rotation_z(day_angle(self.time_of_day));
+            let (se, ce) = 0.41_f32.sin_cos(); // ecliptic obliquity (~23.5°)
+            let ecl = |lon: f32| Vec3::new(lon.cos(), lon.sin() * ce, lon.sin() * se);
+            let to_sky = |d: Vec3| self.position + m.transform_vector3(d) * SKY_R;
+
+            // The ecliptic itself — the shared planetary highway.
+            let mut track: Vec<(Vec3, Vec3)> = Vec::with_capacity(72);
+            let mut prev = to_sky(ecl(0.0));
+            for i in 1..=72 {
+                let p = to_sky(ecl(i as f32 / 72.0 * TAU));
+                track.push((prev, p));
+                prev = p;
+            }
+            renderer.draw_lines(&track, [0.42, 0.40, 0.52, 0.40]);
+
+            // (orbital radius AU, period yr, phase, colour, billboard size).
+            // Earth (r=1) is us; inner hot/rocky, outer gas-giant sizes & hues.
+            let planets: [(f32, f32, f32, [f32; 4], f32); 6] = [
+                (0.39, 0.24, 0.0, [0.80, 0.72, 0.62, 1.0], 30.0), // mercury, rock
+                (0.72, 0.62, 1.1, [0.98, 0.90, 0.66, 1.0], 40.0), // venus, sulfur
+                (1.52, 1.88, 2.4, [0.90, 0.38, 0.24, 1.0], 32.0), // mars, rust
+                (5.20, 11.9, 3.9, [0.86, 0.74, 0.56, 1.0], 56.0), // jupiter, banded
+                (9.54, 29.5, 5.0, [0.90, 0.82, 0.54, 1.0], 50.0), // saturn, pale gold
+                (19.2, 84.0, 0.7, [0.58, 0.86, 0.88, 1.0], 44.0), // uranus, ice cyan
+            ];
+            // Continuous orbital angle: whole years (epoch) + the within-year
+            // season, so the planets match Earth's seasonal position and never
+            // snap at the year wrap.
+            let theta_e = (self.epoch + self.year_month / 12.0) * TAU;
+            let earth = Vec2::new(theta_e.cos(), theta_e.sin()); // r_earth = 1
+            for (r, t, phase, color, size) in planets {
+                let theta = phase + theta_e / t;
+                let helio = Vec2::new(theta.cos(), theta.sin()) * r;
+                let d = helio - earth;
+                let pos = to_sky(ecl(d.y.atan2(d.x)));
+                renderer.draw_billboard(tex, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, color);
+            }
         }
 
         // LOD billboards: a digit per cluster, sitting on the navmesh surface
@@ -1820,25 +1947,40 @@ fn season_tilt(year_month: f32) -> f32 {
     0.25 * -((year_month / 12.0) * TAU).cos()
 }
 
-/// Direction toward the sun for a time of day + season. A circle in the
-/// east–up–west–down plane, phased so 06:00 is the eastern horizon, noon is
-/// overhead, 18:00 the western horizon. **The shared source of truth** for the
-/// lighting (`compute_scene`) and the celestial-path overlay, so the drawn arc
-/// and the actual light can never disagree.
-fn sun_direction(time_of_day: f32, year_month: f32) -> Vec3 {
+/// Daily spin angle of the celestial sphere for a time of day (06:00 puts the
+/// sun on the eastern horizon, noon overhead at the equator).
+fn day_angle(time_of_day: f32) -> f32 {
     use std::f32::consts::TAU;
-    let a = ((time_of_day - 6.0) / 24.0) * TAU;
-    Vec3::new(a.cos(), a.sin(), season_tilt(year_month)).normalize()
+    ((time_of_day - 6.0) / 24.0) * TAU
+}
+
+/// Observer-latitude tilt: rotate the equatorial frame by `-latitude` about the
+/// east–west (X) axis, lifting the celestial pole to altitude `latitude`.
+/// `0` = equator (sun overhead at noon); `π/2` = north pole (the sun wheels
+/// around the horizon, wobbling by season). The one transform shared by the
+/// sun, the moon, and the star field, so they all swing together.
+fn latitude_mat(latitude: f32) -> Mat4 {
+    Mat4::from_rotation_x(-latitude)
+}
+
+/// Direction toward the sun for a time of day + season + latitude. **The shared
+/// source of truth** for the lighting (`compute_scene`) and the celestial-path
+/// overlay, so the drawn arc and the actual light can never disagree.
+fn sun_direction(time_of_day: f32, year_month: f32, latitude: f32) -> Vec3 {
+    let a = day_angle(time_of_day);
+    let eq = Vec3::new(a.cos(), a.sin(), season_tilt(year_month)).normalize();
+    latitude_mat(latitude).transform_vector3(eq)
 }
 
 /// Direction toward the moon: the sun's arc offset by the lunar phase (one
 /// full turn per `0..4`-week cycle), with a slight opposite seasonal lean. At
 /// phase `0`/`4` (new moon) it coincides with the sun — the alignment that
 /// makes "The Advent".
-fn moon_direction(time_of_day: f32, moon_phase: f32, year_month: f32) -> Vec3 {
+fn moon_direction(time_of_day: f32, moon_phase: f32, year_month: f32, latitude: f32) -> Vec3 {
     use std::f32::consts::TAU;
-    let a = ((time_of_day - 6.0) / 24.0) * TAU + (moon_phase / 4.0) * TAU;
-    Vec3::new(a.cos(), a.sin(), -season_tilt(year_month) * 0.5).normalize()
+    let a = day_angle(time_of_day) + (moon_phase / 4.0) * TAU;
+    let eq = Vec3::new(a.cos(), a.sin(), -season_tilt(year_month) * 0.5).normalize();
+    latitude_mat(latitude).transform_vector3(eq)
 }
 
 /// Sample a body's direction across a full day (`dir_at(time_of_day)`) into a
@@ -1865,6 +2007,74 @@ fn cross_marker(center: Vec3, half: f32) -> [(Vec3, Vec3); 3] {
         (center - Vec3::Y * half, center + Vec3::Y * half),
         (center - Vec3::Z * half, center + Vec3::Z * half),
     ]
+}
+
+/// Integer hash → `[0, 1)`. Deterministic, stateless — a stand-in for an RNG so
+/// the generated star map is identical every run.
+fn hash01(n: u32) -> f32 {
+    let mut x = n.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    x = ((x >> ((x >> 28).wrapping_add(4))) ^ x).wrapping_mul(277_803_737);
+    x = (x >> 22) ^ x;
+    (x & 0x00ff_ffff) as f32 / 16_777_216.0
+}
+
+/// Deterministically generate 14 constellations of bright stars on the
+/// celestial unit sphere — each a cluster of 5–7 stars spread around a centre,
+/// returned as an ordered list (connect consecutive stars to draw the figure).
+/// ~84 stars total (≥ the asked 77). Sky-fixed; the draw path rotates them with
+/// time + latitude like everything else celestial.
+fn generate_constellations() -> Vec<Vec<Vec3>> {
+    use std::f32::consts::TAU;
+    let mut out = Vec::with_capacity(14);
+    for c in 0..14u32 {
+        // Centre spread around the sphere, kept off the exact poles.
+        let theta = hash01(c * 13 + 1) * TAU;
+        let z = hash01(c * 13 + 2) * 1.6 - 0.8;
+        let r = (1.0 - z * z).max(0.0).sqrt();
+        let center = Vec3::new(r * theta.cos(), r * theta.sin(), z);
+        // Local tangent frame for the cluster's spread.
+        let aux = if center.z.abs() < 0.9 {
+            Vec3::Z
+        } else {
+            Vec3::X
+        };
+        let tx = aux.cross(center).normalize();
+        let ty = center.cross(tx);
+        let n = 5 + (hash01(c * 13 + 3) * 3.0) as usize; // 5..7 stars
+        let mut stars = Vec::with_capacity(n);
+        for s in 0..n {
+            let h1 = hash01(c * 211 + s as u32 * 3 + 7);
+            let h2 = hash01(c * 211 + s as u32 * 3 + 8);
+            let spread = 0.22; // angular radius of the figure
+            let p = center + tx * ((h1 - 0.5) * spread) + ty * ((h2 - 0.5) * spread);
+            stars.push(p.normalize());
+        }
+        out.push(stars);
+    }
+    out
+}
+
+/// A small white soft-disc RGBA texture (radial alpha falloff) — tinted per
+/// planet to draw the pinhead planet billboards. White so the billboard's
+/// colour tint becomes the planet's colour.
+fn build_disc_texture() -> Vec<u8> {
+    const S: usize = 16;
+    let mut px = vec![0u8; S * S * 4];
+    let c = (S as f32 - 1.0) * 0.5;
+    for y in 0..S {
+        for x in 0..S {
+            let dx = x as f32 - c;
+            let dy = y as f32 - c;
+            let d = (dx * dx + dy * dy).sqrt() / c; // 0 centre … 1 edge
+            let a = 1.0 - smoothstep(0.65, 1.0, d); // soft round edge
+            let i = (y * S + x) * 4;
+            px[i] = 255;
+            px[i + 1] = 255;
+            px[i + 2] = 255;
+            px[i + 3] = (a * 255.0) as u8;
+        }
+    }
+    px
 }
 
 /// Angular radii of the celestial discs, **mirrored in `sky.wgsl`**. The
@@ -1897,11 +2107,20 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 /// * `fog` (`0..1`) is the distance-fog amount; the haze is tinted to the sky
 ///   horizon (so it reacts to time of day *and* the eclipse) and modulated by a
 ///   gentle "thicker when the sun is low" weather curve.
-fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32) -> SceneLighting {
+/// * `latitude` (radians, `0` = equator, `π/2` = north pole) tilts the whole
+///   celestial sphere — sun, moon, and star field — so the sun's arc lowers
+///   toward a horizon-grazing wheel near the pole.
+fn compute_scene(
+    time_of_day: f32,
+    moon_phase: f32,
+    year_month: f32,
+    fog: f32,
+    latitude: f32,
+) -> SceneLighting {
     use std::f32::consts::TAU;
 
     // Sun position + how high it sits drives intensity and warmth.
-    let sun_dir = sun_direction(time_of_day, year_month);
+    let sun_dir = sun_direction(time_of_day, year_month, latitude);
     let sun_up = sun_dir.y.max(0.0); // 0 at/below horizon → 1 overhead
     let sun_amt = (sun_dir.y * 3.0).clamp(0.0, 1.0); // short twilight ramp
                                                      // Warm at the horizon (dawn/dusk), white when high.
@@ -1911,7 +2130,7 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32) -
 
     // Moon: same arc offset by the phase; brightness is the lit fraction of the
     // disc (0 at new moon, 1 at full) gated by how high it sits.
-    let moon_dir = moon_direction(time_of_day, moon_phase, year_month);
+    let moon_dir = moon_direction(time_of_day, moon_phase, year_month, latitude);
     let moon_amt = (moon_dir.y * 3.0).clamp(0.0, 1.0);
     let illum = 0.5 - 0.5 * ((moon_phase / 4.0) * TAU).cos();
     let moon_color = Vec3::new(0.34, 0.42, 0.66) * (moon_amt * illum * 0.55);
@@ -1953,6 +2172,13 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32) -
     let fog_color = sky_horizon;
     let fog_density = fog.clamp(0.0, 1.0) * 0.0020 * fog_curve;
 
+    // World→celestial rotation for the star field: the inverse of the forward
+    // transform that places a sky-fixed point (latitude tilt ∘ daily spin), so
+    // the stars wheel with time of day and tilt with latitude exactly like the
+    // sun and moon.
+    let star_rotation =
+        (latitude_mat(latitude) * Mat4::from_rotation_z(day_angle(time_of_day))).inverse();
+
     SceneLighting {
         sun_dir,
         sun_color,
@@ -1963,6 +2189,7 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32) -
         sky_horizon,
         fog_color,
         fog_density,
+        star_rotation,
         ..SceneLighting::default()
     }
 }
@@ -2845,6 +3072,8 @@ mod script_smoke {
             .with("year_month", 6.0_f32)
             .with("sim_speed", 12.0_f32)
             .with("fog", 0.2_f32)
+            .with("latitude", 45.0_f32)
+            .with("epoch", 3.0_f32)
     }
 
     #[test]

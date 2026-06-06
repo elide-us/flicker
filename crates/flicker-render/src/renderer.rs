@@ -679,5 +679,6 @@ fn scene_to_sky_uniform(s: &SceneLighting, inv_view_proj: Mat4, camera_pos: Vec3
         moon_color: [s.moon_color.x, s.moon_color.y, s.moon_color.z, 0.0],
         zenith: [s.sky_zenith.x, s.sky_zenith.y, s.sky_zenith.z, 0.0],
         horizon: [s.sky_horizon.x, s.sky_horizon.y, s.sky_horizon.z, 0.0],
+        star_rotation: s.star_rotation.to_cols_array_2d(),
     }
 }

@@ -17,6 +17,7 @@ members = [
     "examples/square-chase",
     "examples/mesh-smoke",
     "examples/voxel-cluster",
+    "examples/hex-world",
 ]
 
 [workspace.package]

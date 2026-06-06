@@ -100,12 +100,16 @@
         { "key": "navmesh", "label": "Navmesh wireframe" },
         { "key": "camera_lod", "label": "Camera-driven LOD" },
         { "key": "lod_billboards", "label": "LOD billboards" },
-        { "key": "celestial_paths", "label": "Celestial paths (Advent)" }
+        { "key": "celestial_paths", "label": "Celestial paths (Advent)" },
+        { "key": "constellations", "label": "Constellations / star map" },
+        { "key": "planets", "label": "Planets / ecliptic" }
       ]
     },
     "controls": {
       "label_x": 16,
       "widget_x": 120,
+      "margin_b": 70,
+      "row_h": 26,
       "label_size": 14,
       "label_color": [0.78, 0.81, 0.86, 1.0],
       "speed": { "y": 340, "label": "Move speed", "min": 20, "max": 200, "w": 150, "h": 12 },
@@ -152,8 +156,8 @@
       "margin_y": 22,
       "unit": 192,
       "gap": 18,
-      "row_gap": 52,
-      "track_h": 32,
+      "row_gap": 14,
+      "track_h": 28,
       "pad": 20,
       "header_h": 30,
       "backdrop": [0.035, 0.04, 0.055, 0.74],
@@ -166,6 +170,8 @@
       "year": { "label": "Year", "min": 0.0, "max": 12.0, "ticks": 12 },
       "speed": { "label": "Speed (sim min/s · 0 = paused)", "min": 0.0, "max": 120.0, "ticks": 12 },
       "fog": { "label": "Fog", "min": 0.0, "max": 1.0, "ticks": 10 },
+      "latitude": { "label": "Latitude", "min": 0.0, "max": 90.0, "ticks": 9 },
+      "epoch": { "label": "Epoch (planet orbits, yr)", "min": 0.0, "max": 100.0, "ticks": 10 },
       "style": {
         "track": [0.09, 0.10, 0.12, 0.96],
         "fill": [0.55, 0.43, 0.23, 1.0],

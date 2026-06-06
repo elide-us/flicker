@@ -16,12 +16,19 @@ local widget_state = {}
 
 -- The interactive controls' widget rects, from UI.hud.controls (label on the
 -- left, widget at `widget_x`).
-local function control_rects()
+local function control_rects(sh)
   local c = UI.hud.controls
+  local rh = c.row_h
+  -- Bottom-left, stacked upward, so the (now larger) checkbox table above never
+  -- covers it. `margin_b` leaves room below the locomotion row for its dropdown
+  -- to open on-screen.
+  local loco_y = sh - c.margin_b
+  local sens_y = loco_y - rh
+  local speed_y = sens_y - rh
   return c, {
-    speed = { x = c.widget_x, y = c.speed.y, w = c.speed.w, h = c.speed.h },
-    sens = { x = c.widget_x, y = c.sens.y, w = c.sens.w, h = c.sens.h },
-    loco = { x = c.widget_x, y = c.locomotion.y, w = c.locomotion.w, h = c.locomotion.h },
+    speed = { x = c.widget_x, y = speed_y, w = c.speed.w, h = c.speed.h },
+    sens = { x = c.widget_x, y = sens_y, w = c.sens.w, h = c.sens.h },
+    loco = { x = c.widget_x, y = loco_y, w = c.locomotion.w, h = c.locomotion.h },
   }
 end
 
@@ -50,7 +57,11 @@ local function lighting_rects(sw, sh)
   local row3_track_dy = row3_label_dy + label_h
   local row4_label_dy = row3_track_dy + th + L.row_gap
   local row4_track_dy = row4_label_dy + label_h
-  local panel_h = row4_track_dy + th + pad * 2
+  local row5_label_dy = row4_track_dy + th + L.row_gap
+  local row5_track_dy = row5_label_dy + label_h
+  local row6_label_dy = row5_track_dy + th + L.row_gap
+  local row6_track_dy = row6_label_dy + label_h
+  local panel_h = row6_track_dy + th + pad * 2
   local px = sw - L.margin_x - panel_w
   local py = sh - L.margin_y - panel_h
   local cx, cy = px + pad, py + pad
@@ -59,6 +70,8 @@ local function lighting_rects(sw, sh)
   local year = { x = cx, y = cy + row2_track_dy, w = total_w, h = th }
   local speed = { x = cx, y = cy + row3_track_dy, w = total_w, h = th }
   local fog = { x = cx, y = cy + row4_track_dy, w = total_w, h = th }
+  local lat = { x = cx, y = cy + row5_track_dy, w = total_w, h = th }
+  local epoch = { x = cx, y = cy + row6_track_dy, w = total_w, h = th }
   local panel = { x = px, y = py, w = panel_w, h = panel_h }
   local labels = {
     header = { x = cx, y = cy },
@@ -67,8 +80,10 @@ local function lighting_rects(sw, sh)
     year = { x = year.x, y = cy + row2_label_dy },
     speed = { x = speed.x, y = cy + row3_label_dy },
     fog = { x = fog.x, y = cy + row4_label_dy },
+    lat = { x = lat.x, y = cy + row5_label_dy },
+    epoch = { x = epoch.x, y = cy + row6_label_dy },
   }
-  return L, sun, moon, year, speed, fog, panel, labels
+  return L, sun, moon, year, speed, fog, lat, epoch, panel, labels
 end
 
 local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
@@ -102,6 +117,19 @@ local function fmt_fog(v)
   return string.format("%.0f%%", v * 100)
 end
 
+local function fmt_lat(v)
+  if v >= 89.5 then
+    return "north pole"
+  elseif v <= 0.5 then
+    return "equator"
+  end
+  return string.format("%.0f°N", v)
+end
+
+local function fmt_epoch(v)
+  return string.format("yr %.1f", v)
+end
+
 -- The i-th checkbox's clickable square, from the JSON geometry.
 local function box_rect(i)
   local cb = UI.hud.checkboxes
@@ -132,7 +160,7 @@ function M.update(mx, my, clicked, sw, sh, down)
   -- current value comes from the Model, the new value goes back in `states`,
   -- and the host applies it (so next frame the Model reflects it).
   if Model and Widgets then
-    local c, r = control_rects()
+    local c, r = control_rects(sh)
     states.move_speed = Widgets.slider_update(
       widget_state,
       "speed",
@@ -163,7 +191,7 @@ function M.update(mx, my, clicked, sw, sh, down)
     -- year (season). Wide tracks + absolute drag, so a click/touch sets the
     -- handle where the cursor is — fine control, no big jumps.
     if UI.hud.lighting then
-      local L, sun, moon, year, speed, fog, panel = lighting_rects(sw, sh)
+      local L, sun, moon, year, speed, fog, lat, epoch, panel = lighting_rects(sw, sh)
       states.time_of_day =
         Widgets.slider_update(widget_state, "sun", sun, mx, my, clicked, down, Model.time_of_day or 12, L.sun.min, L.sun.max)
       states.moon_phase =
@@ -186,6 +214,30 @@ function M.update(mx, my, clicked, sw, sh, down)
       )
       states.fog =
         Widgets.slider_update(widget_state, "fog", fog, mx, my, clicked, down, Model.fog or 0, L.fog.min, L.fog.max)
+      states.latitude = Widgets.slider_update(
+        widget_state,
+        "latitude",
+        lat,
+        mx,
+        my,
+        clicked,
+        down,
+        Model.latitude or 0,
+        L.latitude.min,
+        L.latitude.max
+      )
+      states.epoch = Widgets.slider_update(
+        widget_state,
+        "epoch",
+        epoch,
+        mx,
+        my,
+        clicked,
+        down,
+        Model.epoch or 0,
+        L.epoch.min,
+        L.epoch.max
+      )
       -- Tell the engine the pointer is over this panel so it suppresses the
       -- world-pick on the same press (the static top-left HUD guard in Rust
       -- doesn't know this screen-relative, lower-right panel).
@@ -320,18 +372,18 @@ end
 -- Interactive controls: a move-speed slider, a sensitivity stepper, and a
 -- locomotion dropdown — drawn from the Widgets toolkit, styled from JSON, with
 -- live values from the Model.
-local function controls(cmds)
+local function controls(cmds, sh)
   if not (Model and Widgets) then
     return
   end
-  local c, r = control_rects()
+  local c, r = control_rects(sh)
   local lc = c.label_color
-  local function lbl(spec)
+  local function lbl(text, y)
     cmds[#cmds + 1] = {
       kind = "text",
       x = c.label_x,
-      y = spec.y,
-      text = spec.label,
+      y = y,
+      text = text,
       size = c.label_size,
       r = lc[1],
       g = lc[2],
@@ -340,11 +392,11 @@ local function controls(cmds)
     }
   end
 
-  lbl(c.speed)
+  lbl(c.speed.label, r.speed.y)
   Widgets.slider_draw(cmds, r.speed, Model.move_speed or 0, c.speed.min, c.speed.max, c.slider_style)
-  lbl(c.sens)
+  lbl(c.sens.label, r.sens.y)
   Widgets.stepper_draw(cmds, r.sens, Model.look_sens or 0, c.stepper_style, c.sens.fmt)
-  lbl(c.locomotion)
+  lbl(c.locomotion.label, r.loco.y)
   local current = (Model.walk and 2) or 1
   Widgets.dropdown_draw(cmds, widget_state, "loco", r.loco, c.locomotion.options, current, c.dropdown_style)
 end
@@ -356,7 +408,7 @@ local function lighting(cmds, sw, sh)
   if not (Model and Widgets and UI.hud.lighting) then
     return
   end
-  local L, sun, moon, year, speed, fog, panel, labels = lighting_rects(sw, sh)
+  local L, sun, moon, year, speed, fog, lat, epoch, panel, labels = lighting_rects(sw, sh)
   local st = L.style
 
   local bg = L.backdrop
@@ -411,6 +463,8 @@ local function lighting(cmds, sw, sh)
   row(labels.year, L.year.label, Model.year_month or 6, fmt_month, year, L.year)
   row(labels.speed, L.speed.label, Model.sim_speed or 0, fmt_speed, speed, L.speed)
   row(labels.fog, L.fog.label, Model.fog or 0, fmt_fog, fog, L.fog)
+  row(labels.lat, L.latitude.label, Model.latitude or 0, fmt_lat, lat, L.latitude)
+  row(labels.epoch, L.epoch.label, Model.epoch or 0, fmt_epoch, epoch, L.epoch)
 end
 
 function M.draw(sw, sh)
@@ -420,7 +474,7 @@ function M.draw(sw, sh)
   local cmds = {}
   stats(cmds)
   checkboxes(cmds)
-  controls(cmds)
+  controls(cmds, sh)
   lighting(cmds, sw, sh)
   return cmds
 end

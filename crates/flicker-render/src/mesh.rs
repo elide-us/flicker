@@ -170,6 +170,11 @@ pub struct SceneLighting {
     pub grade: Vec3,
     /// Colour-grade strength in `0..1`. `0.0` ⇒ no grade. Later slice.
     pub grade_strength: f32,
+    /// World→celestial rotation for the procedural night sky (stars + Milky
+    /// Way). A view ray transformed by this lands in a sky-fixed frame, so the
+    /// stars rotate with time of day and tilt with latitude. Identity leaves
+    /// the star field locked to the camera. Only the sky pass uses it.
+    pub star_rotation: Mat4,
 }
 
 impl Default for SceneLighting {
@@ -188,6 +193,7 @@ impl Default for SceneLighting {
             fog_density: 0.0,
             grade: Vec3::ZERO,
             grade_strength: 0.0,
+            star_rotation: Mat4::IDENTITY,
         }
     }
 }

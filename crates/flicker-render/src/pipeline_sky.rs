@@ -33,6 +33,7 @@ pub struct SkyUniform {
     pub moon_color: [f32; 4],
     pub zenith: [f32; 4],
     pub horizon: [f32; 4],
+    pub star_rotation: [[f32; 4]; 4],
 }
 
 const SKY_UNIFORM_SIZE: u64 = std::mem::size_of::<SkyUniform>() as u64;
@@ -50,6 +51,7 @@ impl Default for SkyUniform {
             moon_color: [0.0; 4],
             zenith: [0.012, 0.016, 0.030, 0.0],
             horizon: [0.030, 0.040, 0.085, 0.0],
+            star_rotation: Mat4::IDENTITY.to_cols_array_2d(),
         }
     }
 }

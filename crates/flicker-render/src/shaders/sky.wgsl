@@ -28,7 +28,35 @@ struct Sky {
     moon_color: vec4<f32>,   // moon radiance — cool, dim, peaks at full moon
     zenith: vec4<f32>,       // sky colour straight up; w unused
     horizon: vec4<f32>,      // sky colour at the horizon band; w unused
+    star_rotation: mat4x4<f32>, // world→celestial: rotates the star field with time + latitude
 };
+
+// Hash a 3D cell to [0,1) (Dave Hoskins, hash13). Deterministic, no texture.
+fn hash13(p3in: vec3<f32>) -> f32 {
+    var p3 = fract(p3in * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// Procedural star field over a celestial direction. Bins the sphere into a fine
+// cell grid; a fraction of cells hold a star (more inside the Milky Way band,
+// via `density`), drawn as a soft round point with a hashed brightness.
+fn star_field(cel: vec3<f32>, density: f32) -> f32 {
+    let scale = 240.0;
+    let p = cel * scale;
+    let cell = floor(p);
+    let present = hash13(cell);
+    let threshold = 0.018 + density * 0.10;
+    if (present > threshold) {
+        return 0.0;
+    }
+    // Sub-cell position + brightness, each from a decorrelated hash.
+    let sp = vec3<f32>(hash13(cell + 11.5), hash13(cell + 23.7), hash13(cell + 37.1));
+    let d = length(fract(p) - sp);
+    let core = smoothstep(0.18, 0.0, d);
+    let bright = 0.25 + 0.75 * hash13(cell + 5.3);
+    return core * bright;
+}
 
 @group(0) @binding(0) var<uniform> sky: Sky;
 
@@ -72,6 +100,25 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Below the horizon, sink to a dark ground haze (mostly hidden by terrain).
     let below = clamp(-up * 4.0, 0.0, 1.0);
     col = mix(col, sky.horizon.rgb * 0.30, below);
+
+    // Night sky: a star scattering + a Milky Way band, rotated into the
+    // sky-fixed frame so they wheel with time of day and tilt with latitude.
+    // They rise as the sun sets (`night`) and are painted over by the
+    // sun/moon glow + discs drawn afterwards.
+    let night = 1.0 - smoothstep(-0.12, 0.06, sky.sun_dir.y);
+    if (night > 0.002) {
+        let cel = normalize((sky.star_rotation * vec4<f32>(dir, 0.0)).xyz);
+        // Galactic plane: a fixed great circle in celestial space; the band is
+        // the region near-perpendicular to its pole.
+        let g_pole = normalize(vec3<f32>(0.20, 0.46, 0.86));
+        let band = 1.0 - smoothstep(0.0, 0.30, abs(dot(cel, g_pole)));
+        // Faint dusty nebulosity along the band, mottled by a coarse hash.
+        let milky = pow(band, 2.0) * (0.5 + 0.5 * hash13(floor(cel * 60.0)));
+        col += vec3<f32>(0.34, 0.40, 0.56) * (milky * 0.05 * night);
+        // Star scatter — denser inside the Milky Way band.
+        let stars = star_field(cel, band);
+        col += vec3<f32>(0.85, 0.90, 1.0) * (stars * night);
+    }
 
     // Faked sun scattering: a wide, dim Rayleigh wash (reads as sky glow, not
     // body) + a tight Mie core that hugs the disc, so the sun's *body* reads at

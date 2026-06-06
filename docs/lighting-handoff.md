@@ -119,6 +119,47 @@ mood events** (Part 3).
   `GameScene.fog`, `0..1`) × `0.0020` × a "thicker when the sun is low" curve.
   Fog lives only in the 3D mesh pass, so the HUD/2D stays crisp (invariant #2).
 
+### "Total juice" round — latitude + night sky (landed)
+
+All built on the existing celestial frame; the celestial geometry is now one
+shared rotation (`day_angle` daily spin ∘ `latitude_mat` tilt) used by the sun,
+moon, star field, and constellations, so everything wheels together.
+
+- **Latitude control** (`UI.hud.lighting.latitude`, `GameScene.latitude` in
+  degrees `0..90`): `latitude_mat(lat) = R_x(−lat)` tilts the equatorial frame
+  so the pole rises to altitude `lat`. `0` = equator (unchanged), `90` = north
+  pole (sun wheels the horizon, wobbling by season). Threaded through
+  `sun_direction`/`moon_direction` (so the path overlay tilts too) and the star
+  rotation. The fifth cycle-panel row; `row_gap` dropped 52→26 so five rows fit.
+- **Procedural night sky** (`sky.wgsl`): a hashed **star scatter** (`star_field`
+  + `hash13`, hundreds of points) and a **Milky Way band** (nebulosity + denser
+  stars near a fixed galactic pole), both sampled in a **sky-fixed frame** via a
+  new `star_rotation` mat4 in the Sky uniform (world→celestial = inverse of
+  `latitude_mat ∘ R_z(day_angle)`), so they wheel with time and tilt with
+  latitude. Faded in by `night` (sun below horizon); painted under the
+  sun/moon glow + discs. `SceneLighting.star_rotation` carries it (renderer →
+  `SkyUniform`).
+- **Constellations** (`"constellations"` HUD checkbox, `generate_constellations`
+  + `hash01`): 14 deterministic figures, ~84 bright stars, drawn on the
+  celestial sphere via `draw_lines` (connecting figures + per-star crosses),
+  rotated by the shared transform and night-faded. Sky-fixed, built once.
+
+- **Planets + ecliptic** (`"planets"` HUD checkbox): the six other worlds
+  (we're the seventh) as **pinhead billboard discs** (`build_disc_texture` soft
+  disc, tinted per planet — inner rocky / outer gas-giant hues & sizes, ~0.1× the
+  sun), riding a defined **ecliptic great circle** (obliquity ~23.5°,
+  *independent* of the simplified sun model). Each apparent direction is a real
+  **geocentric solve** — `normalize(helio_planet − helio_earth)` from circular
+  orbits with per-planet `(radius, period, phase, colour, size)` — so they
+  wander and go **retrograde**, then ride the shared daily + latitude rotation.
+  The ecliptic is drawn as the track.
+- **Orbital epoch** (`UI.hud.lighting.epoch`, `GameScene.epoch`, sixth cycle row,
+  Earth-years): a **continuous** orbital clock — `θ_E = (epoch + year_month/12)·τ`
+  — so the planets sweep their orbits smoothly with **no year-wrap snap**. The
+  auto-sim bumps `epoch += 1` whenever `year_month` rolls 12→0; the slider scrubs
+  planets around their orbits directly. (Panel is now six rows; `track_h`/`row_gap`
+  tightened to 28/14 to fit at 540p.)
+
 **With fog in, Parts 1 + 2 are complete.** Remaining is optional / separate:
 - **Full LUT/post colour grade** — the parked richer path (offscreen target +
   fullscreen pass); the forward eclipse darkening already covers the Advent.
