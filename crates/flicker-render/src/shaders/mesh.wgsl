@@ -142,5 +142,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let sun = scene.sun_color.rgb * max(dot(in.world_normal, scene.sun_dir.xyz), 0.0);
     let moon = scene.moon_color.rgb * max(dot(in.world_normal, scene.moon_dir.xyz), 0.0);
     let shaded = base * (scene.ambient.rgb + sun + moon);
-    return vec4<f32>(shaded, 1.0) * per_draw.tint;
+    let lit = vec4<f32>(shaded, 1.0) * per_draw.tint;
+
+    // Distance fog (forward): exponential by view distance, blending the lit
+    // surface toward `fog_color` — driven example-side to the sky-horizon
+    // colour, so far terrain melts into the sky rather than a flat grey wall.
+    // `fog_color.w` is the density (0 ⇒ no fog); the camera position rides in
+    // the Scene uniform. Keeps the HUD/2D crisp — fog lives only in the 3D pass.
+    let dist = length(in.world_position - scene.camera_pos.xyz);
+    let fog = 1.0 - exp(-scene.fog_color.w * dist);
+    let rgb = mix(lit.rgb, scene.fog_color.rgb, fog);
+    return vec4<f32>(rgb, lit.a);
 }

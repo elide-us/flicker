@@ -144,6 +144,11 @@ struct GameScene {
     /// month, 360-day year) so the sky genuinely evolves — eclipses recur on
     /// their own. Lets the motion run for recording at a chosen speed.
     sim_speed: f32,
+    /// Distance-fog amount `0..1` from the lower-right "Fog" slider. `0` = clear.
+    /// `compute_scene` turns it into the `Scene` fog density (tinted to the sky
+    /// horizon, so the haze melts into the sky) with a gentle "thicker when the
+    /// sun is low" weather curve on top.
+    fog: f32,
 
     /// The scripted HUD. Owns the three debug-toggle checkboxes; the
     /// fields below are refreshed from it each frame. `None` only if
@@ -264,6 +269,7 @@ impl Default for GameScene {
             moon_phase: 1.0,
             year_month: 6.0,
             sim_speed: 0.0, // paused — the Speed slider starts it
+            fog: 0.2,       // a light haze on by default, so the effect is visible
             script: None,
             wireframe_on: false,
             corner_arrows_on: false,
@@ -1295,6 +1301,7 @@ impl GameScene {
             .with("moon_phase", self.moon_phase)
             .with("year_month", self.year_month)
             .with("sim_speed", self.sim_speed)
+            .with("fog", self.fog)
             .with("corner_arrows", self.corner_arrows.len())
             .with("nav_count", self.navs.len());
 
@@ -1453,6 +1460,9 @@ impl Scene for GameScene {
                     if let Some(v) = toggles.number("sim_speed") {
                         self.sim_speed = v as f32;
                     }
+                    if let Some(v) = toggles.number("fog") {
+                        self.fog = v as f32;
+                    }
 
                     // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
                     // 2 = Walk). Surface-walk generates the nav surface; fly mode
@@ -1610,6 +1620,7 @@ impl Scene for GameScene {
             self.time_of_day,
             self.moon_phase,
             self.year_month,
+            self.fog,
         ));
         renderer.draw_sky();
 
@@ -1883,7 +1894,10 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 ///   (opposite the sun, brightest) at `2`.
 /// * `year_month` (months, `0..12`) tilts the sun arc north/south with the
 ///   season; the eclipse "time of year" gate will hang off this later.
-fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLighting {
+/// * `fog` (`0..1`) is the distance-fog amount; the haze is tinted to the sky
+///   horizon (so it reacts to time of day *and* the eclipse) and modulated by a
+///   gentle "thicker when the sun is low" weather curve.
+fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32) -> SceneLighting {
     use std::f32::consts::TAU;
 
     // Sun position + how high it sits drives intensity and warmth.
@@ -1931,6 +1945,14 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLig
     let sky_zenith = sky_zenith.lerp(Vec3::new(0.035, 0.014, 0.022), eclipse);
     let sky_horizon = sky_horizon.lerp(Vec3::new(0.10, 0.030, 0.042), eclipse);
 
+    // Distance fog: tint = the (now time-of-day- and eclipse-aware) horizon
+    // colour so far terrain melts into the sky; amount = the manual slider with
+    // a gentle weather curve (a touch thicker when the sun sits low, like
+    // morning/evening haze). `0.0020` maps a full slider to a dense pea-souper.
+    let fog_curve = 0.65 + 0.35 * (1.0 - sun_amt);
+    let fog_color = sky_horizon;
+    let fog_density = fog.clamp(0.0, 1.0) * 0.0020 * fog_curve;
+
     SceneLighting {
         sun_dir,
         sun_color,
@@ -1939,6 +1961,8 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32) -> SceneLig
         ambient,
         sky_zenith,
         sky_horizon,
+        fog_color,
+        fog_density,
         ..SceneLighting::default()
     }
 }
@@ -2820,6 +2844,7 @@ mod script_smoke {
             .with("moon_phase", 1.0_f32)
             .with("year_month", 6.0_f32)
             .with("sim_speed", 12.0_f32)
+            .with("fog", 0.2_f32)
     }
 
     #[test]

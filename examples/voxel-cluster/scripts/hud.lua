@@ -48,7 +48,9 @@ local function lighting_rects(sw, sh)
   local row2_track_dy = row2_label_dy + label_h
   local row3_label_dy = row2_track_dy + th + L.row_gap
   local row3_track_dy = row3_label_dy + label_h
-  local panel_h = row3_track_dy + th + pad * 2
+  local row4_label_dy = row3_track_dy + th + L.row_gap
+  local row4_track_dy = row4_label_dy + label_h
+  local panel_h = row4_track_dy + th + pad * 2
   local px = sw - L.margin_x - panel_w
   local py = sh - L.margin_y - panel_h
   local cx, cy = px + pad, py + pad
@@ -56,6 +58,7 @@ local function lighting_rects(sw, sh)
   local moon = { x = cx + unit + gap, y = cy + row1_track_dy, w = unit * 2, h = th }
   local year = { x = cx, y = cy + row2_track_dy, w = total_w, h = th }
   local speed = { x = cx, y = cy + row3_track_dy, w = total_w, h = th }
+  local fog = { x = cx, y = cy + row4_track_dy, w = total_w, h = th }
   local panel = { x = px, y = py, w = panel_w, h = panel_h }
   local labels = {
     header = { x = cx, y = cy },
@@ -63,8 +66,9 @@ local function lighting_rects(sw, sh)
     moon = { x = moon.x, y = cy + row1_label_dy },
     year = { x = year.x, y = cy + row2_label_dy },
     speed = { x = speed.x, y = cy + row3_label_dy },
+    fog = { x = fog.x, y = cy + row4_label_dy },
   }
-  return L, sun, moon, year, speed, panel, labels
+  return L, sun, moon, year, speed, fog, panel, labels
 end
 
 local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
@@ -89,6 +93,13 @@ local function fmt_speed(v)
     return "paused"
   end
   return string.format("%.0f min/s", v)
+end
+
+local function fmt_fog(v)
+  if v <= 0 then
+    return "clear"
+  end
+  return string.format("%.0f%%", v * 100)
 end
 
 -- The i-th checkbox's clickable square, from the JSON geometry.
@@ -152,7 +163,7 @@ function M.update(mx, my, clicked, sw, sh, down)
     -- year (season). Wide tracks + absolute drag, so a click/touch sets the
     -- handle where the cursor is — fine control, no big jumps.
     if UI.hud.lighting then
-      local L, sun, moon, year, speed, panel = lighting_rects(sw, sh)
+      local L, sun, moon, year, speed, fog, panel = lighting_rects(sw, sh)
       states.time_of_day =
         Widgets.slider_update(widget_state, "sun", sun, mx, my, clicked, down, Model.time_of_day or 12, L.sun.min, L.sun.max)
       states.moon_phase =
@@ -173,6 +184,8 @@ function M.update(mx, my, clicked, sw, sh, down)
         L.speed.min,
         L.speed.max
       )
+      states.fog =
+        Widgets.slider_update(widget_state, "fog", fog, mx, my, clicked, down, Model.fog or 0, L.fog.min, L.fog.max)
       -- Tell the engine the pointer is over this panel so it suppresses the
       -- world-pick on the same press (the static top-left HUD guard in Rust
       -- doesn't know this screen-relative, lower-right panel).
@@ -343,7 +356,7 @@ local function lighting(cmds, sw, sh)
   if not (Model and Widgets and UI.hud.lighting) then
     return
   end
-  local L, sun, moon, year, speed, panel, labels = lighting_rects(sw, sh)
+  local L, sun, moon, year, speed, fog, panel, labels = lighting_rects(sw, sh)
   local st = L.style
 
   local bg = L.backdrop
@@ -397,6 +410,7 @@ local function lighting(cmds, sw, sh)
   row(labels.moon, L.moon.label, Model.moon_phase or 0, fmt_moon, moon, L.moon)
   row(labels.year, L.year.label, Model.year_month or 6, fmt_month, year, L.year)
   row(labels.speed, L.speed.label, Model.sim_speed or 0, fmt_speed, speed, L.speed)
+  row(labels.fog, L.fog.label, Model.fog or 0, fmt_fog, fog, L.fog)
 end
 
 function M.draw(sw, sh)

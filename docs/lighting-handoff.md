@@ -110,23 +110,29 @@ mood events** (Part 3).
   cadence via `rem_euclid`, so the sky evolves and eclipses recur on their own —
   for running/recording the motion. Manual scrub still wins the frame it's
   dragged. Distinct widget id `cycle_speed` (vs the move-speed slider's `speed`).
-**Next increments the user flagged (not yet built):**
-- **Distance fog** — the one remaining Part 2 piece: forward fog in `mesh.wgsl`
-  (`mix(shaded, fog_color, 1 − exp(−density·dist))`, `dist` from `camera_pos`),
-  with `fog_color` tied to the sky horizon so fog melts into the sky. Uniform
-  fields (`fog_color`/`fog_density`) already exist, inert. Pairs with a
-  morning-fog curve off `time_of_day` + a manual fog slider.
+
+- **Distance fog** (forward — the last Part 2 piece, **done**): in `mesh.wgsl`,
+  `mix(lit, fog_color, 1 − exp(−density·dist))` with `dist = length(world_pos −
+  camera_pos)`. `compute_scene` sets `fog_color = sky_horizon` (so the haze
+  melts into the sky and reacts to time-of-day **and** the eclipse) and density
+  from a **Fog** slider (fourth cycle-panel row, `UI.hud.lighting.fog`,
+  `GameScene.fog`, `0..1`) × `0.0020` × a "thicker when the sun is low" curve.
+  Fog lives only in the 3D mesh pass, so the HUD/2D stays crisp (invariant #2).
+
+**With fog in, Parts 1 + 2 are complete.** Remaining is optional / separate:
 - **Full LUT/post colour grade** — the parked richer path (offscreen target +
   fullscreen pass); the forward eclipse darkening already covers the Advent.
 - **"Alien" mood events** — low-strength desaturated psychedelic grade presets
-  the cycle blends toward (Part 3 flavour).
+  the cycle blends toward (Part 3 flavour). *(User has accounting in place to
+  spin these off separately — not in this track.)*
 - **Scene selector** (orthogonal, its own track): `--bake <name>` →
   `bake/<name>/…`, a `scenes` dropdown, and a source-reload path
   (`source` swap + `generation` bump + `submit_field_jobs`).
 
-The sections below are the **original** plan/contract; treat Part 1 + the sky +
-the eclipse world-reaction as implemented, and fog + the richer grade/alien
-events as remaining.
+The sections below are the **original** plan/contract; Parts 1 & 2 (sun/moon
+lighting + time-of-day, the procedural sky, the Advent eclipse + world-reaction,
+and distance fog) are **implemented**; the richer grade / alien events / scene
+selector remain as separate tracks.
 
 ## Destination
 
