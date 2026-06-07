@@ -36,8 +36,14 @@ use topology::{HexCoord, HexMap, Hemisphere};
 
 const WORLD_OFFSET: Vec2 = Vec2::new(1234.0, 5678.0);
 const SIM_DT: f32 = 0.05;
-/// Rings per hemisphere (R=2 → 38 hexes total, matching the sketch's 0..37).
-const RINGS: u32 = 2;
+/// Rings per hemisphere (R=3 → 74 hexes total).
+const RINGS: u32 = 3;
+/// The whole world is settled once at startup, then only hexes within this many
+/// rings of the **north pole** keep animating live — the rest are frozen so the
+/// per-frame mesh churn stays small.
+const ANIMATE_RINGS: u32 = 1;
+/// Ticks run on every hex at startup so the static backdrop looks settled.
+const SETTLE_TICKS: u32 = 50;
 /// Meshes rebuild on this real-time cadence, decoupled from the 20 Hz sim, so a
 /// world of tiles doesn't re-upload every frame.
 const REBUILD_INTERVAL: f32 = 0.15;
@@ -115,23 +121,35 @@ fn mk(renderer: &mut Renderer, mesh: (Vec<MeshVertex>, Vec<u32>), tint: [f32; 4]
     })
 }
 
-/// Every tile's biome-coloured surface + cloud deck, placed across the map.
-fn build_world(tiles: &[HexTile], renderer: &mut Renderer) -> Vec<Sheet> {
+/// Push one tile's biome-coloured surface + cloud deck, placed in the map.
+fn push_tile(out: &mut Vec<Sheet>, t: &HexTile, renderer: &mut Renderer) {
+    let s = &t.stack;
+    let model = Mat4::from_translation(Vec3::new(t.place.x, 0.0, t.place.y));
+    let realized = layers::build_sheet(0.0, |i, j| s.realized(i, j).0, |i, j| s.realized(i, j).1, |_, _| true);
+    out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], model));
+    let cloud = layers::build_sheet(WY_CLOUD, |i, j| at(&s.cloud, i, j) * 40.0, |_, _| layers::M_CLOUD, |i, j| at(&s.cloud, i, j) > 0.15);
+    out.extend(mk(renderer, cloud, [1.0, 1.0, 1.0, 0.5], model));
+}
+
+/// Build sheets for the tiles whose animated-flag matches `animated`.
+fn build_subset(tiles: &[HexTile], mask: &[bool], animated: bool, renderer: &mut Renderer) -> Vec<Sheet> {
     let mut out = Vec::new();
-    for t in tiles {
-        let s = &t.stack;
-        let model = Mat4::from_translation(Vec3::new(t.place.x, 0.0, t.place.y));
-        let realized = layers::build_sheet(0.0, |i, j| s.realized(i, j).0, |i, j| s.realized(i, j).1, |_, _| true);
-        out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], model));
-        let cloud = layers::build_sheet(WY_CLOUD, |i, j| at(&s.cloud, i, j) * 40.0, |_, _| layers::M_CLOUD, |i, j| at(&s.cloud, i, j) > 0.15);
-        out.extend(mk(renderer, cloud, [1.0, 1.0, 1.0, 0.5], model));
+    for (t, &m) in tiles.iter().zip(mask) {
+        if m == animated {
+            push_tile(&mut out, t, renderer);
+        }
     }
     out
 }
 
 struct World {
     tiles: Vec<HexTile>,
-    sheets: Vec<Sheet>,
+    /// Per-tile: does this hex keep animating after the startup settle?
+    animated: Vec<bool>,
+    /// Frozen backdrop, built once after settling.
+    static_sheets: Vec<Sheet>,
+    /// The live ring(s), rebuilt on the cadence.
+    animated_sheets: Vec<Sheet>,
     sim_accum: f32,
     rebuild_accum: f32,
     dirty: bool,
@@ -146,22 +164,26 @@ struct World {
 impl World {
     fn new() -> Self {
         let map = HexMap::new(RINGS);
-        let tiles = (0..map.total())
-            .map(|i| {
-                let place = hex_flat_pos(map.coord(i));
-                HexTile {
-                    place,
-                    stack: LayerStack::generate(WORLD_OFFSET + place),
-                }
-            })
-            .collect();
+        let mut tiles = Vec::with_capacity(map.total() as usize);
+        let mut animated = Vec::with_capacity(map.total() as usize);
+        for i in 0..map.total() {
+            let c = map.coord(i);
+            let place = hex_flat_pos(c);
+            tiles.push(HexTile {
+                place,
+                stack: LayerStack::generate(WORLD_OFFSET + place),
+            });
+            animated.push(c.hemi == Hemisphere::North && c.ring <= ANIMATE_RINGS);
+        }
         Self {
             tiles,
-            sheets: Vec::new(),
+            animated,
+            static_sheets: Vec::new(),
+            animated_sheets: Vec::new(),
             sim_accum: 0.0,
             rebuild_accum: REBUILD_INTERVAL,
             dirty: true,
-            pos: Vec3::new(0.0, 1700.0, -2900.0),
+            pos: Vec3::new(0.0, 2100.0, -3700.0),
             yaw: 0.0,
             pitch: -0.5,
             prev_mouse: Vec2::ZERO,
@@ -175,21 +197,31 @@ impl World {
         Vec3::new(sy * cp, sp, cy * cp)
     }
 
-    fn rebuild(&mut self, renderer: &mut Renderer) {
-        for s in std::mem::take(&mut self.sheets) {
+    /// Rebuild only the live ring's meshes (the frozen backdrop is left alone).
+    fn rebuild_animated(&mut self, renderer: &mut Renderer) {
+        for s in std::mem::take(&mut self.animated_sheets) {
             renderer.free_mesh(s.handle);
         }
-        self.sheets = build_world(&self.tiles, renderer);
+        self.animated_sheets = build_subset(&self.tiles, &self.animated, true, renderer);
         self.dirty = false;
     }
 }
 
 impl Scene for World {
-    fn enter(&mut self, _renderer: &mut Renderer) {
+    fn enter(&mut self, renderer: &mut Renderer) {
+        let live = self.animated.iter().filter(|&&a| a).count();
         println!(
-            "HexWorld flat graph: {} hexes (R={RINGS}). Fly: WASD + Space/Shift, RMB look, Esc quit.",
+            "HexWorld flat graph: {} hexes (R={RINGS}); settling, {live} animate live. Fly: WASD, R/F up/down, RMB look, Esc.",
             self.tiles.len()
         );
+        // Settle the whole world once so the frozen backdrop looks alive.
+        for _ in 0..SETTLE_TICKS {
+            for t in &mut self.tiles {
+                t.stack.tick(SIM_DT);
+            }
+        }
+        // Build the frozen backdrop now; the live ring is built on first render.
+        self.static_sheets = build_subset(&self.tiles, &self.animated, false, renderer);
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, _r: &Renderer) -> Transition {
@@ -237,12 +269,14 @@ impl Scene for World {
         }
         self.pos += v * speed;
 
-        // Sim every tile at fixed step (capped so a hitch can't spiral).
+        // Sim only the live ring at fixed step (capped so a hitch can't spiral).
         self.sim_accum += dt;
         let mut steps = 0;
         while self.sim_accum >= SIM_DT && steps < 4 {
-            for t in &mut self.tiles {
-                t.stack.tick(SIM_DT);
+            for (t, &live) in self.tiles.iter_mut().zip(self.animated.iter()) {
+                if live {
+                    t.stack.tick(SIM_DT);
+                }
             }
             self.sim_accum -= SIM_DT;
             steps += 1;
@@ -262,7 +296,7 @@ impl Scene for World {
 
     fn render(&mut self, renderer: &mut Renderer) {
         if self.dirty {
-            self.rebuild(renderer);
+            self.rebuild_animated(renderer);
         }
 
         let camera = Camera {
@@ -279,7 +313,7 @@ impl Scene for World {
             ..SceneLighting::default()
         });
         renderer.draw_sky();
-        for s in &self.sheets {
+        for s in self.static_sheets.iter().chain(&self.animated_sheets) {
             renderer.draw_mesh(
                 s.handle,
                 s.model,
