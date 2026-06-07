@@ -10,3 +10,4 @@ bytemuck.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 flate2.workspace = true
+serde = { workspace = true, features = ["derive"] }

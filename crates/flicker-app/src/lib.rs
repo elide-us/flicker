@@ -12,8 +12,13 @@ pub use runner::run;
 // Re-export so games can `use flicker::app::{App, run, InputState, Key};`
 // (plus the bindings layer) without reaching into
 // `flicker::core::input::*` themselves.
-pub use flicker_core::input::bindings::{Action, Bindings, ControlConfig};
-pub use flicker_core::input::{InputState, Key};
+pub use flicker_core::input::bindings::{
+    AbstractControls, Action, AxisDirection, Bindings, ControlConfig, InputBinding, InputMap,
+};
+pub use flicker_core::input::{
+    DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputState, Key,
+    MouseButton,
+};
 
 use std::time::Duration;
 
