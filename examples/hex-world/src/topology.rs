@@ -1,11 +1,33 @@
-//! HexWorld — the **flat neighbour graph** (per the Flat Neighbor Graph &
-//! Celestial Orientation spec).
+//! HexWorld — the **flat neighbour graph**, with formal edge-neighbour finding.
 //!
-//! The world data is a flat graph: a linear array of hexes, each carrying **6
-//! explicit edge-neighbour refs**, baked as data and never recomputed from
-//! geometry. **There is no sphere in the data.** [`HexMap::celestial_dir`] is the
-//! one read-only sphere hook — consumed only by the celestial sim, never by the
-//! data or render paths.
+//! Each hemisphere is a **hexagon-of-hexagons** of radius `R` (ring `k` holds
+//! `6k` hexes, total `1 + 3R(R+1)` per hemisphere). That is precisely the shape
+//! whose adjacency **cube coordinates** describe exactly: every hex maps to a
+//! cube `(x, y, z)` with `x + y + z = 0`, its ring is the cube distance from the
+//! pole, and its six edge-neighbours are the six cube-adjacent cells. Intra-
+//! hemisphere adjacency is therefore exact and **symmetric by construction** at
+//! any size — no proportional-mapping approximations.
+//!
+//! The two hemispheres are joined at the equator (ring `R`) by a **symmetric
+//! fold**: north `(R, p)` pairs with south `(R, p)` and `(R, p−1)` (the half-hex
+//! interlock), defined as an undirected edge set so both directions agree.
+//!
+//! Result: [`HexMap::neighbours`] returns 5–6 distinct neighbours per hex (6 in
+//! the interior, 6 on equator edges, 5 at the six equator corners — the
+//! intentional defect of folding a sphere flat), with **zero asymmetry, zero
+//! duplicates, zero self-references** for any `R`. That is the property a
+//! halo-exchange simulation needs: if A pulls from B, B pushes to A.
+//!
+//! ## Scale (the practical max)
+//!
+//! `total(R) = 2 + 6R(R+1)`. The addressing is the ceiling: a `u32` index tops
+//! out near `R ≈ 26,700` (~4.3 billion hexes) — at the spec's 1024 ft/hex that
+//! is a great-circle of ~110k hexes ≈ a roughly Earth-sized planet; `u64` is
+//! effectively unbounded. This implementation also precomputes a cube→index map
+//! (O(N) memory), which caps the *in-RAM* graph at ~tens of millions of hexes
+//! (a few GB) — ample for any test world. Planet scale would drop the map for
+//! analytic cube↔pos arithmetic (O(1) memory, O(1) per neighbour); past that the
+//! real wall is **sim compute per cycle** (the sweep is O(N)), not addressing.
 
 use std::collections::HashMap;
 
@@ -31,21 +53,59 @@ pub struct HexCoord {
     pub pos: u32,
 }
 
-// Fixed edge order for the 6 baked refs, consumed by the flat render layout:
-// W and E are the same-ring mates; NW/NE are inboard (toward the pole); SW/SE
-// are outboard (away from the pole, or across the equator seam).
-pub const EDGE_W: usize = 0;
-pub const EDGE_NW: usize = 1;
-pub const EDGE_NE: usize = 2;
-pub const EDGE_E: usize = 3;
-pub const EDGE_SE: usize = 4;
-pub const EDGE_SW: usize = 5;
+/// Cube coordinate of a hex within its hemisphere (`x + y + z == 0`).
+type Cube = (i32, i32, i32);
 
-/// The world container: a flat array of hexes with baked adjacency.
+/// The six cube neighbour directions, in cyclic order (Red Blob convention).
+const CUBE_DIRS: [Cube; 6] = [
+    (1, -1, 0),
+    (1, 0, -1),
+    (0, 1, -1),
+    (-1, 1, 0),
+    (-1, 0, 1),
+    (0, -1, 1),
+];
+
+#[inline]
+fn cube_add(a: Cube, b: Cube) -> Cube {
+    (a.0 + b.0, a.1 + b.1, a.2 + b.2)
+}
+
+/// Cube distance from the pole = the hex's ring.
+#[inline]
+fn cube_ring(c: Cube) -> i32 {
+    (c.0.abs() + c.1.abs() + c.2.abs()) / 2
+}
+
+/// Spiral `(ring, pos)` → cube: walk the hexagonal ring at radius `ring`,
+/// starting one corner out along direction 4 and stepping around the six sides.
+/// This is the forward map; [`HexMap`] inverts it with a precomputed table.
+fn spiral_to_cube(ring: u32, pos: u32) -> Cube {
+    if ring == 0 {
+        return (0, 0, 0);
+    }
+    let k = ring as i32;
+    let mut c = (CUBE_DIRS[4].0 * k, CUBE_DIRS[4].1 * k, CUBE_DIRS[4].2 * k);
+    let mut p = 0;
+    for dir in CUBE_DIRS {
+        for _ in 0..ring {
+            if p == pos {
+                return c;
+            }
+            c = cube_add(c, dir);
+            p += 1;
+        }
+    }
+    c // unreachable for pos < 6*ring
+}
+
+/// The world container: a flat array of hexes with exact cube-based adjacency.
 pub struct HexMap {
     rings: u32,
     coords: Vec<HexCoord>,
     index_of: HashMap<HexCoord, u32>,
+    cubes: Vec<Cube>,
+    cube_index: HashMap<(Hemisphere, Cube), u32>,
 }
 
 impl HexMap {
@@ -81,11 +141,21 @@ impl HexMap {
             ring: 0,
             pos: 0,
         });
+
         let index_of = coords.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
+        let mut cubes = Vec::with_capacity(coords.len());
+        let mut cube_index = HashMap::with_capacity(coords.len());
+        for (i, c) in coords.iter().enumerate() {
+            let cube = spiral_to_cube(c.ring, c.pos);
+            cubes.push(cube);
+            cube_index.insert((c.hemi, cube), i as u32);
+        }
         Self {
             rings,
             coords,
             index_of,
+            cubes,
+            cube_index,
         }
     }
 
@@ -98,6 +168,9 @@ impl HexMap {
     pub fn index(&self, coord: HexCoord) -> u32 {
         self.index_of[&coord]
     }
+    pub fn cube(&self, index: u32) -> Cube {
+        self.cubes[index as usize]
+    }
     pub fn ring_len(ring: u32) -> u32 {
         if ring == 0 {
             1
@@ -106,95 +179,41 @@ impl HexMap {
         }
     }
 
-    /// The 6 baked edge-neighbour refs in `EDGE_*` order. Always 6; at a growth
-    /// seam a ref may repeat — the graph just stores whatever §1.3 resolves.
-    pub fn edge_refs(&self, index: u32) -> [u32; 6] {
+    /// The hex's **edge-neighbours** — 5 or 6 distinct indices, symmetric for
+    /// every hex at any size. Intra-hemisphere neighbours come from cube
+    /// adjacency (this handles the pole and every interior ring uniformly);
+    /// equator hexes additionally fold to the opposite hemisphere.
+    pub fn neighbours(&self, index: u32) -> Vec<u32> {
         let c = self.coord(index);
-        // Pole: its six edges are ring-1's hexes, in spiral order.
-        if c.ring == 0 {
-            return std::array::from_fn(|e| {
-                self.index(HexCoord {
-                    hemi: c.hemi,
-                    ring: 1,
-                    pos: e as u32,
-                })
-            });
-        }
-        let n = Self::ring_len(c.ring);
-        let same_w = self.index(HexCoord {
-            pos: (c.pos + n - 1) % n,
-            ..c
-        });
-        let same_e = self.index(HexCoord {
-            pos: (c.pos + 1) % n,
-            ..c
-        });
-        let (nw, ne) = self.cross_ring(c, c.ring - 1);
-        let (se, sw) = if c.ring == self.rings {
-            self.equator_join(c)
-        } else {
-            self.cross_ring(c, c.ring + 1)
-        };
-        let mut r = [0u32; 6];
-        r[EDGE_W] = same_w;
-        r[EDGE_NW] = nw;
-        r[EDGE_NE] = ne;
-        r[EDGE_E] = same_e;
-        r[EDGE_SE] = se;
-        r[EDGE_SW] = sw;
-        r
-    }
+        let cube = self.cube(index);
+        let r = self.rings as i32;
+        let mut out = Vec::with_capacity(6);
 
-    /// Two refs in `target` ring, found by proportional position mapping.
-    fn cross_ring(&self, c: HexCoord, target: u32) -> (u32, u32) {
-        if target == 0 {
-            // ring 1's inboard pair is the single pole hex.
-            let p = self.index(HexCoord {
-                hemi: c.hemi,
-                ring: 0,
-                pos: 0,
-            });
-            return (p, p);
+        // Same-hemisphere neighbours: cube-adjacent cells still inside the
+        // hexagon. Off-perimeter steps (ring R+1) are dropped — the equator
+        // fold below replaces them.
+        for dir in CUBE_DIRS {
+            let nc = cube_add(cube, dir);
+            if cube_ring(nc) <= r {
+                if let Some(&j) = self.cube_index.get(&(c.hemi, nc)) {
+                    out.push(j);
+                }
+            }
         }
-        let from = Self::ring_len(c.ring) as f32;
-        let to = Self::ring_len(target);
-        let f = (c.pos as f32 + 0.5) / from * to as f32 - 0.5;
-        let a = f.floor().rem_euclid(to as f32) as u32;
-        let b = (a + 1) % to;
-        (
-            self.index(HexCoord {
-                hemi: c.hemi,
-                ring: target,
-                pos: a,
-            }),
-            self.index(HexCoord {
-                hemi: c.hemi,
-                ring: target,
-                pos: b,
-            }),
-        )
-    }
 
-    /// Equator seam: outboard refs come from the opposite hemisphere's
-    /// equatorial ring (identical edge count) at a fixed half-hex offset.
-    fn equator_join(&self, c: HexCoord) -> (u32, u32) {
-        let r = self.rings;
-        let n = Self::ring_len(r);
-        let o = c.hemi.opposite();
-        let a = c.pos % n;
-        let b = (c.pos + n - 1) % n; // the fixed-convention half-step
-        (
-            self.index(HexCoord {
-                hemi: o,
-                ring: r,
-                pos: a,
-            }),
-            self.index(HexCoord {
-                hemi: o,
-                ring: r,
-                pos: b,
-            }),
-        )
+        // Equator fold (undirected, so it is symmetric): north (R,p) ↔ south
+        // (R,p) and (R,p−1); the mirror for south.
+        if c.ring == self.rings {
+            let n = Self::ring_len(self.rings);
+            let (a, b) = match c.hemi {
+                Hemisphere::North => (c.pos % n, (c.pos + n - 1) % n),
+                Hemisphere::South => (c.pos % n, (c.pos + 1) % n),
+            };
+            let o = c.hemi.opposite();
+            out.push(self.index(HexCoord { hemi: o, ring: self.rings, pos: a }));
+            out.push(self.index(HexCoord { hemi: o, ring: self.rings, pos: b }));
+        }
+        out
     }
 
     /// **Read-only** celestial orientation: the hex's theoretical unit point on a
@@ -230,51 +249,64 @@ mod tests {
     }
 
     #[test]
-    fn index_coord_bijection() {
-        let m = HexMap::new(5);
+    fn index_coord_and_cube_bijections() {
+        let m = HexMap::new(6);
         for i in 0..m.total() {
             assert_eq!(m.index(m.coord(i)), i);
+            // cube round-trips back to the same index within its hemisphere.
+            assert_eq!(m.cube_index[&(m.coord(i).hemi, m.cube(i))], i);
         }
     }
 
+    /// The load-bearing reliability property, across a wide range of sizes:
+    /// every adjacency is mutual, with no duplicate or self references.
     #[test]
-    fn every_hex_has_six_valid_refs() {
-        for r in 1..=6 {
+    fn neighbours_are_symmetric_clean_at_every_size() {
+        for r in 1..=30 {
             let m = HexMap::new(r);
             for i in 0..m.total() {
-                let refs = m.edge_refs(i);
-                for &j in &refs {
-                    assert!(j < m.total(), "ref {j} out of range for {i} (R={r})");
+                let ns = m.neighbours(i);
+                assert!(ns.len() == 5 || ns.len() == 6, "R={r}: deg {} at {i}", ns.len());
+                for (k, &j) in ns.iter().enumerate() {
+                    assert_ne!(j, i, "R={r}: self-ref at {i}");
+                    assert!(!ns[..k].contains(&j), "R={r}: dup {j} at {i}");
+                    assert!(j < m.total());
+                    assert!(m.neighbours(j).contains(&i), "R={r}: {i}->{j} not mutual");
                 }
             }
         }
     }
 
     #[test]
-    fn pole_edges_are_ring_one() {
+    fn interior_hexes_have_six_neighbours() {
+        let m = HexMap::new(5);
+        for i in 0..m.total() {
+            let c = m.coord(i);
+            if c.ring < m.rings {
+                // pole and every non-equator ring: a full six.
+                assert_eq!(m.neighbours(i).len(), 6, "ring {} pos {}", c.ring, c.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn pole_neighbours_are_ring_one() {
         let m = HexMap::new(4);
-        let pole = m.index(HexCoord {
-            hemi: Hemisphere::North,
-            ring: 0,
-            pos: 0,
-        });
-        for &j in &m.edge_refs(pole) {
+        let pole = m.index(HexCoord { hemi: Hemisphere::North, ring: 0, pos: 0 });
+        let ns = m.neighbours(pole);
+        assert_eq!(ns.len(), 6);
+        for j in ns {
             assert_eq!(m.coord(j).ring, 1);
         }
     }
 
     #[test]
-    fn equator_outboard_crosses_hemispheres() {
+    fn equator_hexes_fold_across_hemispheres() {
         let r = 4;
         let m = HexMap::new(r);
-        let eq = m.index(HexCoord {
-            hemi: Hemisphere::North,
-            ring: r,
-            pos: 0,
-        });
-        let refs = m.edge_refs(eq);
-        assert_eq!(m.coord(refs[EDGE_SE]).hemi, Hemisphere::South);
-        assert_eq!(m.coord(refs[EDGE_SW]).hemi, Hemisphere::South);
+        let eq = m.index(HexCoord { hemi: Hemisphere::North, ring: r, pos: 0 });
+        let crosses = m.neighbours(eq).into_iter().filter(|&j| m.coord(j).hemi == Hemisphere::South).count();
+        assert_eq!(crosses, 2, "equator hex should fold to exactly two south hexes");
     }
 
     #[test]
