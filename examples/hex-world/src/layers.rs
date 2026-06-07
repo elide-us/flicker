@@ -46,9 +46,9 @@ pub const VSCALE: f32 = 1.1;
 const SUN_WAVELENGTH: f32 = HEX_SIZE * 8.0; // warm band spans ~several hexes
 const SUN_DIR: (f32, f32) = (0.95, 0.31); // sweep direction across the world
 const SUN_OMEGA: f32 = 0.6; // temporal sweep rate (rad/s)
-const T_BASE: f32 = 6.0; // baseline temperature
-const T_AMP: f32 = 26.0; // day-side insolation amplitude
-const LAPSE: f32 = 22.0; // cooling per unit normalized altitude
+const T_BASE: f32 = 12.0; // baseline temperature
+const T_AMP: f32 = 46.0; // day-side insolation amplitude
+const LAPSE: f32 = 20.0; // cooling per unit normalized altitude
 const FREEZE: f32 = 4.0; // below this, precip falls as snow / water freezes
 const EVAP_T0: f32 = 8.0; // evaporation only above this temperature
 const EVAP_RATE: f32 = 0.05; // per (temp − T0) per second
@@ -73,6 +73,13 @@ const THERMO_AMP: f32 = 240.0; // day-side thermosphere "faces off" (huge swing)
 const STRATO_BASE: f32 = -8.0;
 const STRATO_GAIN: f32 = 70.0; // warming per unit UV absorbed (the inversion)
 
+// Climate is integrated weather: a slow exponential average of temperature and
+// moisture. Biomes classify off *climate* so they stay stable while the
+// day/night weather flickers. Rate ≈ 1/250 ticks ≈ averages over ~a day.
+const CLIMATE_RATE: f32 = 0.004;
+/// Altitude above which land is bare alpine rock regardless of climate.
+const ALPINE_ALT: f32 = 0.85;
+
 // Material indices into the mesh shader's demo palette (`mesh.wgsl`).
 pub const M_WATER_DEEP: u32 = 1;
 pub const M_WATER_MID: u32 = 2;
@@ -86,6 +93,14 @@ pub const M_LAND: u32 = 13;
 pub const M_AURORA: u32 = 14;
 pub const M_UV: u32 = 15;
 pub const M_VOID: u32 = 16;
+// Biome materials (climate-classified land).
+pub const M_DESERT: u32 = 17;
+pub const M_SAVANNA: u32 = 18;
+pub const M_GRASSLAND: u32 = 19;
+pub const M_FOREST: u32 = 20;
+pub const M_RAINFOREST: u32 = 21;
+pub const M_TAIGA: u32 = 22;
+pub const M_TUNDRA: u32 = 23;
 
 /// Pointy-top row half-width at normalized lat `a = z / size`.
 fn band_width(a: f32) -> f32 {
@@ -115,6 +130,16 @@ pub fn minmax(field: &[f32]) -> (f32, f32) {
     field.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| {
         (a.min(v), b.max(v))
     })
+}
+
+/// The 33rd/67th percentile of a sample (sorted in place), for splitting a
+/// field into thirds. Returns a degenerate spread if there's too little data.
+fn terciles(v: &mut [f32]) -> (f32, f32) {
+    if v.len() < 3 {
+        return (f32::MAX, f32::MAX);
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (v[v.len() / 3], v[2 * v.len() / 3])
 }
 
 /// Pack a two-stop colour ramp into the shader's material word: `primary = cold`,
@@ -162,6 +187,11 @@ pub struct LayerStack {
     pub stratosphere: Vec<f32>, // warmed by ozone UV absorption (the inversion)
     pub thermosphere: Vec<f32>, // hardest radiation; extreme day/night swing
     pub ozone: Vec<f32>,        // UV-absorbing amount, 0..1 (a "hole" lets UV through)
+    // --- climate (integrated weather → drives biomes) ---
+    pub climate_temp: Vec<f32>,     // slow average of temperature
+    pub climate_moisture: Vec<f32>, // slow average of humidity
+    biome_t: (f32, f32),            // temperature terciles (33rd, 67th) over eligible land
+    biome_m: (f32, f32),            // moisture terciles
     // --- reference scalars ---
     pub snow_line: f32,
     pub relief_lo: f32,
@@ -235,7 +265,7 @@ impl LayerStack {
         // Start the air moist so the cycle has something to rain out.
         let humidity = vec![5.0f32; n];
 
-        Self {
+        let mut s = Self {
             ground,
             water,
             ice,
@@ -243,18 +273,27 @@ impl LayerStack {
             cloud: vec![0.0; n],
             temperature: vec![T_BASE; n],
             pressure: vec![0.0; n],
-            humidity,
+            humidity: humidity.clone(),
             wind_x: vec![0.0; n],
             wind_z: vec![0.0; n],
             stratosphere: vec![STRATO_BASE; n],
             thermosphere: vec![THERMO_BASE; n],
             ozone: vec![1.0; n],
+            climate_temp: vec![T_BASE; n],
+            climate_moisture: humidity,
+            biome_t: (0.0, 1.0),
+            biome_m: (0.0, 1.0),
             snow_line,
             relief_lo: lo,
             relief_span: span,
             time: 0.0,
             world_origin: world_off,
-        }
+        };
+        // Seed climate from one thermal pass so biomes are sensible from frame 1.
+        s.update_thermal();
+        s.climate_temp.copy_from_slice(&s.temperature);
+        s.refresh_biome_bands();
+        s
     }
 
     #[inline]
@@ -272,6 +311,61 @@ impl LayerStack {
         self.condense_precipitate(dt);
         self.runoff();
         self.melt_ice(dt);
+        self.update_climate();
+    }
+
+    /// Integrate weather into climate (a slow exponential average), and refresh
+    /// the climate ranges biome classification reads.
+    fn update_climate(&mut self) {
+        for k in 0..G * G {
+            self.climate_temp[k] += CLIMATE_RATE * (self.temperature[k] - self.climate_temp[k]);
+            self.climate_moisture[k] += CLIMATE_RATE * (self.humidity[k] - self.climate_moisture[k]);
+        }
+        self.refresh_biome_bands();
+    }
+
+    /// Recompute the temperature/moisture tercile thresholds over the
+    /// Whittaker-eligible land (above freezing, below the alpine line), so each
+    /// climate band is ~1/3 of the land and a full spread of biomes emerges
+    /// instead of one dominant type.
+    fn refresh_biome_bands(&mut self) {
+        let mut ts = Vec::new();
+        let mut ms = Vec::new();
+        for k in 0..G * G {
+            if self.water[k] <= 0.5 && self.altitude(k) <= ALPINE_ALT && self.climate_temp[k] >= FREEZE {
+                ts.push(self.climate_temp[k]);
+                ms.push(self.climate_moisture[k]);
+            }
+        }
+        self.biome_t = terciles(&mut ts);
+        self.biome_m = terciles(&mut ms);
+    }
+
+    /// Classify the biome of land cell `(i, j)` from its **climate** (not the
+    /// flickering weather): a Whittaker-style temperature×moisture grid, with
+    /// freezing and alpine overrides. Temperature & moisture are taken relative
+    /// to the map's own range so a spread of biomes always emerges. Returns a
+    /// palette material; callers handle water/lava/surface-ice themselves.
+    pub fn biome_material(&self, i: usize, j: usize) -> u32 {
+        let k = idx(i, j);
+        if self.altitude(k) > ALPINE_ALT {
+            return M_STONE; // bare alpine rock
+        }
+        let (ct, cm) = (self.climate_temp[k], self.climate_moisture[k]);
+        if ct < FREEZE {
+            return if cm > self.biome_m.0 { M_TAIGA } else { M_TUNDRA };
+        }
+        let tcol = (ct >= self.biome_t.0) as u32 + (ct >= self.biome_t.1) as u32; // 0 cold..2 hot
+        let mrow = (cm >= self.biome_m.0) as u32 + (cm >= self.biome_m.1) as u32; // 0 dry..2 wet
+        match (tcol, mrow) {
+            (0, 0) => M_TUNDRA,
+            (0, _) => M_TAIGA,
+            (1, 0) | (1, 1) => M_GRASSLAND,
+            (1, _) => M_FOREST,
+            (2, 0) => M_DESERT,
+            (2, 1) => M_SAVANNA,
+            _ => M_RAINFOREST,
+        }
     }
 
     /// Top-of-atmosphere stellar flux at cell `(i, j)`: a planar day/night wave
@@ -502,10 +596,8 @@ impl LayerStack {
             M_LAVA
         } else if self.ice[k] > 0.5 {
             M_ICE
-        } else if self.ground[k] > self.snow_line {
-            M_STONE
         } else {
-            M_LAND
+            self.biome_material(i, j) // climate-classified land (handles alpine)
         };
         ((h - BASE_HEIGHT) * VSCALE, mat)
     }
@@ -662,12 +754,31 @@ mod tests {
     }
 
     #[test]
+    fn biomes_differentiate_from_climate() {
+        // Let the climate settle, then land should carry several distinct biomes
+        // (not one flat type) — the payoff of classifying off integrated weather.
+        let mut s = stack();
+        for _ in 0..400 {
+            s.tick(0.05);
+        }
+        let mut kinds = std::collections::HashSet::new();
+        for j in 0..G {
+            for i in 0..G {
+                if s.water[i + j * G] <= 0.5 {
+                    kinds.insert(s.biome_material(i, j));
+                }
+            }
+        }
+        assert!(kinds.len() >= 5, "only {} biome kinds: {:?}", kinds.len(), kinds);
+    }
+
+    #[test]
     fn realized_is_finite_with_valid_materials() {
         let s = stack();
         for j in 0..G {
             for i in 0..G {
                 let (y, m) = s.realized(i, j);
-                assert!(y.is_finite() && (1..=13).contains(&m));
+                assert!(y.is_finite() && (1..=23).contains(&m));
             }
         }
     }

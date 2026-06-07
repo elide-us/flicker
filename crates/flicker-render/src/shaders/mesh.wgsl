@@ -119,6 +119,15 @@ fn material_index_color(index: u32) -> vec3<f32> {
         case 15u: { return vec3<f32>(0.55, 0.32, 0.88); } // UV           ozone absorption
         case 16u: { return vec3<f32>(0.02, 0.02, 0.06); } // VOID         night-side / space
 
+        // ---- biomes (climate-classified land) ----
+        case 17u: { return vec3<f32>(0.82, 0.72, 0.45); } // DESERT       sand
+        case 18u: { return vec3<f32>(0.70, 0.68, 0.32); } // SAVANNA      dry grass
+        case 19u: { return vec3<f32>(0.45, 0.65, 0.30); } // GRASSLAND    green
+        case 20u: { return vec3<f32>(0.20, 0.45, 0.22); } // FOREST       forest green
+        case 21u: { return vec3<f32>(0.10, 0.33, 0.18); } // RAINFOREST   deep green
+        case 22u: { return vec3<f32>(0.26, 0.42, 0.34); } // TAIGA        cold conifer
+        case 23u: { return vec3<f32>(0.56, 0.52, 0.46); } // TUNDRA       grey-brown
+
         // Fallback for unknown materials (also the EMPTY=0 case).
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
