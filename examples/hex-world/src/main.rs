@@ -40,6 +40,7 @@ const SIM_DT: f32 = 0.05;
 const RINGS: i32 = 1;
 
 // Exploded-view display heights per layer.
+const PY_BIOME: f32 = 120.0;
 const PY_GROUND: f32 = 240.0;
 const PY_TEMP: f32 = 360.0;
 const PY_HUMID: f32 = 470.0;
@@ -144,6 +145,15 @@ fn build_exploded(s: &LayerStack, renderer: &mut Renderer) -> Vec<Sheet> {
     // realized composite (mesh, opaque, at the base)
     let realized = layers::build_sheet(0.0, |i, j| s.realized(i, j).0, |i, j| s.realized(i, j).1, |_, _| true);
     out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], m));
+
+    // biome / climate (flat classification map — water shown as water)
+    let biome = layers::build_sheet(
+        PY_BIOME,
+        |_, _| 0.0,
+        |i, j| if at(&s.water, i, j) > 0.5 { layers::M_WATER_MID } else { s.biome_material(i, j) },
+        |_, _| true,
+    );
+    out.extend(mk(renderer, biome, [1.0, 1.0, 1.0, 0.95], m));
 
     // temperature (heatmap)
     let (tlo, thi) = layers::minmax(&s.temperature);
@@ -281,6 +291,7 @@ impl LayeredHex {
                 self.distance = 1550.0;
                 self.labels = vec![
                     (Vec3::new(lx, 95.0, 0.0), "realized", [1.0, 1.0, 1.0, 1.0]),
+                    (Vec3::new(lx, PY_BIOME, 0.0), "biome / climate", [0.5, 0.75, 0.4, 1.0]),
                     (Vec3::new(lx, PY_GROUND, 0.0), "ground", [0.6, 0.8, 0.5, 1.0]),
                     (Vec3::new(lx, PY_TEMP, 0.0), "temperature", [1.0, 0.6, 0.3, 1.0]),
                     (Vec3::new(lx, PY_HUMID, 0.0), "humidity", [0.5, 0.7, 1.0, 1.0]),
