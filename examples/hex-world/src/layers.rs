@@ -40,12 +40,23 @@ pub const HEX_SIZE: f32 = 130.0;
 /// Apothem: centre to the N/S **flat edge** = √3/2 · size (half the N/S height).
 pub const HEX_HALF_W: f32 = HEX_SIZE * 0.866_025;
 
-/// Vertical exaggeration so the gentle `[96, 160]` heightmap reads in the viewer.
+/// Vertical exaggeration of the heightmap. The sim runs on normalized altitude,
+/// so this only sets how the data *reads* — see [`VSCALE`].
 const RELIEF_GAIN: f32 = 2.0;
 /// Centre of the heightmap output band (matches `flicker-primitive`).
 const BASE_HEIGHT: f32 = 128.0;
-/// World→display vertical scale for rendering elevations/thicknesses.
-pub const VSCALE: f32 = 1.1;
+/// World→display vertical scale. Tiny on purpose: at planet scale, relief is a
+/// fraction of a percent of the surface, so the world reads nearly flat —
+/// oceans/land as colour, only a hint of 3-D — not stratosphere-tall spikes.
+pub const VSCALE: f32 = 0.15;
+
+/// Terrain *detail* is sampled from the heightmap at this multiple of the
+/// (small) display coordinates, so shrinking the hexes doesn't shrink the world
+/// the noise covers. Keeps a few gentle features across the map while each hex
+/// stays smooth (no within-hex spikes). Decoupled from display size on purpose.
+const SAMPLE_SCALE: f32 = 1.0;
+/// Fixed world-coordinate origin of the sampled region (the seed's "where").
+const SAMPLE_ORIGIN: Vec2 = Vec2::new(1234.0, 5678.0);
 
 // --- Simulation constants (POC tuning; arbitrary units) ---
 // The sun is a planar day/night wave sweeping across *world* coordinates, so
@@ -214,14 +225,18 @@ pub struct LayerStack {
 
 impl LayerStack {
     /// Generate the initial stack by sampling the world heightmap at `world_off`.
-    pub fn generate(world_off: Vec2) -> Self {
+    pub fn generate(place: Vec2) -> Self {
         let n = G * G;
         let mut ground = vec![0.0f32; n];
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
         for j in 0..G {
             for i in 0..G {
                 let (x, z) = cell_local(i, j);
-                let raw = world_height(world_off.x + x, world_off.y + z);
+                // Sample the heightmap at the scaled world position so terrain
+                // detail is independent of the (small) display size; adjacent
+                // hexes still share edge samples, so seams stay continuous.
+                let s = SAMPLE_ORIGIN + (place + Vec2::new(x, z)) * SAMPLE_SCALE;
+                let raw = world_height(s.x, s.y);
                 let e = BASE_HEIGHT + (raw - BASE_HEIGHT) * RELIEF_GAIN;
                 ground[idx(i, j)] = e;
                 lo = lo.min(e);
@@ -297,7 +312,7 @@ impl LayerStack {
             relief_lo: lo,
             relief_span: span,
             time: 0.0,
-            world_origin: world_off,
+            world_origin: place,
         };
         // Seed climate from one thermal pass so biomes are sensible from frame 1.
         s.update_thermal();

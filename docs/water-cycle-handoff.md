@@ -1,4 +1,4 @@
-# Handoff — the layered field model & water cycle (POC proven, ready to expand)
+# Handoff — the layered field model & water cycle → going vertical
 
 > Captures the model proven out in `examples/hex-world` over a design+build run:
 > a stack of heightmap-style **field layers** per hex, a conserved **water
@@ -14,6 +14,121 @@
 > downstream reduction). Where the spec leans on the optimized "Rivulet DAG",
 > this POC uses the simpler cellular-automata flow the spec calls the naive
 > version — see *Expansion*.
+
+---
+
+## ⇒ Actionable handoff — the water cycle goes vertical (next two sessions)
+
+Since the model below (§0–6) was written, the example grew the **full flat hex
+graph**, **reliable neighbour-finding**, a **fly-camera world**, a **per-hex
+inspector**, and a corrected **vertical-scale model**. **Step 1 of the vertical
+arc (the inspector) is done and on `main`.** This block hands off **Step 2** and
+details **Step 3**. §0–6 remain the load-bearing foundation; §7–9's *viewer*
+specifics are superseded here — the "E toggle Exploded↔World" is gone; it's now
+one fly-camera world (WASD/RF, RMB look) with **left-click to split a hex out**.
+
+### Current state (locked foundation, on `main`)
+- **Flat hex graph** (`topology.rs`, no longer parked): two **flat-top** discs
+  (north/south poles at their centres), joined at the equator with a half-hex
+  interlock. Flat-top = triangle points face E/W (the 2048-cluster wide axis).
+- **Reliable edge-neighbours** (`HexMap::neighbours`): cube-coordinate adjacency
+  (exact for the hexagon-of-hexagons) + a symmetric equator fold — **0 asymmetry
+  / 0 dups / 0 self-refs at any size** (`neighbours_are_symmetric_clean_at_every_size`).
+  Replaced the old proportional `edge_refs`, which had dozens of asymmetric edges.
+  This is the backbone a global sweep iterates over.
+- **Inspector (Step 1, done):** left-click a hex → a translucent **hexagonal
+  prism** splits out *in place* over the tile — per-band coloured glass walls +
+  edge lines, every layer sheet floating inside (`build_inspect`, `hex_walls`,
+  `column_lines`, `band_boundaries`, `PY_*`). The selected hex ticks live; click
+  again to close. **Step 2 renders its new bands inside this column.**
+- Plus the water cycle (§3), radiative cascade (§4), climate→biomes (§5), and the
+  render-class taxonomy (§1) — all still as described below.
+- **Scale:** `VSCALE = 0.15` is display-only and deliberately flat (planet
+  scale); the sim runs on **normalized** altitude, so a flat display changes no
+  physics. Hexes are full size; only the index billboards were shrunk.
+
+### The vertical-scale model (the corrected, load-bearing context)
+The atmosphere is **real stacked cluster layers**, not theoretical space. With
+`CLUSTER_DIM = 256` and a voxel = **0.5 ft**:
+- A **cluster = a 128 ft cube** (256 × 0.5 ft).
+- Hex = 2048 cluster-columns E–W = **1024 ft** = 8 clusters wide.
+- The world is **256 stacked cluster layers = 32,768 ft ≈ 6.2 miles** vertical
+  (256 clusters × 256 voxels × 0.5 ft).
+- **The heightmap's 256 grey levels index the surface's cluster layer** — one
+  grey step = one cluster layer = **128 ft** (not 256 voxels inside *one* cluster,
+  which is the simplification the demo currently renders).
+
+A column is **ground = layers `0..H`**, **air = layers `H..255`** (H = the
+heightmap value); the air column has `256 − H` layers and **varies per column**.
+That makes the physics literal:
+- **Pressure** integrates down the real 128-ft layer count; a mountain (higher H)
+  has a shorter, lower-pressure column — walking up is one 128-ft layer at a time.
+- **Orographic rain**: higher H → fewer air layers → condensation reached lower →
+  windward wet. **Rain-shadow deserts**: the ozone-warmed band aloft caps
+  convection, so inland cloud never rains. A few layers of relief tip thresholds.
+
+### The conveyor belt (what Steps 2–3 build)
+A hex is a **vertical slice**; the sim's job is the whole slice:
+1. Solar heat enters per-layer, top-down (the radiative cascade = the inter-band
+   *filters*; ozone is a real higher layer range).
+2. Surface evaporates moisture into the lowest air layer.
+3. Convection lifts it band→band (buoyancy; rate from the temp/pressure gradient).
+4. It condenses where the column crosses threshold → rain/snow back down.
+5. Column-integrated pressure ties it together, driving convection **and** wind.
+
+### STEP 2 — Atmosphere → vertical band stack (the immediate handoff)
+Replace the flat atmosphere (single `humidity` + two upper heatmaps
+`stratosphere`/`thermosphere`) with a **discrete vertical stack of air bands**
+above the surface, each carrying `{ temp, moisture, pressure }`.
+- A small **fixed N** of bands (8–16), each a *range of the 256 cluster layers*
+  by altitude. Keep N fixed for bounded cost — the 128-ft granularity informs
+  band altitudes + the pressure math, it is **not** one cell per layer (`256 − H`
+  × thousands of hexes is too many).
+- The surface sits in the band containing layer `H`; bands below are underground,
+  above are the air column.
+- The **radiative cascade becomes the inter-band filters** — fold the existing
+  `A_THERMO`/`A_UV` absorption into per-band absorption as flux passes down;
+  `thermosphere`/`stratosphere` collapse into "the top bands."
+- **Extend `build_inspect`** so the split-out column shows every air band
+  explicitly. The inspector is the verification instrument.
+- *Decisions to flag (don't guess silently):* fixed N vs per-column layer count
+  (recommend fixed N, map `H` → which band the ground is in); band altitude ↔
+  cluster-layer mapping; one moisture pool vs per-band pools (conservation holds
+  either way).
+
+### STEP 3 — Vertical convection + real column pressure (the session after)
+- **Real pressure:** replace the placeholder (`update_wind` sets
+  `pressure = −temperature`) with **column-integrated pressure** — air mass above
+  each band, down the 128-ft layer count, so surface pressure depends on `H`.
+  Drives both the vertical convection and the existing horizontal wind.
+- **Vertical convection:** buoyant warm/moist air rises band→band.
+- **Threshold precipitation:** a band's capacity falls with cold/altitude; excess
+  condenses (cloud) and falls back to the surface band (water warm / ice
+  freezing). Orographic + rain-shadow fall out of `H` + the inversion.
+- **Conservation extends vertically:** `Σ(surface water + ice + airborne moisture
+  across all bands + in-flight cloud)` invariant; add a test mirroring
+  `water_mass_is_conserved_across_many_ticks`.
+
+### Keep in line with these three (the reminder)
+One coherent arc — build each so the others still hold:
+1. **The inspector (Step 1) keeps working.** Step 2's bands render *inside* the
+   split-out translucent column; don't bypass it. It is the instrument that makes
+   the vertical model verifiable — you can't see a conveyor belt from the
+   top-down map.
+2. **The vertical-scale model is the substrate.** 256 cluster layers × 128 ft;
+   air = the real layers above `H`; pressure counted per 128-ft step. Steps 2–3
+   build *on* this, not on abstract band counts.
+3. **Conservation never drifts** (§3; spec §4). Every transfer — evaporation,
+   convection, condensation, precipitation, melt — moves mass between pools and
+   never creates/destroys it. Keep the render-class split (§1): substance = mesh,
+   influence/bands = heatmap.
+
+### Parallel track (not in these two steps, don't forget it)
+Steps 2–3 are **per-hex (vertical)**. The **horizontal** coupling — clouds/water
+flowing *across* hexes — is **halo exchange** over the now-reliable
+`HexMap::neighbours` (§8.1). Tiles still sim in isolation; wire it once the
+vertical model is in, to make the cycle global (rivers cross hexes, weather
+drifts). Independent of the vertical work, but needed for a coherent world.
 
 ---
 
@@ -176,11 +291,13 @@ new conserved state. Guarded by `biomes_differentiate_from_climate` (≥5 kinds)
   tiles sampling the shared function." The viewer's **World view** lays out
   concentric hex rings (`RINGS`, axial coords on the proven bubble spacing) and
   draws each tile's realized surface into one continuous map.
-- **The hex graph's job is addressing + wrap, not stitching.** A flat interior
-  patch needs no graph. `topology.rs` (the spherical flat-neighbour graph, with
-  `celestial_dir`) is **parked**; it plugs in for **wrap-around and streaming**,
-  where the still-open "per-hex data layout (square 2048² vs 6-strips)" decision
-  lives.
+- **The hex graph's job is addressing + adjacency, not stitching the flat
+  terrain.** `topology.rs` is now **revived and load-bearing** — it lays out the
+  full two-disc flat graph and provides reliable `neighbours` (the backbone for
+  halo exchange, §8.1). Terrain continuity itself still comes free from the
+  heightmap; the graph carries adjacency (incl. the equator fold) and
+  `celestial_dir`. Wrap-around/streaming and the still-open "per-hex data layout
+  (square 2048² vs 6-strips)" decision remain future work.
 - **The sun sweeps in world coordinates** so the temperature field joins
   seamlessly across tiles (globally normalized heatmap, no seam).
 - **Not yet joined: the dynamics.** Tiles currently sim **independently** —
@@ -191,12 +308,14 @@ new conserved state. Guarded by `biomes_differentiate_from_climate` (≥5 kinds)
 
 ## 8. Where to expand (prioritized)
 
-### 8.1 Cross-hex halo exchange — *highest structural value*
+### 8.1 Cross-hex halo exchange — *the horizontal parallel track*
 Make weather flow across the joined map: each tile exchanges its edge cells with
-graph neighbours each tick (domain-decomposition halo). In the flat patch the
-neighbour cell is the spatially-coincident one; with the real graph it routes
-through `topology.rs` edge-refs. Until this lands, "joined" is true for terrain
-but not for clouds/water. **Do this before adding more layers.**
+graph neighbours each tick (domain-decomposition halo), routing through the now
+**reliable `HexMap::neighbours`** (the old proportional `edge_refs` is gone).
+Until this lands, "joined" is true for terrain but not for clouds/water.
+**Sequencing revised:** the *vertical* atmosphere arc (Steps 2–3 in the handoff
+block at the top) was prioritized first; halo exchange is the **horizontal**
+parallel track — wire it once the vertical model is in.
 
 ### 8.2 Biome feedback loops — *closes the climate loop*
 Biome is a terminal read-out today. Feed it back: biome → **albedo** → into the
@@ -249,13 +368,19 @@ spec's §13.4 **`world-state`** crate (`FieldStack` + passes + conservation +
   both relief and heatmaps), `pack_ramp`, `minmax`, `terciles`. **8 tests**:
   conservation, finite/bounded, sun-moves, thermosphere swing, ozone↓surface,
   biome variety, realized validity, thresholds.
-- **`examples/hex-world/src/main.rs`** — viewer only. **E** toggles
-  Exploded (one hex, full stack) ↔ World (joined rings); **Space** pauses the
-  sim; camera auto-orbits (A/D, W/S, Esc).
+- **`examples/hex-world/src/main.rs`** — viewer only. Now the **full flat hex
+  graph** as one fly-camera world (WASD/RF, RMB look, Esc) with a graticule
+  overlay + index billboards, and **left-click → split a hex out** in place (the
+  inspector). *(The old "E toggle Exploded↔World" is gone.)* Helpers: `hex_flat_pos`/
+  `ring_offset` (layout), `build_inspect`/`hex_walls`/`column_lines`/`pick_hex`
+  (inspector), `build_graticule`.
+- **`examples/hex-world/src/topology.rs`** — **revived and the load-bearing graph**:
+  `HexMap::neighbours` (reliable cube-coordinate adjacency + symmetric equator
+  fold), `cube`, `spiral_to_cube`. Its `#[cfg(test)]` proves symmetry at any size.
 - **`crates/flicker-render/src/shaders/mesh.wgsl`** — demo palette extended to
   index 23 (the only change outside the example).
-- **Parked, on disk, un-`mod`-ed:** `topology.rs`, `planet_mesh.rs` (the prior
-  flat-graph traversal POC) — revive for the wrap/streaming step (§8.1).
+- **Tests:** `cargo test -p hex-world` → **18** (sim conservation/biome/atmosphere
+  in `layers.rs`; neighbour symmetry + layout tessellation in `topology.rs`/`main.rs`).
 
 ---
 
@@ -272,6 +397,14 @@ spec's §13.4 **`world-state`** crate (`FieldStack` + passes + conservation +
 - One field cell ≈ one cluster (macro/LOD8); per-cluster bake is the layer below.
 - Substance-vs-meaning is the scope seam; veins are field thresholds, not objects.
 - Terrain continuity is free from the heightmap; the graph is for wrap/addressing.
+- **Flat-top** hex orientation (points E/W); two-disc spiral layout, equator interlock.
+- **Reliable** cube-coordinate `neighbours` (symmetric at any size); proportional
+  `edge_refs` is gone.
+- **Vertical-scale model:** 256 stacked cluster layers × 128 ft (a cluster is a
+  128 ft cube); air = the real layers above the surface (`H`). The atmosphere
+  sim is built on this, not abstract band counts.
+- The **inspector** (in-place split-out translucent hex prism) is the verification
+  instrument for the vertical model; new layers/bands render inside it.
 
 **Deferred (do not invent; see §8):**
 - Cross-hex dynamics (halo exchange) — terrain joins, weather doesn't yet.
