@@ -29,8 +29,10 @@
 //!   per-device sensitivity, inversion, and deadzone tuning.
 
 pub mod bindings;
+pub mod settings_gui;
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
@@ -90,6 +92,58 @@ pub enum Key {
     NumLock,
 }
 
+impl fmt::Display for Key {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            // Letters
+            Key::A => "A", Key::B => "B", Key::C => "C", Key::D => "D",
+            Key::E => "E", Key::F => "F", Key::G => "G", Key::H => "H",
+            Key::I => "I", Key::J => "J", Key::K => "K", Key::L => "L",
+            Key::M => "M", Key::N => "N", Key::O => "O", Key::P => "P",
+            Key::Q => "Q", Key::R => "R", Key::S => "S", Key::T => "T",
+            Key::U => "U", Key::V => "V", Key::W => "W", Key::X => "X",
+            Key::Y => "Y", Key::Z => "Z",
+            // Digits
+            Key::Digit0 => "0", Key::Digit1 => "1", Key::Digit2 => "2",
+            Key::Digit3 => "3", Key::Digit4 => "4", Key::Digit5 => "5",
+            Key::Digit6 => "6", Key::Digit7 => "7", Key::Digit8 => "8",
+            Key::Digit9 => "9",
+            // Function keys
+            Key::F1 => "F1", Key::F2 => "F2", Key::F3 => "F3", Key::F4 => "F4",
+            Key::F5 => "F5", Key::F6 => "F6", Key::F7 => "F7", Key::F8 => "F8",
+            Key::F9 => "F9", Key::F10 => "F10", Key::F11 => "F11", Key::F12 => "F12",
+            // Arrows
+            Key::Up => "Up", Key::Down => "Down", Key::Left => "Left", Key::Right => "Right",
+            // Modifiers
+            Key::LeftShift => "L-Shift", Key::RightShift => "R-Shift",
+            Key::LeftControl => "L-Ctrl", Key::RightControl => "R-Ctrl",
+            Key::LeftAlt => "L-Alt", Key::RightAlt => "R-Alt",
+            Key::LeftSuper => "L-Super", Key::RightSuper => "R-Super",
+            // Navigation
+            Key::Home => "Home", Key::End => "End", Key::PageUp => "PageUp",
+            Key::PageDown => "PageDown", Key::Insert => "Insert", Key::Delete => "Del",
+            Key::Backspace => "Backspace", Key::Tab => "Tab", Key::Enter => "Enter",
+            Key::Escape => "Esc", Key::Space => "Space",
+            Key::PrintScreen => "PrtSc", Key::ScrollLock => "ScrLk", Key::Pause => "Pause",
+            // Punctuation
+            Key::Minus => "-", Key::Equal => "=",
+            Key::LeftBracket => "[", Key::RightBracket => "]",
+            Key::Backslash => "\\", Key::Semicolon => ";", Key::Apostrophe => "'",
+            Key::Comma => ",", Key::Period => ".", Key::Slash => "/", Key::Grave => "`",
+            // Numpad
+            Key::Numpad0 => "KP0", Key::Numpad1 => "KP1", Key::Numpad2 => "KP2",
+            Key::Numpad3 => "KP3", Key::Numpad4 => "KP4", Key::Numpad5 => "KP5",
+            Key::Numpad6 => "KP6", Key::Numpad7 => "KP7", Key::Numpad8 => "KP8",
+            Key::Numpad9 => "KP9",
+            Key::NumpadAdd => "KP+", Key::NumpadSubtract => "KP-",
+            Key::NumpadMultiply => "KP*", Key::NumpadDivide => "KP/",
+            Key::NumpadDecimal => "KP.", Key::NumpadEnter => "KPEnter",
+            Key::NumpadEqual => "KP=", Key::NumLock => "NumLk",
+        };
+        write!(f, "{name}")
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Section: Mouse
 // ───────────────────────────────────────────────────────────────────
@@ -102,6 +156,18 @@ pub enum MouseButton {
     Middle,
     Back,
     Forward,
+}
+
+impl fmt::Display for MouseButton {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Left => write!(f, "Left Mouse"),
+            Self::Right => write!(f, "Right Mouse"),
+            Self::Middle => write!(f, "Middle Mouse"),
+            Self::Back => write!(f, "Mouse Back"),
+            Self::Forward => write!(f, "Mouse Forward"),
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -147,6 +213,34 @@ pub enum GamepadButton {
     Z,
 }
 
+impl fmt::Display for GamepadButton {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::South => write!(f, "A / Cross"),
+            Self::East => write!(f, "B / Circle"),
+            Self::North => write!(f, "X / Square"),
+            Self::West => write!(f, "Y / Triangle"),
+            Self::LeftBumper => write!(f, "LB"),
+            Self::RightBumper => write!(f, "RB"),
+            Self::LeftTrigger => write!(f, "LT"),
+            Self::RightTrigger => write!(f, "RT"),
+            Self::Select => write!(f, "Select"),
+            Self::Start => write!(f, "Start"),
+            Self::Guide => write!(f, "Guide"),
+            Self::Mode => write!(f, "Mode"),
+            Self::LeftStick => write!(f, "L-Stick Press"),
+            Self::RightStick => write!(f, "R-Stick Press"),
+            Self::DPadUp => write!(f, "D-Pad Up"),
+            Self::DPadDown => write!(f, "D-Pad Down"),
+            Self::DPadLeft => write!(f, "D-Pad Left"),
+            Self::DPadRight => write!(f, "D-Pad Right"),
+            Self::Touchpad => write!(f, "Touchpad"),
+            Self::C => write!(f, "C"),
+            Self::Z => write!(f, "Z"),
+        }
+    }
+}
+
 /// Gamepad axis identifier.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GamepadAxis {
@@ -156,6 +250,19 @@ pub enum GamepadAxis {
     RightStickY,
     LeftTrigger,
     RightTrigger,
+}
+
+impl fmt::Display for GamepadAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LeftStickX => write!(f, "L-Stick X"),
+            Self::LeftStickY => write!(f, "L-Stick Y"),
+            Self::RightStickX => write!(f, "R-Stick X"),
+            Self::RightStickY => write!(f, "R-Stick Y"),
+            Self::LeftTrigger => write!(f, "Left Trigger"),
+            Self::RightTrigger => write!(f, "Right Trigger"),
+        }
+    }
 }
 
 /// Deadzone application strategy for analog sticks.
@@ -169,8 +276,17 @@ pub enum DeadzoneShape {
     PerAxis,
 }
 
+impl fmt::Display for DeadzoneShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Circular => write!(f, "Circular"),
+            Self::PerAxis => write!(f, "Per-Axis"),
+        }
+    }
+}
+
 /// Per-gamepad configuration (deadzones, thresholds).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GamepadConfig {
     /// Deadzone for the left analog stick (0.0–1.0).
     pub left_stick_deadzone: f32,
@@ -462,6 +578,9 @@ impl InputState {
     }
 
     /// Is the given axis past threshold on any connected gamepad?
+    ///
+    /// Stick axes use the per-gamepad deadzone; trigger axes use the
+    /// per-gamepad `trigger_threshold`.
     fn any_gamepad_axis_active(
         &self,
         axis: GamepadAxis,
@@ -469,9 +588,20 @@ impl InputState {
     ) -> bool {
         self.gamepads.values().any(|gp| {
             let val = gp.axis_value(axis);
+            let threshold = match axis {
+                GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => {
+                    gp.config().left_stick_deadzone
+                }
+                GamepadAxis::RightStickX | GamepadAxis::RightStickY => {
+                    gp.config().right_stick_deadzone
+                }
+                GamepadAxis::LeftTrigger | GamepadAxis::RightTrigger => {
+                    gp.config().trigger_threshold
+                }
+            };
             match direction {
-                bindings::AxisDirection::Positive => val > 0.5,
-                bindings::AxisDirection::Negative => val < -0.5,
+                bindings::AxisDirection::Positive => val > threshold,
+                bindings::AxisDirection::Negative => val < -threshold,
             }
         })
     }

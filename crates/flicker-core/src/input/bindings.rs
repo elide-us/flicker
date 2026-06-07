@@ -22,6 +22,7 @@
 //!   (legacy)
 
 use std::collections::HashMap;
+use std::fmt;
 
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,36 @@ pub enum Action {
     Quit,
 }
 
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MoveForward => write!(f, "Move Forward"),
+            Self::MoveBackward => write!(f, "Move Backward"),
+            Self::StrafeLeft => write!(f, "Strafe Left"),
+            Self::StrafeRight => write!(f, "Strafe Right"),
+            Self::MoveUp => write!(f, "Move Up"),
+            Self::MoveDown => write!(f, "Move Down"),
+            Self::LookUp => write!(f, "Look Up"),
+            Self::LookDown => write!(f, "Look Down"),
+            Self::LookLeft => write!(f, "Look Left"),
+            Self::LookRight => write!(f, "Look Right"),
+            Self::PrimaryAction => write!(f, "Primary Action"),
+            Self::SecondaryAction => write!(f, "Secondary Action"),
+            Self::Jump => write!(f, "Jump"),
+            Self::Sprint => write!(f, "Sprint"),
+            Self::Crouch => write!(f, "Crouch"),
+            Self::Interact => write!(f, "Interact"),
+            Self::Reload => write!(f, "Reload"),
+            Self::Confirm => write!(f, "Confirm"),
+            Self::Cancel => write!(f, "Cancel"),
+            Self::Menu => write!(f, "Menu"),
+            Self::Inventory => write!(f, "Inventory"),
+            Self::Map => write!(f, "Map"),
+            Self::Quit => write!(f, "Quit"),
+        }
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Section: Input Mapping
 // ───────────────────────────────────────────────────────────────────
@@ -92,6 +123,17 @@ pub enum InputBinding {
     },
 }
 
+impl fmt::Display for InputBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Key(k) => write!(f, "{k}"),
+            Self::MouseButton(mb) => write!(f, "{mb}"),
+            Self::GamepadButton(gb) => write!(f, "{gb}"),
+            Self::GamepadAxis { axis, direction } => write!(f, "{axis} {direction}"),
+        }
+    }
+}
+
 /// Which half of an analog axis triggers a binding.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AxisDirection {
@@ -99,6 +141,15 @@ pub enum AxisDirection {
     Positive,
     /// Negative half (< -0.5) — left / up on most sticks.
     Negative,
+}
+
+impl fmt::Display for AxisDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Positive => write!(f, "+"),
+            Self::Negative => write!(f, "-"),
+        }
+    }
 }
 
 /// Maps semantic actions to one or more physical inputs.
@@ -207,7 +258,7 @@ impl InputMap {
         map.bind(Action::Sprint, InputBinding::Key(Key::LeftShift));
         map.bind(Action::Crouch, InputBinding::Key(Key::LeftControl));
         map.bind(Action::Interact, InputBinding::Key(Key::E));
-        map.bind(Action::Reload, InputBinding::Key(Key::R));
+        map.bind(Action::Reload, InputBinding::Key(Key::X));
         map
     }
 
@@ -497,7 +548,7 @@ impl AbstractControls {
 /// Legacy control config, kept for backward compatibility.
 ///
 /// New code should prefer [`AbstractControls`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ControlConfig {
     pub look_sensitivity: f32,
     pub move_speed: f32,

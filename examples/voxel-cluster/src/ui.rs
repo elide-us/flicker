@@ -542,6 +542,11 @@ impl Theme {
         ]
     }
 
+    /// 1×1 white pixel texture — used for colored-rect fills.
+    pub fn white(&self) -> TextureHandle {
+        self.white
+    }
+
     /// Opaque full-screen dark backdrop — for a menu with nothing behind it.
     pub fn backdrop(&self, r: &mut Renderer, screen: Vec2) {
         r.draw_sprite(self.white, Vec2::ZERO, screen, COL_BACKDROP);

@@ -9,6 +9,7 @@ pub use compression::{
 pub use input::bindings::{
     AbstractControls, Action, AxisDirection, Bindings, ControlConfig, InputBinding, InputMap,
 };
+pub use input::settings_gui::{GuiRenderer, InputSettingsPanel};
 pub use input::{
     DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputState, Key,
     MouseButton,

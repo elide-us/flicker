@@ -19,6 +19,7 @@ pub use flicker_core::input::{
     DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputState, Key,
     MouseButton,
 };
+pub use flicker_core::input::settings_gui::{GuiRenderer, InputSettingsPanel};
 
 use std::time::Duration;
 

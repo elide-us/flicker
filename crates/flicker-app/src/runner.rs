@@ -402,7 +402,14 @@ pub fn run<A: App>(app: A) -> Result<()> {
     let event_loop = EventLoop::new().context("failed to create winit event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let gilrs = Gilrs::new().map_err(|e| anyhow::anyhow!("failed to initialize gilrs: {e}"))?;
+    let gilrs = match Gilrs::new() {
+        Ok(g) => g,
+        Err(gilrs::Error::NotImplemented(g)) => {
+            tracing::warn!("gamepads unavailable on this platform");
+            g
+        }
+        Err(e) => return Err(anyhow::anyhow!("gilrs init failed: {e}")),
+    };
 
     let mut runner = Runner {
         app,
