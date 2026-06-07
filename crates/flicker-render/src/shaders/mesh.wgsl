@@ -109,6 +109,16 @@ fn material_index_color(index: u32) -> vec3<f32> {
         // assessed against. Used by the voxel-cluster field (`Material::new(10..)`).
         case 10u: { return vec3<f32>(0.46, 0.44, 0.42); } // STONE        matte neutral
 
+        // ---- world-sim surface stack (demo) ----
+        case 11u: { return vec3<f32>(0.95, 0.35, 0.10); } // LAVA         hot orange
+        case 12u: { return vec3<f32>(0.80, 0.90, 1.00); } // ICE          pale icy blue
+        case 13u: { return vec3<f32>(0.32, 0.42, 0.24); } // LAND         mossy ground
+
+        // ---- upper atmosphere heatmaps (demo) ----
+        case 14u: { return vec3<f32>(0.20, 0.95, 0.55); } // AURORA       thermosphere glow
+        case 15u: { return vec3<f32>(0.55, 0.32, 0.88); } // UV           ozone absorption
+        case 16u: { return vec3<f32>(0.02, 0.02, 0.06); } // VOID         night-side / space
+
         // Fallback for unknown materials (also the EMPTY=0 case).
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }
