@@ -22,15 +22,22 @@
 //!
 //! Reusable nucleus (pure data); `main.rs` only visualizes it.
 
+// Reusable nucleus: it intentionally exposes more (heatmap ramps, all the field
+// layers, conservation accounting) than any single demo renders. A demo using a
+// subset isn't dead code — it's the library surface for the next one.
+#![allow(dead_code)]
+
 use flicker::render::{MeshVertex, Vec2, Vec3};
 use flicker_primitive::heightmap::world_height;
 
 /// Grid resolution across the hex footprint (`G × G` cells / vertices).
 pub const G: usize = 64;
 
-/// Hex size: centre to N/S point, world units.
+/// Hex size: centre to the **E/W point**, world units. Flat-top orientation —
+/// the points face E/W, so this is the wide (point-to-point) axis that maps to
+/// the 2048-cluster texture width (≈1024 ft per hex).
 pub const HEX_SIZE: f32 = 130.0;
-/// Flat-to-flat half-width = √3/2 · size.
+/// Apothem: centre to the N/S **flat edge** = √3/2 · size (half the N/S height).
 pub const HEX_HALF_W: f32 = HEX_SIZE * 0.866_025;
 
 /// Vertical exaggeration so the gentle `[96, 160]` heightmap reads in the viewer.
@@ -102,7 +109,8 @@ pub const M_RAINFOREST: u32 = 21;
 pub const M_TAIGA: u32 = 22;
 pub const M_TUNDRA: u32 = 23;
 
-/// Pointy-top row half-width at normalized lat `a = z / size`.
+/// Flat-top column half-height at normalized lon `a = x / size`: 1.0 across the
+/// flat band `|a| ≤ ½`, tapering to the E/W points at `|a| = 1`.
 fn band_width(a: f32) -> f32 {
     let a = a.abs();
     if a <= 0.5 {
@@ -112,11 +120,13 @@ fn band_width(a: f32) -> f32 {
     }
 }
 
-/// Local XZ position of grid cell `(i, j)`, hex centred at the origin.
+/// Local XZ position of grid cell `(i, j)`, hex centred at the origin. **Flat-top:**
+/// `x` (E/W) is the wide point-to-point axis at full extent; `z` (N/S) is the
+/// edge-to-edge axis, masked to the hex outline.
 pub fn cell_local(i: usize, j: usize) -> (f32, f32) {
-    let z = (j as f32 / (G - 1) as f32 * 2.0 - 1.0) * HEX_SIZE;
-    let wf = band_width(z / HEX_SIZE);
-    let x = (i as f32 / (G - 1) as f32 * 2.0 - 1.0) * HEX_HALF_W * wf;
+    let x = (i as f32 / (G - 1) as f32 * 2.0 - 1.0) * HEX_SIZE;
+    let wf = band_width(x / HEX_SIZE);
+    let z = (j as f32 / (G - 1) as f32 * 2.0 - 1.0) * HEX_HALF_W * wf;
     (x, z)
 }
 
