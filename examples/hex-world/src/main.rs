@@ -51,6 +51,15 @@ const REBUILD_INTERVAL: f32 = 0.15;
 const MOVE_SPEED: f32 = 950.0;
 const LOOK_SENS: f32 = 0.005;
 const WY_CLOUD: f32 = 120.0;
+/// Height of the hex-index billboards — clear above the cloud deck.
+const BILLBOARD_Y: f32 = 280.0;
+/// Height of the reference graticule overlay (above clouds, below billboards).
+const GRATICULE_Y: f32 = 210.0;
+/// Meridian spokes per disc (Earth-style time-zone bands).
+const TIME_ZONES: usize = 24;
+
+/// A coloured group of world-space line segments (one graticule curve set).
+type LineGroup = (Vec<(Vec3, Vec3)>, [f32; 4]);
 
 /// One hex's data and its flat-layout placement.
 struct HexTile {
@@ -96,17 +105,80 @@ fn ring_offset(ring: u32, pos: u32) -> Vec2 {
 
 /// Flat position of a hex: its hemisphere's cluster centre plus its ring offset.
 /// North cluster sits left, south cluster right, separated so equators meet.
-fn hex_flat_pos(coord: HexCoord) -> Vec2 {
-    // Clusters one column-pitch apart so the equator rings meet along a vertical
-    // seam. The south is shifted half a hex (one apothem) vertically so its
-    // flat-top E/W points interlock with the north's like teeth — per the spec's
-    // "southern hemisphere rotated half a hex".
+/// Flat-layout centre (the pole) of a hemisphere's disc. The two discs are drawn
+/// side by side as independent polar maps — no implied join between them.
+fn cluster_center(hemi: Hemisphere) -> Vec2 {
     let sep = 1.5 * HEX_SIZE * (RINGS as f32 + 0.5);
-    let center = match coord.hemi {
+    match hemi {
         Hemisphere::North => Vec2::new(-sep, 0.0),
         Hemisphere::South => Vec2::new(sep, HEX_HALF_W),
-    };
-    center + ring_offset(coord.ring, coord.pos)
+    }
+}
+
+fn hex_flat_pos(coord: HexCoord) -> Vec2 {
+    cluster_center(coord.hemi) + ring_offset(coord.ring, coord.pos)
+}
+
+/// Radial distance from a disc's pole to ring `value` (fractional allowed). Ring
+/// pitch is the flat-top hex centre-to-centre distance.
+fn ring_radius(value: f32) -> f32 {
+    value * 2.0 * HEX_HALF_W
+}
+
+/// Ring value of an Earth latitude on the disc: pole (90°) → 0, equator (0°) →
+/// `R + 0.5` (half a hex out in the teeth — the same mapping `celestial_dir` uses).
+fn latitude_ring(lat_deg: f32) -> f32 {
+    (90.0 - lat_deg.abs()) / 90.0 * (RINGS as f32 + 0.5)
+}
+
+/// A horizontal circle of line segments at height `GRATICULE_Y`, around `center`.
+fn circle(center: Vec2, radius: f32, segs: usize) -> Vec<(Vec3, Vec3)> {
+    (0..segs)
+        .map(|i| {
+            let a0 = i as f32 / segs as f32 * std::f32::consts::TAU;
+            let a1 = (i + 1) as f32 / segs as f32 * std::f32::consts::TAU;
+            (
+                Vec3::new(center.x + radius * a0.cos(), GRATICULE_Y, center.y + radius * a0.sin()),
+                Vec3::new(center.x + radius * a1.cos(), GRATICULE_Y, center.y + radius * a1.sin()),
+            )
+        })
+        .collect()
+}
+
+/// `count` radial meridian spokes from the pole out to `r_outer`.
+fn meridians(center: Vec2, r_outer: f32, count: usize) -> Vec<(Vec3, Vec3)> {
+    let start = -std::f32::consts::FRAC_PI_2; // longitude 0 = the pos-0 direction (−Z)
+    (0..count)
+        .map(|i| {
+            let a = start + i as f32 / count as f32 * std::f32::consts::TAU;
+            (
+                Vec3::new(center.x, GRATICULE_Y, center.y),
+                Vec3::new(center.x + r_outer * a.cos(), GRATICULE_Y, center.y + r_outer * a.sin()),
+            )
+        })
+        .collect()
+}
+
+/// Reference graticule for both discs: (segments, colour) groups — equator,
+/// tropics, polar circles, and time-zone meridians. Static; built once.
+fn build_graticule() -> Vec<LineGroup> {
+    let eq_r = ring_radius(latitude_ring(0.0));
+    let trop_r = ring_radius(latitude_ring(23.5));
+    let polar_r = ring_radius(latitude_ring(66.5));
+    let (mut equator, mut tropic, mut polar, mut grid) = (vec![], vec![], vec![], vec![]);
+    for hemi in [Hemisphere::North, Hemisphere::South] {
+        let c = cluster_center(hemi);
+        equator.extend(circle(c, eq_r, 96));
+        tropic.extend(circle(c, trop_r, 96));
+        polar.extend(circle(c, polar_r, 72));
+        grid.extend(meridians(c, eq_r, TIME_ZONES));
+    }
+    vec![
+        (equator, [1.0, 0.25, 0.25, 1.0]),  // equator — red
+        (tropic, [1.0, 0.65, 0.2, 0.9]),    // tropics — orange
+        (polar, [0.4, 0.85, 1.0, 0.9]),     // polar circles — cyan
+        (grid, [0.75, 0.75, 0.85, 0.5]),    // time-zone meridians — dim
+    ]
 }
 
 fn mk(renderer: &mut Renderer, mesh: (Vec<MeshVertex>, Vec<u32>), tint: [f32; 4], model: Mat4) -> Option<Sheet> {
@@ -150,6 +222,8 @@ struct World {
     static_sheets: Vec<Sheet>,
     /// The live ring(s), rebuilt on the cadence.
     animated_sheets: Vec<Sheet>,
+    /// Static reference graticule (latitude rings + meridians), per colour group.
+    graticule: Vec<LineGroup>,
     sim_accum: f32,
     rebuild_accum: f32,
     dirty: bool,
@@ -180,6 +254,7 @@ impl World {
             animated,
             static_sheets: Vec::new(),
             animated_sheets: Vec::new(),
+            graticule: build_graticule(),
             sim_accum: 0.0,
             rebuild_accum: REBUILD_INTERVAL,
             dirty: true,
@@ -324,7 +399,25 @@ impl Scene for World {
             );
         }
 
+        // Reference graticule overlay: equator / tropics / polar circles + meridians.
+        for (segs, color) in &self.graticule {
+            renderer.draw_lines(segs, *color);
+        }
+
+        // Hex-index billboards, floating above the cloud layer (world-array
+        // index per tile), distance-scaled so they stay readable.
+        let size = renderer.size();
+        let vp = camera.view_projection(size.x / size.y);
         renderer.set_layer(50.0);
+        for (i, t) in self.tiles.iter().enumerate() {
+            let world = Vec3::new(t.place.x, BILLBOARD_Y, t.place.y);
+            if let Some(p) = project_to_screen(vp, world, size) {
+                let dist = (world - self.pos).length();
+                let px = (160_000.0 / dist).clamp(16.0, 96.0);
+                renderer.draw_text(&i.to_string(), p, px, [1.0, 0.95, 0.35, 1.0]);
+            }
+        }
+
         renderer.draw_text(
             "WASD move · R/F up/down · hold RMB to look · Esc quit",
             Vec2::new(12.0, 12.0),
@@ -332,6 +425,18 @@ impl Scene for World {
             [1.0, 1.0, 1.0, 0.8],
         );
     }
+}
+
+/// Project a world point to screen pixels; `None` if behind the camera.
+fn project_to_screen(vp: Mat4, world: Vec3, size: Vec2) -> Option<Vec2> {
+    let clip = vp * world.extend(1.0);
+    if clip.w <= 0.001 {
+        return None;
+    }
+    Some(Vec2::new(
+        (clip.x / clip.w * 0.5 + 0.5) * size.x,
+        (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * size.y,
+    ))
 }
 
 fn main() -> Result<()> {
