@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/clayengine",
+    "crates/flicker-materials",
+    "crates/flicker-worldstate",
+    "crates/flicker-worldgen",
     "crates/flicker-primitive",
     "crates/flicker-core",
     "crates/flicker-render",
@@ -78,6 +81,9 @@ fastrand = "2"
 
 # Internal cross-crate deps
 clayengine = { version = "0.1.0", path = "crates/clayengine" }
+flicker-materials = { version = "0.1.0", path = "crates/flicker-materials" }
+flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
+flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
 flicker-primitive = { version = "0.1.0", path = "crates/flicker-primitive" }
 flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
 flicker-render = { version = "0.1.0", path = "crates/flicker-render" }

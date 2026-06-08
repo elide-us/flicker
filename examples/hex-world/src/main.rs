@@ -32,6 +32,9 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker_materials::{JsonTableSource, Tables};
+use flicker_worldgen::{Epoch1, Epoch1Params};
+use flicker_worldstate::Composition;
 
 use layers::{LayerStack, G, HEX_HALF_W, HEX_SIZE};
 use topology::{HexCoord, HexMap, Hemisphere};
@@ -58,6 +61,21 @@ const BILLBOARD_Y: f32 = 120.0;
 const GRATICULE_Y: f32 = 95.0;
 /// Meridian spokes per disc (Earth-style time-zone bands).
 const TIME_ZONES: usize = 24;
+
+// --- Epoch 1 geology stack (the exploded layer view) ---
+/// Materials vocabulary directory (the JSON tables), relative to this example.
+const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
+/// World seed for the Epoch 1 element distribution.
+const GEO_SEED: u64 = 0x0EC0_DE01;
+/// Duplicate surface planes stacked below the surface — placeholders for the
+/// sub-surface layers later epochs will fill.
+const GEO_DUP_LAYERS: usize = 8;
+/// Total stacked planes: the surface, its duplicates, and the Epoch 1 map.
+const GEO_PLANES: usize = GEO_DUP_LAYERS + 2;
+/// Index of the bottom plane — the Epoch 1 dominant-element map.
+const GEO_EPOCH_PLANE: usize = GEO_PLANES - 1;
+/// Vertical gap between stacked planes, world units.
+const GEO_SPACING: f32 = 200.0;
 
 // Inspect (split-out column) display mapping. The column is the world's real
 // 256-layer y-axis (the 8-bit `ClusterId` y-field), drawn at `COL_PER_LAYER`
@@ -226,6 +244,58 @@ fn push_tile(out: &mut Vec<Sheet>, t: &HexTile, renderer: &mut Renderer) {
     out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], model));
     let cloud = layers::build_sheet(WY_CLOUD, |i, j| at(&s.cloud, i, j) * 20.0, |_, _| layers::M_CLOUD, |i, j| at(&s.cloud, i, j) > 0.15);
     out.extend(mk(renderer, cloud, [1.0, 1.0, 1.0, 0.5], model));
+}
+
+/// The biome surface plane for the geology stack — every hex's realized surface
+/// (no cloud deck), built once and reused at each stacked layer's Y offset.
+fn build_stack_surface(tiles: &[HexTile], renderer: &mut Renderer) -> Vec<Sheet> {
+    let mut out = Vec::new();
+    for t in tiles {
+        let model = Mat4::from_translation(Vec3::new(t.place.x, 0.0, t.place.y));
+        let realized = layers::build_sheet(
+            0.0,
+            |i, j| t.stack.realized(i, j).0,
+            |i, j| t.stack.realized(i, j).1,
+            |_, _| true,
+        );
+        out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], model));
+    }
+    out
+}
+
+/// HSV→RGB, all channels in `[0, 1]`.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let h6 = (h.fract() + 1.0).fract() * 6.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h6 % 2.0) - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h6 as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r + m, g + m, b + m]
+}
+
+/// A distinct colour per element — a golden-ratio hue by atomic number, so the
+/// elements read as clearly different tints. (The periodic table carries no
+/// colour; this is a debug palette for the dominant-element map.)
+fn element_color(atomic_number: u8) -> [f32; 4] {
+    let hue = (atomic_number as f32 * 0.618_034).fract();
+    let [r, g, b] = hsv_to_rgb(hue, 0.62, 0.95);
+    [r, g, b, 1.0]
+}
+
+/// The Epoch 1 plane tint for a hex: its dominant element's colour, or grey for
+/// an empty composition.
+fn hex_color(comp: &Composition) -> [f32; 4] {
+    match comp.dominant() {
+        Some(n) => element_color(n),
+        None => [0.5, 0.5, 0.5, 1.0],
+    }
 }
 
 /// Build sheets for the tiles whose animated-flag matches `animated`.
@@ -489,6 +559,16 @@ struct World {
     local_dirty: bool,
     /// World-view camera pose, saved while in Local view so it restores on exit.
     saved_cam: Option<(Vec3, f32, f32)>,
+    // Epoch 1 geology stack: per-hex dominant-element colours, the reusable
+    // surface plane + flat hex mesh, and the view toggle / layer isolation.
+    hex_colors: Vec<[f32; 4]>,
+    stack_surface: Vec<Sheet>,
+    epoch_hex_mesh: Option<MeshHandle>,
+    show_stack: bool,
+    solo_layer: Option<usize>,
+    prev_stack_toggle: bool,
+    prev_solo_up: bool,
+    prev_solo_down: bool,
 }
 
 impl World {
@@ -505,6 +585,26 @@ impl World {
             });
             animated.push(c.hemi == Hemisphere::North && c.ring <= ANIMATE_RINGS);
         }
+
+        // Epoch 1: seed a composition per hex from its point on the sphere and
+        // keep the dominant element's colour for the geology map. If the
+        // vocabulary can't load, fall back to grey so the app still runs.
+        let hex_colors = match Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)) {
+            Ok(tables) => {
+                let epoch = Epoch1::new(&tables, Epoch1Params::default(), GEO_SEED);
+                (0..map.total())
+                    .map(|i| {
+                        let d = map.celestial_dir(i);
+                        hex_color(&epoch.seed_hex(Vec3::new(d[0], d[1], d[2])))
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                tracing::error!("Epoch 1 seed failed ({e}); geology map will be grey");
+                vec![[0.5, 0.5, 0.5, 1.0]; map.total() as usize]
+            }
+        };
+
         Self {
             tiles,
             animated,
@@ -535,6 +635,14 @@ impl World {
             local_sheets: Vec::new(),
             local_dirty: false,
             saved_cam: None,
+            hex_colors,
+            stack_surface: Vec::new(),
+            epoch_hex_mesh: None,
+            show_stack: false,
+            solo_layer: None,
+            prev_stack_toggle: false,
+            prev_solo_up: false,
+            prev_solo_down: false,
         }
     }
 
@@ -588,6 +696,40 @@ impl World {
         }
         self.inspect_dirty = true; // rebuild (World) or clear (Local) the column
         self.view_mode = mode;
+    }
+
+    /// Cycle the isolated stack layer: `None` (show all) ↔ `0..GEO_PLANES`. `dir`
+    /// is +1 (down toward the Epoch 1 plane) or −1 (up toward the surface).
+    fn solo_step(&mut self, dir: i32) {
+        let cur = self.solo_layer.map_or(-1, |l| l as i32);
+        let next = (cur + dir).clamp(-1, GEO_PLANES as i32 - 1);
+        self.solo_layer = (next >= 0).then_some(next as usize);
+    }
+
+    /// Draw the exploded geology stack: the surface biome plane, its duplicate
+    /// placeholder planes (the same meshes at descending Y), and the Epoch 1
+    /// dominant-element map at the bottom — honoring the isolated-layer filter.
+    fn draw_stack(&self, renderer: &mut Renderer) {
+        let visible = |l: usize| self.solo_layer.is_none_or(|s| s == l);
+        for l in 0..GEO_EPOCH_PLANE {
+            if !visible(l) {
+                continue;
+            }
+            let shift = Mat4::from_translation(Vec3::new(0.0, -(l as f32) * GEO_SPACING, 0.0));
+            for s in &self.stack_surface {
+                renderer.draw_mesh(s.handle, shift * s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
+            }
+        }
+        // Epoch 1 plane: one flat hex per tile, tinted by its dominant element.
+        if visible(GEO_EPOCH_PLANE) {
+            if let Some(mesh) = self.epoch_hex_mesh {
+                let y = -(GEO_EPOCH_PLANE as f32) * GEO_SPACING;
+                for (t, &tint) in self.tiles.iter().zip(&self.hex_colors) {
+                    let model = Mat4::from_translation(Vec3::new(t.place.x, y, t.place.y));
+                    renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
+                }
+            }
+        }
     }
 
     /// The engine state the HUD script reads each frame (the `Model` global).
@@ -682,6 +824,26 @@ impl World {
             self.dragging = false;
         }
         self.prev_mouse = input.mouse_position;
+
+        // Geology stack: '\' toggles the exploded layer view; Up/Down isolate a
+        // single layer (cycling all → surface → … → Epoch 1). Edge-detected so a
+        // held key fires once.
+        let toggle = input.key_down(Key::Backslash);
+        if toggle && !self.prev_stack_toggle {
+            self.show_stack = !self.show_stack;
+            println!("geology stack: {}", if self.show_stack { "on" } else { "off" });
+        }
+        self.prev_stack_toggle = toggle;
+        let up = input.key_down(Key::Up);
+        if up && !self.prev_solo_up {
+            self.solo_step(-1);
+        }
+        self.prev_solo_up = up;
+        let down = input.key_down(Key::Down);
+        if down && !self.prev_solo_down {
+            self.solo_step(1);
+        }
+        self.prev_solo_down = down;
 
         // Left-click: select the hex under the cursor (click it again, or empty
         // space, to deselect). Its stack splits out in place. Suppressed when the
@@ -810,19 +972,23 @@ impl World {
         });
         renderer.draw_sky();
 
-        // Surface meshes: the whole graph (World) or just the focus set (Local).
+        // Surface meshes: the Local focus set, the exploded geology stack, or the
+        // flat whole-graph world.
         if local {
             for s in &self.local_sheets {
                 renderer.draw_mesh(s.handle, s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
             }
+        } else if self.show_stack {
+            self.draw_stack(renderer);
         } else {
             for s in self.static_sheets.iter().chain(&self.animated_sheets).chain(&self.inspect_sheets) {
                 renderer.draw_mesh(s.handle, s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
             }
         }
 
-        // Planet-overview overlays (graticule + the focus column) — World only.
-        if !local {
+        // Planet-overview overlays (graticule + the focus column) — flat World
+        // only; the exploded stack hides them.
+        if !local && !self.show_stack {
             if self.show_graticule {
                 for (segs, color) in &self.graticule {
                     renderer.draw_lines(segs, *color);
@@ -835,7 +1001,7 @@ impl World {
 
         let size = renderer.size();
         let vp = camera.view_projection(size.x / size.y);
-        if self.show_billboards {
+        if self.show_billboards && !self.show_stack {
             renderer.set_layer(50.0);
             let labels: Vec<usize> = if local {
                 self.local_set()
@@ -881,6 +1047,9 @@ impl Scene for World {
             "HexWorld flat graph: {} hexes (R={RINGS}); settling, {live} animate live. Fly: WASD, R/F up/down, RMB look, Esc.",
             self.tiles.len()
         );
+        println!(
+            "Geology stack: '\\' toggles the exploded layer stack (Epoch 1 map at the bottom); Up/Down isolate one layer."
+        );
         // Settle the whole world once so the frozen backdrop looks alive.
         for _ in 0..SETTLE_TICKS {
             for t in &mut self.tiles {
@@ -889,6 +1058,13 @@ impl Scene for World {
         }
         // Build the frozen backdrop now; the live ring is built on first render.
         self.static_sheets = build_subset(&self.tiles, &self.animated, false, renderer);
+
+        // Geology-stack meshes: the settled biome surface (reused at every
+        // stacked layer) and one flat near-white hex tinted per-draw for the
+        // Epoch 1 plane.
+        self.stack_surface = build_stack_surface(&self.tiles, renderer);
+        let (fv, fi) = layers::build_sheet(0.0, |_, _| 0.0, |_, _| layers::M_FOAM, |_, _| true);
+        self.epoch_hex_mesh = Some(renderer.upload_mesh(&fv, MeshIndices::U32(&fi)));
 
         // Load the Lua view/sim HUD: control logic + the embedded widget toolkit
         // + the declarative layout, then seed the model so frame 1's `update`

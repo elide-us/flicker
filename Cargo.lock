@@ -701,6 +701,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-materials"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "flicker-net"
 version = "0.1.0"
 dependencies = [
@@ -785,6 +794,26 @@ dependencies = [
 [[package]]
 name = "flicker-worker"
 version = "0.1.0"
+
+[[package]]
+name = "flicker-worldgen"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "flicker-worldstate",
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flicker-worldstate"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "foldhash"
@@ -1105,7 +1134,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-materials",
  "flicker-primitive",
+ "flicker-worldgen",
+ "flicker-worldstate",
  "glam",
  "tracing",
  "tracing-subscriber",
