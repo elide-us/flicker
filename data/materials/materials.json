@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "purpose": "The material index — the resolved 'blend-results' a voxel renders. A material is NOT an element; it is what an aggregate element-composition (periodic_table.json) CLASSIFIES to from a voxel's perspective. Index space is 0-255; only a limited RESOLVED set is defined now — the rest is reserved to grow.",
+    "classify": "A voxel's material = best-match of its local composition (cluster aggregate + local variation) against the `signature` of each material. `signature` lists the defining elements (roughly most→least dominant by mass). Coarse/provisional — the real classifier is later.",
+    "traits": "hardness (Mohs-like 0-10, erosion resistance), brittleness (0 ductile..1 shatters → sediment), water_capacity (0..1 porosity / how much water it holds), viscosity (0 flows freely each pass .. 1 static solid; governs how a flow-effect material moves per pass — water lowest, oil/lava mid, ice creeps high), density_g_cm3 (differentiation / weight). Authoritative here; element traits are the blend fallback. PROPOSED STARTING VALUES — tune.",
+    "render": "color [r,g,b] 0-1 is a placeholder palette; reconcile with the mesh palette (M_* in examples/hex-world/src/layers.rs) when the sim drives rendering.",
+    "effects_note": "water / ice / lava are not stacked layers — they are tracked effects (persistent saturation/flow state) whose per-pass motion rate comes from viscosity. See docs."
+  },
+  "materials": [
+    { "id": 0,  "name": "Air",        "category": "void",     "signature": [],                  "hardness": 0.0, "brittleness": 0.0, "water_capacity": 0.0, "viscosity": 0.0, "density_g_cm3": 0.0,  "color": [0,0,0],          "note": "empty / not solid" },
+    { "id": 1,  "name": "Bedrock",    "category": "rock",     "signature": ["Si","O","Fe","Al"],"hardness": 7.0, "brittleness": 0.4, "water_capacity": 0.02,"viscosity": 1.0, "density_g_cm3": 2.9,  "color": [0.30,0.30,0.33], "note": "generic 100%-solid basement; the default below-surface fill" },
+
+    { "id": 10, "name": "Granite",    "category": "rock",     "signature": ["Si","O","Al","K"], "hardness": 6.5, "brittleness": 0.5, "water_capacity": 0.04,"viscosity": 1.0, "density_g_cm3": 2.70, "color": [0.72,0.68,0.66] },
+    { "id": 11, "name": "Basalt",     "category": "rock",     "signature": ["Fe","Si","O","Ca"],"hardness": 6.0, "brittleness": 0.5, "water_capacity": 0.04,"viscosity": 1.0, "density_g_cm3": 3.00, "color": [0.24,0.24,0.26] },
+    { "id": 12, "name": "Sandstone",  "category": "rock",     "signature": ["Si","O"],          "hardness": 4.0, "brittleness": 0.6, "water_capacity": 0.25,"viscosity": 1.0, "density_g_cm3": 2.30, "color": [0.80,0.70,0.50] },
+    { "id": 13, "name": "Limestone",  "category": "rock",     "signature": ["Ca","C","O"],      "hardness": 3.0, "brittleness": 0.5, "water_capacity": 0.20,"viscosity": 1.0, "density_g_cm3": 2.60, "color": [0.82,0.80,0.74], "note": "carbonate (CaCO3)" },
+    { "id": 14, "name": "Shale",      "category": "rock",     "signature": ["Si","Al","O","C"], "hardness": 3.0, "brittleness": 0.7, "water_capacity": 0.30,"viscosity": 1.0, "density_g_cm3": 2.40, "color": [0.40,0.38,0.36] },
+
+    { "id": 20, "name": "Dirt",       "category": "soil",     "signature": ["Si","Al","O","C"], "hardness": 1.0, "brittleness": 0.3, "water_capacity": 0.50,"viscosity": 0.9, "density_g_cm3": 1.50, "color": [0.45,0.32,0.20], "note": "the classic; weathered rock + organics + water" },
+    { "id": 21, "name": "Clay",       "category": "soil",     "signature": ["Al","Si","O"],     "hardness": 1.5, "brittleness": 0.4, "water_capacity": 0.70,"viscosity": 0.7, "density_g_cm3": 1.80, "color": [0.55,0.35,0.28], "note": "plastic when saturated" },
+    { "id": 22, "name": "Sand",       "category": "sediment", "signature": ["Si","O"],          "hardness": 4.0, "brittleness": 0.2, "water_capacity": 0.15,"viscosity": 0.8, "density_g_cm3": 1.60, "color": [0.85,0.76,0.55], "note": "loose grains; drains" },
+    { "id": 23, "name": "Gravel",     "category": "sediment", "signature": ["Si","O","Fe"],     "hardness": 5.0, "brittleness": 0.3, "water_capacity": 0.10,"viscosity": 0.85,"density_g_cm3": 1.80, "color": [0.50,0.48,0.45] },
+    { "id": 24, "name": "Peat",       "category": "soil",     "signature": ["C","H","O"],       "hardness": 0.5, "brittleness": 0.2, "water_capacity": 0.85,"viscosity": 0.6, "density_g_cm3": 1.10, "color": [0.28,0.20,0.12], "note": "bog; waterlogged organics" },
+
+    { "id": 40, "name": "Hematite",   "category": "ore",      "signature": ["Fe","O"],          "hardness": 5.5, "brittleness": 0.5, "water_capacity": 0.04,"viscosity": 1.0, "density_g_cm3": 5.00, "color": [0.55,0.20,0.16], "extracted_element": "Fe", "note": "iron ore (Fe2O3)" },
+    { "id": 41, "name": "Chalcopyrite","category": "ore",     "signature": ["Cu","Fe","S"],     "hardness": 3.5, "brittleness": 0.5, "water_capacity": 0.04,"viscosity": 1.0, "density_g_cm3": 4.20, "color": [0.80,0.70,0.25], "extracted_element": "Cu", "note": "copper ore (CuFeS2)" },
+    { "id": 42, "name": "GoldOre",    "category": "ore",      "signature": ["Au","Si","O"],     "hardness": 3.0, "brittleness": 0.4, "water_capacity": 0.04,"viscosity": 1.0, "density_g_cm3": 6.00, "color": [0.85,0.72,0.30], "extracted_element": "Au", "note": "native gold in quartz" },
+    { "id": 43, "name": "Coal",       "category": "ore",      "signature": ["C"],               "hardness": 2.0, "brittleness": 0.6, "water_capacity": 0.10,"viscosity": 1.0, "density_g_cm3": 1.40, "color": [0.08,0.08,0.09], "extracted_element": "C", "note": "carbon fuel" },
+
+    { "id": 60, "name": "Water",      "category": "liquid",   "signature": ["H","O"],           "hardness": 0.0, "brittleness": 0.0, "water_capacity": 1.0, "viscosity": 0.05,"density_g_cm3": 1.00, "color": [0.20,0.40,0.75], "note": "effect: moves one motion per pass" },
+    { "id": 61, "name": "Ice",        "category": "solid",    "signature": ["H","O"],           "hardness": 1.5, "brittleness": 0.7, "water_capacity": 1.0, "viscosity": 0.95,"density_g_cm3": 0.92, "color": [0.80,0.90,0.98], "note": "frozen water; creeps slowly" },
+    { "id": 62, "name": "Lava",       "category": "liquid",   "signature": ["Si","O","Fe"],     "hardness": 0.0, "brittleness": 0.0, "water_capacity": 0.0, "viscosity": 0.40,"density_g_cm3": 2.80, "color": [0.95,0.45,0.15], "note": "molten silicate; freezes to basalt" },
+    { "id": 63, "name": "Oil",        "category": "liquid",   "signature": ["C","H"],           "hardness": 0.0, "brittleness": 0.0, "water_capacity": 0.0, "viscosity": 0.30,"density_g_cm3": 0.90, "color": [0.10,0.08,0.06], "note": "hydrocarbon; hydrophobic, viscous" }
+  ]
+}

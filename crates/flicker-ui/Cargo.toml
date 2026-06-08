@@ -1,0 +1,12 @@
+[package]
+name = "flicker-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+flicker-render.workspace = true
+flicker-script.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

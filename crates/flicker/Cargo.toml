@@ -13,3 +13,4 @@ flicker-script.workspace = true
 flicker-net.workspace = true
 flicker-app.workspace = true
 flicker-scene.workspace = true
+flicker-ui.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "flicker-worldstate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Data-model **tier ②** — the retained material ledger (see
+# docs/material-model-handoff.md §1, §3-4 and docs/flicker-world-system-spec.md
+# §4, §13 "world-state"). A surface-only, sparse map of per-column material
+# ledgers: the conserved element-mass truth the whole simulation runs on. This
+# crate is the *substrate*; the erosion sweep, rivulets, and write-back that
+# evolve it (spec §5-6) are deferred to later slices. Depends on the vocabulary
+# (flicker-materials) for trait blends; stays decoupled from voxel storage —
+# the join is voxel → ledger (the thin seam-to-voxel translates between them).
+[dependencies]
+flicker-materials.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

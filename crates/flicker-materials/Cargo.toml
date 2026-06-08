@@ -1,0 +1,17 @@
+[package]
+name = "flicker-materials"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The world-material vocabulary — data-model **tier ①** (see
+# docs/material-model-handoff.md §1–2). Owns the periodic table (26 elements)
+# and the 256-material index, loaded from `data/materials/*.json` today and
+# from flicker-net → web service → DB later, all behind the `TableSource`
+# seam: the simulation asks the source, never a hardcoded path. Standalone —
+# no graphics, no voxel storage — it just defines the vocabulary and answers
+# element/material lookups and composition-weighted trait blends.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -6,19 +6,23 @@
 //! - **Substance** (`ground`, `water`, `ice`, `lava`, `cloud`) — real material
 //!   with a thickness; rendered as **meshes**. `water`'s surface *level* is
 //!   `ground + water` (computed against the contour below), not a global plane.
-//! - **Influence fields** (`temperature`, `pressure`, `wind`, `humidity`) —
-//!   scalar/vector fields whose job is to *drive other layers*; rendered as
-//!   flat, colour-shaded **heatmaps**, never as relief.
+//! - **Influence fields** (`temperature`, `pressure`, `wind`) — scalar/vector
+//!   fields whose job is to *drive other layers*; rendered as flat, colour-shaded
+//!   **heatmaps**, never as relief. (Airborne water lives in `band_moisture`, a
+//!   conserved substance pool spread across the vertical air bands.)
 //!
 //! The realized composite (substance only) is the LOD8 macro surface — one cell
 //! ≈ one cluster. Cluster expansion / contour bake is the layer *below* this and
 //! is out of scope here.
 //!
-//! [`LayerStack::tick`] advances a minimal but conservative water cycle:
-//! insolation→temperature, pressure→wind, evaporation, humidity advection,
-//! orographic condensation→precipitation, downhill runoff, ice melt. Water
-//! mass (`water + ice + humidity`) is conserved across a tick (closed
-//! boundaries) — the invariant the whole design rests on, and the one tested.
+//! [`LayerStack::tick`] advances a conservative **vertical** water cycle — the
+//! sediment conveyor: insolation→temperature, real column pressure→wind,
+//! evaporation into the surface air band, per-band horizontal advection,
+//! buoyant vertical convection (the lift), per-band condensation→precipitation
+//! back to the surface (the drop), downhill runoff (toward the ocean), ice melt.
+//! Water mass (`water + ice + Σ band_moisture`) is conserved across a tick
+//! (closed boundaries) — the invariant the whole design rests on, and the one
+//! tested.
 //!
 //! Reusable nucleus (pure data); `main.rs` only visualizes it.
 
@@ -33,19 +37,31 @@ use flicker_primitive::heightmap::world_height;
 /// Grid resolution across the hex footprint (`G × G` cells / vertices).
 pub const G: usize = 64;
 
-/// Hex size: centre to the **E/W point**, world units. Flat-top orientation —
-/// the points face E/W, so this is the wide (point-to-point) axis that maps to
-/// the 2048-cluster texture width (≈1024 ft per hex).
-pub const HEX_SIZE: f32 = 130.0;
+/// Hex size: centre to the **E/W point**, in world units. **Real scale:** one
+/// world unit = one cluster = 128 ft, so the point-to-point width is `2 ·
+/// HEX_SIZE = 2048` clusters ≈ **49.6 mi** (N/S flat-to-flat ≈ 43 mi). The sim
+/// runs on normalized altitude, so this sets world *size*, not physics.
+pub const HEX_SIZE: f32 = 1024.0;
 /// Apothem: centre to the N/S **flat edge** = √3/2 · size (half the N/S height).
 pub const HEX_HALF_W: f32 = HEX_SIZE * 0.866_025;
 
-/// Vertical exaggeration so the gentle `[96, 160]` heightmap reads in the viewer.
+/// Vertical exaggeration of the heightmap. The sim runs on normalized altitude,
+/// so this only sets how the data *reads* — see [`VSCALE`].
 const RELIEF_GAIN: f32 = 2.0;
 /// Centre of the heightmap output band (matches `flicker-primitive`).
 const BASE_HEIGHT: f32 = 128.0;
-/// World→display vertical scale for rendering elevations/thicknesses.
-pub const VSCALE: f32 = 1.1;
+/// World→display vertical scale. Tiny on purpose: at planet scale, relief is a
+/// fraction of a percent of the surface, so the world reads nearly flat —
+/// oceans/land as colour, only a hint of 3-D — not stratosphere-tall spikes.
+pub const VSCALE: f32 = 0.15;
+
+/// Terrain *detail* is sampled from the heightmap at this multiple of the
+/// (small) display coordinates, so shrinking the hexes doesn't shrink the world
+/// the noise covers. Keeps a few gentle features across the map while each hex
+/// stays smooth (no within-hex spikes). Decoupled from display size on purpose.
+const SAMPLE_SCALE: f32 = 1.0;
+/// Fixed world-coordinate origin of the sampled region (the seed's "where").
+const SAMPLE_ORIGIN: Vec2 = Vec2::new(1234.0, 5678.0);
 
 // --- Simulation constants (POC tuning; arbitrary units) ---
 // The sun is a planar day/night wave sweeping across *world* coordinates, so
@@ -108,6 +124,98 @@ pub const M_FOREST: u32 = 20;
 pub const M_RAINFOREST: u32 = 21;
 pub const M_TAIGA: u32 = 22;
 pub const M_TUNDRA: u32 = 23;
+
+// --- Vertical band model (the world's y-axis structure) ---
+//
+// The `ClusterId` y-field is 8 bits, so the world is exactly 256 stacked cluster
+// layers tall (× 128 ft = 6.2 mi) — the maximum local coordinate box. Below
+// layer 0 is the impassable molten floor; above layer 256 the celestial engine
+// takes over. Those 256 layers partition into three equal **zones** — *below*
+// (lithosphere: molten/GM floor, resource veins, caves), *terrain* (where the
+// surface lives), *atmosphere* (the air column) — each split into three
+// sub-bands (low / mid / high), giving N = 9 fixed bands. Bands are **global**
+// altitude ranges; a band's *role* for a given column (underground / surface /
+// air) is decided per column by where that column's surface layer falls.
+//
+// This round defines the structure, normalizes terrain into it, and derives a
+// per-band profile for the inspector. Band-to-band physics (convection, per-band
+// precipitation, the column pressure integral) is Step 3 — see the handoff.
+
+/// World vertical extent in cluster layers — the 8-bit `ClusterId` y-field.
+pub const Y_LAYERS: usize = 256;
+/// Fixed vertical band count: 3 zones × 3 sub-bands.
+pub const BANDS: usize = 9;
+
+/// Layer boundaries of the 9 bands (`BAND_BOUNDS[b]..BAND_BOUNDS[b + 1]`), tiling
+/// `0..Y_LAYERS` with no gap. The three zones are equal thirds: below = bands
+/// 0..3, terrain = 3..6, atmosphere = 6..9.
+pub const BAND_BOUNDS: [usize; BANDS + 1] = {
+    let mut b = [0usize; BANDS + 1];
+    let mut i = 0;
+    while i <= BANDS {
+        b[i] = i * Y_LAYERS / BANDS;
+        i += 1;
+    }
+    b
+};
+
+/// First terrain-zone layer. The surface is normalized into `[TERRAIN_LO,
+/// TERRAIN_HI)` so every column keeps the below-zone as underground (room for
+/// caves/veins) and the above-zone as atmosphere (room for weather).
+pub const TERRAIN_LO: usize = BAND_BOUNDS[3];
+/// One past the last terrain-zone layer.
+pub const TERRAIN_HI: usize = BAND_BOUNDS[6];
+
+/// Global `ground` display-height window — `world_height`'s `128 ± 32`, widened
+/// by [`RELIEF_GAIN`] — mapped linearly into the terrain band.
+const GROUND_LO: f32 = BASE_HEIGHT - 32.0 * RELIEF_GAIN; // 64
+const GROUND_HI: f32 = BASE_HEIGHT + 32.0 * RELIEF_GAIN; // 192
+
+// Vertical profile shape (POC; derived display values, not tuned physics).
+const GEO_HOT: f32 = 900.0; // molten-floor temperature at layer 0
+const AIR_LAPSE_L: f32 = 0.55; // air cooling per cluster-layer of altitude
+const P_SCALE_L: f32 = 80.0; // pressure scale height, in cluster-layers
+const MOIST_SCALE_L: f32 = 28.0; // airborne-moisture e-folding altitude (layers)
+
+// Vertical water cycle (Step 3 — the conveyor belt: evaporate low, convect up,
+// condense/precip down, feeding the downhill runoff).
+const INIT_AIR_MOIST: f32 = 5.0; // seed airborne water per column, spread over air bands
+const CONVECT_RATE: f32 = 0.6; // base fraction of a band's moisture lifted / s
+const CONVECT_T: f32 = 6.0; // per-band temp drop that saturates buoyancy to 1
+const AIR_RHO_P: f32 = 1.0; // baseline air-mass weight per band (pressure integral)
+const MOIST_RHO_P: f32 = 0.1; // airborne moisture's contribution to that mass
+
+/// A band's role for a column whose surface sits at a given layer.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum BandRole {
+    /// Below the surface — lithosphere (caves, veins, the molten floor).
+    Underground,
+    /// The band the surface layer falls in.
+    Surface,
+    /// Above the surface — the air column.
+    Air,
+}
+
+/// Which band a (fractional) cluster-layer falls in.
+pub fn band_of_layer(layer: f32) -> usize {
+    let l = layer.clamp(0.0, (Y_LAYERS - 1) as f32) as usize;
+    let mut b = 0;
+    while b + 1 < BANDS && BAND_BOUNDS[b + 1] <= l {
+        b += 1;
+    }
+    b
+}
+
+/// Mid cluster-layer of band `b`.
+pub fn band_mid(b: usize) -> f32 {
+    (BAND_BOUNDS[b] + BAND_BOUNDS[b + 1]) as f32 * 0.5
+}
+
+/// Read band `b` of column `(i, j)` from a band field (`band_temp` etc.).
+#[inline]
+pub fn band_at(field: &[f32], i: usize, j: usize, b: usize) -> f32 {
+    field[idx(i, j) * BANDS + b]
+}
 
 /// Flat-top column half-height at normalized lon `a = x / size`: 1.0 across the
 /// flat band `|a| ≤ ½`, tapering to the E/W points at `|a| = 1`.
@@ -189,17 +297,24 @@ pub struct LayerStack {
     pub cloud: Vec<f32>, // derived saturation, drawn as a mesh deck
     // --- influence fields (heatmaps) ---
     pub temperature: Vec<f32>, // troposphere / surface
-    pub pressure: Vec<f32>,
-    pub humidity: Vec<f32>,
+    pub pressure: Vec<f32>,    // surface pressure (air mass above; set by update_pressure)
     pub wind_x: Vec<f32>,
     pub wind_z: Vec<f32>,
     // --- upper-atmosphere heatmaps (radiative cascade from the star) ---
     pub stratosphere: Vec<f32>, // warmed by ozone UV absorption (the inversion)
     pub thermosphere: Vec<f32>, // hardest radiation; extreme day/night swing
     pub ozone: Vec<f32>,        // UV-absorbing amount, 0..1 (a "hole" lets UV through)
+    // --- vertical band stack (the spine: BANDS per column, layer-ordered
+    //     low→high). `band_moisture` is the **conserved airborne-water pool** —
+    //     the air half of the water cycle, evolved by evaporate/advect/convect/
+    //     condense. `band_temp`/`band_pressure` are derived influence fields,
+    //     recomputed each tick. ---
+    pub band_temp: Vec<f32>,     // °C per band: geothermal below, lapse + inversion above
+    pub band_moisture: Vec<f32>, // conserved airborne water, per air band (lift→drop pool)
+    pub band_pressure: Vec<f32>, // real column pressure: air mass strictly above each band
     // --- climate (integrated weather → drives biomes) ---
     pub climate_temp: Vec<f32>,     // slow average of temperature
-    pub climate_moisture: Vec<f32>, // slow average of humidity
+    pub climate_moisture: Vec<f32>, // slow average of column airborne moisture
     biome_t: (f32, f32),            // temperature terciles (33rd, 67th) over eligible land
     biome_m: (f32, f32),            // moisture terciles
     // --- reference scalars ---
@@ -214,14 +329,18 @@ pub struct LayerStack {
 
 impl LayerStack {
     /// Generate the initial stack by sampling the world heightmap at `world_off`.
-    pub fn generate(world_off: Vec2) -> Self {
+    pub fn generate(place: Vec2) -> Self {
         let n = G * G;
         let mut ground = vec![0.0f32; n];
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
         for j in 0..G {
             for i in 0..G {
                 let (x, z) = cell_local(i, j);
-                let raw = world_height(world_off.x + x, world_off.y + z);
+                // Sample the heightmap at the scaled world position so terrain
+                // detail is independent of the (small) display size; adjacent
+                // hexes still share edge samples, so seams stay continuous.
+                let s = SAMPLE_ORIGIN + (place + Vec2::new(x, z)) * SAMPLE_SCALE;
+                let raw = world_height(s.x, s.y);
                 let e = BASE_HEIGHT + (raw - BASE_HEIGHT) * RELIEF_GAIN;
                 ground[idx(i, j)] = e;
                 lo = lo.min(e);
@@ -272,9 +391,6 @@ impl LayerStack {
             }
         }
 
-        // Start the air moist so the cycle has something to rain out.
-        let humidity = vec![5.0f32; n];
-
         let mut s = Self {
             ground,
             water,
@@ -283,25 +399,34 @@ impl LayerStack {
             cloud: vec![0.0; n],
             temperature: vec![T_BASE; n],
             pressure: vec![0.0; n],
-            humidity: humidity.clone(),
             wind_x: vec![0.0; n],
             wind_z: vec![0.0; n],
             stratosphere: vec![STRATO_BASE; n],
             thermosphere: vec![THERMO_BASE; n],
             ozone: vec![1.0; n],
+            band_temp: vec![0.0; n * BANDS],
+            band_moisture: vec![0.0; n * BANDS],
+            band_pressure: vec![0.0; n * BANDS],
             climate_temp: vec![T_BASE; n],
-            climate_moisture: humidity,
+            climate_moisture: vec![0.0; n],
             biome_t: (0.0, 1.0),
             biome_m: (0.0, 1.0),
             snow_line,
             relief_lo: lo,
             relief_span: span,
             time: 0.0,
-            world_origin: world_off,
+            world_origin: place,
         };
-        // Seed climate from one thermal pass so biomes are sensible from frame 1.
+        // Establish the vertical state, then seed climate so biomes are sensible
+        // from frame 1: one thermal pass → band temps → seed air moisture (so the
+        // cycle has water to rain out) → real column pressure.
         s.update_thermal();
+        s.refresh_band_temp();
+        s.seed_air_moisture();
+        s.update_pressure();
         s.climate_temp.copy_from_slice(&s.temperature);
+        let col: Vec<f32> = (0..n).map(|k| s.column_moisture(k)).collect();
+        s.climate_moisture = col;
         s.refresh_biome_bands();
         s
     }
@@ -311,17 +436,154 @@ impl LayerStack {
         (self.ground[k] - self.relief_lo) / self.relief_span
     }
 
-    /// Advance the water cycle by `dt` seconds.
+    /// Advance the vertical water cycle by `dt` seconds — one step of the rolling
+    /// per-hex sweep. Neighbour edges (heat/pressure) read whatever value they
+    /// currently hold; cross-hex moisture (halo) is the separate parallel track.
     pub fn tick(&mut self, dt: f32) {
         self.time += dt;
-        self.update_thermal();
-        self.update_wind();
-        self.evaporate(dt);
-        self.advect_humidity(dt);
-        self.condense_precipitate(dt);
-        self.runoff();
+        self.update_thermal(); // surface temperature + upper-atmosphere heatmaps
+        self.refresh_band_temp(); // per-band temperature profile (influence)
+        self.update_pressure(); // real column-integrated pressure + surface field
+        self.update_wind(); // wind down the surface pressure gradient
+        self.evaporate(dt); // surface water → lowest air band
+        self.advect_bands(dt); // horizontal drift of each air band
+        self.convect(dt); // buoyant lift band→band (the conveyor)
+        self.condense_precipitate(dt); // per-band condense → precip to surface
+        self.runoff(); // surface water downhill toward basins
         self.melt_ice(dt);
         self.update_climate();
+    }
+
+    /// Cluster-layer the column's surface sits in — the macro heightmap
+    /// normalized into the terrain band, so it always lands in the middle third
+    /// (guaranteeing underground room below and atmosphere above every column).
+    pub fn surface_layer(&self, k: usize) -> f32 {
+        let t = ((self.ground[k] - GROUND_LO) / (GROUND_HI - GROUND_LO)).clamp(0.0, 1.0);
+        let sl = TERRAIN_LO as f32 + t * (TERRAIN_HI - TERRAIN_LO) as f32;
+        // Keep the surface strictly inside the terrain zone (bands 3..6) — the
+        // closed top would otherwise spill into the first atmosphere band.
+        sl.min(TERRAIN_HI as f32 - 0.5)
+    }
+
+    /// Role of band `b` for column `k`: bands above the surface layer are air,
+    /// the band containing it is the surface, bands below are underground. Bands
+    /// are global ranges, so the same band is air for a lowland column and
+    /// underground for a mountain one — the orographic mechanism, structurally.
+    pub fn band_role(&self, k: usize, b: usize) -> BandRole {
+        let sl = self.surface_layer(k);
+        let (lo, hi) = (BAND_BOUNDS[b] as f32, BAND_BOUNDS[b + 1] as f32);
+        if sl >= hi {
+            BandRole::Underground
+        } else if sl >= lo {
+            BandRole::Surface
+        } else {
+            BandRole::Air
+        }
+    }
+
+    /// Total airborne moisture in column `k` (summed over its bands).
+    pub fn column_moisture(&self, k: usize) -> f32 {
+        self.band_moisture[k * BANDS..(k + 1) * BANDS].iter().sum()
+    }
+
+    /// Derive the per-band temperature profile from the surface thermal fields —
+    /// a pure influence-field derive, recomputed each tick: geothermal warming
+    /// below the surface, lapse-cooling above with the ozone inversion folded in
+    /// up high and the thermosphere taking the ceiling.
+    fn refresh_band_temp(&mut self) {
+        for k in 0..G * G {
+            let sl = self.surface_layer(k);
+            let surf_t = self.temperature[k];
+            let strat = self.stratosphere[k];
+            let therm = self.thermosphere[k];
+            let base = k * BANDS;
+            let bt = &mut self.band_temp[base..base + BANDS];
+            for (b, t) in bt.iter_mut().enumerate() {
+                let mid = band_mid(b);
+                *t = if mid <= sl {
+                    let d = ((sl - mid) / sl.max(1.0)).clamp(0.0, 1.0);
+                    surf_t + (GEO_HOT - surf_t) * d
+                } else {
+                    let cold = surf_t - AIR_LAPSE_L * (mid - sl);
+                    let alt = (mid / Y_LAYERS as f32).clamp(0.0, 1.0);
+                    let to_strat = ((alt - 0.62) / 0.18).clamp(0.0, 1.0);
+                    let to_therm = ((alt - 0.86) / 0.14).clamp(0.0, 1.0);
+                    let inv = cold + (strat - cold) * 0.5 * to_strat;
+                    inv + (therm - inv) * to_therm
+                };
+            }
+        }
+    }
+
+    /// Real column-integrated pressure: each band's pressure is the air mass
+    /// **strictly above** it (baseline air density that thins with altitude, plus
+    /// the airborne moisture), summed top-down. The surface pressure field is the
+    /// whole air column above the surface — so a mountain (higher surface band)
+    /// sits under fewer air bands and reads lower pressure. Replaces the old
+    /// `pressure = −temperature` placeholder.
+    fn update_pressure(&mut self) {
+        for k in 0..G * G {
+            let surf_b = band_of_layer(self.surface_layer(k));
+            let base = k * BANDS;
+            let mut above = 0.0f32; // air mass strictly above the current band
+            for b in (0..BANDS).rev() {
+                self.band_pressure[base + b] = above;
+                if b > surf_b {
+                    let rho = (-band_mid(b) / P_SCALE_L).exp();
+                    above += AIR_RHO_P * rho + MOIST_RHO_P * self.band_moisture[base + b];
+                }
+            }
+            self.pressure[k] = self.band_pressure[base + surf_b];
+        }
+    }
+
+    /// Seed each column's air bands with initial moisture (thinning aloft) so the
+    /// conveyor has water to lift and rain from frame 1.
+    fn seed_air_moisture(&mut self) {
+        for k in 0..G * G {
+            let sl = self.surface_layer(k);
+            let surf_b = band_of_layer(sl);
+            let base = k * BANDS;
+            let mut w = [0.0f32; BANDS];
+            let mut wsum = 0.0f32;
+            for (b, wb) in w.iter_mut().enumerate() {
+                if b > surf_b {
+                    let wi = (-(band_mid(b) - sl) / MOIST_SCALE_L).exp();
+                    *wb = wi;
+                    wsum += wi;
+                }
+            }
+            let bm = &mut self.band_moisture[base..base + BANDS];
+            for (mb, &wb) in bm.iter_mut().zip(w.iter()) {
+                *mb = if wsum > 0.0 { INIT_AIR_MOIST * wb / wsum } else { 0.0 };
+            }
+        }
+    }
+
+    /// Vertical convection — the lift stage of the conveyor. Buoyant (warm-below)
+    /// air carries moisture up band→band; the rate scales with the temperature
+    /// drop to the band above. Conservative within the column (closed at the top).
+    fn convect(&mut self, dt: f32) {
+        for k in 0..G * G {
+            let surf_b = band_of_layer(self.surface_layer(k));
+            let base = k * BANDS;
+            let mut delta = [0.0f32; BANDS];
+            for b in (surf_b + 1)..(BANDS - 1) {
+                let m = self.band_moisture[base + b];
+                if m <= 0.0 {
+                    continue;
+                }
+                let drop = self.band_temp[base + b] - self.band_temp[base + b + 1];
+                let buoy = (drop / CONVECT_T).clamp(0.0, 1.0);
+                let lift = (m * CONVECT_RATE * dt * buoy).min(m * 0.9);
+                delta[b] -= lift;
+                delta[b + 1] += lift;
+            }
+            let bm = &mut self.band_moisture[base..base + BANDS];
+            for (mb, &d) in bm.iter_mut().zip(delta.iter()) {
+                *mb += d;
+            }
+        }
     }
 
     /// Integrate weather into climate (a slow exponential average), and refresh
@@ -329,7 +591,8 @@ impl LayerStack {
     fn update_climate(&mut self) {
         for k in 0..G * G {
             self.climate_temp[k] += CLIMATE_RATE * (self.temperature[k] - self.climate_temp[k]);
-            self.climate_moisture[k] += CLIMATE_RATE * (self.humidity[k] - self.climate_moisture[k]);
+            let col = self.column_moisture(k);
+            self.climate_moisture[k] += CLIMATE_RATE * (col - self.climate_moisture[k]);
         }
         self.refresh_biome_bands();
     }
@@ -428,12 +691,9 @@ impl LayerStack {
         diffuse(&mut self.thermosphere, 0.2, 1);
     }
 
-    /// Pressure falls where it is warm; wind blows down the pressure gradient
-    /// (cold→warm) plus a constant prevailing drift.
+    /// Wind blows down the surface pressure gradient (the real column pressure
+    /// set by [`Self::update_pressure`]) plus a constant prevailing drift.
     fn update_wind(&mut self) {
-        for k in 0..G * G {
-            self.pressure[k] = -self.temperature[k];
-        }
         for j in 0..G {
             for i in 0..G {
                 let k = idx(i, j);
@@ -447,72 +707,94 @@ impl LayerStack {
         }
     }
 
-    /// Surface water evaporates into the air as a function of temperature.
+    /// Surface water evaporates into the lowest air band above the surface, as a
+    /// function of temperature — the bottom of the conveyor belt.
     fn evaporate(&mut self, dt: f32) {
         for k in 0..G * G {
             if self.water[k] > 0.0 {
                 let e = (EVAP_RATE * (self.temperature[k] - EVAP_T0).max(0.0) * dt).min(self.water[k]);
                 self.water[k] -= e;
-                self.humidity[k] += e;
+                let air0 = band_of_layer(self.surface_layer(k)) + 1; // lowest air band
+                self.band_moisture[k * BANDS + air0] += e;
             }
         }
     }
 
-    /// Conservative upwind advection of humidity along the wind, with closed
-    /// boundaries (no flux leaves the domain ⇒ humidity is conserved).
-    fn advect_humidity(&mut self, dt: f32) {
+    /// Conservative upwind advection of each air band's moisture along the wind.
+    /// Closed at the domain edge **and** against any face where the band is not
+    /// air for the neighbour, so moisture never drifts into rock (a column's
+    /// surface can be higher than its neighbour's). Within-hex horizontal drift;
+    /// cross-hex moisture (halo exchange) is the separate parallel track.
+    fn advect_bands(&mut self, dt: f32) {
         let mut delta = vec![0.0f32; G * G];
-        for j in 0..G {
-            for i in 0..G {
-                let k = idx(i, j);
-                let h = self.humidity[k];
-                if h <= 0.0 {
-                    continue;
-                }
-                let fx = (self.wind_x[k] * dt).clamp(-ADV_CFL, ADV_CFL);
-                let fz = (self.wind_z[k] * dt).clamp(-ADV_CFL, ADV_CFL);
-                if fx > 0.0 && i < G - 1 {
-                    let q = h * fx;
-                    delta[k] -= q;
-                    delta[idx(i + 1, j)] += q;
-                } else if fx < 0.0 && i > 0 {
-                    let q = h * -fx;
-                    delta[k] -= q;
-                    delta[idx(i - 1, j)] += q;
-                }
-                if fz > 0.0 && j < G - 1 {
-                    let q = h * fz;
-                    delta[k] -= q;
-                    delta[idx(i, j + 1)] += q;
-                } else if fz < 0.0 && j > 0 {
-                    let q = h * -fz;
-                    delta[k] -= q;
-                    delta[idx(i, j - 1)] += q;
+        for b in 0..BANDS {
+            delta.fill(0.0);
+            for j in 0..G {
+                for i in 0..G {
+                    let k = idx(i, j);
+                    let m = self.band_moisture[k * BANDS + b];
+                    if m <= 0.0 {
+                        continue;
+                    }
+                    let fx = (self.wind_x[k] * dt).clamp(-ADV_CFL, ADV_CFL);
+                    let fz = (self.wind_z[k] * dt).clamp(-ADV_CFL, ADV_CFL);
+                    // Move fraction `f` of `m` into neighbour `nb` only if that
+                    // band is air there (else the face is closed; moisture stays).
+                    let flux = |nb: usize, f: f32, delta: &mut [f32]| {
+                        if self.band_role(nb, b) == BandRole::Air {
+                            let q = m * f;
+                            delta[k] -= q;
+                            delta[nb] += q;
+                        }
+                    };
+                    if fx > 0.0 && i < G - 1 {
+                        flux(idx(i + 1, j), fx, &mut delta);
+                    } else if fx < 0.0 && i > 0 {
+                        flux(idx(i - 1, j), -fx, &mut delta);
+                    }
+                    if fz > 0.0 && j < G - 1 {
+                        flux(idx(i, j + 1), fz, &mut delta);
+                    } else if fz < 0.0 && j > 0 {
+                        flux(idx(i, j - 1), -fz, &mut delta);
+                    }
                 }
             }
-        }
-        for (h, d) in self.humidity.iter_mut().zip(&delta) {
-            *h += *d;
+            for (kk, &d) in delta.iter().enumerate() {
+                self.band_moisture[kk * BANDS + b] += d;
+            }
         }
     }
 
-    /// Air holds less moisture when cold and at altitude (orographic lift); the
-    /// supersaturated excess rains out — as water if warm, ice if freezing.
-    /// `cloud` records saturation for the cloud deck. Humidity→water/ice conserves.
+    /// Per-band condensation — the drop stage. Each air band holds less moisture
+    /// when cold (capacity falls with band temperature, which falls with
+    /// altitude), so the conveyor's lifted moisture supersaturates up high and
+    /// rains out, falling to the surface as water if it's warm there, ice if
+    /// freezing. `cloud` records the peak air-band saturation for the deck.
+    /// Conserves (band moisture → surface water/ice).
     fn condense_precipitate(&mut self, dt: f32) {
         let rate = (PRECIP_RATE * dt).min(1.0);
         for k in 0..G * G {
-            let temp_factor = ((self.temperature[k] - FREEZE) / T_AMP).clamp(0.1, 1.0);
-            let cap = CAP0 * temp_factor * (1.0 - 0.6 * self.altitude(k));
-            self.cloud[k] = (self.humidity[k] / cap.max(0.01)).clamp(0.0, 1.5);
-            let excess = (self.humidity[k] - cap).max(0.0);
-            if excess > 0.0 {
-                let p = excess * rate;
-                self.humidity[k] -= p;
+            let surf_b = band_of_layer(self.surface_layer(k));
+            let base = k * BANDS;
+            let mut precip = 0.0f32;
+            let mut sat = 0.0f32;
+            for b in (surf_b + 1)..BANDS {
+                let cap = CAP0 * ((self.band_temp[base + b] - FREEZE) / T_AMP).clamp(0.1, 1.0);
+                let m = self.band_moisture[base + b];
+                sat = sat.max(m / cap.max(0.01));
+                let excess = (m - cap).max(0.0);
+                if excess > 0.0 {
+                    let p = excess * rate;
+                    self.band_moisture[base + b] -= p;
+                    precip += p;
+                }
+            }
+            self.cloud[k] = sat.clamp(0.0, 1.5);
+            if precip > 0.0 {
                 if self.temperature[k] > FREEZE {
-                    self.water[k] += p;
+                    self.water[k] += precip;
                 } else {
-                    self.ice[k] += p;
+                    self.ice[k] += precip;
                 }
             }
         }
@@ -580,10 +862,10 @@ impl LayerStack {
         }
     }
 
-    /// Conserved total: liquid + frozen + airborne water.
+    /// Conserved total: liquid + frozen + airborne water (summed over all bands).
     pub fn total_water(&self) -> f64 {
         (0..G * G)
-            .map(|k| (self.water[k] + self.ice[k] + self.humidity[k]) as f64)
+            .map(|k| (self.water[k] + self.ice[k] + self.column_moisture(k)) as f64)
             .sum()
     }
 
@@ -696,6 +978,115 @@ mod tests {
     }
 
     #[test]
+    fn bands_tile_the_full_column() {
+        assert_eq!(BAND_BOUNDS[0], 0);
+        assert_eq!(BAND_BOUNDS[BANDS], Y_LAYERS);
+        for b in 0..BANDS {
+            assert!(BAND_BOUNDS[b] < BAND_BOUNDS[b + 1], "band {b} empty/inverted");
+        }
+        // Three equal zones: below 0..3, terrain 3..6, atmosphere 6..9.
+        assert_eq!(TERRAIN_LO, BAND_BOUNDS[3]);
+        assert_eq!(TERRAIN_HI, BAND_BOUNDS[6]);
+        // band_of_layer agrees with the boundaries at the edges.
+        assert_eq!(band_of_layer(0.0), 0);
+        assert_eq!(band_of_layer((Y_LAYERS - 1) as f32), BANDS - 1);
+        assert_eq!(band_of_layer(TERRAIN_LO as f32), 3);
+    }
+
+    #[test]
+    fn terrain_normalizes_into_the_middle_third() {
+        let mut s = stack();
+        // Every generated column lands in the terrain zone.
+        for k in 0..G * G {
+            let sl = s.surface_layer(k);
+            assert!(
+                (TERRAIN_LO as f32..TERRAIN_HI as f32).contains(&sl),
+                "surface layer {sl} outside the terrain band"
+            );
+        }
+        // The global height window maps onto the terrain band edges.
+        s.ground[0] = GROUND_LO;
+        assert!((s.surface_layer(0) - TERRAIN_LO as f32).abs() < 1e-3);
+        s.ground[0] = GROUND_LO - 1000.0; // below-window clamps to the floor
+        assert!((s.surface_layer(0) - TERRAIN_LO as f32).abs() < 1e-3);
+        s.ground[0] = GROUND_HI + 1000.0; // above-window clamps just under the top
+        let top = s.surface_layer(0);
+        assert!(top < TERRAIN_HI as f32 && top > (TERRAIN_HI - 2) as f32);
+    }
+
+    #[test]
+    fn band_roles_partition_each_column() {
+        let s = stack();
+        for k in 0..G * G {
+            let surf = band_of_layer(s.surface_layer(k));
+            assert!((3..6).contains(&surf), "surface band {surf} not in terrain zone");
+            for b in 0..BANDS {
+                let expect = if b < surf {
+                    BandRole::Underground
+                } else if b == surf {
+                    BandRole::Surface
+                } else {
+                    BandRole::Air
+                };
+                assert_eq!(s.band_role(k, b), expect, "col {k} band {b} (surface {surf})");
+            }
+            // Zone guarantees hold regardless of the column's height.
+            assert_eq!(s.band_role(k, 0), BandRole::Underground);
+            assert_eq!(s.band_role(k, BANDS - 1), BandRole::Air);
+        }
+    }
+
+    #[test]
+    fn band_profile_is_finite_and_pressure_falls_with_altitude() {
+        let s = stack();
+        for k in 0..G * G {
+            let surf_b = band_of_layer(s.surface_layer(k));
+            let mut last_p = f32::INFINITY;
+            for b in 0..BANDS {
+                let (t, p, m) = (
+                    s.band_temp[k * BANDS + b],
+                    s.band_pressure[k * BANDS + b],
+                    s.band_moisture[k * BANDS + b],
+                );
+                assert!(t.is_finite() && p.is_finite() && m.is_finite());
+                // Non-increasing with altitude everywhere; strictly falling
+                // through the air bands (where the real column integral thins).
+                assert!(p <= last_p + 1e-3, "pressure rose with altitude at band {b}");
+                if b > surf_b {
+                    assert!(p < last_p, "pressure not strictly falling across air band {b}");
+                }
+                last_p = p;
+                // Airborne moisture only exists in the air bands.
+                if b <= surf_b {
+                    assert!(m.abs() < 1e-6, "airborne moisture at/below surface band {b}");
+                }
+            }
+            // The air was seeded, so the column holds moisture to drive the cycle.
+            assert!(s.column_moisture(k) > 0.0, "column {k} has no airborne moisture");
+        }
+    }
+
+    #[test]
+    fn the_conveyor_runs_and_conserves() {
+        let mut s = stack();
+        let start_total = s.total_water();
+        // Airborne moisture is seeded exactly; any activity (evaporation lifting
+        // water up, precipitation dropping it out) perturbs the column total.
+        let air0: f64 = (0..G * G).map(|k| s.column_moisture(k) as f64).sum();
+        for _ in 0..300 {
+            s.tick(0.05);
+        }
+        let air1: f64 = (0..G * G).map(|k| s.column_moisture(k) as f64).sum();
+        assert!(
+            (air1 - air0).abs() > 1.0,
+            "air moisture inert ({air0} → {air1}) — the conveyor isn't running"
+        );
+        // Conveyor must not leak: the same conservation invariant, end to end.
+        let drift = (s.total_water() - start_total).abs() / start_total;
+        assert!(drift < 1e-3, "conveyor leaked water: drift {drift}");
+    }
+
+    #[test]
     fn the_sim_stays_finite_and_bounded() {
         let mut s = stack();
         for _ in 0..300 {
@@ -706,14 +1097,17 @@ mod tests {
             for v in [
                 s.water[k],
                 s.ice[k],
-                s.humidity[k],
+                s.column_moisture(k),
                 s.temperature[k],
                 s.stratosphere[k],
                 s.thermosphere[k],
             ] {
                 assert!(v.is_finite(), "non-finite field value");
             }
-            assert!(s.water[k] >= -1e-3 && s.ice[k] >= -1e-3 && s.humidity[k] >= -1e-3);
+            assert!(s.water[k] >= -1e-3 && s.ice[k] >= -1e-3 && s.column_moisture(k) >= -1e-3);
+            for b in 0..BANDS {
+                assert!(s.band_moisture[k * BANDS + b] >= -1e-3, "negative band moisture");
+            }
         }
     }
 

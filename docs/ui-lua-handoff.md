@@ -370,8 +370,11 @@ tests accordingly. (User OK'd revisiting the "in-ratio per rung" idea here.)
 
 ## Pinned — parked
 
-- A `flicker-ui` crate is the natural home for the generic widgets, but only
-  worth extracting once the Lua protocol shape is settled (don't pre-factor).
+- ✅ **`flicker-ui` crate extracted** (the protocol had settled). It holds the
+  reusable UI *surface* — `render_hud`, the embedded `widgets.lua` toolkit
+  (`WIDGETS_LUA` + `load_widgets`), and `load_ui_json` — consumed by both
+  `voxel-cluster` and `examples/hex-world`'s new Lua view/sim HUD. The gothic
+  `ui.rs` Theme/Canvas stays example-local (game-specific). See `docs/ui.md`.
 - The voxel "world generator / bounded horizon / LOD8 backdrop" work
   (`docs/voxel-terrain-walking-handoff.md`, Phase B) is **unrelated and still
   open** — different track from the UI work here.
