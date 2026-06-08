@@ -178,6 +178,41 @@ external binding-generation / codegen step is needed** while the boundary stays
 Rust-internal; if Lua scripts ever version or ship independently of the engine,
 revisit with a generated contract + CI check (parked).
 
-The `ui.rs` widgets remain example-local; the generic machinery (canvas,
-panel/button/dropdown, layout, hit-testing) can still promote to a `flicker-ui`
-crate once the widget set settles, leaving the game-specific gothic theme behind.
+### `flicker-ui` — the extracted UI surface (engine library)
+
+The reusable **render surface** now lives in the `flicker-ui` crate (it depends
+on both `flicker-script` and `flicker-render`, which is *why* it is its own crate —
+the boundary contract forbids `flicker-script` from touching a renderer handle):
+
+- **`render_hud(renderer, commands, white, textures)`** — the single draw path
+  that turns a script's `HudCommand`s into `Renderer` calls (was example-local in
+  `voxel-cluster`).
+- **`WIDGETS_LUA` + `load_widgets(host)`** — the shared immediate-mode widget
+  toolkit (slider / stepper / dropdown / **button**), embedded via `include_str!`
+  so every consumer gets one copy (was `voxel-cluster/scripts/widgets.lua`).
+- **`load_ui_json(host, path)`** — read `ui_elements.json` and expose it as the
+  `UI` global.
+
+`voxel-cluster` consumes it (its local `render_hud`/widgets were removed), and
+**`examples/hex-world` is the second consumer**: a Lua view/sim HUD
+(`scripts/hex_ui.lua` + `ui_elements.json`) with sim pause/speed, graticule and
+index-billboard toggles, a reset-camera button, a stats readout, and a
+**view-mode selector**. Both reach it through the `flicker` umbrella as
+`flicker::ui`.
+
+The selector switches between two kept views:
+- **World** — the whole flat hex graph, orbit/fly camera, graticule + the
+  split-out inspector column.
+- **Local** — culls to the focus hex (the selection, or nearest on entry) + its
+  ≤6 graph neighbours (`HexMap::neighbours`) and snaps a close camera framing
+  them: the "render only the local ~7 tiles" mode. Entering saves the overview
+  camera (restored on exit); left-click re-focuses; the HUD surfaces the true
+  scale (1 hex ≈ 49.6 mi). *Geometry stays at display scale* — the literal
+  world-unit rescale (≈1000×) is deferred because it needs a camera/depth-precision
+  retune and buys nothing visually until the per-cluster voxel bake exists.
+
+The gothic **`ui.rs`** toolkit (Canvas, procedural `Theme` textures, the locked
+`build_button`) stays example-local — it is the game-specific *theme*, not the
+generic surface. A future pass could promote the Rust widget/layout/hit-test
+machinery too, but the Lua scripts already own layout/hit-testing, so the
+pressure to do so is low.

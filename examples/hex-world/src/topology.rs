@@ -21,9 +21,10 @@
 //! ## Scale (the practical max)
 //!
 //! `total(R) = 2 + 6R(R+1)`. The addressing is the ceiling: a `u32` index tops
-//! out near `R ≈ 26,700` (~4.3 billion hexes) — at the spec's 1024 ft/hex that
-//! is a great-circle of ~110k hexes ≈ a roughly Earth-sized planet; `u64` is
-//! effectively unbounded. This implementation also precomputes a cube→index map
+//! out near `R ≈ 26,700` (~4.3 billion hexes) — at the spec's ~49.6 mi/hex
+//! (2048 clusters × 128 ft) that great-circle of ~110k hexes is a star-sized
+//! world (~220× Earth's circumference); an *Earth-sized* planet is only
+//! ~`R = 125` (~95k hexes). `u64` is effectively unbounded. This implementation also precomputes a cube→index map
 //! (O(N) memory), which caps the *in-RAM* graph at ~tens of millions of hexes
 //! (a few GB) — ample for any test world. Planet scale would drop the map for
 //! analytic cube↔pos arithmetic (O(1) memory, O(1) per neighbour); past that the

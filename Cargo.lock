@@ -661,6 +661,7 @@ dependencies = [
  "flicker-render",
  "flicker-scene",
  "flicker-script",
+ "flicker-ui",
 ]
 
 [[package]]
@@ -756,6 +757,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "flicker-ui"
+version = "0.1.0"
+dependencies = [
+ "flicker-render",
+ "flicker-script",
+ "serde_json",
  "tracing",
 ]
 
@@ -1096,6 +1107,7 @@ dependencies = [
  "flicker",
  "flicker-primitive",
  "glam",
+ "tracing",
  "tracing-subscriber",
 ]
 

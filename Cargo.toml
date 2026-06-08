@@ -12,6 +12,7 @@ members = [
     "crates/flicker-scene",
     "crates/flicker-voxel",
     "crates/flicker-worker",
+    "crates/flicker-ui",
     "crates/flicker",
     "examples/hello-sprite",
     "examples/square-chase",
@@ -87,6 +88,7 @@ flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
 flicker-scene = { version = "0.1.0", path = "crates/flicker-scene" }
 flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "crates/flicker-worker" }
+flicker-ui = { version = "0.1.0", path = "crates/flicker-ui" }
 
 [profile.dev]
 opt-level = 1

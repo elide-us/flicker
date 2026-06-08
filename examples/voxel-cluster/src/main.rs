@@ -48,7 +48,8 @@ use flicker::render::{
     TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
-use flicker::script::{HudCommand, ScriptHost, TextAlign, ValueMap};
+use flicker::script::{ScriptHost, ValueMap};
+use flicker::ui::{load_widgets, render_hud};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
     ClusterNav, CornerVector, FaceDir, LocalCoord, Lod, Material, NeighborContext,
@@ -2194,67 +2195,8 @@ fn compute_scene(
     }
 }
 
-/// Render a Lua HUD command list with the engine. The single draw path shared
-/// by every Lua-driven screen: `Rect` uses the 1×1 `white` texture tinted by
-/// its color; `Sprite` looks its texture up in `textures` by the id the script
-/// got from the `Textures` global; `Text` with [`TextAlign::Center`] is
-/// measured and offset so `x` is its center. Each command's `layer` is applied
-/// relative to the scene's current base layer, so a script can stack its own
-/// sub-layers (e.g. a dropdown over a panel) without knowing its scene depth.
-fn render_hud(
-    renderer: &mut Renderer,
-    commands: &[HudCommand],
-    white: TextureHandle,
-    textures: &[TextureHandle],
-) {
-    let base = renderer.layer();
-    for command in commands {
-        match command {
-            HudCommand::Rect {
-                x,
-                y,
-                w,
-                h,
-                color,
-                layer,
-            } => {
-                renderer.set_layer(base + layer);
-                renderer.draw_sprite(white, Vec2::new(*x, *y), Vec2::new(*w, *h), *color);
-            }
-            HudCommand::Sprite {
-                tex,
-                x,
-                y,
-                w,
-                h,
-                color,
-                layer,
-            } => {
-                if let Some(&handle) = textures.get(*tex as usize) {
-                    renderer.set_layer(base + layer);
-                    renderer.draw_sprite(handle, Vec2::new(*x, *y), Vec2::new(*w, *h), *color);
-                }
-            }
-            HudCommand::Text {
-                x,
-                y,
-                text,
-                size,
-                color,
-                layer,
-                align,
-            } => {
-                renderer.set_layer(base + layer);
-                let left = match align {
-                    TextAlign::Center => x - renderer.measure_text(text, *size).x * 0.5,
-                    TextAlign::Left => *x,
-                };
-                renderer.draw_text(text, Vec2::new(left, *y), *size, *color);
-            }
-        }
-    }
-    renderer.set_layer(base);
-}
+// `render_hud` now lives in `flicker-ui` (the reusable UI surface) and is
+// imported above; the call sites below are unchanged.
 
 // ===== Front-end scenes (logo, menu, pause overlay) =====
 
@@ -2634,34 +2576,11 @@ const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements
 /// hardcoded constants. Logs and continues on failure (scripts guard
 /// `if not UI`). Calling again hot-reloads the layout after an edit.
 fn expose_ui_elements(script: &ScriptHost) {
-    match std::fs::read_to_string(UI_ELEMENTS_PATH) {
-        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(ui) => {
-                if let Err(e) = script.set_global_json("UI", &ui) {
-                    tracing::error!("UI elements exposure failed: {e}");
-                }
-            }
-            Err(e) => tracing::error!("ui_elements.json parse failed: {e}"),
-        },
-        Err(e) => tracing::error!("ui_elements.json read failed: {e}"),
-    }
+    flicker::ui::load_ui_json(script, UI_ELEMENTS_PATH);
 }
 
-/// Path to the reusable Lua widget toolkit (slider / stepper / dropdown).
-const WIDGETS_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/widgets.lua");
-
-/// Expose `widgets.lua` to `script` as the `Widgets` global, so screens can use
-/// the shared immediate-mode widgets. Best-effort; logs on failure.
-fn load_widgets(script: &ScriptHost) {
-    match std::fs::read_to_string(WIDGETS_SCRIPT_PATH) {
-        Ok(source) => {
-            if let Err(e) = script.set_lua_module("Widgets", &source, "widgets.lua") {
-                tracing::error!("widgets module load failed: {e}");
-            }
-        }
-        Err(e) => tracing::error!("widgets.lua read failed: {e}"),
-    }
-}
+// `load_widgets` (and the embedded `widgets.lua` toolkit) now live in
+// `flicker-ui` and are imported above; `scripts/widgets.lua` was retired.
 
 /// Load a UI script from `path`, register the theme's textures by name (index =
 /// id), expose `ui_elements.json` as the `UI` global, and the `Widgets` toolkit.

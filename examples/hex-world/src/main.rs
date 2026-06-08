@@ -27,9 +27,11 @@ use anyhow::Result;
 use flicker::app::{run, InputState, Key};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
-    Vec2, Vec3,
+    TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
+use flicker::script::{ScriptHost, ValueMap};
+use flicker::ui::{load_ui_json, load_widgets, render_hud};
 
 use layers::{LayerStack, G, HEX_HALF_W, HEX_SIZE};
 use topology::{HexCoord, HexMap, Hemisphere};
@@ -57,26 +59,28 @@ const GRATICULE_Y: f32 = 95.0;
 /// Meridian spokes per disc (Earth-style time-zone bands).
 const TIME_ZONES: usize = 24;
 
-// Inspect (split-view) exploded-stack heights, bottom→top.
-const PY_GROUND: f32 = 240.0;
-const PY_TEMP: f32 = 360.0;
-const PY_HUMID: f32 = 470.0;
-const PY_WATER: f32 = 590.0;
-const PY_CLOUD: f32 = 710.0;
-const PY_STRATO: f32 = 830.0;
-const PY_THERMO: f32 = 950.0;
-/// The exploded layer stack floats up from here, lined up over the selected hex.
-const EXPLODE_BASE: f32 = 110.0;
-/// Translucent wall material per layer band (bottom→top), tinting the column.
-const BAND_MAT: [u32; 8] = [
-    layers::M_ICE,
-    layers::M_LAND,
-    layers::M_LAVA,
-    layers::M_WATER_SHALLOW,
-    layers::M_WATER_MID,
-    layers::M_CLOUD,
-    layers::M_UV,
-    layers::M_AURORA,
+// Inspect (split-out column) display mapping. The column is the world's real
+// 256-layer y-axis (the 8-bit `ClusterId` y-field), drawn at `COL_PER_LAYER`
+// display units per cluster-layer, rising from `COL_BASE` over the selected hex.
+const COL_BASE: f32 = 110.0;
+const COL_PER_LAYER: f32 = 3.5;
+/// Display Y of (fractional) cluster-layer `layer` within the split-out column.
+fn layer_py(layer: f32) -> f32 {
+    COL_BASE + layer * COL_PER_LAYER
+}
+/// Translucent wall material per band (bottom→top): the three zones — below
+/// (molten / rock / soil), terrain (lowland / hill / alpine), atmosphere (lower
+/// air / cloud deck / thin air) — so the column's vertical structure reads.
+const BAND_MAT: [u32; layers::BANDS] = [
+    layers::M_LAVA,          // 0 molten floor (GM layer)
+    layers::M_STONE,         // 1 deep / resource veins
+    layers::M_LAND,          // 2 shallow subsurface / caves
+    layers::M_GRASSLAND,     // 3 lowlands
+    layers::M_FOREST,        // 4 hills
+    layers::M_TUNDRA,        // 5 highlands / alpine
+    layers::M_WATER_SHALLOW, // 6 lower troposphere
+    layers::M_UV,            // 7 mid / cloud deck
+    layers::M_AURORA,        // 8 thin air → space
 ];
 
 /// A coloured group of world-space line segments (one graticule curve set).
@@ -235,6 +239,24 @@ fn build_subset(tiles: &[HexTile], mask: &[bool], animated: bool, renderer: &mut
     out
 }
 
+/// Build sheets for an explicit set of tile indices (the Local view's ≤7 tiles).
+fn build_tiles(tiles: &[HexTile], indices: &[usize], renderer: &mut Renderer) -> Vec<Sheet> {
+    let mut out = Vec::new();
+    for &i in indices {
+        push_tile(&mut out, &tiles[i], renderer);
+    }
+    out
+}
+
+/// Local-view camera pose framing the focus hex centred at `place`.
+fn local_cam_pose(place: Vec2) -> (Vec3, f32, f32) {
+    (
+        Vec3::new(place.x, LOCAL_CAM_UP, place.y - LOCAL_CAM_BACK),
+        0.0,
+        LOCAL_CAM_PITCH,
+    )
+}
+
 /// A floating layer label: world position, text, colour.
 type Label = (Vec3, &'static str, [f32; 4]);
 
@@ -265,20 +287,15 @@ fn pick_hex(camera: &Camera, cursor: Vec2, size: Vec2, tiles: &[HexTile]) -> Opt
     (d2 < (HEX_SIZE * 1.2).powi(2)).then_some(i)
 }
 
-/// The 9 y-levels bounding the 8 column bands: the map surface, then each
-/// exploded layer height. Derived so it tracks the `PY_*` constants.
-fn band_boundaries() -> [f32; 9] {
-    [
-        0.0,
-        EXPLODE_BASE,
-        EXPLODE_BASE + PY_GROUND,
-        EXPLODE_BASE + PY_TEMP,
-        EXPLODE_BASE + PY_HUMID,
-        EXPLODE_BASE + PY_WATER,
-        EXPLODE_BASE + PY_CLOUD,
-        EXPLODE_BASE + PY_STRATO,
-        EXPLODE_BASE + PY_THERMO,
-    ]
+/// The `BANDS + 1` display-Y boundaries of the column's bands — the real
+/// cluster-layer partition ([`layers::BAND_BOUNDS`]) mapped through [`layer_py`].
+/// `column_lines` rings every boundary; `build_inspect` walls between them.
+fn band_boundaries() -> [f32; layers::BANDS + 1] {
+    let mut by = [0.0f32; layers::BANDS + 1];
+    for (b, y) in by.iter_mut().enumerate() {
+        *y = layer_py(layers::BAND_BOUNDS[b] as f32);
+    }
+    by
 }
 
 /// XZ of flat-top hex corner `k` around `place`.
@@ -329,77 +346,106 @@ fn column_lines(place: Vec2) -> Vec<(Vec3, Vec3)> {
     segs
 }
 
-/// Build the exploded layer stack + labels for one hex, **lined up in the world**
-/// over `place` (rising from [`EXPLODE_BASE`]). Every layer is shown explicitly:
-/// substance as relief, influence fields and atmospheric bands as flat heatmaps.
+/// Build the split-out **vertical column** + labels for one hex, lined up in the
+/// world over `place`. The column is the world's real 256-layer y-axis: nine
+/// translucent zone-coloured bands (below / terrain / atmosphere), the surface
+/// relief seated at its normalized layer in the terrain third, the cloud deck in
+/// the air bands, and the per-band temperature profile + air-band moisture as
+/// flat heatmaps at their true altitudes. This is the verification instrument
+/// for the Step-2 vertical model; band-to-band physics arrives in Step 3.
 fn build_inspect(s: &LayerStack, place: Vec2, renderer: &mut Renderer) -> (Vec<Sheet>, Vec<Label>) {
-    let off = Vec3::new(place.x, EXPLODE_BASE, place.y);
+    let off = Vec3::new(place.x, 0.0, place.y);
     let m = Mat4::from_translation(off);
     let nrm = |v: f32, lo: f32, hi: f32| if hi > lo { (v - lo) / (hi - lo) } else { 0.5 };
     let mut out = Vec::new();
 
+    // The realized top-down map at ground level — the "you are here" reference.
     let realized = layers::build_sheet(0.0, |i, j| s.realized(i, j).0, |i, j| s.realized(i, j).1, |_, _| true);
     out.extend(mk(renderer, realized, [1.0, 1.0, 1.0, 1.0], m));
 
-    let snow = s.snow_line;
-    let ground = layers::build_sheet(
-        PY_GROUND,
-        |i, j| (at(&s.ground, i, j) - 128.0) * layers::VSCALE,
-        |i, j| if at(&s.ground, i, j) > snow { layers::M_STONE } else { layers::M_LAND },
+    // Surface relief, seated at each column's true normalized layer in the
+    // terrain third — lowlands sit low, peaks high, all inside the middle third.
+    let surface = layers::build_sheet(
+        0.0,
+        |i, j| layer_py(s.surface_layer(j * layers::G + i)),
+        |i, j| s.realized(i, j).1,
         |_, _| true,
     );
-    out.extend(mk(renderer, ground, [1.0, 1.0, 1.0, 0.7], m));
+    out.extend(mk(renderer, surface, [1.0, 1.0, 1.0, 0.95], m));
 
-    let (tlo, thi) = layers::minmax(&s.temperature);
-    let temp = layers::build_sheet(PY_TEMP, |_, _| 0.0, |i, j| layers::pack_ramp(layers::M_ICE, layers::M_LAVA, nrm(at(&s.temperature, i, j), tlo, thi)), |_, _| true);
-    out.extend(mk(renderer, temp, [1.0, 1.0, 1.0, 0.92], m));
+    // Per-band temperature profile: one flat heatmap at each band's altitude,
+    // on a shared ramp so the column reads as one gradient — hot molten floor,
+    // through the surface, lapse-cooling air, the ozone inversion, the top swing.
+    let (btlo, bthi) = layers::minmax(&s.band_temp);
+    for b in 0..layers::BANDS {
+        let y = layer_py(layers::band_mid(b));
+        let temp = layers::build_sheet(
+            y,
+            |_, _| 0.0,
+            |i, j| layers::pack_ramp(layers::M_ICE, layers::M_LAVA, nrm(layers::band_at(&s.band_temp, i, j, b), btlo, bthi)),
+            |_, _| true,
+        );
+        out.extend(mk(renderer, temp, [1.0, 1.0, 1.0, 0.5], m));
+    }
 
-    let (hlo, hhi) = layers::minmax(&s.humidity);
-    let humid = layers::build_sheet(PY_HUMID, |_, _| 0.0, |i, j| layers::pack_ramp(layers::M_FOAM, layers::M_WATER_DEEP, nrm(at(&s.humidity, i, j), hlo, hhi)), |_, _| true);
-    out.extend(mk(renderer, humid, [1.0, 1.0, 1.0, 0.92], m));
+    // Air-band moisture: a heatmap in each atmosphere-zone band, offset above
+    // the temperature sheet so the two don't z-fight.
+    let (bmlo, bmhi) = layers::minmax(&s.band_moisture);
+    for b in 6..layers::BANDS {
+        let y = layer_py(layers::band_mid(b)) + 4.0;
+        let moist = layers::build_sheet(
+            y,
+            |_, _| 0.0,
+            |i, j| layers::pack_ramp(layers::M_FOAM, layers::M_WATER_DEEP, nrm(layers::band_at(&s.band_moisture, i, j, b), bmlo, bmhi)),
+            |i, j| layers::band_at(&s.band_moisture, i, j, b) > 1e-4,
+        );
+        out.extend(mk(renderer, moist, [1.0, 1.0, 1.0, 0.5], m));
+    }
 
-    let water = layers::build_sheet(
-        PY_WATER,
-        |i, j| at(&s.water, i, j) * layers::VSCALE,
-        |i, j| {
-            let d = at(&s.water, i, j);
-            if d > 28.0 { layers::M_WATER_DEEP } else if d > 10.0 { layers::M_WATER_MID } else { layers::M_WATER_SHALLOW }
-        },
-        |i, j| at(&s.water, i, j) > 0.5,
+    // Cloud deck (substance) in the mid-atmosphere band.
+    let cloud = layers::build_sheet(
+        layer_py(layers::band_mid(7)),
+        |i, j| at(&s.cloud, i, j) * 6.0,
+        |_, _| layers::M_CLOUD,
+        |i, j| at(&s.cloud, i, j) > 0.15,
     );
-    out.extend(mk(renderer, water, [1.0, 1.0, 1.0, 0.6], m));
-
-    let cloud = layers::build_sheet(PY_CLOUD, |i, j| at(&s.cloud, i, j) * 40.0, |_, _| layers::M_CLOUD, |i, j| at(&s.cloud, i, j) > 0.15);
     out.extend(mk(renderer, cloud, [1.0, 1.0, 1.0, 0.45], m));
 
-    let (slo, shi) = layers::minmax(&s.stratosphere);
-    let strato = layers::build_sheet(PY_STRATO, |_, _| 0.0, |i, j| layers::pack_ramp(layers::M_ICE, layers::M_UV, nrm(at(&s.stratosphere, i, j), slo, shi)), |_, _| true);
-    out.extend(mk(renderer, strato, [1.0, 1.0, 1.0, 0.9], m));
-
-    let (xlo, xhi) = layers::minmax(&s.thermosphere);
-    let thermo = layers::build_sheet(PY_THERMO, |_, _| 0.0, |i, j| layers::pack_ramp(layers::M_VOID, layers::M_AURORA, nrm(at(&s.thermosphere, i, j), xlo, xhi)), |_, _| true);
-    out.extend(mk(renderer, thermo, [1.0, 1.0, 1.0, 0.92], m));
-
-    // Translucent hexagonal walls per band — the 3-D column the layers sit in.
+    // Translucent hexagonal walls per band — the 9-band column the data sits in.
     let by = band_boundaries();
-    for band in 0..by.len() - 1 {
-        let walls = hex_walls(place, by[band], by[band + 1], BAND_MAT[band]);
+    for b in 0..layers::BANDS {
+        let walls = hex_walls(place, by[b], by[b + 1], BAND_MAT[b]);
         out.extend(mk(renderer, walls, [1.0, 1.0, 1.0, 0.16], Mat4::IDENTITY));
     }
 
     let lx = -HEX_HALF_W - 55.0;
+    let lbl = |layer: f32| Vec3::new(lx, layer_py(layer), 0.0) + off;
     let labels = vec![
         (Vec3::new(lx, 95.0, 0.0) + off, "realized", [1.0, 1.0, 1.0, 1.0]),
-        (Vec3::new(lx, PY_GROUND, 0.0) + off, "ground", [0.6, 0.8, 0.5, 1.0]),
-        (Vec3::new(lx, PY_TEMP, 0.0) + off, "temperature", [1.0, 0.6, 0.3, 1.0]),
-        (Vec3::new(lx, PY_HUMID, 0.0) + off, "humidity", [0.5, 0.7, 1.0, 1.0]),
-        (Vec3::new(lx, PY_WATER, 0.0) + off, "water", [0.4, 0.7, 1.0, 1.0]),
-        (Vec3::new(lx, PY_CLOUD, 0.0) + off, "cloud", [0.85, 0.87, 0.9, 1.0]),
-        (Vec3::new(lx, PY_STRATO, 0.0) + off, "stratosphere (ozone)", [0.7, 0.5, 0.95, 1.0]),
-        (Vec3::new(lx, PY_THERMO, 0.0) + off, "thermosphere", [0.3, 0.95, 0.6, 1.0]),
+        (lbl(layers::band_mid(0)), "molten floor (GM)", [1.0, 0.5, 0.3, 1.0]),
+        (lbl(42.0), "underground · veins / caves", [0.75, 0.6, 0.5, 1.0]),
+        (lbl(127.0), "terrain (surface band)", [0.6, 0.85, 0.55, 1.0]),
+        (lbl(213.0), "atmosphere", [0.55, 0.8, 1.0, 1.0]),
+        (lbl(248.0), "thin air → space", [0.6, 0.95, 0.8, 1.0]),
     ];
     (out, labels)
 }
+
+/// Lua control logic for the view/sim HUD (`scripts/hex_ui.lua`).
+const UI_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hex_ui.lua");
+/// Declarative HUD layout/state the Lua script reads as the `UI` global.
+const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
+/// Default fly-camera pose (also the "Reset camera" target).
+const CAM_HOME: (Vec3, f32, f32) = (Vec3::new(0.0, 1500.0, -2600.0), 0.0, -0.6);
+/// Local-view camera: it looks down at the focus hex from `UP` above and `BACK`
+/// south, so the focus + its ≤6 neighbours frame the view (~3 hex diameters) —
+/// the "render only the local seven tiles" mode. At true scale one hex is
+/// ≈49.6 mi; the geometry stays at display scale (the literal world-unit rescale
+/// is deferred — it needs a camera/precision retune), the scale is surfaced in
+/// the HUD.
+const LOCAL_CAM_UP: f32 = 720.0;
+const LOCAL_CAM_BACK: f32 = 540.0;
+const LOCAL_CAM_PITCH: f32 = -0.72;
 
 struct World {
     tiles: Vec<HexTile>,
@@ -425,6 +471,24 @@ struct World {
     pitch: f32,
     prev_mouse: Vec2,
     dragging: bool,
+    // Lua-driven view/sim HUD (surface = flicker-ui, control = hex_ui.lua,
+    // state = ui_elements.json).
+    script: Option<ScriptHost>,
+    white: Option<TextureHandle>,
+    sim_paused: bool,
+    sim_speed: f32,
+    show_graticule: bool,
+    show_billboards: bool,
+    view_mode: u32,
+    /// Pointer is over the HUD this frame — suppress the world hex-pick.
+    ui_capture: bool,
+    // Local view: the focus hex (= `selected`) + its ≤6 neighbours, culled from
+    // the whole-world graph (`map`) and framed by a close camera.
+    map: HexMap,
+    local_sheets: Vec<Sheet>,
+    local_dirty: bool,
+    /// World-view camera pose, saved while in Local view so it restores on exit.
+    saved_cam: Option<(Vec3, f32, f32)>,
 }
 
 impl World {
@@ -454,11 +518,128 @@ impl World {
             inspect_sheets: Vec::new(),
             inspect_labels: Vec::new(),
             inspect_dirty: false,
-            pos: Vec3::new(0.0, 1500.0, -2600.0),
-            yaw: 0.0,
-            pitch: -0.6,
+            pos: CAM_HOME.0,
+            yaw: CAM_HOME.1,
+            pitch: CAM_HOME.2,
             prev_mouse: Vec2::ZERO,
             dragging: false,
+            script: None,
+            white: None,
+            sim_paused: false,
+            sim_speed: 1.0,
+            show_graticule: true,
+            show_billboards: true,
+            view_mode: 1,
+            ui_capture: false,
+            map,
+            local_sheets: Vec::new(),
+            local_dirty: false,
+            saved_cam: None,
+        }
+    }
+
+    fn local_view(&self) -> bool {
+        self.view_mode == 2
+    }
+
+    /// The focus hex (`selected`) + its ≤6 graph neighbours — the ≤7 tiles the
+    /// Local view renders. Empty if nothing is focused.
+    fn local_set(&self) -> Vec<usize> {
+        match self.selected {
+            Some(f) => {
+                let mut v: Vec<usize> =
+                    self.map.neighbours(f as u32).into_iter().map(|j| j as usize).collect();
+                v.push(f);
+                v
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Tile whose centre is nearest the camera (the default Local focus).
+    fn nearest_tile(&self) -> Option<usize> {
+        let cam = Vec2::new(self.pos.x, self.pos.z);
+        (0..self.tiles.len()).min_by(|&a, &b| {
+            let da = (self.tiles[a].place - cam).length_squared();
+            let db = (self.tiles[b].place - cam).length_squared();
+            da.total_cmp(&db)
+        })
+    }
+
+    /// Switch view mode, snapping the camera into / out of the local frame. The
+    /// local meshes are (re)built and freed in `render_map` (where `&mut Renderer`
+    /// is available); this only moves state.
+    fn set_view_mode(&mut self, mode: u32) {
+        if mode == 2 && self.view_mode != 2 {
+            // → Local: save the overview camera, pick a focus if none, frame it.
+            self.saved_cam = Some((self.pos, self.yaw, self.pitch));
+            if self.selected.is_none() {
+                self.selected = self.nearest_tile();
+            }
+            if let Some(f) = self.selected {
+                (self.pos, self.yaw, self.pitch) = local_cam_pose(self.tiles[f].place);
+            }
+            self.local_dirty = true;
+        } else if mode == 1 && self.view_mode == 2 {
+            // → World: restore the overview camera.
+            if let Some(saved) = self.saved_cam.take() {
+                (self.pos, self.yaw, self.pitch) = saved;
+            }
+        }
+        self.inspect_dirty = true; // rebuild (World) or clear (Local) the column
+        self.view_mode = mode;
+    }
+
+    /// The engine state the HUD script reads each frame (the `Model` global).
+    fn ui_model(&self) -> ValueMap {
+        ValueMap::new()
+            .with("hex_count", self.tiles.len())
+            .with("rings", RINGS)
+            .with("pos_x", self.pos.x)
+            .with("pos_y", self.pos.y)
+            .with("pos_z", self.pos.z)
+            .with("yaw", self.yaw)
+            .with("pitch", self.pitch)
+            .with("selected", self.selected.map_or(-1.0, |i| i as f64))
+            .with("sim_paused", self.sim_paused)
+            .with("sim_speed", self.sim_speed)
+            .with("view_mode", self.view_mode)
+            .with("sim_time", self.tiles.first().map_or(0.0, |t| t.stack.time))
+            .with("local_tiles", if self.local_view() { self.local_set().len() } else { 0 })
+    }
+
+    /// Run the Lua HUD's `update`: feed input, apply the returned control values
+    /// to engine state. Called before `update_map` so `ui_capture` can gate the
+    /// world-pick.
+    fn run_ui(&mut self, input: &InputState, r: &Renderer) {
+        let size = r.size();
+        // Get the results out first, releasing the `self.script` borrow before we
+        // mutate self (set_view_mode needs `&mut self`).
+        let res = match self.script.as_ref() {
+            Some(s) => match s.update(input, size.x, size.y) {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::error!("hex-world UI update failed: {e}");
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.sim_paused = res.is_on("sim_paused");
+        self.show_graticule = res.is_on("graticule");
+        self.show_billboards = res.is_on("billboards");
+        if let Some(v) = res.number("sim_speed") {
+            self.sim_speed = v as f32;
+        }
+        if let Some(v) = res.number("view_mode") {
+            let mode = v as u32;
+            if mode != self.view_mode {
+                self.set_view_mode(mode);
+            }
+        }
+        self.ui_capture = res.is_on("ui_capture");
+        if res.is_on("reset_camera") {
+            (self.pos, self.yaw, self.pitch) = CAM_HOME;
         }
     }
 
@@ -503,11 +684,24 @@ impl World {
         self.prev_mouse = input.mouse_position;
 
         // Left-click: select the hex under the cursor (click it again, or empty
-        // space, to deselect). Its stack splits out in place.
-        if input.mouse_left_pressed {
+        // space, to deselect). Its stack splits out in place. Suppressed when the
+        // pointer is over the HUD (`ui_capture`), so clicking a control doesn't
+        // also pick a hex behind it.
+        if input.mouse_left_pressed && !self.ui_capture {
             let picked = pick_hex(&self.map_camera(), input.mouse_position, r.size(), &self.tiles);
-            self.selected = if picked == self.selected { None } else { picked };
-            self.inspect_dirty = true;
+            if self.local_view() {
+                // Re-focus the local set on a clicked tile; never deselect (the
+                // Local view always keeps a focus). Camera stays where it is.
+                if let Some(i) = picked {
+                    if self.selected != Some(i) {
+                        self.selected = Some(i);
+                        self.local_dirty = true;
+                    }
+                }
+            } else {
+                self.selected = if picked == self.selected { None } else { picked };
+                self.inspect_dirty = true;
+            }
         }
 
         // Move: 6-DOF fly.
@@ -536,8 +730,12 @@ impl World {
         }
         self.pos += v * speed;
 
-        // Sim the live ring + the selected hex, at fixed step (capped).
-        self.sim_accum += dt;
+        // Sim the live ring + the selected hex, at fixed step (capped). The HUD
+        // pauses it and scales its rate (sim_speed); the fixed SIM_DT is kept so
+        // each tick is deterministic — speed changes how much sim-time elapses.
+        if !self.sim_paused {
+            self.sim_accum += dt * self.sim_speed;
+        }
         let mut steps = 0;
         while self.sim_accum >= SIM_DT && steps < 4 {
             for idx in 0..self.tiles.len() {
@@ -556,6 +754,7 @@ impl World {
         if self.rebuild_accum >= REBUILD_INTERVAL {
             self.rebuild_accum = 0.0;
             self.dirty = true;
+            self.local_dirty = true;
             if self.selected.is_some() {
                 self.inspect_dirty = true;
             }
@@ -563,19 +762,42 @@ impl World {
     }
 
     fn render_map(&mut self, renderer: &mut Renderer) {
-        if self.dirty {
-            self.rebuild_animated(renderer);
+        let local = self.local_view();
+
+        // Mesh build: World rebuilds the live ring on its cadence; Local builds
+        // the focus set (≤7 tiles) and frees it again when we leave Local.
+        if local {
+            if self.local_dirty {
+                for s in std::mem::take(&mut self.local_sheets) {
+                    renderer.free_mesh(s.handle);
+                }
+                self.local_sheets = build_tiles(&self.tiles, &self.local_set(), renderer);
+                self.local_dirty = false;
+            }
+        } else {
+            if !self.local_sheets.is_empty() {
+                for s in std::mem::take(&mut self.local_sheets) {
+                    renderer.free_mesh(s.handle);
+                }
+            }
+            if self.dirty {
+                self.rebuild_animated(renderer);
+            }
         }
-        // Rebuild the selected hex's split-out stack, lined up over its tile.
+
+        // The split-out inspector column is a World-view tool; in Local view the
+        // selection is just the focus, so the column is cleared, not built.
         if self.inspect_dirty {
             for s in std::mem::take(&mut self.inspect_sheets) {
                 renderer.free_mesh(s.handle);
             }
             self.inspect_labels.clear();
-            if let Some(i) = self.selected {
-                let (sheets, labels) = build_inspect(&self.tiles[i].stack, self.tiles[i].place, renderer);
-                self.inspect_sheets = sheets;
-                self.inspect_labels = labels;
+            if !local {
+                if let Some(i) = self.selected {
+                    let (sheets, labels) = build_inspect(&self.tiles[i].stack, self.tiles[i].place, renderer);
+                    self.inspect_sheets = sheets;
+                    self.inspect_labels = labels;
+                }
             }
             self.inspect_dirty = false;
         }
@@ -587,38 +809,68 @@ impl World {
             ..SceneLighting::default()
         });
         renderer.draw_sky();
-        for s in self.static_sheets.iter().chain(&self.animated_sheets).chain(&self.inspect_sheets) {
-            renderer.draw_mesh(s.handle, s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
+
+        // Surface meshes: the whole graph (World) or just the focus set (Local).
+        if local {
+            for s in &self.local_sheets {
+                renderer.draw_mesh(s.handle, s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
+            }
+        } else {
+            for s in self.static_sheets.iter().chain(&self.animated_sheets).chain(&self.inspect_sheets) {
+                renderer.draw_mesh(s.handle, s.model, MeshDrawOptions { wireframe: false, tint: s.tint });
+            }
         }
-        for (segs, color) in &self.graticule {
-            renderer.draw_lines(segs, *color);
-        }
-        if let Some(i) = self.selected {
-            renderer.draw_lines(&column_lines(self.tiles[i].place), [0.6, 0.9, 1.0, 0.8]);
+
+        // Planet-overview overlays (graticule + the focus column) — World only.
+        if !local {
+            if self.show_graticule {
+                for (segs, color) in &self.graticule {
+                    renderer.draw_lines(segs, *color);
+                }
+            }
+            if let Some(i) = self.selected {
+                renderer.draw_lines(&column_lines(self.tiles[i].place), [0.6, 0.9, 1.0, 0.8]);
+            }
         }
 
         let size = renderer.size();
         let vp = camera.view_projection(size.x / size.y);
-        renderer.set_layer(50.0);
-        for (i, t) in self.tiles.iter().enumerate() {
-            let world = Vec3::new(t.place.x, BILLBOARD_Y, t.place.y);
-            if let Some(p) = project_to_screen(vp, world, size) {
-                let dist = (world - self.pos).length();
-                let px = (28_000.0 / dist).clamp(7.0, 16.0);
-                renderer.draw_text(&i.to_string(), p, px, [1.0, 0.95, 0.35, 1.0]);
+        if self.show_billboards {
+            renderer.set_layer(50.0);
+            let labels: Vec<usize> = if local {
+                self.local_set()
+            } else {
+                (0..self.tiles.len()).collect()
+            };
+            for i in labels {
+                let t = &self.tiles[i];
+                let world = Vec3::new(t.place.x, BILLBOARD_Y, t.place.y);
+                if let Some(p) = project_to_screen(vp, world, size) {
+                    let dist = (world - self.pos).length();
+                    let px = (28_000.0 / dist).clamp(7.0, 16.0);
+                    renderer.draw_text(&i.to_string(), p, px, [1.0, 0.95, 0.35, 1.0]);
+                }
             }
         }
-        // Labels for the split-out stack.
+        // Labels for the split-out stack (World only; empty in Local).
         for &(pos, text, color) in &self.inspect_labels {
             if let Some(p) = project_to_screen(vp, pos, size) {
                 renderer.draw_text(text, p, 16.0, color);
             }
         }
-        let hud = match self.selected {
-            Some(i) => format!("hex {i} split out · click it again to close · WASD/RF fly · RMB look · Esc"),
-            None => "WASD/RF fly · RMB look · left-click a hex to split out its layers · Esc quit".to_string(),
-        };
-        renderer.draw_text(&hud, Vec2::new(12.0, 12.0), 18.0, [1.0, 1.0, 1.0, 0.8]);
+
+        // Lua-driven view/sim HUD, on top of everything (surface = flicker-ui's
+        // render bridge, control = hex_ui.lua, state = ui_elements.json).
+        if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
+            if let Err(e) = script.set_model(&self.ui_model()) {
+                tracing::error!("hex-world UI model publish failed: {e}");
+            }
+            renderer.set_layer(100.0);
+            match script.draw(size.x, size.y) {
+                Ok(cmds) => render_hud(renderer, &cmds, white, &[]),
+                Err(e) => tracing::error!("hex-world UI draw failed: {e}"),
+            }
+        }
     }
 }
 
@@ -637,12 +889,27 @@ impl Scene for World {
         }
         // Build the frozen backdrop now; the live ring is built on first render.
         self.static_sheets = build_subset(&self.tiles, &self.animated, false, renderer);
+
+        // Load the Lua view/sim HUD: control logic + the embedded widget toolkit
+        // + the declarative layout, then seed the model so frame 1's `update`
+        // reads sane values.
+        match ScriptHost::from_file(UI_SCRIPT_PATH) {
+            Ok(s) => {
+                load_ui_json(&s, UI_ELEMENTS_PATH);
+                load_widgets(&s);
+                let _ = s.set_model(&self.ui_model());
+                self.script = Some(s);
+            }
+            Err(e) => tracing::error!("hex-world UI script load failed: {e}"),
+        }
+        self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, r: &Renderer) -> Transition {
         if input.key_down(Key::Escape) {
             return Transition::Quit;
         }
+        self.run_ui(input, r);
         self.update_map(dt.as_secs_f32(), input, r);
         Transition::None
     }
@@ -723,5 +990,74 @@ mod tests {
         // Symmetric hemispheres; total = 2 + 6·R·(R+1).
         assert_eq!(north, south);
         assert_eq!(north + south, 2 + 6 * RINGS * (RINGS + 1));
+    }
+
+    // Loads the real hex_ui.lua + ui_elements.json + the flicker-ui widget
+    // toolkit and runs a frame headlessly — so a malformed layout, a broken
+    // script, or a name the script reads but the data/model lacks fails the
+    // build (the boundary-validation pattern from docs/ui.md).
+    #[test]
+    fn ui_script_runs_a_frame() {
+        let s = ScriptHost::from_file(UI_SCRIPT_PATH).expect("hex_ui.lua loads");
+        load_ui_json(&s, UI_ELEMENTS_PATH);
+        load_widgets(&s);
+        let model = ValueMap::new()
+            .with("hex_count", 74u32)
+            .with("rings", 3u32)
+            .with("pos_x", 0.0f32)
+            .with("pos_y", 0.0f32)
+            .with("pos_z", 0.0f32)
+            .with("yaw", 0.0f32)
+            .with("pitch", 0.0f32)
+            .with("selected", -1.0f64)
+            .with("sim_paused", false)
+            .with("sim_speed", 1.0f32)
+            .with("view_mode", 1u32)
+            .with("sim_time", 0.0f32);
+        s.set_model(&model).expect("set_model");
+
+        // Click the first checkbox ("Pause simulation", origin [16,152], box 18).
+        let mut input = InputState::new();
+        input.mouse_position = Vec2::new(25.0, 160.0);
+        input.mouse_left_pressed = true;
+        let res = s.update(&input, 960.0, 540.0).expect("update runs");
+        assert!(res.is_on("sim_paused"), "clicking the checkbox toggles sim_paused");
+        // Seeded overlays read on; pointer over the HUD captures the click.
+        assert!(res.is_on("graticule") && res.is_on("billboards"));
+        assert!(res.is_on("ui_capture"), "pointer over the HUD suppresses world-pick");
+
+        let cmds = s.draw(960.0, 540.0).expect("draw runs");
+        assert!(!cmds.is_empty(), "HUD should emit draw commands");
+    }
+
+    // The Local view culls to the focus hex + its ≤6 graph neighbours and snaps
+    // the camera into / out of a close local frame. (No renderer needed — this
+    // is the cull/focus/camera state logic.)
+    #[test]
+    fn local_view_focuses_the_seven_tiles() {
+        let mut w = World::new();
+        assert!(!w.local_view());
+
+        // Entering Local with no selection picks the nearest tile as the focus
+        // and saves the overview camera.
+        w.set_view_mode(2);
+        assert!(w.local_view());
+        assert!(w.saved_cam.is_some(), "Local saves the overview camera");
+        let focus = w.selected.expect("Local view picks a focus");
+
+        // The rendered set is the focus + its neighbours (6 or 7 distinct tiles).
+        let set = w.local_set();
+        assert!(set.contains(&focus), "focus is in the local set");
+        assert!((6..=7).contains(&set.len()), "local set has {} tiles", set.len());
+        let mut uniq = set.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), set.len(), "local set has no duplicates");
+
+        // Exiting Local restores the overview camera exactly.
+        w.set_view_mode(1);
+        assert!(!w.local_view());
+        assert!(w.saved_cam.is_none());
+        assert_eq!(w.pos, CAM_HOME.0, "exiting Local restores the overview camera");
     }
 }
