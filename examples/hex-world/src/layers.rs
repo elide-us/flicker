@@ -37,12 +37,11 @@ use flicker_primitive::heightmap::world_height;
 /// Grid resolution across the hex footprint (`G × G` cells / vertices).
 pub const G: usize = 64;
 
-/// Hex size: centre to the **E/W point**, world units. Flat-top orientation —
-/// the points face E/W, so this is the wide (point-to-point) axis that maps to
-/// the 2048-cluster texture width: 2048 clusters × 128 ft ≈ **49.6 mi** per hex
-/// point-to-point (N/S flat-to-flat ≈ 43 mi). `HEX_SIZE` itself is a display
-/// unit, decoupled from that real scale.
-pub const HEX_SIZE: f32 = 130.0;
+/// Hex size: centre to the **E/W point**, in world units. **Real scale:** one
+/// world unit = one cluster = 128 ft, so the point-to-point width is `2 ·
+/// HEX_SIZE = 2048` clusters ≈ **49.6 mi** (N/S flat-to-flat ≈ 43 mi). The sim
+/// runs on normalized altitude, so this sets world *size*, not physics.
+pub const HEX_SIZE: f32 = 1024.0;
 /// Apothem: centre to the N/S **flat edge** = √3/2 · size (half the N/S height).
 pub const HEX_HALF_W: f32 = HEX_SIZE * 0.866_025;
 

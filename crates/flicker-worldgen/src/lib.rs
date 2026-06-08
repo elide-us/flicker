@@ -19,8 +19,10 @@
 
 pub mod epoch1;
 pub mod noise;
+pub mod pipeline;
 
 pub use epoch1::{Epoch1, Epoch1Params};
+pub use pipeline::{epoch_stack, six_epoch_stack, EpochTransform, PassThrough, EPOCHS};
 
 use std::collections::BTreeMap;
 

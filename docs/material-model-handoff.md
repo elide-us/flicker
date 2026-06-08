@@ -228,17 +228,25 @@ of the linked-list's length? a fraction of the per-pass sediment-movement calc?
 
 ## 8. Next concrete steps
 
-1. **This doc locks the model** (the "define the boundaries" deliverable).
-2. **`compounds.json`** (world-forming subset) if/when needed.
+> **Status** (implementation progress + decisions: `docs/material-model-impl-handoff.md`):
+> steps 3–5 are **built** (crates `flicker-materials`, `flicker-worldstate`,
+> `flicker-worldgen`; Epoch 1 generated *and* rendered in the `hex-world` stack
+> viz). Step 6 is the big remaining one.
+
+1. **This doc locks the model** (the "define the boundaries" deliverable). ✅
+2. **`compounds.json`** (world-forming subset) if/when needed. *(deferred)*
 3. **`TableSource` loader** reading `data/materials/*.json` (the JSON-now /
-   network-later seam).
+   network-later seam). ✅ — `flicker-materials`.
 4. **Aggregate ledger schema** (②): per-pixel `{ composition: {El: amount},
    bulk_composition, surface_material, effects: { water_saturation, ice, lava } }`,
-   sparse.
+   sparse. ✅ — `flicker-worldstate`.
 5. **Epoch 1** — seed per-hex composition from the tables; render a dominant-
-   element/material tint per hex to *see and verify* the distribution.
+   element/material tint per hex to *see and verify* the distribution. ✅ —
+   `flicker-worldgen` + `hex-world` stack viz. (Per-cell **materialization** —
+   resolving each hex toward its 2048² detail — is the next refinement.)
 6. **Re-home the water cycle** onto the ledger + pass-based stepping (§4), then
-   build the **Rivulet** structure on top (§5).
+   build the **Rivulet** structure on top (§5). *(pending — the sim is kept and
+   the tier-② substrate now exists)*
 
 ---
 
