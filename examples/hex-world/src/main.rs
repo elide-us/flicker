@@ -4,10 +4,11 @@
 //! one cluster = 128 ft, so a hex is 2048 units (≈49.6 mi) across and the column
 //! is 256 units (≈6.2 mi) tall:
 //!
-//! - **Six epoch planes** at the bottom — the per-hex composition from each
-//!   world-gen epoch ([`flicker_worldgen::six_epoch_stack`]; Epoch 1 generates,
-//!   Epochs 2-6 copy it for now), each a flat hex coloured by its dominant
-//!   element. They diverge as real epoch transforms replace the copies.
+//! - **Six epoch planes** at the bottom — the world-gen epochs, each a per-cell
+//!   **relief mesh** sampled from that epoch's `HexState` field (the spatial
+//!   hardness distribution → terrain: hard rock ridges, soft valleys), tinted by
+//!   its dominant element. Epoch 1 composition, Epoch 2 differentiated crust,
+//!   Epoch 3 plate-driven elevation; Epochs 4-6 copy Epoch 3 for now.
 //! - **Nine surface-simulation bands** stacked on top — the existing band model
 //!   drawn as colour-coded **empty shells**. The water-cycle sim still ticks
 //!   underneath (its mechanics — heat, convection, precipitation — are kept); we
@@ -30,10 +31,12 @@ use flicker::render::{
 };
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker_materials::{JsonTableSource, Tables};
-use flicker_worldgen::{six_epoch_stack, Epoch1, Epoch1Params, EPOCHS};
+use flicker_worldgen::{
+    six_epoch_stack, Epoch1, Epoch1Params, EpochCtx, FieldSampler, HexState, EPOCHS,
+};
 use flicker_worldstate::Composition;
 
-use layers::{build_sheet, LayerStack, BANDS, BAND_BOUNDS, HEX_HALF_W, HEX_SIZE};
+use layers::{build_sheet, cell_local, LayerStack, BANDS, BAND_BOUNDS, HEX_HALF_W, HEX_SIZE};
 use topology::{HexCoord, HexMap, Hemisphere};
 
 /// Rings per hemisphere (R=3 → 74 hexes).
@@ -57,7 +60,7 @@ const VEXAG: f32 = 1.0;
 /// an order of magnitude larger than a band's real height (~28 u) so the six
 /// epoch layers are easy to see and compare as their transforms diverge them.
 /// Only the epoch stack is exploded — the sim bands stay at true altitude.
-const EPOCH_GAP: f32 = 320.0;
+const EPOCH_GAP: f32 = 640.0;
 /// Translucency of the (empty) band shells.
 const BAND_ALPHA: f32 = 0.22;
 
@@ -168,30 +171,34 @@ fn element_color(atomic_number: u8) -> [f32; 4] {
     [r, g, b, 1.0]
 }
 
-/// An epoch plane's tint for a hex: its dominant element's colour, grey if empty.
-fn hex_color(comp: &Composition) -> [f32; 4] {
-    match comp.dominant() {
+/// Per-hex composition tint: the dominant element's colour, grey if empty. The
+/// spatial structure now lives in the per-cell relief mesh; this tint is the
+/// province colour drawn over it.
+fn element_color_opt(dominant: Option<u8>) -> [f32; 4] {
+    match dominant {
         Some(n) => element_color(n),
         None => [0.5, 0.5, 0.5, 1.0],
     }
 }
 
-/// One hex: its flat-layout position, its kept (undrawn) water-cycle sim, and the
-/// six epoch dominant-element colours (Epoch 1 first, Epoch 6 last).
+/// One hex: its flat-layout position, its kept (undrawn) water-cycle sim, the six
+/// epoch states (Epoch 1 first, Epoch 6 last), and the per-cell relief meshes
+/// sampled from them — 3 distinct (Epoch 1/2/3); Epochs 4-6 reuse Epoch 3's.
 struct Tile {
     place: Vec2,
     stack: LayerStack,
-    epoch_colors: Vec<[f32; 4]>,
+    epoch_states: Vec<HexState>,
+    relief: Vec<MeshHandle>,
 }
 
 struct World {
     tiles: Vec<Tile>,
     /// Per-tile: does this hex keep ticking after the startup settle?
     animated: Vec<bool>,
-    /// Flat near-white hex, drawn once per (hex, epoch) with the epoch's tint.
-    epoch_hex: Option<MeshHandle>,
     /// The 9 band shells, at their real altitudes, coloured per zone.
     band_shells: Vec<MeshHandle>,
+    /// Vocabulary, kept until `enter` samples the per-cell fields, then dropped.
+    tables: Option<Tables>,
     pos: Vec3,
     yaw: f32,
     pitch: f32,
@@ -205,44 +212,50 @@ impl World {
         let map = HexMap::new(RINGS);
         let n = map.total() as usize;
 
-        // Per-hex unit-sphere direction → the six-epoch composition stack →
-        // per-(epoch, hex) dominant-element colours.
-        let epoch_layers: Vec<Vec<[f32; 4]>> =
-            match Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)) {
-                Ok(tables) => {
-                    let e1 = Epoch1::new(&tables, Epoch1Params::default(), SEED);
-                    let dirs: Vec<Vec3> = (0..map.total())
-                        .map(|i| {
-                            let d = map.celestial_dir(i);
-                            Vec3::new(d[0], d[1], d[2])
-                        })
-                        .collect();
-                    six_epoch_stack(&e1, &dirs)
-                        .iter()
-                        .map(|layer| layer.iter().map(hex_color).collect())
-                        .collect()
-                }
-                Err(e) => {
-                    tracing::error!("Epoch seed failed ({e}); epoch planes will be grey");
-                    vec![vec![[0.5, 0.5, 0.5, 1.0]; n]; EPOCHS]
-                }
-            };
+        let tables = Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)).ok();
+
+        // Per-hex unit-sphere direction → the six-epoch `HexState` stack. Each
+        // tile keeps its six states; the per-cell fields are sampled from them in
+        // `enter` (where the renderer is available).
+        let stack: Vec<Vec<HexState>> = match &tables {
+            Some(tables) => {
+                let e1 = Epoch1::new(tables, Epoch1Params::default(), SEED);
+                let dirs: Vec<Vec3> = (0..map.total())
+                    .map(|i| {
+                        let d = map.celestial_dir(i);
+                        Vec3::new(d[0], d[1], d[2])
+                    })
+                    .collect();
+                let neighbors: Vec<Vec<u32>> = (0..map.total()).map(|i| map.neighbours(i)).collect();
+                let ctx = EpochCtx { tables, dirs: &dirs, neighbors: &neighbors, seed: SEED };
+                six_epoch_stack(&e1, &ctx)
+            }
+            None => {
+                tracing::error!("vocabulary failed to load; the stack will be empty");
+                vec![vec![HexState::new(Composition::new()); n]; EPOCHS]
+            }
+        };
 
         let mut tiles = Vec::with_capacity(n);
         let mut animated = Vec::with_capacity(n);
         for i in 0..map.total() {
             let c = map.coord(i);
             let place = hex_flat_pos(c);
-            let epoch_colors = (0..EPOCHS).map(|e| epoch_layers[e][i as usize]).collect();
-            tiles.push(Tile { place, stack: LayerStack::generate(place), epoch_colors });
+            let epoch_states = (0..EPOCHS).map(|e| stack[e][i as usize].clone()).collect();
+            tiles.push(Tile {
+                place,
+                stack: LayerStack::generate(place),
+                epoch_states,
+                relief: Vec::new(),
+            });
             animated.push(c.hemi == Hemisphere::North && c.ring <= ANIMATE_RINGS);
         }
 
         Self {
             tiles,
             animated,
-            epoch_hex: None,
             band_shells: Vec::new(),
+            tables,
             pos: CAM_HOME.0,
             yaw: CAM_HOME.1,
             pitch: CAM_HOME.2,
@@ -328,20 +341,22 @@ impl World {
     }
 
     fn draw_stack(&self, renderer: &mut Renderer) {
-        let Some(epoch_hex) = self.epoch_hex else {
-            return;
-        };
         for tile in &self.tiles {
-            let base = Vec3::new(tile.place.x, 0.0, tile.place.y);
+            if tile.relief.len() < 3 {
+                continue;
+            }
             // Six exploded epoch planes below 0 — Epoch 1 lowest, Epoch 6 nearest
-            // the bands. Spaced by EPOCH_GAP (independent of the bands' real scale).
-            for (e, &tint) in tile.epoch_colors.iter().enumerate() {
+            // the bands. Each is a per-cell relief mesh (hardness field → terrain),
+            // tinted by the epoch's dominant element. Epochs 4-6 reuse Epoch 3's.
+            for e in 0..EPOCHS {
+                let mesh = tile.relief[e.min(2)];
+                let tint = element_color_opt(tile.epoch_states[e].surface().dominant());
                 let y = -((EPOCHS - e) as f32) * EPOCH_GAP;
-                let model = Mat4::from_translation(base + Vec3::new(0.0, y, 0.0));
-                renderer.draw_mesh(epoch_hex, model, MeshDrawOptions { wireframe: false, tint });
+                let model = Mat4::from_translation(Vec3::new(tile.place.x, y, tile.place.y));
+                renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
             }
             // Nine empty band shells at their real altitudes (0..Y_LAYERS).
-            let model = Mat4::from_translation(base);
+            let model = Mat4::from_translation(Vec3::new(tile.place.x, 0.0, tile.place.y));
             let shell_tint = [1.0, 1.0, 1.0, BAND_ALPHA];
             for &shell in &self.band_shells {
                 renderer.draw_mesh(shell, model, MeshDrawOptions { wireframe: false, tint: shell_tint });
@@ -364,10 +379,7 @@ impl Scene for World {
                 tile.stack.tick(SIM_DT);
             }
         }
-        // Shared meshes: one flat near-white hex for the epoch planes, and the
-        // nine band shells at their real altitudes.
-        let (fv, fi) = build_sheet(0.0, |_, _| 0.0, |_, _| layers::M_FOAM, |_, _| true);
-        self.epoch_hex = Some(renderer.upload_mesh(&fv, MeshIndices::U32(&fi)));
+        // Nine empty band shells at their real altitudes.
         self.band_shells = (0..BANDS)
             .map(|b| {
                 let y0 = BAND_BOUNDS[b] as f32 * VEXAG;
@@ -376,6 +388,30 @@ impl Scene for World {
                 renderer.upload_mesh(&v, MeshIndices::U32(&i))
             })
             .collect();
+        // Per-tile relief meshes: sample each distinct epoch's per-cell field
+        // (hardness → relief) into a resolved mesh. Epochs 4-6 reuse Epoch 3's.
+        if let Some(tables) = self.tables.take() {
+            let sampler = FieldSampler::new(&tables, SEED);
+            for tile in self.tiles.iter_mut() {
+                let place = tile.place;
+                let relief: Vec<MeshHandle> = (0..3)
+                    .map(|e| {
+                        let state = &tile.epoch_states[e];
+                        let (v, idx) = build_sheet(
+                            0.0,
+                            |i, j| {
+                                let (lx, lz) = cell_local(i, j);
+                                sampler.sample(state, place + Vec2::new(lx, lz)).elevation
+                            },
+                            |_, _| layers::M_FOAM,
+                            |_, _| true,
+                        );
+                        renderer.upload_mesh(&v, MeshIndices::U32(&idx))
+                    })
+                    .collect();
+                tile.relief = relief;
+            }
+        }
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, _r: &Renderer) -> Transition {
@@ -438,7 +474,7 @@ mod tests {
     fn epoch_stack_is_six_layers_per_hex() {
         let w = World::new();
         for tile in &w.tiles {
-            assert_eq!(tile.epoch_colors.len(), EPOCHS);
+            assert_eq!(tile.epoch_states.len(), EPOCHS);
         }
     }
 }

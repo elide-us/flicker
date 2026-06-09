@@ -6,23 +6,31 @@
 //! runs on — "the gap from zero to a planet that looks like a planet" (material
 //! handoff §7). Offline-heavy; the runtime links none of it.
 //!
-//! This crate currently implements **Epoch 1** only — initial per-hex element
-//! distribution ([`Epoch1`]). Epochs 2-6 (differentiation, tectonics,
-//! hydrosphere, mineralization, erosion/biomes) are deferred.
-//!
-//! Output is a [`Composition`] per hex; wrapping it into a ledger [`Cell`] /
-//! [`Ledger`] is the caller's (seam) concern.
+//! The chain so far ([`HexState`] threads through it):
+//! - **Epoch 1** ([`Epoch1`]) — initial per-hex element distribution.
+//! - **Epoch 2** ([`Epoch2`]) — differentiation: light silicates rise to a
+//!   crust, heavy metals sink.
+//! - **Epoch 3** ([`Epoch3`]) — plate tectonics: plates, boundaries, and the
+//!   mean-surface-**elevation** that gives continents and mountains.
+//! - Epochs 4-6 ([`PassThrough`]) — hydrosphere, mineralization, erosion/biomes
+//!   are deferred copies until their transforms are written.
 //!
 //! [`Composition`]: flicker_worldstate::Composition
-//! [`Cell`]: flicker_worldstate::Cell
-//! [`Ledger`]: flicker_worldstate::Ledger
 
 pub mod epoch1;
+pub mod epoch2;
+pub mod epoch3;
+pub mod field;
 pub mod noise;
 pub mod pipeline;
+pub mod state;
 
 pub use epoch1::{Epoch1, Epoch1Params};
-pub use pipeline::{epoch_stack, six_epoch_stack, EpochTransform, PassThrough, EPOCHS};
+pub use epoch2::Epoch2;
+pub use epoch3::Epoch3;
+pub use field::{CellSample, FieldSampler};
+pub use pipeline::{epoch_stack, six_epoch_stack, EpochCtx, EpochTransform, PassThrough, EPOCHS};
+pub use state::{Boundary, HexState};
 
 use std::collections::BTreeMap;
 
