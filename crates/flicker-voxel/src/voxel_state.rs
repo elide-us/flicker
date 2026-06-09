@@ -310,7 +310,11 @@ mod tests {
         f.set(coord(2, 0, 0), VoxelState::Flowing);
         f.set(coord(255, 255, 255), VoxelState::Solid);
         f.set(coord(100, 100, 100), VoxelState::Flowing);
-        let words = Box::new(*f.as_words());
+        // Allocate the buffer on the heap directly to avoid a 4 MB
+        // stack copy (Box::new(*array) would copy through the stack).
+        let mut heap_buf = vec![0u64; STATE_FIELD_WORDS].into_boxed_slice();
+        heap_buf.copy_from_slice(f.as_words());
+        let words: Box<[u64; STATE_FIELD_WORDS]> = heap_buf.try_into().unwrap();
         let loaded = StateField::from_words(words);
         for &(x, y, z, expected) in &[
             (0u32, 0u32, 0u32, VoxelState::Solid),

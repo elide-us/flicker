@@ -152,4 +152,12 @@ function W.button_draw(cmds, r, text, s, hot)
   label(cmds, r.x + r.w * 0.5, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "center")
 end
 
+-- SECTION HEADER -----------------------------------------------------------
+-- A full-width label bar marking a subsection (e.g. "KEYBOARD", "MOUSE",
+-- "CONTROLLER"). Stateless — just draws a tinted rect + centered text.
+function W.section_header_draw(cmds, r, text, s)
+  rect(cmds, r.x, r.y, r.w, r.h, s.bg)
+  label(cmds, r.x + 8, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "left")
+end
+
 return W

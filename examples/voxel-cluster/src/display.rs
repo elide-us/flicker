@@ -4,8 +4,7 @@
 //!
 //! The window is the real source of truth (a scene applies a change straight to
 //! it via the [`Renderer`]); [`CURRENT`] mirrors the last-applied setting so the
-//! settings panel can show the active selection and the confirm overlay can
-//! revert it.
+//! confirm overlay can revert it.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -28,14 +27,6 @@ impl DisplayMode {
         DisplayMode::BorderlessFullscreen,
         DisplayMode::ExclusiveFullscreen,
     ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            DisplayMode::Windowed => "Windowed",
-            DisplayMode::BorderlessFullscreen => "Fullscreen Window",
-            DisplayMode::ExclusiveFullscreen => "Fullscreen",
-        }
-    }
 }
 
 /// A selectable resolution in physical pixels.
@@ -43,53 +34,6 @@ impl DisplayMode {
 pub struct Resolution {
     pub w: u32,
     pub h: u32,
-}
-
-/// The smallest "debug" window — the lowest rung in the ladder (below the 720p
-/// floor); the resolution list filters up from here.
-pub const DEBUG_RES: Resolution = Resolution { w: 960, h: 540 };
-
-/// Heights (px) offered above the 720p floor, before capping at native.
-const LADDER_HEIGHTS: [u32; 3] = [720, 1080, 1440];
-
-/// Build the resolution list for a monitor of physical size `monitor` (falls
-/// back to a 1080p assumption when unknown): the debug default, the in-ratio
-/// ladder entries strictly below native height, then Native. Deduped and kept
-/// short (Apple-simple).
-pub fn resolution_options(monitor: Option<(u32, u32)>) -> Vec<Resolution> {
-    let (mw, mh) = monitor.unwrap_or((1920, 1080));
-    let aspect = mw as f32 / mh.max(1) as f32;
-    let mut out = vec![DEBUG_RES];
-    for &h in &LADDER_HEIGHTS {
-        if h < mh {
-            // Even width matching the monitor aspect (720p floor enforced by
-            // the table; native is added separately below).
-            let w = (((h as f32 * aspect).round() as u32) / 2) * 2;
-            out.push(Resolution { w, h });
-        }
-    }
-    out.push(Resolution { w: mw, h: mh }); // Native
-                                           // Dedup by (w, h), preserving order (tiny list, O(n²) is fine).
-    let mut i = 0;
-    while i < out.len() {
-        if out[..i].contains(&out[i]) {
-            out.remove(i);
-        } else {
-            i += 1;
-        }
-    }
-    out
-}
-
-/// Human label for a resolution, marking the debug default and the native one.
-pub fn resolution_label(r: Resolution, monitor: Option<(u32, u32)>) -> String {
-    if r == DEBUG_RES {
-        format!("{} × {}  (debug)", r.w, r.h)
-    } else if monitor == Some((r.w, r.h)) {
-        format!("Native  ({} × {})", r.w, r.h)
-    } else {
-        format!("{} × {}", r.w, r.h)
-    }
 }
 
 /// A full display setting: presentation mode + resolution.
@@ -120,7 +64,7 @@ impl DisplaySetting {
 }
 
 /// Process-wide current setting (the window is the real state; this mirrors it
-/// so panels can show the selection and the confirm overlay can revert).
+/// so the confirm overlay can revert).
 static CURRENT: Mutex<DisplaySetting> = Mutex::new(DisplaySetting::DEFAULT);
 
 /// The last-applied display setting.
@@ -167,44 +111,5 @@ fn save_to_disk(setting: DisplaySetting) {
             }
         }
         Err(e) => tracing::warn!("failed to serialize display settings: {e}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ladder_1080p_is_debug_720_native() {
-        assert_eq!(
-            resolution_options(Some((1920, 1080))),
-            vec![
-                DEBUG_RES,
-                Resolution { w: 1280, h: 720 },
-                Resolution { w: 1920, h: 1080 },
-            ]
-        );
-    }
-
-    #[test]
-    fn ladder_720p_monitor_is_debug_plus_native() {
-        assert_eq!(
-            resolution_options(Some((1280, 720))),
-            vec![DEBUG_RES, Resolution { w: 1280, h: 720 }]
-        );
-    }
-
-    #[test]
-    fn ladder_4k_has_full_ladder() {
-        assert_eq!(
-            resolution_options(Some((3840, 2160))),
-            vec![
-                DEBUG_RES,
-                Resolution { w: 1280, h: 720 },
-                Resolution { w: 1920, h: 1080 },
-                Resolution { w: 2560, h: 1440 },
-                Resolution { w: 3840, h: 2160 },
-            ]
-        );
     }
 }
