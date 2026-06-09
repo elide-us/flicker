@@ -1,5 +1,11 @@
 # Handoff — hex-world local-render model + the two pole quirks
 
+> **⚠ SUPERSEDED** by the *HexWorld — Flat Neighbor Graph & Celestial Orientation*
+> spec. The sphere-as-substrate model in this doc is **retired**: the world data
+> is now a flat hex graph with baked edge-neighbour refs, the render is a flat
+> local bubble, and the sphere survives only as a read-only per-hex celestial
+> orientation. Kept for history; do not implement from it.
+
 > Captures the design that the `examples/hex-world` prototype proved out, and
 > **flags two intentional pole-region cheats** so a future session doesn't
 > "fix" them or re-litigate the topology. Re-verify code anchors (line numbers

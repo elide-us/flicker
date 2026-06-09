@@ -1,325 +1,444 @@
-//! hex-world — a local-patch viewer for the continuous hex planet.
+//! HexWorld — the world-data **stack visualization** (a data view, not gameplay).
 //!
-//! Concrete embodiment of the local-only render model (see
-//! `docs/hex-world-handoff.md`): it **never assembles the sphere.** It renders
-//! only the focus hex plus its ring of neighbours (≤7 tiles, [`LOCAL_DEPTH`]),
-//! every tile **gnomonic-flattened onto the focus hex's tangent plane** — the
-//! "planar snap." The focus follows your gaze; crossing a hex boundary re-snaps
-//! the whole patch onto the new plane and frees/builds tiles accordingly. The
-//! sphere's curvature is paid across the *sequence* of snaps, never inside one
-//! patch — which is why a purely local patch is all that's ever needed.
+//! Each hex is drawn as a vertical stack at **real scale** — one world unit =
+//! one cluster = 128 ft, so a hex is 2048 units (≈49.6 mi) across and the column
+//! is 256 units (≈6.2 mi) tall:
 //!
-//! An equirectangular minimap (right) shows where the resident patch sits on
-//! the whole planet, with array indices on the live tiles.
+//! - **Six epoch planes** at the bottom — the per-hex composition from each
+//!   world-gen epoch ([`flicker_worldgen::six_epoch_stack`]; Epoch 1 generates,
+//!   Epochs 2-6 copy it for now), each a flat hex coloured by its dominant
+//!   element. They diverge as real epoch transforms replace the copies.
+//! - **Nine surface-simulation bands** stacked on top — the existing band model
+//!   drawn as colour-coded **empty shells**. The water-cycle sim still ticks
+//!   underneath (its mechanics — heat, convection, precipitation — are kept); we
+//!   simply no longer draw water/lava/ice as heightmaps, nor any band content.
+//!   The sim's ground reads Epoch 6.
 //!
-//! Controls (orbit, keyboard only):
-//!   * A / D — swing around the planet (yaw)
-//!   * W / S — tilt over the poles (pitch)
-//!   * R / F — zoom in / out
-//!   * Esc   — quit
+//! Fly: WASD move, R/F up/down, hold right mouse to look, Esc quits.
 
-mod planet_mesh;
+mod layers;
+#[allow(dead_code)] // adjacency/celestial kept; only layout + celestial_dir used here.
 mod topology;
 
-use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Result;
-use flicker::app::{run, Action, Bindings, InputState, Key};
+use flicker::app::{run, InputState, Key};
 use flicker::render::{
-    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, TextureHandle,
+    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
     Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneManager, Transition};
+use flicker_materials::{JsonTableSource, Tables};
+use flicker_worldgen::{six_epoch_stack, Epoch1, Epoch1Params, EPOCHS};
+use flicker_worldstate::Composition;
 
-use planet_mesh::PLANET_RADIUS;
-use topology::{Hemisphere, HexCoord, Planet};
+use layers::{build_sheet, LayerStack, BANDS, BAND_BOUNDS, HEX_HALF_W, HEX_SIZE};
+use topology::{HexCoord, HexMap, Hemisphere};
 
-/// Planet size. `total = 2 + 6·R·(R+1)`; R=4 → 122 hexes.
-const RINGS: u32 = 4;
-/// How many neighbour rings around the focus hex to show. 1 = the focus plus
-/// its immediate ring — at most 7 tiles, the gameplay-scale local patch.
-const LOCAL_DEPTH: u32 = 1;
+/// Rings per hemisphere (R=3 → 74 hexes).
+const RINGS: u32 = 3;
+/// World seed for the Epoch 1 element distribution.
+const SEED: u64 = 0x0EC0_DE01;
+/// Materials vocabulary directory (the JSON tables), relative to this example.
+const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
 
-struct PlanetScene {
-    planet: Planet,
-    /// Currently-built local tiles, keyed by hex index — the streaming cache.
-    local: HashMap<u32, MeshHandle>,
-    /// Hex the camera is currently over; drives which tiles are resident.
-    focus: u32,
-    yaw: f32,
-    pitch: f32,
-    distance: f32,
-    bindings: Bindings,
-    white: Option<TextureHandle>,
+/// Fixed sim step; the kept water-cycle mechanics still tick (undrawn).
+const SIM_DT: f32 = 0.05;
+/// Ticks run on every hex at startup so the kept sim settles into a real state.
+const SETTLE_TICKS: u32 = 50;
+/// Hexes within this many rings of the north pole keep ticking after settle.
+const ANIMATE_RINGS: u32 = 1;
+
+/// Vertical exaggeration of the stack. `1.0` is true scale (a 256-unit column
+/// under a 2048-wide hex — a thin slab); raise it to read the bands while flying.
+const VEXAG: f32 = 1.0;
+/// Vertical gap between the **exploded** epoch planes, world units. Deliberately
+/// an order of magnitude larger than a band's real height (~28 u) so the six
+/// epoch layers are easy to see and compare as their transforms diverge them.
+/// Only the epoch stack is exploded — the sim bands stay at true altitude.
+const EPOCH_GAP: f32 = 320.0;
+/// Translucency of the (empty) band shells.
+const BAND_ALPHA: f32 = 0.22;
+
+// Material index per band shell (bottom→top): the three zones — below (molten /
+// rock / soil), terrain (lowland / hill / alpine), atmosphere (lower air / cloud
+// deck / thin air). Colour only; the bands are drawn empty.
+const BAND_MAT: [u32; BANDS] = [
+    layers::M_LAVA,
+    layers::M_STONE,
+    layers::M_LAND,
+    layers::M_GRASSLAND,
+    layers::M_FOREST,
+    layers::M_TUNDRA,
+    layers::M_WATER_SHALLOW,
+    layers::M_UV,
+    layers::M_AURORA,
+];
+
+/// Default fly-camera pose, retuned for real scale (the R=3 world spans ~±10k
+/// units): position, yaw, pitch.
+const CAM_HOME: (Vec3, f32, f32) = (Vec3::new(0.0, 9000.0, -17000.0), 0.0, -0.45);
+const MOVE_SPEED: f32 = 11000.0;
+const LOOK_SENS: f32 = 0.005;
+
+/// Flat XZ offset of `pos` within `ring` (flat-top axial basis: NE and N).
+fn ring_offset(ring: u32, pos: u32) -> Vec2 {
+    if ring == 0 {
+        return Vec2::ZERO;
+    }
+    const DIRS: [(i32, i32); 6] = [(1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1), (1, -1)];
+    let (mut q, mut r) = (DIRS[4].0 * ring as i32, DIRS[4].1 * ring as i32);
+    let mut cells = Vec::with_capacity(6 * ring as usize);
+    for &(dq, dr) in &DIRS {
+        for _ in 0..ring {
+            cells.push((q, r));
+            q += dq;
+            r += dr;
+        }
+    }
+    let (cq, cr) = cells[pos as usize % cells.len()];
+    let aq = Vec2::new(1.5 * HEX_SIZE, HEX_HALF_W);
+    let ar = Vec2::new(0.0, 2.0 * HEX_HALF_W);
+    aq * cq as f32 + ar * cr as f32
 }
 
-impl PlanetScene {
+/// Flat-layout centre of a hemisphere's disc — the two discs drawn side by side.
+fn cluster_center(hemi: Hemisphere) -> Vec2 {
+    let sep = 1.5 * HEX_SIZE * (RINGS as f32 + 0.5);
+    match hemi {
+        Hemisphere::North => Vec2::new(-sep, 0.0),
+        Hemisphere::South => Vec2::new(sep, HEX_HALF_W),
+    }
+}
+
+fn hex_flat_pos(coord: HexCoord) -> Vec2 {
+    cluster_center(coord.hemi) + ring_offset(coord.ring, coord.pos)
+}
+
+/// XZ of flat-top hex corner `k`, centred at the origin.
+fn hex_corner(k: usize) -> (f32, f32) {
+    let a = k as f32 * std::f32::consts::FRAC_PI_3;
+    (HEX_SIZE * a.cos(), HEX_SIZE * a.sin())
+}
+
+/// The 6 side faces of an empty hexagonal-prism band `[y0, y1]` at the origin,
+/// material `mat`. Double-sided so it reads from inside and out.
+fn band_shell(y0: f32, y1: f32, mat: u32) -> (Vec<MeshVertex>, Vec<u32>) {
+    let mut verts = Vec::with_capacity(24);
+    let mut inds = Vec::with_capacity(72);
+    for k in 0..6 {
+        let (x0, z0) = hex_corner(k);
+        let (x1, z1) = hex_corner((k + 1) % 6);
+        let (mx, mz) = ((x0 + x1) * 0.5, (z0 + z1) * 0.5);
+        let nl = (mx * mx + mz * mz).sqrt().max(1e-6);
+        let normal = [mx / nl, 0.0, mz / nl];
+        let b = verts.len() as u32;
+        for (x, y, z) in [(x0, y0, z0), (x1, y0, z1), (x1, y1, z1), (x0, y1, z0)] {
+            verts.push(MeshVertex { position: [x, y, z], normal, material: mat });
+        }
+        inds.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]); // outward
+        inds.extend_from_slice(&[b, b + 2, b + 1, b, b + 3, b + 2]); // inward
+    }
+    (verts, inds)
+}
+
+/// HSV→RGB, channels in `[0, 1]`.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let h6 = (h.fract() + 1.0).fract() * 6.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h6 % 2.0) - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match h6 as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r + m, g + m, b + m]
+}
+
+/// A distinct colour per element — a golden-ratio hue by atomic number. (The
+/// periodic table carries no colour; this is a debug palette.)
+fn element_color(atomic_number: u8) -> [f32; 4] {
+    let hue = (atomic_number as f32 * 0.618_034).fract();
+    let [r, g, b] = hsv_to_rgb(hue, 0.62, 0.95);
+    [r, g, b, 1.0]
+}
+
+/// An epoch plane's tint for a hex: its dominant element's colour, grey if empty.
+fn hex_color(comp: &Composition) -> [f32; 4] {
+    match comp.dominant() {
+        Some(n) => element_color(n),
+        None => [0.5, 0.5, 0.5, 1.0],
+    }
+}
+
+/// One hex: its flat-layout position, its kept (undrawn) water-cycle sim, and the
+/// six epoch dominant-element colours (Epoch 1 first, Epoch 6 last).
+struct Tile {
+    place: Vec2,
+    stack: LayerStack,
+    epoch_colors: Vec<[f32; 4]>,
+}
+
+struct World {
+    tiles: Vec<Tile>,
+    /// Per-tile: does this hex keep ticking after the startup settle?
+    animated: Vec<bool>,
+    /// Flat near-white hex, drawn once per (hex, epoch) with the epoch's tint.
+    epoch_hex: Option<MeshHandle>,
+    /// The 9 band shells, at their real altitudes, coloured per zone.
+    band_shells: Vec<MeshHandle>,
+    pos: Vec3,
+    yaw: f32,
+    pitch: f32,
+    prev_mouse: Vec2,
+    dragging: bool,
+    sim_accum: f32,
+}
+
+impl World {
     fn new() -> Self {
+        let map = HexMap::new(RINGS);
+        let n = map.total() as usize;
+
+        // Per-hex unit-sphere direction → the six-epoch composition stack →
+        // per-(epoch, hex) dominant-element colours.
+        let epoch_layers: Vec<Vec<[f32; 4]>> =
+            match Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)) {
+                Ok(tables) => {
+                    let e1 = Epoch1::new(&tables, Epoch1Params::default(), SEED);
+                    let dirs: Vec<Vec3> = (0..map.total())
+                        .map(|i| {
+                            let d = map.celestial_dir(i);
+                            Vec3::new(d[0], d[1], d[2])
+                        })
+                        .collect();
+                    six_epoch_stack(&e1, &dirs)
+                        .iter()
+                        .map(|layer| layer.iter().map(hex_color).collect())
+                        .collect()
+                }
+                Err(e) => {
+                    tracing::error!("Epoch seed failed ({e}); epoch planes will be grey");
+                    vec![vec![[0.5, 0.5, 0.5, 1.0]; n]; EPOCHS]
+                }
+            };
+
+        let mut tiles = Vec::with_capacity(n);
+        let mut animated = Vec::with_capacity(n);
+        for i in 0..map.total() {
+            let c = map.coord(i);
+            let place = hex_flat_pos(c);
+            let epoch_colors = (0..EPOCHS).map(|e| epoch_layers[e][i as usize]).collect();
+            tiles.push(Tile { place, stack: LayerStack::generate(place), epoch_colors });
+            animated.push(c.hemi == Hemisphere::North && c.ring <= ANIMATE_RINGS);
+        }
+
         Self {
-            planet: Planet::new(RINGS),
-            local: HashMap::new(),
-            focus: 0,
-            yaw: 0.0,
-            pitch: 0.0,
-            distance: PLANET_RADIUS * 2.4,
-            bindings: Bindings::wasd(),
-            white: None,
+            tiles,
+            animated,
+            epoch_hex: None,
+            band_shells: Vec::new(),
+            pos: CAM_HOME.0,
+            yaw: CAM_HOME.1,
+            pitch: CAM_HOME.2,
+            prev_mouse: Vec2::ZERO,
+            dragging: false,
+            sim_accum: 0.0,
         }
     }
 
-    /// Rebuild the resident `LOCAL_DEPTH`-ring patch flattened onto the current
-    /// focus plane. Every tile reprojects when the focus moves, so this frees
-    /// all and rebuilds from scratch. Needs `&mut Renderer`, so it runs from
-    /// `enter`/`render`, never `update`.
-    fn reconcile(&mut self, renderer: &mut Renderer) {
-        for (_, handle) in self.local.drain() {
-            renderer.free_mesh(handle);
-        }
-        let frame = planet_mesh::focus_frame(&self.planet, self.planet.coord(self.focus));
-        for h in local_set(&self.planet, self.focus, LOCAL_DEPTH) {
-            let (verts, indices) =
-                planet_mesh::build_tile(&self.planet, self.planet.coord(h), &frame);
-            let handle = renderer.upload_mesh(&verts, MeshIndices::U32(&indices));
-            self.local.insert(h, handle);
+    fn forward(&self) -> Vec3 {
+        let (sy, cy) = self.yaw.sin_cos();
+        let (sp, cp) = self.pitch.sin_cos();
+        Vec3::new(sy * cp, sp, cy * cp)
+    }
+
+    fn camera(&self) -> Camera {
+        Camera {
+            position: self.pos,
+            target: self.pos + self.forward(),
+            up: Vec3::Y,
+            fov_y_radians: 60.0_f32.to_radians(),
+            near: 1.0,
+            far: 300_000.0,
         }
     }
 
-    /// Equirectangular god-map on the right: every hex a dot, the resident
-    /// patch lit and index-labelled, the focus in cyan — so you watch hexes
-    /// load and unload across the planet as you fly.
-    fn draw_minimap(&self, renderer: &mut Renderer) {
-        let Some(white) = self.white else {
+    /// Fly camera + the kept sim's tick (undrawn).
+    fn step(&mut self, dt: f32, input: &InputState) {
+        // Look: hold right mouse, drag to pitch/yaw.
+        if input.mouse_right {
+            if self.dragging {
+                let d = input.mouse_position - self.prev_mouse;
+                self.yaw -= d.x * LOOK_SENS;
+                self.pitch = (self.pitch - d.y * LOOK_SENS).clamp(-1.5, 1.5);
+            }
+            self.dragging = true;
+        } else {
+            self.dragging = false;
+        }
+        self.prev_mouse = input.mouse_position;
+
+        // Move: 6-DOF fly.
+        let fwd = self.forward();
+        let (sy, cy) = self.yaw.sin_cos();
+        let right = Vec3::new(-cy, 0.0, sy);
+        let speed = MOVE_SPEED * dt;
+        let mut v = Vec3::ZERO;
+        if input.key_down(Key::W) {
+            v += fwd;
+        }
+        if input.key_down(Key::S) {
+            v -= fwd;
+        }
+        if input.key_down(Key::D) {
+            v += right;
+        }
+        if input.key_down(Key::A) {
+            v -= right;
+        }
+        if input.key_down(Key::R) {
+            v += Vec3::Y;
+        }
+        if input.key_down(Key::F) {
+            v -= Vec3::Y;
+        }
+        self.pos += v * speed;
+
+        // The kept water-cycle mechanics tick (undrawn) on the live ring.
+        self.sim_accum += dt;
+        let mut steps = 0;
+        while self.sim_accum >= SIM_DT && steps < 4 {
+            for (idx, tile) in self.tiles.iter_mut().enumerate() {
+                if self.animated[idx] {
+                    tile.stack.tick(SIM_DT);
+                }
+            }
+            self.sim_accum -= SIM_DT;
+            steps += 1;
+        }
+        if self.sim_accum > SIM_DT {
+            self.sim_accum = 0.0;
+        }
+    }
+
+    fn draw_stack(&self, renderer: &mut Renderer) {
+        let Some(epoch_hex) = self.epoch_hex else {
             return;
         };
-        let view = renderer.size();
-        let (pw, ph) = (360.0_f32, 180.0_f32);
-        let px = view.x - pw - 20.0;
-        let py = (view.y - ph) * 0.5;
-
-        renderer.set_layer(100.0);
-        renderer.draw_sprite(
-            white,
-            Vec2::new(px - 6.0, py - 26.0),
-            Vec2::new(pw + 12.0, ph + 46.0),
-            [0.05, 0.06, 0.09, 0.85],
-        );
-        // equator reference line
-        renderer.draw_sprite(
-            white,
-            Vec2::new(px, py + ph * 0.5),
-            Vec2::new(pw, 1.0),
-            [0.30, 0.32, 0.42, 0.8],
-        );
-
-        let fc = self.planet.coord(self.focus);
-        let hemi = if matches!(fc.hemi, Hemisphere::North) {
-            'N'
-        } else {
-            'S'
-        };
-        renderer.draw_text(
-            &format!(
-                "HEX MAP   focus #{}  {}r{}p{}   resident {}",
-                self.focus,
-                hemi,
-                fc.ring,
-                fc.pos,
-                self.local.len()
-            ),
-            Vec2::new(px, py - 22.0),
-            13.0,
-            [0.90, 0.95, 1.0, 1.0],
-        );
-
-        for i in 0..self.planet.total_hexes() {
-            let c = self.planet.coord(i);
-            let lon = self.planet.longitude_center_deg(c).unwrap_or(180.0);
-            let lat = self.planet.latitude_deg(c);
-            let mx = px + (lon / 360.0) * pw;
-            let my = py + (1.0 - (lat + 90.0) / 180.0) * ph;
-            let resident = self.local.contains_key(&i);
-            let (sz, color) = if i == self.focus {
-                (8.0, [0.30, 1.0, 1.0, 1.0])
-            } else if resident {
-                (6.0, [1.0, 0.80, 0.35, 1.0])
-            } else {
-                (3.0, [0.35, 0.38, 0.45, 0.85])
-            };
-            renderer.draw_sprite(
-                white,
-                Vec2::new(mx - sz * 0.5, my - sz * 0.5),
-                Vec2::splat(sz),
-                color,
-            );
-            if resident {
-                renderer.draw_text(
-                    &i.to_string(),
-                    Vec2::new(mx + 5.0, my - 6.0),
-                    10.0,
-                    [1.0, 1.0, 1.0, 0.95],
-                );
+        for tile in &self.tiles {
+            let base = Vec3::new(tile.place.x, 0.0, tile.place.y);
+            // Six exploded epoch planes below 0 — Epoch 1 lowest, Epoch 6 nearest
+            // the bands. Spaced by EPOCH_GAP (independent of the bands' real scale).
+            for (e, &tint) in tile.epoch_colors.iter().enumerate() {
+                let y = -((EPOCHS - e) as f32) * EPOCH_GAP;
+                let model = Mat4::from_translation(base + Vec3::new(0.0, y, 0.0));
+                renderer.draw_mesh(epoch_hex, model, MeshDrawOptions { wireframe: false, tint });
+            }
+            // Nine empty band shells at their real altitudes (0..Y_LAYERS).
+            let model = Mat4::from_translation(base);
+            let shell_tint = [1.0, 1.0, 1.0, BAND_ALPHA];
+            for &shell in &self.band_shells {
+                renderer.draw_mesh(shell, model, MeshDrawOptions { wireframe: false, tint: shell_tint });
             }
         }
     }
 }
 
-impl Scene for PlanetScene {
+impl Scene for World {
     fn enter(&mut self, renderer: &mut Renderer) {
-        self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
-        // Start over a mid-latitude hex (off the poles and seams).
-        self.focus = self.planet.index(HexCoord {
-            hemi: Hemisphere::North,
-            ring: 2,
-            pos: 0,
-        });
-        let dir = Vec3::from_array(self.planet.unit_position(self.planet.coord(self.focus)));
-        self.pitch = dir.y.clamp(-1.0, 1.0).asin();
-        self.yaw = dir.x.atan2(dir.z);
-        self.reconcile(renderer);
+        let live = self.animated.iter().filter(|&&a| a).count();
+        println!(
+            "HexWorld stack viz: {} hexes (R={RINGS}), real scale (1 unit = 1 cluster = 128 ft). \
+             {live} sim hexes tick live (undrawn). Fly: WASD, R/F up/down, RMB look, Esc.",
+            self.tiles.len()
+        );
+        // Settle the kept sim so its (undrawn) state is real.
+        for _ in 0..SETTLE_TICKS {
+            for tile in &mut self.tiles {
+                tile.stack.tick(SIM_DT);
+            }
+        }
+        // Shared meshes: one flat near-white hex for the epoch planes, and the
+        // nine band shells at their real altitudes.
+        let (fv, fi) = build_sheet(0.0, |_, _| 0.0, |_, _| layers::M_FOAM, |_, _| true);
+        self.epoch_hex = Some(renderer.upload_mesh(&fv, MeshIndices::U32(&fi)));
+        self.band_shells = (0..BANDS)
+            .map(|b| {
+                let y0 = BAND_BOUNDS[b] as f32 * VEXAG;
+                let y1 = BAND_BOUNDS[b + 1] as f32 * VEXAG;
+                let (v, i) = band_shell(y0, y1, BAND_MAT[b]);
+                renderer.upload_mesh(&v, MeshIndices::U32(&i))
+            })
+            .collect();
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _r: &Renderer) -> Transition {
         if input.key_down(Key::Escape) {
             return Transition::Quit;
         }
-        let sr = input.action_active(&self.bindings, Action::StrafeRight);
-        let sl = input.action_active(&self.bindings, Action::StrafeLeft);
-        let mf = input.action_active(&self.bindings, Action::MoveForward);
-        let mb = input.action_active(&self.bindings, Action::MoveBackward);
-        let mu = input.action_active(&self.bindings, Action::MoveUp);
-        let md = input.action_active(&self.bindings, Action::MoveDown);
-        let f = |b: bool| if b { 1.0 } else { 0.0 };
-
-        let dt = dt.as_secs_f32();
-        let rot = 1.0 * dt;
-        self.yaw += (f(sr) - f(sl)) * rot;
-        self.pitch = (self.pitch + (f(mf) - f(mb)) * rot).clamp(-1.4, 1.4);
-        let zoom = 1.0 + (f(md) - f(mu)) * 1.5 * dt;
-        self.distance = (self.distance * zoom).clamp(PLANET_RADIUS * 1.4, PLANET_RADIUS * 4.0);
+        self.step(dt.as_secs_f32(), input);
         Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let mut camera = Camera::orbit(Vec3::ZERO, self.distance, self.yaw, self.pitch);
-
-        // The hex under the camera is the focus; reproject the patch if it moved.
-        let focus = nearest_hex(&self.planet, camera.position.normalize());
-        if focus != self.focus {
-            self.focus = focus;
-            self.reconcile(renderer);
-        }
-
-        // Flatten onto — and aim the camera at — the focus hex's plane.
-        let frame = planet_mesh::focus_frame(&self.planet, self.planet.coord(self.focus));
-        camera.target = frame.center;
+        let camera = self.camera();
         renderer.set_camera(&camera);
-        renderer.set_scene(SceneLighting::default());
+        renderer.set_scene(SceneLighting {
+            sun_dir: Vec3::new(0.4, 0.9, 0.35).normalize(),
+            ..SceneLighting::default()
+        });
         renderer.draw_sky();
-
-        for (&h, &handle) in &self.local {
-            let options = MeshDrawOptions {
-                wireframe: false,
-                tint: tile_tint(&self.planet, self.planet.coord(h)),
-            };
-            renderer.draw_mesh(handle, Mat4::IDENTITY, options);
-        }
-
-        // Hex outlines: cyan for the focus, amber for the rest.
-        for &h in self.local.keys() {
-            let corners = planet_mesh::hex_corners(&self.planet, self.planet.coord(h), &frame);
-            let n = corners.len();
-            let segments: Vec<(Vec3, Vec3)> =
-                (0..n).map(|k| (corners[k], corners[(k + 1) % n])).collect();
-            let color = if h == self.focus {
-                [0.3, 1.0, 1.0, 1.0]
-            } else {
-                [1.0, 0.85, 0.4, 1.0]
-            };
-            renderer.draw_lines(&segments, color);
-        }
-
-        // Stamp each tile's array index on it (project its anchor to screen).
-        let size = renderer.size();
-        let view_proj = camera.view_projection(size.x / size.y);
-        renderer.set_layer(50.0);
-        for &h in self.local.keys() {
-            let anchor = planet_mesh::tile_center(&self.planet, self.planet.coord(h), &frame);
-            if let Some(s) = project_to_screen(view_proj, anchor, size) {
-                let color = if h == self.focus {
-                    [0.4, 1.0, 1.0, 1.0]
-                } else {
-                    [1.0, 1.0, 1.0, 0.95]
-                };
-                renderer.draw_text(&h.to_string(), s, 16.0, color);
-            }
-        }
-
-        self.draw_minimap(renderer);
+        self.draw_stack(renderer);
     }
-}
-
-/// Project a world point to screen pixels; `None` if behind the camera.
-fn project_to_screen(view_proj: Mat4, world: Vec3, size: Vec2) -> Option<Vec2> {
-    let clip = view_proj * world.extend(1.0);
-    if clip.w <= 0.001 {
-        return None;
-    }
-    let nx = clip.x / clip.w;
-    let ny = clip.y / clip.w;
-    Some(Vec2::new(
-        (nx * 0.5 + 0.5) * size.x,
-        (1.0 - (ny * 0.5 + 0.5)) * size.y,
-    ))
-}
-
-/// BFS the topology out to `depth` rings from `focus`.
-fn local_set(planet: &Planet, focus: u32, depth: u32) -> HashSet<u32> {
-    let mut set = HashSet::from([focus]);
-    let mut frontier = vec![focus];
-    for _ in 0..depth {
-        let mut next = Vec::new();
-        for h in frontier {
-            for n in planet.neighbors(h) {
-                if set.insert(n) {
-                    next.push(n);
-                }
-            }
-        }
-        frontier = next;
-    }
-    set
-}
-
-/// Hex whose center direction is closest to `dir` (the sub-camera point).
-fn nearest_hex(planet: &Planet, dir: Vec3) -> u32 {
-    let mut best = 0;
-    let mut best_dot = f32::MIN;
-    for i in 0..planet.total_hexes() {
-        let d = Vec3::from_array(planet.unit_position(planet.coord(i))).dot(dir);
-        if d > best_dot {
-            best_dot = d;
-            best = i;
-        }
-    }
-    best
-}
-
-/// Per-hex colour: hemisphere sets the hue, ring brightens toward the equator,
-/// and a parity checker keeps adjacent hexes visually distinct.
-fn tile_tint(planet: &Planet, c: HexCoord) -> [f32; 4] {
-    let base = match c.hemi {
-        Hemisphere::North => [0.80, 0.66, 0.45],
-        Hemisphere::South => [0.46, 0.60, 0.80],
-    };
-    let ring_f = 0.55 + 0.45 * (c.ring as f32 / planet.rings() as f32);
-    let checker = if ((c.pos + c.ring) & 1) == 0 { 1.0 } else { 0.82 };
-    let s = ring_f * checker;
-    [base[0] * s, base[1] * s, base[2] * s, 1.0]
 }
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    run(SceneManager::new(Box::new(PlanetScene::new())))?;
+    run(SceneManager::new(Box::new(World::new())))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flat_layout_tessellates_without_overlap() {
+        let map = HexMap::new(RINGS);
+        let places: Vec<Vec2> = (0..map.total()).map(|i| hex_flat_pos(map.coord(i))).collect();
+        for a in 0..places.len() {
+            for b in a + 1..places.len() {
+                let d = (places[a] - places[b]).length();
+                assert!(d > HEX_HALF_W, "hexes {a},{b} overlap (d = {d:.1})");
+            }
+        }
+    }
+
+    #[test]
+    fn each_ring_is_full_and_separated_by_hemisphere() {
+        let map = HexMap::new(RINGS);
+        let (mut north, mut south) = (0u32, 0u32);
+        for i in 0..map.total() {
+            match map.coord(i).hemi {
+                Hemisphere::North => north += 1,
+                Hemisphere::South => south += 1,
+            }
+        }
+        assert_eq!(north, south);
+        assert_eq!(north + south, 2 + 6 * RINGS * (RINGS + 1));
+    }
+
+    #[test]
+    fn epoch_stack_is_six_layers_per_hex() {
+        let w = World::new();
+        for tile in &w.tiles {
+            assert_eq!(tile.epoch_colors.len(), EPOCHS);
+        }
+    }
 }

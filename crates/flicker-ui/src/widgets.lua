@@ -1,8 +1,9 @@
 -- widgets.lua: reusable immediate-mode UI widgets for flicker Lua screens.
 --
--- Loaded by the host as the `Widgets` global (ScriptHost::set_lua_module). Each
--- widget is split into an `*_update` (hit-test + interaction, called from the
--- script's `update`) and an `*_draw` (emit commands, called from `draw`).
+-- Embedded in `flicker-ui` (`include_str!`) and loaded by a host as the
+-- `Widgets` global via `flicker_ui::load_widgets` (ScriptHost::set_lua_module).
+-- Each widget is split into an `*_update` (hit-test + interaction, called from
+-- the script's `update`) and an `*_draw` (emit commands, called from `draw`).
 --
 -- Values are NOT stored here: they live in the engine `Model` (two-way) — the
 -- update returns the new value, the host applies it, and next frame `Model`
@@ -136,6 +137,19 @@ function W.dropdown_draw(cmds, state, id, r, options, selected, s)
       label(cmds, r.x + 8, iy + 3, options[i], s.label_size, s.label, "left", 1)
     end
   end
+end
+
+-- BUTTON -------------------------------------------------------------------
+-- A momentary push button: returns `true` on the frame it is clicked. Stateless
+-- (no `state` table needed) — the caller treats the return as a one-shot action.
+function W.button_update(r, mx, my, clicked)
+  return clicked and point_in(mx, my, r.x, r.y, r.w, r.h)
+end
+
+function W.button_draw(cmds, r, text, s, hot)
+  local fill = hot and s.hot or s.cell
+  rect(cmds, r.x, r.y, r.w, r.h, fill)
+  label(cmds, r.x + r.w * 0.5, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "center")
 end
 
 return W

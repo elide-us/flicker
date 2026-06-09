@@ -1,0 +1,63 @@
+{
+  "_comment": "Declarative UI layout for the hex-world view/sim controls. The host parses this and exposes it to Lua as the `UI` global (flicker-script set_global_json); scripts/hex_ui.lua reads named elements and emits draw commands. Colors are RGBA 0..1; positions/sizes are HUD pixels (origin top-left). Edit and relaunch to restyle. Checkbox keys + the slider/dropdown/button values flow back through the engine Model.",
+
+  "hud": {
+    "capture": { "x": 0, "y": 0, "w": 300, "h": 360 },
+
+    "stats": {
+      "x": 16,
+      "title": { "y": 14, "size": 20, "color": [1.0, 1.0, 1.0, 1.0] },
+      "cam":   { "y": 40, "size": 15, "color": [0.72, 0.84, 0.96, 1.0] },
+      "sel":   { "y": 60, "size": 15, "color": [0.96, 0.86, 0.60, 1.0] },
+      "sim":   { "y": 80, "size": 15, "color": [0.62, 0.95, 0.72, 1.0] },
+      "view":  { "y": 100, "size": 15, "color": [0.78, 0.80, 0.98, 1.0] }
+    },
+
+    "checkboxes": {
+      "origin": [16, 152],
+      "row_h": 26,
+      "box": 18,
+      "header": { "text": "VIEW / SIM — click to toggle", "size": 15, "color": [0.85, 0.85, 0.7, 1.0] },
+      "border_color": [1.0, 1.0, 1.0, 1.0],
+      "fill_on": [0.30, 0.62, 0.95, 1.0],
+      "fill_off": [0.15, 0.15, 0.18, 1.0],
+      "label_size": 15,
+      "label_color": [0.9, 0.9, 0.9, 1.0],
+      "items": [
+        { "key": "sim_paused", "label": "Pause simulation" },
+        { "key": "graticule", "label": "Graticule overlay" },
+        { "key": "billboards", "label": "Index billboards" }
+      ]
+    },
+
+    "controls": {
+      "label_x": 16,
+      "widget_x": 130,
+      "origin_y": 250,
+      "row_h": 28,
+      "label_size": 14,
+      "label_color": [0.78, 0.81, 0.86, 1.0],
+      "speed": { "label": "Sim speed", "min": 0.0, "max": 4.0, "w": 150, "h": 12 },
+      "reset": { "label": "Reset camera", "w": 150, "h": 24 },
+      "view": { "label": "View", "options": ["World", "Local"], "w": 120, "h": 20 },
+      "slider_style": {
+        "track": [0.10, 0.11, 0.13, 0.97],
+        "fill": [0.34, 0.55, 0.86, 1.0],
+        "handle": [0.62, 0.80, 1.0, 0.95],
+        "handle_w": 8
+      },
+      "dropdown_style": {
+        "cell": [0.10, 0.11, 0.13, 0.97],
+        "hot": [0.20, 0.30, 0.44, 0.98],
+        "label": [0.9, 0.9, 0.9, 1.0],
+        "label_size": 13
+      },
+      "button_style": {
+        "cell": [0.13, 0.16, 0.23, 0.97],
+        "hot": [0.22, 0.30, 0.44, 0.98],
+        "label": [0.86, 0.92, 1.0, 1.0],
+        "label_size": 14
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+[package]
+name = "flicker-worldgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The world-generation pipeline (system spec §13 "world-gen"): the offline
+# epoch kernels that produce the foundational composition maps the runtime
+# material model (flicker-worldstate, tier ②) then runs on. Depends on the
+# vocabulary (flicker-materials) and the ledger types (flicker-worldstate);
+# the runtime links none of it. This slice is **Epoch 1** only — initial
+# per-hex element distribution; epochs 2-6 are deferred.
+[dependencies]
+flicker-materials.workspace = true
+flicker-worldstate.workspace = true
+glam.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

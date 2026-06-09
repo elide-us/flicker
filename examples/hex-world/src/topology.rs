@@ -1,55 +1,36 @@
-//! Hex-planet topology — the "virtual sphere" addressing and adjacency model.
+//! HexWorld — the **flat neighbour graph**, with formal edge-neighbour finding.
 //!
-//! This is the experiment's real payload. Everything visual is a viewer for it.
+//! Each hemisphere is a **hexagon-of-hexagons** of radius `R` (ring `k` holds
+//! `6k` hexes, total `1 + 3R(R+1)` per hemisphere). That is precisely the shape
+//! whose adjacency **cube coordinates** describe exactly: every hex maps to a
+//! cube `(x, y, z)` with `x + y + z = 0`, its ring is the cube distance from the
+//! pole, and its six edge-neighbours are the six cube-adjacent cells. Intra-
+//! hemisphere adjacency is therefore exact and **symmetric by construction** at
+//! any size — no proportional-mapping approximations.
 //!
-//! # The model
+//! The two hemispheres are joined at the equator (ring `R`) by a **symmetric
+//! fold**: north `(R, p)` pairs with south `(R, p)` and `(R, p−1)` (the half-hex
+//! interlock), defined as an undirected edge set so both directions agree.
 //!
-//! A planet is a polar-symmetric stack of latitude rings. `R` (`rings`) is the
-//! number of rings from a pole *to the equator*; it is the single planet-size
-//! knob. The two hemispheres are mirror images joined directly at the equator —
-//! there is **no shared equator band** (the two outermost rings are distinct and
-//! touch across the fold). That choice is what makes the minimal planet 14 hexes,
-//! not 8:
+//! Result: [`HexMap::neighbours`] returns 5–6 distinct neighbours per hex (6 in
+//! the interior, 6 on equator edges, 5 at the six equator corners — the
+//! intentional defect of folding a sphere flat), with **zero asymmetry, zero
+//! duplicates, zero self-references** for any `R`. That is the property a
+//! halo-exchange simulation needs: if A pulls from B, B pushes to A.
 //!
-//! ```text
-//! total = 2 + 6·R·(R+1)
-//!   R=1 -> 14   (minimum)
-//!   R=2 -> 38
-//!   R=3 -> 74   (test floor, 30° per latitude ring)
-//!   R=4 -> 122
-//! ```
+//! ## Scale (the practical max)
 //!
-//! Each ring subdivides latitude; each ring further out subdivides longitude:
-//! - ring 0 is a single cap hex (a pole),
-//! - ring `k` (1..=R) holds `6k` hexes, each spanning the longitude sector
-//!   `[p/(6k), (p+1)/(6k))` of the full circle.
-//!
-//! Latitude is uniform at `90°/R` per ring (pole = ±90°, equator = 0°).
-//!
-//! # Adjacency
-//!
-//! This is a latitude/longitude grid, not a strict hexagonal lattice — "weirdly
-//! shaped, and it doesn't have to be perfect." Neighbours are:
-//! - the two in-ring cells (`pos ± 1`, wrapping the ring),
-//! - every cell in the next ring toward the pole whose longitude sector overlaps,
-//! - every cell in the next ring toward the equator whose longitude sector
-//!   overlaps — and at the equator (`ring == R`) that "next ring" is the *other
-//!   hemisphere's* ring R (the fold).
-//!
-//! Because the two equator rings have equal counts and aligned sectors, the fold
-//! is identity in longitude: `North(R, p)` ↔ `South(R, p)`. There is no chirality
-//! flip to get wrong here — but [`Planet::neighbors`] is still validated by the
-//! adjacency-symmetry test, which would catch one if the model grew it.
-
-// The adjacency API (`neighbors`, `index`, `opposite`, …) is consumed by the
-// stage-3 streaming cache and is fully exercised by the tests below; the
-// stage-2 binary doesn't call all of it yet, so silence dead-code until then.
-#![allow(dead_code)]
+//! `total(R) = 2 + 6R(R+1)`. The addressing is the ceiling: a `u32` index tops
+//! out near `R ≈ 26,700` (~4.3 billion hexes) — at the spec's ~49.6 mi/hex
+//! (2048 clusters × 128 ft) that great-circle of ~110k hexes is a star-sized
+//! world (~220× Earth's circumference); an *Earth-sized* planet is only
+//! ~`R = 125` (~95k hexes). `u64` is effectively unbounded. This implementation also precomputes a cube→index map
+//! (O(N) memory), which caps the *in-RAM* graph at ~tens of millions of hexes
+//! (a few GB) — ample for any test world. Planet scale would drop the map for
+//! analytic cube↔pos arithmetic (O(1) memory, O(1) per neighbour); past that the
+//! real wall is **sim compute per cycle** (the sweep is O(N)), not addressing.
 
 use std::collections::HashMap;
-
-/// Smallest legal planet: R=1, 14 hexes.
-pub const MIN_RINGS: u32 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Hemisphere {
@@ -60,15 +41,12 @@ pub enum Hemisphere {
 impl Hemisphere {
     pub fn opposite(self) -> Self {
         match self {
-            Hemisphere::North => Hemisphere::South,
-            Hemisphere::South => Hemisphere::North,
+            Self::North => Self::South,
+            Self::South => Self::North,
         }
     }
 }
 
-/// A hex addressed by hemisphere / ring / position-in-ring.
-///
-/// `ring == 0` is the hemisphere's pole and always has `pos == 0`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct HexCoord {
     pub hemi: Hemisphere,
@@ -76,45 +54,124 @@ pub struct HexCoord {
     pub pos: u32,
 }
 
-/// A whole planet: the ring count plus the canonical index↔coord mapping.
-///
-/// Array order runs pole-to-pole with the fold in the middle:
-/// `North pole, North ring 1..=R, South ring R..=1, South pole`. So the two
-/// equator rings are adjacent in the array and the south pole is the last index
-/// — matching the spec's "south pole is the last element."
-pub struct Planet {
+/// Cube coordinate of a hex within its hemisphere (`x + y + z == 0`).
+type Cube = (i32, i32, i32);
+
+/// The six cube neighbour directions, in cyclic order (Red Blob convention).
+const CUBE_DIRS: [Cube; 6] = [
+    (1, -1, 0),
+    (1, 0, -1),
+    (0, 1, -1),
+    (-1, 1, 0),
+    (-1, 0, 1),
+    (0, -1, 1),
+];
+
+#[inline]
+fn cube_add(a: Cube, b: Cube) -> Cube {
+    (a.0 + b.0, a.1 + b.1, a.2 + b.2)
+}
+
+/// Cube distance from the pole = the hex's ring.
+#[inline]
+fn cube_ring(c: Cube) -> i32 {
+    (c.0.abs() + c.1.abs() + c.2.abs()) / 2
+}
+
+/// Spiral `(ring, pos)` → cube: walk the hexagonal ring at radius `ring`,
+/// starting one corner out along direction 4 and stepping around the six sides.
+/// This is the forward map; [`HexMap`] inverts it with a precomputed table.
+fn spiral_to_cube(ring: u32, pos: u32) -> Cube {
+    if ring == 0 {
+        return (0, 0, 0);
+    }
+    let k = ring as i32;
+    let mut c = (CUBE_DIRS[4].0 * k, CUBE_DIRS[4].1 * k, CUBE_DIRS[4].2 * k);
+    let mut p = 0;
+    for dir in CUBE_DIRS {
+        for _ in 0..ring {
+            if p == pos {
+                return c;
+            }
+            c = cube_add(c, dir);
+            p += 1;
+        }
+    }
+    c // unreachable for pos < 6*ring
+}
+
+/// The world container: a flat array of hexes with exact cube-based adjacency.
+pub struct HexMap {
     rings: u32,
     coords: Vec<HexCoord>,
     index_of: HashMap<HexCoord, u32>,
+    cubes: Vec<Cube>,
+    cube_index: HashMap<(Hemisphere, Cube), u32>,
 }
 
-impl Planet {
-    /// Build a planet with `rings` (>= [`MIN_RINGS`]) rings per hemisphere.
+impl HexMap {
+    /// Build a world with `rings` rings per hemisphere. Array order: north pole,
+    /// north rings 1..=R, south rings R..=1 (the mirror), south pole (last).
     pub fn new(rings: u32) -> Self {
-        assert!(rings >= MIN_RINGS, "a planet needs at least {MIN_RINGS} ring");
-        let coords = build_coords(rings);
-        let index_of = coords
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| (c, i as u32))
-            .collect();
+        assert!(rings >= 1);
+        let mut coords = vec![HexCoord {
+            hemi: Hemisphere::North,
+            ring: 0,
+            pos: 0,
+        }];
+        for k in 1..=rings {
+            for p in 0..Self::ring_len(k) {
+                coords.push(HexCoord {
+                    hemi: Hemisphere::North,
+                    ring: k,
+                    pos: p,
+                });
+            }
+        }
+        for k in (1..=rings).rev() {
+            for p in 0..Self::ring_len(k) {
+                coords.push(HexCoord {
+                    hemi: Hemisphere::South,
+                    ring: k,
+                    pos: p,
+                });
+            }
+        }
+        coords.push(HexCoord {
+            hemi: Hemisphere::South,
+            ring: 0,
+            pos: 0,
+        });
+
+        let index_of = coords.iter().enumerate().map(|(i, &c)| (c, i as u32)).collect();
+        let mut cubes = Vec::with_capacity(coords.len());
+        let mut cube_index = HashMap::with_capacity(coords.len());
+        for (i, c) in coords.iter().enumerate() {
+            let cube = spiral_to_cube(c.ring, c.pos);
+            cubes.push(cube);
+            cube_index.insert((c.hemi, cube), i as u32);
+        }
         Self {
             rings,
             coords,
             index_of,
+            cubes,
+            cube_index,
         }
     }
 
-    pub fn rings(&self) -> u32 {
-        self.rings
-    }
-
-    /// `2 + 6·R·(R+1)`.
-    pub fn total_hexes(&self) -> u32 {
+    pub fn total(&self) -> u32 {
         self.coords.len() as u32
     }
-
-    /// Hexes in `ring`: 1 at the pole, `6·ring` otherwise.
+    pub fn coord(&self, index: u32) -> HexCoord {
+        self.coords[index as usize]
+    }
+    pub fn index(&self, coord: HexCoord) -> u32 {
+        self.index_of[&coord]
+    }
+    pub fn cube(&self, index: u32) -> Cube {
+        self.cubes[index as usize]
+    }
     pub fn ring_len(ring: u32) -> u32 {
         if ring == 0 {
             1
@@ -123,402 +180,143 @@ impl Planet {
         }
     }
 
-    pub fn coord(&self, index: u32) -> HexCoord {
-        self.coords[index as usize]
-    }
-
-    pub fn index(&self, coord: HexCoord) -> u32 {
-        self.index_of[&coord]
-    }
-
-    /// Array indices of every hex adjacent to `index`.
-    pub fn neighbors(&self, index: u32) -> Vec<u32> {
-        self.neighbor_coords(self.coord(index))
-            .into_iter()
-            .map(|c| self.index(c))
-            .collect()
-    }
-
-    /// Adjacency in coordinate space (see module docs for the rules).
-    pub fn neighbor_coords(&self, c: HexCoord) -> Vec<HexCoord> {
-        let r = self.rings;
+    /// The hex's **edge-neighbours** — 5 or 6 distinct indices, symmetric for
+    /// every hex at any size. Intra-hemisphere neighbours come from cube
+    /// adjacency (this handles the pole and every interior ring uniformly);
+    /// equator hexes additionally fold to the opposite hemisphere.
+    pub fn neighbours(&self, index: u32) -> Vec<u32> {
+        let c = self.coord(index);
+        let cube = self.cube(index);
+        let r = self.rings as i32;
         let mut out = Vec::with_capacity(6);
 
-        // Pole: bordered by the whole of ring 1 in the same hemisphere.
-        if c.ring == 0 {
-            for p in 0..Self::ring_len(1) {
-                out.push(HexCoord {
-                    hemi: c.hemi,
-                    ring: 1,
-                    pos: p,
-                });
-            }
-            return out;
-        }
-
-        let n = Self::ring_len(c.ring);
-        // In-ring (the ring is a cycle, so east eventually wraps home).
-        out.push(HexCoord {
-            hemi: c.hemi,
-            ring: c.ring,
-            pos: (c.pos + 1) % n,
-        });
-        out.push(HexCoord {
-            hemi: c.hemi,
-            ring: c.ring,
-            pos: (c.pos + n - 1) % n,
-        });
-
-        // Toward the pole.
-        if c.ring - 1 == 0 {
-            out.push(HexCoord {
-                hemi: c.hemi,
-                ring: 0,
-                pos: 0,
-            });
-        } else {
-            let k2 = c.ring - 1;
-            for q in 0..Self::ring_len(k2) {
-                if sectors_overlap(c.ring, c.pos, k2, q) {
-                    out.push(HexCoord {
-                        hemi: c.hemi,
-                        ring: k2,
-                        pos: q,
-                    });
+        // Same-hemisphere neighbours: cube-adjacent cells still inside the
+        // hexagon. Off-perimeter steps (ring R+1) are dropped — the equator
+        // fold below replaces them.
+        for dir in CUBE_DIRS {
+            let nc = cube_add(cube, dir);
+            if cube_ring(nc) <= r {
+                if let Some(&j) = self.cube_index.get(&(c.hemi, nc)) {
+                    out.push(j);
                 }
             }
         }
 
-        // Toward the equator — or across the fold at the equator itself.
-        if c.ring < r {
-            let k2 = c.ring + 1;
-            for q in 0..Self::ring_len(k2) {
-                if sectors_overlap(c.ring, c.pos, k2, q) {
-                    out.push(HexCoord {
-                        hemi: c.hemi,
-                        ring: k2,
-                        pos: q,
-                    });
-                }
-            }
-        } else {
-            // ring == R: glue to the other hemisphere's equator ring.
-            for q in 0..n {
-                if sectors_overlap(c.ring, c.pos, r, q) {
-                    out.push(HexCoord {
-                        hemi: c.hemi.opposite(),
-                        ring: r,
-                        pos: q,
-                    });
-                }
-            }
+        // Equator fold (undirected, so it is symmetric): north (R,p) ↔ south
+        // (R,p) and (R,p−1); the mirror for south.
+        if c.ring == self.rings {
+            let n = Self::ring_len(self.rings);
+            let (a, b) = match c.hemi {
+                Hemisphere::North => (c.pos % n, (c.pos + n - 1) % n),
+                Hemisphere::South => (c.pos % n, (c.pos + 1) % n),
+            };
+            let o = c.hemi.opposite();
+            out.push(self.index(HexCoord { hemi: o, ring: self.rings, pos: a }));
+            out.push(self.index(HexCoord { hemi: o, ring: self.rings, pos: b }));
         }
-
         out
     }
 
-    /// Latitude of a ring in degrees: +90° at a pole down toward 0° at the
-    /// equator. Spacing is `90°/(R+0.5)`, **not** `90°/R`: that lands the two
-    /// equator rings at ±half-a-step so they *straddle* the equator (meeting at
-    /// lat 0) instead of both sitting on lat 0 and drawing over each other.
-    pub fn latitude_deg(&self, c: HexCoord) -> f32 {
+    /// **Read-only** celestial orientation: the hex's theoretical unit point on a
+    /// sphere. Stubbed even-ish distribution (naive ring-radius → lat/lon). The
+    /// *only* place the sphere appears, and only the celestial sim reads it.
+    pub fn celestial_dir(&self, index: u32) -> [f32; 3] {
+        let c = self.coord(index);
         let mag = 90.0 - (c.ring as f32) * (90.0 / (self.rings as f32 + 0.5));
-        match c.hemi {
+        let lat = match c.hemi {
             Hemisphere::North => mag,
             Hemisphere::South => -mag,
         }
-    }
-
-    /// Longitude of a hex's center in degrees `[0, 360)`. `None` for the poles
-    /// (a cap has no single longitude).
-    ///
-    /// The southern hemisphere is rotated half an equator-cell so its teeth
-    /// **interlock** with the north across the fold instead of meeting
-    /// point-to-point (which left a zigzag seam). The offset is constant per
-    /// hemisphere, so it changes nothing about the south's internal meshing —
-    /// only the equator junction, where it lands exactly half a cell.
-    pub fn longitude_center_deg(&self, c: HexCoord) -> Option<f32> {
-        if c.ring == 0 {
-            None
+        .to_radians();
+        let lon = if c.ring == 0 {
+            0.0
         } else {
-            let n = Self::ring_len(c.ring) as f32;
-            let base = ((c.pos as f32) + 0.5) / n * 360.0;
-            // Equator cell = 360/(6R); half = 30/R degrees.
-            let offset = match c.hemi {
-                Hemisphere::North => 0.0,
-                Hemisphere::South => 30.0 / self.rings as f32,
-            };
-            Some((base + offset).rem_euclid(360.0))
-        }
-    }
-
-    /// Hex center as a unit vector on the virtual sphere (Y up, north pole at
-    /// +Y). This is the "fake the curve out of a flat data set" placement hook
-    /// the god-view will use; the data stays flat, only the angle is known.
-    pub fn unit_position(&self, c: HexCoord) -> [f32; 3] {
-        let lat = self.latitude_deg(c).to_radians();
-        let lon = self.longitude_center_deg(c).unwrap_or(0.0).to_radians();
+            ((c.pos as f32 + 0.5) / Self::ring_len(c.ring) as f32 * 360.0).to_radians()
+        };
         let (clat, slat) = (lat.cos(), lat.sin());
         [clat * lon.cos(), slat, clat * lon.sin()]
     }
 }
 
-/// Do the longitude sectors of `(k1,p1)` and `(k2,p2)` share interior (an edge,
-/// not just a corner)? Pure integer test — no float boundary ambiguity.
-///
-/// Sector `(k,p) = [p/(6k), (p+1)/(6k))`. The common factor 6 cancels, leaving:
-/// overlap ⇔ `p1·k2 < (p2+1)·k1` AND `p2·k1 < (p1+1)·k2`.
-fn sectors_overlap(k1: u32, p1: u32, k2: u32, p2: u32) -> bool {
-    let (k1, p1, k2, p2) = (k1 as u64, p1 as u64, k2 as u64, p2 as u64);
-    p1 * k2 < (p2 + 1) * k1 && p2 * k1 < (p1 + 1) * k2
-}
-
-/// Canonical array order: N pole, N ring 1..=R, S ring R..=1, S pole.
-fn build_coords(rings: u32) -> Vec<HexCoord> {
-    let mut v = Vec::new();
-    v.push(HexCoord {
-        hemi: Hemisphere::North,
-        ring: 0,
-        pos: 0,
-    });
-    for k in 1..=rings {
-        for p in 0..Planet::ring_len(k) {
-            v.push(HexCoord {
-                hemi: Hemisphere::North,
-                ring: k,
-                pos: p,
-            });
-        }
-    }
-    for k in (1..=rings).rev() {
-        for p in 0..Planet::ring_len(k) {
-            v.push(HexCoord {
-                hemi: Hemisphere::South,
-                ring: k,
-                pos: p,
-            });
-        }
-    }
-    v.push(HexCoord {
-        hemi: Hemisphere::South,
-        ring: 0,
-        pos: 0,
-    });
-    v
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-
-    fn expected_total(r: u32) -> u32 {
-        2 + 6 * r * (r + 1)
-    }
 
     #[test]
-    fn total_matches_closed_form_and_your_numbers() {
-        // The numbers you called out by hand must fall straight out of the model.
-        assert_eq!(Planet::new(1).total_hexes(), 14, "minimum planet");
-        assert_eq!(Planet::new(3).total_hexes(), 74, "test floor");
-        for r in 1..=8 {
-            assert_eq!(Planet::new(r).total_hexes(), expected_total(r), "R={r}");
-        }
-    }
-
-    #[test]
-    fn index_coord_is_a_bijection() {
+    fn total_matches_closed_form() {
         for r in 1..=6 {
-            let p = Planet::new(r);
-            let mut seen = HashSet::new();
-            for i in 0..p.total_hexes() {
-                let c = p.coord(i);
-                assert_eq!(p.index(c), i, "round-trip i={i} R={r}");
-                assert!(seen.insert(c), "duplicate coord at i={i} R={r}");
-            }
+            assert_eq!(HexMap::new(r).total(), 2 + 6 * r * (r + 1));
         }
     }
 
     #[test]
-    fn poles_are_first_and_last_and_cap_the_array() {
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            assert_eq!(
-                p.coord(0),
-                HexCoord {
-                    hemi: Hemisphere::North,
-                    ring: 0,
-                    pos: 0
-                }
-            );
-            assert_eq!(
-                p.coord(p.total_hexes() - 1),
-                HexCoord {
-                    hemi: Hemisphere::South,
-                    ring: 0,
-                    pos: 0
-                }
-            );
+    fn index_coord_and_cube_bijections() {
+        let m = HexMap::new(6);
+        for i in 0..m.total() {
+            assert_eq!(m.index(m.coord(i)), i);
+            // cube round-trips back to the same index within its hemisphere.
+            assert_eq!(m.cube_index[&(m.coord(i).hemi, m.cube(i))], i);
         }
     }
 
+    /// The load-bearing reliability property, across a wide range of sizes:
+    /// every adjacency is mutual, with no duplicate or self references.
     #[test]
-    fn ring_lengths_are_six_k() {
-        let p = Planet::new(4);
-        for i in 0..p.total_hexes() {
-            let c = p.coord(i);
-            let expect = if c.ring == 0 { 1 } else { 6 * c.ring };
-            // pos must be in range for its ring
-            assert!(c.pos < expect, "pos {} out of range for ring {}", c.pos, c.ring);
-        }
-    }
-
-    #[test]
-    fn adjacency_is_symmetric() {
-        // THE fold guard: if any seam (equator fold included) were wired one-way,
-        // some j would list i without i listing j. Holds for every planet size.
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            for i in 0..p.total_hexes() {
-                for j in p.neighbors(i) {
-                    assert!(
-                        p.neighbors(j).contains(&i),
-                        "asymmetry: {i} -> {j} but not back (R={r}, {:?} -> {:?})",
-                        p.coord(i),
-                        p.coord(j),
-                    );
+    fn neighbours_are_symmetric_clean_at_every_size() {
+        for r in 1..=30 {
+            let m = HexMap::new(r);
+            for i in 0..m.total() {
+                let ns = m.neighbours(i);
+                assert!(ns.len() == 5 || ns.len() == 6, "R={r}: deg {} at {i}", ns.len());
+                for (k, &j) in ns.iter().enumerate() {
+                    assert_ne!(j, i, "R={r}: self-ref at {i}");
+                    assert!(!ns[..k].contains(&j), "R={r}: dup {j} at {i}");
+                    assert!(j < m.total());
+                    assert!(m.neighbours(j).contains(&i), "R={r}: {i}->{j} not mutual");
                 }
             }
         }
     }
 
     #[test]
-    fn neighbors_are_valid_unique_and_not_self() {
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            for i in 0..p.total_hexes() {
-                let ns = p.neighbors(i);
-                let set: HashSet<u32> = ns.iter().copied().collect();
-                assert_eq!(set.len(), ns.len(), "dup neighbor of {i} (R={r})");
-                assert!(!set.contains(&i), "{i} neighbors itself (R={r})");
-                for &j in &ns {
-                    assert!(j < p.total_hexes(), "neighbor {j} out of range (R={r})");
-                }
+    fn interior_hexes_have_six_neighbours() {
+        let m = HexMap::new(5);
+        for i in 0..m.total() {
+            let c = m.coord(i);
+            if c.ring < m.rings {
+                // pole and every non-equator ring: a full six.
+                assert_eq!(m.neighbours(i).len(), 6, "ring {} pos {}", c.ring, c.pos);
             }
         }
     }
 
     #[test]
-    fn pole_borders_all_of_ring_one() {
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            let npole = p.index(HexCoord {
-                hemi: Hemisphere::North,
-                ring: 0,
-                pos: 0,
-            });
-            let ns = p.neighbors(npole);
-            assert_eq!(ns.len(), 6, "pole should touch 6 hexes (R={r})");
-            for &j in &ns {
-                let c = p.coord(j);
-                assert_eq!(c.ring, 1, "pole neighbor not in ring 1 (R={r})");
-                assert_eq!(c.hemi, Hemisphere::North);
-            }
+    fn pole_neighbours_are_ring_one() {
+        let m = HexMap::new(4);
+        let pole = m.index(HexCoord { hemi: Hemisphere::North, ring: 0, pos: 0 });
+        let ns = m.neighbours(pole);
+        assert_eq!(ns.len(), 6);
+        for j in ns {
+            assert_eq!(m.coord(j).ring, 1);
         }
     }
 
     #[test]
-    fn equator_fold_is_identity_in_longitude() {
-        // North(R, p) must border South(R, p) — same longitude across the fold.
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            for pos in 0..Planet::ring_len(r) {
-                let north = p.index(HexCoord {
-                    hemi: Hemisphere::North,
-                    ring: r,
-                    pos,
-                });
-                let south = p.index(HexCoord {
-                    hemi: Hemisphere::South,
-                    ring: r,
-                    pos,
-                });
-                assert!(
-                    p.neighbors(north).contains(&south),
-                    "fold N({r},{pos}) !-> S({r},{pos}) (R={r})",
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn equator_rings_straddle_the_line() {
-        // Regression: the two equator rings must NOT share a latitude. They used
-        // to both land on 0° and render on top of each other (south over north).
-        for r in 1..=6 {
-            let p = Planet::new(r);
-            let north = p.latitude_deg(HexCoord {
-                hemi: Hemisphere::North,
-                ring: r,
-                pos: 0,
-            });
-            let south = p.latitude_deg(HexCoord {
-                hemi: Hemisphere::South,
-                ring: r,
-                pos: 0,
-            });
-            assert!(north > 0.0, "north equator ring above the line (R={r})");
-            assert!(south < 0.0, "south equator ring below the line (R={r})");
-            assert!((north + south).abs() < 1e-4, "rings must mirror (R={r})");
-        }
-    }
-
-    #[test]
-    fn south_leads_north_by_half_an_equator_cell() {
-        // The equator teeth interlock only if the south ring is offset half a
-        // cell from the north at the same `pos`.
+    fn equator_hexes_fold_across_hemispheres() {
         let r = 4;
-        let p = Planet::new(r);
-        let north = p
-            .longitude_center_deg(HexCoord {
-                hemi: Hemisphere::North,
-                ring: r,
-                pos: 0,
-            })
-            .unwrap();
-        let south = p
-            .longitude_center_deg(HexCoord {
-                hemi: Hemisphere::South,
-                ring: r,
-                pos: 0,
-            })
-            .unwrap();
-        let cell = 360.0 / (6.0 * r as f32);
-        let diff = (south - north).rem_euclid(360.0);
-        assert!(
-            (diff - cell / 2.0).abs() < 1e-3,
-            "south should lead north by half a cell ({}°), got {diff}°",
-            cell / 2.0
-        );
+        let m = HexMap::new(r);
+        let eq = m.index(HexCoord { hemi: Hemisphere::North, ring: r, pos: 0 });
+        let crosses = m.neighbours(eq).into_iter().filter(|&j| m.coord(j).hemi == Hemisphere::South).count();
+        assert_eq!(crosses, 2, "equator hex should fold to exactly two south hexes");
     }
 
     #[test]
-    fn an_in_ring_walk_circles_back() {
-        // Flying east along a ring returns to where you started.
-        let start = HexCoord {
-            hemi: Hemisphere::North,
-            ring: 2,
-            pos: 0,
-        };
-        let n = Planet::ring_len(2);
-        let mut cur = start;
-        for _ in 0..n {
-            // east neighbour = same ring, pos+1
-            cur = HexCoord {
-                pos: (cur.pos + 1) % n,
-                ..cur
-            };
+    fn celestial_is_unit() {
+        let m = HexMap::new(4);
+        for i in 0..m.total() {
+            let d = m.celestial_dir(i);
+            let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            assert!((len - 1.0).abs() < 1e-4);
         }
-        assert_eq!(cur, start, "ring did not close");
     }
 }

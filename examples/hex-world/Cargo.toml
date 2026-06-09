@@ -10,6 +10,13 @@ publish = false
 [dependencies]
 flicker = { path = "../../crates/flicker" }
 flicker-primitive.workspace = true
+# The world-material stack: Epoch 1 (worldgen) seeds a composition per hex from
+# the vocabulary (materials) into the ledger types (worldstate); the geology
+# stack renders the dominant element of each.
+flicker-materials.workspace = true
+flicker-worldstate.workspace = true
+flicker-worldgen.workspace = true
 glam.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
