@@ -38,11 +38,12 @@
 //!     the cluster centre, showing that cluster's current LOD.
 
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use flicker::app::{run, Action, Bindings, ControlConfig, InputState, Key};
+use flicker::app::{run, Action, InputState, Key};
+use flicker::app::{AbstractControls, GamepadConfig, GuiRenderer, InputMap, InputSettingsPanel};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
     TextureHandle, Vec2, Vec3,
@@ -59,6 +60,48 @@ use flicker_worker::WorkerPool;
 
 mod display;
 mod ui;
+
+// ───────────────────────────────────────────────────────────────────
+// RendererGui — implements GuiRenderer for the engine's Renderer
+// ───────────────────────────────────────────────────────────────────
+
+struct RendererGui<'a> {
+    renderer: &'a mut Renderer,
+    white: TextureHandle,
+}
+
+impl<'a> RendererGui<'a> {
+    fn new(renderer: &'a mut Renderer, white: TextureHandle) -> Self {
+        Self { renderer, white }
+    }
+}
+
+impl<'a> GuiRenderer for RendererGui<'a> {
+    fn draw_rect(&mut self, pos: Vec2, size: Vec2, color: [f32; 4]) {
+        self.renderer.draw_sprite(self.white, pos, size, color);
+    }
+
+    fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
+        self.renderer.draw_triangle(a, b, c, color);
+    }
+
+    fn draw_text(&mut self, text: &str, pos: Vec2, size: f32, color: [f32; 4]) {
+        self.renderer.draw_text(text, pos, size, color);
+    }
+
+    fn measure_text(&mut self, text: &str, size: f32) -> Vec2 {
+        self.renderer.measure_text(text, size)
+    }
+
+    fn screen_size(&self) -> Vec2 {
+        self.renderer.size()
+    }
+}
+
+/// Input settings changes pushed from the pause scene and consumed by
+/// the game scene. `None` when no pending change exists.
+static INPUT_SETTINGS: Mutex<Option<(InputMap, AbstractControls, GamepadConfig)>> =
+    Mutex::new(None);
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
@@ -123,8 +166,9 @@ struct GameScene {
     /// per-frame delta. `None` when right is not held.
     last_look_cursor: Option<Vec2>,
 
-    bindings: Bindings,
-    config: ControlConfig,
+    bindings: InputMap,
+    controls: AbstractControls,
+    gamepad_config: GamepadConfig,
 
     /// Day/night cycle controls, scrubbed by the three lower-right sliders
     /// (`scripts/hud.lua` → `UI.hud.lighting`) and fed back through the value
@@ -286,8 +330,9 @@ impl Default for GameScene {
             yaw: 0.0,
             pitch: 0.0,
             last_look_cursor: None,
-            bindings: Bindings::wasd(),
-            config: ControlConfig::default(),
+            bindings: InputMap::wasd_and_mouse(),
+            controls: AbstractControls::default(),
+            gamepad_config: GamepadConfig::default(),
             // Mid-morning, a young waxing moon, early summer — an angled warm
             // sun that shows the matte shading well the moment the demo opens.
             time_of_day: 9.5,
@@ -1248,16 +1293,16 @@ impl GameScene {
         // Horizontal intent, flattened to the XZ plane (R/F are inert while
         // walking).
         let mut horizontal = Vec3::ZERO;
-        if input.action_active(&self.bindings, Action::MoveForward) {
+        if input.input_active(&self.bindings, Action::MoveForward) {
             horizontal += self.move_forward();
         }
-        if input.action_active(&self.bindings, Action::MoveBackward) {
+        if input.input_active(&self.bindings, Action::MoveBackward) {
             horizontal -= self.move_forward();
         }
-        if input.action_active(&self.bindings, Action::StrafeRight) {
+        if input.input_active(&self.bindings, Action::StrafeRight) {
             horizontal += self.move_right();
         }
-        if input.action_active(&self.bindings, Action::StrafeLeft) {
+        if input.input_active(&self.bindings, Action::StrafeLeft) {
             horizontal -= self.move_right();
         }
         let step = horizontal.normalize_or_zero() * WALK_SPEED * dt_s;
@@ -1324,10 +1369,10 @@ impl GameScene {
             .with("pos_z", self.position.z)
             .with("yaw", self.yaw)
             .with("pitch", self.pitch)
-            .with("move_speed", self.config.move_speed)
-            .with("look_sens", self.config.look_sensitivity)
-            .with("invert_y", self.config.invert_pitch)
-            .with("invert_x", self.config.invert_yaw)
+            .with("move_speed", self.controls.move_speed)
+            .with("look_sens", self.controls.mouse_sensitivity)
+            .with("invert_y", self.controls.invert_mouse_pitch)
+            .with("invert_x", self.controls.invert_mouse_yaw)
             .with("time_of_day", self.time_of_day)
             .with("moon_phase", self.moon_phase)
             .with("year_month", self.year_month)
@@ -1433,6 +1478,15 @@ impl Scene for GameScene {
             return Transition::None;
         }
 
+        // Pick up input settings changes pushed from the pause scene.
+        if let Ok(mut pending) = INPUT_SETTINGS.lock() {
+            if let Some((map, controls, gp_cfg)) = pending.take() {
+                self.bindings = map;
+                self.controls = controls;
+                self.gamepad_config = gp_cfg;
+            }
+        }
+
         // Escape edge (we track the level ourselves — only the mouse exposes a
         // ready-made press flag) pushes the pause overlay. The scene manager
         // then freezes us, so no gameplay runs until it pops.
@@ -1441,7 +1495,12 @@ impl Scene for GameScene {
         self.escape_prev = esc_down;
         if esc_pressed {
             let theme = self.ui_theme.expect("pause theme built in enter");
-            return Transition::Push(Box::new(PauseScene::new(theme)));
+            return Transition::Push(Box::new(PauseScene::new(
+                theme,
+                &self.bindings,
+                &self.controls,
+                &self.gamepad_config,
+            )));
         }
 
         // Debug toggles now live in the HUD script: feed it the mouse +
@@ -1476,10 +1535,10 @@ impl Scene for GameScene {
                     // control config live (the slider returns the current value
                     // unchanged when not dragging, so this is idempotent).
                     if let Some(v) = toggles.number("move_speed") {
-                        self.config.move_speed = v as f32;
+                        self.controls.move_speed = v as f32;
                     }
                     if let Some(v) = toggles.number("look_sens") {
-                        self.config.look_sensitivity = v as f32;
+                        self.controls.mouse_sensitivity = v as f32;
                     }
 
                     // Day/night cycle sliders (lower-right): scrub the sun arc,
@@ -1597,7 +1656,7 @@ impl Scene for GameScene {
         // Look: right-drag, with invert/sensitivity applied by config.
         if input.mouse_right {
             if let Some(prev) = self.last_look_cursor {
-                let (dyaw, dpitch) = self.config.look_delta(input.mouse_position - prev);
+                let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
                 self.yaw -= dyaw;
                 self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
             }
@@ -1612,26 +1671,26 @@ impl Scene for GameScene {
             self.walk_step(dt_s, input);
         } else {
             let mut motion = Vec3::ZERO;
-            if input.action_active(&self.bindings, Action::MoveForward) {
+            if input.input_active(&self.bindings, Action::MoveForward) {
                 motion += self.move_forward();
             }
-            if input.action_active(&self.bindings, Action::MoveBackward) {
+            if input.input_active(&self.bindings, Action::MoveBackward) {
                 motion -= self.move_forward();
             }
-            if input.action_active(&self.bindings, Action::StrafeRight) {
+            if input.input_active(&self.bindings, Action::StrafeRight) {
                 motion += self.move_right();
             }
-            if input.action_active(&self.bindings, Action::StrafeLeft) {
+            if input.input_active(&self.bindings, Action::StrafeLeft) {
                 motion -= self.move_right();
             }
-            if input.action_active(&self.bindings, Action::MoveUp) {
+            if input.input_active(&self.bindings, Action::MoveUp) {
                 motion += Vec3::Y;
             }
-            if input.action_active(&self.bindings, Action::MoveDown) {
+            if input.input_active(&self.bindings, Action::MoveDown) {
                 motion -= Vec3::Y;
             }
             if motion.length_squared() > 0.0 {
-                self.position += motion.normalize() * self.config.move_speed * dt_s;
+                self.position += motion.normalize() * self.controls.move_speed * dt_s;
             }
         }
 
@@ -2736,22 +2795,35 @@ impl Scene for MenuScene {
 
 /// Pause overlay pushed over the frozen game. Resume (or Escape) pops back to
 /// the game; Quit exits. Reuses the game's already-uploaded [`ui::Theme`].
+///
+/// Tab toggles the input settings panel (key bindings, mouse/gamepad
+/// config, movement). On close, buffered changes are pushed to the
+/// game scene via [`INPUT_SETTINGS`].
 struct PauseScene {
     theme: ui::Theme,
     modal: ModalUi,
     escape_prev: bool,
+    tab_prev: bool,
+    mouse_left_prev: bool,
     settings: Option<SettingsPanel>,
+    input_panel: InputSettingsPanel,
 }
 
 impl PauseScene {
-    fn new(theme: ui::Theme) -> Self {
-        // Escape is held at the instant the game pushes us; start `escape_prev`
-        // true so the opening press doesn't immediately pop us back.
+    fn new(
+        theme: ui::Theme,
+        input_map: &InputMap,
+        controls: &AbstractControls,
+        gamepad_config: &GamepadConfig,
+    ) -> Self {
         Self {
             modal: ModalUi::new(&theme),
             theme,
             escape_prev: true,
+            tab_prev: false,
+            mouse_left_prev: false,
             settings: None,
+            input_panel: InputSettingsPanel::new(input_map, controls, gamepad_config),
         }
     }
 }
@@ -2766,14 +2838,38 @@ impl Scene for PauseScene {
     }
 
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        // ── Tab toggle for input settings ──
+        let tab_down = input.key_down(Key::Tab);
+        let tab_pressed = tab_down && !self.tab_prev;
+        self.tab_prev = tab_down;
+        if tab_pressed {
+            self.input_panel.toggle();
+        }
+
+        // ── Input settings panel (when visible, it owns focus) ──
+        if self.input_panel.is_visible() {
+            let clicked = input.mouse_left && !self.mouse_left_prev;
+            self.mouse_left_prev = input.mouse_left;
+            self.input_panel.update(input, input.mouse_position, clicked);
+            if self.input_panel.should_close() {
+                let (map, controls, gp_cfg) = self.input_panel.take_apply();
+                if let Ok(mut slot) = INPUT_SETTINGS.lock() {
+                    *slot = Some((map, controls, gp_cfg));
+                }
+                return Transition::Pop;
+            }
+            return Transition::None;
+        }
+
+        // ── Escape: resume ──
         let esc_down = input.key_down(Key::Escape);
         let esc_pressed = esc_down && !self.escape_prev;
         self.escape_prev = esc_down;
         if esc_pressed {
-            return Transition::Pop; // resume
+            return Transition::Pop;
         }
-        // Settings dropdowns (top-right) — resolution is allowed on the pause
-        // screen. A confirmable change pushes the confirm overlay.
+
+        // ── Display settings dropdowns (top-right) ──
         if let Some(panel) = self.settings.as_mut() {
             if let Some(change) = panel.update(input, renderer) {
                 if let Some(prev) = apply_display_change(change, renderer) {
@@ -2782,6 +2878,8 @@ impl Scene for PauseScene {
                 return Transition::None;
             }
         }
+
+        // ── Modal buttons ──
         let actions = self.modal.update(input, renderer, "pause", None);
         if actions.is_on("resume") {
             return Transition::Pop;
@@ -2796,6 +2894,13 @@ impl Scene for PauseScene {
         self.modal.render(renderer, "pause", None);
         if let Some(panel) = self.settings.as_ref() {
             panel.draw(&self.theme, renderer);
+        }
+
+        // Input settings panel overlay
+        if self.input_panel.is_visible() {
+            let white = self.theme.white();
+            let mut gui = RendererGui::new(renderer, white);
+            self.input_panel.draw(&mut gui);
         }
     }
 }
