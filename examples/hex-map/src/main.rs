@@ -324,6 +324,19 @@ struct HexInst {
     logical: Vec3,
 }
 
+/// The fold-in layout for a selected tile: its six neighbours placed flat in its
+/// tangent plane, against its edges. `slots` pairs each neighbour's number with
+/// its pre-transform centre in the selected tile's plane; `tilt`/`flip`/`left`
+/// are the selected tile's orientation and map (so neighbours draw coplanar with
+/// it). `center` is the selected tile's own number (the anchor).
+struct Rosette {
+    center: u32,
+    left: bool,
+    flip: bool,
+    tilt: Mat4,
+    slots: Vec<(u32, Vec3)>,
+}
+
 /// Build the full hex list for both maps — the single source of truth for tile
 /// numbering and placement (mirrors how `render` laid the tiles out before).
 fn build_hex_instances() -> Vec<HexInst> {
@@ -803,6 +816,10 @@ struct HexScene {
     within: Vec<Vec<u32>>,
     /// Number of the hex the cursor is hovering, if any (mouse-pick result).
     hovered: Option<u32>,
+    /// The clicked/selected hex, if any (toggled by left-click). While set, its
+    /// six neighbours fold flat into its tangent plane, aligned to its edges,
+    /// instead of pushing outward.
+    selected: Option<u32>,
     /// Tiles to stretch this frame: the hovered tile plus its six neighbours
     /// (same-map + across-equator). Recomputed with `hovered` at [`PICK_HZ`].
     highlight: Vec<u32>,
@@ -842,6 +859,7 @@ impl HexScene {
             hexes,
             within,
             hovered: None,
+            selected: None,
             highlight: Vec::new(),
             pick_accum: 0.0,
             white: None,
@@ -931,43 +949,117 @@ impl HexScene {
         best.map(|(_, n)| n)
     }
 
-    /// The seven-tile highlight set for the current hover: the hovered tile plus
-    /// its six neighbours. Same-map neighbours come from [`Self::within`]; an
-    /// equator tile is short by `6 − within`, and those slots are filled by the
-    /// nearest tiles in the *other* map's equator (the across-equator mesh),
-    /// measured on the live rendered centres so it tracks the maps' rolls.
-    fn compute_highlight(&self) -> Vec<u32> {
-        let Some(h) = self.hovered else {
-            return Vec::new();
-        };
-        let within = &self.within[h as usize];
-        let mut hi = Vec::with_capacity(7);
-        hi.push(h);
-        hi.extend_from_slice(within);
+    /// World centre of tile `inst` under the current map transforms.
+    fn tile_center(&self, inst: &HexInst, m_right: &Mat4, m_left: &Mat4) -> Vec3 {
+        if inst.left {
+            m_left.transform_point3(inst.center)
+        } else {
+            m_right.transform_point3(inst.center)
+        }
+    }
+
+    /// The six neighbours of tile `n`: its same-map neighbours ([`Self::within`])
+    /// first, then — if it's an equator tile short of six — the nearest tiles in
+    /// the *other* map's equator (the across-equator mesh), measured on the live
+    /// rendered centres so the match tracks the maps' rolls.
+    fn neighbors_of(&self, n: u32) -> Vec<u32> {
+        let within = &self.within[n as usize];
+        let mut out = within.clone();
         let need = 6usize.saturating_sub(within.len());
         if need > 0 {
             let (m_right, m_left) = self.map_transforms();
-            let center = |inst: &HexInst| {
-                if inst.left {
-                    m_left.transform_point3(inst.center)
-                } else {
-                    m_right.transform_point3(inst.center)
-                }
-            };
-            let here = &self.hexes[h as usize];
-            let origin = center(here);
-            // Candidates: equator tiles (own neighbour count < 6) of the OTHER
-            // map, nearest first.
+            let here = &self.hexes[n as usize];
+            let origin = self.tile_center(here, &m_right, &m_left);
             let mut cands: Vec<(f32, u32)> = self
                 .hexes
                 .iter()
                 .filter(|b| b.left != here.left && self.within[b.number as usize].len() < 6)
-                .map(|b| ((center(b) - origin).length(), b.number))
+                .map(|b| {
+                    (
+                        (self.tile_center(b, &m_right, &m_left) - origin).length(),
+                        b.number,
+                    )
+                })
                 .collect();
             cands.sort_by(|a, b| a.0.total_cmp(&b.0));
-            hi.extend(cands.into_iter().take(need).map(|(_, n)| n));
+            out.extend(cands.into_iter().take(need).map(|(_, num)| num));
         }
+        out
+    }
+
+    /// The seven-tile highlight set for the current hover: the hovered tile plus
+    /// its six neighbours.
+    fn compute_highlight(&self) -> Vec<u32> {
+        let Some(h) = self.hovered else {
+            return Vec::new();
+        };
+        let mut hi = Vec::with_capacity(7);
+        hi.push(h);
+        hi.extend(self.neighbors_of(h));
         hi
+    }
+
+    /// Lay the selected tile's six neighbours flat into its tangent plane,
+    /// aligned to its edges — the "fold-in" for select mode. Each neighbour gets
+    /// a hex-step offset in the selected tile `s`'s plane: same-map neighbours
+    /// land on the exact edge they share (from the logical offset, flip-corrected
+    /// for the left map); across-equator neighbours fill the remaining outward
+    /// edges by world-direction match.
+    fn build_rosette(&self, s: u32, m_right: &Mat4, m_left: &Mat4) -> Rosette {
+        let here = &self.hexes[s as usize];
+        let xform = if here.left { *m_left } else { *m_right };
+        let tilt = tilt_to_normal((here.center - here.dome_center).normalize_or_zero());
+        // Edge direction in the flat frame, mirrored when the map is flipped, so
+        // the slot lines up with the tile's *drawn* edge.
+        let flip_dir = |v: Vec3| {
+            if here.flip {
+                Vec3::new(-v.x, v.y, v.z)
+            } else {
+                v
+            }
+        };
+        let slot_pre = |e: usize| here.center + tilt.transform_vector3(flip_dir(edge_normal(e)) * HEX_SPACING);
+        let slots_pre: [Vec3; 6] = std::array::from_fn(slot_pre);
+        let w_s = xform.transform_point3(here.center);
+
+        let within = &self.within[s as usize];
+        let all = self.neighbors_of(s);
+        let mut used = [false; 6];
+        let mut out: Vec<(u32, Vec3)> = Vec::with_capacity(6);
+
+        // Same-map neighbours → the edge their logical offset points along.
+        for &n in within {
+            let o = (self.hexes[n as usize].logical - here.logical).normalize_or_zero();
+            let e = (0..6)
+                .filter(|&e| !used[e])
+                .max_by(|&a, &b| o.dot(edge_normal(a)).total_cmp(&o.dot(edge_normal(b))))
+                .unwrap_or(0);
+            used[e] = true;
+            out.push((n, slots_pre[e]));
+        }
+        // Across-equator neighbours → the nearest remaining (outward) edge, by
+        // world direction from the selected tile.
+        for &n in all.iter().filter(|n| !within.contains(n)) {
+            let dir_n = (self.tile_center(&self.hexes[n as usize], m_right, m_left) - w_s)
+                .normalize_or_zero();
+            let e = (0..6)
+                .filter(|&e| !used[e])
+                .max_by(|&a, &b| {
+                    let da = (xform.transform_point3(slots_pre[a]) - w_s).normalize_or_zero();
+                    let db = (xform.transform_point3(slots_pre[b]) - w_s).normalize_or_zero();
+                    dir_n.dot(da).total_cmp(&dir_n.dot(db))
+                })
+                .unwrap_or(0);
+            used[e] = true;
+            out.push((n, slots_pre[e]));
+        }
+        Rosette {
+            center: s,
+            left: here.left,
+            flip: here.flip,
+            tilt,
+            slots: out,
+        }
     }
 
     /// Per-frame values handed to the HUD script as the `Model` global.
@@ -1007,10 +1099,35 @@ impl HexScene {
     /// orientation and edge labelling, so adjacency reads straight off the
     /// colours/letters (e.g. hex 0's edge `a` faces hex 1's edge `d`).
     ///
-    /// The hex is tilted tangent to the dome: rotated about its centre so its
-    /// face normal points along the radius from `dome_center` (the map's centre
-    /// axis at the dome's base height) — perpendicular to that radius. So a tile
-    /// lies flat at the apex and stands vertical at the equator.
+    /// Draw one tile: its translucent fill (brighter `HOVER_TINT` when `lit`)
+    /// then its coloured wireframe + labels, both at `center`/`tilt`/`xform`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_tile(
+        &self,
+        renderer: &mut Renderer,
+        center: Vec3,
+        tilt: Mat4,
+        xform: &Mat4,
+        flip: bool,
+        number: u32,
+        lit: bool,
+    ) {
+        if let Some(mesh) = self.fill_mesh {
+            let model = *xform
+                * Mat4::from_translation(center)
+                * tilt
+                * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
+            let tint = if lit { HOVER_TINT } else { FILL_TINT };
+            renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
+        }
+        self.draw_hex(renderer, center, number, flip, xform, tilt);
+    }
+
+    /// `tilt` rotates the flat hex about its centre so its face normal points
+    /// along its radial (normally [`tilt_to_normal`] of the dome radius, so the
+    /// tile lies flat at the apex and vertical at the equator). For a selected
+    /// tile's folded-in neighbour, the caller instead passes the *selected*
+    /// tile's tilt so the neighbour lies coplanar with it.
     fn draw_hex(
         &self,
         renderer: &mut Renderer,
@@ -1018,7 +1135,7 @@ impl HexScene {
         number: u32,
         flip: bool,
         xform: &Mat4,
-        dome_center: Vec3,
+        tilt: Mat4,
     ) {
         let mut corners = hex_corners(center, HEX_SIZE);
         if flip {
@@ -1029,10 +1146,8 @@ impl HexScene {
                 *c = flip_ns(*c, center);
             }
         }
-        // Tilt the hex tangent to the dome (normal → radius from `dome_center`),
-        // then apply the map's roll `xform`. `place` does both about the centre,
-        // so every drawn point is tilted-then-rolled together.
-        let tilt = tilt_to_normal((center - dome_center).normalize_or_zero());
+        // Apply `tilt` (about the centre) then the map's roll `xform`. `place`
+        // does both, so every drawn point is tilted-then-rolled together.
         let place = |p: Vec3| xform.transform_point3(center + tilt.transform_vector3(p - center));
         for i in 0..6 {
             let a = place(corners[i]);
@@ -1152,6 +1267,15 @@ impl Scene for HexScene {
                 None
             };
             self.drag_cursor = input.mouse_position;
+            // A click that didn't grab a wheel toggles tile selection: pick the
+            // tile under the cursor; clicking the selected tile again clears it,
+            // clicking another selects it, clicking empty space clears it.
+            if self.drag.is_none() {
+                self.selected = match self.pick(input.mouse_position, screen) {
+                    Some(n) if self.selected == Some(n) => None,
+                    other => other,
+                };
+            }
         }
         if input.mouse_left {
             if let Some(wheel) = self.drag {
@@ -1244,16 +1368,33 @@ impl Scene for HexScene {
         draw_compass(renderer, Vec3::ZERO, false, &m_right);
         draw_compass(renderer, reflect(c), true, &m_left);
 
+        // When a tile is clicked/selected, fold its six neighbours flat into its
+        // tangent plane, aligned to its edges.
+        let rosette = self.selected.map(|s| self.build_rosette(s, &m_right, &m_left));
+
         // Every tile of both maps: a 25%-grey translucent face (the pickable
-        // surface) plus its coloured wireframe + labels (drawn by `draw_hex`).
-        // The hovered tile extends outward along its radial normal — the hover
-        // highlight — and its fill brightens; fill and wireframe share the same
-        // (possibly stretched) centre so they move together. The fill insets a
-        // hair inward so the coloured edges always draw in front of it.
+        // surface) plus its coloured wireframe + labels (`draw_tile`). A
+        // selected tile's neighbours fold in (rosette); otherwise the hovered
+        // tile and its six neighbours stretch outward along their radial — the
+        // hover highlight. The fill insets a hair so edges draw in front.
         for inst in &self.hexes {
-            let xform = if inst.left { &m_left } else { &m_right };
-            // The hovered tile and its six neighbours stretch outward together —
-            // the seven-tile highlight.
+            let own = if inst.left { &m_left } else { &m_right };
+            if let Some(ros) = &rosette {
+                // A folded-in neighbour: draw in the selected tile's plane.
+                if let Some(&(_, slot)) = ros.slots.iter().find(|(num, _)| *num == inst.number) {
+                    let rx = if ros.left { &m_left } else { &m_right };
+                    self.draw_tile(renderer, slot, ros.tilt, rx, ros.flip, inst.number, true);
+                    continue;
+                }
+                // The selected tile itself: its resting spot, highlighted (anchor
+                // of the rosette).
+                if ros.center == inst.number {
+                    let tilt = tilt_to_normal((inst.center - inst.dome_center).normalize_or_zero());
+                    self.draw_tile(renderer, inst.center, tilt, own, inst.flip, inst.number, true);
+                    continue;
+                }
+            }
+            // Hover highlight: the lit tile pushes outward along its radial.
             let lit = self.highlight.contains(&inst.number);
             let center = if lit {
                 let radial = (inst.center - inst.dome_center).normalize_or_zero();
@@ -1261,16 +1402,8 @@ impl Scene for HexScene {
             } else {
                 inst.center
             };
-            if let Some(mesh) = self.fill_mesh {
-                let tilt = tilt_to_normal((center - inst.dome_center).normalize_or_zero());
-                let model = *xform
-                    * Mat4::from_translation(center)
-                    * tilt
-                    * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
-                let tint = if lit { HOVER_TINT } else { FILL_TINT };
-                renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
-            }
-            self.draw_hex(renderer, center, inst.number, inst.flip, xform, inst.dome_center);
+            let tilt = tilt_to_normal((center - inst.dome_center).normalize_or_zero());
+            self.draw_tile(renderer, center, tilt, own, inst.flip, inst.number, lit);
         }
 
         // Ring guide circles + cardinal dome, per map. Each ring circle passes
@@ -1597,6 +1730,32 @@ mod tests {
             assert_eq!(hl.len(), 7, "tile {n} highlight {hl:?}");
             assert!(hl.contains(&n), "tile {n} not in its own highlight");
             assert!(hl[1..].iter().all(|&m| m != n), "tile {n} duplicated");
+        }
+    }
+
+    #[test]
+    fn select_rosette() {
+        let s = HexScene::new();
+        let (mr, ml) = s.map_transforms();
+        for n in 0..s.hexes.len() as u32 {
+            let ros = s.build_rosette(n, &mr, &ml);
+            assert_eq!(ros.center, n);
+            // The fold-in places exactly the tile's six neighbours...
+            assert_eq!(ros.slots.len(), 6, "tile {n} rosette size");
+            let mut got: Vec<u32> = ros.slots.iter().map(|(m, _)| *m).collect();
+            got.sort();
+            let mut want = s.neighbors_of(n);
+            want.sort();
+            assert_eq!(got, want, "tile {n} rosette ≠ its neighbours");
+            // ...each on a distinct edge slot (no two neighbours stacked).
+            for i in 0..6 {
+                for j in (i + 1)..6 {
+                    assert!(
+                        (ros.slots[i].1 - ros.slots[j].1).length() > 1.0,
+                        "tile {n} slots {i},{j} coincide"
+                    );
+                }
+            }
         }
     }
 
