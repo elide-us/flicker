@@ -33,6 +33,12 @@
 //!     verticals run from the base equator (the outer ring, e.g. the right map's
 //!     21↔30 span) up over the apex, where the centre tile sits. All lifted in
 //!     +Y and rolled with the map.
+//!   * **world-gen terrain** on every tile: the hex-world six-epoch stack
+//!     (`flicker-worldgen`) runs over this layout's numbering and adjacency, and
+//!     each tile draws the consolidated top layer — the Epoch-6 eroded ground
+//!     with its sea — in place of the grey fill, while **all six epoch layers
+//!     stay resident** for the ongoing generation tweaks (see `terrain.rs`).
+//!     The ring slider rebuilds the whole world.
 //!
 //! It follows the voxel-cluster application model end to end: a [`Scene`] driven
 //! by [`SceneManager`]/[`run`], the [`InputMap`]/[`AbstractControls`] input
@@ -56,6 +62,9 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker_materials::Tables;
+
+mod terrain;
 
 const HUD_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
 const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
@@ -224,6 +233,12 @@ const SLIDER_HANDLE_W: f32 = 14.0;
 const SLIDER_HANDLE_H: f32 = 28.0;
 /// Cursor distance (px) within which a press grabs the slider.
 const SLIDER_HIT_PAD: f32 = 22.0;
+
+/// World seed driving the six-epoch world-gen stack (hex-world's test seed).
+const WORLD_SEED: u64 = 0x0EC0_DE01;
+/// Tint (× the lit base colour) of a hovered/selected tile's terrain — stands
+/// in for the grey fill's `HOVER_TINT` once terrain is drawn.
+const TERRAIN_HOVER_TINT: [f32; 4] = [1.45, 1.45, 1.45, 1.0];
 
 /// Material index of the hex face fill — CLOUD_MID, a neutral mid-grey in the
 /// mesh palette (so the fill reads grey, not coloured).
@@ -854,6 +869,19 @@ struct HexScene {
     /// Unit translucent hexagon face, drawn per tile as the pickable surface.
     fill_mesh: Option<MeshHandle>,
     script: Option<ScriptHost>,
+
+    /// Materials vocabulary the epochs run on; `None` if the JSON tables failed
+    /// to load (tiles then keep the plain grey fill).
+    tables: Option<Tables>,
+    /// The generated world — all six epoch layers per tile, retained so the
+    /// ongoing generation tweaks can re-read any layer. Drawing uses only the
+    /// consolidated top layer.
+    world: Option<terrain::WorldGen>,
+    /// Per-tile ground + sea meshes (indexed by tile number).
+    terrain: Vec<terrain::TileTerrain>,
+    /// World/meshes need (re)building next frame — set at startup and by the
+    /// ring slider; the upload needs the `&mut Renderer` only `render` holds.
+    terrain_dirty: bool,
 }
 
 impl HexScene {
@@ -890,6 +918,10 @@ impl HexScene {
             glyphs: None,
             fill_mesh: None,
             script: None,
+            tables: terrain::load_tables(),
+            world: None,
+            terrain: Vec::new(),
+            terrain_dirty: true,
         }
     }
 
@@ -911,22 +943,29 @@ impl HexScene {
         flat.cross(Vec3::Y).normalize_or_zero()
     }
 
-    /// The two maps' roll/placement transforms (right, left) for this frame —
-    /// shared by `render` (drawing) and `pick` (hit-test) so both agree. The
-    /// left map's chain is roll → drop+Z-align → half-hex yaw → slide under the
-    /// right map (see the inline notes where each piece is defined).
-    fn map_transforms(&self) -> (Mat4, Mat4) {
+    /// The two maps' roll/placement transforms (right, left) for the given roll
+    /// angles. The left map's chain is roll → drop+Z-align → half-hex yaw →
+    /// slide under the right map (see the inline notes where each piece is
+    /// defined). The terrain build calls this with the **rest pose** (right 0,
+    /// left π) so the generated world is independent of the wheels.
+    fn map_transforms_for(rings: usize, right_roll: f32, left_roll: f32) -> (Mat4, Mat4) {
         let lx = left_axis_x();
-        let m_right = roll_transform(0.0, self.right_roll);
+        let m_right = roll_transform(0.0, right_roll);
         let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
         // Half-hex yaw scales with the ring count (outer ring = 6·rings tiles).
         let yaw = Mat4::from_translation(Vec3::new(lx, 0.0, 0.0))
-            * Mat4::from_rotation_y(left_yaw(self.num_rings))
+            * Mat4::from_rotation_y(left_yaw(rings))
             * Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
         let left_under = Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
         let m_left =
-            left_under * yaw * Mat4::from_translation(left_shift) * roll_transform(lx, -self.left_roll);
+            left_under * yaw * Mat4::from_translation(left_shift) * roll_transform(lx, -left_roll);
         (m_right, m_left)
+    }
+
+    /// This frame's map transforms — shared by `render` (drawing) and `pick`
+    /// (hit-test) so both agree.
+    fn map_transforms(&self) -> (Mat4, Mat4) {
+        Self::map_transforms_for(self.num_rings, self.right_roll, self.left_roll)
     }
 
     /// Set the ring count (clamped to `MIN_RINGS‥MAX_RINGS`) and, if it changed,
@@ -943,6 +982,37 @@ impl HexScene {
         self.hovered = None;
         self.selected = None;
         self.highlight.clear();
+        // The tile set changed, so the whole world regenerates (next render,
+        // which holds the `&mut Renderer` the mesh upload needs).
+        self.terrain_dirty = true;
+    }
+
+    /// Free the old terrain meshes and, when the vocabulary is loaded, run the
+    /// six-epoch stack over the current tile set and upload each tile's
+    /// top-layer meshes. The across-equator adjacency is read at the rest pose
+    /// so wheel state can't change the generated world.
+    fn rebuild_terrain(&mut self, renderer: &mut Renderer) {
+        for t in self.terrain.drain(..) {
+            renderer.free_mesh(t.ground);
+            if let Some(w) = t.water {
+                renderer.free_mesh(w);
+            }
+        }
+        self.world = None;
+        let Some(tables) = self.tables.as_ref() else { return };
+        let (m_right, m_left) =
+            Self::map_transforms_for(self.num_rings, 0.0, std::f32::consts::PI);
+        let world = terrain::WorldGen::generate(
+            tables,
+            &self.hexes,
+            &self.within,
+            self.num_rings,
+            WORLD_SEED,
+            &m_right,
+            &m_left,
+        );
+        self.terrain = world.upload_meshes(tables, &self.hexes, renderer);
+        self.world = Some(world);
     }
 
     /// Screen-X of the slider handle for the current ring count.
@@ -1205,7 +1275,18 @@ impl HexScene {
         number: u32,
         lit: bool,
     ) {
-        if let Some(mesh) = self.fill_mesh {
+        if let Some(t) = self.terrain.get(number as usize) {
+            // The world-gen top layer — the Epoch-6 ground relief with its sea
+            // — rides the tile's full placement chain, so it stretches on
+            // hover and folds into a rosette with the wireframe.
+            let model = *xform * Mat4::from_translation(center) * tilt;
+            let tint = if lit { TERRAIN_HOVER_TINT } else { [1.0, 1.0, 1.0, 1.0] };
+            renderer.draw_mesh(t.ground, model, MeshDrawOptions { wireframe: false, tint });
+            if let Some(w) = t.water {
+                renderer.draw_mesh(w, model, MeshDrawOptions { wireframe: false, tint });
+            }
+        } else if let Some(mesh) = self.fill_mesh {
+            // Fallback when the vocabulary failed to load: the plain grey fill.
             let model = *xform
                 * Mat4::from_translation(center)
                 * tilt
@@ -1448,6 +1529,13 @@ impl Scene for HexScene {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
+        // (Re)generate the world + terrain meshes when the tile set changed —
+        // here because the mesh upload needs the `&mut Renderer`.
+        if self.terrain_dirty {
+            self.terrain_dirty = false;
+            self.rebuild_terrain(renderer);
+        }
+
         renderer.set_camera(&Camera {
             position: self.position,
             target: self.position + self.forward(),
