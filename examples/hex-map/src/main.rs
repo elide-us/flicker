@@ -213,6 +213,21 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         * HEX_SPACING
 }
 
+/// Snap a tile's `offset` from its map centre radially out onto its ring circle:
+/// every ring tile lands at radius `k·HEX_SPACING` (k = its ring index, read off
+/// the offset's length), keeping its direction. Ring corners are already on the
+/// circle (no move); the straight-run hexes between corners on ring 2+ slide out
+/// onto it. The centre tile (offset ≈ 0) stays put. This deliberately breaks the
+/// hex tessellation's symmetry — only the tile's location moves, not its shape.
+fn snap_to_ring(offset: Vec3) -> Vec3 {
+    let r = offset.length();
+    if r < 1e-3 {
+        return offset;
+    }
+    let k = (r / HEX_SPACING).round();
+    offset / r * (k * HEX_SPACING)
+}
+
 /// Ring-`k` cell offsets from a centre (× `HEX_SPACING`): the classic clockwise
 /// walk starting at the NW corner (`k·a`), `k` steps along each of the six sides
 /// (side `s` runs in direction `s + 2`). This is the formula that lets us add a
@@ -832,11 +847,11 @@ impl Scene for HexScene {
         // which continues the outward spiral and ends on the SW corner (3f).
         draw_compass(renderer, Vec3::ZERO, false, &m_right);
         for (number, steps) in HEX_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, hex_center(steps), number as u32, false, &m_right);
+            self.draw_hex(renderer, snap_to_ring(hex_center(steps)), number as u32, false, &m_right);
         }
         let ring3 = first_ring(3);
         for (i, &off) in ring3.iter().enumerate() {
-            self.draw_hex(renderer, off, (HEX_STEPS.len() + i) as u32, false, &m_right);
+            self.draw_hex(renderer, snap_to_ring(off), (HEX_STEPS.len() + i) as u32, false, &m_right);
         }
         let right_count = HEX_STEPS.len() + ring3.len(); // 37
 
@@ -848,11 +863,13 @@ impl Scene for HexScene {
         let c = left_center();
         let lring3 = left_ring(3);
         for (i, &off) in lring3.iter().enumerate() {
-            self.draw_hex(renderer, reflect(c + off), (right_count + i) as u32, true, &m_left);
+            self.draw_hex(renderer, reflect(c + snap_to_ring(off)), (right_count + i) as u32, true, &m_left);
         }
         let left_built_base = right_count + lring3.len(); // 55
         for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, reflect(hex_center(steps)), (left_built_base + j) as u32, true, &m_left);
+            // Snap relative to the left centre `c`, then re-centre and reflect.
+            let off = snap_to_ring(hex_center(steps) - c);
+            self.draw_hex(renderer, reflect(c + off), (left_built_base + j) as u32, true, &m_left);
         }
         draw_compass(renderer, reflect(c), true, &m_left);
 
@@ -1083,6 +1100,41 @@ mod tests {
 
         // The chart is drawn reflected to the west (screen-left).
         assert!(LEFT_AXIS_X > 0.0);
+    }
+
+    #[test]
+    fn ring_snap() {
+        let s = HEX_SPACING;
+
+        // Centre tile (offset 0) is left in place.
+        assert!(snap_to_ring(Vec3::ZERO).length() < 1e-3);
+
+        // Ring-1 tiles are all corners already at radius s — unchanged.
+        for n in 1..=6 {
+            let p = hex_center(HEX_STEPS[n]);
+            assert!((snap_to_ring(p) - p).length() < 1e-2, "ring1 corner {n} moved");
+        }
+
+        // Every ring-2 / ring-3 tile lands exactly on its ring circle (2s / 3s),
+        // and the move is purely radial (direction preserved).
+        let on_circle = |n: usize, off: Vec3, k: f32| {
+            let snapped = snap_to_ring(off);
+            assert!((snapped.length() - k * s).abs() < 1e-2, "tile {n} not on {k}·s circle");
+            // Purely radial: same unit direction (so it slid straight out).
+            assert!((snapped.normalize() - off.normalize()).length() < 1e-3, "tile {n} turned");
+        };
+        for n in 7..=18 {
+            on_circle(n, hex_center(HEX_STEPS[n]), 2.0);
+        }
+        for (i, &off) in first_ring(3).iter().enumerate() {
+            on_circle(19 + i, off, 3.0);
+        }
+
+        // The non-corner ring-2 edge tiles genuinely MOVE outward (they began at
+        // √3·s ≈ 1.73·s, inside the 2s circle).
+        let edge = hex_center(HEX_STEPS[7]); // due-west edge tile
+        assert!(edge.length() < 2.0 * s - 1.0);
+        assert!(snap_to_ring(edge).length() > edge.length() + 1.0);
     }
 
     #[test]
