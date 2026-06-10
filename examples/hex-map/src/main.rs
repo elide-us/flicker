@@ -306,17 +306,25 @@ fn ring_dome_lift(k: usize, rings: usize) -> f32 {
 
 /// Place a tile from its `offset` from the map centre onto a `rings`-ring dome:
 /// read its ring `k` from the offset's length, then set it on that ring's dome
-/// circle — horizontal radius [`ring_dome_radius`] in the offset's direction,
-/// lifted [`ring_dome_lift`]. The centre tile rides up to the apex; each ring
-/// rests an equal angular step down the dome, every hex (corner or straight-run)
-/// snapped onto its ring circle. Only the location moves — the hex keeps shape.
+/// circle, **evenly distributed** — its azimuth is snapped to the nearest of the
+/// `6k` slots evenly spaced around the ring (anchored on the corners at 30°+60°s),
+/// at horizontal radius [`ring_dome_radius`] and lifted [`ring_dome_lift`]. The
+/// projection (the raw offset direction) only fixed the *ordering*; its angular
+/// wobble between corners is regularised away here, so each ring is uniform. The
+/// centre tile rides to the apex. Only the location moves — the hex keeps shape;
+/// `logical` (same-map adjacency) is unaffected, so the topology is unchanged.
 fn dome_position(offset: Vec3, rings: usize) -> Vec3 {
     let r = offset.length();
     if r < 1e-3 {
         return Vec3::new(0.0, ring_dome_lift(0, rings), 0.0);
     }
     let k = (r / HEX_SPACING).round() as usize;
-    offset / r * ring_dome_radius(k, rings) + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0)
+    // Snap the azimuth to ring k's even grid (slot = 2π/6k, anchored at 30°).
+    let slot = std::f32::consts::PI / (3.0 * k as f32);
+    let base = std::f32::consts::FRAC_PI_6;
+    let theta = base + ((offset.z.atan2(offset.x) - base) / slot).round() * slot;
+    let dir = Vec3::new(theta.cos(), 0.0, theta.sin());
+    dir * ring_dome_radius(k, rings) + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0)
 }
 
 /// Rotation that tilts a flat hex (whose normal is +Y) so its normal becomes the
