@@ -105,6 +105,11 @@ const HEX_SPACING: f32 = 2.0 * APOTHEM + HEX_GAP;
 /// step north of it (8.e ↔ 7.b), and so on round to hex 18 (SW), which closes
 /// back onto hex 7. Each pair `[i, i]` lands on a ring-2 corner, `[i, i+1]` on
 /// the edge-hex between two corners.
+///
+/// Reference/spec table: the layout is now grown from [`first_ring`] (which
+/// reproduces this exactly), so this is consumed only by the `ring_formula` /
+/// `ring2_spiral` tests that pin that equivalence.
+#[allow(dead_code)]
 const HEX_STEPS: [&[usize]; 19] = [
     &[], // 0  origin
     &[0], &[1], &[2], &[3], &[4], &[5], // 1–6: across edges a–f (NW,N,NE,SE,S,SW)
@@ -133,6 +138,11 @@ const HEX_STEPS: [&[usize]; 19] = [
 /// south (`c` onto prev `f`); 30 turns NW and shuts it (30.a ↔ 19.d). Ring-1
 /// (31–36) spirals in from 30, marches rotating N,N,NE,SE,S,SW and closes onto
 /// 31. (Drawn as 19 + index.)
+///
+/// Reference/spec table: the layout is now grown from [`left_ring`] (which
+/// reproduces this exactly), so this is consumed only by the `ring_formula` /
+/// `left_map_column` tests that pin that equivalence.
+#[allow(dead_code)]
 const LEFT_MAP_STEPS: [&[usize]; 19] = [
     &[5, 5, 0], // 19  f+f+a — west edge
     &[0, 0, 5], // 20  a+a+f
@@ -161,11 +171,14 @@ const LEFT_MAP_STEPS: [&[usize]; 19] = [
 /// Wide enough that the two (now ring-3) maps clear each other.
 const LEFT_AXIS_X: f32 = 4.5 * HEX_SPACING;
 
-/// Half-hex yaw of the left (down-facing) map about its own vertical centre axis
-/// — half the outer ring's hex spacing (ring 3 = 18 hexes → 20° apart, so 10°),
-/// setting the lower ring's points into the upper ring's valleys. Positive is
-/// CCW about +Y; this is negative (the other way). Test value; flip to reverse.
-const LEFT_YAW: f32 = -std::f32::consts::PI / 18.0; // −10° = −½ · (360°/18)
+/// Half-hex yaw of the left (down-facing) map about its own vertical centre
+/// axis, given `rings`: half the outer ring's hex spacing. The outer ring has
+/// `6·rings` tiles (`360°/6·rings` apart), so this is `−½` of that — negative
+/// (CW about +Y), setting the lower ring's points into the upper ring's valleys.
+/// (`rings = 3` → `−10°`, matching the earlier hand-tuned value.)
+fn left_yaw(rings: usize) -> f32 {
+    -std::f32::consts::PI / (6.0 * rings as f32)
+}
 
 /// Radius of the roll wheel handles.
 const WHEEL_RADIUS: f32 = 850.0;
@@ -188,13 +201,29 @@ const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
 /// Line segments per guide circle.
 const GUIDE_SEGS: usize = 96;
 
-/// Number of hex rings around each map centre (centre tile excluded). The dome's
-/// quarter-turn (apex → equator) is divided evenly across this many rings, so
-/// ring `k` rests `k·(90°/NUM_RINGS)` down the dome.
-const NUM_RINGS: usize = 3;
-/// Dome (hemisphere) radius: the outermost ring sits on its equator, so this is
-/// `NUM_RINGS · HEX_SPACING`.
-const DOME_RADIUS: f32 = NUM_RINGS as f32 * HEX_SPACING;
+/// Ring-count range the slider spans, and the start value. Each map has a centre
+/// tile plus `rings` rings; the dome's quarter-turn (apex → equator) is divided
+/// evenly across `rings`, so ring `k` rests `k·(90°/rings)` down the dome.
+const MIN_RINGS: usize = 1;
+const MAX_RINGS: usize = 5;
+const DEFAULT_RINGS: usize = 3;
+
+/// Dome (hemisphere) radius for `rings`: the outermost ring sits on its equator,
+/// so the radius is `rings · HEX_SPACING`.
+fn dome_radius(rings: usize) -> f32 {
+    rings as f32 * HEX_SPACING
+}
+
+// Ring-count slider (screen-space, pixels from the top-left, below the HUD
+// stats block). Drag the handle 1‥5 to grow/shrink both maps.
+const SLIDER_X0: f32 = 20.0;
+const SLIDER_X1: f32 = 220.0;
+const SLIDER_Y: f32 = 210.0;
+const SLIDER_TRACK_H: f32 = 6.0;
+const SLIDER_HANDLE_W: f32 = 14.0;
+const SLIDER_HANDLE_H: f32 = 28.0;
+/// Cursor distance (px) within which a press grabs the slider.
+const SLIDER_HIT_PAD: f32 = 22.0;
 
 /// Material index of the hex face fill — CLOUD_MID, a neutral mid-grey in the
 /// mesh palette (so the fill reads grey, not coloured).
@@ -246,7 +275,9 @@ fn edge_normal(e: usize) -> Vec3 {
 }
 
 /// World centre of the hex reached by walking `steps` (unit edge-steps) from the
-/// origin — the sum of the step directions scaled to the hex spacing.
+/// origin — the sum of the step directions scaled to the hex spacing. Now used
+/// only to evaluate the `HEX_STEPS`/`LEFT_MAP_STEPS` reference tables in tests.
+#[allow(dead_code)]
 fn hex_center(steps: &[usize]) -> Vec3 {
     steps
         .iter()
@@ -254,40 +285,38 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         * HEX_SPACING
 }
 
-/// Polar angle (from the apex) at which ring `k` rests on the dome: the dome's
-/// quarter-turn (apex → equator) split evenly across [`NUM_RINGS`], so ring k
-/// sits `k·(90°/NUM_RINGS)` down from the apex — rings 1/2/3 at 30°/60°/90°,
-/// the outermost on the base equator (`k = 0` is the apex over the centre).
-fn ring_dome_angle(k: usize) -> f32 {
-    k as f32 * (std::f32::consts::FRAC_PI_2 / NUM_RINGS as f32)
+/// Polar angle (from the apex) at which ring `k` rests on a `rings`-ring dome:
+/// the quarter-turn (apex → equator) split evenly, so ring k sits `k·(90°/rings)`
+/// down from the apex (the outermost on the base equator; `k = 0` is the apex).
+fn ring_dome_angle(k: usize, rings: usize) -> f32 {
+    k as f32 * (std::f32::consts::FRAC_PI_2 / rings as f32)
 }
 
-/// Horizontal radius of ring `k`'s circle on the dome — `DOME_RADIUS · sin θ` at
-/// the ring's dome angle θ. (0 at the apex, `DOME_RADIUS` at the base equator.)
-fn ring_dome_radius(k: usize) -> f32 {
-    DOME_RADIUS * ring_dome_angle(k).sin()
+/// Horizontal radius of ring `k`'s circle on a `rings`-ring dome — `radius · sin θ`
+/// at the ring's dome angle θ. (0 at the apex, full radius at the base equator.)
+fn ring_dome_radius(k: usize, rings: usize) -> f32 {
+    dome_radius(rings) * ring_dome_angle(k, rings).sin()
 }
 
 /// World height of ring `k`'s circle above the map centre — `GUIDE_LIFT +
-/// DOME_RADIUS · cos θ`. (`GUIDE_LIFT + DOME_RADIUS` at the apex, `GUIDE_LIFT` at
-/// the base equator.)
-fn ring_dome_lift(k: usize) -> f32 {
-    GUIDE_LIFT + DOME_RADIUS * ring_dome_angle(k).cos()
+/// radius · cos θ`. (`GUIDE_LIFT + radius` at the apex, `GUIDE_LIFT` at the base.)
+fn ring_dome_lift(k: usize, rings: usize) -> f32 {
+    GUIDE_LIFT + dome_radius(rings) * ring_dome_angle(k, rings).cos()
 }
 
-/// Place a tile from its `offset` from the map centre onto the dome: read its
-/// ring `k` from the offset's length, then set it on that ring's dome circle —
-/// horizontal radius [`ring_dome_radius`] in the offset's direction, lifted
-/// [`ring_dome_lift`]. The centre tile rides up to the apex; each ring rests an
-/// equal angular step down the dome, every hex (corner or straight-run) snapped
-/// onto its ring circle. Only the location moves — the hex keeps its shape.
-fn dome_position(offset: Vec3) -> Vec3 {
+/// Place a tile from its `offset` from the map centre onto a `rings`-ring dome:
+/// read its ring `k` from the offset's length, then set it on that ring's dome
+/// circle — horizontal radius [`ring_dome_radius`] in the offset's direction,
+/// lifted [`ring_dome_lift`]. The centre tile rides up to the apex; each ring
+/// rests an equal angular step down the dome, every hex (corner or straight-run)
+/// snapped onto its ring circle. Only the location moves — the hex keeps shape.
+fn dome_position(offset: Vec3, rings: usize) -> Vec3 {
     let r = offset.length();
     if r < 1e-3 {
-        return Vec3::new(0.0, ring_dome_lift(0), 0.0);
+        return Vec3::new(0.0, ring_dome_lift(0, rings), 0.0);
     }
     let k = (r / HEX_SPACING).round() as usize;
-    offset / r * ring_dome_radius(k) + Vec3::new(0.0, ring_dome_lift(k), 0.0)
+    offset / r * ring_dome_radius(k, rings) + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0)
 }
 
 /// Rotation that tilts a flat hex (whose normal is +Y) so its normal becomes the
@@ -337,61 +366,39 @@ struct Rosette {
     slots: Vec<(u32, Vec3)>,
 }
 
-/// Build the full hex list for both maps — the single source of truth for tile
-/// numbering and placement (mirrors how `render` laid the tiles out before).
-fn build_hex_instances() -> Vec<HexInst> {
-    let mut v = Vec::with_capacity(2 * (HEX_STEPS.len() + 6 * NUM_RINGS));
-    let right_dome = Vec3::new(0.0, GUIDE_LIFT, 0.0);
-    for (number, steps) in HEX_STEPS.iter().enumerate() {
-        let logical = hex_center(steps);
-        v.push(HexInst {
-            number: number as u32,
-            center: dome_position(logical),
-            flip: false,
-            dome_center: right_dome,
-            left: false,
-            logical,
-        });
-    }
-    let ring3 = first_ring(NUM_RINGS);
-    for (i, &off) in ring3.iter().enumerate() {
-        v.push(HexInst {
-            number: (HEX_STEPS.len() + i) as u32,
-            center: dome_position(off),
-            flip: false,
-            dome_center: right_dome,
-            left: false,
-            logical: off,
-        });
-    }
-    let right_count = HEX_STEPS.len() + ring3.len();
+/// Build the full hex list for both maps at `rings` rings — the single source of
+/// truth for tile numbering and placement. Grown straight from the ring formulas
+/// (which reproduce the hand-built `HEX_STEPS`/`LEFT_MAP_STEPS` tables exactly,
+/// per the `ring_formula` test), so any ring count lays out consistently. The
+/// right map numbers centre-outward (0, then `first_ring(1..rings)`); the left
+/// map continues the count outer-ring-inward (`left_ring(rings..1)`, then its
+/// centre), so a ring grows in the middle of the whole sequence.
+fn build_hex_instances(rings: usize) -> Vec<HexInst> {
+    let mut v: Vec<HexInst> = Vec::with_capacity(2 * (1 + 3 * rings * (rings + 1)));
+    let push = |v: &mut Vec<HexInst>, logical, center, flip, dome_center, left| {
+        let number = v.len() as u32;
+        v.push(HexInst { number, center, flip, dome_center, left, logical });
+    };
 
+    // Right map: centre, then each ring's spiral, outward.
+    let right_dome = Vec3::new(0.0, GUIDE_LIFT, 0.0);
+    push(&mut v, Vec3::ZERO, dome_position(Vec3::ZERO, rings), false, right_dome, false);
+    for k in 1..=rings {
+        for off in first_ring(k) {
+            push(&mut v, off, dome_position(off, rings), false, right_dome, false);
+        }
+    }
+
+    // Left map: outer ring inward, then its centre (record-flipped + reflected).
     let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
     let c = left_center();
     let left_dome = reflect(c) + Vec3::new(0.0, GUIDE_LIFT, 0.0);
-    let lring3 = left_ring(NUM_RINGS);
-    for (i, &off) in lring3.iter().enumerate() {
-        v.push(HexInst {
-            number: (right_count + i) as u32,
-            center: reflect(c + dome_position(off)),
-            flip: true,
-            dome_center: left_dome,
-            left: true,
-            logical: c + off,
-        });
+    for k in (1..=rings).rev() {
+        for off in left_ring(k) {
+            push(&mut v, c + off, reflect(c + dome_position(off, rings)), true, left_dome, true);
+        }
     }
-    let left_built_base = right_count + lring3.len();
-    for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-        let logical = hex_center(steps);
-        v.push(HexInst {
-            number: (left_built_base + j) as u32,
-            center: reflect(c + dome_position(logical - c)),
-            flip: true,
-            dome_center: left_dome,
-            left: true,
-            logical,
-        });
-    }
+    push(&mut v, c, reflect(c + dome_position(Vec3::ZERO, rings)), true, left_dome, true);
     v
 }
 
@@ -808,11 +815,17 @@ struct HexScene {
     /// The roll wheel being left-dragged, and the cursor at the previous frame.
     drag: Option<Wheel>,
     drag_cursor: Vec2,
+    /// True while the ring-count slider handle is being dragged.
+    slider_drag: bool,
 
-    /// Static per-hex placement (number, centre, flip, dome centre, which map),
-    /// shared by drawing and the pick test. Roll-independent, built once.
+    /// Number of rings per map (1‥5), set by the slider. Drives the tile layout,
+    /// dome radius/divisions, and equator yaw.
+    num_rings: usize,
+    /// Per-hex placement for the current ring count (number, centre, flip, dome
+    /// centre, which map), shared by drawing and the pick test. Rebuilt on every
+    /// ring-count change; roll-independent otherwise.
     hexes: Vec<HexInst>,
-    /// Same-map neighbours per tile number (built once from logical positions).
+    /// Same-map neighbours per tile number (rebuilt with `hexes`).
     within: Vec<Vec<u32>>,
     /// Number of the hex the cursor is hovering, if any (mouse-pick result).
     hovered: Option<u32>,
@@ -837,7 +850,7 @@ struct HexScene {
 
 impl HexScene {
     fn new() -> Self {
-        let hexes = build_hex_instances();
+        let hexes = build_hex_instances(DEFAULT_RINGS);
         let within = build_within_neighbors(&hexes);
         Self {
             // Above and south, angled down — framed for both ring-3 maps plus
@@ -856,6 +869,8 @@ impl HexScene {
             left_roll: std::f32::consts::PI, // rolled to π: left map faces directly down
             drag: None,
             drag_cursor: Vec2::ZERO,
+            slider_drag: false,
+            num_rings: DEFAULT_RINGS,
             hexes,
             within,
             hovered: None,
@@ -896,15 +911,49 @@ impl HexScene {
         let lx = left_axis_x();
         let m_right = roll_transform(0.0, self.right_roll);
         let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
-        let left_yaw = Mat4::from_translation(Vec3::new(lx, 0.0, 0.0))
-            * Mat4::from_rotation_y(LEFT_YAW)
+        // Half-hex yaw scales with the ring count (outer ring = 6·rings tiles).
+        let yaw = Mat4::from_translation(Vec3::new(lx, 0.0, 0.0))
+            * Mat4::from_rotation_y(left_yaw(self.num_rings))
             * Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
         let left_under = Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
-        let m_left = left_under
-            * left_yaw
-            * Mat4::from_translation(left_shift)
-            * roll_transform(lx, -self.left_roll);
+        let m_left =
+            left_under * yaw * Mat4::from_translation(left_shift) * roll_transform(lx, -self.left_roll);
         (m_right, m_left)
+    }
+
+    /// Set the ring count (clamped to `MIN_RINGS‥MAX_RINGS`) and, if it changed,
+    /// rebuild the tile layout and neighbour table and clear the hover/selection
+    /// (tile numbers change with the count).
+    fn set_rings(&mut self, rings: usize) {
+        let rings = rings.clamp(MIN_RINGS, MAX_RINGS);
+        if rings == self.num_rings {
+            return;
+        }
+        self.num_rings = rings;
+        self.hexes = build_hex_instances(rings);
+        self.within = build_within_neighbors(&self.hexes);
+        self.hovered = None;
+        self.selected = None;
+        self.highlight.clear();
+    }
+
+    /// Screen-X of the slider handle for the current ring count.
+    fn slider_handle_x(&self) -> f32 {
+        let t = (self.num_rings - MIN_RINGS) as f32 / (MAX_RINGS - MIN_RINGS) as f32;
+        SLIDER_X0 + t * (SLIDER_X1 - SLIDER_X0)
+    }
+
+    /// Ring count for a cursor at screen-X `x` (snapped to an integer step).
+    fn slider_value(&self, x: f32) -> usize {
+        let t = ((x - SLIDER_X0) / (SLIDER_X1 - SLIDER_X0)).clamp(0.0, 1.0);
+        MIN_RINGS + (t * (MAX_RINGS - MIN_RINGS) as f32).round() as usize
+    }
+
+    /// Whether a cursor at `p` is close enough to the slider to grab it.
+    fn over_slider(&self, p: Vec2) -> bool {
+        p.x >= SLIDER_X0 - SLIDER_HIT_PAD
+            && p.x <= SLIDER_X1 + SLIDER_HIT_PAD
+            && (p.y - SLIDER_Y).abs() <= SLIDER_HIT_PAD
     }
 
     /// Build a world-space pick ray (origin, unit dir) through the pixel at
@@ -1099,6 +1148,42 @@ impl HexScene {
     /// orientation and edge labelling, so adjacency reads straight off the
     /// colours/letters (e.g. hex 0's edge `a` faces hex 1's edge `d`).
     ///
+    /// Draw the ring-count slider (2D, screen-space): a track with a tick per
+    /// ring count, a handle at the current value, and a `Rings / Tiles` readout.
+    fn draw_slider(&self, renderer: &mut Renderer) {
+        let Some(white) = self.white else { return };
+        // Track.
+        renderer.draw_sprite(
+            white,
+            Vec2::new(SLIDER_X0, SLIDER_Y - SLIDER_TRACK_H * 0.5),
+            Vec2::new(SLIDER_X1 - SLIDER_X0, SLIDER_TRACK_H),
+            [0.24, 0.27, 0.33, 0.85],
+        );
+        // A tick at each integer ring count.
+        for n in MIN_RINGS..=MAX_RINGS {
+            let t = (n - MIN_RINGS) as f32 / (MAX_RINGS - MIN_RINGS) as f32;
+            let x = SLIDER_X0 + t * (SLIDER_X1 - SLIDER_X0);
+            renderer.draw_sprite(
+                white,
+                Vec2::new(x - 1.0, SLIDER_Y - 9.0),
+                Vec2::new(2.0, 18.0),
+                [0.45, 0.50, 0.58, 0.9],
+            );
+        }
+        // Handle (cyan, matching the guide circles).
+        let hx = self.slider_handle_x();
+        renderer.draw_sprite(
+            white,
+            Vec2::new(hx - SLIDER_HANDLE_W * 0.5, SLIDER_Y - SLIDER_HANDLE_H * 0.5),
+            Vec2::new(SLIDER_HANDLE_W, SLIDER_HANDLE_H),
+            GUIDE_COLOR,
+        );
+        // Readout above the track.
+        let tiles = 2 * (1 + 3 * self.num_rings * (self.num_rings + 1));
+        let label = format!("Rings {}   ({} tiles)", self.num_rings, tiles);
+        renderer.draw_text(&label, Vec2::new(SLIDER_X0, SLIDER_Y - 32.0), 18.0, [0.90, 0.95, 1.0, 1.0]);
+    }
+
     /// Draw one tile: its translucent fill (brighter `HOVER_TINT` when `lit`)
     /// then its coloured wireframe + labels, both at `center`/`tilt`/`xform`.
     #[allow(clippy::too_many_arguments)]
@@ -1255,30 +1340,38 @@ impl Scene for HexScene {
         let right_wheel = Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z);
         let left_wheel = Vec3::new(left_axis_x(), 0.0, LEFT_WHEEL_Z);
         if input.mouse_left_pressed {
-            let hit = |w: Vec3| {
-                project_to_screen(w, view_proj, screen)
-                    .is_some_and(|sp| (sp - input.mouse_position).length() < WHEEL_PICK_PX)
-            };
-            self.drag = if hit(right_wheel) {
-                Some(Wheel::Right)
-            } else if hit(left_wheel) {
-                Some(Wheel::Left)
+            if self.over_slider(input.mouse_position) {
+                // Grab the ring-count slider — this press neither rolls nor picks.
+                self.slider_drag = true;
+                self.set_rings(self.slider_value(input.mouse_position.x));
             } else {
-                None
-            };
-            self.drag_cursor = input.mouse_position;
-            // A click that didn't grab a wheel toggles tile selection: pick the
-            // tile under the cursor; clicking the selected tile again clears it,
-            // clicking another selects it, clicking empty space clears it.
-            if self.drag.is_none() {
-                self.selected = match self.pick(input.mouse_position, screen) {
-                    Some(n) if self.selected == Some(n) => None,
-                    other => other,
+                let hit = |w: Vec3| {
+                    project_to_screen(w, view_proj, screen)
+                        .is_some_and(|sp| (sp - input.mouse_position).length() < WHEEL_PICK_PX)
                 };
+                self.drag = if hit(right_wheel) {
+                    Some(Wheel::Right)
+                } else if hit(left_wheel) {
+                    Some(Wheel::Left)
+                } else {
+                    None
+                };
+                self.drag_cursor = input.mouse_position;
+                // A click that didn't grab a wheel toggles tile selection: pick
+                // the tile under the cursor; clicking the selected tile again
+                // clears it, clicking another selects it, empty space clears it.
+                if self.drag.is_none() {
+                    self.selected = match self.pick(input.mouse_position, screen) {
+                        Some(n) if self.selected == Some(n) => None,
+                        other => other,
+                    };
+                }
             }
         }
         if input.mouse_left {
-            if let Some(wheel) = self.drag {
+            if self.slider_drag {
+                self.set_rings(self.slider_value(input.mouse_position.x));
+            } else if let Some(wheel) = self.drag {
                 let delta = (input.mouse_position.y - self.drag_cursor.y) * ROLL_SENS;
                 self.drag_cursor = input.mouse_position;
                 let roll = match wheel {
@@ -1289,6 +1382,7 @@ impl Scene for HexScene {
             }
         } else {
             self.drag = None;
+            self.slider_drag = false;
         }
 
         // Look: right-drag, with sensitivity/invert applied by the config.
@@ -1333,7 +1427,12 @@ impl Scene for HexScene {
         self.pick_accum += dt_s;
         if self.pick_accum >= 1.0 / PICK_HZ {
             self.pick_accum = 0.0;
-            self.hovered = self.pick(input.mouse_position, screen);
+            // Don't hover-pick through the slider widget.
+            self.hovered = if self.over_slider(input.mouse_position) {
+                None
+            } else {
+                self.pick(input.mouse_position, screen)
+            };
             self.highlight = self.compute_highlight();
         }
 
@@ -1416,19 +1515,21 @@ impl Scene for HexScene {
         // span). Centred on each map's roll axis (right at the origin, left at
         // its reflected centre column), lifted +Y, rolled with the map.
         use std::f32::consts::{PI, TAU};
+        let rings = self.num_rings;
+        let outer_r = dome_radius(rings);
         for (centre, xform) in [(Vec3::ZERO, &m_right), (reflect(c), &m_left)] {
             // Latitude rings: each ring circle sits at its even angular division
             // down the dome (radius ring_dome_radius, height ring_dome_lift),
             // threading the ring of hexes resting there.
-            for k in 1..=NUM_RINGS {
-                let lat = centre + Vec3::new(0.0, ring_dome_lift(k), 0.0);
-                draw_arc(renderer, lat, ring_dome_radius(k), Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
+            for k in 1..=rings {
+                let lat = centre + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0);
+                draw_arc(renderer, lat, ring_dome_radius(k, rings), Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
             }
             // Cardinal meridians: half-arcs over the X (E–W) and Z (N–S)
             // verticals, from the base equator up over the apex.
             let base = centre + Vec3::new(0.0, GUIDE_LIFT, 0.0);
-            draw_arc(renderer, base, DOME_RADIUS, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
-            draw_arc(renderer, base, DOME_RADIUS, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            draw_arc(renderer, base, outer_r, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            draw_arc(renderer, base, outer_r, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
         }
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
@@ -1446,6 +1547,10 @@ impl Scene for HexScene {
                 Err(e) => tracing::error!("HUD draw failed: {e}"),
             }
         }
+
+        // Ring-count slider, on top of the HUD.
+        renderer.set_layer(1000.0);
+        self.draw_slider(renderer);
     }
 }
 
@@ -1642,42 +1747,43 @@ mod tests {
     #[test]
     fn dome_placement() {
         use std::f32::consts::FRAC_PI_2;
-        let r = DOME_RADIUS; // 3·s
+        let rings = 3;
+        let r = dome_radius(rings); // 3·s
 
         // The rings divide the dome's quarter-turn evenly: 30°, 60°, 90°.
-        assert!((ring_dome_angle(1) - FRAC_PI_2 / 3.0).abs() < 1e-6);
-        assert!((ring_dome_angle(2) - 2.0 * FRAC_PI_2 / 3.0).abs() < 1e-6);
-        assert!((ring_dome_angle(3) - FRAC_PI_2).abs() < 1e-6);
+        assert!((ring_dome_angle(1, rings) - FRAC_PI_2 / 3.0).abs() < 1e-6);
+        assert!((ring_dome_angle(2, rings) - 2.0 * FRAC_PI_2 / 3.0).abs() < 1e-6);
+        assert!((ring_dome_angle(3, rings) - FRAC_PI_2).abs() < 1e-6);
 
         // Outer ring on the base equator (radius r, lift GUIDE_LIFT); centre on
         // the apex (radius 0, lift GUIDE_LIFT + r).
-        assert!((ring_dome_radius(3) - r).abs() < 1e-2);
-        assert!((ring_dome_lift(3) - GUIDE_LIFT).abs() < 1e-2);
-        assert!(ring_dome_radius(0).abs() < 1e-3);
-        assert!((ring_dome_lift(0) - (GUIDE_LIFT + r)).abs() < 1e-2);
+        assert!((ring_dome_radius(3, rings) - r).abs() < 1e-2);
+        assert!((ring_dome_lift(3, rings) - GUIDE_LIFT).abs() < 1e-2);
+        assert!(ring_dome_radius(0, rings).abs() < 1e-3);
+        assert!((ring_dome_lift(0, rings) - (GUIDE_LIFT + r)).abs() < 1e-2);
 
         // Inner rings step in/down by their angle: ring 1 at 30° (radius r·sin30
         // = r/2), ring 2 at 60°. Heights descend apex → base.
-        assert!((ring_dome_radius(1) - r * 0.5).abs() < 1e-2);
-        assert!((ring_dome_radius(2) - r * (2.0 * FRAC_PI_2 / 3.0).sin()).abs() < 1e-2);
-        assert!(ring_dome_lift(1) > ring_dome_lift(2));
-        assert!(ring_dome_lift(2) > ring_dome_lift(3));
+        assert!((ring_dome_radius(1, rings) - r * 0.5).abs() < 1e-2);
+        assert!((ring_dome_radius(2, rings) - r * (2.0 * FRAC_PI_2 / 3.0).sin()).abs() < 1e-2);
+        assert!(ring_dome_lift(1, rings) > ring_dome_lift(2, rings));
+        assert!(ring_dome_lift(2, rings) > ring_dome_lift(3, rings));
 
         // A placed tile keeps its offset direction, lands on its ring's dome
         // circle, and gains its ring's lift. (HEX_STEPS[10] = 2b, ring-2 corner.)
         let off = hex_center(HEX_STEPS[10]);
-        let p = dome_position(off);
+        let p = dome_position(off, rings);
         let horiz = Vec3::new(p.x, 0.0, p.z);
-        assert!((horiz.length() - ring_dome_radius(2)).abs() < 1e-2);
-        assert!((p.y - ring_dome_lift(2)).abs() < 1e-2);
+        assert!((horiz.length() - ring_dome_radius(2, rings)).abs() < 1e-2);
+        assert!((p.y - ring_dome_lift(2, rings)).abs() < 1e-2);
         assert!((horiz.normalize() - off.normalize()).length() < 1e-3); // purely radial
 
         // A non-corner ring-2 edge tile snaps onto the SAME ring circle.
-        let edge = dome_position(hex_center(HEX_STEPS[7])); // due-west edge tile
-        assert!((Vec3::new(edge.x, 0.0, edge.z).length() - ring_dome_radius(2)).abs() < 1e-2);
+        let edge = dome_position(hex_center(HEX_STEPS[7]), rings); // due-west edge tile
+        assert!((Vec3::new(edge.x, 0.0, edge.z).length() - ring_dome_radius(2, rings)).abs() < 1e-2);
 
         // The centre tile lands on the apex over the centre axis.
-        let apex = dome_position(Vec3::ZERO);
+        let apex = dome_position(Vec3::ZERO, rings);
         assert!(apex.x.abs() < 1e-3 && apex.z.abs() < 1e-3);
         assert!((apex.y - (GUIDE_LIFT + r)).abs() < 1e-2);
     }
@@ -1700,9 +1806,9 @@ mod tests {
         // the hex stands vertical; the centre tile's radius is +Y, so it stays
         // flat. (Both measured against the dome centre at the base height.)
         let dome_c = Vec3::new(0.0, GUIDE_LIFT, 0.0);
-        let n3 = (dome_position(first_ring(3)[0]) - dome_c).normalize();
+        let n3 = (dome_position(first_ring(3)[0], 3) - dome_c).normalize();
         assert!(n3.y.abs() < 1e-3, "ring-3 hex should stand vertical");
-        let nc = (dome_position(Vec3::ZERO) - dome_c).normalize();
+        let nc = (dome_position(Vec3::ZERO, 3) - dome_c).normalize();
         assert!((nc - Vec3::Y).length() < 1e-4, "centre hex should lie flat");
     }
 
@@ -1757,6 +1863,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dynamic_ring_counts() {
+        let mut s = HexScene::new();
+        for rings in MIN_RINGS..=MAX_RINGS {
+            s.set_rings(rings);
+            assert_eq!(s.num_rings, rings);
+            // Two maps, each a centre + `rings` rings of 6k tiles.
+            let expect = 2 * (1 + 3 * rings * (rings + 1));
+            assert_eq!(s.hexes.len(), expect, "{rings} rings → tile count");
+            // The seven-tile invariant survives at every ring count.
+            for n in 0..s.hexes.len() as u32 {
+                s.hovered = Some(n);
+                assert_eq!(s.compute_highlight().len(), 7, "{rings} rings, tile {n}");
+            }
+        }
+        // One ring per map is the "map of 14": two centres + two rings of six.
+        s.set_rings(1);
+        assert_eq!(s.hexes.len(), 14);
+        // Clamped to the slider range.
+        s.set_rings(99);
+        assert_eq!(s.num_rings, MAX_RINGS);
+        s.set_rings(0);
+        assert_eq!(s.num_rings, MIN_RINGS);
     }
 
     #[test]
