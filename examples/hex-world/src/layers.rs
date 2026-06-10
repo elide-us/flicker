@@ -124,6 +124,14 @@ pub const M_FOREST: u32 = 20;
 pub const M_RAINFOREST: u32 = 21;
 pub const M_TAIGA: u32 = 22;
 pub const M_TUNDRA: u32 = 23;
+// World-gen rock hardness ramp (soft→hard) and ore-vein colours (Epoch 5).
+pub const M_ROCK_SOFT: u32 = 24;
+pub const M_ROCK_HARD: u32 = 25;
+pub const M_ORE_IRON: u32 = 26;
+pub const M_ORE_COPPER: u32 = 27;
+pub const M_ORE_GOLD: u32 = 28;
+pub const M_ORE_SILVER: u32 = 29;
+pub const M_ORE_OTHER: u32 = 30;
 
 // --- Vertical band model (the world's y-axis structure) ---
 //
