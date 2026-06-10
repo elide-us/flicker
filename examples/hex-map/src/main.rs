@@ -21,6 +21,15 @@
 //!     the middle of the whole sequence; a second compass sits on its centre.
 //!   * a **roll wheel** south of each map: left-drag to roll it about its N-S
 //!     axis, 0–180° (tops always tilt away from each other).
+//!   * **ring guide circles + a cardinal dome** floating above each map: three
+//!     concentric circles, one through each ring's *corner* hexes (radius
+//!     `k·HEX_SPACING`; the straight-run hexes between corners on ring 2+ fall
+//!     just inside and are skipped), plus a dome of the outer radius (`3·s`)
+//!     arcing over the X (E–W) and Z (N–S) verticals and springing from the
+//!     outer ring's four cardinal points up to an apex over the centre — so its
+//!     diameter matches the outer ring (e.g. the right map's 21↔30 span). All
+//!     lifted in +Y (world up — the left map's "down", as it is record-flipped)
+//!     and rolled with the map. Nothing is drawn over the centre tile.
 //!
 //! It follows the voxel-cluster application model end to end: a [`Scene`] driven
 //! by [`SceneManager`]/[`run`], the [`InputMap`]/[`AbstractControls`] input
@@ -156,6 +165,16 @@ const LEFT_WHEEL_Z: f32 = -7000.0;
 const WHEEL_PICK_PX: f32 = 90.0;
 /// Roll change per pixel of vertical drag (radians).
 const ROLL_SENS: f32 = 0.005;
+
+/// Height the ring guide circles float above the (flat) tile plane, in +Y,
+/// before the map's roll tilts them with it. Tall enough to clear the centre
+/// number labels.
+const GUIDE_LIFT: f32 = 700.0;
+/// Colour of the ring guide circles (a soft cyan, distinct from the edge hues
+/// and the yellow roll wheels).
+const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
+/// Line segments per guide circle.
+const GUIDE_SEGS: usize = 96;
 
 // ───────────────────────────────────────────────────────────────────
 // Geometry helpers
@@ -322,6 +341,36 @@ fn draw_wheel(renderer: &mut Renderer, centre: Vec3, radius: f32, roll: f32, col
         let tip = centre + Vec3::new(radius * a.cos(), radius * a.sin(), 0.0);
         renderer.draw_lines(&[(centre, tip)], color);
     }
+}
+
+/// Draw a circle (or partial arc) of `radius` about `center`, lying in the plane
+/// spanned by unit vectors `u`,`v` (point = `center + radius·(cos·u + sin·v)`),
+/// over the angle span `[a0, a1]` in `segs` segments, then tilted by the map's
+/// roll `xform`. With `u = X, v = Z, [0, TAU]` it's a flat ring on the tile
+/// plane; with `u = X|Z, v = Y, [0, PI]` it's a vertical dome half-arc rising
+/// from the `±u` cardinal points to an apex at `center + radius·Y`.
+#[allow(clippy::too_many_arguments)]
+fn draw_arc(
+    renderer: &mut Renderer,
+    center: Vec3,
+    radius: f32,
+    u: Vec3,
+    v: Vec3,
+    a0: f32,
+    a1: f32,
+    segs: usize,
+    xform: &Mat4,
+    color: [f32; 4],
+) {
+    let p = |a: f32| xform.transform_point3(center + (u * a.cos() + v * a.sin()) * radius);
+    let lines: Vec<(Vec3, Vec3)> = (0..segs)
+        .map(|i| {
+            let t0 = a0 + (a1 - a0) * i as f32 / segs as f32;
+            let t1 = a0 + (a1 - a0) * (i + 1) as f32 / segs as f32;
+            (p(t0), p(t1))
+        })
+        .collect();
+    renderer.draw_lines(&lines, color);
 }
 
 /// Four short segments forming a pyramid arrowhead at `tip`, opening back along
@@ -806,6 +855,27 @@ impl Scene for HexScene {
             self.draw_hex(renderer, reflect(hex_center(steps)), (left_built_base + j) as u32, true, &m_left);
         }
         draw_compass(renderer, reflect(c), true, &m_left);
+
+        // Ring guide circles + cardinal dome, per map. Each ring circle passes
+        // through that ring's CORNER hexes (radius k·HEX_SPACING); the
+        // straight-run hexes between corners on ring 2+ fall just inside and are
+        // skipped. Over each map a cardinal dome of the outer radius (3·s) arcs
+        // across the X (E–W) and Z (N–S) verticals, springing from the outer
+        // ring's four cardinal points up to an apex over the centre — so the
+        // dome diameter equals the outer ring's (e.g. the right map's 21↔30
+        // span). Centred on each map's roll axis (right at the origin, left at
+        // its reflected centre column), lifted +Y, rolled with the map.
+        use std::f32::consts::{PI, TAU};
+        let outer_r = 3.0 * HEX_SPACING;
+        for (centre, xform) in [(Vec3::ZERO, &m_right), (reflect(c), &m_left)] {
+            let lifted = centre + Vec3::new(0.0, GUIDE_LIFT, 0.0);
+            for k in 1..=3 {
+                let r = k as f32 * HEX_SPACING;
+                draw_arc(renderer, lifted, r, Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
+            }
+            draw_arc(renderer, lifted, outer_r, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            draw_arc(renderer, lifted, outer_r, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+        }
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
         draw_wheel(renderer, Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z), WHEEL_RADIUS, self.right_roll, [0.95, 0.85, 0.45, 1.0]);
