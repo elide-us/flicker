@@ -1,0 +1,26 @@
+{
+  "_comment": "Declarative HUD layout for the hex-map client. The host parses this and exposes it to Lua as the `UI` global (flicker-script ScriptHost::set_global_json); scripts/hud.lua reads `UI.hud` and emits draw commands. Edit values here to move/recolour the HUD, then relaunch. Colours are RGBA 0..1; positions/sizes are HUD pixels (origin top-left).",
+
+  "hud": {
+    "stats": {
+      "x": 18,
+      "y": 18,
+      "line_h": 22,
+      "title_size": 22,
+      "value_size": 16,
+      "title_color": [0.95, 0.85, 0.55, 1.0],
+      "value_color": [0.78, 0.86, 0.96, 1.0]
+    },
+    "legend": {
+      "x": 18,
+      "margin_b": 156,
+      "line_h": 22,
+      "size": 16,
+      "head_color": [0.85, 0.85, 0.70, 1.0],
+      "x_color": [0.96, 0.45, 0.45, 1.0],
+      "y_color": [0.55, 0.92, 0.60, 1.0],
+      "z_color": [0.55, 0.72, 1.00, 1.0],
+      "hint_color": [0.72, 0.75, 0.82, 1.0]
+    }
+  }
+}
