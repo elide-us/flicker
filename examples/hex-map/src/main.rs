@@ -6,9 +6,12 @@
 //!     matching voxel-cluster); each axis's positive half is bright with a
 //!     pyramid arrowhead, the negative half dim, so `+`/`-` reads at a glance;
 //!   * **flat-top hexagons**, 2048 units corner-to-corner (the two points face
-//!     east/west: +X = west, −X = east), drawn as rasterized line wireframes on
-//!     the ground plane (XZ, y = 0) with a **dot at each corner**, each edge in
-//!     its own colour and labelled `a`–`f` (clockwise from the west point);
+//!     east/west: +X = west, −X = east), drawn as rasterized line wireframes —
+//!     each hex lifted onto the cardinal dome (see below) and tilted tangent to
+//!     it (its face normal along the radius from the dome centre), so it lies
+//!     flat at the apex and stands vertical at the equator — with a **dot at
+//!     each corner**, each edge in its own colour and labelled `a`–`f`
+//!     (clockwise from the west point);
 //!   * a **number billboard** over each hex centre — the per-hex map-ordering
 //!     label. The right map is numbered centre-outward as one clockwise spiral:
 //!     0 centre, ring 1 (1–6), ring 2 (7–18, hand-built), ring 3 (19–36, grown
@@ -21,15 +24,15 @@
 //!     the middle of the whole sequence; a second compass sits on its centre.
 //!   * a **roll wheel** south of each map: left-drag to roll it about its N-S
 //!     axis, 0–180° (tops always tilt away from each other).
-//!   * **ring guide circles + a cardinal dome** floating above each map: three
-//!     concentric circles, one through each ring's *corner* hexes (radius
-//!     `k·HEX_SPACING`; the straight-run hexes between corners on ring 2+ fall
-//!     just inside and are skipped), plus a dome of the outer radius (`3·s`)
-//!     arcing over the X (E–W) and Z (N–S) verticals and springing from the
-//!     outer ring's four cardinal points up to an apex over the centre — so its
-//!     diameter matches the outer ring (e.g. the right map's 21↔30 span). All
-//!     lifted in +Y (world up — the left map's "down", as it is record-flipped)
-//!     and rolled with the map. Nothing is drawn over the centre tile.
+//!   * a **cardinal dome** over each map: a hemisphere of radius `3·s` whose
+//!     quarter-turn (apex → equator) is divided evenly across the rings, so ring
+//!     k rests `k·(90°/3)` down the dome — rings 1/2/3 at 30°/60°/90°. Each ring
+//!     is a **latitude circle** at that angle (horizontal radius `3s·sin θ`,
+//!     lifted `3s·cos θ`) with its hexes — corner and straight-run alike —
+//!     snapped onto it; two **meridian arcs** over the X (E–W) and Z (N–S)
+//!     verticals run from the base equator (the outer ring, e.g. the right map's
+//!     21↔30 span) up over the apex, where the centre tile sits. All lifted in
+//!     +Y and rolled with the map.
 //!
 //! It follows the voxel-cluster application model end to end: a [`Scene`] driven
 //! by [`SceneManager`]/[`run`], the [`InputMap`]/[`AbstractControls`] input
@@ -176,6 +179,14 @@ const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
 /// Line segments per guide circle.
 const GUIDE_SEGS: usize = 96;
 
+/// Number of hex rings around each map centre (centre tile excluded). The dome's
+/// quarter-turn (apex → equator) is divided evenly across this many rings, so
+/// ring `k` rests `k·(90°/NUM_RINGS)` down the dome.
+const NUM_RINGS: usize = 3;
+/// Dome (hemisphere) radius: the outermost ring sits on its equator, so this is
+/// `NUM_RINGS · HEX_SPACING`.
+const DOME_RADIUS: f32 = NUM_RINGS as f32 * HEX_SPACING;
+
 // ───────────────────────────────────────────────────────────────────
 // Geometry helpers
 // ───────────────────────────────────────────────────────────────────
@@ -213,19 +224,56 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         * HEX_SPACING
 }
 
-/// Snap a tile's `offset` from its map centre radially out onto its ring circle:
-/// every ring tile lands at radius `k·HEX_SPACING` (k = its ring index, read off
-/// the offset's length), keeping its direction. Ring corners are already on the
-/// circle (no move); the straight-run hexes between corners on ring 2+ slide out
-/// onto it. The centre tile (offset ≈ 0) stays put. This deliberately breaks the
-/// hex tessellation's symmetry — only the tile's location moves, not its shape.
-fn snap_to_ring(offset: Vec3) -> Vec3 {
+/// Polar angle (from the apex) at which ring `k` rests on the dome: the dome's
+/// quarter-turn (apex → equator) split evenly across [`NUM_RINGS`], so ring k
+/// sits `k·(90°/NUM_RINGS)` down from the apex — rings 1/2/3 at 30°/60°/90°,
+/// the outermost on the base equator (`k = 0` is the apex over the centre).
+fn ring_dome_angle(k: usize) -> f32 {
+    k as f32 * (std::f32::consts::FRAC_PI_2 / NUM_RINGS as f32)
+}
+
+/// Horizontal radius of ring `k`'s circle on the dome — `DOME_RADIUS · sin θ` at
+/// the ring's dome angle θ. (0 at the apex, `DOME_RADIUS` at the base equator.)
+fn ring_dome_radius(k: usize) -> f32 {
+    DOME_RADIUS * ring_dome_angle(k).sin()
+}
+
+/// World height of ring `k`'s circle above the map centre — `GUIDE_LIFT +
+/// DOME_RADIUS · cos θ`. (`GUIDE_LIFT + DOME_RADIUS` at the apex, `GUIDE_LIFT` at
+/// the base equator.)
+fn ring_dome_lift(k: usize) -> f32 {
+    GUIDE_LIFT + DOME_RADIUS * ring_dome_angle(k).cos()
+}
+
+/// Place a tile from its `offset` from the map centre onto the dome: read its
+/// ring `k` from the offset's length, then set it on that ring's dome circle —
+/// horizontal radius [`ring_dome_radius`] in the offset's direction, lifted
+/// [`ring_dome_lift`]. The centre tile rides up to the apex; each ring rests an
+/// equal angular step down the dome, every hex (corner or straight-run) snapped
+/// onto its ring circle. Only the location moves — the hex keeps its shape.
+fn dome_position(offset: Vec3) -> Vec3 {
     let r = offset.length();
     if r < 1e-3 {
-        return offset;
+        return Vec3::new(0.0, ring_dome_lift(0), 0.0);
     }
-    let k = (r / HEX_SPACING).round();
-    offset / r * (k * HEX_SPACING)
+    let k = (r / HEX_SPACING).round() as usize;
+    offset / r * ring_dome_radius(k) + Vec3::new(0.0, ring_dome_lift(k), 0.0)
+}
+
+/// Rotation that tilts a flat hex (whose normal is +Y) so its normal becomes the
+/// unit vector `n`: the shortest-arc rotation taking +Y to `n`. Laying each hex
+/// tangent to the dome — perpendicular to the radius from the dome centre — uses
+/// this with `n` = that radius, so a tile rides flat at the apex (`n = +Y`) and
+/// stands vertical at the equator (`n` horizontal).
+fn tilt_to_normal(n: Vec3) -> Mat4 {
+    let d = Vec3::Y.dot(n).clamp(-1.0, 1.0);
+    if d > 0.999_999 {
+        Mat4::IDENTITY
+    } else if d < -0.999_999 {
+        Mat4::from_axis_angle(Vec3::X, std::f32::consts::PI)
+    } else {
+        Mat4::from_axis_angle(Vec3::Y.cross(n).normalize(), d.acos())
+    }
 }
 
 /// Ring-`k` cell offsets from a centre (× `HEX_SPACING`): the classic clockwise
@@ -281,8 +329,8 @@ fn flip_ns(p: Vec3, center: Vec3) -> Vec3 {
 
 /// Draw an XYZ compass gadget at `origin`: red X, green Y, blue Z, each positive
 /// half bright with a pyramid arrowhead and the negative half dim. With `flip`
-/// the frame is record-flipped about the N-S axis — **X points east, Y points
-/// down**, Z/north unchanged — matching the flipped left-chart tiles.
+/// the frame is mirrored west↔east about the N-S axis — **X points east**, Y/up
+/// and Z/north unchanged — matching the X-mirrored left-chart tiles.
 fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool, xform: &Mat4) {
     let axes = [
         (Vec3::X, [0.95, 0.30, 0.30, 1.0]),
@@ -291,7 +339,7 @@ fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool, xform: &Mat4)
     ];
     for (dir, color) in axes {
         let d = if flip {
-            Vec3::new(-dir.x, -dir.y, dir.z)
+            Vec3::new(-dir.x, dir.y, dir.z)
         } else {
             dir
         };
@@ -573,7 +621,7 @@ impl HexScene {
                 ..AbstractControls::default()
             },
             right_roll: 0.0,
-            left_roll: 0.0,
+            left_roll: std::f32::consts::PI, // rolled to π: left map faces directly down
             drag: None,
             drag_cursor: Vec2::ZERO,
             white: None,
@@ -637,7 +685,20 @@ impl HexScene {
     /// number billboard floating over the centre. Every hex shares the same
     /// orientation and edge labelling, so adjacency reads straight off the
     /// colours/letters (e.g. hex 0's edge `a` faces hex 1's edge `d`).
-    fn draw_hex(&self, renderer: &mut Renderer, center: Vec3, number: u32, flip: bool, xform: &Mat4) {
+    ///
+    /// The hex is tilted tangent to the dome: rotated about its centre so its
+    /// face normal points along the radius from `dome_center` (the map's centre
+    /// axis at the dome's base height) — perpendicular to that radius. So a tile
+    /// lies flat at the apex and stands vertical at the equator.
+    fn draw_hex(
+        &self,
+        renderer: &mut Renderer,
+        center: Vec3,
+        number: u32,
+        flip: bool,
+        xform: &Mat4,
+        dome_center: Vec3,
+    ) {
         let mut corners = hex_corners(center, HEX_SIZE);
         if flip {
             // Record-flip about the N-S axis through the centre: mirror
@@ -647,21 +708,25 @@ impl HexScene {
                 *c = flip_ns(*c, center);
             }
         }
-        // `xform` is the map's roll (rotation about its N-S axis); applied to
-        // every drawn point so the whole hex tilts together.
+        // Tilt the hex tangent to the dome (normal → radius from `dome_center`),
+        // then apply the map's roll `xform`. `place` does both about the centre,
+        // so every drawn point is tilted-then-rolled together.
+        let tilt = tilt_to_normal((center - dome_center).normalize_or_zero());
+        let place = |p: Vec3| xform.transform_point3(center + tilt.transform_vector3(p - center));
         for i in 0..6 {
-            let a = xform.transform_point3(corners[i]);
-            let b = xform.transform_point3(corners[(i + 1) % 6]);
+            let a = place(corners[i]);
+            let b = place(corners[(i + 1) % 6]);
             let color = EDGE_COLORS[i];
             renderer.draw_lines(&[(a, b)], color);
 
             if let Some(glyphs) = self.glyphs {
-                // Nudge the letter outward from the centre (correct mirrored too)
-                // and lift it off the ground plane, then roll it with the map.
+                // Nudge the letter outward from the centre (in the flat frame,
+                // correct mirrored too) and lift it off the face, then
+                // tilt+roll it with the hex.
                 let mid = (corners[i] + corners[(i + 1) % 6]) * 0.5;
                 let outward =
                     Vec3::new(mid.x - center.x, 0.0, mid.z - center.z).normalize_or_zero();
-                let pos = xform.transform_point3(
+                let pos = place(
                     mid + outward * EDGE_LABEL_OUT + Vec3::new(0.0, EDGE_LABEL_SIZE * 0.5, 0.0),
                 );
                 let letter = (b'a' + i as u8) as char;
@@ -679,7 +744,7 @@ impl HexScene {
             for c in corners {
                 renderer.draw_billboard(
                     dot,
-                    xform.transform_point3(c),
+                    place(c),
                     Vec2::splat(DOT_SIZE),
                     Vec2::ZERO,
                     Vec2::ONE,
@@ -688,8 +753,7 @@ impl HexScene {
             }
         }
         if let Some(glyphs) = self.glyphs {
-            let label =
-                xform.transform_point3(center + Vec3::new(0.0, LABEL_SIZE * 0.5 + 40.0, 0.0));
+            let label = place(center + Vec3::new(0.0, LABEL_SIZE * 0.5 + 40.0, 0.0));
             self.draw_text_billboard(
                 renderer,
                 glyphs,
@@ -840,18 +904,26 @@ impl Scene for HexScene {
         // pose (right upright, left record-flipped/down-facing).
         let lx = left_axis_x();
         let m_right = roll_transform(0.0, self.right_roll);
-        let m_left = roll_transform(lx, -self.left_roll);
+        // Lower the left (down-facing) map half a tile in −Y and align its centre
+        // on the right map's Z — it sits half a step north (z = ½·HEX_SPACING),
+        // so shift −Z by that. Post-multiplied (applied after the roll), the whole
+        // rolled left dome drops straight down below the right's up-facing dome.
+        let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
+        let m_left = Mat4::from_translation(left_shift) * roll_transform(lx, -self.left_roll);
 
         // First (right) map: compass at the origin, then the hand-built centre +
         // ring 1 + ring 2 (tiles 0–18), then the formula-grown ring 3 (19–36),
-        // which continues the outward spiral and ends on the SW corner (3f).
+        // which continues the outward spiral and ends on the SW corner (3f). The
+        // dome centre is the map's centre axis at the dome's base height; each
+        // hex tilts tangent to the dome about it.
+        let right_dome_c = Vec3::new(0.0, GUIDE_LIFT, 0.0);
         draw_compass(renderer, Vec3::ZERO, false, &m_right);
         for (number, steps) in HEX_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, snap_to_ring(hex_center(steps)), number as u32, false, &m_right);
+            self.draw_hex(renderer, dome_position(hex_center(steps)), number as u32, false, &m_right, right_dome_c);
         }
         let ring3 = first_ring(3);
         for (i, &off) in ring3.iter().enumerate() {
-            self.draw_hex(renderer, snap_to_ring(off), (HEX_STEPS.len() + i) as u32, false, &m_right);
+            self.draw_hex(renderer, dome_position(off), (HEX_STEPS.len() + i) as u32, false, &m_right, right_dome_c);
         }
         let right_count = HEX_STEPS.len() + ring3.len(); // 37
 
@@ -859,17 +931,23 @@ impl Scene for HexScene {
         // numbered first — inserting the new tiles in the *middle* of the whole
         // sequence — then the hand-built ring 2 / ring 1 / centre follow. Logical
         // positions reflect about LEFT_AXIS_X.
-        let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, 0.0, p.z);
+        // The reflection mirrors west↔east but keeps Y, so the dome lift from
+        // [`dome_position`] survives it.
+        let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
         let c = left_center();
+        // Dome centre for the left map: its reflected centre axis at the base
+        // height. Computed from the reflected world position, so the radius (and
+        // thus each hex's tilt) mirrors west↔east with the chart.
+        let left_dome_c = reflect(c) + Vec3::new(0.0, GUIDE_LIFT, 0.0);
         let lring3 = left_ring(3);
         for (i, &off) in lring3.iter().enumerate() {
-            self.draw_hex(renderer, reflect(c + snap_to_ring(off)), (right_count + i) as u32, true, &m_left);
+            self.draw_hex(renderer, reflect(c + dome_position(off)), (right_count + i) as u32, true, &m_left, left_dome_c);
         }
         let left_built_base = right_count + lring3.len(); // 55
         for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-            // Snap relative to the left centre `c`, then re-centre and reflect.
-            let off = snap_to_ring(hex_center(steps) - c);
-            self.draw_hex(renderer, reflect(c + off), (left_built_base + j) as u32, true, &m_left);
+            // Place relative to the left centre `c`, then re-centre and reflect.
+            let off = dome_position(hex_center(steps) - c);
+            self.draw_hex(renderer, reflect(c + off), (left_built_base + j) as u32, true, &m_left, left_dome_c);
         }
         draw_compass(renderer, reflect(c), true, &m_left);
 
@@ -883,15 +961,19 @@ impl Scene for HexScene {
         // span). Centred on each map's roll axis (right at the origin, left at
         // its reflected centre column), lifted +Y, rolled with the map.
         use std::f32::consts::{PI, TAU};
-        let outer_r = 3.0 * HEX_SPACING;
         for (centre, xform) in [(Vec3::ZERO, &m_right), (reflect(c), &m_left)] {
-            let lifted = centre + Vec3::new(0.0, GUIDE_LIFT, 0.0);
-            for k in 1..=3 {
-                let r = k as f32 * HEX_SPACING;
-                draw_arc(renderer, lifted, r, Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
+            // Latitude rings: each ring circle sits at its even angular division
+            // down the dome (radius ring_dome_radius, height ring_dome_lift),
+            // threading the ring of hexes resting there.
+            for k in 1..=NUM_RINGS {
+                let lat = centre + Vec3::new(0.0, ring_dome_lift(k), 0.0);
+                draw_arc(renderer, lat, ring_dome_radius(k), Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
             }
-            draw_arc(renderer, lifted, outer_r, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
-            draw_arc(renderer, lifted, outer_r, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            // Cardinal meridians: half-arcs over the X (E–W) and Z (N–S)
+            // verticals, from the base equator up over the apex.
+            let base = centre + Vec3::new(0.0, GUIDE_LIFT, 0.0);
+            draw_arc(renderer, base, DOME_RADIUS, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            draw_arc(renderer, base, DOME_RADIUS, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
         }
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
@@ -1103,38 +1185,70 @@ mod tests {
     }
 
     #[test]
-    fn ring_snap() {
-        let s = HEX_SPACING;
+    fn dome_placement() {
+        use std::f32::consts::FRAC_PI_2;
+        let r = DOME_RADIUS; // 3·s
 
-        // Centre tile (offset 0) is left in place.
-        assert!(snap_to_ring(Vec3::ZERO).length() < 1e-3);
+        // The rings divide the dome's quarter-turn evenly: 30°, 60°, 90°.
+        assert!((ring_dome_angle(1) - FRAC_PI_2 / 3.0).abs() < 1e-6);
+        assert!((ring_dome_angle(2) - 2.0 * FRAC_PI_2 / 3.0).abs() < 1e-6);
+        assert!((ring_dome_angle(3) - FRAC_PI_2).abs() < 1e-6);
 
-        // Ring-1 tiles are all corners already at radius s — unchanged.
-        for n in 1..=6 {
-            let p = hex_center(HEX_STEPS[n]);
-            assert!((snap_to_ring(p) - p).length() < 1e-2, "ring1 corner {n} moved");
-        }
+        // Outer ring on the base equator (radius r, lift GUIDE_LIFT); centre on
+        // the apex (radius 0, lift GUIDE_LIFT + r).
+        assert!((ring_dome_radius(3) - r).abs() < 1e-2);
+        assert!((ring_dome_lift(3) - GUIDE_LIFT).abs() < 1e-2);
+        assert!(ring_dome_radius(0).abs() < 1e-3);
+        assert!((ring_dome_lift(0) - (GUIDE_LIFT + r)).abs() < 1e-2);
 
-        // Every ring-2 / ring-3 tile lands exactly on its ring circle (2s / 3s),
-        // and the move is purely radial (direction preserved).
-        let on_circle = |n: usize, off: Vec3, k: f32| {
-            let snapped = snap_to_ring(off);
-            assert!((snapped.length() - k * s).abs() < 1e-2, "tile {n} not on {k}·s circle");
-            // Purely radial: same unit direction (so it slid straight out).
-            assert!((snapped.normalize() - off.normalize()).length() < 1e-3, "tile {n} turned");
+        // Inner rings step in/down by their angle: ring 1 at 30° (radius r·sin30
+        // = r/2), ring 2 at 60°. Heights descend apex → base.
+        assert!((ring_dome_radius(1) - r * 0.5).abs() < 1e-2);
+        assert!((ring_dome_radius(2) - r * (2.0 * FRAC_PI_2 / 3.0).sin()).abs() < 1e-2);
+        assert!(ring_dome_lift(1) > ring_dome_lift(2));
+        assert!(ring_dome_lift(2) > ring_dome_lift(3));
+
+        // A placed tile keeps its offset direction, lands on its ring's dome
+        // circle, and gains its ring's lift. (HEX_STEPS[10] = 2b, ring-2 corner.)
+        let off = hex_center(HEX_STEPS[10]);
+        let p = dome_position(off);
+        let horiz = Vec3::new(p.x, 0.0, p.z);
+        assert!((horiz.length() - ring_dome_radius(2)).abs() < 1e-2);
+        assert!((p.y - ring_dome_lift(2)).abs() < 1e-2);
+        assert!((horiz.normalize() - off.normalize()).length() < 1e-3); // purely radial
+
+        // A non-corner ring-2 edge tile snaps onto the SAME ring circle.
+        let edge = dome_position(hex_center(HEX_STEPS[7])); // due-west edge tile
+        assert!((Vec3::new(edge.x, 0.0, edge.z).length() - ring_dome_radius(2)).abs() < 1e-2);
+
+        // The centre tile lands on the apex over the centre axis.
+        let apex = dome_position(Vec3::ZERO);
+        assert!(apex.x.abs() < 1e-3 && apex.z.abs() < 1e-3);
+        assert!((apex.y - (GUIDE_LIFT + r)).abs() < 1e-2);
+    }
+
+    #[test]
+    fn hex_tilt() {
+        // The tilt maps the flat hex normal (+Y) onto the requested normal, and
+        // is a rigid rotation (preserves lengths).
+        let check = |n: Vec3| {
+            let m = tilt_to_normal(n);
+            assert!((m.transform_vector3(Vec3::Y) - n).length() < 1e-4, "normal {n:?}");
+            let v = Vec3::new(HEX_SIZE, 0.0, 0.0);
+            assert!((m.transform_vector3(v).length() - HEX_SIZE).abs() < 1e-1);
         };
-        for n in 7..=18 {
-            on_circle(n, hex_center(HEX_STEPS[n]), 2.0);
-        }
-        for (i, &off) in first_ring(3).iter().enumerate() {
-            on_circle(19 + i, off, 3.0);
-        }
+        check(Vec3::Y); // apex: identity (stays flat)
+        check(Vec3::X); // equator (due west): stands vertical
+        check(Vec3::new(0.3, 0.8, -0.5).normalize()); // an oblique radius
 
-        // The non-corner ring-2 edge tiles genuinely MOVE outward (they began at
-        // √3·s ≈ 1.73·s, inside the 2s circle).
-        let edge = hex_center(HEX_STEPS[7]); // due-west edge tile
-        assert!(edge.length() < 2.0 * s - 1.0);
-        assert!(snap_to_ring(edge).length() > edge.length() + 1.0);
+        // A ring-3 hex sits at the equator, so its dome radius is horizontal and
+        // the hex stands vertical; the centre tile's radius is +Y, so it stays
+        // flat. (Both measured against the dome centre at the base height.)
+        let dome_c = Vec3::new(0.0, GUIDE_LIFT, 0.0);
+        let n3 = (dome_position(first_ring(3)[0]) - dome_c).normalize();
+        assert!(n3.y.abs() < 1e-3, "ring-3 hex should stand vertical");
+        let nc = (dome_position(Vec3::ZERO) - dome_c).normalize();
+        assert!((nc - Vec3::Y).length() < 1e-4, "centre hex should lie flat");
     }
 
     #[test]
