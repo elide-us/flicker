@@ -22,6 +22,7 @@ members = [
     "examples/mesh-smoke",
     "examples/voxel-cluster",
     "examples/hex-world",
+    "examples/hex-map",
 ]
 
 [workspace.package]
