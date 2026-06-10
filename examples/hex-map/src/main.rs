@@ -49,7 +49,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use flicker::app::{run, AbstractControls, Action, InputMap, InputState, Key};
-use flicker::render::{Camera, Mat4, Renderer, SceneLighting, TextureHandle, Vec2, Vec3};
+use flicker::render::{
+    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
+    TextureHandle, Vec2, Vec3,
+};
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
@@ -158,6 +161,12 @@ const LEFT_MAP_STEPS: [&[usize]; 19] = [
 /// Wide enough that the two (now ring-3) maps clear each other.
 const LEFT_AXIS_X: f32 = 4.5 * HEX_SPACING;
 
+/// Half-hex yaw of the left (down-facing) map about its own vertical centre axis
+/// — half the outer ring's hex spacing (ring 3 = 18 hexes → 20° apart, so 10°),
+/// setting the lower ring's points into the upper ring's valleys. Positive is
+/// CCW about +Y; this is negative (the other way). Test value; flip to reverse.
+const LEFT_YAW: f32 = -std::f32::consts::PI / 18.0; // −10° = −½ · (360°/18)
+
 /// Radius of the roll wheel handles.
 const WHEEL_RADIUS: f32 = 850.0;
 /// World Z (south) of each map's roll wheel, on the map's N-S axis — south of
@@ -186,6 +195,27 @@ const NUM_RINGS: usize = 3;
 /// Dome (hemisphere) radius: the outermost ring sits on its equator, so this is
 /// `NUM_RINGS · HEX_SPACING`.
 const DOME_RADIUS: f32 = NUM_RINGS as f32 * HEX_SPACING;
+
+/// Material index of the hex face fill — CLOUD_MID, a neutral mid-grey in the
+/// mesh palette (so the fill reads grey, not coloured).
+const FILL_MATERIAL: u32 = 7;
+/// Tint (× the lit base colour) of a resting tile fill; the `.w` is its opacity
+/// — 25% transparent grey.
+const FILL_TINT: [f32; 4] = [1.0, 1.0, 1.0, 0.25];
+/// Tint of the hovered tile fill — brighter and more opaque, to read as a
+/// highlight alongside the outward stretch.
+const HOVER_TINT: [f32; 4] = [1.6, 1.6, 1.6, 0.55];
+/// How far a hovered tile extends outward (along its radial normal) from its
+/// resting spot on the dome — the hover "stretch" highlight.
+const HOVER_STRETCH: f32 = 700.0;
+/// Tiny inward (−radial) offset of the fill below the wireframe plane, so the
+/// coloured edges always draw in front of the fill (no z-fighting).
+const FILL_INSET: f32 = 4.0;
+/// Hover hit-test rate — the mouse pick runs this many times a second, not every
+/// frame.
+const PICK_HZ: f32 = 15.0;
+/// Vertical FOV used to build the pick ray; matches the render camera.
+const PICK_FOV_Y: f32 = std::f32::consts::PI / 3.0; // 60°
 
 // ───────────────────────────────────────────────────────────────────
 // Geometry helpers
@@ -274,6 +304,174 @@ fn tilt_to_normal(n: Vec3) -> Mat4 {
     } else {
         Mat4::from_axis_angle(Vec3::Y.cross(n).normalize(), d.acos())
     }
+}
+
+/// Static placement of one hex, independent of roll: its map-ordering `number`,
+/// the pre-transform centre handed to [`HexScene::draw_hex`], whether it is
+/// record-flipped, the dome centre its tilt is measured from, and which map
+/// (`left` ⇒ the left map's transform). Built once by [`build_hex_instances`]
+/// and shared by drawing and the mouse pick so both see identical geometry.
+#[derive(Copy, Clone)]
+struct HexInst {
+    number: u32,
+    center: Vec3,
+    flip: bool,
+    dome_center: Vec3,
+    left: bool,
+    /// Pre-dome grid centre in the map's own logical frame. Within one map, two
+    /// tiles are neighbours iff their `logical` centres are `HEX_SPACING` apart —
+    /// the source of truth for same-map adjacency (roll-independent).
+    logical: Vec3,
+}
+
+/// Build the full hex list for both maps — the single source of truth for tile
+/// numbering and placement (mirrors how `render` laid the tiles out before).
+fn build_hex_instances() -> Vec<HexInst> {
+    let mut v = Vec::with_capacity(2 * (HEX_STEPS.len() + 6 * NUM_RINGS));
+    let right_dome = Vec3::new(0.0, GUIDE_LIFT, 0.0);
+    for (number, steps) in HEX_STEPS.iter().enumerate() {
+        let logical = hex_center(steps);
+        v.push(HexInst {
+            number: number as u32,
+            center: dome_position(logical),
+            flip: false,
+            dome_center: right_dome,
+            left: false,
+            logical,
+        });
+    }
+    let ring3 = first_ring(NUM_RINGS);
+    for (i, &off) in ring3.iter().enumerate() {
+        v.push(HexInst {
+            number: (HEX_STEPS.len() + i) as u32,
+            center: dome_position(off),
+            flip: false,
+            dome_center: right_dome,
+            left: false,
+            logical: off,
+        });
+    }
+    let right_count = HEX_STEPS.len() + ring3.len();
+
+    let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
+    let c = left_center();
+    let left_dome = reflect(c) + Vec3::new(0.0, GUIDE_LIFT, 0.0);
+    let lring3 = left_ring(NUM_RINGS);
+    for (i, &off) in lring3.iter().enumerate() {
+        v.push(HexInst {
+            number: (right_count + i) as u32,
+            center: reflect(c + dome_position(off)),
+            flip: true,
+            dome_center: left_dome,
+            left: true,
+            logical: c + off,
+        });
+    }
+    let left_built_base = right_count + lring3.len();
+    for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
+        let logical = hex_center(steps);
+        v.push(HexInst {
+            number: (left_built_base + j) as u32,
+            center: reflect(c + dome_position(logical - c)),
+            flip: true,
+            dome_center: left_dome,
+            left: true,
+            logical,
+        });
+    }
+    v
+}
+
+/// Same-map neighbours of every tile, indexed by tile number: the (≤6) tiles in
+/// the *same* map whose logical centre is one `HEX_SPACING` step away. Interior
+/// tiles get all six here; equator (ring-3) tiles come up short — their missing
+/// neighbours are filled across the equator at pick time (see
+/// [`HexScene::compute_highlight`]). Static, so built once.
+fn build_within_neighbors(hexes: &[HexInst]) -> Vec<Vec<u32>> {
+    let tol = HEX_SPACING * 0.1; // logical neighbours are exactly one step apart
+    hexes
+        .iter()
+        .map(|a| {
+            hexes
+                .iter()
+                .filter(|b| {
+                    b.number != a.number
+                        && b.left == a.left
+                        && ((b.logical - a.logical).length() - HEX_SPACING).abs() < tol
+                })
+                .map(|b| b.number)
+                .collect()
+        })
+        .collect()
+}
+
+/// World-space corners of a hex after the tilt-tangent + map `xform` — the same
+/// placement [`HexScene::draw_hex`] draws, used to build the pick triangles.
+fn hex_world_corners(center: Vec3, flip: bool, dome_center: Vec3, xform: &Mat4) -> [Vec3; 6] {
+    let mut corners = hex_corners(center, HEX_SIZE);
+    if flip {
+        for c in corners.iter_mut() {
+            *c = flip_ns(*c, center);
+        }
+    }
+    let tilt = tilt_to_normal((center - dome_center).normalize_or_zero());
+    corners.map(|p| xform.transform_point3(center + tilt.transform_vector3(p - center)))
+}
+
+/// Möller–Trumbore ray/triangle intersection, **double-sided** (no back-face
+/// cull, so the down-facing left dome's tiles pick too). Returns the ray
+/// parameter `t > 0` at the hit, else `None`.
+fn ray_triangle(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let e1 = b - a;
+    let e2 = c - a;
+    let h = dir.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-7 {
+        return None; // ray parallel to the triangle
+    }
+    let inv = 1.0 / det;
+    let s = origin - a;
+    let u = inv * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let vbc = inv * dir.dot(q);
+    if vbc < 0.0 || u + vbc > 1.0 {
+        return None;
+    }
+    let t = inv * e2.dot(q);
+    (t > 1e-4).then_some(t)
+}
+
+/// A unit translucent hexagon face for [`Renderer::draw_mesh`]: a centre vertex
+/// plus six corners at `HEX_SIZE` in the local XZ plane, fanned into six
+/// triangles — **double-sided** (a +Y front fan and a −Y back fan with reversed
+/// winding) so the face shows whether viewed from above or below, since the mesh
+/// pipeline back-face-culls. Per-tile placement comes from the model matrix.
+fn build_hex_fill_mesh() -> (Vec<MeshVertex>, Vec<u32>) {
+    let corner = |i: usize| -> [f32; 3] {
+        let a = i as f32 * std::f32::consts::FRAC_PI_3;
+        [HEX_SIZE * a.cos(), 0.0, HEX_SIZE * a.sin()]
+    };
+    let mut verts = Vec::with_capacity(14);
+    // Front side (normal +Y): centre then 6 corners → indices 0..=6.
+    verts.push(MeshVertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], material: FILL_MATERIAL });
+    for i in 0..6 {
+        verts.push(MeshVertex { position: corner(i), normal: [0.0, 1.0, 0.0], material: FILL_MATERIAL });
+    }
+    // Back side (normal −Y): centre then 6 corners → indices 7..=13.
+    verts.push(MeshVertex { position: [0.0; 3], normal: [0.0, -1.0, 0.0], material: FILL_MATERIAL });
+    for i in 0..6 {
+        verts.push(MeshVertex { position: corner(i), normal: [0.0, -1.0, 0.0], material: FILL_MATERIAL });
+    }
+    let mut idx = Vec::with_capacity(36);
+    for i in 0..6u32 {
+        let j = (i + 1) % 6;
+        idx.extend_from_slice(&[0, 1 + i, 1 + j]); // front fan
+        idx.extend_from_slice(&[7, 8 + j, 8 + i]); // back fan (reversed winding)
+    }
+    (verts, idx)
 }
 
 /// Ring-`k` cell offsets from a centre (× `HEX_SPACING`): the classic clockwise
@@ -598,15 +796,32 @@ struct HexScene {
     drag: Option<Wheel>,
     drag_cursor: Vec2,
 
+    /// Static per-hex placement (number, centre, flip, dome centre, which map),
+    /// shared by drawing and the pick test. Roll-independent, built once.
+    hexes: Vec<HexInst>,
+    /// Same-map neighbours per tile number (built once from logical positions).
+    within: Vec<Vec<u32>>,
+    /// Number of the hex the cursor is hovering, if any (mouse-pick result).
+    hovered: Option<u32>,
+    /// Tiles to stretch this frame: the hovered tile plus its six neighbours
+    /// (same-map + across-equator). Recomputed with `hovered` at [`PICK_HZ`].
+    highlight: Vec<u32>,
+    /// Seconds since the last hover pick — the hit-test runs at [`PICK_HZ`].
+    pick_accum: f32,
+
     // GPU handles, uploaded once in `enter`.
     white: Option<TextureHandle>,
     dot: Option<TextureHandle>,
     glyphs: Option<TextureHandle>,
+    /// Unit translucent hexagon face, drawn per tile as the pickable surface.
+    fill_mesh: Option<MeshHandle>,
     script: Option<ScriptHost>,
 }
 
 impl HexScene {
     fn new() -> Self {
+        let hexes = build_hex_instances();
+        let within = build_within_neighbors(&hexes);
         Self {
             // Above and south, angled down — framed for both ring-3 maps plus
             // the roll wheels to their south.
@@ -624,9 +839,15 @@ impl HexScene {
             left_roll: std::f32::consts::PI, // rolled to π: left map faces directly down
             drag: None,
             drag_cursor: Vec2::ZERO,
+            hexes,
+            within,
+            hovered: None,
+            highlight: Vec::new(),
+            pick_accum: 0.0,
             white: None,
             dot: None,
             glyphs: None,
+            fill_mesh: None,
             script: None,
         }
     }
@@ -647,6 +868,106 @@ impl HexScene {
     fn move_right(&self) -> Vec3 {
         let flat = self.move_forward();
         flat.cross(Vec3::Y).normalize_or_zero()
+    }
+
+    /// The two maps' roll/placement transforms (right, left) for this frame —
+    /// shared by `render` (drawing) and `pick` (hit-test) so both agree. The
+    /// left map's chain is roll → drop+Z-align → half-hex yaw → slide under the
+    /// right map (see the inline notes where each piece is defined).
+    fn map_transforms(&self) -> (Mat4, Mat4) {
+        let lx = left_axis_x();
+        let m_right = roll_transform(0.0, self.right_roll);
+        let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
+        let left_yaw = Mat4::from_translation(Vec3::new(lx, 0.0, 0.0))
+            * Mat4::from_rotation_y(LEFT_YAW)
+            * Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
+        let left_under = Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
+        let m_left = left_under
+            * left_yaw
+            * Mat4::from_translation(left_shift)
+            * roll_transform(lx, -self.left_roll);
+        (m_right, m_left)
+    }
+
+    /// Build a world-space pick ray (origin, unit dir) through the pixel at
+    /// `cursor` for a `viewport`-sized window, from the camera basis. Mirrors
+    /// voxel-cluster's `build_pick_ray`.
+    fn build_pick_ray(&self, cursor: Vec2, viewport: Vec2) -> (Vec3, Vec3) {
+        let f = self.forward();
+        let r = f.cross(Vec3::Y).normalize_or_zero();
+        let u = r.cross(f).normalize_or_zero();
+        let aspect = viewport.x / viewport.y;
+        let t = (PICK_FOV_Y * 0.5).tan();
+        // +0.5 so the ray passes through the pixel centre.
+        let ndc_x = 2.0 * (cursor.x + 0.5) / viewport.x - 1.0;
+        let ndc_y = 1.0 - 2.0 * (cursor.y + 0.5) / viewport.y;
+        let dir = (f + r * (ndc_x * aspect * t) + u * (ndc_y * t)).normalize_or_zero();
+        (self.position, dir)
+    }
+
+    /// Cast a ray through `cursor` and return the `number` of the nearest hex
+    /// face it hits (resting positions, so hover stays put while the highlight
+    /// stretches). `None` if the cursor is over empty space.
+    fn pick(&self, cursor: Vec2, viewport: Vec2) -> Option<u32> {
+        if viewport.x <= 0.0 || viewport.y <= 0.0 {
+            return None;
+        }
+        let (m_right, m_left) = self.map_transforms();
+        let (origin, dir) = self.build_pick_ray(cursor, viewport);
+        let mut best: Option<(f32, u32)> = None;
+        for inst in &self.hexes {
+            let xform = if inst.left { &m_left } else { &m_right };
+            let center = xform.transform_point3(inst.center);
+            let corners = hex_world_corners(inst.center, inst.flip, inst.dome_center, xform);
+            for i in 0..6 {
+                if let Some(t) = ray_triangle(origin, dir, center, corners[i], corners[(i + 1) % 6])
+                {
+                    if best.is_none_or(|(bt, _)| t < bt) {
+                        best = Some((t, inst.number));
+                    }
+                }
+            }
+        }
+        best.map(|(_, n)| n)
+    }
+
+    /// The seven-tile highlight set for the current hover: the hovered tile plus
+    /// its six neighbours. Same-map neighbours come from [`Self::within`]; an
+    /// equator tile is short by `6 − within`, and those slots are filled by the
+    /// nearest tiles in the *other* map's equator (the across-equator mesh),
+    /// measured on the live rendered centres so it tracks the maps' rolls.
+    fn compute_highlight(&self) -> Vec<u32> {
+        let Some(h) = self.hovered else {
+            return Vec::new();
+        };
+        let within = &self.within[h as usize];
+        let mut hi = Vec::with_capacity(7);
+        hi.push(h);
+        hi.extend_from_slice(within);
+        let need = 6usize.saturating_sub(within.len());
+        if need > 0 {
+            let (m_right, m_left) = self.map_transforms();
+            let center = |inst: &HexInst| {
+                if inst.left {
+                    m_left.transform_point3(inst.center)
+                } else {
+                    m_right.transform_point3(inst.center)
+                }
+            };
+            let here = &self.hexes[h as usize];
+            let origin = center(here);
+            // Candidates: equator tiles (own neighbour count < 6) of the OTHER
+            // map, nearest first.
+            let mut cands: Vec<(f32, u32)> = self
+                .hexes
+                .iter()
+                .filter(|b| b.left != here.left && self.within[b.number as usize].len() < 6)
+                .map(|b| ((center(b) - origin).length(), b.number))
+                .collect();
+            cands.sort_by(|a, b| a.0.total_cmp(&b.0));
+            hi.extend(cands.into_iter().take(need).map(|(_, n)| n));
+        }
+        hi
     }
 
     /// Per-frame values handed to the HUD script as the `Model` global.
@@ -777,6 +1098,9 @@ impl Scene for HexScene {
             ATLAS_W as u32,
             ATLAS_H as u32,
         ));
+        // Unit translucent hex face, instanced per tile via draw_mesh.
+        let (verts, idx) = build_hex_fill_mesh();
+        self.fill_mesh = Some(renderer.upload_mesh(&verts, MeshIndices::U32(&idx)));
 
         // Scripted HUD: layout in ui_elements.json (`UI.hud`), behaviour in Lua.
         match ScriptHost::from_file(HUD_SCRIPT_PATH) {
@@ -879,6 +1203,16 @@ impl Scene for HexScene {
             self.position += motion.normalize() * self.controls.move_speed * dt_s;
         }
 
+        // Hover hit-test, rate-limited to PICK_HZ (not every frame): ray-cast the
+        // cursor against the tile faces and remember which tile is under it. The
+        // hovered tile is stretched outward in `render`.
+        self.pick_accum += dt_s;
+        if self.pick_accum >= 1.0 / PICK_HZ {
+            self.pick_accum = 0.0;
+            self.hovered = self.pick(input.mouse_position, screen);
+            self.highlight = self.compute_highlight();
+        }
+
         Transition::None
     }
 
@@ -896,60 +1230,48 @@ impl Scene for HexScene {
         renderer.set_scene(SceneLighting::default());
         renderer.draw_sky();
 
-        // Each map rolls about its own N-S axis: the right map about world Z
-        // (X=0), the left map about its centre column. The left map is the
-        // *mirror* of the right, so it rolls the **opposite** way — its angle is
-        // negated. (Same sign would make the two maps rotate alike, collapsing
-        // the opposite maps into the same map.) Roll 0 leaves each in its start
-        // pose (right upright, left record-flipped/down-facing).
+        // Both maps' roll/placement transforms (see `map_transforms`): the right
+        // map rolls about world Z; the left map rolls the opposite way, drops
+        // below, yaws a half-hex, and slides under the right map. Shared with the
+        // mouse pick so drawing and hit-test agree.
         let lx = left_axis_x();
-        let m_right = roll_transform(0.0, self.right_roll);
-        // Lower the left (down-facing) map half a tile in −Y and align its centre
-        // on the right map's Z — it sits half a step north (z = ½·HEX_SPACING),
-        // so shift −Z by that. Post-multiplied (applied after the roll), the whole
-        // rolled left dome drops straight down below the right's up-facing dome.
-        let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
-        let m_left = Mat4::from_translation(left_shift) * roll_transform(lx, -self.left_roll);
-
-        // First (right) map: compass at the origin, then the hand-built centre +
-        // ring 1 + ring 2 (tiles 0–18), then the formula-grown ring 3 (19–36),
-        // which continues the outward spiral and ends on the SW corner (3f). The
-        // dome centre is the map's centre axis at the dome's base height; each
-        // hex tilts tangent to the dome about it.
-        let right_dome_c = Vec3::new(0.0, GUIDE_LIFT, 0.0);
-        draw_compass(renderer, Vec3::ZERO, false, &m_right);
-        for (number, steps) in HEX_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, dome_position(hex_center(steps)), number as u32, false, &m_right, right_dome_c);
-        }
-        let ring3 = first_ring(3);
-        for (i, &off) in ring3.iter().enumerate() {
-            self.draw_hex(renderer, dome_position(off), (HEX_STEPS.len() + i) as u32, false, &m_right, right_dome_c);
-        }
-        let right_count = HEX_STEPS.len() + ring3.len(); // 37
-
-        // Left map (record-flipped, then rolled): its new outer ring 3 is
-        // numbered first — inserting the new tiles in the *middle* of the whole
-        // sequence — then the hand-built ring 2 / ring 1 / centre follow. Logical
-        // positions reflect about LEFT_AXIS_X.
-        // The reflection mirrors west↔east but keeps Y, so the dome lift from
-        // [`dome_position`] survives it.
+        let (m_right, m_left) = self.map_transforms();
+        // Mirror west↔east (keeping Y) — for the left compass and guides below.
         let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
         let c = left_center();
-        // Dome centre for the left map: its reflected centre axis at the base
-        // height. Computed from the reflected world position, so the radius (and
-        // thus each hex's tilt) mirrors west↔east with the chart.
-        let left_dome_c = reflect(c) + Vec3::new(0.0, GUIDE_LIFT, 0.0);
-        let lring3 = left_ring(3);
-        for (i, &off) in lring3.iter().enumerate() {
-            self.draw_hex(renderer, reflect(c + dome_position(off)), (right_count + i) as u32, true, &m_left, left_dome_c);
-        }
-        let left_built_base = right_count + lring3.len(); // 55
-        for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-            // Place relative to the left centre `c`, then re-centre and reflect.
-            let off = dome_position(hex_center(steps) - c);
-            self.draw_hex(renderer, reflect(c + off), (left_built_base + j) as u32, true, &m_left, left_dome_c);
-        }
+
+        // Compass at each map's centre.
+        draw_compass(renderer, Vec3::ZERO, false, &m_right);
         draw_compass(renderer, reflect(c), true, &m_left);
+
+        // Every tile of both maps: a 25%-grey translucent face (the pickable
+        // surface) plus its coloured wireframe + labels (drawn by `draw_hex`).
+        // The hovered tile extends outward along its radial normal — the hover
+        // highlight — and its fill brightens; fill and wireframe share the same
+        // (possibly stretched) centre so they move together. The fill insets a
+        // hair inward so the coloured edges always draw in front of it.
+        for inst in &self.hexes {
+            let xform = if inst.left { &m_left } else { &m_right };
+            // The hovered tile and its six neighbours stretch outward together —
+            // the seven-tile highlight.
+            let lit = self.highlight.contains(&inst.number);
+            let center = if lit {
+                let radial = (inst.center - inst.dome_center).normalize_or_zero();
+                inst.center + radial * HOVER_STRETCH
+            } else {
+                inst.center
+            };
+            if let Some(mesh) = self.fill_mesh {
+                let tilt = tilt_to_normal((center - inst.dome_center).normalize_or_zero());
+                let model = *xform
+                    * Mat4::from_translation(center)
+                    * tilt
+                    * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
+                let tint = if lit { HOVER_TINT } else { FILL_TINT };
+                renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
+            }
+            self.draw_hex(renderer, center, inst.number, inst.flip, xform, inst.dome_center);
+        }
 
         // Ring guide circles + cardinal dome, per map. Each ring circle passes
         // through that ring's CORNER hexes (radius k·HEX_SPACING); the
@@ -1249,6 +1571,33 @@ mod tests {
         assert!(n3.y.abs() < 1e-3, "ring-3 hex should stand vertical");
         let nc = (dome_position(Vec3::ZERO) - dome_c).normalize();
         assert!((nc - Vec3::Y).length() < 1e-4, "centre hex should lie flat");
+    }
+
+    #[test]
+    fn seven_tile_highlight() {
+        let mut s = HexScene::new();
+
+        // Interior tiles (right centre + ring 1 + ring 2 = 0..=18) have all six
+        // neighbours within their own map.
+        for n in 0..=18u32 {
+            assert_eq!(s.within[n as usize].len(), 6, "interior tile {n}");
+        }
+        // Equator tiles (right ring 3 = 19..=36) come up short — hex-ring corners
+        // keep 3 same-map neighbours, straight-run edges keep 4.
+        for n in 19..=36u32 {
+            let w = s.within[n as usize].len();
+            assert!(w == 3 || w == 4, "equator tile {n} within = {w}");
+        }
+
+        // Hovering any tile lights exactly seven (itself + six neighbours): the
+        // shortfall on equator tiles is made up across the equator.
+        for n in 0..s.hexes.len() as u32 {
+            s.hovered = Some(n);
+            let hl = s.compute_highlight();
+            assert_eq!(hl.len(), 7, "tile {n} highlight {hl:?}");
+            assert!(hl.contains(&n), "tile {n} not in its own highlight");
+            assert!(hl[1..].iter().all(|&m| m != n), "tile {n} duplicated");
+        }
     }
 
     #[test]
