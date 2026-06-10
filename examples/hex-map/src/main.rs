@@ -14,10 +14,11 @@
 //!     each edge `a`–`f` (clockwise: 1 NW, 2 N, 3 NE, 4 SE, 5 S, 6 SW); ring 2
 //!     (7–18) is the next ring, walked clockwise from due west (hex 7). Every
 //!     neighbour is drawn with a gap.
-//!   * a **second "left map"** — ring-3 tiles 19–21 split off into a separate
-//!     chart offset west (screen-left), drawn as its outer-right column. Their
-//!     links back to the first map (19.c↔7.f, 19.d↔18.a, 20.c↔8.f, 20.d↔7.a,
-//!     21.d↔8.a + the fold link 21.e↔8.b) are *logical*, not topographical.
+//!   * a **second "left map"** — tiles 19–37 split off into a separate chart to
+//!     the west (screen-left), **record-flipped** about the N-S axis (Y down,
+//!     west↔east mirrored; b/e stay N/S): a full 19-tile hexagon — ring-2
+//!     (19–30), ring-1 (31–36), centre tile (37). A second compass, sitting on
+//!     the centre tile, marks the flipped frame.
 //!
 //! It follows the voxel-cluster application model end to end: a [`Scene`] driven
 //! by [`SceneManager`]/[`run`], the [`InputMap`]/[`AbstractControls`] input
@@ -104,22 +105,43 @@ const HEX_STEPS: [&[usize]; 19] = [
     &[5, 5], // 18 2f   — SW corner
 ];
 
-/// The "left map": three ring-3 tiles (19–21) split off into a separate chart.
-/// Each entry is the tile's *logical* ring-3 path from the first map's origin —
-/// the west column of ring 3, so the tiles line up with the first map's west
-/// hexes (18/7/8) at the half-step. When drawn they are shifted west by
-/// [`LEFT_MAP_DX`] into their own chart, while their edge links back to the
-/// first map stay logical: 19.c↔7.f, 19.d↔18.a; 20.c↔8.f, 20.d↔7.a; 21.d↔8.a
-/// plus the fold link 21.e↔8.b. (Drawn as 19, 20, 21 = index + 19.)
-const LEFT_MAP_STEPS: [&[usize]; 3] = [
-    &[5, 5, 0], // 19  ring-3 f+f+a — west of first map's 7 & 18
-    &[0, 0, 5], // 20  ring-3 a+a+f — west of 7 & 8
-    &[0, 0, 0], // 21  ring-3 3a (NW corner) — only one inner edge + the fold
+/// The "left map": tiles placed by the user's connection rules, each entry the
+/// tile's *logical* path from the first map's origin. The whole chart is drawn
+/// **record-flipped** about [`LEFT_AXIS_X`] (logical X reflects, and each tile
+/// mirrors — `draw_hex(.., flip=true)`). It is a full 19-tile hexagon around the
+/// centre at logical (√3/2, ½): ring-2 (19–30), ring-1 (31–36), centre (37).
+/// Ring-2: seam/west column 19–21 (aligned with the first map's 18/7/8 at the
+/// half-step); 22–23 curve up (`f` onto prev `c`); 24–25 over the top (`a` onto
+/// prev `d`); 26–27 down the east edge (`b` onto prev `e`); 28–29 close the
+/// south (`c` onto prev `f`); 30 turns NW and shuts it (30.a ↔ 19.d). Ring-1
+/// (31–36) spirals in from 30, marches rotating N,N,NE,SE,S,SW and closes onto
+/// 31. (Drawn as 19 + index.)
+const LEFT_MAP_STEPS: [&[usize]; 19] = [
+    &[5, 5, 0], // 19  f+f+a — west edge
+    &[0, 0, 5], // 20  a+a+f
+    &[0, 0, 0], // 21  3a
+    &[0, 0, 1], // 22  2a+b — 22.f ↔ 21.c  (north curve, up)
+    &[0, 1, 1], // 23  a+2b — 23.f ↔ 22.c
+    &[1, 1],    // 24  2b   — 24.a ↔ 23.d  (over the top)
+    &[1, 2],    // 25  b+c  — 25.a ↔ 24.d
+    &[2],       // 26  c    — 26.b ↔ 25.e  (east edge, down)
+    &[3],       // 27  d    — 27.b ↔ 26.e
+    &[4],       // 28  e    — 28.c ↔ 27.f  (south, closing)
+    &[4, 5],    // 29  e+f  — 29.c ↔ 28.f
+    &[5, 5],    // 30  2f   — 30.d ↔ 29.a; 30.a ↔ 19.d (ring-2 closes)
+    &[0, 5],    // 31  f+a  — 31.e ↔ 30.b  (inner ring, north)
+    &[0, 0],    // 32  2a   — 32.e ↔ 31.b
+    &[0, 1],    // 33  a+b  — 33.f ↔ 32.c  (NE)
+    &[1],       // 34  b    — 34.a ↔ 33.d  (SE)
+    &[],        // 35  orig — 35.b ↔ 34.e  (S)
+    &[5],       // 36  f    — 36.c ↔ 35.f  (SW); closes onto 31
+    &[0],       // 37  a    — centre tile, at (√3/2, ½)
 ];
 
-/// Westward (screen-left) shift applied to the left map so it clears the first
-/// map by ~one map radius — "offset to the left by at least the full radius".
-const LEFT_MAP_DX: f32 = 2.5 * HEX_SPACING;
+/// X of the vertical axis the left chart is record-flipped about. Logical
+/// positions reflect through it (`x → 2·axis − x`) to land west (screen-left)
+/// of the first map; combined with each tile's mirror that's a true reflection.
+const LEFT_AXIS_X: f32 = 3.5 * HEX_SPACING;
 
 // ───────────────────────────────────────────────────────────────────
 // Geometry helpers
@@ -156,6 +178,37 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         .iter()
         .fold(Vec3::ZERO, |acc, &s| acc + edge_normal(s))
         * HEX_SPACING
+}
+
+/// Mirror point `p` about the north–south (Z) axis through `center` — the
+/// horizontal half of the left chart's record-flip: west↔east (`x → 2·cx − x`),
+/// north/south unchanged. (The flip's Y-inversion is shown by the gadget, not
+/// the flat tiles, which sit on `y = 0`.)
+fn flip_ns(p: Vec3, center: Vec3) -> Vec3 {
+    Vec3::new(2.0 * center.x - p.x, p.y, p.z)
+}
+
+/// Draw an XYZ compass gadget at `origin`: red X, green Y, blue Z, each positive
+/// half bright with a pyramid arrowhead and the negative half dim. With `flip`
+/// the frame is record-flipped about the N-S axis — **X points east, Y points
+/// down**, Z/north unchanged — matching the flipped left-chart tiles.
+fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool) {
+    let axes = [
+        (Vec3::X, [0.95, 0.30, 0.30, 1.0]),
+        (Vec3::Y, [0.40, 0.90, 0.45, 1.0]),
+        (Vec3::Z, [0.40, 0.62, 1.00, 1.0]),
+    ];
+    for (dir, color) in axes {
+        let d = if flip {
+            Vec3::new(-dir.x, -dir.y, dir.z)
+        } else {
+            dir
+        };
+        let dim = [color[0] * 0.4, color[1] * 0.4, color[2] * 0.4, 0.7];
+        renderer.draw_lines(&[(origin, origin - d * AXIS_LEN)], dim);
+        renderer.draw_lines(&[(origin, origin + d * AXIS_LEN)], color);
+        renderer.draw_lines(&arrowhead(origin + d * AXIS_LEN, d, ARROW), color);
+    }
 }
 
 /// Four short segments forming a pyramid arrowhead at `tip`, opening back along
@@ -315,14 +368,14 @@ impl HexScene {
     fn new() -> Self {
         Self {
             // Above and south, angled down — framed to take in the first map
-            // (right) and the offset left-map column (screen-left).
-            position: Vec3::new(3000.0, 7200.0, -9800.0),
-            yaw: 0.0,     // face +Z (north), into the field
-            pitch: -0.62, // look down at it
+            // (right) and the flipped left arch 19–27 (screen-left).
+            position: Vec3::new(6600.0, 8500.0, -11500.0),
+            yaw: 0.0,     // face +Z (north)
+            pitch: -0.58, // look down at it
             last_look_cursor: None,
             bindings: InputMap::wasd_and_mouse(),
             controls: AbstractControls {
-                // Two charts side by side now (~25 k across) — fly fast.
+                // Two charts side by side (~20 k across) — fly fast.
                 move_speed: 2500.0,
                 ..AbstractControls::default()
             },
@@ -387,8 +440,16 @@ impl HexScene {
     /// number billboard floating over the centre. Every hex shares the same
     /// orientation and edge labelling, so adjacency reads straight off the
     /// colours/letters (e.g. hex 0's edge `a` faces hex 1's edge `d`).
-    fn draw_hex(&self, renderer: &mut Renderer, center: Vec3, number: u32) {
-        let corners = hex_corners(center, HEX_SIZE);
+    fn draw_hex(&self, renderer: &mut Renderer, center: Vec3, number: u32, flip: bool) {
+        let mut corners = hex_corners(center, HEX_SIZE);
+        if flip {
+            // Record-flip about the N-S axis through the centre: mirror
+            // west↔east. b/e stay at N/S; the a/f and c/d edges swap sides and
+            // the colour arrangement reverses left-to-right.
+            for c in corners.iter_mut() {
+                *c = flip_ns(*c, center);
+            }
+        }
         for i in 0..6 {
             let a = corners[i];
             let b = corners[(i + 1) % 6];
@@ -396,12 +457,12 @@ impl HexScene {
             renderer.draw_lines(&[(a, b)], color);
 
             if let Some(glyphs) = self.glyphs {
-                // Nudge the letter outward past the edge so it doesn't sit on
-                // the line, and lift it off the ground plane.
+                // Nudge the letter outward from the centre (correct mirrored too)
+                // and lift it off the ground plane.
                 let mid = (a + b) * 0.5;
-                let pos = mid
-                    + edge_normal(i) * EDGE_LABEL_OUT
-                    + Vec3::new(0.0, EDGE_LABEL_SIZE * 0.5, 0.0);
+                let outward =
+                    Vec3::new(mid.x - center.x, 0.0, mid.z - center.z).normalize_or_zero();
+                let pos = mid + outward * EDGE_LABEL_OUT + Vec3::new(0.0, EDGE_LABEL_SIZE * 0.5, 0.0);
                 let letter = (b'a' + i as u8) as char;
                 self.draw_text_billboard(
                     renderer,
@@ -518,44 +579,40 @@ impl Scene for HexScene {
             up: Vec3::Y,
             fov_y_radians: 60.0_f32.to_radians(),
             near: 1.0,
-            far: 20000.0,
+            far: 50000.0,
         });
 
         // A plain default sky gives a horizon to orient against.
         renderer.set_scene(SceneLighting::default());
         renderer.draw_sky();
 
-        // Compass: red X, green Y, blue Z. The positive half is bright with an
-        // arrowhead; the negative half is dim — so +/- reads at a glance.
-        let axes = [
-            (Vec3::X, [0.95, 0.30, 0.30, 1.0]),
-            (Vec3::Y, [0.40, 0.90, 0.45, 1.0]),
-            (Vec3::Z, [0.40, 0.62, 1.00, 1.0]),
-        ];
-        for (dir, color) in axes {
-            let dim = [color[0] * 0.4, color[1] * 0.4, color[2] * 0.4, 0.7];
-            renderer.draw_lines(&[(Vec3::ZERO, -dir * AXIS_LEN)], dim);
-            renderer.draw_lines(&[(Vec3::ZERO, dir * AXIS_LEN)], color);
-            renderer.draw_lines(&arrowhead(dir * AXIS_LEN, dir, ARROW), color);
-        }
+        // Compass gadget at the world origin for the first map.
+        draw_compass(renderer, Vec3::ZERO, false);
 
-        // The hex field, drawn from `HEX_STEPS` (each hex's path of unit edge-
+        // The first map, drawn from `HEX_STEPS` (each hex's path of unit edge-
         // steps from the origin, indexed by its number): hex 0 at the centre,
         // ring 1 (1–6) across edges a–f, ring 2 (7–18) walked clockwise from due
         // west. Every hex shares the orientation/edge-labelling, so a hex's edge
         // meets its neighbour's opposite edge across the gap (0.a ↔ 1.d, …).
         for (number, steps) in HEX_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, hex_center(steps), number as u32);
+            self.draw_hex(renderer, hex_center(steps), number as u32, false);
         }
 
-        // The left map: ring-3 tiles 19–21 drawn as a separate chart's outer
-        // right column, shifted west by `LEFT_MAP_DX`. They keep their logical
-        // ring-3 positions (so 19/20/21 align with the first map's 18/7/8) but
-        // sit in open space to the left; their links back are logical only.
+        // The left map: ring-3 tiles 19–24, the whole chart **record-flipped**
+        // about `LEFT_AXIS_X` — logical X reflects through the axis (landing west
+        // of the first map) and each tile mirrors (flip=true), which together is
+        // one clean reflection. 19–21 are the seam column; 22–24 trace the ring-3
+        // NW→N edge. All links back to the first map are logical.
         for (i, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-            let pos = hex_center(steps) + Vec3::new(LEFT_MAP_DX, 0.0, 0.0);
-            self.draw_hex(renderer, pos, (19 + i) as u32);
+            let logical = hex_center(steps);
+            let pos = Vec3::new(2.0 * LEFT_AXIS_X - logical.x, 0.0, logical.z);
+            self.draw_hex(renderer, pos, (19 + i) as u32, true);
         }
+        // Second compass gadget for the flipped chart (Y down, X east), moved to
+        // sit on the centre tile 37 (its X already matches the 23/29 column; now
+        // lifted north to the centre's Z). The map itself isn't repositioned.
+        let centre = hex_center(LEFT_MAP_STEPS[18]); // [18] = tile 37 (centre)
+        draw_compass(renderer, Vec3::new(2.0 * LEFT_AXIS_X - centre.x, 0.0, centre.z), true);
 
         // Scripted HUD: publish the live model, then draw the script's commands.
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
@@ -677,8 +734,70 @@ mod tests {
         assert!((at(7) - (p(1) + step_d)).length() < 1.0); // 20.d ↔ 7.a
         assert!((at(8) - (p(2) + step_d)).length() < 1.0); // 21.d ↔ 8.a (corner: one inner edge)
 
-        // The drawn chart is shifted west (screen-left): +X, ≥ one map radius.
-        assert!(LEFT_MAP_DX >= 2.0 * APOTHEM);
+        // 22/23 curve up — each new tile's f edge meets the prev c.
+        assert!((p(3) - p(2) - step_c).length() < 1.0); // 22.f ↔ 21.c
+        assert!((p(4) - p(3) - step_c).length() < 1.0); // 23.f ↔ 22.c
+        // 24/25 over the top (a onto prev d → SE); 26/27 down the east edge
+        // (b onto prev e → S).
+        assert!((p(5) - p(4) - step_d).length() < 1.0); // 24.a ↔ 23.d
+        assert!((p(6) - p(5) - step_d).length() < 1.0); // 25.a ↔ 24.d
+        let step_s = edge_normal(4) * s;
+        assert!((p(7) - p(6) - step_s).length() < 1.0); // 26.b ↔ 25.e
+        assert!((p(8) - p(7) - step_s).length() < 1.0); // 27.b ↔ 26.e
+        // 28/29 close the south (c onto prev f → SW); 30 turns NW onto 29 and
+        // shuts the ring (30.d ↔ 29.a, then 30.a ↔ 19.d).
+        let step_sw = edge_normal(5) * s;
+        let step_nw = edge_normal(0) * s;
+        assert!((p(9) - p(8) - step_sw).length() < 1.0); // 28.c ↔ 27.f
+        assert!((p(10) - p(9) - step_sw).length() < 1.0); // 29.c ↔ 28.f
+        assert!((p(11) - p(10) - step_nw).length() < 1.0); // 30.d ↔ 29.a
+        assert!((p(0) - p(11) - step_nw).length() < 1.0); // 30.a ↔ 19.d (ring closes)
+
+        // Tiles 19–30 form a ring-2 hexagon around centre (√3/2, ½)·s: corners
+        // at radius 2·s, edge-hexes at √3·s.
+        let centre = Vec3::new(0.866_025_4 * s, 0.0, 0.5 * s);
+        for i in 0..12 {
+            let r = (p(i) - centre).length() / s;
+            assert!(r > 1.7 && r < 2.01, "tile {} radius {r}", i + 19);
+        }
+
+        // Inner ring 31–36 (marches rotate N,N,NE,SE,S,SW) closes onto 31, and
+        // 37 is the centre tile.
+        assert!((p(12) - p(11) - step_b).length() < 1.0); // 31.e ↔ 30.b
+        assert!((p(13) - p(12) - step_b).length() < 1.0); // 32.e ↔ 31.b
+        assert!((p(14) - p(13) - step_c).length() < 1.0); // 33.f ↔ 32.c
+        assert!((p(15) - p(14) - step_d).length() < 1.0); // 34.a ↔ 33.d
+        assert!((p(16) - p(15) - step_s).length() < 1.0); // 35.b ↔ 34.e
+        assert!((p(17) - p(16) - step_sw).length() < 1.0); // 36.c ↔ 35.f
+        assert!((p(12) - p(17) - step_nw).length() < 1.0); // 31 = 36 + NW (closes)
+        assert!((p(18) - centre).length() < 1e-3); // 37 = centre tile
+        // The 6 inner-ring tiles all sit one step from the centre.
+        for i in 12..18 {
+            assert!(((p(i) - centre).length() / s - 1.0).abs() < 1e-3, "tile {}", i + 19);
+        }
+
+        // The chart is drawn reflected to the west (screen-left).
+        assert!(LEFT_AXIS_X > 0.0);
+    }
+
+    #[test]
+    fn record_flip() {
+        let center = Vec3::ZERO;
+        let c = hex_corners(center, HEX_SIZE);
+        let f: Vec<Vec3> = c.iter().map(|&p| flip_ns(p, center)).collect();
+        let mid = |i: usize, src: &[Vec3]| (src[i] + src[(i + 1) % 6]) * 0.5;
+
+        // b (edge 1) stays north (+Z), e (edge 4) stays south — the flip axis.
+        assert!(mid(1, &f).z > 0.0 && mid(1, &f).x.abs() < 1.0);
+        assert!(mid(4, &f).z < 0.0 && mid(4, &f).x.abs() < 1.0);
+        // a (edge 0) was on the west (+X); after the flip it's on the east (−X).
+        assert!(mid(0, &c).x > 0.0 && mid(0, &f).x < 0.0);
+        // c (edge 2) was east; after the flip it's west — a/f and c/d swap sides.
+        assert!(mid(2, &c).x < 0.0 && mid(2, &f).x > 0.0);
+        // North/south components are untouched by the flip.
+        for i in 0..6 {
+            assert!((mid(i, &c).z - mid(i, &f).z).abs() < 1e-3);
+        }
     }
 
     #[test]
