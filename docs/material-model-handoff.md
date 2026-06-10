@@ -229,9 +229,12 @@ of the linked-list's length? a fraction of the per-pass sediment-movement calc?
 ## 8. Next concrete steps
 
 > **Status** (implementation progress + decisions: `docs/material-model-impl-handoff.md`):
-> steps 3–5 are **built** (crates `flicker-materials`, `flicker-worldstate`,
-> `flicker-worldgen`; Epoch 1 generated *and* rendered in the `hex-world` stack
-> viz). Step 6 is the big remaining one.
+> steps 3–5 are **built and well surpassed** — crates `flicker-materials`,
+> `flicker-worldstate`, `flicker-worldgen` exist, and the epoch pipeline now runs
+> **Epochs 1–4 with real formation physics** (composition → differentiation →
+> plate tectonics + orogeny → hydrosphere) with per-cell hardness/terrain fields,
+> all rendered in the `hex-world` stack viz. Epochs 5–6 then **step 6 (re-home the
+> water cycle)** are the remaining arc.
 
 1. **This doc locks the model** (the "define the boundaries" deliverable). ✅
 2. **`compounds.json`** (world-forming subset) if/when needed. *(deferred)*

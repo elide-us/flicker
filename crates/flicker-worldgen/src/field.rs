@@ -22,6 +22,15 @@
 //! cell. Where plates collide (Epoch 3 `orogeny`), compression folds finer ridges
 //! in and lifts the belt — mountain ranges along the convergent boundary.
 //!
+//! Two Epoch-5 structures break the crust's uniformity into the **seams** the
+//! erosion sim wants. A hex carrying an ore vein (`vein_element`) sees its metal
+//! routed not through the smooth composition sub-field but a **filament** — thin
+//! sinuous crests where the metal concentrates and the troughs between revert to
+//! the host rock — so the vein reads as a banded streak that takes on the metal's
+//! hardness. And the crystallized crust gains a **foliation**: anisotropic,
+//! gently folded strata that modulate hardness up and down across the layering,
+//! the differential a rivulet later carves into ribs and runnels.
+//!
 //! Fields are sampled in a continuous world coordinate (cluster units), so
 //! adjacent hexes that sample shared edge positions agree — terrain flows across
 //! hex boundaries with no seam.
@@ -41,6 +50,10 @@ pub struct CellSample {
     pub elevation: f32,
     /// The locally dominant element (for a composition tint).
     pub dominant: Option<ElementId>,
+    /// Ore-vein intensity at this cell, `0..1` (Epoch 5). `0` off a vein; rises
+    /// on the thin filaments where the hex's `vein_element` concentrates. The
+    /// overlay signal for the renderer, and why these cells erode differently.
+    pub vein: f32,
 }
 
 /// Samples the per-cell fields of a hex. Cheap to build (just borrows the
@@ -74,6 +87,24 @@ pub struct FieldSampler<'a> {
     pub orogeny_lift: f32,
     /// Fold-ridge frequency at orogenic belts, relative to the base relief.
     pub fold_freq_mult: f32,
+    /// Spatial frequency of the ore-vein filaments (higher = thinner, denser
+    /// bands).
+    pub vein_freq: f32,
+    /// Sharpness of a filament crest — the power the ridge is raised to. Higher
+    /// pinches the vein into a thinner streak.
+    pub vein_sharp: f64,
+    /// Multiplier on the vein metal's local amount in a filament **trough**
+    /// (`< 1` clears the metal out from between the bands).
+    pub vein_low: f64,
+    /// Multiplier on the vein metal's local amount on a filament **crest**
+    /// (`> 1` concentrates it into the streak so it can dominate the cell).
+    pub vein_gain: f64,
+    /// Spatial frequency of the foliation strata (the metamorphic/sedimentary
+    /// layering that bands the hardness).
+    pub foliation_freq: f32,
+    /// Fractional hardness swing across the foliation (`0.3` = ±30% between a
+    /// hard layer and the soft layer beside it). `0` disables it.
+    pub foliation_amp: f32,
 }
 
 impl<'a> FieldSampler<'a> {
@@ -94,6 +125,12 @@ impl<'a> FieldSampler<'a> {
             flow_strength: 250.0,
             orogeny_lift: 1.8,
             fold_freq_mult: 5.0,
+            vein_freq: 0.004,
+            vein_sharp: 3.0,
+            vein_low: 0.12,
+            vein_gain: 6.0,
+            foliation_freq: 0.0035,
+            foliation_amp: 0.3,
         }
     }
 
@@ -110,22 +147,81 @@ impl<'a> FieldSampler<'a> {
         p
     }
 
+    /// A vein filament at `p`, `0..1`: a ridged field pinched into thin sinuous
+    /// crests (`vein_sharp`) where an ore vein concentrates its metal, ~0 in the
+    /// host rock between them.
+    fn filament(&self, p: Vec3) -> f64 {
+        let n = fbm(p * self.vein_freq, self.octaves, 0x5EED_0FA1, self.seed);
+        let ridge = (1.0 - 2.0 * (n - 0.5).abs()).clamp(0.0, 1.0);
+        ridge.powf(self.vein_sharp.max(1.0))
+    }
+
+    /// Foliation at `p`, `-1..1`: anisotropic, gently folded strata — high
+    /// frequency across the layering, low along it, warped so the bands bend
+    /// rather than run straight. Modulates the crystallized crust's hardness.
+    fn foliation(&self, p: Vec3) -> f32 {
+        let warp = fbm(p * (self.foliation_freq * 0.5), 2, 0xF0D1_A7E5, self.seed) as f32 - 0.5;
+        let q = Vec3::new(
+            p.x * self.foliation_freq + warp * 3.0,
+            0.0,
+            p.z * self.foliation_freq * 0.18,
+        );
+        let n = fbm(q, self.octaves, 0x57BA_7A00, self.seed);
+        ((1.0 - 2.0 * (n - 0.5).abs()) * 2.0 - 1.0) as f32
+    }
+
     /// Sample the cell at continuous world position `world` (cluster units) for a
-    /// hex in state `state`.
+    /// hex in state `state`, using the hex's own tectonic `elevation` / `orogeny`.
     pub fn sample(&self, state: &HexState, world: Vec2) -> CellSample {
+        self.sample_blended(state, world, state.elevation, state.orogeny)
+    }
+
+    /// Like [`sample`](Self::sample), but with the tectonic `elevation` (`-1..1`)
+    /// and `orogeny` (`0..1`) supplied by the caller instead of read from `state`.
+    /// A renderer blends those two scalars across the hex's six-neighbour graph
+    /// and feeds the smoothed values in, so terrain **joins across hex
+    /// boundaries** rather than stepping at them. Composition, crust state and the
+    /// ore vein still come from `state` (they vary by world position, not by the
+    /// per-hex tectonic base).
+    pub fn sample_blended(
+        &self,
+        state: &HexState,
+        world: Vec2,
+        elevation: f32,
+        orogeny: f32,
+    ) -> CellSample {
         let p = self.convect(Vec3::new(world.x, 0.0, world.y));
         let surf = state.surface();
         let cutoff = surf.total() * self.trace_cutoff;
+
+        // The hex's ore metal, if any, concentrates along a filament rather than
+        // its smooth sub-field — a banded streak (strength tapers with the vein).
+        let vein_metal = state.vein_element;
+        let fil = if vein_metal.is_some() && state.vein_strength > 0.0 {
+            self.filament(p) * state.vein_strength as f64
+        } else {
+            0.0
+        };
 
         // Per-element NS sub-fields → per-cell composition → blended hardness.
         let (mut h_sum, mut w_sum) = (0.0f64, 0.0f64);
         let mut best: (Option<ElementId>, f64) = (None, f64::MIN);
         for (el, amount) in surf.iter() {
-            if amount < cutoff {
+            let is_vein = Some(el) == vein_metal;
+            // Trace elements don't move the blend — but never skip the vein metal,
+            // whose whole point is to concentrate locally.
+            if amount < cutoff && !is_vein {
                 continue;
             }
-            let n = fbm(p * self.composition_freq, self.octaves, el as u64 ^ 0x00C0_FFEE, self.seed);
-            let local = amount * (self.floor + (1.0 - self.floor) * n);
+            // The vein metal rides the filament (cleared from troughs, piled on
+            // crests); every other element rides its smooth sub-field.
+            let field = if is_vein {
+                self.vein_low + (self.vein_gain - self.vein_low) * fil
+            } else {
+                let n = fbm(p * self.composition_freq, self.octaves, el as u64 ^ 0x00C0_FFEE, self.seed);
+                self.floor + (1.0 - self.floor) * n
+            };
+            let local = amount * field;
             if let Some(e) = self.tables.element_by_number(el) {
                 // Gases are binders, not hardness-bearers — skip them so the blend
                 // reflects the solid rock-formers (and isn't dragged to ~0 by O).
@@ -138,7 +234,14 @@ impl<'a> FieldSampler<'a> {
                 best = (Some(el), local);
             }
         }
-        let hardness = if w_sum > 0.0 { (h_sum / w_sum) as f32 } else { 0.0 };
+        let mut hardness = if w_sum > 0.0 { (h_sum / w_sum) as f32 } else { 0.0 };
+
+        // Foliation: once the crust has crystallized, fine strata band the
+        // hardness up and down across the layering — the seam structure erosion
+        // bites into at different rates.
+        if !state.crust.is_empty() && self.foliation_amp != 0.0 {
+            hardness = (hardness * (1.0 + self.foliation_amp * self.foliation(p))).clamp(0.0, 10.0);
+        }
 
         // Relief: tectonic base + a hardness-weighted ridge. Soft rock barely
         // rises; hard rock throws up the full ridge amplitude. Once the crust has
@@ -153,16 +256,16 @@ impl<'a> FieldSampler<'a> {
         // Orogeny: where plates collide, compression folds finer ridges in and
         // lifts the belt higher — mountain ranges along the convergent boundary.
         let mut amp = self.relief_amp;
-        if state.orogeny > 0.0 {
+        if orogeny > 0.0 {
             let f = fbm(p * self.relief_freq * self.fold_freq_mult, self.octaves, 0x000F_01D5, self.seed);
             let fold = ((1.0 - 2.0 * (f - 0.5).abs()) * 2.0 - 1.0) as f32;
-            ridge += state.orogeny * 0.6 * fold;
-            amp *= 1.0 + state.orogeny * self.orogeny_lift;
+            ridge += orogeny * 0.6 * fold;
+            amp *= 1.0 + orogeny * self.orogeny_lift;
         }
         let hard_norm = (hardness / 10.0).clamp(0.0, 1.0);
-        let elevation = state.elevation * self.tectonic_scale + amp * ridge * (0.3 + 0.7 * hard_norm);
+        let elev_world = elevation * self.tectonic_scale + amp * ridge * (0.3 + 0.7 * hard_norm);
 
-        CellSample { hardness, elevation, dominant: best.0 }
+        CellSample { hardness, elevation: elev_world, dominant: best.0, vein: fil as f32 }
     }
 }
 
@@ -260,6 +363,84 @@ mod tests {
         let b = s.sample(&state, Vec2::new(123.0, 456.0));
         assert_eq!(a.hardness.to_bits(), b.hardness.to_bits());
         assert_eq!(a.elevation.to_bits(), b.elevation.to_bits());
+        assert_eq!(a.vein.to_bits(), b.vein.to_bits());
+    }
+
+    #[test]
+    fn an_ore_vein_bands_across_the_hex() {
+        // A silica crust carrying an iron vein: the iron should concentrate into
+        // filaments (some cells high-vein, most low) rather than spread evenly,
+        // and the high-vein cells should read iron-ward in hardness (Fe 4.0 <
+        // Si 6.5), giving the differential erosion handle.
+        let t = tables();
+        let s = FieldSampler::new(&t, 7);
+        let mut state = HexState::new(Composition::new());
+        state.crust = Composition::from_iter([(SI, 8000.0), (FE, 2000.0)]);
+        state.vein_element = Some(FE);
+        state.vein_strength = 1.0;
+
+        let mut max_vein = 0.0f32;
+        let mut min_vein = 1.0f32;
+        let (mut soft_on_vein, mut hard_off_vein) = (false, false);
+        for k in 0..400 {
+            let w = Vec2::new(k as f32 * 53.0, (k as f32 * 37.0).sin() * 2000.0);
+            let c = s.sample(&state, w);
+            assert!((0.0..=1.0).contains(&c.vein));
+            max_vein = max_vein.max(c.vein);
+            min_vein = min_vein.min(c.vein);
+            if c.vein > 0.5 && c.hardness < 6.0 {
+                soft_on_vein = true; // iron pulled the blend down on the streak
+            }
+            if c.vein < 0.05 && c.hardness > 6.0 {
+                hard_off_vein = true; // host silica between the bands
+            }
+        }
+        assert!(max_vein - min_vein > 0.3, "vein didn't band (flat {min_vein}..{max_vein})");
+        assert!(soft_on_vein, "vein cells didn't take on the metal's hardness");
+        assert!(hard_off_vein, "host rock between the bands didn't stay hard");
+    }
+
+    #[test]
+    fn no_vein_means_no_vein_signal() {
+        let t = tables();
+        let s = FieldSampler::new(&t, 7);
+        let mut state = HexState::new(Composition::new());
+        state.crust = Composition::from_iter([(SI, 9000.0), (FE, 1000.0)]);
+        // vein_element stays None.
+        for k in 0..100 {
+            let c = s.sample(&state, Vec2::new(k as f32 * 91.0, k as f32 * 67.0));
+            assert_eq!(c.vein, 0.0, "a vein signal appeared without a vein");
+        }
+    }
+
+    #[test]
+    fn foliation_bands_a_single_element_crust() {
+        // A pure-silicon crust blends to a flat 6.5 hardness everywhere — so any
+        // spatial variation here is the foliation alone. With it on, the hardness
+        // bands; with it off, it's dead flat.
+        let t = tables();
+        let comp = Composition::from_iter([(SI, 10_000.0)]);
+        let mut state = HexState::new(comp.clone());
+        state.crust = comp; // crystallized → foliation applies
+
+        let mut banded = FieldSampler::new(&t, 7);
+        banded.foliation_amp = 0.3;
+        let mut flat = FieldSampler::new(&t, 7);
+        flat.foliation_amp = 0.0;
+
+        let (mut blo, mut bhi) = (f32::MAX, f32::MIN);
+        let (mut flo, mut fhi) = (f32::MAX, f32::MIN);
+        for k in 0..200 {
+            let w = Vec2::new(k as f32 * 60.0, k as f32 * 80.0);
+            let b = banded.sample(&state, w).hardness;
+            let f = flat.sample(&state, w).hardness;
+            blo = blo.min(b);
+            bhi = bhi.max(b);
+            flo = flo.min(f);
+            fhi = fhi.max(f);
+        }
+        assert!((fhi - flo) < 1e-3, "no-foliation hardness should be flat ({flo}..{fhi})");
+        assert!((bhi - blo) > 0.5, "foliation didn't band the hardness ({blo}..{bhi})");
     }
 
     #[test]
@@ -274,5 +455,18 @@ mod tests {
         let at = Vec2::new(200.0, 200.0);
         // Same position, higher tectonic base ⇒ higher cell elevation.
         assert!(s.sample(&high, at).elevation > s.sample(&low, at).elevation);
+    }
+
+    #[test]
+    fn blended_elevation_overrides_the_hex_base() {
+        // The caller's blended elevation (not state.elevation) drives the cell —
+        // the seam the renderer feeds in to join terrain across hex boundaries.
+        let t = tables();
+        let s = FieldSampler::new(&t, 7);
+        let state = HexState::new(Composition::from_iter([(SI, 1000.0)])); // elevation 0
+        let at = Vec2::new(200.0, 200.0);
+        let low = s.sample_blended(&state, at, -0.5, 0.0);
+        let high = s.sample_blended(&state, at, 0.5, 0.0);
+        assert!(high.elevation > low.elevation, "blended elevation didn't drive the cell");
     }
 }

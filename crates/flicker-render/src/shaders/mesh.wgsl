@@ -128,6 +128,17 @@ fn material_index_color(index: u32) -> vec3<f32> {
         case 22u: { return vec3<f32>(0.26, 0.42, 0.34); } // TAIGA        cold conifer
         case 23u: { return vec3<f32>(0.56, 0.52, 0.46); } // TUNDRA       grey-brown
 
+        // ---- world-gen rock hardness ramp (Epoch viz) ----
+        case 24u: { return vec3<f32>(0.30, 0.25, 0.22); } // ROCK_SOFT    dark, weak (shale/clay)
+        case 25u: { return vec3<f32>(0.82, 0.80, 0.75); } // ROCK_HARD    pale, resistant (granite)
+
+        // ---- world-gen ore veins (Epoch 5) ----
+        case 26u: { return vec3<f32>(0.62, 0.20, 0.14); } // ORE_IRON     hematite red
+        case 27u: { return vec3<f32>(0.78, 0.46, 0.16); } // ORE_COPPER   coppery rust
+        case 28u: { return vec3<f32>(0.93, 0.78, 0.28); } // ORE_GOLD     gold
+        case 29u: { return vec3<f32>(0.80, 0.82, 0.85); } // ORE_SILVER   bright silver
+        case 30u: { return vec3<f32>(0.58, 0.30, 0.66); } // ORE_OTHER    violet (rare metal)
+
         // Fallback for unknown materials (also the EMPTY=0 case).
         default: { return vec3<f32>(1.0, 0.0, 1.0); }
     }

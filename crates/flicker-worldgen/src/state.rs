@@ -7,7 +7,36 @@
 //! erosion (water-cycle) sim consumes is the `elevation` heightmap together with
 //! the `crust` / `composition` it erodes.
 
+use flicker_materials::ElementId;
 use flicker_worldstate::Composition;
+
+/// Dominant biome of a hex's surface (Epoch 6), from temperature + moisture +
+/// elevation. A Whittaker-style classification; the runtime reads it to dress
+/// the surface.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum Biome {
+    /// Submerged — below sea level.
+    #[default]
+    Ocean,
+    /// Frozen waste — very cold.
+    Ice,
+    /// Cold, treeless.
+    Tundra,
+    /// Cold, moist — boreal conifer forest.
+    Taiga,
+    /// Temperate, dry — open grass.
+    Grassland,
+    /// Temperate, moist — deciduous forest.
+    Forest,
+    /// Hot, wet.
+    Rainforest,
+    /// Hot, seasonally dry — grass + scattered trees.
+    Savanna,
+    /// Hot, arid.
+    Desert,
+    /// Above the tree line — bare rock / permanent snow.
+    Alpine,
+}
 
 /// A hex's boundary relationship to its neighbours' plates (Epoch 3).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -49,6 +78,32 @@ pub struct HexState {
     /// Orogenic fold intensity `0..1` — the convergence strength where plates
     /// collide (Epoch 3). Drives the folded, lifted mountain relief in the field.
     pub orogeny: f32,
+    /// Global sea level in the normalized elevation space, once the hydrosphere
+    /// forms (Epoch 4). `0` before it runs.
+    pub sea_level: f32,
+    /// Water depth at this hex (`sea_level - elevation`, clamped ≥ 0) (Epoch 4).
+    pub water_depth: f32,
+    /// Surface temperature from latitude + elevation lapse (Epoch 4).
+    pub temperature: f32,
+    /// Hydrothermal mineralization intensity `0..1` (Epoch 5): high along the
+    /// active fault/boundary plumbing (with fluid present) where metals
+    /// precipitate. Drives where ore veins can form. `0` before it runs.
+    pub hydrothermal: f32,
+    /// The metal this hex's ore vein carries, if a vein runs through it
+    /// (Epoch 5). `None` off a vein.
+    pub vein_element: Option<ElementId>,
+    /// Vein concentration at this hex `0..1` (Epoch 5): peaks near the vein
+    /// source and tapers toward the tips. `0` off a vein.
+    pub vein_strength: f32,
+    /// Drainage flow accumulated at this hex (Epoch 6): the rainfall gathered
+    /// from everything that drains through it. High along trunk rivers — the
+    /// water sim's starting flow field. `0` before Epoch 6.
+    pub flow: f32,
+    /// Loose sediment deposited on this hex by macro-erosion (Epoch 6), in
+    /// normalized elevation units — the soft cover the water sim moves first.
+    pub sediment: f32,
+    /// Dominant biome (Epoch 6).
+    pub biome: Biome,
 }
 
 impl HexState {
@@ -65,6 +120,15 @@ impl HexState {
             boundary: Boundary::Interior,
             elevation: 0.0,
             orogeny: 0.0,
+            sea_level: 0.0,
+            water_depth: 0.0,
+            temperature: 0.0,
+            hydrothermal: 0.0,
+            vein_element: None,
+            vein_strength: 0.0,
+            flow: 0.0,
+            sediment: 0.0,
+            biome: Biome::Ocean,
         }
     }
 

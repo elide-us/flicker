@@ -12,14 +12,21 @@
 //!   crust, heavy metals sink.
 //! - **Epoch 3** ([`Epoch3`]) — plate tectonics: plates, boundaries, and the
 //!   mean-surface-**elevation** that gives continents and mountains.
-//! - Epochs 4-6 ([`PassThrough`]) — hydrosphere, mineralization, erosion/biomes
-//!   are deferred copies until their transforms are written.
+//! - **Epoch 4** ([`Epoch4`]) — hydrosphere: oceans fill the low basins; surface
+//!   temperature from latitude + elevation lapse.
+//! - **Epoch 5** ([`Epoch5`]) — mineralization: hydrothermal ore veins
+//!   concentrate metal along the fault network.
+//! - **Epoch 6** ([`Epoch6`]) — erosion / biomes: macro-erode the terrain into a
+//!   starting landscape, route drainage, and classify each hex's biome.
 //!
 //! [`Composition`]: flicker_worldstate::Composition
 
 pub mod epoch1;
 pub mod epoch2;
 pub mod epoch3;
+pub mod epoch4;
+pub mod epoch5;
+pub mod epoch6;
 pub mod field;
 pub mod noise;
 pub mod pipeline;
@@ -28,9 +35,12 @@ pub mod state;
 pub use epoch1::{Epoch1, Epoch1Params};
 pub use epoch2::Epoch2;
 pub use epoch3::Epoch3;
+pub use epoch4::Epoch4;
+pub use epoch5::Epoch5;
+pub use epoch6::Epoch6;
 pub use field::{CellSample, FieldSampler};
 pub use pipeline::{epoch_stack, six_epoch_stack, EpochCtx, EpochTransform, PassThrough, EPOCHS};
-pub use state::{Boundary, HexState};
+pub use state::{Biome, Boundary, HexState};
 
 use std::collections::BTreeMap;
 

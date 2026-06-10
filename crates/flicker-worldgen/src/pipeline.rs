@@ -2,11 +2,12 @@
 //! adding/transforming per-hex fields ([`HexState`]).
 //!
 //! Epoch 1 seeds the bulk composition; **Epoch 2** differentiates a crust;
-//! **Epoch 3** lays down plates and elevation (continents / mountains). Epochs
-//! 4-6 are [`PassThrough`] copies until their transforms (hydrosphere,
-//! mineralization, erosion / biomes) are written — replacing one is the unit of
-//! future epoch work. The chain keeps **every** layer so the stack can be
-//! visualized epoch by epoch.
+//! **Epoch 3** lays down plates and elevation (continents / mountains); **Epoch
+//! 4** floods the basins (hydrosphere); **Epoch 5** mineralizes ore veins along
+//! the faults; **Epoch 6** erodes the terrain into a starting landscape and
+//! assigns biomes. The chain keeps **every** layer so the stack can be
+//! visualized epoch by epoch; [`PassThrough`] stands in for any epoch whose real
+//! transform isn't written yet.
 
 use flicker_materials::Tables;
 use glam::Vec3;
@@ -14,6 +15,9 @@ use glam::Vec3;
 use crate::epoch1::Epoch1;
 use crate::epoch2::Epoch2;
 use crate::epoch3::Epoch3;
+use crate::epoch4::Epoch4;
+use crate::epoch5::Epoch5;
+use crate::epoch6::Epoch6;
 use crate::state::HexState;
 
 /// Number of epochs in the default stack ([`six_epoch_stack`]); the ground is
@@ -68,17 +72,18 @@ pub fn epoch_stack(
 }
 
 /// The default six-epoch stack: Epoch 1 (seed) → Epoch 2 (differentiation) →
-/// Epoch 3 (tectonics) → Epochs 4-6 (pass-through). Returns six per-hex layers,
-/// **Epoch 1 at index 0, Epoch 6 (the ground) at index 5**.
+/// Epoch 3 (tectonics) → Epoch 4 (hydrosphere) → Epoch 5 (mineralization) →
+/// Epoch 6 (erosion / biomes). Returns six per-hex layers, **Epoch 1 at index 0,
+/// Epoch 6 (the ground) at index 5**.
 pub fn six_epoch_stack(epoch1: &Epoch1, ctx: &EpochCtx) -> Vec<Vec<HexState>> {
     let seed_layer: Vec<HexState> = ctx
         .dirs
         .iter()
         .map(|&d| HexState::new(epoch1.seed_hex(d)))
         .collect();
-    let (e2, e3) = (Epoch2::default(), Epoch3::default());
-    let (p4, p5, p6) = (PassThrough(4), PassThrough(5), PassThrough(6));
-    let transforms: [&dyn EpochTransform; 5] = [&e2, &e3, &p4, &p5, &p6];
+    let (e2, e3, e4) = (Epoch2::default(), Epoch3::default(), Epoch4::default());
+    let (e5, e6) = (Epoch5::default(), Epoch6::default());
+    let transforms: [&dyn EpochTransform; 5] = [&e2, &e3, &e4, &e5, &e6];
     epoch_stack(seed_layer, ctx, &transforms)
 }
 
@@ -128,9 +133,15 @@ mod tests {
         // Epoch 3: plates + elevation written.
         assert!(stack[2].iter().any(|s| s.elevation != 0.0));
         assert!(stack[2].iter().any(|s| s.boundary != Boundary::Interior));
-        // Epochs 4-6 are pass-through copies of Epoch 3.
-        assert_eq!(stack[3], stack[2]);
-        assert_eq!(stack[4], stack[2]);
-        assert_eq!(stack[5], stack[2]);
+        // Epoch 4 adds the hydrosphere (sea level + oceans).
+        assert_ne!(stack[3], stack[2], "Epoch 4 should change the state");
+        assert!(stack[3].iter().any(|s| s.water_depth > 0.0), "Epoch 4 made no ocean");
+        // Epoch 5 mineralizes: hydrothermal signature + ore veins appear.
+        assert_ne!(stack[4], stack[3], "Epoch 5 should change the state");
+        assert!(stack[4].iter().any(|s| s.hydrothermal > 0.0), "Epoch 5 made no hydrothermal activity");
+        assert!(stack[4].iter().any(|s| s.vein_element.is_some()), "Epoch 5 formed no veins");
+        // Epoch 6 erodes + assigns biomes.
+        assert_ne!(stack[5], stack[4], "Epoch 6 should change the state");
+        assert!(stack[5].iter().any(|s| s.flow > Epoch6::default().rain), "Epoch 6 routed no drainage");
     }
 }
