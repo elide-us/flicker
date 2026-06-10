@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use flicker::app::{run, AbstractControls, Action, InputMap, InputState, Key};
-use flicker::render::{Camera, Renderer, SceneLighting, TextureHandle, Vec2, Vec3};
+use flicker::render::{Camera, Mat4, Renderer, SceneLighting, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
@@ -143,6 +143,16 @@ const LEFT_MAP_STEPS: [&[usize]; 19] = [
 /// of the first map; combined with each tile's mirror that's a true reflection.
 const LEFT_AXIS_X: f32 = 3.5 * HEX_SPACING;
 
+/// Radius of the roll wheel handles.
+const WHEEL_RADIUS: f32 = 850.0;
+/// World Z (south) of each map's roll wheel, on the map's N-S axis.
+const RIGHT_WHEEL_Z: f32 = -6000.0;
+const LEFT_WHEEL_Z: f32 = -5000.0;
+/// Screen-pixel radius for hit-testing a wheel against the cursor.
+const WHEEL_PICK_PX: f32 = 90.0;
+/// Roll change per pixel of vertical drag (radians).
+const ROLL_SENS: f32 = 0.005;
+
 // ───────────────────────────────────────────────────────────────────
 // Geometry helpers
 // ───────────────────────────────────────────────────────────────────
@@ -192,7 +202,7 @@ fn flip_ns(p: Vec3, center: Vec3) -> Vec3 {
 /// half bright with a pyramid arrowhead and the negative half dim. With `flip`
 /// the frame is record-flipped about the N-S axis — **X points east, Y points
 /// down**, Z/north unchanged — matching the flipped left-chart tiles.
-fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool) {
+fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool, xform: &Mat4) {
     let axes = [
         (Vec3::X, [0.95, 0.30, 0.30, 1.0]),
         (Vec3::Y, [0.40, 0.90, 0.45, 1.0]),
@@ -205,9 +215,65 @@ fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool) {
             dir
         };
         let dim = [color[0] * 0.4, color[1] * 0.4, color[2] * 0.4, 0.7];
-        renderer.draw_lines(&[(origin, origin - d * AXIS_LEN)], dim);
-        renderer.draw_lines(&[(origin, origin + d * AXIS_LEN)], color);
-        renderer.draw_lines(&arrowhead(origin + d * AXIS_LEN, d, ARROW), color);
+        let tip = origin + d * AXIS_LEN;
+        let t = |p: Vec3| xform.transform_point3(p);
+        renderer.draw_lines(&[(t(origin), t(origin - d * AXIS_LEN))], dim);
+        renderer.draw_lines(&[(t(origin), t(tip))], color);
+        for (s, e) in arrowhead(tip, d, ARROW) {
+            renderer.draw_lines(&[(t(s), t(e))], color);
+        }
+    }
+}
+
+/// World X of the left map's centre column (the reflected centre tile 37) — the
+/// vertical line the left map rolls about.
+fn left_axis_x() -> f32 {
+    2.0 * LEFT_AXIS_X - hex_center(LEFT_MAP_STEPS[18]).x
+}
+
+/// Roll transform: rotate about the vertical Z-line at world X `axis_x` by
+/// `angle`. The map's N-S axis stays fixed; its east/west halves tilt up/down.
+fn roll_transform(axis_x: f32, angle: f32) -> Mat4 {
+    Mat4::from_translation(Vec3::new(axis_x, 0.0, 0.0))
+        * Mat4::from_rotation_z(angle)
+        * Mat4::from_translation(Vec3::new(-axis_x, 0.0, 0.0))
+}
+
+/// Project a world point to screen pixels (origin top-left). `None` if behind
+/// the camera. Used to hit-test the roll wheels against the cursor.
+fn project_to_screen(world: Vec3, view_proj: Mat4, screen: Vec2) -> Option<Vec2> {
+    let clip = view_proj * world.extend(1.0);
+    if clip.w <= 1e-3 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some(Vec2::new(
+        (ndc.x * 0.5 + 0.5) * screen.x,
+        (1.0 - (ndc.y * 0.5 + 0.5)) * screen.y,
+    ))
+}
+
+/// Draw a roll wheel: a vertical ring (XY plane) with three spokes whose angle
+/// tracks `roll`, so dragging it visibly turns. The wheel sits on the map's
+/// Z-axis (the roll axis) and is *not* itself rolled.
+fn draw_wheel(renderer: &mut Renderer, centre: Vec3, radius: f32, roll: f32, color: [f32; 4]) {
+    use std::f32::consts::TAU;
+    const SEGS: usize = 32;
+    let rim: Vec<(Vec3, Vec3)> = (0..SEGS)
+        .map(|i| {
+            let a0 = i as f32 / SEGS as f32 * TAU;
+            let a1 = (i + 1) as f32 / SEGS as f32 * TAU;
+            (
+                centre + Vec3::new(radius * a0.cos(), radius * a0.sin(), 0.0),
+                centre + Vec3::new(radius * a1.cos(), radius * a1.sin(), 0.0),
+            )
+        })
+        .collect();
+    renderer.draw_lines(&rim, color);
+    for k in 0..3 {
+        let a = roll + k as f32 * TAU / 3.0;
+        let tip = centre + Vec3::new(radius * a.cos(), radius * a.sin(), 0.0);
+        renderer.draw_lines(&[(centre, tip)], color);
     }
 }
 
@@ -346,6 +412,13 @@ fn glyph_x(cx: f32, i: usize, n: usize, glyph: f32) -> f32 {
 // Scene
 // ───────────────────────────────────────────────────────────────────
 
+/// Which roll wheel the cursor is currently dragging.
+#[derive(Copy, Clone, PartialEq)]
+enum Wheel {
+    Right,
+    Left,
+}
+
 struct HexScene {
     /// Camera eye position (world).
     position: Vec3,
@@ -357,6 +430,15 @@ struct HexScene {
     bindings: InputMap,
     controls: AbstractControls,
 
+    /// Per-map roll about the N-S axis, 0..π. Right map: 0 = upright, π = upside
+    /// down (rolls left). Left map: 0 = down-facing (its record-flipped start),
+    /// π = upright (rolls right). Both tilt their tops *away* from each other.
+    right_roll: f32,
+    left_roll: f32,
+    /// The roll wheel being left-dragged, and the cursor at the previous frame.
+    drag: Option<Wheel>,
+    drag_cursor: Vec2,
+
     // GPU handles, uploaded once in `enter`.
     white: Option<TextureHandle>,
     dot: Option<TextureHandle>,
@@ -367,11 +449,11 @@ struct HexScene {
 impl HexScene {
     fn new() -> Self {
         Self {
-            // Above and south, angled down — framed to take in the first map
-            // (right) and the flipped left arch 19–27 (screen-left).
-            position: Vec3::new(6600.0, 8500.0, -11500.0),
+            // Above and south, angled down — framed for both maps plus the roll
+            // wheels to their south.
+            position: Vec3::new(6600.0, 9500.0, -13000.0),
             yaw: 0.0,     // face +Z (north)
-            pitch: -0.58, // look down at it
+            pitch: -0.56, // look down at it
             last_look_cursor: None,
             bindings: InputMap::wasd_and_mouse(),
             controls: AbstractControls {
@@ -379,6 +461,10 @@ impl HexScene {
                 move_speed: 2500.0,
                 ..AbstractControls::default()
             },
+            right_roll: 0.0,
+            left_roll: 0.0,
+            drag: None,
+            drag_cursor: Vec2::ZERO,
             white: None,
             dot: None,
             glyphs: None,
@@ -440,7 +526,7 @@ impl HexScene {
     /// number billboard floating over the centre. Every hex shares the same
     /// orientation and edge labelling, so adjacency reads straight off the
     /// colours/letters (e.g. hex 0's edge `a` faces hex 1's edge `d`).
-    fn draw_hex(&self, renderer: &mut Renderer, center: Vec3, number: u32, flip: bool) {
+    fn draw_hex(&self, renderer: &mut Renderer, center: Vec3, number: u32, flip: bool, xform: &Mat4) {
         let mut corners = hex_corners(center, HEX_SIZE);
         if flip {
             // Record-flip about the N-S axis through the centre: mirror
@@ -450,19 +536,23 @@ impl HexScene {
                 *c = flip_ns(*c, center);
             }
         }
+        // `xform` is the map's roll (rotation about its N-S axis); applied to
+        // every drawn point so the whole hex tilts together.
         for i in 0..6 {
-            let a = corners[i];
-            let b = corners[(i + 1) % 6];
+            let a = xform.transform_point3(corners[i]);
+            let b = xform.transform_point3(corners[(i + 1) % 6]);
             let color = EDGE_COLORS[i];
             renderer.draw_lines(&[(a, b)], color);
 
             if let Some(glyphs) = self.glyphs {
                 // Nudge the letter outward from the centre (correct mirrored too)
-                // and lift it off the ground plane.
-                let mid = (a + b) * 0.5;
+                // and lift it off the ground plane, then roll it with the map.
+                let mid = (corners[i] + corners[(i + 1) % 6]) * 0.5;
                 let outward =
                     Vec3::new(mid.x - center.x, 0.0, mid.z - center.z).normalize_or_zero();
-                let pos = mid + outward * EDGE_LABEL_OUT + Vec3::new(0.0, EDGE_LABEL_SIZE * 0.5, 0.0);
+                let pos = xform.transform_point3(
+                    mid + outward * EDGE_LABEL_OUT + Vec3::new(0.0, EDGE_LABEL_SIZE * 0.5, 0.0),
+                );
                 let letter = (b'a' + i as u8) as char;
                 self.draw_text_billboard(
                     renderer,
@@ -478,7 +568,7 @@ impl HexScene {
             for c in corners {
                 renderer.draw_billboard(
                     dot,
-                    c,
+                    xform.transform_point3(c),
                     Vec2::splat(DOT_SIZE),
                     Vec2::ZERO,
                     Vec2::ONE,
@@ -487,7 +577,8 @@ impl HexScene {
             }
         }
         if let Some(glyphs) = self.glyphs {
-            let label = center + Vec3::new(0.0, LABEL_SIZE * 0.5 + 40.0, 0.0);
+            let label =
+                xform.transform_point3(center + Vec3::new(0.0, LABEL_SIZE * 0.5 + 40.0, 0.0));
             self.draw_text_billboard(
                 renderer,
                 glyphs,
@@ -524,7 +615,7 @@ impl Scene for HexScene {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         // The wasd_and_mouse preset binds Escape to Menu (its later Escape bind
         // wins under the one-input-one-action rule), so check the key directly
         // for this menu-less demo.
@@ -532,6 +623,50 @@ impl Scene for HexScene {
             return Transition::Quit;
         }
         let dt_s = dt.as_secs_f32();
+
+        // Roll wheels: left-click a wheel to grab it, drag vertically to roll its
+        // map about the N-S axis (clamped to 0..π). Hit-tested by projecting each
+        // wheel centre to the screen.
+        let screen = renderer.size();
+        let aspect = if screen.y > 0.0 { screen.x / screen.y } else { 1.0 };
+        let view_proj = Camera {
+            position: self.position,
+            target: self.position + self.forward(),
+            up: Vec3::Y,
+            fov_y_radians: 60.0_f32.to_radians(),
+            near: 1.0,
+            far: 50000.0,
+        }
+        .view_projection(aspect);
+        let right_wheel = Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z);
+        let left_wheel = Vec3::new(left_axis_x(), 0.0, LEFT_WHEEL_Z);
+        if input.mouse_left_pressed {
+            let hit = |w: Vec3| {
+                project_to_screen(w, view_proj, screen)
+                    .is_some_and(|sp| (sp - input.mouse_position).length() < WHEEL_PICK_PX)
+            };
+            self.drag = if hit(right_wheel) {
+                Some(Wheel::Right)
+            } else if hit(left_wheel) {
+                Some(Wheel::Left)
+            } else {
+                None
+            };
+            self.drag_cursor = input.mouse_position;
+        }
+        if input.mouse_left {
+            if let Some(wheel) = self.drag {
+                let delta = (input.mouse_position.y - self.drag_cursor.y) * ROLL_SENS;
+                self.drag_cursor = input.mouse_position;
+                let roll = match wheel {
+                    Wheel::Right => &mut self.right_roll,
+                    Wheel::Left => &mut self.left_roll,
+                };
+                *roll = (*roll + delta).clamp(0.0, std::f32::consts::PI);
+            }
+        } else {
+            self.drag = None;
+        }
 
         // Look: right-drag, with sensitivity/invert applied by the config.
         if input.mouse_right {
@@ -586,33 +721,32 @@ impl Scene for HexScene {
         renderer.set_scene(SceneLighting::default());
         renderer.draw_sky();
 
-        // Compass gadget at the world origin for the first map.
-        draw_compass(renderer, Vec3::ZERO, false);
+        // Each map rolls about its own N-S axis: the right map about world Z
+        // (X=0), the left map about its centre column. Roll 0 leaves each in its
+        // start pose.
+        let lx = left_axis_x();
+        let m_right = roll_transform(0.0, self.right_roll);
+        let m_left = roll_transform(lx, self.left_roll);
 
-        // The first map, drawn from `HEX_STEPS` (each hex's path of unit edge-
-        // steps from the origin, indexed by its number): hex 0 at the centre,
-        // ring 1 (1–6) across edges a–f, ring 2 (7–18) walked clockwise from due
-        // west. Every hex shares the orientation/edge-labelling, so a hex's edge
-        // meets its neighbour's opposite edge across the gap (0.a ↔ 1.d, …).
+        // First map (upright base): compass at the origin, then the hexes.
+        draw_compass(renderer, Vec3::ZERO, false, &m_right);
         for (number, steps) in HEX_STEPS.iter().enumerate() {
-            self.draw_hex(renderer, hex_center(steps), number as u32, false);
+            self.draw_hex(renderer, hex_center(steps), number as u32, false, &m_right);
         }
 
-        // The left map: ring-3 tiles 19–24, the whole chart **record-flipped**
-        // about `LEFT_AXIS_X` — logical X reflects through the axis (landing west
-        // of the first map) and each tile mirrors (flip=true), which together is
-        // one clean reflection. 19–21 are the seam column; 22–24 trace the ring-3
-        // NW→N edge. All links back to the first map are logical.
+        // Left map (record-flipped base, then rolled): tiles, then the compass on
+        // the centre tile 37.
         for (i, steps) in LEFT_MAP_STEPS.iter().enumerate() {
             let logical = hex_center(steps);
             let pos = Vec3::new(2.0 * LEFT_AXIS_X - logical.x, 0.0, logical.z);
-            self.draw_hex(renderer, pos, (19 + i) as u32, true);
+            self.draw_hex(renderer, pos, (19 + i) as u32, true, &m_left);
         }
-        // Second compass gadget for the flipped chart (Y down, X east), moved to
-        // sit on the centre tile 37 (its X already matches the 23/29 column; now
-        // lifted north to the centre's Z). The map itself isn't repositioned.
         let centre = hex_center(LEFT_MAP_STEPS[18]); // [18] = tile 37 (centre)
-        draw_compass(renderer, Vec3::new(2.0 * LEFT_AXIS_X - centre.x, 0.0, centre.z), true);
+        draw_compass(renderer, Vec3::new(2.0 * LEFT_AXIS_X - centre.x, 0.0, centre.z), true, &m_left);
+
+        // Roll wheels, south of each map on its N-S axis (left-drag to roll).
+        draw_wheel(renderer, Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z), WHEEL_RADIUS, self.right_roll, [0.95, 0.85, 0.45, 1.0]);
+        draw_wheel(renderer, Vec3::new(lx, 0.0, LEFT_WHEEL_Z), WHEEL_RADIUS, self.left_roll, [0.95, 0.85, 0.45, 1.0]);
 
         // Scripted HUD: publish the live model, then draw the script's commands.
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
@@ -778,6 +912,33 @@ mod tests {
 
         // The chart is drawn reflected to the west (screen-left).
         assert!(LEFT_AXIS_X > 0.0);
+    }
+
+    #[test]
+    fn roll() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+
+        // Roll 0 is the identity.
+        let p = Vec3::new(300.0, 90.0, 50.0);
+        assert!((roll_transform(0.0, 0.0).transform_point3(p) - p).length() < 1e-3);
+
+        // Roll π about X=0 is a 180° flip: (x, y, z) → (−x, −y, z).
+        let q = roll_transform(0.0, PI).transform_point3(p);
+        assert!((q - Vec3::new(-300.0, -90.0, 50.0)).length() < 1e-1);
+
+        // Right map (axis X=0): at the half-roll the surface "up" (+Y) tilts to
+        // −X (east) — away from the west-side left map; bottom toward it.
+        let up = roll_transform(0.0, FRAC_PI_2).transform_point3(Vec3::Y);
+        assert!(up.x < -0.9 && up.y.abs() < 0.1);
+
+        // Left map: a full roll turns the record-flipped tile 19 back upright —
+        // its X lands at the un-reflected position, flat again.
+        let lx = left_axis_x();
+        let logical19 = hex_center(LEFT_MAP_STEPS[0]);
+        let reflected19 = Vec3::new(2.0 * LEFT_AXIS_X - logical19.x, 0.0, logical19.z);
+        let rolled = roll_transform(lx, PI).transform_point3(reflected19);
+        let upright_x = lx + (logical19.x - hex_center(LEFT_MAP_STEPS[18]).x);
+        assert!((rolled.x - upright_x).abs() < 1e-1 && rolled.y.abs() < 1e-2);
     }
 
     #[test]
