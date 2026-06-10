@@ -10,15 +10,17 @@
 //!     the ground plane (XZ, y = 0) with a **dot at each corner**, each edge in
 //!     its own colour and labelled `a`–`f` (clockwise from the west point);
 //!   * a **number billboard** over each hex centre — the per-hex map-ordering
-//!     label. Hex 0 sits at the origin; ring 1 (1–6) is one neighbour across
-//!     each edge `a`–`f` (clockwise: 1 NW, 2 N, 3 NE, 4 SE, 5 S, 6 SW); ring 2
-//!     (7–18) is the next ring, walked clockwise from due west (hex 7). Every
-//!     neighbour is drawn with a gap.
-//!   * a **second "left map"** — tiles 19–37 split off into a separate chart to
-//!     the west (screen-left), **record-flipped** about the N-S axis (Y down,
-//!     west↔east mirrored; b/e stay N/S): a full 19-tile hexagon — ring-2
-//!     (19–30), ring-1 (31–36), centre tile (37). A second compass, sitting on
-//!     the centre tile, marks the flipped frame.
+//!     label. The right map is numbered centre-outward as one clockwise spiral:
+//!     0 centre, ring 1 (1–6), ring 2 (7–18, hand-built), ring 3 (19–36, grown
+//!     by the [`first_ring`] formula). Each ring ends on its SW corner, so the
+//!     map ends on a corner (36 = 3f). Bump the ring count and the spiral grows
+//!     in place.
+//!   * a **second "left map"** to the west (screen-left), **record-flipped**
+//!     about the N-S axis (Y down, west↔east mirrored; b/e stay N/S), numbered
+//!     outer-ring-inward and continuing the count (37–73) so a new ring lands in
+//!     the middle of the whole sequence; a second compass sits on its centre.
+//!   * a **roll wheel** south of each map: left-drag to roll it about its N-S
+//!     axis, 0–180° (tops always tilt away from each other).
 //!
 //! It follows the voxel-cluster application model end to end: a [`Scene`] driven
 //! by [`SceneManager`]/[`run`], the [`InputMap`]/[`AbstractControls`] input
@@ -141,13 +143,15 @@ const LEFT_MAP_STEPS: [&[usize]; 19] = [
 /// X of the vertical axis the left chart is record-flipped about. Logical
 /// positions reflect through it (`x → 2·axis − x`) to land west (screen-left)
 /// of the first map; combined with each tile's mirror that's a true reflection.
-const LEFT_AXIS_X: f32 = 3.5 * HEX_SPACING;
+/// Wide enough that the two (now ring-3) maps clear each other.
+const LEFT_AXIS_X: f32 = 4.5 * HEX_SPACING;
 
 /// Radius of the roll wheel handles.
 const WHEEL_RADIUS: f32 = 850.0;
-/// World Z (south) of each map's roll wheel, on the map's N-S axis.
-const RIGHT_WHEEL_Z: f32 = -6000.0;
-const LEFT_WHEEL_Z: f32 = -5000.0;
+/// World Z (south) of each map's roll wheel, on the map's N-S axis — south of
+/// the ring-3 extent.
+const RIGHT_WHEEL_Z: f32 = -8000.0;
+const LEFT_WHEEL_Z: f32 = -7000.0;
 /// Screen-pixel radius for hit-testing a wheel against the cursor.
 const WHEEL_PICK_PX: f32 = 90.0;
 /// Roll change per pixel of vertical drag (radians).
@@ -190,6 +194,49 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         * HEX_SPACING
 }
 
+/// Ring-`k` cell offsets from a centre (× `HEX_SPACING`): the classic clockwise
+/// walk starting at the NW corner (`k·a`), `k` steps along each of the six sides
+/// (side `s` runs in direction `s + 2`). This is the formula that lets us add a
+/// ring to either map consistently — the hand-built tables above are exactly
+/// rotations of these (see the `ring_formula` test).
+fn ring_offsets(k: usize) -> Vec<Vec3> {
+    let mut cells = Vec::with_capacity(6 * k);
+    let mut cell = edge_normal(0) * (k as f32) * HEX_SPACING;
+    for side in 0..6 {
+        let step = edge_normal((side + 2) % 6) * HEX_SPACING;
+        for _ in 0..k {
+            cells.push(cell);
+            cell += step;
+        }
+    }
+    cells
+}
+
+/// The **right** map's ring `k`, in outward-spiral order: it enters one NW step
+/// out from the previous ring's SW corner and **ends on its own SW corner**
+/// (`k·f` rotated to last). Rotating by `5k+1` lands the SW corner last; this
+/// reproduces the hand-built ring 1 (`a…f`) and ring 2 (`f+a…2f`) exactly.
+fn first_ring(k: usize) -> Vec<Vec3> {
+    let mut r = ring_offsets(k);
+    r.rotate_left((5 * k + 1) % (6 * k));
+    r
+}
+
+/// The **left** map's ring `k` (offsets from its centre), **starting on the SW
+/// corner** (`k·f` first) — the hand-built left order, extended. Rotating by
+/// `5k` lands the SW corner first.
+fn left_ring(k: usize) -> Vec<Vec3> {
+    let mut r = ring_offsets(k);
+    r.rotate_left(5 * k);
+    r
+}
+
+/// Logical centre of the left map (first-map coordinates, before the reflection)
+/// — equal to the hand-built centre tile's position.
+fn left_center() -> Vec3 {
+    edge_normal(0) * HEX_SPACING
+}
+
 /// Mirror point `p` about the north–south (Z) axis through `center` — the
 /// horizontal half of the left chart's record-flip: west↔east (`x → 2·cx − x`),
 /// north/south unchanged. (The flip's Y-inversion is shown by the gadget, not
@@ -228,7 +275,7 @@ fn draw_compass(renderer: &mut Renderer, origin: Vec3, flip: bool, xform: &Mat4)
 /// World X of the left map's centre column (the reflected centre tile 37) — the
 /// vertical line the left map rolls about.
 fn left_axis_x() -> f32 {
-    2.0 * LEFT_AXIS_X - hex_center(LEFT_MAP_STEPS[18]).x
+    2.0 * LEFT_AXIS_X - left_center().x
 }
 
 /// Roll transform: rotate about the vertical Z-line at world X `axis_x` by
@@ -449,16 +496,16 @@ struct HexScene {
 impl HexScene {
     fn new() -> Self {
         Self {
-            // Above and south, angled down — framed for both maps plus the roll
-            // wheels to their south.
-            position: Vec3::new(6600.0, 9500.0, -13000.0),
-            yaw: 0.0,     // face +Z (north)
-            pitch: -0.56, // look down at it
+            // Above and south, angled down — framed for both ring-3 maps plus
+            // the roll wheels to their south.
+            position: Vec3::new(8800.0, 8600.0, -15500.0),
+            yaw: 0.0,    // face +Z (north)
+            pitch: -0.5, // look down at it
             last_look_cursor: None,
             bindings: InputMap::wasd_and_mouse(),
             controls: AbstractControls {
-                // Two charts side by side (~20 k across) — fly fast.
-                move_speed: 2500.0,
+                // Two big charts side by side (~33 k across) — fly fast.
+                move_speed: 4000.0,
                 ..AbstractControls::default()
             },
             right_roll: 0.0,
@@ -635,7 +682,7 @@ impl Scene for HexScene {
             up: Vec3::Y,
             fov_y_radians: 60.0_f32.to_radians(),
             near: 1.0,
-            far: 50000.0,
+            far: 100000.0,
         }
         .view_projection(aspect);
         let right_wheel = Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z);
@@ -714,7 +761,7 @@ impl Scene for HexScene {
             up: Vec3::Y,
             fov_y_radians: 60.0_f32.to_radians(),
             near: 1.0,
-            far: 50000.0,
+            far: 100000.0,
         });
 
         // A plain default sky gives a horizon to orient against.
@@ -722,31 +769,47 @@ impl Scene for HexScene {
         renderer.draw_sky();
 
         // Each map rolls about its own N-S axis: the right map about world Z
-        // (X=0), the left map about its centre column. Roll 0 leaves each in its
-        // start pose.
+        // (X=0), the left map about its centre column. The left map is the
+        // *mirror* of the right, so it rolls the **opposite** way — its angle is
+        // negated. (Same sign would make the two maps rotate alike, collapsing
+        // the opposite maps into the same map.) Roll 0 leaves each in its start
+        // pose (right upright, left record-flipped/down-facing).
         let lx = left_axis_x();
         let m_right = roll_transform(0.0, self.right_roll);
-        let m_left = roll_transform(lx, self.left_roll);
+        let m_left = roll_transform(lx, -self.left_roll);
 
-        // First map (upright base): compass at the origin, then the hexes.
+        // First (right) map: compass at the origin, then the hand-built centre +
+        // ring 1 + ring 2 (tiles 0–18), then the formula-grown ring 3 (19–36),
+        // which continues the outward spiral and ends on the SW corner (3f).
         draw_compass(renderer, Vec3::ZERO, false, &m_right);
         for (number, steps) in HEX_STEPS.iter().enumerate() {
             self.draw_hex(renderer, hex_center(steps), number as u32, false, &m_right);
         }
-
-        // Left map (record-flipped base, then rolled): tiles, then the compass on
-        // the centre tile 37.
-        for (i, steps) in LEFT_MAP_STEPS.iter().enumerate() {
-            let logical = hex_center(steps);
-            let pos = Vec3::new(2.0 * LEFT_AXIS_X - logical.x, 0.0, logical.z);
-            self.draw_hex(renderer, pos, (19 + i) as u32, true, &m_left);
+        let ring3 = first_ring(3);
+        for (i, &off) in ring3.iter().enumerate() {
+            self.draw_hex(renderer, off, (HEX_STEPS.len() + i) as u32, false, &m_right);
         }
-        let centre = hex_center(LEFT_MAP_STEPS[18]); // [18] = tile 37 (centre)
-        draw_compass(renderer, Vec3::new(2.0 * LEFT_AXIS_X - centre.x, 0.0, centre.z), true, &m_left);
+        let right_count = HEX_STEPS.len() + ring3.len(); // 37
+
+        // Left map (record-flipped, then rolled): its new outer ring 3 is
+        // numbered first — inserting the new tiles in the *middle* of the whole
+        // sequence — then the hand-built ring 2 / ring 1 / centre follow. Logical
+        // positions reflect about LEFT_AXIS_X.
+        let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, 0.0, p.z);
+        let c = left_center();
+        let lring3 = left_ring(3);
+        for (i, &off) in lring3.iter().enumerate() {
+            self.draw_hex(renderer, reflect(c + off), (right_count + i) as u32, true, &m_left);
+        }
+        let left_built_base = right_count + lring3.len(); // 55
+        for (j, steps) in LEFT_MAP_STEPS.iter().enumerate() {
+            self.draw_hex(renderer, reflect(hex_center(steps)), (left_built_base + j) as u32, true, &m_left);
+        }
+        draw_compass(renderer, reflect(c), true, &m_left);
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
         draw_wheel(renderer, Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z), WHEEL_RADIUS, self.right_roll, [0.95, 0.85, 0.45, 1.0]);
-        draw_wheel(renderer, Vec3::new(lx, 0.0, LEFT_WHEEL_Z), WHEEL_RADIUS, self.left_roll, [0.95, 0.85, 0.45, 1.0]);
+        draw_wheel(renderer, Vec3::new(lx, 0.0, LEFT_WHEEL_Z), WHEEL_RADIUS, -self.left_roll, [0.95, 0.85, 0.45, 1.0]);
 
         // Scripted HUD: publish the live model, then draw the script's commands.
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
@@ -849,6 +912,44 @@ mod tests {
     }
 
     #[test]
+    fn ring_formula() {
+        let s = HEX_SPACING;
+
+        // The formula reproduces the hand-built right map *exactly*, so adding a
+        // ring can't reorder the existing tiles: ring 1 == HEX_STEPS[1..=6],
+        // ring 2 == HEX_STEPS[7..=18].
+        let r1 = first_ring(1);
+        for i in 0..6 {
+            assert!((r1[i] - hex_center(HEX_STEPS[1 + i])).length() < 1e-2, "ring1[{i}]");
+        }
+        let r2 = first_ring(2);
+        for i in 0..12 {
+            assert!((r2[i] - hex_center(HEX_STEPS[7 + i])).length() < 1e-2, "ring2[{i}]");
+        }
+
+        // Ring 3 continues the spiral and ENDS ON A CORNER.
+        let r3 = first_ring(3);
+        assert_eq!(r3.len(), 18);
+        // first cell = previous SW corner (HEX_STEPS[18] = 2f) + one NW step.
+        assert!((r3[0] - (hex_center(HEX_STEPS[18]) + edge_normal(0) * s)).length() < 1e-2);
+        // last cell = the ring-3 SW corner: radius 3·s, in the SW direction
+        // (+X west, −Z south).
+        let last = *r3.last().unwrap();
+        assert!((last.length() / s - 3.0).abs() < 1e-2);
+        assert!(last.x > 0.0 && last.z < 0.0);
+
+        // The left ring formula reproduces the hand-built left ring 2 (offsets
+        // from the left centre), and its ring 3 *starts* on the SW corner.
+        let c = left_center();
+        let lr2 = left_ring(2);
+        for i in 0..12 {
+            assert!((lr2[i] - (hex_center(LEFT_MAP_STEPS[i]) - c)).length() < 1e-2, "left2[{i}]");
+        }
+        let lr3 = left_ring(3);
+        assert!((lr3[0].length() / s - 3.0).abs() < 1e-2 && lr3[0].x > 0.0 && lr3[0].z < 0.0);
+    }
+
+    #[test]
     fn left_map_column() {
         let s = HEX_SPACING;
         let p = |i: usize| hex_center(LEFT_MAP_STEPS[i]); // logical (pre-shift) positions
@@ -926,17 +1027,23 @@ mod tests {
         let q = roll_transform(0.0, PI).transform_point3(p);
         assert!((q - Vec3::new(-300.0, -90.0, 50.0)).length() < 1e-1);
 
-        // Right map (axis X=0): at the half-roll the surface "up" (+Y) tilts to
-        // −X (east) — away from the west-side left map; bottom toward it.
-        let up = roll_transform(0.0, FRAC_PI_2).transform_point3(Vec3::Y);
-        assert!(up.x < -0.9 && up.y.abs() < 0.1);
+        // The maps roll OPPOSITE ways (the left map's angle is negated). At the
+        // half-roll the right map's surface "up" (+Y) tilts to −X (east) and the
+        // left map's to +X (west) — i.e. each tilts away from the other; their
+        // bottoms meet. If they shared a sign they'd tilt the same way.
+        let right_up = roll_transform(0.0, FRAC_PI_2).transform_point3(Vec3::Y);
+        let left_up = roll_transform(0.0, -FRAC_PI_2).transform_point3(Vec3::Y);
+        assert!(right_up.x < -0.9 && right_up.y.abs() < 0.1); // right top → east
+        assert!(left_up.x > 0.9 && left_up.y.abs() < 0.1); // left top → west (opposite)
+        assert!((right_up.x - left_up.x).abs() > 1.5); // genuinely opposite, not the same
 
         // Left map: a full roll turns the record-flipped tile 19 back upright —
-        // its X lands at the un-reflected position, flat again.
+        // its X lands at the un-reflected position, flat again. (±π land the same
+        // place; the negation only flips the *path*, not the endpoint.)
         let lx = left_axis_x();
         let logical19 = hex_center(LEFT_MAP_STEPS[0]);
         let reflected19 = Vec3::new(2.0 * LEFT_AXIS_X - logical19.x, 0.0, logical19.z);
-        let rolled = roll_transform(lx, PI).transform_point3(reflected19);
+        let rolled = roll_transform(lx, -PI).transform_point3(reflected19);
         let upright_x = lx + (logical19.x - hex_center(LEFT_MAP_STEPS[18]).x);
         assert!((rolled.x - upright_x).abs() < 1e-1 && rolled.y.abs() < 1e-2);
     }
