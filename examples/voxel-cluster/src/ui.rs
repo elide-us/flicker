@@ -37,10 +37,6 @@ const INK: Rgb = (8, 9, 11);
 
 /// Tarnished-gold title text.
 pub const COL_TITLE: [f32; 4] = [0.83, 0.67, 0.39, 1.0];
-/// Resting label (cold silver) — used by the settings dropdowns.
-const COL_LABEL: [f32; 4] = [0.78, 0.81, 0.86, 1.0];
-/// Hovered label (lit gold) — used by the settings dropdowns.
-const COL_LABEL_HOVER: [f32; 4] = [0.96, 0.80, 0.42, 1.0];
 /// Hovered button outline (gold).
 const COL_GOLD_LINE: [f32; 4] = [0.85, 0.66, 0.32, 0.95];
 /// Opaque dark backdrop for a full-screen menu (nothing behind it).
@@ -48,23 +44,18 @@ const COL_BACKDROP: [f32; 4] = [0.035, 0.04, 0.05, 1.0];
 /// Loading-bar track (recessed dark) and tarnished-gold fill.
 const COL_BAR_TRACK: [f32; 4] = [0.05, 0.06, 0.07, 1.0];
 const COL_BAR_FILL: [f32; 4] = [0.63, 0.49, 0.26, 1.0];
-/// Dropdown cell fill (resting) and hovered fill.
-const COL_DD_FILL: [f32; 4] = [0.10, 0.11, 0.13, 0.97];
-const COL_DD_HOT: [f32; 4] = [0.17, 0.19, 0.22, 0.98];
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
 const PANEL_W: u32 = 520;
 const PANEL_H: u32 = 384;
+/// Settings panel: wider for the 3-tab layout.
+const SETTINGS_PANEL_W: u32 = 800;
+const SETTINGS_PANEL_H: u32 = 500;
 /// Stone-frame thickness (px) around the recessed content well.
 const FRAME: u32 = 38;
 const BUTTON_W: u32 = 264;
 const BUTTON_H: u32 = 54;
-
-/// Dropdown row height (px) — about half the menu button — and label size, for
-/// the compact settings dropdowns.
-pub const DD_ROW_H: f32 = 26.0;
-pub const DD_LABEL_SIZE: f32 = 15.0;
 
 /// Stroke width (px) for the gold filigree curves.
 const FIL_STROKE: f32 = 2.0;
@@ -432,6 +423,62 @@ fn build_panel() -> Vec<u8> {
     c.into_pixels()
 }
 
+/// Wider settings panel (800×500) with the same gothic styling as the
+/// modal panel but scaled for the 3-tab layout.
+fn build_settings_panel() -> Vec<u8> {
+    let (w, h) = (SETTINGS_PANEL_W as usize, SETTINGS_PANEL_H as usize);
+    let f = FRAME as usize;
+    let mut c = Canvas::new(w, h);
+
+    // 1. Flat slate frame with gentle drift + faint cracks.
+    c.stone_fill();
+    c.crack(7, (200, 0), 1.85, 160);
+    c.crack(41, (w as i32 - 50, h as i32), -1.9, 160);
+    c.crack(13, (w as i32 / 2, h as i32 - 10), 0.7, 100);
+
+    // 2. Raised 3D bevel on the outer edge.
+    c.outer_bevel(8, 16.0);
+
+    // 3. Recessed content well: flat dark field with a soft vignette.
+    let (cw, ch) = (w - 2 * f, h - 2 * f);
+    for yy in 0..ch {
+        let base = lerp_rgb(SURFACE_TOP, SURFACE_BOT, yy as f32 / (ch - 1) as f32);
+        for xx in 0..cw {
+            let edge = (xx.min(cw - 1 - xx)).min(yy.min(ch - 1 - yy)) as f32;
+            let vig = 0.7 + 0.3 * (edge / 40.0).min(1.0);
+            c.put((f + xx) as i32, (f + yy) as i32, scale(base, vig), 255);
+        }
+    }
+    c.rect_outline((f - 2, f - 2), (cw + 4, ch + 4), INK, 150, 2);
+
+    // 4. Tarnished-gold filigree: frame line, corner scrolls, flourishes.
+    c.g_frame((f - 7, f - 7), (cw + 14, ch + 14));
+    let (x0, y0) = ((f - 7) as f32, (f - 7) as f32);
+    let (x1, y1) = ((w - f + 6) as f32, (h - f + 6) as f32);
+    c.corner_scroll(x0, y0, 1.0, 1.0);
+    c.corner_scroll(x1, y0, -1.0, 1.0);
+    c.corner_scroll(x0, y1, 1.0, -1.0);
+    c.corner_scroll(x1, y1, -1.0, -1.0);
+    let (mx, my) = (w as f32 * 0.5, h as f32 * 0.5);
+    c.center_flourish(mx, (f / 2) as f32, true);
+    c.center_flourish(mx, (h - f / 2) as f32, true);
+    c.center_flourish((f / 2) as f32, my, false);
+    c.center_flourish((w - f / 2) as f32, my, false);
+
+    // 5. Title band at the top of the content well.
+    let (band_x, band_w) = (f + 6, cw - 12);
+    let (band_y, band_h) = (f + 6, 50usize);
+    c.fill_rect(
+        (band_x, band_y),
+        (band_w, band_h),
+        shade(SURFACE_BOT, -8),
+        255,
+    );
+    c.hline(band_x, band_x + band_w, band_y, GOLD, 255);
+    c.hline(band_x, band_x + band_w, band_y + band_h, GOLD, 255);
+    c.into_pixels()
+}
+
 /// A raised button plate: a lighter metal gradient, a faint top/left silver
 /// bevel and bottom/right ink shadow, and a gold hairline border.
 fn build_button() -> Vec<u8> {
@@ -473,13 +520,6 @@ struct Rect {
     h: f32,
 }
 
-impl Rect {
-    /// Point-in-rect test — used by the settings-dropdown hit-testing.
-    fn contains(&self, p: Vec2) -> bool {
-        p.x >= self.x && p.x <= self.x + self.w && p.y >= self.y && p.y <= self.y + self.h
-    }
-}
-
 /// Screen-space placement of the centred gothic panel — used by the loading
 /// widget (the menu/pause/confirm modals are now Lua-driven). Recomputed from
 /// the viewport each frame.
@@ -510,6 +550,7 @@ pub fn modal_layout(screen: Vec2) -> ModalLayout {
 #[derive(Copy, Clone)]
 pub struct Theme {
     panel: TextureHandle,
+    settings_panel: TextureHandle,
     button: TextureHandle,
     white: TextureHandle,
 }
@@ -520,9 +561,11 @@ impl Theme {
     pub fn build(renderer: &mut Renderer) -> Self {
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
         let panel = renderer.load_texture(&build_panel(), PANEL_W, PANEL_H);
+        let settings_panel = renderer.load_texture(&build_settings_panel(), SETTINGS_PANEL_W, SETTINGS_PANEL_H);
         let button = renderer.load_texture(&build_button(), BUTTON_W, BUTTON_H);
         Self {
             panel,
+            settings_panel,
             button,
             white,
         }
@@ -534,17 +577,13 @@ impl Theme {
     /// consumer's `render_hud`). `white` is id 0 so it doubles as the rect fill.
     ///
     /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
-    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 3] {
+    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 4] {
         [
             ("white", self.white),
             ("panel", self.panel),
+            ("settings_panel", self.settings_panel),
             ("button", self.button),
         ]
-    }
-
-    /// 1×1 white pixel texture — used for colored-rect fills.
-    pub fn white(&self) -> TextureHandle {
-        self.white
     }
 
     /// Opaque full-screen dark backdrop — for a menu with nothing behind it.
@@ -634,156 +673,6 @@ fn outline(r: &mut Renderer, white: TextureHandle, rect: &Rect, t: f32, color: [
         Vec2::new(t, rect.h),
         color,
     );
-}
-
-// ===== compact dropdown widget (settings panel) =====
-
-/// A compact dropdown: a header showing the current choice that expands to a
-/// list of rows. Drawn with primitives (no baked texture), so it sizes to any
-/// row count. State is just open/closed; the selected index and the labels live
-/// with the caller (e.g. the settings panel).
-pub struct Dropdown {
-    open: bool,
-}
-
-impl Dropdown {
-    #[must_use]
-    pub fn new() -> Self {
-        Self { open: false }
-    }
-
-    /// Screen height the dropdown occupies right now (just the header, plus the
-    /// rows when open) — for stacking widgets beneath it.
-    #[must_use]
-    pub fn height(&self, items: usize) -> f32 {
-        if self.open {
-            DD_ROW_H * (items as f32 + 1.0)
-        } else {
-            DD_ROW_H
-        }
-    }
-
-    /// Handle a click at `cursor`. `anchor` is the header's top-left, `width`
-    /// the box width, `items` the row count. A header click toggles open; a row
-    /// click returns `Some(index)` and closes; any other click closes.
-    pub fn click(&mut self, anchor: Vec2, width: f32, items: usize, cursor: Vec2) -> Option<usize> {
-        let (header, rows) = dd_layout(anchor, width, items);
-        if header.contains(cursor) {
-            self.open = !self.open;
-            return None;
-        }
-        if self.open {
-            for (i, row) in rows.iter().enumerate() {
-                if row.contains(cursor) {
-                    self.open = false;
-                    return Some(i);
-                }
-            }
-            self.open = false;
-        }
-        None
-    }
-
-    /// Draw the dropdown: a header showing `items[selected]` plus a caret, and —
-    /// when open — the rows (the active one lit, the hovered one highlighted).
-    pub fn draw(
-        &self,
-        theme: &Theme,
-        r: &mut Renderer,
-        place: (Vec2, f32),
-        items: &[String],
-        selected: usize,
-        cursor: Vec2,
-    ) {
-        let (anchor, width) = place;
-        let (header, rows) = dd_layout(anchor, width, items.len());
-        dd_cell(theme, r, &header, false);
-        if let Some(label) = items.get(selected) {
-            dd_label(r, label, &header, COL_LABEL);
-        }
-        dd_caret(r, &header, self.open);
-        if self.open {
-            for (i, row) in rows.iter().enumerate() {
-                let hot = row.contains(cursor);
-                dd_cell(theme, r, row, hot);
-                let col = if i == selected {
-                    COL_LABEL_HOVER
-                } else {
-                    COL_LABEL
-                };
-                dd_label(r, &items[i], row, col);
-            }
-        }
-    }
-}
-
-impl Default for Dropdown {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Header rect + one rect per row for a dropdown at `anchor`.
-fn dd_layout(anchor: Vec2, width: f32, items: usize) -> (Rect, Vec<Rect>) {
-    let header = Rect {
-        x: anchor.x,
-        y: anchor.y,
-        w: width,
-        h: DD_ROW_H,
-    };
-    let rows = (0..items)
-        .map(|i| Rect {
-            x: anchor.x,
-            y: anchor.y + DD_ROW_H * (i as f32 + 1.0),
-            w: width,
-            h: DD_ROW_H,
-        })
-        .collect();
-    (header, rows)
-}
-
-/// A dropdown cell: slate fill (lit when `hot`) + a thin gold border.
-fn dd_cell(theme: &Theme, r: &mut Renderer, rect: &Rect, hot: bool) {
-    let fill = if hot { COL_DD_HOT } else { COL_DD_FILL };
-    r.draw_sprite(
-        theme.white,
-        Vec2::new(rect.x, rect.y),
-        Vec2::new(rect.w, rect.h),
-        fill,
-    );
-    outline(r, theme.white, rect, 1.0, COL_GOLD_LINE);
-}
-
-/// Left-aligned dropdown label, vertically centred in `rect`.
-fn dd_label(r: &mut Renderer, text: &str, rect: &Rect, color: [f32; 4]) {
-    r.draw_text(
-        text,
-        Vec2::new(rect.x + 10.0, rect.y + (rect.h - DD_LABEL_SIZE) * 0.5),
-        DD_LABEL_SIZE,
-        color,
-    );
-}
-
-/// A small gold caret at the right of a dropdown header (down = closed,
-/// up = open), drawn as a filled triangle so it needs no glyph.
-fn dd_caret(r: &mut Renderer, header: &Rect, open: bool) {
-    let cx = header.x + header.w - 14.0;
-    let cy = header.y + header.h * 0.5;
-    let s = 4.0;
-    let (a, b, c) = if open {
-        (
-            Vec2::new(cx - s, cy + s * 0.6),
-            Vec2::new(cx + s, cy + s * 0.6),
-            Vec2::new(cx, cy - s * 0.6),
-        )
-    } else {
-        (
-            Vec2::new(cx - s, cy - s * 0.6),
-            Vec2::new(cx + s, cy - s * 0.6),
-            Vec2::new(cx, cy + s * 0.6),
-        )
-    };
-    r.draw_triangle(a, b, c, COL_GOLD_LINE);
 }
 
 #[cfg(test)]

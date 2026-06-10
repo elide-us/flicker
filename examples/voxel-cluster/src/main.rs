@@ -43,7 +43,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use flicker::app::{run, Action, InputState, Key};
-use flicker::app::{AbstractControls, GamepadConfig, GuiRenderer, InputMap, InputSettingsPanel};
+use flicker::app::{AbstractControls, GamepadConfig, InputMap, RebindCapture};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
     TextureHandle, Vec2, Vec3,
@@ -62,41 +62,118 @@ mod display;
 mod ui;
 
 // ───────────────────────────────────────────────────────────────────
-// RendererGui — implements GuiRenderer for the engine's Renderer
+// Unified settings persistence
 // ───────────────────────────────────────────────────────────────────
 
-struct RendererGui<'a> {
-    renderer: &'a mut Renderer,
-    white: TextureHandle,
+/// Full settings state persisted to `settings.json`.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct GameSettings {
+    audio: AudioSettings,
+    video: VideoSettings,
+    input: InputSettings,
 }
 
-impl<'a> RendererGui<'a> {
-    fn new(renderer: &'a mut Renderer, white: TextureHandle) -> Self {
-        Self { renderer, white }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct AudioSettings {
+    master: f32,
+    music: f32,
+    sfx: f32,
+    voice: f32,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self { master: 0.8, music: 0.6, sfx: 0.7, voice: 0.9 }
     }
 }
 
-impl<'a> GuiRenderer for RendererGui<'a> {
-    fn draw_rect(&mut self, pos: Vec2, size: Vec2, color: [f32; 4]) {
-        self.renderer.draw_sprite(self.white, pos, size, color);
-    }
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct VideoSettings {
+    display_mode: usize,
+    resolution: usize,
+    quality: usize,
+    vsync: bool,
+    fps_limit: usize,
+}
 
-    fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
-        self.renderer.draw_triangle(a, b, c, color);
-    }
-
-    fn draw_text(&mut self, text: &str, pos: Vec2, size: f32, color: [f32; 4]) {
-        self.renderer.draw_text(text, pos, size, color);
-    }
-
-    fn measure_text(&mut self, text: &str, size: f32) -> Vec2 {
-        self.renderer.measure_text(text, size)
-    }
-
-    fn screen_size(&self) -> Vec2 {
-        self.renderer.size()
+impl Default for VideoSettings {
+    fn default() -> Self {
+        Self { display_mode: 1, resolution: 3, quality: 3, vsync: true, fps_limit: 2 }
     }
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct InputSettings {
+    mouse_sensitivity: f32,
+    sprint_sensitivity: f32,
+    invert_pitch: bool,
+    invert_yaw: bool,
+    raw_input: bool,
+    stick_sensitivity: f32,
+    left_deadzone: f32,
+    right_deadzone: f32,
+    trigger_threshold: f32,
+    invert_stick_pitch: bool,
+    invert_stick_yaw: bool,
+    deadzone_shape: usize,
+}
+
+impl Default for InputSettings {
+    fn default() -> Self {
+        Self {
+            mouse_sensitivity: 0.005,
+            sprint_sensitivity: 0.005,
+            invert_pitch: false,
+            invert_yaw: false,
+            raw_input: true,
+            stick_sensitivity: 2.0,
+            left_deadzone: 0.2,
+            right_deadzone: 0.2,
+            trigger_threshold: 0.5,
+            invert_stick_pitch: false,
+            invert_stick_yaw: false,
+            deadzone_shape: 0,
+        }
+    }
+}
+
+impl Default for GameSettings {
+    fn default() -> Self {
+        Self {
+            audio: AudioSettings::default(),
+            video: VideoSettings::default(),
+            input: InputSettings::default(),
+        }
+    }
+}
+
+impl GameSettings {
+    fn settings_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/settings.json"))
+    }
+
+    fn save(&self) {
+        let path = Self::settings_path();
+        match serde_json::to_vec_pretty(self) {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    tracing::warn!("failed to write {}: {e}", path.display());
+                }
+            }
+            Err(e) => tracing::warn!("failed to serialize settings: {e}"),
+        }
+    }
+}
+
+static GAME_SETTINGS: Mutex<GameSettings> = Mutex::new(GameSettings {
+    audio: AudioSettings { master: 0.8, music: 0.6, sfx: 0.7, voice: 0.9 },
+    video: VideoSettings { display_mode: 1, resolution: 3, quality: 3, vsync: true, fps_limit: 2 },
+    input: InputSettings {
+        mouse_sensitivity: 0.005, sprint_sensitivity: 0.005, invert_pitch: false, invert_yaw: false,
+        raw_input: true, stick_sensitivity: 2.0, left_deadzone: 0.2, right_deadzone: 0.2,
+        trigger_threshold: 0.5, invert_stick_pitch: false, invert_stick_yaw: false, deadzone_shape: 0,
+    },
+});
 
 /// Input settings changes pushed from the pause scene and consumed by
 /// the game scene. `None` when no pending change exists.
@@ -295,9 +372,8 @@ struct GameScene {
     /// generated asynchronously, so the snap waits for it).
     walk_needs_snap: bool,
 
-    /// Previous-frame Escape key level, for press-edge detection (only the
-    /// mouse exposes a ready-made edge flag). A press pushes the pause overlay.
-    escape_prev: bool,
+    /// Previous-frame menu action level, for press-edge detection.
+    menu_prev: bool,
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
     /// `enter`.
@@ -363,7 +439,7 @@ impl Default for GameScene {
             vy: 0.0,
             grounded: false,
             walk_needs_snap: false,
-            escape_prev: false,
+            menu_prev: false,
             ui_theme: None,
             phase: GamePhase::Booting,
             nav_ready_target: 0,
@@ -535,7 +611,7 @@ impl GameScene {
                 let b = verts[tri[1] as usize];
                 let c = verts[tri[2] as usize];
                 if let Some(t) = Self::ray_triangle(origin, dir, a, b, c) {
-                    if best.map_or(true, |(bt, _)| t < bt) {
+                    if best.is_none_or(|(bt, _)| t < bt) {
                         best = Some((t, *id));
                     }
                 }
@@ -657,7 +733,7 @@ impl VirtualVoxel {
             self_relative: [0.0; 3],
             world: Vec3::ZERO,
         }; 8];
-        for o in 0..8 {
+        for (o, corner) in corners.iter_mut().enumerate() {
             let bx = (o & 1) as i32;
             let by = ((o >> 1) & 1) as i32;
             let bz = ((o >> 2) & 1) as i32;
@@ -674,7 +750,7 @@ impl VirtualVoxel {
             ];
             let world = cluster_origin
                 + Vec3::new(m[0] as f32 + v[0], m[1] as f32 + v[1], m[2] as f32 + v[2]);
-            corners[o] = VirtualVoxelCorner {
+            *corner = VirtualVoxelCorner {
                 owner_local: m,
                 owner_relative: v,
                 self_relative,
@@ -1487,13 +1563,12 @@ impl Scene for GameScene {
             }
         }
 
-        // Escape edge (we track the level ourselves — only the mouse exposes a
-        // ready-made press flag) pushes the pause overlay. The scene manager
-        // then freezes us, so no gameplay runs until it pops.
-        let esc_down = input.key_down(Key::Escape);
-        let esc_pressed = esc_down && !self.escape_prev;
-        self.escape_prev = esc_down;
-        if esc_pressed {
+        // Menu action edge detection pushes the pause overlay. The scene
+        // manager then freezes us, so no gameplay runs until it pops.
+        let menu_down = self.bindings.action_pressed(Action::Menu, input);
+        let menu_pressed = menu_down && !self.menu_prev;
+        self.menu_prev = menu_down;
+        if menu_pressed {
             let theme = self.ui_theme.expect("pause theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
@@ -2408,19 +2483,12 @@ impl Scene for LogoScene {
     }
 }
 
-// ===== settings panel (display mode + resolution dropdowns, top-right) =====
-
-/// Inset (px) of the settings panel from the top-right corner. Top-left is
-/// reserved for gameplay bars (health/mana/stamina); top-right is system UI.
-const SETTINGS_INSET: f32 = 24.0;
-
 /// Seconds the confirm overlay waits before auto-reverting a display change.
 const CONFIRM_SECS: f32 = 15.0;
 
 /// A selection made in the settings dropdowns.
 enum DisplayChange {
     Mode(display::DisplayMode),
-    Res(display::Resolution),
 }
 
 /// Apply `change` to the window immediately and record it as current. Returns
@@ -2440,124 +2508,10 @@ fn apply_display_change(
             },
             matches!(m, display::DisplayMode::ExclusiveFullscreen),
         ),
-        DisplayChange::Res(r) => (
-            display::DisplaySetting {
-                mode: prev.mode,
-                res: r,
-            },
-            true,
-        ),
     };
     next.apply(renderer);
     display::set_current(next);
     confirm.then_some(prev)
-}
-
-/// Two stacked dropdowns (mode + resolution) anchored top-right. Shown on the
-/// menu and pause overlay; hidden during active gameplay.
-struct SettingsPanel {
-    mode_dd: ui::Dropdown,
-    res_dd: ui::Dropdown,
-    width: f32,
-    res_options: Vec<display::Resolution>,
-    res_labels: Vec<String>,
-    mode_labels: Vec<String>,
-    last_cursor: Vec2,
-}
-
-impl SettingsPanel {
-    fn new(renderer: &mut Renderer) -> Self {
-        let monitor = renderer.monitor_size();
-        let res_options = display::resolution_options(monitor);
-        let res_labels: Vec<String> = res_options
-            .iter()
-            .map(|&r| display::resolution_label(r, monitor))
-            .collect();
-        let mode_labels: Vec<String> = display::DisplayMode::ALL
-            .iter()
-            .map(|m| m.label().to_string())
-            .collect();
-        // Width = widest label across both dropdowns + room for the text inset
-        // and the caret, measured with the real font.
-        let widest = |labels: &[String], renderer: &mut Renderer| {
-            labels
-                .iter()
-                .map(|l| renderer.measure_text(l, ui::DD_LABEL_SIZE).x)
-                .fold(0.0_f32, f32::max)
-        };
-        let width = widest(&res_labels, renderer).max(widest(&mode_labels, renderer)) + 46.0;
-        Self {
-            mode_dd: ui::Dropdown::new(),
-            res_dd: ui::Dropdown::new(),
-            width,
-            res_options,
-            res_labels,
-            mode_labels,
-            last_cursor: Vec2::ZERO,
-        }
-    }
-
-    /// Top-left anchors of the two stacked dropdowns at the current screen size
-    /// (resolution sits below the mode dropdown, accounting for its open rows).
-    fn anchors(&self, screen: Vec2) -> (Vec2, Vec2) {
-        let x = screen.x - SETTINGS_INSET - self.width;
-        let mode_anchor = Vec2::new(x, SETTINGS_INSET);
-        let res_y = mode_anchor.y + self.mode_dd.height(self.mode_labels.len()) + 8.0;
-        (mode_anchor, Vec2::new(x, res_y))
-    }
-
-    /// Process a click; return a requested display change, if any.
-    fn update(&mut self, input: &InputState, renderer: &Renderer) -> Option<DisplayChange> {
-        self.last_cursor = input.mouse_position;
-        if !input.mouse_left_pressed {
-            return None;
-        }
-        let (mode_anchor, res_anchor) = self.anchors(renderer.size());
-        let cursor = input.mouse_position;
-        if let Some(i) = self
-            .mode_dd
-            .click(mode_anchor, self.width, self.mode_labels.len(), cursor)
-        {
-            return Some(DisplayChange::Mode(display::DisplayMode::ALL[i]));
-        }
-        if let Some(i) = self
-            .res_dd
-            .click(res_anchor, self.width, self.res_options.len(), cursor)
-        {
-            return Some(DisplayChange::Res(self.res_options[i]));
-        }
-        None
-    }
-
-    fn draw(&self, theme: &ui::Theme, renderer: &mut Renderer) {
-        let (mode_anchor, res_anchor) = self.anchors(renderer.size());
-        let current = display::current();
-        let mode_sel = display::DisplayMode::ALL
-            .iter()
-            .position(|&m| m == current.mode)
-            .unwrap_or(0);
-        let res_sel = self
-            .res_options
-            .iter()
-            .position(|&r| r == current.res)
-            .unwrap_or(0);
-        self.res_dd.draw(
-            theme,
-            renderer,
-            (res_anchor, self.width),
-            &self.res_labels,
-            res_sel,
-            self.last_cursor,
-        );
-        self.mode_dd.draw(
-            theme,
-            renderer,
-            (mode_anchor, self.width),
-            &self.mode_labels,
-            mode_sel,
-            self.last_cursor,
-        );
-    }
 }
 
 /// Confirm-or-revert overlay shown after a resolution / exclusive-fullscreen
@@ -2620,6 +2574,9 @@ impl Scene for ConfirmDisplayScene {
         self.modal.render(renderer, "confirm", Some(&subtitle));
     }
 }
+
+/// Path to the unified settings Lua script.
+const SETTINGS_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/settings.lua");
 
 /// Path to the Lua main-menu screen (panel/title/buttons + hit-testing).
 /// Shared gothic-modal script: renders the menu, pause, and confirm screens
@@ -2730,13 +2687,302 @@ impl ModalUi {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────
+// Unified Settings Scene
+// ───────────────────────────────────────────────────────────────────
+
+/// A full-screen settings overlay driven by `scripts/settings.lua`.
+/// Replaces the old `SettingsPanel` (display dropdowns) and
+/// `InputSettingsPanel` (tabbed input config). Returns a
+/// [`SettingsResult`] when popped so the calling scene can apply changes.
+struct UnifiedSettingsScene {
+    theme: ui::Theme,
+    script: Option<ScriptHost>,
+    textures: Vec<TextureHandle>,
+    rebind: RebindCapture,
+    /// Local copy of settings (edits buffered here, persisted on apply).
+    settings: GameSettings,
+    /// Current input map (mutated by rebinds).
+    input_map: InputMap,
+    /// Last mouse position for render-time model.
+    last_cursor: Vec2,
+    /// Last mouse down state for render-time model.
+    last_down: bool,
+    /// Last scroll wheel delta for render-time model.
+    last_scroll: f32,
+}
+
+impl UnifiedSettingsScene {
+    fn new(theme: ui::Theme, input_map: &InputMap) -> Self {
+        let (script, textures) = load_ui_script(SETTINGS_SCRIPT_PATH, &theme);
+        let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
+        Self {
+            theme,
+            script,
+            textures,
+            rebind: RebindCapture::new(),
+            settings,
+            input_map: input_map.clone(),
+            last_cursor: Vec2::ZERO,
+            last_down: false,
+            last_scroll: 0.0,
+        }
+    }
+
+    /// Build the per-frame Model for the settings script.
+    fn model(&self, sw: f32, sh: f32) -> ValueMap {
+        let mut m = ValueMap::new()
+            .with("mx", self.last_cursor.x as f64)
+            .with("my", self.last_cursor.y as f64)
+            .with("clicked", false)
+            .with("down", self.last_down)
+            .with("sw", sw as f64)
+            .with("sh", sh as f64)
+            .with("scroll", self.last_scroll as f64);
+
+        // Audio settings (flat keys)
+        m.set("audio_master", self.settings.audio.master as f64);
+        m.set("audio_music", self.settings.audio.music as f64);
+        m.set("audio_sfx", self.settings.audio.sfx as f64);
+        m.set("audio_voice", self.settings.audio.voice as f64);
+
+        // Video settings (flat keys)
+        m.set("video_display_mode", self.settings.video.display_mode as f64);
+        m.set("video_resolution", self.settings.video.resolution as f64);
+        m.set("video_quality", self.settings.video.quality as f64);
+        m.set("video_vsync", self.settings.video.vsync);
+        m.set("video_fps_limit", self.settings.video.fps_limit as f64);
+
+        // Input mouse settings (flat keys)
+        m.set("input_mouse_sensitivity", self.settings.input.mouse_sensitivity as f64);
+        m.set("input_mouse_sprint_sensitivity", self.settings.input.sprint_sensitivity as f64);
+        m.set("input_mouse_invert_pitch", self.settings.input.invert_pitch);
+        m.set("input_mouse_invert_yaw", self.settings.input.invert_yaw);
+        m.set("input_mouse_raw_input", self.settings.input.raw_input);
+
+        // Input controller settings (flat keys)
+        m.set("input_ctrl_stick_sensitivity", self.settings.input.stick_sensitivity as f64);
+        m.set("input_ctrl_left_deadzone", self.settings.input.left_deadzone as f64);
+        m.set("input_ctrl_right_deadzone", self.settings.input.right_deadzone as f64);
+        m.set("input_ctrl_trigger_threshold", self.settings.input.trigger_threshold as f64);
+        m.set("input_ctrl_invert_stick_pitch", self.settings.input.invert_stick_pitch);
+        m.set("input_ctrl_invert_stick_yaw", self.settings.input.invert_stick_yaw);
+        m.set("input_ctrl_deadzone_shape", self.settings.input.deadzone_shape as f64);
+
+        // Rebind state
+        if self.rebind.is_active() {
+            if let Some(action) = self.rebind.current_action() {
+                m.set("rebind_action", format!("{action}"));
+                m.set("rebind_gamepad", self.rebind.is_gamepad());
+            }
+        }
+
+        m
+    }
+}
+
+impl Scene for UnifiedSettingsScene {
+    fn is_overlay(&self) -> bool {
+        true
+    }
+
+    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        let Some(script) = self.script.as_ref() else {
+            return Transition::Pop;
+        };
+
+        let size = renderer.size();
+        self.last_cursor = input.mouse_position;
+        self.last_down = input.mouse_left;
+        self.last_scroll = input.mouse_wheel_delta;
+
+        // Run Lua update
+        let _ = script.set_model(&self.model(size.x, size.y));
+        let results = script.update(input, size.x, size.y).unwrap_or_else(|e| {
+            tracing::error!("settings update failed: {e}");
+            ValueMap::new()
+        });
+
+        // ── Handle rebind ──
+        if self.rebind.is_active() {
+            if results.is_on("settings_rebind_cancel") {
+                self.rebind.cancel();
+            } else if let Some((action, binding)) = self.rebind.poll(input, &mut self.input_map) {
+                tracing::info!("rebound {action} to {binding}");
+            }
+            return Transition::None;
+        }
+
+        // ── Handle back button ──
+        if results.is_on("settings_back") {
+            // Persist and pop
+            {
+                let mut gs = GAME_SETTINGS.lock().expect("settings lock");
+                *gs = self.settings.clone();
+                gs.save();
+            }
+            return Transition::Pop;
+        }
+
+        // ── Apply audio changes ──
+        if let Some(v) = results.number("audio_master") {
+            self.settings.audio.master = v as f32;
+        }
+        if let Some(v) = results.number("audio_music") {
+            self.settings.audio.music = v as f32;
+        }
+        if let Some(v) = results.number("audio_sfx") {
+            self.settings.audio.sfx = v as f32;
+        }
+        if let Some(v) = results.number("audio_voice") {
+            self.settings.audio.voice = v as f32;
+        }
+
+        // ── Apply video changes ──
+        if let Some(v) = results.number("video_display_mode") {
+            let new_mode = v as usize;
+            if new_mode != self.settings.video.display_mode {
+                self.settings.video.display_mode = new_mode;
+                let mode = display::DisplayMode::ALL[new_mode.min(2)];
+                let change = DisplayChange::Mode(mode);
+                if let Some(prev) = apply_display_change(change, renderer) {
+                    return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
+                }
+            }
+        }
+        if let Some(v) = results.number("video_resolution") {
+            self.settings.video.resolution = v as usize;
+        }
+        if let Some(v) = results.number("video_quality") {
+            self.settings.video.quality = v as usize;
+        }
+        if results.is_on("video_vsync") {
+            self.settings.video.vsync = true;
+        } else if let Some(v) = results.get("video_vsync") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.video.vsync = *b;
+            }
+        }
+        if let Some(v) = results.number("video_fps_limit") {
+            self.settings.video.fps_limit = v as usize;
+        }
+
+        // ── Apply input mouse changes ──
+        if let Some(v) = results.number("input_mouse_sensitivity") {
+            self.settings.input.mouse_sensitivity = v as f32;
+        }
+        if let Some(v) = results.number("input_mouse_sprint_sensitivity") {
+            self.settings.input.sprint_sensitivity = v as f32;
+        }
+        if let Some(v) = results.get("input_mouse_invert_pitch") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.input.invert_pitch = *b;
+            }
+        }
+        if let Some(v) = results.get("input_mouse_invert_yaw") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.input.invert_yaw = *b;
+            }
+        }
+        if let Some(v) = results.get("input_mouse_raw_input") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.input.raw_input = *b;
+            }
+        }
+
+        // ── Apply input controller changes ──
+        if let Some(v) = results.number("input_controller_stick_sensitivity") {
+            self.settings.input.stick_sensitivity = v as f32;
+        }
+        if let Some(v) = results.number("input_controller_left_deadzone") {
+            self.settings.input.left_deadzone = v as f32;
+        }
+        if let Some(v) = results.number("input_controller_right_deadzone") {
+            self.settings.input.right_deadzone = v as f32;
+        }
+        if let Some(v) = results.number("input_controller_trigger_threshold") {
+            self.settings.input.trigger_threshold = v as f32;
+        }
+        if let Some(v) = results.get("input_controller_invert_stick_pitch") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.input.invert_stick_pitch = *b;
+            }
+        }
+        if let Some(v) = results.get("input_controller_invert_stick_yaw") {
+            if let flicker::script::Value::Bool(b) = v {
+                self.settings.input.invert_stick_yaw = *b;
+            }
+        }
+        if let Some(v) = results.number("input_controller_deadzone_shape") {
+            self.settings.input.deadzone_shape = v as usize;
+        }
+
+        // ── Start rebind ──
+        if results.is_on("settings_rebind_active") {
+            if let Some(action_str) = results.text("settings_rebind_action") {
+                let for_gamepad = results.is_on("settings_rebind_gamepad");
+                if let Some(action) = parse_action(action_str) {
+                    self.rebind.start(action, for_gamepad);
+                }
+            }
+        }
+
+        Transition::None
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+
+        let size = renderer.size();
+        let _ = script.set_model(&self.model(size.x, size.y));
+
+        match script.draw(size.x, size.y) {
+            Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
+            Err(e) => tracing::error!("settings draw failed: {e}"),
+        }
+    }
+}
+
+/// Parse an action string back into the `Action` enum.
+fn parse_action(s: &str) -> Option<Action> {
+    match s {
+        "MoveForward" => Some(Action::MoveForward),
+        "MoveBackward" => Some(Action::MoveBackward),
+        "StrafeLeft" => Some(Action::StrafeLeft),
+        "StrafeRight" => Some(Action::StrafeRight),
+        "MoveUp" => Some(Action::MoveUp),
+        "MoveDown" => Some(Action::MoveDown),
+        "Jump" => Some(Action::Jump),
+        "Sprint" => Some(Action::Sprint),
+        "Crouch" => Some(Action::Crouch),
+        "Interact" => Some(Action::Interact),
+        "Reload" => Some(Action::Reload),
+        "PrimaryAction" => Some(Action::PrimaryAction),
+        "SecondaryAction" => Some(Action::SecondaryAction),
+        "Confirm" => Some(Action::Confirm),
+        "Cancel" => Some(Action::Cancel),
+        "Menu" => Some(Action::Menu),
+        "Inventory" => Some(Action::Inventory),
+        "Map" => Some(Action::Map),
+        "Quit" => Some(Action::Quit),
+        "LookUp" => Some(Action::LookUp),
+        "LookDown" => Some(Action::LookDown),
+        "LookLeft" => Some(Action::LookLeft),
+        "LookRight" => Some(Action::LookRight),
+        _ => None,
+    }
+}
+
 /// Main menu: a thin shell over the shared modal (`screen = "menu"`). The script
-/// owns layout/labels/hit-testing; this scene routes the `start`/`quit` actions
-/// to transitions and keeps the (still Rust) settings dropdowns.
+/// owns layout/labels/hit-testing; this scene routes the `start`/`settings`/`quit`
+/// actions to transitions.
 struct MenuScene {
     theme: Option<ui::Theme>,
     modal: Option<ModalUi>,
-    settings: Option<SettingsPanel>,
+    /// Pending input map changes from the settings overlay.
+    pending_input: Option<InputMap>,
 }
 
 impl MenuScene {
@@ -2744,7 +2990,7 @@ impl MenuScene {
         Self {
             theme: None,
             modal: None,
-            settings: None,
+            pending_input: None,
         }
     }
 }
@@ -2754,26 +3000,19 @@ impl Scene for MenuScene {
         let theme = ui::Theme::build(renderer);
         self.modal = Some(ModalUi::new(&theme));
         self.theme = Some(theme);
-        self.settings = Some(SettingsPanel::new(renderer));
     }
 
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        // Settings dropdowns (top-right). A confirmable change pushes the
-        // confirm overlay; safe changes apply instantly.
-        if let Some(panel) = self.settings.as_mut() {
-            if let Some(change) = panel.update(input, renderer) {
-                if let Some(prev) = apply_display_change(change, renderer) {
-                    let theme = self.theme.expect("theme built in enter");
-                    return Transition::Push(Box::new(ConfirmDisplayScene::new(theme, prev)));
-                }
-                return Transition::None;
-            }
-        }
         // The shared modal hit-tests the buttons and fires momentary actions.
         if let Some(modal) = self.modal.as_ref() {
             let actions = modal.update(input, renderer, "menu", None);
             if actions.is_on("start") {
                 return Transition::Replace(Box::new(GameScene::new()));
+            }
+            if actions.is_on("settings") {
+                let theme = self.theme.expect("theme built in enter");
+                let input_map = self.pending_input.take().unwrap_or_default();
+                return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map)));
             }
             if actions.is_on("quit") {
                 return Transition::Quit;
@@ -2783,12 +3022,8 @@ impl Scene for MenuScene {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let Some(theme) = self.theme else { return };
         if let Some(modal) = self.modal.as_ref() {
             modal.render(renderer, "menu", None);
-        }
-        if let Some(panel) = self.settings.as_ref() {
-            panel.draw(&theme, renderer);
         }
     }
 }
@@ -2796,34 +3031,28 @@ impl Scene for MenuScene {
 /// Pause overlay pushed over the frozen game. Resume (or Escape) pops back to
 /// the game; Quit exits. Reuses the game's already-uploaded [`ui::Theme`].
 ///
-/// Tab toggles the input settings panel (key bindings, mouse/gamepad
-/// config, movement). On close, buffered changes are pushed to the
-/// game scene via [`INPUT_SETTINGS`].
+/// The "SETTINGS" button opens the unified settings overlay (Audio/Video/Input).
+/// On close, buffered input changes are pushed to the game scene via
+/// [`INPUT_SETTINGS`].
 struct PauseScene {
     theme: ui::Theme,
     modal: ModalUi,
-    escape_prev: bool,
-    tab_prev: bool,
-    mouse_left_prev: bool,
-    settings: Option<SettingsPanel>,
-    input_panel: InputSettingsPanel,
+    bindings: InputMap,
+    menu_prev: bool,
 }
 
 impl PauseScene {
     fn new(
         theme: ui::Theme,
         input_map: &InputMap,
-        controls: &AbstractControls,
-        gamepad_config: &GamepadConfig,
+        _controls: &AbstractControls,
+        _gamepad_config: &GamepadConfig,
     ) -> Self {
         Self {
             modal: ModalUi::new(&theme),
             theme,
-            escape_prev: true,
-            tab_prev: false,
-            mouse_left_prev: false,
-            settings: None,
-            input_panel: InputSettingsPanel::new(input_map, controls, gamepad_config),
+            bindings: input_map.clone(),
+            menu_prev: true,
         }
     }
 }
@@ -2833,56 +3062,25 @@ impl Scene for PauseScene {
         true
     }
 
-    fn enter(&mut self, renderer: &mut Renderer) {
-        self.settings = Some(SettingsPanel::new(renderer));
-    }
-
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        // ── Tab toggle for input settings ──
-        let tab_down = input.key_down(Key::Tab);
-        let tab_pressed = tab_down && !self.tab_prev;
-        self.tab_prev = tab_down;
-        if tab_pressed {
-            self.input_panel.toggle();
-        }
-
-        // ── Input settings panel (when visible, it owns focus) ──
-        if self.input_panel.is_visible() {
-            let clicked = input.mouse_left && !self.mouse_left_prev;
-            self.mouse_left_prev = input.mouse_left;
-            self.input_panel.update(input, input.mouse_position, clicked);
-            if self.input_panel.should_close() {
-                let (map, controls, gp_cfg) = self.input_panel.take_apply();
-                if let Ok(mut slot) = INPUT_SETTINGS.lock() {
-                    *slot = Some((map, controls, gp_cfg));
-                }
-                return Transition::Pop;
-            }
-            return Transition::None;
-        }
-
-        // ── Escape: resume ──
-        let esc_down = input.key_down(Key::Escape);
-        let esc_pressed = esc_down && !self.escape_prev;
-        self.escape_prev = esc_down;
-        if esc_pressed {
+        // ── Menu action: resume ──
+        let menu_down = self.bindings.action_pressed(Action::Menu, input);
+        let menu_pressed = menu_down && !self.menu_prev;
+        self.menu_prev = menu_down;
+        if menu_pressed {
             return Transition::Pop;
-        }
-
-        // ── Display settings dropdowns (top-right) ──
-        if let Some(panel) = self.settings.as_mut() {
-            if let Some(change) = panel.update(input, renderer) {
-                if let Some(prev) = apply_display_change(change, renderer) {
-                    return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
-                }
-                return Transition::None;
-            }
         }
 
         // ── Modal buttons ──
         let actions = self.modal.update(input, renderer, "pause", None);
         if actions.is_on("resume") {
             return Transition::Pop;
+        }
+        if actions.is_on("settings") {
+            return Transition::Push(Box::new(UnifiedSettingsScene::new(
+                self.theme,
+                &self.bindings,
+            )));
         }
         if actions.is_on("quit") {
             return Transition::Quit;
@@ -2892,16 +3090,6 @@ impl Scene for PauseScene {
 
     fn render(&mut self, renderer: &mut Renderer) {
         self.modal.render(renderer, "pause", None);
-        if let Some(panel) = self.settings.as_ref() {
-            panel.draw(&self.theme, renderer);
-        }
-
-        // Input settings panel overlay
-        if self.input_panel.is_visible() {
-            let white = self.theme.white();
-            let mut gui = RendererGui::new(renderer, white);
-            self.input_panel.draw(&mut gui);
-        }
     }
 }
 

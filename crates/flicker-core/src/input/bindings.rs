@@ -27,7 +27,7 @@ use std::fmt;
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use super::{GamepadAxis, GamepadButton, Key, MouseButton};
+use super::{GamepadAxis, GamepadButton, InputState, Key, MouseButton};
 
 // ───────────────────────────────────────────────────────────────────
 // Section: Semantic Actions
@@ -231,6 +231,33 @@ impl InputMap {
         self.action_to_bindings.keys().copied()
     }
 
+    /// Is the given action currently pressed? Checks all bindings for
+    /// the action against the current input state.
+    pub fn action_pressed(&self, action: Action, input: &InputState) -> bool {
+        self.bindings_for(action).iter().any(|b| match b {
+            InputBinding::Key(k) => input.key_down(*k),
+            InputBinding::MouseButton(mb) => match mb {
+                MouseButton::Left => input.mouse_left,
+                MouseButton::Right => input.mouse_right,
+                MouseButton::Middle => input.mouse_middle,
+                MouseButton::Back => input.mouse_back,
+                MouseButton::Forward => input.mouse_forward,
+            },
+            InputBinding::GamepadButton(btn) => {
+                input.gamepad(0).map_or(false, |gp| gp.button_down(*btn))
+            }
+            InputBinding::GamepadAxis { axis, direction } => {
+                input.gamepad(0).map_or(false, |gp| {
+                    let v = gp.axis_value(*axis);
+                    match direction {
+                        AxisDirection::Positive => v > 0.5,
+                        AxisDirection::Negative => v < -0.5,
+                    }
+                })
+            }
+        })
+    }
+
     // ── Preset constructors ──
 
     /// WASD keyboard + mouse layout. Maps:
@@ -246,6 +273,7 @@ impl InputMap {
         map.bind(Action::MoveUp, InputBinding::Key(Key::R));
         map.bind(Action::MoveDown, InputBinding::Key(Key::F));
         map.bind(Action::Quit, InputBinding::Key(Key::Escape));
+        map.bind(Action::Menu, InputBinding::Key(Key::Escape));
         map.bind(
             Action::PrimaryAction,
             InputBinding::MouseButton(MouseButton::Left),
@@ -272,6 +300,7 @@ impl InputMap {
         map.bind(Action::MoveUp, InputBinding::Key(Key::R));
         map.bind(Action::MoveDown, InputBinding::Key(Key::W));
         map.bind(Action::Quit, InputBinding::Key(Key::Escape));
+        map.bind(Action::Menu, InputBinding::Key(Key::Escape));
         map.bind(
             Action::PrimaryAction,
             InputBinding::MouseButton(MouseButton::Left),

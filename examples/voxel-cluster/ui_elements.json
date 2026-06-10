@@ -25,6 +25,7 @@
       "title": "FLICKER",
       "items": [
         { "id": "start", "label": "START" },
+        { "id": "settings", "label": "SETTINGS" },
         { "id": "quit", "label": "QUIT" }
       ]
     },
@@ -33,6 +34,7 @@
       "title": "PAUSED",
       "items": [
         { "id": "resume", "label": "RESUME" },
+        { "id": "settings", "label": "SETTINGS" },
         { "id": "quit", "label": "QUIT" }
       ]
     },
@@ -43,6 +45,174 @@
         { "id": "keep", "label": "KEEP" },
         { "id": "revert", "label": "REVERT" }
       ]
+    }
+  },
+
+  "settings": {
+    "panel": { "texture": "settings_panel", "w": 800, "h": 500 },
+    "title": { "text": "SETTINGS", "size": 34, "offset_y": 28, "color": [0.83, 0.67, 0.39, 1.0] },
+    "tabs": {
+      "y": 72,
+      "h": 36,
+      "gap": 4,
+      "label_size": 16,
+      "active_color": [0.83, 0.67, 0.39, 1.0],
+      "inactive_color": [0.55, 0.58, 0.63, 1.0],
+      "hover_color": [0.96, 0.80, 0.42, 1.0],
+      "active_bg": [0.14, 0.15, 0.18, 0.6],
+      "hover_bg": [0.83, 0.67, 0.39, 0.1],
+      "bar_color": [0.45, 0.36, 0.18, 0.3]
+    },
+    "content": {
+      "y": 116,
+      "pad_x": 28,
+      "pad_y": 12
+    },
+    "back_button": {
+      "texture": "button",
+      "w": 160,
+      "h": 44,
+      "label": "BACK",
+      "label_size": 20
+    },
+    "audio": {
+      "sliders": [
+        { "id": "master", "label": "Master Volume", "min": 0.0, "max": 1.0, "default": 0.8 },
+        { "id": "music", "label": "Music Volume", "min": 0.0, "max": 1.0, "default": 0.6 },
+        { "id": "sfx", "label": "SFX Volume", "min": 0.0, "max": 1.0, "default": 0.7 },
+        { "id": "voice", "label": "Voice Volume", "min": 0.0, "max": 1.0, "default": 0.9 }
+      ]
+    },
+    "video": {
+      "display_modes": ["Windowed", "Borderless Fullscreen", "Exclusive Fullscreen"],
+      "resolutions": ["960×540", "1280×720", "1920×1080", "2560×1440", "Native"],
+      "fps_limits": ["30", "60", "120", "144", "240", "Unlimited"],
+      "quality_levels": ["Low", "Medium", "High", "Ultra"]
+    },
+    "input": {
+      "sections": [
+        {
+          "id": "keyboard",
+          "label": "KEYBOARD",
+          "actions": [
+            { "id": "MoveForward", "label": "Move Forward" },
+            { "id": "MoveBackward", "label": "Move Backward" },
+            { "id": "StrafeLeft", "label": "Strafe Left" },
+            { "id": "StrafeRight", "label": "Strafe Right" },
+            { "id": "MoveUp", "label": "Move Up" },
+            { "id": "MoveDown", "label": "Move Down" },
+            { "id": "Jump", "label": "Jump" },
+            { "id": "Sprint", "label": "Sprint" },
+            { "id": "Crouch", "label": "Crouch" },
+            { "id": "Interact", "label": "Interact" },
+            { "id": "Reload", "label": "Reload" },
+            { "id": "PrimaryAction", "label": "Primary Action" },
+            { "id": "SecondaryAction", "label": "Secondary Action" },
+            { "id": "Confirm", "label": "Confirm" },
+            { "id": "Cancel", "label": "Cancel" },
+            { "id": "Menu", "label": "Menu" },
+            { "id": "Inventory", "label": "Inventory" },
+            { "id": "Map", "label": "Map" },
+            { "id": "Quit", "label": "Quit" }
+          ]
+        },
+        {
+          "id": "mouse",
+          "label": "MOUSE",
+          "sliders": [
+            { "id": "sensitivity", "label": "Sensitivity", "min": 0.001, "max": 0.02, "default": 0.005 },
+            { "id": "sprint_sensitivity", "label": "Sprint Sensitivity", "min": 0.001, "max": 0.02, "default": 0.005 }
+          ],
+          "checkboxes": [
+            { "id": "invert_pitch", "label": "Invert Pitch", "default": false },
+            { "id": "invert_yaw", "label": "Invert Yaw", "default": false },
+            { "id": "raw_input", "label": "Raw Input", "default": true }
+          ]
+        },
+        {
+          "id": "controller",
+          "label": "CONTROLLER",
+          "sliders": [
+            { "id": "stick_sensitivity", "label": "Stick Sensitivity", "min": 0.5, "max": 8.0, "default": 2.0 },
+            { "id": "left_deadzone", "label": "Left Stick Deadzone", "min": 0.0, "max": 0.5, "default": 0.2 },
+            { "id": "right_deadzone", "label": "Right Stick Deadzone", "min": 0.0, "max": 0.5, "default": 0.2 },
+            { "id": "trigger_threshold", "label": "Trigger Threshold", "min": 0.1, "max": 0.9, "default": 0.5 }
+          ],
+          "checkboxes": [
+            { "id": "invert_stick_pitch", "label": "Invert Stick Pitch", "default": false },
+            { "id": "invert_stick_yaw", "label": "Invert Stick Yaw", "default": false }
+          ],
+          "dropdowns": [
+            { "id": "deadzone_shape", "label": "Deadzone Shape", "options": ["Circular", "Per-Axis"], "default": 0 }
+          ],
+          "actions": [
+            { "id": "MoveForward", "label": "Move Forward" },
+            { "id": "MoveBackward", "label": "Move Backward" },
+            { "id": "StrafeLeft", "label": "Strafe Left" },
+            { "id": "StrafeRight", "label": "Strafe Right" },
+            { "id": "LookUp", "label": "Look Up" },
+            { "id": "LookDown", "label": "Look Down" },
+            { "id": "LookLeft", "label": "Look Left" },
+            { "id": "LookRight", "label": "Look Right" },
+            { "id": "Jump", "label": "Jump" },
+            { "id": "Sprint", "label": "Sprint" },
+            { "id": "Crouch", "label": "Crouch" },
+            { "id": "Interact", "label": "Interact" },
+            { "id": "Reload", "label": "Reload" },
+            { "id": "PrimaryAction", "label": "Primary Action" },
+            { "id": "SecondaryAction", "label": "Secondary Action" },
+            { "id": "Confirm", "label": "Confirm" },
+            { "id": "Cancel", "label": "Cancel" },
+            { "id": "Menu", "label": "Menu" },
+            { "id": "Inventory", "label": "Inventory" },
+            { "id": "Map", "label": "Map" },
+            { "id": "Quit", "label": "Quit" }
+          ]
+        }
+      ],
+      "rebind_overlay": {
+        "w": 400,
+        "h": 120,
+        "bg": [0.06, 0.07, 0.08, 0.94],
+        "title_size": 18,
+        "title_color": [0.83, 0.67, 0.39, 1.0],
+        "hint_size": 13,
+        "hint_color": [0.45, 0.48, 0.53, 1.0]
+      }
+    },
+    "style": {
+      "slider": {
+        "track": [0.22, 0.24, 0.28, 1.0],
+        "fill": [0.63, 0.50, 0.26, 0.8],
+        "handle": [0.83, 0.67, 0.39, 1.0],
+        "handle_w": 14
+      },
+      "checkbox": {
+        "box": [0.22, 0.24, 0.28, 1.0],
+        "check": [0.83, 0.67, 0.39, 1.0],
+        "border": [0.45, 0.36, 0.18, 0.3],
+        "size": 20
+      },
+      "dropdown": {
+        "cell": [0.10, 0.11, 0.13, 0.97],
+        "hot": [0.17, 0.19, 0.22, 0.98],
+        "label": [0.78, 0.81, 0.86, 1.0],
+        "label_size": 14,
+        "row_h": 26
+      },
+      "row_height": 32,
+      "label_size": 15,
+      "label_color": [0.78, 0.81, 0.86, 1.0],
+      "label_dim": [0.45, 0.48, 0.53, 1.0],
+      "header_size": 16,
+      "header_color": [0.83, 0.67, 0.39, 1.0],
+      "divider": [0.45, 0.36, 0.18, 0.3],
+      "rebind_bg": [0.30, 0.18, 0.10, 0.85],
+      "gold": [0.63, 0.50, 0.26, 1.0],
+      "gold_line": [0.45, 0.36, 0.18, 0.6],
+      "section_bg": [0.11, 0.12, 0.15, 1.0],
+      "section_header_size": 14,
+      "section_header_color": [0.63, 0.50, 0.26, 1.0]
     }
   },
 

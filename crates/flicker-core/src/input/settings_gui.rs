@@ -28,7 +28,7 @@
 //! }
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use glam::Vec2;
 
@@ -235,10 +235,18 @@ pub struct InputSettingsPanel {
     // Edge-detection bookkeeping
     prev_keys: HashSet<Key>,
     prev_mouse_left: bool,
+    prev_mouse_right: bool,
+    prev_mouse_middle: bool,
+    prev_mouse_back: bool,
+    prev_mouse_forward: bool,
     prev_gamepad_buttons: HashSet<GamepadButton>,
+    prev_gamepad_axes: HashMap<GamepadAxis, f32>,
     // Cursor state (set via update)
     cursor_pos: Vec2,
     cursor_clicked: bool,
+    // Layout cache (set via draw, used by click handlers)
+    screen_size: Vec2,
+    deadzone_shape_rects: Vec<(f32, f32, f32)>,
 }
 
 impl InputSettingsPanel {
@@ -250,7 +258,7 @@ impl InputSettingsPanel {
     ) -> Self {
         Self {
             active_tab: Tab::KeyBindings,
-            visible: true,
+            visible: false,
             input_map: input_map.clone(),
             controls: *controls,
             gamepad_config: gamepad_config.clone(),
@@ -259,9 +267,16 @@ impl InputSettingsPanel {
             close_requested: false,
             prev_keys: HashSet::new(),
             prev_mouse_left: false,
+            prev_mouse_right: false,
+            prev_mouse_middle: false,
+            prev_mouse_back: false,
+            prev_mouse_forward: false,
             prev_gamepad_buttons: HashSet::new(),
+            prev_gamepad_axes: HashMap::new(),
             cursor_pos: Vec2::ZERO,
             cursor_clicked: false,
+            screen_size: Vec2::ZERO,
+            deadzone_shape_rects: Vec::new(),
         }
     }
 
@@ -294,6 +309,8 @@ impl InputSettingsPanel {
         let map = std::mem::replace(&mut self.input_map, InputMap::empty());
         let controls = std::mem::replace(&mut self.controls, AbstractControls::default());
         let gp_cfg = std::mem::replace(&mut self.gamepad_config, GamepadConfig::default());
+        self.close_requested = false;
+        self.visible = false;
         (map, controls, gp_cfg)
     }
 
@@ -346,7 +363,12 @@ impl InputSettingsPanel {
                 input,
                 &self.prev_keys,
                 &self.prev_mouse_left,
+                &self.prev_mouse_right,
+                &self.prev_mouse_middle,
+                &self.prev_mouse_back,
+                &self.prev_mouse_forward,
                 &self.prev_gamepad_buttons,
+                &self.prev_gamepad_axes,
                 rb.for_gamepad,
             );
             if let Some(binding) = captured {
@@ -411,8 +433,9 @@ impl InputSettingsPanel {
         match id {
             x if x == slider_id(Tab::Mouse, 0) => self.controls.mouse_sensitivity = value,
             x if x == slider_id(Tab::GamepadSettings, 0) => self.controls.stick_sensitivity = value,
-            x if x == slider_id(Tab::GamepadSettings, 1) => self.controls.stick_deadzone = value,
+            x if x == slider_id(Tab::GamepadSettings, 1) => self.gamepad_config.left_stick_deadzone = value,
             x if x == slider_id(Tab::GamepadSettings, 2) => self.gamepad_config.trigger_threshold = value,
+            x if x == slider_id(Tab::GamepadSettings, 3) => self.gamepad_config.right_stick_deadzone = value,
             x if x == slider_id(Tab::Movement, 0) => self.controls.move_speed = value,
             _ => {}
         }
@@ -421,11 +444,12 @@ impl InputSettingsPanel {
     // ── Draw ──
 
     /// Draw the full settings panel. Call each frame when visible.
-    pub fn draw(&self, r: &mut dyn GuiRenderer) {
+    pub fn draw(&mut self, r: &mut dyn GuiRenderer) {
         if !self.visible {
             return;
         }
         let screen = r.screen_size();
+        self.screen_size = screen;
         let (panel_pos, panel_size) = Self::panel_geometry(screen);
 
         // Background dim
@@ -517,7 +541,11 @@ impl InputSettingsPanel {
     // ───────────────────────────────────────────────────────────────
 
     fn hit_test_tabs(&self, cursor: Vec2) -> Option<Tab> {
-        let screen = Vec2::new(1920.0, 1080.0); // tab positions are margin-based, screen-independent
+        let screen = if self.screen_size.x > 0.0 && self.screen_size.y > 0.0 {
+            self.screen_size
+        } else {
+            Vec2::new(1920.0, 1080.0)
+        };
         let (_panel_pos, panel_size) = Self::panel_geometry(screen);
         let tab_h = Self::tab_height(panel_size.y);
         let x = PANEL_MARGIN;
@@ -751,7 +779,7 @@ impl InputSettingsPanel {
     // Gamepad Settings tab
     // ───────────────────────────────────────────────────────────────
 
-    fn draw_gamepad_settings_tab(&self, r: &mut dyn GuiRenderer, x: f32, y: f32, w: f32) {
+    fn draw_gamepad_settings_tab(&mut self, r: &mut dyn GuiRenderer, x: f32, y: f32, w: f32) {
         let mut cy = y;
         r.draw_text("Gamepad Look", Vec2::new(x, cy), HEADER_SIZE, COL_TITLE);
         cy += HEADER_SIZE + 12.0;
@@ -766,7 +794,9 @@ impl InputSettingsPanel {
         r.draw_text("Deadzone", Vec2::new(x, cy), HEADER_SIZE, COL_TITLE);
         cy += HEADER_SIZE + 12.0;
 
-        cy = self.draw_slider(r, x, cy, w, "Stick Deadzone", self.controls.stick_deadzone, 0.0, 0.5);
+        cy = self.draw_slider(r, x, cy, w, "Left Stick Deadzone", self.gamepad_config.left_stick_deadzone, 0.0, 0.5);
+        cy += 4.0;
+        cy = self.draw_slider(r, x, cy, w, "Right Stick Deadzone", self.gamepad_config.right_stick_deadzone, 0.0, 0.5);
         cy += 8.0;
         cy = self.draw_deadzone_selector(r, x, cy);
         cy += 8.0;
@@ -814,11 +844,11 @@ impl InputSettingsPanel {
         }
         cy += ROW_HEIGHT + 4.0 + 16.0 + HEADER_SIZE + 12.0;
 
-        // Stick Deadzone slider
+        // Left Stick Deadzone slider
         let track_y = cy + ROW_HEIGHT - 4.0;
         if self.hit_track(cursor, track_x, track_y, track_w) {
             let t = ((cursor.x - track_x) / track_w).clamp(0.0, 1.0);
-            self.controls.stick_deadzone = t * 0.5;
+            self.gamepad_config.left_stick_deadzone = t * 0.5;
             self.slider_drag = Some(SliderDrag {
                 id: slider_id(Tab::GamepadSettings, 1),
                 track_x,
@@ -828,21 +858,32 @@ impl InputSettingsPanel {
             });
             return;
         }
+        cy += ROW_HEIGHT + 4.0 + 4.0;
+
+        // Right Stick Deadzone slider
+        let track_y = cy + ROW_HEIGHT - 4.0;
+        if self.hit_track(cursor, track_x, track_y, track_w) {
+            let t = ((cursor.x - track_x) / track_w).clamp(0.0, 1.0);
+            self.gamepad_config.right_stick_deadzone = t * 0.5;
+            self.slider_drag = Some(SliderDrag {
+                id: slider_id(Tab::GamepadSettings, 3),
+                track_x,
+                track_w,
+                min: 0.0,
+                max: 0.5,
+            });
+            return;
+        }
         cy += ROW_HEIGHT + 4.0 + 8.0;
 
-        // Deadzone shape selector
-        let shape_x = x + 160.0;
-        let options = [DeadzoneShape::Circular, DeadzoneShape::PerAxis];
-        let mut ox = shape_x;
-        for &shape in &options {
-            let label = format!("{shape}");
-            let lm = Vec2::new(label.len() as f32 * 8.0, LABEL_SIZE);
-            let bw = lm.x + 16.0;
-            if cursor.x >= ox && cursor.x <= ox + bw && cursor.y >= cy && cursor.y <= cy + ROW_HEIGHT {
-                self.gamepad_config.deadzone_shape = shape;
+        // Deadzone shape selector (uses cached layout from draw)
+        for &(sx, sw, _) in &self.deadzone_shape_rects {
+            if cursor.x >= sx && cursor.x <= sx + sw && cursor.y >= cy && cursor.y <= cy + ROW_HEIGHT {
+                let idx = self.deadzone_shape_rects.iter().position(|&(x, _, _)| x == sx).unwrap();
+                let options = [DeadzoneShape::Circular, DeadzoneShape::PerAxis];
+                self.gamepad_config.deadzone_shape = options[idx];
                 return;
             }
-            ox += bw + 4.0;
         }
         cy += ROW_HEIGHT + 4.0 + 8.0;
 
@@ -1006,16 +1047,19 @@ impl InputSettingsPanel {
     // Widget: deadzone shape selector
     // ───────────────────────────────────────────────────────────────
 
-    fn draw_deadzone_selector(&self, r: &mut dyn GuiRenderer, x: f32, y: f32) -> f32 {
+    fn draw_deadzone_selector(&mut self, r: &mut dyn GuiRenderer, x: f32, y: f32) -> f32 {
         r.draw_text("Deadzone Shape", Vec2::new(x, y + 2.0), LABEL_SIZE, COL_LABEL);
 
         let options = [DeadzoneShape::Circular, DeadzoneShape::PerAxis];
         let mut ox = x + 160.0;
+        self.deadzone_shape_rects.clear();
         for &shape in &options {
             let label = format!("{shape}");
             let is_active = self.gamepad_config.deadzone_shape == shape;
             let lm = r.measure_text(&label, LABEL_SIZE);
             let bw = lm.x + 16.0;
+
+            self.deadzone_shape_rects.push((ox, bw, if is_active { 1.0 } else { 0.0 }));
 
             let bg = if is_active { COL_ACTIVE } else { [0.0; 4] };
             r.draw_rect(Vec2::new(ox, y), Vec2::new(bw, ROW_HEIGHT), bg);
@@ -1120,11 +1164,13 @@ impl InputSettingsPanel {
             && cursor.y <= y + ROW_HEIGHT
     }
 
-    /// Estimate screen size from cursor position. The cursor is always
-    /// inside the window, so we can infer the minimum screen bounds.
-    /// Used only for layout math in the click path — the draw path
-    /// gets the real screen size from `GuiRenderer`.
+    /// Estimate screen size from stored draw info or cursor position.
+    /// The draw path sets `screen_size` from `GuiRenderer::screen_size()`.
+    /// The click path uses this for layout math.
     fn cursor_screen_estimate(&self) -> Vec2 {
+        if self.screen_size.x > 0.0 && self.screen_size.y > 0.0 {
+            return self.screen_size;
+        }
         Vec2::new(
             (self.cursor_pos.x + PANEL_MARGIN + 100.0).max(880.0),
             (self.cursor_pos.y + PANEL_MARGIN + 100.0).max(720.0),
@@ -1135,11 +1181,16 @@ impl InputSettingsPanel {
     // Input capture for rebind
     // ───────────────────────────────────────────────────────────────
 
-    fn capture_input(
+    pub fn capture_input(
         input: &InputState,
         prev_keys: &HashSet<Key>,
         prev_mouse_left: &bool,
+        prev_mouse_right: &bool,
+        prev_mouse_middle: &bool,
+        prev_mouse_back: &bool,
+        prev_mouse_forward: &bool,
         prev_gp_buttons: &HashSet<GamepadButton>,
+        prev_gp_axes: &HashMap<GamepadAxis, f32>,
         for_gamepad: bool,
     ) -> Option<InputBinding> {
         if for_gamepad {
@@ -1151,12 +1202,13 @@ impl InputSettingsPanel {
                 }
                 for &axis in &ALL_GAMEPAD_AXES {
                     let val = gp.axis_value(axis);
-                    if val > 0.7 {
+                    let prev = prev_gp_axes.get(&axis).copied().unwrap_or(0.0);
+                    if prev <= 0.7 && val > 0.7 {
                         return Some(InputBinding::GamepadAxis {
                             axis,
                             direction: AxisDirection::Positive,
                         });
-                    } else if val < -0.7 {
+                    } else if prev >= -0.7 && val < -0.7 {
                         return Some(InputBinding::GamepadAxis {
                             axis,
                             direction: AxisDirection::Negative,
@@ -1173,16 +1225,16 @@ impl InputSettingsPanel {
             if input.mouse_left && !prev_mouse_left {
                 return Some(InputBinding::MouseButton(MouseButton::Left));
             }
-            if input.mouse_right {
+            if input.mouse_right && !prev_mouse_right {
                 return Some(InputBinding::MouseButton(MouseButton::Right));
             }
-            if input.mouse_middle {
+            if input.mouse_middle && !prev_mouse_middle {
                 return Some(InputBinding::MouseButton(MouseButton::Middle));
             }
-            if input.mouse_back {
+            if input.mouse_back && !prev_mouse_back {
                 return Some(InputBinding::MouseButton(MouseButton::Back));
             }
-            if input.mouse_forward {
+            if input.mouse_forward && !prev_mouse_forward {
                 return Some(InputBinding::MouseButton(MouseButton::Forward));
             }
         }
@@ -1197,12 +1249,20 @@ impl InputSettingsPanel {
             }
         }
         self.prev_mouse_left = input.mouse_left;
+        self.prev_mouse_right = input.mouse_right;
+        self.prev_mouse_middle = input.mouse_middle;
+        self.prev_mouse_back = input.mouse_back;
+        self.prev_mouse_forward = input.mouse_forward;
         self.prev_gamepad_buttons.clear();
+        self.prev_gamepad_axes.clear();
         if let Some(gp) = input.gamepad(0) {
             for &btn in &ALL_GAMEPAD_BUTTONS {
                 if gp.button_down(btn) {
                     self.prev_gamepad_buttons.insert(btn);
                 }
+            }
+            for &axis in &ALL_GAMEPAD_AXES {
+                self.prev_gamepad_axes.insert(axis, gp.axis_value(axis));
             }
         }
     }
@@ -1212,7 +1272,7 @@ impl InputSettingsPanel {
 // Input lists for rebind capture
 // ───────────────────────────────────────────────────────────────────
 
-const ALL_GAMEPAD_BUTTONS: [GamepadButton; 20] = [
+const ALL_GAMEPAD_BUTTONS: [GamepadButton; 21] = [
     GamepadButton::South,
     GamepadButton::East,
     GamepadButton::North,
@@ -1224,6 +1284,7 @@ const ALL_GAMEPAD_BUTTONS: [GamepadButton; 20] = [
     GamepadButton::Select,
     GamepadButton::Start,
     GamepadButton::Guide,
+    GamepadButton::Mode,
     GamepadButton::LeftStick,
     GamepadButton::RightStick,
     GamepadButton::DPadUp,
@@ -1244,7 +1305,7 @@ const ALL_GAMEPAD_AXES: [GamepadAxis; 6] = [
     GamepadAxis::RightTrigger,
 ];
 
-const ALL_KEYS: [Key; 91] = [
+const ALL_KEYS: [Key; 103] = [
     Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H,
     Key::I, Key::J, Key::K, Key::L, Key::M, Key::N, Key::O, Key::P,
     Key::Q, Key::R, Key::S, Key::T, Key::U, Key::V, Key::W, Key::X,
@@ -1262,6 +1323,146 @@ const ALL_KEYS: [Key; 91] = [
     Key::Minus, Key::Equal, Key::LeftBracket, Key::RightBracket,
     Key::Backslash, Key::Semicolon, Key::Apostrophe,
     Key::Comma, Key::Period, Key::Slash, Key::Grave,
+    Key::Numpad0, Key::Numpad1, Key::Numpad2, Key::Numpad3, Key::Numpad4,
+    Key::Numpad5, Key::Numpad6, Key::Numpad7, Key::Numpad8, Key::Numpad9,
     Key::NumpadAdd, Key::NumpadSubtract, Key::NumpadMultiply, Key::NumpadDivide,
-    Key::NumpadEnter, Key::NumLock,
+    Key::NumpadDecimal, Key::NumpadEnter, Key::NumpadEqual, Key::NumLock,
 ];
+
+// ───────────────────────────────────────────────────────────────────
+// Standalone rebind capture (usable from Lua-driven settings)
+// ───────────────────────────────────────────────────────────────────
+
+/// Lightweight rebind capture state, usable independently from
+/// [`InputSettingsPanel`]. The Lua settings screen drives this via
+/// the Rust host to perform key/gamepad rebinding.
+pub struct RebindCapture {
+    /// The action being rebound, if any.
+    action: Option<Action>,
+    /// Whether this rebind targets a gamepad binding.
+    for_gamepad: bool,
+    /// Previous-frame input snapshots for edge detection.
+    prev_keys: HashSet<Key>,
+    prev_mouse_left: bool,
+    prev_mouse_right: bool,
+    prev_mouse_middle: bool,
+    prev_mouse_back: bool,
+    prev_mouse_forward: bool,
+    prev_gamepad_buttons: HashSet<GamepadButton>,
+    prev_gamepad_axes: HashMap<GamepadAxis, f32>,
+}
+
+impl RebindCapture {
+    pub fn new() -> Self {
+        Self {
+            action: None,
+            for_gamepad: false,
+            prev_keys: HashSet::new(),
+            prev_mouse_left: false,
+            prev_mouse_right: false,
+            prev_mouse_middle: false,
+            prev_mouse_back: false,
+            prev_mouse_forward: false,
+            prev_gamepad_buttons: HashSet::new(),
+            prev_gamepad_axes: HashMap::new(),
+        }
+    }
+
+    /// Start rebinding `action`. Set `for_gamepad` to capture gamepad input.
+    pub fn start(&mut self, action: Action, for_gamepad: bool) {
+        self.action = Some(action);
+        self.for_gamepad = for_gamepad;
+    }
+
+    /// Cancel the current rebind.
+    pub fn cancel(&mut self) {
+        self.action = None;
+    }
+
+    /// Whether a rebind is in progress.
+    pub fn is_active(&self) -> bool {
+        self.action.is_some()
+    }
+
+    /// The action being rebound, if any.
+    pub fn current_action(&self) -> Option<Action> {
+        self.action
+    }
+
+    /// Whether the current rebind targets gamepad.
+    pub fn is_gamepad(&self) -> bool {
+        self.for_gamepad
+    }
+
+    /// Poll for a captured input. Returns `Some((action, binding))` when the
+    /// user presses a button/key, or `None` if still waiting. Resolves
+    /// conflicts by unbinding the input from any other action first.
+    pub fn poll(
+        &mut self,
+        input: &InputState,
+        input_map: &mut InputMap,
+    ) -> Option<(Action, InputBinding)> {
+        let action = self.action?;
+
+        let captured = InputSettingsPanel::capture_input(
+            input,
+            &self.prev_keys,
+            &self.prev_mouse_left,
+            &self.prev_mouse_right,
+            &self.prev_mouse_middle,
+            &self.prev_mouse_back,
+            &self.prev_mouse_forward,
+            &self.prev_gamepad_buttons,
+            &self.prev_gamepad_axes,
+            self.for_gamepad,
+        );
+
+        self.update_prev(input);
+
+        let binding = captured?;
+
+        // Conflict detection: unbind from other actions
+        if let Some(conflict_action) = input_map.action_for(binding) {
+            if conflict_action != action {
+                input_map.unbind(conflict_action, binding);
+            }
+        }
+
+        // Remove old binding at slot 0 if it exists
+        let old_bindings: Vec<InputBinding> = input_map.bindings_for(action).to_vec();
+        if !old_bindings.is_empty() {
+            input_map.unbind(action, old_bindings[0]);
+        }
+
+        input_map.bind(action, binding);
+        self.action = None;
+
+        Some((action, binding))
+    }
+
+    fn update_prev(&mut self, input: &InputState) {
+        self.prev_keys.clear();
+        for &key in &ALL_KEYS {
+            if input.key_down(key) {
+                self.prev_keys.insert(key);
+            }
+        }
+        self.prev_mouse_left = input.mouse_left;
+        self.prev_mouse_right = input.mouse_right;
+        self.prev_mouse_middle = input.mouse_middle;
+        self.prev_mouse_back = input.mouse_back;
+        self.prev_mouse_forward = input.mouse_forward;
+        self.prev_gamepad_buttons.clear();
+        self.prev_gamepad_axes.clear();
+        if let Some(gp) = input.gamepad(0) {
+            for &btn in &ALL_GAMEPAD_BUTTONS {
+                if gp.button_down(btn) {
+                    self.prev_gamepad_buttons.insert(btn);
+                }
+            }
+            for &axis in &ALL_GAMEPAD_AXES {
+                self.prev_gamepad_axes.insert(axis, gp.axis_value(axis));
+            }
+        }
+    }
+}
