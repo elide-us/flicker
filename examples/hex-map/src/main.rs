@@ -53,6 +53,7 @@ use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_materials::Tables;
 
 mod terrain;
+mod topology;
 
 const HUD_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
 const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
@@ -360,16 +361,17 @@ fn build_within_neighbors(hexes: &[HexInst]) -> Vec<Vec<u32>> {
         .collect()
 }
 
-/// World-space corners of a hex after the map `xform` — the same placement
+/// World-space corners of a hex after the per-tile `tilt` (fence stand-up;
+/// identity when flat) and map `xform` — the same placement
 /// [`HexScene::draw_hex`] draws, used to build the pick triangles.
-fn hex_world_corners(center: Vec3, flip: bool, xform: &Mat4) -> [Vec3; 6] {
+fn hex_world_corners(center: Vec3, flip: bool, tilt: Mat4, xform: &Mat4) -> [Vec3; 6] {
     let mut corners = hex_corners(center, HEX_SIZE);
     if flip {
         for c in corners.iter_mut() {
             *c = flip_ns(*c, center);
         }
     }
-    corners.map(|p| xform.transform_point3(p))
+    corners.map(|p| xform.transform_point3(center + tilt.transform_vector3(p - center)))
 }
 
 /// Möller–Trumbore ray/triangle intersection, **double-sided** (no back-face
@@ -763,6 +765,11 @@ struct HexScene {
     /// World/meshes need (re)building next frame — set at startup and by the
     /// ring slider; the upload needs the `&mut Renderer` only `render` holds.
     terrain_dirty: bool,
+    /// Fence view (toggle `G`): the outer-ring tiles stand vertical as six walls
+    /// per map, one per hexagon side. Inner tiles stay flat.
+    fence: bool,
+    /// Rising-edge latch for the fence toggle key, so one tap flips it.
+    fence_key_was_down: bool,
 }
 
 impl HexScene {
@@ -803,6 +810,8 @@ impl HexScene {
             world: None,
             terrain: Vec::new(),
             terrain_dirty: true,
+            fence: false,
+            fence_key_was_down: false,
         }
     }
 
@@ -925,6 +934,69 @@ impl HexScene {
         (self.position, dir)
     }
 
+    /// Fence frame for an equator tile in fence view: `(fence_start, p0, t, n)`
+    /// — the fence's first tile number, its centre `p0` (the wall anchor), the
+    /// unit run direction `t` along the side, and the outward unit normal `n`
+    /// (⊥ `t`). `None` when fence view is off or `inst` isn't an equator tile.
+    /// All tiles of a fence share `t`/`n`, so the standing wall is one flat plane
+    /// ([`topology::Topology::equator_fence`] gives the `rings`-tile grouping).
+    fn fence_frame(&self, inst: &HexInst) -> Option<(u32, Vec3, Vec3, Vec3)> {
+        if !self.fence {
+            return None;
+        }
+        let (_, fence) = topology::Topology::new(self.num_rings).equator_fence(inst.number)?;
+        let start = fence.start;
+        let p0 = self.hexes[start as usize].center;
+        let map_center = if inst.left {
+            Vec3::new(left_axis_x(), 0.0, left_center().z)
+        } else {
+            Vec3::ZERO
+        };
+        // Run along the side from the first two tiles (a clean side direction);
+        // a single-tile fence (rings == 1) falls back to the radial's tangent.
+        let raw_t = if self.num_rings >= 2 {
+            self.hexes[(start + 1) as usize].center - p0
+        } else {
+            let r = p0 - map_center;
+            Vec3::new(-r.z, 0.0, r.x)
+        };
+        let t = Vec3::new(raw_t.x, 0.0, raw_t.z).normalize_or_zero();
+        // Outward normal ⊥ t, flipped to point away from the map centre.
+        let mut n = Vec3::new(t.z, 0.0, -t.x);
+        if n.dot(p0 - map_center) < 0.0 {
+            n = -n;
+        }
+        Some((start, p0, t, n))
+    }
+
+    /// Relaid centre of a fence tile: in fence view the `rings` tiles of a fence
+    /// are spread evenly along the side line (`p0 + t · j · HEX_SPACING`) so they
+    /// are collinear — and so, standing, exactly coplanar (the corner tile no
+    /// longer bends off the wall). The tile's own centre otherwise.
+    fn tile_fence_center(&self, inst: &HexInst) -> Vec3 {
+        match self.fence_frame(inst) {
+            Some((start, p0, t, _)) => p0 + t * ((inst.number - start) as f32 * HEX_SPACING),
+            None => inst.center,
+        }
+    }
+
+    /// Per-tile orientation. Flat (identity) normally; in fence view an equator
+    /// tile stands vertical as part of its **fence** — a Z-rotation swings a hex
+    /// point up to +Y, then a Y-yaw turns the face outward along the fence normal
+    /// `n`. Shared across the fence, so the wall is aligned (no yaw) with its
+    /// point-to-point axis exactly vertical; the map roll carries the north walls
+    /// up and the record-flipped south down.
+    fn tile_tilt(&self, inst: &HexInst) -> Mat4 {
+        match self.fence_frame(inst) {
+            Some((_, _, _, n)) => {
+                let n_az = n.z.atan2(n.x);
+                Mat4::from_rotation_y(std::f32::consts::PI - n_az)
+                    * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2)
+            }
+            None => Mat4::IDENTITY,
+        }
+    }
+
     /// Cast a ray through `cursor` and return the `number` of the nearest hex
     /// face it hits (resting positions, so hover stays put while the highlight
     /// stretches). `None` if the cursor is over empty space.
@@ -937,8 +1009,9 @@ impl HexScene {
         let mut best: Option<(f32, u32)> = None;
         for inst in &self.hexes {
             let xform = if inst.left { &m_left } else { &m_right };
-            let center = xform.transform_point3(inst.center);
-            let corners = hex_world_corners(inst.center, inst.flip, xform);
+            let fc = self.tile_fence_center(inst);
+            let center = xform.transform_point3(fc);
+            let corners = hex_world_corners(fc, inst.flip, self.tile_tilt(inst), xform);
             for i in 0..6 {
                 if let Some(t) = ray_triangle(origin, dir, center, corners[i], corners[(i + 1) % 6])
                 {
@@ -1133,14 +1206,20 @@ impl HexScene {
         let tiles = 2 * (1 + 3 * self.num_rings * (self.num_rings + 1));
         let label = format!("Rings {}   ({} tiles)", self.num_rings, tiles);
         renderer.draw_text(&label, Vec2::new(SLIDER_X0, SLIDER_Y - 32.0), 18.0, [0.90, 0.95, 1.0, 1.0]);
+        // Fence-view toggle state + key hint, below the track.
+        let fence = format!("Fence [G]: {}", if self.fence { "on" } else { "off" });
+        renderer.draw_text(&fence, Vec2::new(SLIDER_X0, SLIDER_Y + 16.0), 18.0, [0.90, 0.95, 1.0, 1.0]);
     }
 
     /// Draw one tile: its translucent fill (brighter `HOVER_TINT` when `lit`)
-    /// then its coloured wireframe + labels, both at `center`/`xform`.
+    /// then its coloured wireframe + labels, at `center` with per-tile `tilt`
+    /// (fence stand-up; identity for a flat tile) under the map `xform`.
+    #[allow(clippy::too_many_arguments)]
     fn draw_tile(
         &self,
         renderer: &mut Renderer,
         center: Vec3,
+        tilt: Mat4,
         xform: &Mat4,
         flip: bool,
         number: u32,
@@ -1148,9 +1227,8 @@ impl HexScene {
     ) {
         if let Some(t) = self.terrain.get(number as usize) {
             // The world-gen top layer — the Epoch-6 ground relief with its sea —
-            // rides the tile's placement (flat centre, rolled with the map), so
-            // it folds into a rosette with the wireframe.
-            let model = *xform * Mat4::from_translation(center);
+            // rides the tile's placement (centre, fence tilt, then map roll).
+            let model = *xform * Mat4::from_translation(center) * tilt;
             let tint = if lit { TERRAIN_HOVER_TINT } else { [1.0, 1.0, 1.0, 1.0] };
             renderer.draw_mesh(t.ground, model, MeshDrawOptions { wireframe: false, tint });
             if let Some(w) = t.water {
@@ -1160,22 +1238,24 @@ impl HexScene {
             // Fallback when the vocabulary failed to load: the plain grey fill.
             let model = *xform
                 * Mat4::from_translation(center)
+                * tilt
                 * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
             let tint = if lit { HOVER_TINT } else { FILL_TINT };
             renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
         }
-        self.draw_hex(renderer, center, number, flip, xform);
+        self.draw_hex(renderer, center, number, flip, tilt, xform);
     }
 
-    /// Draw the flat hex wireframe + labels at `center`, rolled by the map
-    /// `xform`. (All tiles lie flat on the ground; a selected tile's folded-in
-    /// neighbour is just drawn at its rosette `center` in the same plane.)
+    /// Draw the hex wireframe + labels at `center`, with per-tile `tilt` (fence
+    /// stand-up; identity when flat) under the map roll `xform`. A selected
+    /// tile's folded-in neighbour passes identity and its rosette `center`.
     fn draw_hex(
         &self,
         renderer: &mut Renderer,
         center: Vec3,
         number: u32,
         flip: bool,
+        tilt: Mat4,
         xform: &Mat4,
     ) {
         let mut corners = hex_corners(center, HEX_SIZE);
@@ -1187,9 +1267,9 @@ impl HexScene {
                 *c = flip_ns(*c, center);
             }
         }
-        // The map's roll `xform` is the only placement transform now (the tiles
-        // are already flat around `center`).
-        let place = |p: Vec3| xform.transform_point3(p);
+        // Stand the tile up by `tilt` about its centre (fence view), then apply
+        // the map's roll `xform`.
+        let place = |p: Vec3| xform.transform_point3(center + tilt.transform_vector3(p - center));
         for i in 0..6 {
             let a = place(corners[i]);
             let b = place(corners[(i + 1) % 6]);
@@ -1277,6 +1357,13 @@ impl Scene for HexScene {
         if input.key_down(Key::Escape) {
             return Transition::Quit;
         }
+        // Fence view toggle (G): outer-ring tiles stand up as six walls per map.
+        // Rising-edge latched so a single tap flips it.
+        let g_down = input.key_down(Key::G);
+        if g_down && !self.fence_key_was_down {
+            self.fence = !self.fence;
+        }
+        self.fence_key_was_down = g_down;
         let dt_s = dt.as_secs_f32();
 
         // Roll wheels: left-click a wheel to grab it, drag vertically to roll its
@@ -1442,21 +1529,25 @@ impl Scene for HexScene {
         for inst in &self.hexes {
             let own = if inst.left { &m_left } else { &m_right };
             if let Some(ros) = &rosette {
-                // A folded-in neighbour: draw at its rosette slot.
+                // A folded-in neighbour: draw flat at its rosette slot.
                 if let Some(&(_, slot)) = ros.slots.iter().find(|(num, _)| *num == inst.number) {
                     let rx = if ros.left { &m_left } else { &m_right };
-                    self.draw_tile(renderer, slot, rx, ros.flip, inst.number, true);
+                    self.draw_tile(renderer, slot, Mat4::IDENTITY, rx, ros.flip, inst.number, true);
                     continue;
                 }
                 // The selected tile itself: its resting spot, highlighted.
                 if ros.center == inst.number {
-                    self.draw_tile(renderer, inst.center, own, inst.flip, inst.number, true);
+                    self.draw_tile(renderer, inst.center, Mat4::IDENTITY, own, inst.flip, inst.number, true);
                     continue;
                 }
             }
             // Hover highlight: the lit tile (hovered + its neighbours) brightens.
+            // In fence view the outer ring stands up as flat walls (`tile_tilt`
+            // + `tile_fence_center` relay the equator tiles into coplanar rows).
             let lit = self.highlight.contains(&inst.number);
-            self.draw_tile(renderer, inst.center, own, inst.flip, inst.number, lit);
+            let tilt = self.tile_tilt(inst);
+            let center = self.tile_fence_center(inst);
+            self.draw_tile(renderer, center, tilt, own, inst.flip, inst.number, lit);
         }
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
