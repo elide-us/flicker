@@ -25,7 +25,7 @@
 //! drawn terrain mirrors with the tile and logically adjacent edges still
 //! correspond across the drawn layout.
 
-use flicker::render::{Mat4, MeshHandle, MeshIndices, MeshVertex, Renderer, Vec2, Vec3};
+use flicker::render::{MeshHandle, MeshIndices, MeshVertex, Renderer, Vec2, Vec3};
 use flicker_materials::{JsonTableSource, Tables};
 use flicker_worldgen::{
     six_epoch_stack, Biome, CellSample, Epoch1, Epoch1Params, EpochCtx, FieldSampler, HexState,
@@ -258,41 +258,15 @@ fn celestial_dirs(hexes: &[HexInst], rings: usize) -> Vec<Vec3> {
         .collect()
 }
 
-/// World centre of a tile under the given map transforms.
-fn tile_center(inst: &HexInst, m_right: &Mat4, m_left: &Mat4) -> Vec3 {
-    if inst.left {
-        m_left.transform_point3(inst.center)
-    } else {
-        m_right.transform_point3(inst.center)
-    }
-}
-
-/// Across-equator neighbours per tile: for each tile short of six same-map
-/// neighbours, the nearest equator tiles of the *other* map, measured at the
-/// supplied (rest-pose) transforms — the static mirror of
-/// `HexScene::neighbors_of`, so the sim's fold matches the highlight's.
-fn equator_fill(
-    hexes: &[HexInst],
-    within: &[Vec<u32>],
-    m_right: &Mat4,
-    m_left: &Mat4,
-) -> Vec<Vec<u32>> {
-    hexes
-        .iter()
-        .map(|a| {
-            let need = 6usize.saturating_sub(within[a.number as usize].len());
-            if need == 0 {
-                return Vec::new();
-            }
-            let origin = tile_center(a, m_right, m_left);
-            let mut cands: Vec<(f32, u32)> = hexes
-                .iter()
-                .filter(|b| b.left != a.left && within[b.number as usize].len() < 6)
-                .map(|b| ((tile_center(b, m_right, m_left) - origin).length(), b.number))
-                .collect();
-            cands.sort_by(|x, y| x.0.total_cmp(&y.0));
-            cands.into_iter().take(need).map(|(_, n)| n).collect()
-        })
+/// Across-equator neighbours per tile: each equator tile's two twins on the
+/// other map, from the deterministic σ-zipper
+/// ([`crate::topology::Topology::equator_partners`]) — the static mirror of
+/// `HexScene::neighbors_of`, so the sim's fold matches the highlight's. No
+/// proximity, so it no longer depends on the map transforms.
+fn equator_fill(rings: usize, within: &[Vec<u32>]) -> Vec<Vec<u32>> {
+    let topo = crate::topology::Topology::new(rings);
+    (0..within.len() as u32)
+        .map(|n| topo.equator_partners(n))
         .collect()
 }
 
@@ -373,20 +347,18 @@ pub struct WorldGen {
 }
 
 impl WorldGen {
-    /// Run the six-epoch stack for `seed` over the map's tiles. `m_right` /
-    /// `m_left` must be the **rest-pose** map transforms so the across-equator
-    /// adjacency (and with it the whole world) is independent of the wheels.
+    /// Run the six-epoch stack for `seed` over the map's tiles. The
+    /// across-equator adjacency comes from the σ-zipper (tile numbers only), so
+    /// the generated world is independent of the wheels by construction.
     pub fn generate(
         tables: &Tables,
         hexes: &[HexInst],
         within: &[Vec<u32>],
         rings: usize,
         seed: u64,
-        m_right: &Mat4,
-        m_left: &Mat4,
     ) -> Self {
         let dirs = celestial_dirs(hexes, rings);
-        let fill = equator_fill(hexes, within, m_right, m_left);
+        let fill = equator_fill(rings, within);
         let neighbors = world_neighbors(within, &fill);
         let e1 = Epoch1::new(tables, Epoch1Params::default(), seed);
         let ctx = EpochCtx { tables, dirs: &dirs, neighbors: &neighbors, seed };
@@ -473,14 +445,13 @@ impl WorldGen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{build_hex_instances, build_within_neighbors, ring_offsets, HexScene};
+    use crate::{build_hex_instances, build_within_neighbors, ring_offsets};
 
     fn world(rings: usize) -> (Vec<HexInst>, Vec<Vec<u32>>, WorldGen) {
         let tables = load_tables().expect("repo data/materials loads");
         let hexes = build_hex_instances(rings);
         let within = build_within_neighbors(&hexes);
-        let (mr, ml) = HexScene::map_transforms_for(0.0, std::f32::consts::PI);
-        let w = WorldGen::generate(&tables, &hexes, &within, rings, 0x0EC0_DE01, &mr, &ml);
+        let w = WorldGen::generate(&tables, &hexes, &within, rings, 0x0EC0_DE01);
         (hexes, within, w)
     }
 
@@ -539,8 +510,7 @@ mod tests {
         let rings = 2;
         let hexes = build_hex_instances(rings);
         let within = build_within_neighbors(&hexes);
-        let (mr, ml) = HexScene::map_transforms_for(0.0, std::f32::consts::PI);
-        let fill = equator_fill(&hexes, &within, &mr, &ml);
+        let fill = equator_fill(rings, &within);
         let nbrs = world_neighbors(&within, &fill);
         for (i, ns) in nbrs.iter().enumerate() {
             // Interior tiles keep exactly their six same-map neighbours.

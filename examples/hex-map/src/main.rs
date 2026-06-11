@@ -886,15 +886,12 @@ impl HexScene {
         }
         self.world = None;
         let Some(tables) = self.tables.as_ref() else { return };
-        let (m_right, m_left) = Self::map_transforms_for(0.0, std::f32::consts::PI);
         let world = terrain::WorldGen::generate(
             tables,
             &self.hexes,
             &self.within,
             self.num_rings,
             WORLD_SEED,
-            &m_right,
-            &m_left,
         );
         self.terrain = world.upload_meshes(tables, &self.hexes, renderer);
         self.world = Some(world);
@@ -1035,31 +1032,18 @@ impl HexScene {
         }
     }
 
-    /// The six neighbours of tile `n`: its same-map neighbours ([`Self::within`])
-    /// first, then — if it's an equator tile short of six — the nearest tiles in
-    /// the *other* map's equator (the across-equator mesh), measured on the live
-    /// rendered centres so the match tracks the maps' rolls.
+    /// The neighbours of tile `n`: its same-map neighbours ([`Self::within`])
+    /// first, then — if it's an equator tile — its across-equator twins from the
+    /// deterministic σ-zipper ([`topology::Topology::equator_partners`]). No
+    /// proximity, so the set is roll-independent. Interior tiles already hold six
+    /// within-neighbours; equator **edge** tiles reach six (four within + two
+    /// cross), equator **corner** tiles five (three within + two cross).
     fn neighbors_of(&self, n: u32) -> Vec<u32> {
-        let within = &self.within[n as usize];
-        let mut out = within.clone();
-        let need = 6usize.saturating_sub(within.len());
-        if need > 0 {
-            let (m_right, m_left) = self.map_transforms();
-            let here = &self.hexes[n as usize];
-            let origin = self.tile_center(here, &m_right, &m_left);
-            let mut cands: Vec<(f32, u32)> = self
-                .hexes
-                .iter()
-                .filter(|b| b.left != here.left && self.within[b.number as usize].len() < 6)
-                .map(|b| {
-                    (
-                        (self.tile_center(b, &m_right, &m_left) - origin).length(),
-                        b.number,
-                    )
-                })
-                .collect();
-            cands.sort_by(|a, b| a.0.total_cmp(&b.0));
-            out.extend(cands.into_iter().take(need).map(|(_, num)| num));
+        let mut out = self.within[n as usize].clone();
+        for p in topology::Topology::new(self.num_rings).equator_partners(n) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
         }
         out
     }
@@ -1765,7 +1749,7 @@ mod tests {
     }
 
     #[test]
-    fn seven_tile_highlight() {
+    fn highlight_follows_the_fold_topology() {
         let mut s = HexScene::new();
 
         // Interior tiles (right centre + ring 1 + ring 2 = 0..=18) have all six
@@ -1774,18 +1758,23 @@ mod tests {
             assert_eq!(s.within[n as usize].len(), 6, "interior tile {n}");
         }
         // Equator tiles (right ring 3 = 19..=36) come up short — hex-ring corners
-        // keep 3 same-map neighbours, straight-run edges keep 4.
+        // keep 3 same-map neighbours, straight-run edges keep 4 — and each gains
+        // exactly two across-equator twins from the σ-zipper.
         for n in 19..=36u32 {
             let w = s.within[n as usize].len();
             assert!(w == 3 || w == 4, "equator tile {n} within = {w}");
+            assert_eq!(s.neighbors_of(n).len(), w + 2, "equator tile {n} twins");
         }
 
-        // Hovering any tile lights exactly seven (itself + six neighbours): the
-        // shortfall on equator tiles is made up across the equator.
+        // Hovering lights the tile plus its neighbours: seven for interior and
+        // equator-edge tiles (six neighbours), six for the equator corners
+        // (five — three within + two cross). Never proximity, so roll-stable.
         for n in 0..s.hexes.len() as u32 {
             s.hovered = Some(n);
             let hl = s.compute_highlight();
-            assert_eq!(hl.len(), 7, "tile {n} highlight {hl:?}");
+            let want = 1 + s.neighbors_of(n).len();
+            assert_eq!(hl.len(), want, "tile {n} highlight {hl:?}");
+            assert!((6..=7).contains(&hl.len()), "tile {n} highlight {} off-range", hl.len());
             assert!(hl.contains(&n), "tile {n} not in its own highlight");
             assert!(hl[1..].iter().all(|&m| m != n), "tile {n} duplicated");
         }
@@ -1798,16 +1787,18 @@ mod tests {
         for n in 0..s.hexes.len() as u32 {
             let ros = s.build_rosette(n, &mr, &ml);
             assert_eq!(ros.center, n);
-            // The fold-in places exactly the tile's six neighbours...
-            assert_eq!(ros.slots.len(), 6, "tile {n} rosette size");
+            // The fold-in places exactly the tile's neighbours — six for most,
+            // five for the equator corners.
+            assert_eq!(ros.slots.len(), s.neighbors_of(n).len(), "tile {n} rosette size");
             let mut got: Vec<u32> = ros.slots.iter().map(|(m, _)| *m).collect();
             got.sort();
             let mut want = s.neighbors_of(n);
             want.sort();
             assert_eq!(got, want, "tile {n} rosette ≠ its neighbours");
             // ...each on a distinct edge slot (no two neighbours stacked).
-            for i in 0..6 {
-                for j in (i + 1)..6 {
+            let m = ros.slots.len();
+            for i in 0..m {
+                for j in (i + 1)..m {
                     assert!(
                         (ros.slots[i].1 - ros.slots[j].1).length() > 1.0,
                         "tile {n} slots {i},{j} coincide"
@@ -1826,10 +1817,14 @@ mod tests {
             // Two maps, each a centre + `rings` rings of 6k tiles.
             let expect = 2 * (1 + 3 * rings * (rings + 1));
             assert_eq!(s.hexes.len(), expect, "{rings} rings → tile count");
-            // The seven-tile invariant survives at every ring count.
+            // The fold topology survives at every ring count: each tile lights
+            // itself plus its neighbours — seven for full tiles, six for the
+            // equator corners (and at one ring every equator tile is a corner).
             for n in 0..s.hexes.len() as u32 {
                 s.hovered = Some(n);
-                assert_eq!(s.compute_highlight().len(), 7, "{rings} rings, tile {n}");
+                let hl = s.compute_highlight().len();
+                assert_eq!(hl, 1 + s.neighbors_of(n).len(), "{rings} rings, tile {n}");
+                assert!((6..=7).contains(&hl), "{rings} rings, tile {n} highlight {hl}");
             }
         }
         // One ring per map is the "map of 14": two centres + two rings of six.
