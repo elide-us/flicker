@@ -185,10 +185,10 @@ const ROLL_SENS: f32 = 0.005;
 const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
 
 /// Ring-count range the slider spans, and the start value. Each map has a centre
-/// tile plus `rings` rings; the dome's quarter-turn (apex → equator) is divided
-/// evenly across `rings`, so ring `k` rests `k·(90°/rings)` down the dome.
+/// tile plus `rings` rings; the fence view divides the quarter-turn (centre →
+/// equator) evenly across `rings`, so ring `k` tilts `k·(90°/rings)`.
 const MIN_RINGS: usize = 1;
-const MAX_RINGS: usize = 5;
+const MAX_RINGS: usize = 4;
 const DEFAULT_RINGS: usize = 3;
 
 // Ring-count slider (screen-space, pixels from the top-left, below the HUD
@@ -765,8 +765,9 @@ struct HexScene {
     /// World/meshes need (re)building next frame — set at startup and by the
     /// ring slider; the upload needs the `&mut Renderer` only `render` holds.
     terrain_dirty: bool,
-    /// Fence view (toggle `G`): the outer-ring tiles stand vertical as six walls
-    /// per map, one per hexagon side. Inner tiles stay flat.
+    /// Fence view (toggle `G`): every ring tilts up by its even subdivision of
+    /// the quarter-turn (`k·90°/rings`) — centre flat, equator vertical as six
+    /// walls per map — folding the flat map into a faceted dome.
     fence: bool,
     /// Rising-edge latch for the fence toggle key, so one tap flips it.
     fence_key_was_down: bool,
@@ -934,27 +935,27 @@ impl HexScene {
         (self.position, dir)
     }
 
-    /// Fence frame for an equator tile in fence view: `(fence_start, p0, t, n)`
-    /// — the fence's first tile number, its centre `p0` (the wall anchor), the
-    /// unit run direction `t` along the side, and the outward unit normal `n`
-    /// (⊥ `t`). `None` when fence view is off or `inst` isn't an equator tile.
-    /// All tiles of a fence share `t`/`n`, so the standing wall is one flat plane
-    /// ([`topology::Topology::equator_fence`] gives the `rings`-tile grouping).
-    fn fence_frame(&self, inst: &HexInst) -> Option<(u32, Vec3, Vec3, Vec3)> {
+    /// Fence frame for a non-pole tile in fence view: `(side_start, p0, t, n, k)`
+    /// — the tile's ring-side first tile, its centre `p0` (the facet anchor), the
+    /// unit run direction `t` along the side, the outward unit normal `n` (⊥ `t`),
+    /// and the ring index `k` (which sets the tilt). `None` when fence view is off
+    /// or `inst` is a pole. All tiles of a side share `t`/`n`, so a tilted side is
+    /// one flat facet ([`topology::Topology::ring_side`] gives the grouping).
+    fn fence_frame(&self, inst: &HexInst) -> Option<(u32, Vec3, Vec3, Vec3, usize)> {
         if !self.fence {
             return None;
         }
-        let (_, fence) = topology::Topology::new(self.num_rings).equator_fence(inst.number)?;
-        let start = fence.start;
+        let (k, _, range) = topology::Topology::new(self.num_rings).ring_side(inst.number)?;
+        let start = range.start;
         let p0 = self.hexes[start as usize].center;
         let map_center = if inst.left {
             Vec3::new(left_axis_x(), 0.0, left_center().z)
         } else {
             Vec3::ZERO
         };
-        // Run along the side from the first two tiles (a clean side direction);
-        // a single-tile fence (rings == 1) falls back to the radial's tangent.
-        let raw_t = if self.num_rings >= 2 {
+        // Run along the side from the first two tiles (a clean side direction); a
+        // single-tile side (ring 1) falls back to the radial's tangent.
+        let raw_t = if k >= 2 {
             self.hexes[(start + 1) as usize].center - p0
         } else {
             let r = p0 - map_center;
@@ -966,32 +967,33 @@ impl HexScene {
         if n.dot(p0 - map_center) < 0.0 {
             n = -n;
         }
-        Some((start, p0, t, n))
+        Some((start, p0, t, n, k))
     }
 
-    /// Relaid centre of a fence tile: in fence view the `rings` tiles of a fence
+    /// Relaid centre of a fence tile: in fence view the `k` tiles of a ring side
     /// are spread evenly along the side line (`p0 + t · j · HEX_SPACING`) so they
-    /// are collinear — and so, standing, exactly coplanar (the corner tile no
-    /// longer bends off the wall). The tile's own centre otherwise.
+    /// are collinear — and so, tilted, exactly coplanar (the corner tile no
+    /// longer bends off the facet). The tile's own centre otherwise.
     fn tile_fence_center(&self, inst: &HexInst) -> Vec3 {
         match self.fence_frame(inst) {
-            Some((start, p0, t, _)) => p0 + t * ((inst.number - start) as f32 * HEX_SPACING),
+            Some((start, p0, t, _, _)) => p0 + t * ((inst.number - start) as f32 * HEX_SPACING),
             None => inst.center,
         }
     }
 
-    /// Per-tile orientation. Flat (identity) normally; in fence view an equator
-    /// tile stands vertical as part of its **fence** — a Z-rotation swings a hex
-    /// point up to +Y, then a Y-yaw turns the face outward along the fence normal
-    /// `n`. Shared across the fence, so the wall is aligned (no yaw) with its
-    /// point-to-point axis exactly vertical; the map roll carries the north walls
-    /// up and the record-flipped south down.
+    /// Per-tile orientation. Flat (identity) normally; in fence view a tile tilts
+    /// up by its ring's even subdivision of the quarter-turn — ring `k` of
+    /// `rings` stands at `k·(90°/rings)`, so the centre stays flat, each inner
+    /// ring tilts a little more, and the equator is fully vertical (the fences).
+    /// A Z-rotation tilts the hex (a point swinging toward +Y); a Y-yaw turns the
+    /// face outward along the side normal `n`. Shared across the side, so the
+    /// facet is aligned; the map roll carries north up and the flipped south down.
     fn tile_tilt(&self, inst: &HexInst) -> Mat4 {
         match self.fence_frame(inst) {
-            Some((_, _, _, n)) => {
+            Some((_, _, _, n, k)) => {
+                let theta = ring_dome_angle(k, self.num_rings);
                 let n_az = n.z.atan2(n.x);
-                Mat4::from_rotation_y(std::f32::consts::PI - n_az)
-                    * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2)
+                Mat4::from_rotation_y(std::f32::consts::PI - n_az) * Mat4::from_rotation_z(theta)
             }
             None => Mat4::IDENTITY,
         }

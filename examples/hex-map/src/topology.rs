@@ -108,27 +108,56 @@ impl Topology {
         }
     }
 
-    /// First tile number of the equator ring on the given map.
-    fn equator_start(&self, south: bool) -> u32 {
-        if south {
-            self.per_map // the south equator is the first south ring
-        } else {
-            1 + 3 * (self.rings as u32 - 1) * self.rings as u32 // north outermost ring
-        }
-    }
-
-    /// If `n` is an equator tile, the **fence** it belongs to: the six equator
-    /// fences are the `rings`-tile chunks taken in spiral-number order from the
-    /// ring's lowest index (so a fence is `[lo, lo + rings)`). Returns
-    /// `(fence_index 0..6, tile-number range)`, or `None` off the equator.
-    pub fn equator_fence(&self, n: u32) -> Option<(usize, std::ops::Range<u32>)> {
-        if self.ring_class(n) != RingClass::Equator {
+    /// The ring index `k`, side index, and the side's tile-number range for tile
+    /// `n` — the `k`-tile chunk (one of the ring's six sides) it belongs to,
+    /// taken in spiral-number order from the ring's lowest index. `None` for a
+    /// pole (ring 0). Generalises the equator fences to every ring: a ring's
+    /// side size equals its ring index, so the chunk interval scales with `k`.
+    pub fn ring_side(&self, n: u32) -> Option<(usize, usize, std::ops::Range<u32>)> {
+        if self.ring_class(n) == RingClass::Pole {
             return None;
         }
-        let start = self.equator_start(self.is_south(n));
-        let idx = (n - start) / self.rings as u32;
-        let lo = start + idx * self.rings as u32;
-        Some((idx as usize, lo..lo + self.rings as u32))
+        let local = n % self.per_map;
+        let map_base = if self.is_south(n) { self.per_map } else { 0 };
+        let (k, ring_local_start) = if self.is_south(n) {
+            // South numbers outer-ring-inward: ring `rings` first, then inward.
+            let mut start = 0u32;
+            let mut kk = self.rings;
+            loop {
+                let count = 6 * kk as u32;
+                if local < start + count {
+                    break (kk, start);
+                }
+                start += count;
+                kk -= 1;
+            }
+        } else {
+            // North numbers centre-outward: ring k at [1+3(k-1)k, 1+3k(k+1)).
+            let mut kk = 1usize;
+            loop {
+                let s = 1 + 3 * (kk as u32 - 1) * kk as u32;
+                let e = 1 + 3 * kk as u32 * (kk as u32 + 1);
+                if local < e {
+                    break (kk, s);
+                }
+                kk += 1;
+            }
+        };
+        let side = ((local - ring_local_start) / k as u32) as usize;
+        let lo = map_base + ring_local_start + side as u32 * k as u32;
+        Some((k, side, lo..lo + k as u32))
+    }
+
+    /// If `n` is an equator tile, its **fence**: the equator is the outermost
+    /// ring, so a fence is a ring side of `rings` tiles. Returns
+    /// `(fence_index 0..6, tile-number range)`, or `None` off the equator.
+    /// (The equator's own accessor — kept for the special cross-join rules.)
+    #[allow(dead_code)]
+    pub fn equator_fence(&self, n: u32) -> Option<(usize, std::ops::Range<u32>)> {
+        match self.ring_side(n) {
+            Some((k, side, range)) if k == self.rings => Some((side, range)),
+            _ => None,
+        }
     }
 }
 
@@ -162,13 +191,29 @@ mod tests {
     }
 
     #[test]
+    fn ring_sides_chunk_by_ring_index() {
+        let t = Topology::new(3);
+        // Side size scales with the ring: ring 1 → singletons, ring 2 → pairs,
+        // ring 3 (equator) → triples; chunked from each ring's lowest number.
+        assert_eq!(t.ring_side(1), Some((1, 0, 1..2)));
+        assert_eq!(t.ring_side(6), Some((1, 5, 6..7)));
+        assert_eq!(t.ring_side(7), Some((2, 0, 7..9)));
+        assert_eq!(t.ring_side(9), Some((2, 1, 9..11)));
+        assert_eq!(t.ring_side(19), Some((3, 0, 19..22)));
+        assert_eq!(t.ring_side(37), Some((3, 0, 37..40))); // south equator
+        assert_eq!(t.ring_side(55), Some((2, 0, 55..57))); // south inner ring 2
+        assert_eq!(t.ring_side(0), None); // north pole
+        assert_eq!(t.ring_side(73), None); // south pole
+    }
+
+    #[test]
     fn fences_scale_with_ring_count() {
         for rings in 1..=5 {
             let t = Topology::new(rings);
             // Every equator tile lands in exactly one fence of `rings` tiles,
             // and there are six fences per map.
             for &south in &[false, true] {
-                let start = t.equator_start(south);
+                let start = if south { t.per_map } else { 1 + 3 * (rings as u32 - 1) * rings as u32 };
                 for f in 0..6u32 {
                     for j in 0..rings as u32 {
                         let n = start + f * rings as u32 + j;
