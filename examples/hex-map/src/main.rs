@@ -6,12 +6,9 @@
 //!     matching voxel-cluster); each axis's positive half is bright with a
 //!     pyramid arrowhead, the negative half dim, so `+`/`-` reads at a glance;
 //!   * **flat-top hexagons**, 2048 units corner-to-corner (the two points face
-//!     east/west: +X = west, −X = east), drawn as rasterized line wireframes —
-//!     each hex lifted onto the cardinal dome (see below) and tilted tangent to
-//!     it (its face normal along the radius from the dome centre), so it lies
-//!     flat at the apex and stands vertical at the equator — with a **dot at
-//!     each corner**, each edge in its own colour and labelled `a`–`f`
-//!     (clockwise from the west point);
+//!     east/west: +X = west, −X = east), drawn flat on the ground plane as
+//!     rasterized line wireframes — with a **dot at each corner**, each edge in
+//!     its own colour and labelled `a`–`f` (clockwise from the west point);
 //!   * a **number billboard** over each hex centre — the per-hex map-ordering
 //!     label. The right map is numbered centre-outward as one clockwise spiral:
 //!     0 centre, ring 1 (1–6), ring 2 (7–18, hand-built), ring 3 (19–36, grown
@@ -24,15 +21,6 @@
 //!     the middle of the whole sequence; a second compass sits on its centre.
 //!   * a **roll wheel** south of each map: left-drag to roll it about its N-S
 //!     axis, 0–180° (tops always tilt away from each other).
-//!   * a **cardinal dome** over each map: a hemisphere of radius `3·s` whose
-//!     quarter-turn (apex → equator) is divided evenly across the rings, so ring
-//!     k rests `k·(90°/3)` down the dome — rings 1/2/3 at 30°/60°/90°. Each ring
-//!     is a **latitude circle** at that angle (horizontal radius `3s·sin θ`,
-//!     lifted `3s·cos θ`) with its hexes — corner and straight-run alike —
-//!     snapped onto it; two **meridian arcs** over the X (E–W) and Z (N–S)
-//!     verticals run from the base equator (the outer ring, e.g. the right map's
-//!     21↔30 span) up over the apex, where the centre tile sits. All lifted in
-//!     +Y and rolled with the map.
 //!   * **world-gen terrain** on every tile: the hex-world six-epoch stack
 //!     (`flicker-worldgen`) runs over this layout's numbering and adjacency, and
 //!     each tile draws the consolidated top layer — the Epoch-6 eroded ground
@@ -180,15 +168,6 @@ const LEFT_MAP_STEPS: [&[usize]; 19] = [
 /// Wide enough that the two (now ring-3) maps clear each other.
 const LEFT_AXIS_X: f32 = 4.5 * HEX_SPACING;
 
-/// Half-hex yaw of the left (down-facing) map about its own vertical centre
-/// axis, given `rings`: half the outer ring's hex spacing. The outer ring has
-/// `6·rings` tiles (`360°/6·rings` apart), so this is `−½` of that — negative
-/// (CW about +Y), setting the lower ring's points into the upper ring's valleys.
-/// (`rings = 3` → `−10°`, matching the earlier hand-tuned value.)
-fn left_yaw(rings: usize) -> f32 {
-    -std::f32::consts::PI / (6.0 * rings as f32)
-}
-
 /// Radius of the roll wheel handles.
 const WHEEL_RADIUS: f32 = 850.0;
 /// World Z (south) of each map's roll wheel, on the map's N-S axis — south of
@@ -200,15 +179,9 @@ const WHEEL_PICK_PX: f32 = 90.0;
 /// Roll change per pixel of vertical drag (radians).
 const ROLL_SENS: f32 = 0.005;
 
-/// Height the ring guide circles float above the (flat) tile plane, in +Y,
-/// before the map's roll tilts them with it. Tall enough to clear the centre
-/// number labels.
-const GUIDE_LIFT: f32 = 700.0;
-/// Colour of the ring guide circles (a soft cyan, distinct from the edge hues
-/// and the yellow roll wheels).
+/// Colour of the ring-count slider handle (a soft cyan, distinct from the edge
+/// hues and the yellow roll wheels).
 const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
-/// Line segments per guide circle.
-const GUIDE_SEGS: usize = 96;
 
 /// Ring-count range the slider spans, and the start value. Each map has a centre
 /// tile plus `rings` rings; the dome's quarter-turn (apex → equator) is divided
@@ -216,12 +189,6 @@ const GUIDE_SEGS: usize = 96;
 const MIN_RINGS: usize = 1;
 const MAX_RINGS: usize = 5;
 const DEFAULT_RINGS: usize = 3;
-
-/// Dome (hemisphere) radius for `rings`: the outermost ring sits on its equator,
-/// so the radius is `rings · HEX_SPACING`.
-fn dome_radius(rings: usize) -> f32 {
-    rings as f32 * HEX_SPACING
-}
 
 // Ring-count slider (screen-space, pixels from the top-left, below the HUD
 // stats block). Drag the handle 1‥5 to grow/shrink both maps.
@@ -249,10 +216,7 @@ const FILL_TINT: [f32; 4] = [1.0, 1.0, 1.0, 0.25];
 /// Tint of the hovered tile fill — brighter and more opaque, to read as a
 /// highlight alongside the outward stretch.
 const HOVER_TINT: [f32; 4] = [1.6, 1.6, 1.6, 0.55];
-/// How far a hovered tile extends outward (along its radial normal) from its
-/// resting spot on the dome — the hover "stretch" highlight.
-const HOVER_STRETCH: f32 = 700.0;
-/// Tiny inward (−radial) offset of the fill below the wireframe plane, so the
+/// Tiny downward (−Y) offset of the fill below the wireframe plane, so the
 /// coloured edges always draw in front of the fill (no z-fighting).
 const FILL_INSET: f32 = 4.0;
 /// Hover hit-test rate — the mouse pick runs this many times a second, not every
@@ -300,92 +264,40 @@ fn hex_center(steps: &[usize]) -> Vec3 {
         * HEX_SPACING
 }
 
-/// Polar angle (from the apex) at which ring `k` rests on a `rings`-ring dome:
-/// the quarter-turn (apex → equator) split evenly, so ring k sits `k·(90°/rings)`
-/// down from the apex (the outermost on the base equator; `k = 0` is the apex).
+/// Latitude (polar angle from the pole) of ring `k` on a `rings`-ring map: the
+/// quarter-turn pole→equator split evenly, so ring k sits `k·(90°/rings)` from
+/// the pole (`k = 0` the pole, the outermost ring on the equator). The map draws
+/// flat; this is retained only for the per-tile celestial-direction math.
 fn ring_dome_angle(k: usize, rings: usize) -> f32 {
     k as f32 * (std::f32::consts::FRAC_PI_2 / rings as f32)
 }
 
-/// Horizontal radius of ring `k`'s circle on a `rings`-ring dome — `radius · sin θ`
-/// at the ring's dome angle θ. (0 at the apex, full radius at the base equator.)
-fn ring_dome_radius(k: usize, rings: usize) -> f32 {
-    dome_radius(rings) * ring_dome_angle(k, rings).sin()
-}
-
-/// World height of ring `k`'s circle above the map centre — `GUIDE_LIFT +
-/// radius · cos θ`. (`GUIDE_LIFT + radius` at the apex, `GUIDE_LIFT` at the base.)
-fn ring_dome_lift(k: usize, rings: usize) -> f32 {
-    GUIDE_LIFT + dome_radius(rings) * ring_dome_angle(k, rings).cos()
-}
-
-/// Place a tile from its `offset` from the map centre onto a `rings`-ring dome:
-/// read its ring `k` from the offset's length, then set it on that ring's dome
-/// circle, **evenly distributed** — its azimuth is snapped to the nearest of the
-/// `6k` slots evenly spaced around the ring (anchored on the corners at 30°+60°s),
-/// at horizontal radius [`ring_dome_radius`] and lifted [`ring_dome_lift`]. The
-/// projection (the raw offset direction) only fixed the *ordering*; its angular
-/// wobble between corners is regularised away here, so each ring is uniform. The
-/// centre tile rides to the apex. Only the location moves — the hex keeps shape;
-/// `logical` (same-map adjacency) is unaffected, so the topology is unchanged.
-fn dome_position(offset: Vec3, rings: usize) -> Vec3 {
-    let r = offset.length();
-    if r < 1e-3 {
-        return Vec3::new(0.0, ring_dome_lift(0, rings), 0.0);
-    }
-    let k = (r / HEX_SPACING).round() as usize;
-    // Snap the azimuth to ring k's even grid (slot = 2π/6k, anchored at 30°).
-    let slot = std::f32::consts::PI / (3.0 * k as f32);
-    let base = std::f32::consts::FRAC_PI_6;
-    let theta = base + ((offset.z.atan2(offset.x) - base) / slot).round() * slot;
-    let dir = Vec3::new(theta.cos(), 0.0, theta.sin());
-    dir * ring_dome_radius(k, rings) + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0)
-}
-
-/// Rotation that tilts a flat hex (whose normal is +Y) so its normal becomes the
-/// unit vector `n`: the shortest-arc rotation taking +Y to `n`. Laying each hex
-/// tangent to the dome — perpendicular to the radius from the dome centre — uses
-/// this with `n` = that radius, so a tile rides flat at the apex (`n = +Y`) and
-/// stands vertical at the equator (`n` horizontal).
-fn tilt_to_normal(n: Vec3) -> Mat4 {
-    let d = Vec3::Y.dot(n).clamp(-1.0, 1.0);
-    if d > 0.999_999 {
-        Mat4::IDENTITY
-    } else if d < -0.999_999 {
-        Mat4::from_axis_angle(Vec3::X, std::f32::consts::PI)
-    } else {
-        Mat4::from_axis_angle(Vec3::Y.cross(n).normalize(), d.acos())
-    }
-}
-
 /// Static placement of one hex, independent of roll: its map-ordering `number`,
-/// the pre-transform centre handed to [`HexScene::draw_hex`], whether it is
-/// record-flipped, the dome centre its tilt is measured from, and which map
-/// (`left` ⇒ the left map's transform). Built once by [`build_hex_instances`]
-/// and shared by drawing and the mouse pick so both see identical geometry.
+/// the flat pre-transform centre handed to [`HexScene::draw_hex`], whether it is
+/// record-flipped, and which map (`left` ⇒ the left map's transform). Built once
+/// by [`build_hex_instances`] and shared by drawing and the mouse pick so both
+/// see identical geometry.
 #[derive(Copy, Clone)]
 struct HexInst {
     number: u32,
     center: Vec3,
     flip: bool,
-    dome_center: Vec3,
     left: bool,
-    /// Pre-dome grid centre in the map's own logical frame. Within one map, two
+    /// Flat grid centre in the map's own logical frame. Within one map, two
     /// tiles are neighbours iff their `logical` centres are `HEX_SPACING` apart —
     /// the source of truth for same-map adjacency (roll-independent).
     logical: Vec3,
 }
 
-/// The fold-in layout for a selected tile: its six neighbours placed flat in its
-/// tangent plane, against its edges. `slots` pairs each neighbour's number with
-/// its pre-transform centre in the selected tile's plane; `tilt`/`flip`/`left`
-/// are the selected tile's orientation and map (so neighbours draw coplanar with
-/// it). `center` is the selected tile's own number (the anchor).
+/// The fold-in layout for a selected tile: its six neighbours placed against its
+/// edges. `slots` pairs each neighbour's number with its centre in the selected
+/// tile's plane; `flip`/`left` are the selected tile's orientation and map (so
+/// neighbours draw with it). `center` is the selected tile's own number (the
+/// anchor).
 struct Rosette {
     center: u32,
     left: bool,
     flip: bool,
-    tilt: Mat4,
     slots: Vec<(u32, Vec3)>,
 }
 
@@ -398,30 +310,30 @@ struct Rosette {
 /// centre), so a ring grows in the middle of the whole sequence.
 fn build_hex_instances(rings: usize) -> Vec<HexInst> {
     let mut v: Vec<HexInst> = Vec::with_capacity(2 * (1 + 3 * rings * (rings + 1)));
-    let push = |v: &mut Vec<HexInst>, logical, center, flip, dome_center, left| {
+    let push = |v: &mut Vec<HexInst>, logical, center, flip, left| {
         let number = v.len() as u32;
-        v.push(HexInst { number, center, flip, dome_center, left, logical });
+        v.push(HexInst { number, center, flip, left, logical });
     };
 
-    // Right map: centre, then each ring's spiral, outward.
-    let right_dome = Vec3::new(0.0, GUIDE_LIFT, 0.0);
-    push(&mut v, Vec3::ZERO, dome_position(Vec3::ZERO, rings), false, right_dome, false);
+    // Right map: centre, then each ring's spiral, outward — laid flat on the
+    // ground (the drawn centre is the logical position itself).
+    push(&mut v, Vec3::ZERO, Vec3::ZERO, false, false);
     for k in 1..=rings {
         for off in first_ring(k) {
-            push(&mut v, off, dome_position(off, rings), false, right_dome, false);
+            push(&mut v, off, off, false, false);
         }
     }
 
-    // Left map: outer ring inward, then its centre (record-flipped + reflected).
+    // Left map: outer ring inward, then its centre (record-flipped, the drawn
+    // position reflected west across LEFT_AXIS_X so it sits screen-left).
     let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
     let c = left_center();
-    let left_dome = reflect(c) + Vec3::new(0.0, GUIDE_LIFT, 0.0);
     for k in (1..=rings).rev() {
         for off in left_ring(k) {
-            push(&mut v, c + off, reflect(c + dome_position(off, rings)), true, left_dome, true);
+            push(&mut v, c + off, reflect(c + off), true, true);
         }
     }
-    push(&mut v, c, reflect(c + dome_position(Vec3::ZERO, rings)), true, left_dome, true);
+    push(&mut v, c, reflect(c), true, true);
     v
 }
 
@@ -448,17 +360,16 @@ fn build_within_neighbors(hexes: &[HexInst]) -> Vec<Vec<u32>> {
         .collect()
 }
 
-/// World-space corners of a hex after the tilt-tangent + map `xform` — the same
-/// placement [`HexScene::draw_hex`] draws, used to build the pick triangles.
-fn hex_world_corners(center: Vec3, flip: bool, dome_center: Vec3, xform: &Mat4) -> [Vec3; 6] {
+/// World-space corners of a hex after the map `xform` — the same placement
+/// [`HexScene::draw_hex`] draws, used to build the pick triangles.
+fn hex_world_corners(center: Vec3, flip: bool, xform: &Mat4) -> [Vec3; 6] {
     let mut corners = hex_corners(center, HEX_SIZE);
     if flip {
         for c in corners.iter_mut() {
             *c = flip_ns(*c, center);
         }
     }
-    let tilt = tilt_to_normal((center - dome_center).normalize_or_zero());
-    corners.map(|p| xform.transform_point3(center + tilt.transform_vector3(p - center)))
+    corners.map(|p| xform.transform_point3(p))
 }
 
 /// Möller–Trumbore ray/triangle intersection, **double-sided** (no back-face
@@ -645,36 +556,6 @@ fn draw_wheel(renderer: &mut Renderer, centre: Vec3, radius: f32, roll: f32, col
         let tip = centre + Vec3::new(radius * a.cos(), radius * a.sin(), 0.0);
         renderer.draw_lines(&[(centre, tip)], color);
     }
-}
-
-/// Draw a circle (or partial arc) of `radius` about `center`, lying in the plane
-/// spanned by unit vectors `u`,`v` (point = `center + radius·(cos·u + sin·v)`),
-/// over the angle span `[a0, a1]` in `segs` segments, then tilted by the map's
-/// roll `xform`. With `u = X, v = Z, [0, TAU]` it's a flat ring on the tile
-/// plane; with `u = X|Z, v = Y, [0, PI]` it's a vertical dome half-arc rising
-/// from the `±u` cardinal points to an apex at `center + radius·Y`.
-#[allow(clippy::too_many_arguments)]
-fn draw_arc(
-    renderer: &mut Renderer,
-    center: Vec3,
-    radius: f32,
-    u: Vec3,
-    v: Vec3,
-    a0: f32,
-    a1: f32,
-    segs: usize,
-    xform: &Mat4,
-    color: [f32; 4],
-) {
-    let p = |a: f32| xform.transform_point3(center + (u * a.cos() + v * a.sin()) * radius);
-    let lines: Vec<(Vec3, Vec3)> = (0..segs)
-        .map(|i| {
-            let t0 = a0 + (a1 - a0) * i as f32 / segs as f32;
-            let t1 = a0 + (a1 - a0) * (i + 1) as f32 / segs as f32;
-            (p(t0), p(t1))
-        })
-        .collect();
-    renderer.draw_lines(&lines, color);
 }
 
 /// Four short segments forming a pyramid arrowhead at `tip`, opening back along
@@ -944,28 +825,23 @@ impl HexScene {
     }
 
     /// The two maps' roll/placement transforms (right, left) for the given roll
-    /// angles. The left map's chain is roll → drop+Z-align → half-hex yaw →
-    /// slide under the right map (see the inline notes where each piece is
-    /// defined). The terrain build calls this with the **rest pose** (right 0,
-    /// left π) so the generated world is independent of the wheels.
-    fn map_transforms_for(rings: usize, right_roll: f32, left_roll: f32) -> (Mat4, Mat4) {
-        let lx = left_axis_x();
+    /// angles. Each map is a free-standing dome over its own wheel: the right
+    /// rolls about world Z (the origin column), the left rolls — the opposite
+    /// way, so their tops tilt apart — about its own N-S column at
+    /// [`left_axis_x`], where its wheel sits. Nothing slides one map under the
+    /// other; they stand side by side. The terrain build calls this with the
+    /// **rest pose** (right 0, left π) so the generated world is independent of
+    /// the wheels.
+    fn map_transforms_for(right_roll: f32, left_roll: f32) -> (Mat4, Mat4) {
         let m_right = roll_transform(0.0, right_roll);
-        let left_shift = Vec3::new(0.0, -HEX_SIZE, -0.5 * HEX_SPACING);
-        // Half-hex yaw scales with the ring count (outer ring = 6·rings tiles).
-        let yaw = Mat4::from_translation(Vec3::new(lx, 0.0, 0.0))
-            * Mat4::from_rotation_y(left_yaw(rings))
-            * Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
-        let left_under = Mat4::from_translation(Vec3::new(-lx, 0.0, 0.0));
-        let m_left =
-            left_under * yaw * Mat4::from_translation(left_shift) * roll_transform(lx, -left_roll);
+        let m_left = roll_transform(left_axis_x(), -left_roll);
         (m_right, m_left)
     }
 
     /// This frame's map transforms — shared by `render` (drawing) and `pick`
     /// (hit-test) so both agree.
     fn map_transforms(&self) -> (Mat4, Mat4) {
-        Self::map_transforms_for(self.num_rings, self.right_roll, self.left_roll)
+        Self::map_transforms_for(self.right_roll, self.left_roll)
     }
 
     /// Set the ring count (clamped to `MIN_RINGS‥MAX_RINGS`) and, if it changed,
@@ -1000,8 +876,7 @@ impl HexScene {
         }
         self.world = None;
         let Some(tables) = self.tables.as_ref() else { return };
-        let (m_right, m_left) =
-            Self::map_transforms_for(self.num_rings, 0.0, std::f32::consts::PI);
+        let (m_right, m_left) = Self::map_transforms_for(0.0, std::f32::consts::PI);
         let world = terrain::WorldGen::generate(
             tables,
             &self.hexes,
@@ -1063,7 +938,7 @@ impl HexScene {
         for inst in &self.hexes {
             let xform = if inst.left { &m_left } else { &m_right };
             let center = xform.transform_point3(inst.center);
-            let corners = hex_world_corners(inst.center, inst.flip, inst.dome_center, xform);
+            let corners = hex_world_corners(inst.center, inst.flip, xform);
             for i in 0..6 {
                 if let Some(t) = ray_triangle(origin, dir, center, corners[i], corners[(i + 1) % 6])
                 {
@@ -1135,7 +1010,6 @@ impl HexScene {
     fn build_rosette(&self, s: u32, m_right: &Mat4, m_left: &Mat4) -> Rosette {
         let here = &self.hexes[s as usize];
         let xform = if here.left { *m_left } else { *m_right };
-        let tilt = tilt_to_normal((here.center - here.dome_center).normalize_or_zero());
         // Edge direction in the flat frame, mirrored when the map is flipped, so
         // the slot lines up with the tile's *drawn* edge.
         let flip_dir = |v: Vec3| {
@@ -1145,7 +1019,7 @@ impl HexScene {
                 v
             }
         };
-        let slot_pre = |e: usize| here.center + tilt.transform_vector3(flip_dir(edge_normal(e)) * HEX_SPACING);
+        let slot_pre = |e: usize| here.center + flip_dir(edge_normal(e)) * HEX_SPACING;
         let slots_pre: [Vec3; 6] = std::array::from_fn(slot_pre);
         let w_s = xform.transform_point3(here.center);
 
@@ -1184,7 +1058,6 @@ impl HexScene {
             center: s,
             left: here.left,
             flip: here.flip,
-            tilt,
             slots: out,
         }
     }
@@ -1263,23 +1136,21 @@ impl HexScene {
     }
 
     /// Draw one tile: its translucent fill (brighter `HOVER_TINT` when `lit`)
-    /// then its coloured wireframe + labels, both at `center`/`tilt`/`xform`.
-    #[allow(clippy::too_many_arguments)]
+    /// then its coloured wireframe + labels, both at `center`/`xform`.
     fn draw_tile(
         &self,
         renderer: &mut Renderer,
         center: Vec3,
-        tilt: Mat4,
         xform: &Mat4,
         flip: bool,
         number: u32,
         lit: bool,
     ) {
         if let Some(t) = self.terrain.get(number as usize) {
-            // The world-gen top layer — the Epoch-6 ground relief with its sea
-            // — rides the tile's full placement chain, so it stretches on
-            // hover and folds into a rosette with the wireframe.
-            let model = *xform * Mat4::from_translation(center) * tilt;
+            // The world-gen top layer — the Epoch-6 ground relief with its sea —
+            // rides the tile's placement (flat centre, rolled with the map), so
+            // it folds into a rosette with the wireframe.
+            let model = *xform * Mat4::from_translation(center);
             let tint = if lit { TERRAIN_HOVER_TINT } else { [1.0, 1.0, 1.0, 1.0] };
             renderer.draw_mesh(t.ground, model, MeshDrawOptions { wireframe: false, tint });
             if let Some(w) = t.water {
@@ -1289,19 +1160,16 @@ impl HexScene {
             // Fallback when the vocabulary failed to load: the plain grey fill.
             let model = *xform
                 * Mat4::from_translation(center)
-                * tilt
                 * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
             let tint = if lit { HOVER_TINT } else { FILL_TINT };
             renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
         }
-        self.draw_hex(renderer, center, number, flip, xform, tilt);
+        self.draw_hex(renderer, center, number, flip, xform);
     }
 
-    /// `tilt` rotates the flat hex about its centre so its face normal points
-    /// along its radial (normally [`tilt_to_normal`] of the dome radius, so the
-    /// tile lies flat at the apex and vertical at the equator). For a selected
-    /// tile's folded-in neighbour, the caller instead passes the *selected*
-    /// tile's tilt so the neighbour lies coplanar with it.
+    /// Draw the flat hex wireframe + labels at `center`, rolled by the map
+    /// `xform`. (All tiles lie flat on the ground; a selected tile's folded-in
+    /// neighbour is just drawn at its rosette `center` in the same plane.)
     fn draw_hex(
         &self,
         renderer: &mut Renderer,
@@ -1309,7 +1177,6 @@ impl HexScene {
         number: u32,
         flip: bool,
         xform: &Mat4,
-        tilt: Mat4,
     ) {
         let mut corners = hex_corners(center, HEX_SIZE);
         if flip {
@@ -1320,9 +1187,9 @@ impl HexScene {
                 *c = flip_ns(*c, center);
             }
         }
-        // Apply `tilt` (about the centre) then the map's roll `xform`. `place`
-        // does both, so every drawn point is tilted-then-rolled together.
-        let place = |p: Vec3| xform.transform_point3(center + tilt.transform_vector3(p - center));
+        // The map's roll `xform` is the only placement transform now (the tiles
+        // are already flat around `center`).
+        let place = |p: Vec3| xform.transform_point3(p);
         for i in 0..6 {
             let a = place(corners[i]);
             let b = place(corners[(i + 1) % 6]);
@@ -1549,13 +1416,13 @@ impl Scene for HexScene {
         renderer.set_scene(SceneLighting::default());
         renderer.draw_sky();
 
-        // Both maps' roll/placement transforms (see `map_transforms`): the right
-        // map rolls about world Z; the left map rolls the opposite way, drops
-        // below, yaws a half-hex, and slides under the right map. Shared with the
+        // Both maps' roll/placement transforms (see `map_transforms`): each map
+        // rolls about its own N-S column — the right about world Z, the left the
+        // opposite way about its wheel column at `left_axis_x`. Shared with the
         // mouse pick so drawing and hit-test agree.
         let lx = left_axis_x();
         let (m_right, m_left) = self.map_transforms();
-        // Mirror west↔east (keeping Y) — for the left compass and guides below.
+        // Mirror west↔east (keeping Y) — for the left compass below.
         let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
         let c = left_center();
 
@@ -1563,69 +1430,33 @@ impl Scene for HexScene {
         draw_compass(renderer, Vec3::ZERO, false, &m_right);
         draw_compass(renderer, reflect(c), true, &m_left);
 
-        // When a tile is clicked/selected, fold its six neighbours flat into its
-        // tangent plane, aligned to its edges.
+        // When a tile is clicked/selected, fold its six neighbours flat against
+        // its edges (a rosette around the selected tile).
         let rosette = self.selected.map(|s| self.build_rosette(s, &m_right, &m_left));
 
         // Every tile of both maps: a 25%-grey translucent face (the pickable
-        // surface) plus its coloured wireframe + labels (`draw_tile`). A
-        // selected tile's neighbours fold in (rosette); otherwise the hovered
-        // tile and its six neighbours stretch outward along their radial — the
-        // hover highlight. The fill insets a hair so edges draw in front.
+        // surface) plus its coloured wireframe + labels (`draw_tile`). A selected
+        // tile's neighbours fold in (rosette); the hovered tile and its six
+        // neighbours brighten (the hover highlight). The fill insets a hair so
+        // edges draw in front.
         for inst in &self.hexes {
             let own = if inst.left { &m_left } else { &m_right };
             if let Some(ros) = &rosette {
-                // A folded-in neighbour: draw in the selected tile's plane.
+                // A folded-in neighbour: draw at its rosette slot.
                 if let Some(&(_, slot)) = ros.slots.iter().find(|(num, _)| *num == inst.number) {
                     let rx = if ros.left { &m_left } else { &m_right };
-                    self.draw_tile(renderer, slot, ros.tilt, rx, ros.flip, inst.number, true);
+                    self.draw_tile(renderer, slot, rx, ros.flip, inst.number, true);
                     continue;
                 }
-                // The selected tile itself: its resting spot, highlighted (anchor
-                // of the rosette).
+                // The selected tile itself: its resting spot, highlighted.
                 if ros.center == inst.number {
-                    let tilt = tilt_to_normal((inst.center - inst.dome_center).normalize_or_zero());
-                    self.draw_tile(renderer, inst.center, tilt, own, inst.flip, inst.number, true);
+                    self.draw_tile(renderer, inst.center, own, inst.flip, inst.number, true);
                     continue;
                 }
             }
-            // Hover highlight: the lit tile pushes outward along its radial.
+            // Hover highlight: the lit tile (hovered + its neighbours) brightens.
             let lit = self.highlight.contains(&inst.number);
-            let center = if lit {
-                let radial = (inst.center - inst.dome_center).normalize_or_zero();
-                inst.center + radial * HOVER_STRETCH
-            } else {
-                inst.center
-            };
-            let tilt = tilt_to_normal((center - inst.dome_center).normalize_or_zero());
-            self.draw_tile(renderer, center, tilt, own, inst.flip, inst.number, lit);
-        }
-
-        // Ring guide circles + cardinal dome, per map. Each ring circle passes
-        // through that ring's CORNER hexes (radius k·HEX_SPACING); the
-        // straight-run hexes between corners on ring 2+ fall just inside and are
-        // skipped. Over each map a cardinal dome of the outer radius (3·s) arcs
-        // across the X (E–W) and Z (N–S) verticals, springing from the outer
-        // ring's four cardinal points up to an apex over the centre — so the
-        // dome diameter equals the outer ring's (e.g. the right map's 21↔30
-        // span). Centred on each map's roll axis (right at the origin, left at
-        // its reflected centre column), lifted +Y, rolled with the map.
-        use std::f32::consts::{PI, TAU};
-        let rings = self.num_rings;
-        let outer_r = dome_radius(rings);
-        for (centre, xform) in [(Vec3::ZERO, &m_right), (reflect(c), &m_left)] {
-            // Latitude rings: each ring circle sits at its even angular division
-            // down the dome (radius ring_dome_radius, height ring_dome_lift),
-            // threading the ring of hexes resting there.
-            for k in 1..=rings {
-                let lat = centre + Vec3::new(0.0, ring_dome_lift(k, rings), 0.0);
-                draw_arc(renderer, lat, ring_dome_radius(k, rings), Vec3::X, Vec3::Z, 0.0, TAU, GUIDE_SEGS, xform, GUIDE_COLOR);
-            }
-            // Cardinal meridians: half-arcs over the X (E–W) and Z (N–S)
-            // verticals, from the base equator up over the apex.
-            let base = centre + Vec3::new(0.0, GUIDE_LIFT, 0.0);
-            draw_arc(renderer, base, outer_r, Vec3::X, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
-            draw_arc(renderer, base, outer_r, Vec3::Z, Vec3::Y, 0.0, PI, GUIDE_SEGS, xform, GUIDE_COLOR);
+            self.draw_tile(renderer, inst.center, own, inst.flip, inst.number, lit);
         }
 
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
@@ -1838,74 +1669,6 @@ mod tests {
 
         // The chart is drawn reflected to the west (screen-left).
         assert!(LEFT_AXIS_X > 0.0);
-    }
-
-    #[test]
-    fn dome_placement() {
-        use std::f32::consts::FRAC_PI_2;
-        let rings = 3;
-        let r = dome_radius(rings); // 3·s
-
-        // The rings divide the dome's quarter-turn evenly: 30°, 60°, 90°.
-        assert!((ring_dome_angle(1, rings) - FRAC_PI_2 / 3.0).abs() < 1e-6);
-        assert!((ring_dome_angle(2, rings) - 2.0 * FRAC_PI_2 / 3.0).abs() < 1e-6);
-        assert!((ring_dome_angle(3, rings) - FRAC_PI_2).abs() < 1e-6);
-
-        // Outer ring on the base equator (radius r, lift GUIDE_LIFT); centre on
-        // the apex (radius 0, lift GUIDE_LIFT + r).
-        assert!((ring_dome_radius(3, rings) - r).abs() < 1e-2);
-        assert!((ring_dome_lift(3, rings) - GUIDE_LIFT).abs() < 1e-2);
-        assert!(ring_dome_radius(0, rings).abs() < 1e-3);
-        assert!((ring_dome_lift(0, rings) - (GUIDE_LIFT + r)).abs() < 1e-2);
-
-        // Inner rings step in/down by their angle: ring 1 at 30° (radius r·sin30
-        // = r/2), ring 2 at 60°. Heights descend apex → base.
-        assert!((ring_dome_radius(1, rings) - r * 0.5).abs() < 1e-2);
-        assert!((ring_dome_radius(2, rings) - r * (2.0 * FRAC_PI_2 / 3.0).sin()).abs() < 1e-2);
-        assert!(ring_dome_lift(1, rings) > ring_dome_lift(2, rings));
-        assert!(ring_dome_lift(2, rings) > ring_dome_lift(3, rings));
-
-        // A placed tile keeps its offset direction, lands on its ring's dome
-        // circle, and gains its ring's lift. (HEX_STEPS[10] = 2b, ring-2 corner.)
-        let off = hex_center(HEX_STEPS[10]);
-        let p = dome_position(off, rings);
-        let horiz = Vec3::new(p.x, 0.0, p.z);
-        assert!((horiz.length() - ring_dome_radius(2, rings)).abs() < 1e-2);
-        assert!((p.y - ring_dome_lift(2, rings)).abs() < 1e-2);
-        assert!((horiz.normalize() - off.normalize()).length() < 1e-3); // purely radial
-
-        // A non-corner ring-2 edge tile snaps onto the SAME ring circle.
-        let edge = dome_position(hex_center(HEX_STEPS[7]), rings); // due-west edge tile
-        assert!((Vec3::new(edge.x, 0.0, edge.z).length() - ring_dome_radius(2, rings)).abs() < 1e-2);
-
-        // The centre tile lands on the apex over the centre axis.
-        let apex = dome_position(Vec3::ZERO, rings);
-        assert!(apex.x.abs() < 1e-3 && apex.z.abs() < 1e-3);
-        assert!((apex.y - (GUIDE_LIFT + r)).abs() < 1e-2);
-    }
-
-    #[test]
-    fn hex_tilt() {
-        // The tilt maps the flat hex normal (+Y) onto the requested normal, and
-        // is a rigid rotation (preserves lengths).
-        let check = |n: Vec3| {
-            let m = tilt_to_normal(n);
-            assert!((m.transform_vector3(Vec3::Y) - n).length() < 1e-4, "normal {n:?}");
-            let v = Vec3::new(HEX_SIZE, 0.0, 0.0);
-            assert!((m.transform_vector3(v).length() - HEX_SIZE).abs() < 1e-1);
-        };
-        check(Vec3::Y); // apex: identity (stays flat)
-        check(Vec3::X); // equator (due west): stands vertical
-        check(Vec3::new(0.3, 0.8, -0.5).normalize()); // an oblique radius
-
-        // A ring-3 hex sits at the equator, so its dome radius is horizontal and
-        // the hex stands vertical; the centre tile's radius is +Y, so it stays
-        // flat. (Both measured against the dome centre at the base height.)
-        let dome_c = Vec3::new(0.0, GUIDE_LIFT, 0.0);
-        let n3 = (dome_position(first_ring(3)[0], 3) - dome_c).normalize();
-        assert!(n3.y.abs() < 1e-3, "ring-3 hex should stand vertical");
-        let nc = (dome_position(Vec3::ZERO, 3) - dome_c).normalize();
-        assert!((nc - Vec3::Y).length() < 1e-4, "centre hex should lie flat");
     }
 
     #[test]

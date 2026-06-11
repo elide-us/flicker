@@ -479,7 +479,7 @@ mod tests {
         let tables = load_tables().expect("repo data/materials loads");
         let hexes = build_hex_instances(rings);
         let within = build_within_neighbors(&hexes);
-        let (mr, ml) = HexScene::map_transforms_for(rings, 0.0, std::f32::consts::PI);
+        let (mr, ml) = HexScene::map_transforms_for(0.0, std::f32::consts::PI);
         let w = WorldGen::generate(&tables, &hexes, &within, rings, 0x0EC0_DE01, &mr, &ml);
         (hexes, within, w)
     }
@@ -539,7 +539,7 @@ mod tests {
         let rings = 2;
         let hexes = build_hex_instances(rings);
         let within = build_within_neighbors(&hexes);
-        let (mr, ml) = HexScene::map_transforms_for(rings, 0.0, std::f32::consts::PI);
+        let (mr, ml) = HexScene::map_transforms_for(0.0, std::f32::consts::PI);
         let fill = equator_fill(&hexes, &within, &mr, &ml);
         let nbrs = world_neighbors(&within, &fill);
         for (i, ns) in nbrs.iter().enumerate() {
