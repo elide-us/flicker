@@ -24,7 +24,7 @@
 //! erode against.
 
 use crate::pipeline::{EpochCtx, EpochTransform};
-use crate::state::{Boundary, HexState};
+use crate::state::{Boundary, HexState, LifeStage};
 
 /// Epoch 5 parameters.
 pub struct Epoch5 {
@@ -50,6 +50,12 @@ pub struct Epoch5 {
     /// Metal mass deposited into the crust at a vein's core, as a fraction of the
     /// hex's crust total (scaled by the local concentration along the path).
     pub deposit_fraction: f64,
+    /// Life potential (prebiotic × vent energy) above which precursors cross into
+    /// prokaryotic **microbial** life. Lower → life takes hold more readily.
+    pub microbial_threshold: f32,
+    /// How strongly a hydrothermal vent boosts the precursor→life transition (the
+    /// classic origin-of-life cradle): potential = `prebiotic × (1 + boost × hydro)`.
+    pub vent_life_boost: f32,
 }
 
 impl Default for Epoch5 {
@@ -63,6 +69,8 @@ impl Default for Epoch5 {
             max_veins: 64,
             metal_density_min: 3.5,
             deposit_fraction: 0.35,
+            microbial_threshold: 0.12,
+            vent_life_boost: 1.0,
         }
     }
 }
@@ -155,6 +163,15 @@ impl EpochTransform for Epoch5 {
 
         for (i, s) in out.iter_mut().enumerate() {
             s.hydrothermal = hydro[i];
+            // Microbial life: Epoch 4's precursors cross into prokaryotic life
+            // where energy pushes them over the edge — hydrothermal vents are the
+            // classic cradle, so they multiply the odds. (High `prebiotic` already
+            // implies liquid water + organics from Epoch 4, so no extra water test.)
+            let potential = (s.prebiotic * (1.0 + self.vent_life_boost * hydro[i])).min(1.0);
+            if potential >= self.microbial_threshold {
+                s.life_stage = LifeStage::Microbial;
+                s.biomass = potential;
+            }
         }
         out
     }
@@ -228,6 +245,7 @@ mod tests {
     use crate::epoch1::{Epoch1, Epoch1Params};
     use crate::epoch2::Epoch2;
     use crate::epoch3::Epoch3;
+    use crate::epoch4::Epoch4;
 
     const FE: u8 = 26;
 
@@ -320,6 +338,42 @@ mod tests {
         let a = Epoch5::default().apply(&ctx, &e3);
         let b = Epoch5::default().apply(&ctx, &e3);
         assert_eq!(a, b);
+    }
+
+    /// Run Epochs 1→4 so Epoch 5 has real hydrothermal vents **and** prebiotic
+    /// precursors (Epoch 4) to grow microbial life from.
+    fn through_epoch4<'a>(
+        t: &'a Tables,
+        dirs: &'a [Vec3],
+        neighbors: &'a [Vec<u32>],
+    ) -> (EpochCtx<'a>, Vec<HexState>) {
+        let (ctx, e3) = through_epoch3(t, dirs, neighbors);
+        let e4 = Epoch4::default().apply(&ctx, &e3);
+        (ctx, e4)
+    }
+
+    #[test]
+    fn microbial_life_emerges_from_precursors() {
+        let t = tables();
+        let (dirs, neighbors) = ring(30);
+        let (ctx, e4) = through_epoch4(&t, &dirs, &neighbors);
+        assert!(e4.iter().any(|s| s.prebiotic > 0.0), "precondition: Epoch 4 made precursors");
+
+        // A low threshold so any precursor cradle crosses into life — tests the
+        // mechanism without depending on exact magnitudes.
+        let out = Epoch5 { microbial_threshold: 0.01, ..Epoch5::default() }.apply(&ctx, &e4);
+        assert!(
+            out.iter().any(|s| s.life_stage == LifeStage::Microbial && s.biomass > 0.0),
+            "no microbial life emerged at the precursor cradles"
+        );
+        for s in &out {
+            assert!(s.biomass.is_finite() && (0.0..=1.0).contains(&s.biomass));
+            // No precursors ⇒ no life, no standing biomass.
+            if s.prebiotic <= 0.0 {
+                assert!(s.life_stage < LifeStage::Microbial, "life with no precursors");
+                assert_eq!(s.biomass, 0.0);
+            }
+        }
     }
 
     #[test]

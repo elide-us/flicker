@@ -798,14 +798,39 @@ name = "flicker-worker"
 version = "0.1.0"
 
 [[package]]
+name = "flicker-world"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-materials",
+ "flicker-worldgen",
+ "flicker-worldgrid",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-worldgen"
 version = "0.1.0"
 dependencies = [
  "flicker-materials",
+ "flicker-worldgrid",
  "flicker-worldstate",
  "glam",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flicker-worldgrid"
+version = "0.1.0"
+dependencies = [
+ "glam",
 ]
 
 [[package]]
@@ -1181,6 +1206,14 @@ dependencies = [
  "glam",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "hex-sphere"
+version = "0.1.0"
+dependencies = [
+ "flicker-worldgrid",
+ "glam",
 ]
 
 [[package]]

@@ -144,10 +144,19 @@ fn material_index_color(index: u32) -> vec3<f32> {
     }
 }
 
-// Resolve a packed material to a color. Primary in low 12 bits,
-// secondary in next 12, blend in top 8. Linear interpolation between
-// primary and secondary by blend / 255.
+// Resolve a packed material to a color. Two encodings:
+//   * Direct RGB (escape): primary == 0xFFF marks a packed RGB666 colour in the
+//     upper bits (R bits 12-17, G 18-23, B 24-29) — for continuous data maps the
+//     palette can't express. No real palette entry uses index 0xFFF.
+//   * Palette blend (default): primary in low 12 bits, secondary in next 12,
+//     blend in top 8 — linear interpolation between two palette colours.
 fn material_color(material: u32) -> vec3<f32> {
+    if ((material & 0xFFFu) == 0xFFFu) {
+        let r = f32((material >> 12u) & 0x3Fu) / 63.0;
+        let g = f32((material >> 18u) & 0x3Fu) / 63.0;
+        let b = f32((material >> 24u) & 0x3Fu) / 63.0;
+        return vec3<f32>(r, g, b);
+    }
     let primary = material & 0xFFFu;
     let secondary = (material >> 12u) & 0xFFFu;
     let blend = f32((material >> 24u) & 0xFFu) / 255.0;

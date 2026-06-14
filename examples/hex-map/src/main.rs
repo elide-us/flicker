@@ -54,6 +54,8 @@ use flicker_materials::Tables;
 mod gadget;
 mod geom;
 mod map_structure;
+mod snap_map;
+mod snap_segment;
 mod terrain;
 mod text;
 mod topology;
@@ -68,6 +70,10 @@ use text::{build_disc_texture, build_glyph_atlas};
 // One hemisphere: its tiles' fence fold + the wheel/compass gadget that places
 // and turns it, plus the shared tile-draw primitive and its GPU-handle bundle.
 use map_structure::{draw_tile, MapStructure, TileAssets};
+// The click-to-select fold-in, and the flat horizon the navigator steps over.
+use snap_map::{horizon, SnapMap};
+// The navigator's horizon panel: the turtle + the snapped tiles around it.
+use snap_segment::SnapMapSegment;
 
 const HUD_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
 const UI_ELEMENTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
@@ -80,7 +86,7 @@ const GUIDE_COLOR: [f32; 4] = [0.55, 0.85, 1.0, 0.9];
 /// tile plus `rings` rings; the fence view divides the quarter-turn (centre →
 /// equator) evenly across `rings`, so ring `k` tilts `k·(90°/rings)`.
 const MIN_RINGS: usize = 1;
-const MAX_RINGS: usize = 4;
+const MAX_RINGS: usize = 5;
 const DEFAULT_RINGS: usize = 3;
 
 // Ring-count slider (screen-space, pixels from the top-left, below the HUD
@@ -101,29 +107,16 @@ const WORLD_SEED: u64 = 0x0EC0_DE01;
 const PICK_HZ: f32 = 15.0;
 /// Vertical FOV used to build the pick ray; matches the render camera.
 const PICK_FOV_Y: f32 = std::f32::consts::PI / 3.0; // 60°
+/// Turtle travel speed in navigate mode (world units/second) — slow, ~2s to
+/// cross a tile, so the world scrolls gently under the turtle.
+const NAV_SPEED: f32 = 1100.0;
+/// Turtle turn rate in navigate mode (radians/second) for A/D.
+const TURN_SPEED: f32 = 1.6;
 
 // ───────────────────────────────────────────────────────────────────
 // Drawing & widget helpers (compass, wheel, rosette — modularised in
 // later slices into gadget.rs / snap_map.rs / map_structure.rs)
 // ───────────────────────────────────────────────────────────────────
-
-/// The fold-in layout for a selected tile: its six neighbours placed against its
-/// edges. `slots` pairs each neighbour's number with its centre in the selected
-/// tile's plane; `flip`/`left` are the selected tile's orientation and map (so
-/// neighbours draw with it). `center` is the selected tile's own number (the
-/// anchor).
-struct Rosette {
-    center: u32,
-    left: bool,
-    flip: bool,
-    slots: Vec<(u32, Vec3)>,
-}
-
-/// World X of the left map's centre column (the reflected centre tile 37) — the
-/// vertical line the left map rolls about.
-fn left_axis_x() -> f32 {
-    2.0 * LEFT_AXIS_X - left_center().x
-}
 
 // ───────────────────────────────────────────────────────────────────
 // Scene
@@ -173,6 +166,16 @@ struct HexScene {
     /// six neighbours fold flat into its tangent plane, aligned to its edges,
     /// instead of pushing outward.
     selected: Option<u32>,
+    /// The tile the navigator's turtle is currently within.
+    player_tile: u32,
+    /// The turtle's sub-tile position inside `player_tile`, in world units in the
+    /// hex plane (`y = 0`). Stays within the hexagon; when it crosses an edge the
+    /// player tile becomes the neighbour there and the offset re-centres. The
+    /// world scrolls by this under the fixed turtle.
+    player_offset: Vec3,
+    /// The turtle's heading (yaw, radians; 0 = north). A/D turn it; W/S move
+    /// along it (Logo-turtle style). The map stays north-up; the turtle rotates.
+    heading: f32,
     /// Tiles to stretch this frame: the hovered tile plus its six neighbours
     /// (same-map + across-equator). Recomputed with `hovered` at [`PICK_HZ`].
     highlight: Vec<u32>,
@@ -205,6 +208,12 @@ struct HexScene {
     fence: bool,
     /// Rising-edge latch for the fence toggle key, so one tap flips it.
     fence_key_was_down: bool,
+    /// Navigate mode (toggle `N`): WASD scrolls the world smoothly under the
+    /// fixed turtle (camera fly suspended), so the panel shows the tiles the
+    /// engine snaps as you travel.
+    navigate: bool,
+    /// Rising-edge latch for the navigate toggle key.
+    nav_key_was_down: bool,
 }
 
 impl HexScene {
@@ -224,11 +233,11 @@ impl HexScene {
                 move_speed: 4000.0,
                 ..AbstractControls::default()
             },
-            north: MapStructure::north(),
-            south: MapStructure::south(
-                left_axis_x(),
-                Vec3::new(left_axis_x(), 0.0, left_center().z),
-            ),
+            north: MapStructure::north(wheel_z(DEFAULT_RINGS)),
+            south: {
+                let cx = sep(DEFAULT_RINGS);
+                MapStructure::south(cx, Vec3::new(cx, 0.0, left_center().z), wheel_z(DEFAULT_RINGS))
+            },
             drag: None,
             drag_cursor: Vec2::ZERO,
             slider_drag: false,
@@ -237,6 +246,9 @@ impl HexScene {
             within,
             hovered: None,
             selected: None,
+            player_tile: 0,
+            player_offset: Vec3::ZERO,
+            heading: 0.0,
             highlight: Vec::new(),
             pick_accum: 0.0,
             white: None,
@@ -250,6 +262,8 @@ impl HexScene {
             terrain_dirty: true,
             fence: false,
             fence_key_was_down: false,
+            navigate: false,
+            nav_key_was_down: false,
         }
     }
 
@@ -288,8 +302,9 @@ impl HexScene {
     }
 
     /// Set the ring count (clamped to `MIN_RINGS‥MAX_RINGS`) and, if it changed,
-    /// rebuild the tile layout and neighbour table and clear the hover/selection
-    /// (tile numbers change with the count).
+    /// rebuild the tile layout and neighbour table, slide the south map out to
+    /// the wider separation, and clear the hover/selection (tile numbers change
+    /// with the count).
     fn set_rings(&mut self, rings: usize) {
         let rings = rings.clamp(MIN_RINGS, MAX_RINGS);
         if rings == self.num_rings {
@@ -298,8 +313,17 @@ impl HexScene {
         self.num_rings = rings;
         self.hexes = build_hex_instances(rings);
         self.within = build_within_neighbors(&self.hexes);
+        // Larger maps need more room — slide the south map out to the new centre
+        // column so the two never overlap, and move both maps' wheels further
+        // south so a bigger map can't draw over them. The rolls are kept.
+        self.north.set_placement(0.0, wheel_z(rings));
+        self.south.set_placement(sep(rings), wheel_z(rings));
         self.hovered = None;
         self.selected = None;
+        self.player_tile = 0; // tile numbers change with the ring count
+        self.player_offset = Vec3::ZERO;
+        self.heading = 0.0;
+
         self.highlight.clear();
         // The tile set changed, so the whole world regenerates (next render,
         // which holds the `&mut Renderer` the mesh upload needs).
@@ -394,15 +418,6 @@ impl HexScene {
         best.map(|(_, n)| n)
     }
 
-    /// World centre of tile `inst` under the current map transforms.
-    fn tile_center(&self, inst: &HexInst, m_right: &Mat4, m_left: &Mat4) -> Vec3 {
-        if inst.left {
-            m_left.transform_point3(inst.center)
-        } else {
-            m_right.transform_point3(inst.center)
-        }
-    }
-
     /// The neighbours of tile `n`: its same-map neighbours ([`Self::within`])
     /// first, then — if it's an equator tile — its across-equator twins from the
     /// deterministic σ-zipper ([`topology::Topology::equator_partners`]). No
@@ -431,65 +446,97 @@ impl HexScene {
         hi
     }
 
-    /// Lay the selected tile's six neighbours flat into its tangent plane,
-    /// aligned to its edges — the "fold-in" for select mode. Each neighbour gets
-    /// a hex-step offset in the selected tile `s`'s plane: same-map neighbours
-    /// land on the exact edge they share (from the logical offset, flip-corrected
-    /// for the left map); across-equator neighbours fill the remaining outward
-    /// edges by world-direction match.
-    fn build_rosette(&self, s: u32, m_right: &Mat4, m_left: &Mat4) -> Rosette {
-        let here = &self.hexes[s as usize];
-        let xform = if here.left { *m_left } else { *m_right };
-        // Edge direction in the flat frame, mirrored when the map is flipped, so
-        // the slot lines up with the tile's *drawn* edge.
-        let flip_dir = |v: Vec3| {
-            if here.flip {
-                Vec3::new(-v.x, v.y, v.z)
-            } else {
-                v
+    /// The neighbour of `tile` in world direction `dir` (unit) and its position in
+    /// `tile`'s horizon layout, or `None` if no neighbour lies that way (a
+    /// pentagon-defect corner with a missing edge). Reads the horizon — same-map
+    /// neighbours and across-equator twins alike — so a crossing onto the south
+    /// map happens on the same outward edge it's drawn on.
+    fn neighbor_in_dir(&self, tile: u32, dir: Vec3) -> Option<(u32, Vec3)> {
+        horizon(&self.hexes, &self.within, self.num_rings, tile)
+            .into_iter()
+            .skip(1) // skip the centre tile itself
+            .map(|(n, off)| (n, off, off.normalize_or_zero().dot(dir)))
+            .filter(|&(_, _, d)| d > 0.5)
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(n, off, _)| (n, off))
+    }
+
+    /// Keep the turtle inside its movement cell: while the offset pokes past a
+    /// cell edge, hand it onto the tile the topology joins there and **reset the
+    /// offset into that tile's frame** (a translation) — within a map and across
+    /// the equator alike. The movement cell tiles **gap-free** (apothem
+    /// `HEX_SPACING/2`, not the smaller visual apothem), so a crossing lands the
+    /// turtle cleanly just inside the next tile.
+    ///
+    /// Crossing happens on the **geometric** edge you walk into (the same edge the
+    /// neighbour is drawn on), so there are no walls on the outward edges — only
+    /// the 12 genuine pentagon-defect corners, where a 6th neighbour truly
+    /// doesn't exist, clamp (and you simply step around them). The seam frame is
+    /// faked, which at 50-mile tiles is invisible.
+    fn resolve_crossings(&mut self) {
+        let cell = HEX_SPACING * 0.5;
+        for _ in 0..4 {
+            let off = self.player_offset;
+            let Some((e, over)) = (0..6)
+                .map(|e| (e, off.dot(edge_normal(e)) - cell))
+                .filter(|&(_, over)| over > 0.0)
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+            else {
+                break; // inside the cell
+            };
+            match self.neighbor_in_dir(self.player_tile, edge_normal(e)) {
+                Some((n, n_off)) => {
+                    // Crossing onto the *other* map means crossing the equator,
+                    // and the south map is **record-flipped** (x-mirror). Carry
+                    // the offset and heading through that flip, or "forward" lands
+                    // pointing back and the turtle ping-pongs across the seam.
+                    let cross_maps =
+                        self.hexes[self.player_tile as usize].flip != self.hexes[n as usize].flip;
+                    self.player_tile = n;
+                    let mut new_off = off - n_off; // reset into the new tile
+                    if cross_maps {
+                        new_off = Vec3::new(-new_off.x, new_off.y, new_off.z);
+                        self.heading = -self.heading;
+                    }
+                    self.player_offset = new_off;
+                }
+                None => {
+                    // Pentagon-defect corner / world edge — clamp just inside.
+                    self.player_offset -= edge_normal(e) * over;
+                    break;
+                }
             }
+        }
+    }
+
+    /// While navigate mode is on, draw the turtle on the **main map** too — at
+    /// the player's actual tile + sub-tile position, riding that map's roll — so
+    /// you can see where on the hemisphere the panel's turtle really is (a check
+    /// on the stitching). Mirrored for the record-flipped south map.
+    fn draw_map_turtle(&self, renderer: &mut Renderer, m_right: &Mat4, m_left: &Mat4) {
+        let inst = &self.hexes[self.player_tile as usize];
+        let xform = if inst.left { m_left } else { m_right };
+        // Offset and heading read in the tile's drawn frame (the south map is
+        // record-flipped, so mirror x and negate the heading).
+        let off = if inst.flip {
+            Vec3::new(-self.player_offset.x, 0.0, self.player_offset.z)
+        } else {
+            self.player_offset
         };
-        let slot_pre = |e: usize| here.center + flip_dir(edge_normal(e)) * HEX_SPACING;
-        let slots_pre: [Vec3; 6] = std::array::from_fn(slot_pre);
-        let w_s = xform.transform_point3(here.center);
-
-        let within = &self.within[s as usize];
-        let all = self.neighbors_of(s);
-        let mut used = [false; 6];
-        let mut out: Vec<(u32, Vec3)> = Vec::with_capacity(6);
-
-        // Same-map neighbours → the edge their logical offset points along.
-        for &n in within {
-            let o = (self.hexes[n as usize].logical - here.logical).normalize_or_zero();
-            let e = (0..6)
-                .filter(|&e| !used[e])
-                .max_by(|&a, &b| o.dot(edge_normal(a)).total_cmp(&o.dot(edge_normal(b))))
-                .unwrap_or(0);
-            used[e] = true;
-            out.push((n, slots_pre[e]));
-        }
-        // Across-equator neighbours → the nearest remaining (outward) edge, by
-        // world direction from the selected tile.
-        for &n in all.iter().filter(|n| !within.contains(n)) {
-            let dir_n = (self.tile_center(&self.hexes[n as usize], m_right, m_left) - w_s)
-                .normalize_or_zero();
-            let e = (0..6)
-                .filter(|&e| !used[e])
-                .max_by(|&a, &b| {
-                    let da = (xform.transform_point3(slots_pre[a]) - w_s).normalize_or_zero();
-                    let db = (xform.transform_point3(slots_pre[b]) - w_s).normalize_or_zero();
-                    dir_n.dot(da).total_cmp(&dir_n.dot(db))
-                })
-                .unwrap_or(0);
-            used[e] = true;
-            out.push((n, slots_pre[e]));
-        }
-        Rosette {
-            center: s,
-            left: here.left,
-            flip: here.flip,
-            slots: out,
-        }
+        let heading = if inst.flip { -self.heading } else { self.heading };
+        // The tile's world position (on its possibly flipped/rolled face), then
+        // lift the marker straight up in **world** space so it sits on top and
+        // stays visible whichever way the map is flipped or rolled.
+        let base = xform.transform_point3(inst.center + off);
+        let pos = base + Vec3::new(0.0, 600.0, 0.0);
+        let s = HEX_SIZE * 0.5;
+        let rot = Mat4::from_rotation_y(heading);
+        let v = |local: Vec3| pos + rot.transform_vector3(local);
+        let tip = v(Vec3::new(0.0, 0.0, s));
+        let bl = v(Vec3::new(s * 0.6, 0.0, -s * 0.7));
+        let br = v(Vec3::new(-s * 0.6, 0.0, -s * 0.7));
+        let col = [0.25, 1.0, 0.85, 1.0];
+        renderer.draw_lines(&[(tip, bl), (bl, br), (br, tip)], col);
     }
 
     /// Per-frame values handed to the HUD script as the `Model` global.
@@ -545,6 +592,14 @@ impl HexScene {
         // Fence-view toggle state + key hint, below the track.
         let fence = format!("Fence [G]: {}", if self.fence { "on" } else { "off" });
         renderer.draw_text(&fence, Vec2::new(SLIDER_X0, SLIDER_Y + 16.0), 18.0, [0.90, 0.95, 1.0, 1.0]);
+        // Navigate-mode state + the tile the turtle is on.
+        let nav = format!(
+            "Navigate [N]: {}   (turtle on {})",
+            if self.navigate { "on — WASD scrolls" } else { "off" },
+            self.player_tile
+        );
+        let nav_color = if self.navigate { [0.4, 1.0, 0.85, 1.0] } else { [0.90, 0.95, 1.0, 1.0] };
+        renderer.draw_text(&nav, Vec2::new(SLIDER_X0, SLIDER_Y + 38.0), 18.0, nav_color);
     }
 
 }
@@ -587,6 +642,12 @@ impl Scene for HexScene {
             self.fence = !self.fence;
         }
         self.fence_key_was_down = g_down;
+        // Navigate mode toggle (N): WASD scrolls the world under the turtle.
+        let n_down = input.key_down(Key::N);
+        if n_down && !self.nav_key_was_down {
+            self.navigate = !self.navigate;
+        }
+        self.nav_key_was_down = n_down;
         let dt_s = dt.as_secs_f32();
 
         // Roll wheels: left-click a wheel to grab it, drag vertically to roll its
@@ -626,6 +687,13 @@ impl Scene for HexScene {
                         Some(n) if self.selected == Some(n) => None,
                         other => other,
                     };
+                    // Drop the navigator's turtle onto the clicked tile's centre,
+                    // facing north.
+                    if let Some(n) = self.selected {
+                        self.player_tile = n;
+                        self.player_offset = Vec3::ZERO;
+                        self.heading = 0.0;
+                    }
                 }
             }
         }
@@ -645,8 +713,9 @@ impl Scene for HexScene {
             self.slider_drag = false;
         }
 
-        // Look: right-drag, with sensitivity/invert applied by the config.
-        if input.mouse_right {
+        // Look: right-drag, with sensitivity/invert applied by the config —
+        // suspended in navigate mode so the camera holds still while you travel.
+        if input.mouse_right && !self.navigate {
             if let Some(prev) = self.last_look_cursor {
                 let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
                 self.yaw -= dyaw;
@@ -657,28 +726,55 @@ impl Scene for HexScene {
             self.last_look_cursor = None;
         }
 
-        // Move: free 6-DOF fly in the camera's facing.
-        let mut motion = Vec3::ZERO;
-        if input.input_active(&self.bindings, Action::MoveForward) {
-            motion += self.move_forward();
-        }
-        if input.input_active(&self.bindings, Action::MoveBackward) {
-            motion -= self.move_forward();
-        }
-        if input.input_active(&self.bindings, Action::StrafeRight) {
-            motion += self.move_right();
-        }
-        if input.input_active(&self.bindings, Action::StrafeLeft) {
-            motion -= self.move_right();
-        }
-        if input.input_active(&self.bindings, Action::MoveUp) {
-            motion += Vec3::Y;
-        }
-        if input.input_active(&self.bindings, Action::MoveDown) {
-            motion -= Vec3::Y;
-        }
-        if motion.length_squared() > 0.0 {
-            self.position += motion.normalize() * self.controls.move_speed * dt_s;
+        if self.navigate {
+            // Navigate mode (Logo-turtle): A/D turn the heading, W/S move along
+            // it. The map stays north-up; the world scrolls under the fixed
+            // turtle. When the offset leaves the current hexagon the player tile
+            // becomes the neighbour the engine joins there — across the equator
+            // seam included — so travel stays continuous.
+            if input.input_active(&self.bindings, Action::StrafeLeft) {
+                self.heading += TURN_SPEED * dt_s; // turn left (toward west)
+            }
+            if input.input_active(&self.bindings, Action::StrafeRight) {
+                self.heading -= TURN_SPEED * dt_s; // turn right (toward east)
+            }
+            // Forward along the heading (0 = north/+Z, +heading toward west/+X).
+            let fwd = Vec3::new(self.heading.sin(), 0.0, self.heading.cos());
+            let mut move_dir = Vec3::ZERO;
+            if input.input_active(&self.bindings, Action::MoveForward) {
+                move_dir += fwd;
+            }
+            if input.input_active(&self.bindings, Action::MoveBackward) {
+                move_dir -= fwd;
+            }
+            if move_dir.length_squared() > 0.0 {
+                self.player_offset += move_dir.normalize() * NAV_SPEED * dt_s;
+                self.resolve_crossings();
+            }
+        } else {
+            // Move: free 6-DOF fly in the camera's facing.
+            let mut motion = Vec3::ZERO;
+            if input.input_active(&self.bindings, Action::MoveForward) {
+                motion += self.move_forward();
+            }
+            if input.input_active(&self.bindings, Action::MoveBackward) {
+                motion -= self.move_forward();
+            }
+            if input.input_active(&self.bindings, Action::StrafeRight) {
+                motion += self.move_right();
+            }
+            if input.input_active(&self.bindings, Action::StrafeLeft) {
+                motion -= self.move_right();
+            }
+            if input.input_active(&self.bindings, Action::MoveUp) {
+                motion += Vec3::Y;
+            }
+            if input.input_active(&self.bindings, Action::MoveDown) {
+                motion -= Vec3::Y;
+            }
+            if motion.length_squared() > 0.0 {
+                self.position += motion.normalize() * self.controls.move_speed * dt_s;
+            }
         }
 
         // Hover hit-test, rate-limited to PICK_HZ (not every frame): ray-cast the
@@ -730,9 +826,11 @@ impl Scene for HexScene {
         self.north.paint_compass(renderer);
         self.south.paint_compass(renderer);
 
-        // When a tile is clicked/selected, fold its six neighbours flat against
-        // its edges (a rosette around the selected tile).
-        let rosette = self.selected.map(|s| self.build_rosette(s, &m_right, &m_left));
+        // When a tile is clicked/selected, snap its neighbours flat against its
+        // edges (the snap map around the selected tile).
+        let snap = self
+            .selected
+            .map(|s| SnapMap::build(&self.hexes, &self.within, self.num_rings, s, &m_right, &m_left));
 
         // GPU handles the tile draw needs, bundled once for the loop.
         let assets = TileAssets { fill_mesh: self.fill_mesh, glyphs: self.glyphs, dot: self.dot };
@@ -745,15 +843,15 @@ impl Scene for HexScene {
         for inst in &self.hexes {
             let own = if inst.left { &m_left } else { &m_right };
             let terrain = self.terrain.get(inst.number as usize);
-            if let Some(ros) = &rosette {
-                // A folded-in neighbour: draw flat at its rosette slot.
-                if let Some(&(_, slot)) = ros.slots.iter().find(|(num, _)| *num == inst.number) {
-                    let rx = if ros.left { &m_left } else { &m_right };
-                    draw_tile(renderer, assets, terrain, slot, Mat4::IDENTITY, rx, ros.flip, inst.number, true);
+            if let Some(sm) = &snap {
+                // A snapped neighbour: draw flat at its slot.
+                if let Some(&(_, slot)) = sm.slots.iter().find(|(num, _)| *num == inst.number) {
+                    let rx = if sm.left { &m_left } else { &m_right };
+                    draw_tile(renderer, assets, terrain, slot, Mat4::IDENTITY, rx, sm.flip, inst.number, true);
                     continue;
                 }
                 // The selected tile itself: its resting spot, highlighted.
-                if ros.center == inst.number {
+                if sm.center == inst.number {
                     draw_tile(renderer, assets, terrain, inst.center, Mat4::IDENTITY, own, inst.flip, inst.number, true);
                     continue;
                 }
@@ -771,6 +869,24 @@ impl Scene for HexScene {
         // Roll wheels, south of each map on its N-S axis (left-drag to roll).
         self.north.paint_wheel(renderer);
         self.south.paint_wheel(renderer);
+
+        // The navigator's horizon panel — the turtle and the tiles the engine
+        // snaps around it, scrolled by the turtle's sub-tile offset — above and
+        // centred between the two maps.
+        SnapMapSegment::draw(
+            renderer,
+            assets,
+            &self.hexes,
+            &self.within,
+            self.num_rings,
+            self.player_tile,
+            self.player_offset,
+            self.heading,
+        );
+        // While navigating, also mark the turtle on the hemisphere map itself.
+        if self.navigate {
+            self.draw_map_turtle(renderer, &m_right, &m_left);
+        }
 
         // Scripted HUD: publish the live model, then draw the script's commands.
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
@@ -844,26 +960,26 @@ mod tests {
     }
 
     #[test]
-    fn select_rosette() {
+    fn snap_map_folds_neighbours() {
         let s = HexScene::new();
         let (mr, ml) = s.map_transforms();
         for n in 0..s.hexes.len() as u32 {
-            let ros = s.build_rosette(n, &mr, &ml);
-            assert_eq!(ros.center, n);
+            let sm = SnapMap::build(&s.hexes, &s.within, s.num_rings, n, &mr, &ml);
+            assert_eq!(sm.center, n);
             // The fold-in places exactly the tile's neighbours — six for most,
             // five for the equator corners.
-            assert_eq!(ros.slots.len(), s.neighbors_of(n).len(), "tile {n} rosette size");
-            let mut got: Vec<u32> = ros.slots.iter().map(|(m, _)| *m).collect();
+            assert_eq!(sm.slots.len(), s.neighbors_of(n).len(), "tile {n} snap size");
+            let mut got: Vec<u32> = sm.slots.iter().map(|(m, _)| *m).collect();
             got.sort();
             let mut want = s.neighbors_of(n);
             want.sort();
-            assert_eq!(got, want, "tile {n} rosette ≠ its neighbours");
+            assert_eq!(got, want, "tile {n} snap ≠ its neighbours");
             // ...each on a distinct edge slot (no two neighbours stacked).
-            let m = ros.slots.len();
+            let m = sm.slots.len();
             for i in 0..m {
                 for j in (i + 1)..m {
                     assert!(
-                        (ros.slots[i].1 - ros.slots[j].1).length() > 1.0,
+                        (sm.slots[i].1 - sm.slots[j].1).length() > 1.0,
                         "tile {n} slots {i},{j} coincide"
                     );
                 }

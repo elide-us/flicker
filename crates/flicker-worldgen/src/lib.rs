@@ -34,13 +34,13 @@ pub mod state;
 
 pub use epoch1::{Epoch1, Epoch1Params};
 pub use epoch2::Epoch2;
-pub use epoch3::Epoch3;
+pub use epoch3::{Epoch3, Partition, Plate};
 pub use epoch4::Epoch4;
 pub use epoch5::Epoch5;
-pub use epoch6::Epoch6;
+pub use epoch6::{watersheds, Epoch6, Watershed};
 pub use field::{CellSample, FieldSampler};
 pub use pipeline::{epoch_stack, six_epoch_stack, EpochCtx, EpochTransform, PassThrough, EPOCHS};
-pub use state::{Biome, Boundary, HexState};
+pub use state::{Biome, Boundary, HexState, LifeStage};
 
 use std::collections::BTreeMap;
 

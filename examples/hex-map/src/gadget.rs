@@ -14,10 +14,6 @@ const ARROW: f32 = 96.0;
 
 /// Radius of the roll wheel handles.
 const WHEEL_RADIUS: f32 = 850.0;
-/// World Z (south) of each map's roll wheel, on the map's N-S axis — south of
-/// the ring-3 extent.
-const RIGHT_WHEEL_Z: f32 = -8000.0;
-const LEFT_WHEEL_Z: f32 = -7000.0;
 /// Screen-pixel radius for hit-testing a wheel against the cursor.
 const WHEEL_PICK_PX: f32 = 90.0;
 /// Roll change per pixel of vertical drag (radians).
@@ -46,13 +42,14 @@ pub struct WheelAxisGadget {
 
 impl WheelAxisGadget {
     /// North/right map: rolls about world Z (`x = 0`); wheel + compass on the
-    /// origin column; starts upright.
-    pub fn north() -> Self {
+    /// origin column; starts upright. `wheel_z` is the wheel's south position
+    /// (scaled to the ring count so the map can't cover it).
+    pub fn north(wheel_z: f32) -> Self {
         Self {
             roll: 0.0,
             roll_sign: 1.0,
             column_x: 0.0,
-            wheel: Vec3::new(0.0, 0.0, RIGHT_WHEEL_Z),
+            wheel: Vec3::new(0.0, 0.0, wheel_z),
             compass_origin: Vec3::ZERO,
             compass_flip: false,
         }
@@ -60,13 +57,13 @@ impl WheelAxisGadget {
 
     /// South/left map: record-flipped about its own column `cx`, rolling the
     /// opposite way; starts rolled to π (facing down). `compass_origin` is the
-    /// reflected map centre.
-    pub fn south(cx: f32, compass_origin: Vec3) -> Self {
+    /// reflected map centre; `wheel_z` the wheel's (ring-scaled) south position.
+    pub fn south(cx: f32, compass_origin: Vec3, wheel_z: f32) -> Self {
         Self {
             roll: std::f32::consts::PI,
             roll_sign: -1.0,
             column_x: cx,
-            wheel: Vec3::new(cx, 0.0, LEFT_WHEEL_Z),
+            wheel: Vec3::new(cx, 0.0, wheel_z),
             compass_origin,
             compass_flip: true,
         }
@@ -82,6 +79,16 @@ impl WheelAxisGadget {
     /// fence fold measures its sides' outward normals from.
     pub fn center(&self) -> Vec3 {
         self.compass_origin
+    }
+
+    /// Move the gadget to a new centre column `cx` (the map's roll column / mirror
+    /// axis) and wheel south-position `wheel_z`: the wheel, the compass, and the
+    /// roll axis all slide to them, keeping the current roll. Used when the ring
+    /// count changes the map separation and extent.
+    pub fn set_placement(&mut self, cx: f32, wheel_z: f32) {
+        self.column_x = cx;
+        self.compass_origin.x = cx;
+        self.wheel = Vec3::new(cx, 0.0, wheel_z);
     }
 
     /// Accumulate a vertical drag (pixels) into the roll, clamped to 0..π.
@@ -200,7 +207,7 @@ fn arrowhead(tip: Vec3, dir: Vec3, size: f32) -> [(Vec3, Vec3); 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{hex_center, left_axis_x, LEFT_AXIS_X, LEFT_MAP_STEPS};
+    use crate::{hex_center, left_center, sep, LEFT_MAP_STEPS};
 
     #[test]
     fn roll() {
@@ -226,12 +233,14 @@ mod tests {
 
         // Left map: a full roll turns the record-flipped tile 19 back upright —
         // its X lands at the un-reflected position, flat again. (±π land the same
-        // place; the negation only flips the *path*, not the endpoint.)
-        let lx = left_axis_x();
+        // place; the negation only flips the *path*, not the endpoint.) The south
+        // map mirrors about, and rolls about, its centre column `cx = sep(rings)`.
+        let cx = sep(3);
+        let c = left_center();
         let logical19 = hex_center(LEFT_MAP_STEPS[0]);
-        let reflected19 = Vec3::new(2.0 * LEFT_AXIS_X - logical19.x, 0.0, logical19.z);
-        let rolled = roll_transform(lx, -PI).transform_point3(reflected19);
-        let upright_x = lx + (logical19.x - hex_center(LEFT_MAP_STEPS[18]).x);
+        let reflected19 = Vec3::new(cx + c.x - logical19.x, 0.0, logical19.z);
+        let rolled = roll_transform(cx, -PI).transform_point3(reflected19);
+        let upright_x = cx + (logical19.x - hex_center(LEFT_MAP_STEPS[18]).x);
         assert!((rolled.x - upright_x).abs() < 1e-1 && rolled.y.abs() < 1e-2);
     }
 }

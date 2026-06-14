@@ -5,6 +5,8 @@ members = [
     "crates/flicker-materials",
     "crates/flicker-worldstate",
     "crates/flicker-worldgen",
+    "crates/flicker-worldgrid",
+    "crates/flicker-world",
     "crates/flicker-primitive",
     "crates/flicker-core",
     "crates/flicker-render",
@@ -23,6 +25,7 @@ members = [
     "examples/voxel-cluster",
     "examples/hex-world",
     "examples/hex-map",
+    "examples/hex-sphere",
 ]
 
 [workspace.package]
@@ -85,6 +88,7 @@ clayengine = { version = "0.1.0", path = "crates/clayengine" }
 flicker-materials = { version = "0.1.0", path = "crates/flicker-materials" }
 flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
 flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
+flicker-worldgrid = { version = "0.1.0", path = "crates/flicker-worldgrid" }
 flicker-primitive = { version = "0.1.0", path = "crates/flicker-primitive" }
 flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
 flicker-render = { version = "0.1.0", path = "crates/flicker-render" }

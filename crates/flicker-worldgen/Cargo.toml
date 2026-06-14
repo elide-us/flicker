@@ -18,3 +18,6 @@ serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# Slice 2: prove the epoch chain runs on the real icosahedral topology
+# (incl. the 5-neighbour pentagon) — the first consumer of the grid crate.
+flicker-worldgrid.workspace = true

@@ -1,0 +1,235 @@
+{
+  "_comment": "Declarative UI layout for flicker-world. Exposed to Lua as the `UI` global (flicker-ui load_ui_json); scripts/world_ui.lua reads it. Colours RGBA 0..1; positions/sizes in HUD pixels (origin top-left). Widget values flow through the engine Model (keyed by param id). hud.epochs[n].params is the tunable-knob list per epoch; ids must match world.rs PARAM_DEFS. Edit and relaunch to restyle.",
+
+  "logo": {
+    "images": ["elideus", "clay"],
+    "fade": 0.55, "hold": 1.1, "fit": 0.55,
+    "backdrop": [0.03, 0.03, 0.05, 1.0]
+  },
+
+  "modal": {
+    "panel": { "w": 340, "h": 300, "bg": [0.08, 0.09, 0.12, 0.97], "border": [0.28, 0.36, 0.50, 1.0] },
+    "title": { "offset_y": 54, "size": 28, "color": [0.92, 0.94, 0.98, 1.0] },
+    "subtitle": { "offset_y": 90, "size": 15, "color": [0.70, 0.75, 0.85, 1.0] },
+    "buttons": {
+      "w": 248, "h": 44, "first_y": 120, "gap_y": 58, "label_size": 18,
+      "cell": [0.13, 0.16, 0.23, 0.97],
+      "hot": [0.24, 0.32, 0.46, 0.98],
+      "label": [0.88, 0.93, 1.0, 1.0]
+    }
+  },
+
+  "screens": {
+    "menu":  { "overlay": [0.05, 0.06, 0.09, 1.0], "title": "FLICKER · WORLD", "items": [ { "id": "start", "label": "Start" }, { "id": "settings", "label": "Settings" }, { "id": "quit", "label": "Quit" } ] },
+    "pause": { "overlay": [0.02, 0.03, 0.05, 0.62], "title": "Paused", "items": [ { "id": "resume", "label": "Resume" }, { "id": "settings", "label": "Settings" }, { "id": "quit", "label": "Quit" } ] }
+  },
+
+  "settings": {
+    "panel": { "w": 720, "h": 440, "bg": [0.08, 0.09, 0.12, 0.98], "border": [0.28, 0.36, 0.50, 1.0] },
+    "title": { "text": "Settings", "offset_y": 34, "size": 26, "color": [0.92, 0.94, 0.98, 1.0] },
+    "nav": [
+      { "id": "camera", "label": "Camera" },
+      { "id": "audio", "label": "Audio" },
+      { "id": "video", "label": "Video" },
+      { "id": "keymap", "label": "Key Mappings" }
+    ],
+    "nav_style": {
+      "x": 24, "y": 80, "row_h": 32, "w": 150, "label_size": 15,
+      "active_bg": [0.18, 0.24, 0.36, 0.95], "active": [0.96, 0.97, 1.0, 1.0],
+      "label": [0.72, 0.78, 0.88, 1.0], "rule": [0.20, 0.26, 0.36, 1.0]
+    },
+    "content": {
+      "x": 196, "y": 80, "row_h": 34, "label_x": 8, "widget_x": 200, "widget_w": 230, "value_x": 448,
+      "label_size": 14, "label_color": [0.80, 0.84, 0.92, 1.0], "value_color": [0.60, 0.66, 0.78, 1.0]
+    },
+    "back": {
+      "x": 24, "y": 388, "w": 130, "h": 36, "label": "Back",
+      "cell": [0.13, 0.16, 0.23, 0.97], "hot": [0.24, 0.32, 0.46, 0.98],
+      "label_color": [0.88, 0.93, 1.0, 1.0], "label_size": 16
+    },
+    "slider_style": { "track": [0.10, 0.11, 0.13, 0.97], "fill": [0.34, 0.55, 0.86, 1.0], "handle": [0.62, 0.80, 1.0, 0.95], "handle_w": 8 },
+    "dropdown_style": { "cell": [0.10, 0.11, 0.13, 0.97], "hot": [0.20, 0.30, 0.44, 0.98], "label": [0.90, 0.90, 0.92, 1.0], "label_size": 13 },
+    "checkbox": { "size": 18, "box": [0.10, 0.11, 0.13, 0.97], "check": [0.40, 0.70, 1.0, 1.0], "border": [0.30, 0.40, 0.55, 1.0] },
+    "pages": {
+      "camera": { "controls": [
+        { "id": "invert_y", "kind": "toggle", "label": "Invert Y" },
+        { "id": "invert_x", "kind": "toggle", "label": "Invert X" },
+        { "id": "mouse_sensitivity", "kind": "slider", "label": "Mouse sensitivity", "min": 0.001, "max": 0.02, "fmt": "%.4f" },
+        { "id": "stick_sensitivity", "kind": "slider", "label": "Stick sensitivity", "min": 0.5, "max": 8.0, "fmt": "%.2f" },
+        { "id": "left_deadzone", "kind": "slider", "label": "L stick deadzone", "min": 0.0, "max": 0.5, "fmt": "%.2f" },
+        { "id": "right_deadzone", "kind": "slider", "label": "R stick deadzone", "min": 0.0, "max": 0.5, "fmt": "%.2f" },
+        { "id": "trigger_threshold", "kind": "slider", "label": "Trigger threshold", "min": 0.1, "max": 0.9, "fmt": "%.2f" },
+        { "id": "deadzone_shape", "kind": "choice", "label": "Deadzone shape", "options": ["Circular", "Per-Axis"] },
+        { "id": "vibration", "kind": "toggle", "label": "Vibration" },
+        { "id": "vibration_intensity", "kind": "slider", "label": "Vibration intensity", "min": 0.0, "max": 1.0, "fmt": "%.2f" }
+      ]},
+      "audio": { "controls": [
+        { "id": "master", "kind": "slider", "label": "Master", "min": 0.0, "max": 1.0, "fmt": "%.2f" },
+        { "id": "music", "kind": "slider", "label": "Music", "min": 0.0, "max": 1.0, "fmt": "%.2f" },
+        { "id": "sfx", "kind": "slider", "label": "SFX", "min": 0.0, "max": 1.0, "fmt": "%.2f" },
+        { "id": "voice", "kind": "slider", "label": "Voice", "min": 0.0, "max": 1.0, "fmt": "%.2f" }
+      ]},
+      "video": { "controls": [
+        { "id": "display_mode", "kind": "choice", "label": "Display mode", "options": ["Windowed", "Borderless", "Exclusive"] },
+        { "id": "resolution", "kind": "choice", "label": "Resolution", "options": ["960×540", "1280×720", "1920×1080", "2560×1440", "Native"] },
+        { "id": "quality", "kind": "choice", "label": "Quality", "options": ["Low", "Medium", "High", "Ultra"] },
+        { "id": "fps_limit", "kind": "choice", "label": "FPS limit", "options": ["30", "60", "120", "144", "Unlimited"] },
+        { "id": "vsync", "kind": "toggle", "label": "VSync" }
+      ]},
+      "keymap": {
+        "row_h": 26, "label_x": 8, "bind_x": 250, "label_size": 14,
+        "label_color": [0.80, 0.84, 0.92, 1.0], "bind_color": [0.62, 0.80, 1.0, 1.0], "hot_bg": [0.18, 0.24, 0.36, 0.6],
+        "hint": "Click a row to rebind. (Engine standard actions.)",
+        "rebind_overlay": {
+          "w": 380, "h": 120, "bg": [0.06, 0.07, 0.10, 0.97], "border": [0.40, 0.50, 0.65, 1.0],
+          "title_size": 17, "title_color": [0.92, 0.94, 0.98, 1.0], "hint_size": 13, "hint_color": [0.60, 0.66, 0.78, 1.0]
+        },
+        "actions": [
+          { "id": "MoveForward", "label": "Move Forward" },
+          { "id": "MoveBackward", "label": "Move Backward" },
+          { "id": "StrafeLeft", "label": "Strafe Left" },
+          { "id": "StrafeRight", "label": "Strafe Right" },
+          { "id": "MoveUp", "label": "Move Up" },
+          { "id": "MoveDown", "label": "Move Down" },
+          { "id": "Jump", "label": "Jump" },
+          { "id": "Sprint", "label": "Sprint" },
+          { "id": "Interact", "label": "Interact" },
+          { "id": "Menu", "label": "Menu" }
+        ]
+      }
+    }
+  },
+
+  "hud": {
+    "capture": { "x": 0, "y": 0, "w": 304, "h": 600 },
+
+    "stats": {
+      "x": 16,
+      "title": { "y": 16, "size": 22, "color": [0.92, 0.94, 0.98, 1.0] },
+      "cells": { "y": 48, "size": 15, "color": [0.72, 0.84, 0.96, 1.0] },
+      "seed":  { "y": 70, "size": 15, "color": [0.96, 0.86, 0.60, 1.0] },
+      "view":  { "y": 92, "size": 15, "color": [0.78, 0.80, 0.98, 1.0] }
+    },
+
+    "controls": {
+      "label_x": 16,
+      "widget_x": 120,
+      "label_size": 14,
+      "label_color": [0.78, 0.81, 0.86, 1.0],
+
+      "view":   { "label": "Field", "y": 120, "options": ["Elevation", "Biome", "Plates", "Temperature", "Precipitation", "Prebiotic", "Life", "Deposits", "Flow", "Sediment", "Watersheds", "Composition", "Crust", "Terrain"], "w": 150, "h": 22 },
+      "freq":   { "label": "Grid", "y": 152, "min": 6, "max": 48, "step": 4, "w": 150, "h": 24 },
+      "epoch":  { "label": "Epoch", "y": 184, "min": 1, "max": 6, "step": 1, "w": 150, "h": 24 },
+      "reseed": { "label": "New seed", "y": 216, "w": 150, "h": 26 },
+
+      "stepper_style": {
+        "box": [0.10, 0.11, 0.13, 0.97],
+        "btn": [0.20, 0.30, 0.44, 0.98],
+        "label": [0.90, 0.90, 0.92, 1.0],
+        "label_size": 15
+      },
+      "button_style": {
+        "cell": [0.13, 0.16, 0.23, 0.97],
+        "hot": [0.22, 0.30, 0.44, 0.98],
+        "label": [0.86, 0.92, 1.0, 1.0],
+        "label_size": 14
+      },
+      "dropdown_style": {
+        "cell": [0.10, 0.11, 0.13, 0.97],
+        "hot": [0.20, 0.30, 0.44, 0.98],
+        "label": [0.90, 0.90, 0.92, 1.0],
+        "label_size": 13
+      }
+    },
+
+    "params": {
+      "label_x": 16,
+      "widget_x": 120,
+      "header_y": 258,
+      "header_size": 14,
+      "header_color": [0.85, 0.85, 0.70, 1.0],
+      "origin_y": 280,
+      "row_h": 24,
+      "label_size": 13,
+      "label_color": [0.78, 0.81, 0.86, 1.0],
+      "value_size": 12,
+      "value_color": [0.62, 0.68, 0.80, 1.0],
+      "slider_w": 110,
+      "slider_style": {
+        "track": [0.10, 0.11, 0.13, 0.97],
+        "fill": [0.34, 0.55, 0.86, 1.0],
+        "handle": [0.62, 0.80, 1.0, 0.95],
+        "handle_w": 8
+      }
+    },
+
+    "elements": {
+      "header": "ELEMENT MIX (relative · Epoch 1)",
+      "header_y": 386,
+      "header_size": 14,
+      "header_color": [0.85, 0.85, 0.70, 1.0],
+      "origin_y": 406,
+      "row_h": 22,
+      "cols": 2,
+      "col_x": [16, 158],
+      "label_w": 26,
+      "slider_w": 70,
+      "label_size": 13,
+      "label_color": [0.80, 0.84, 0.92, 1.0],
+      "max": 60.0,
+      "items": [
+        { "sym": "O" }, { "sym": "Si" }, { "sym": "Al" }, { "sym": "Fe" },
+        { "sym": "Ca" }, { "sym": "Na" }, { "sym": "K" }, { "sym": "Ti" },
+        { "sym": "C" }, { "sym": "H" }, { "sym": "P" }, { "sym": "S" },
+        { "sym": "Cl" }, { "sym": "N" }
+      ]
+    },
+
+    "epochs": [
+      { "label": "Composition", "views": ["Composition"], "params": [
+        { "id": "e1_equator_bias", "label": "Equator heavy", "min": 0.0, "max": 3.0 },
+        { "id": "e1_pole_bias", "label": "Pole volatile", "min": 0.0, "max": 3.0 },
+        { "id": "e1_contrast", "label": "Province contrast", "min": 1.0, "max": 6.0 },
+        { "id": "e1_frequency", "label": "Province scale", "min": 0.5, "max": 6.0 }
+      ]},
+      { "label": "Differentiation", "views": ["Crust", "Composition"], "params": [
+        { "id": "e2_crust_density_max", "label": "Crust density cap", "min": 2.5, "max": 5.0 },
+        { "id": "e2_polar_thickening", "label": "Polar thickening", "min": 0.0, "max": 1.0 }
+      ]},
+      { "label": "Tectonics", "views": ["Elevation", "Plates", "Terrain", "Crust", "Composition"], "params": [
+        { "id": "e3_plates", "label": "Plates", "min": 2.0, "max": 24.0, "fmt": "%.0f" },
+        { "id": "e3_continental_fraction", "label": "Continental frac", "min": 0.0, "max": 1.0 },
+        { "id": "e3_mountain_uplift", "label": "Mountain uplift", "min": 0.0, "max": 1.5 },
+        { "id": "e3_rift_drop", "label": "Rift drop", "min": 0.0, "max": 1.0 },
+        { "id": "e3_hotspots", "label": "Hotspots", "min": 0.0, "max": 20.0, "fmt": "%.0f" },
+        { "id": "e3_hotspot_uplift", "label": "Hotspot uplift", "min": 0.0, "max": 1.5 },
+        { "id": "e3_hotspot_trail", "label": "Hotspot trail", "min": 0.05, "max": 1.5 },
+        { "id": "e3_cycles", "label": "Drift time", "min": 1.0, "max": 8.0, "fmt": "%.0f" }
+      ]},
+      { "label": "Hydrosphere", "views": ["Elevation", "Temperature", "Precipitation", "Prebiotic", "Terrain"], "params": [
+        { "id": "e4_hydration", "label": "Hydration", "min": 0.0, "max": 3.0 },
+        { "id": "e4_equator_temp", "label": "Equator C", "min": 0.0, "max": 50.0, "fmt": "%.0f" },
+        { "id": "e4_pole_temp", "label": "Pole C", "min": -60.0, "max": 10.0, "fmt": "%.0f" },
+        { "id": "e4_axial_tilt", "label": "Axial tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f" },
+        { "id": "e4_vapor_scale", "label": "Rain / humidity", "min": 0.0, "max": 3.0 },
+        { "id": "e4_cycles", "label": "Chem cycles", "min": 1.0, "max": 8.0, "fmt": "%.0f" },
+        { "id": "e4_prebiotic_rate", "label": "Precursor rate", "min": 0.0, "max": 1.0 }
+      ]},
+      { "label": "Mineralization", "views": ["Life", "Terrain", "Elevation", "Temperature", "Prebiotic"], "params": [
+        { "id": "e5_max_veins", "label": "Max veins", "min": 0.0, "max": 256.0, "fmt": "%.0f" },
+        { "id": "e5_vein_threshold", "label": "Vein threshold", "min": 0.0, "max": 1.0 },
+        { "id": "e5_microbial", "label": "Life threshold", "min": 0.02, "max": 0.5 },
+        { "id": "e5_vent_life", "label": "Vent boost", "min": 0.0, "max": 3.0 }
+      ]},
+      { "label": "Erosion", "views": ["Biome", "Elevation", "Flow", "Sediment", "Watersheds", "Deposits", "Terrain", "Life", "Temperature", "Precipitation"], "params": [
+        { "id": "e6_rain", "label": "Rain", "min": 0.0, "max": 3.0 },
+        { "id": "e6_erosion_rate", "label": "Erosion rate", "min": 0.0, "max": 0.1, "fmt": "%.3f" },
+        { "id": "e6_iterations", "label": "Iterations", "min": 1.0, "max": 30.0, "fmt": "%.0f" },
+        { "id": "e6_flora", "label": "Flora threshold", "min": 0.0, "max": 1.0 },
+        { "id": "e6_organics", "label": "Peat rate", "min": 0.0, "max": 0.2, "fmt": "%.3f" },
+        { "id": "e6_decomposer", "label": "Decomposer onset", "min": 0.0, "max": 1.0 },
+        { "id": "e6_carbonate", "label": "Carbonate onset", "min": 0.0, "max": 1.0 }
+      ]}
+    ]
+  }
+}

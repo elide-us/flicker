@@ -1,0 +1,23 @@
+[package]
+name = "flicker-world"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The world application — an interactive viewer consolidating the app
+# architecture from examples/hex-world + hex-map onto the icosahedral grid
+# (flicker-worldgrid). Scene-based (loading → world); renders the sphere coloured
+# by world-gen epoch fields with an orbit camera. The Lua UI and logo art are
+# brought in next (still rough); this slice is the runnable viewer. Name not final.
+[dependencies]
+flicker = { path = "../flicker" }
+flicker-worldgrid.workspace = true
+flicker-worldgen.workspace = true
+flicker-materials.workspace = true
+glam.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true

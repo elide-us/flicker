@@ -96,7 +96,10 @@ impl Default for Epoch1Params {
             density_ref: 8.0,
             frequency: 2.2,
             octaves: 2,
-            contrast: 3.0,
+            // Sharper provinces (was 3.0) so regions reach stronger single-element
+            // dominance — including the heavy/iron-rich regions that give Epoch 2 a
+            // wider crust-buoyancy spread for Epoch 3's isostasy to carve.
+            contrast: 4.0,
             noise_floor: 0.05,
         }
     }

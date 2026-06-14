@@ -1,0 +1,14 @@
+[package]
+name = "flicker-worldgrid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The planet topology substrate (see docs/hex-sphere-handoff.md). Produces the
+# icosahedral hex-grid adjacency — per-cell direction, neighbours (5 for the 12
+# pentagon defects, 6 otherwise), area and a pentagon flag — to feed the
+# already topology-agnostic world-gen `EpochCtx { dirs, neighbours, .. }`. Owns
+# NO heightmaps, storage, erosion, or rendering. Slice 1: one pentagon-centered
+# patch; the full ISEA sphere + sharding lands in a later slice.
+[dependencies]
+glam.workspace = true

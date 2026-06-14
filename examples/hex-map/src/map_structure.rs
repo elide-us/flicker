@@ -70,15 +70,17 @@ pub struct MapStructure {
 }
 
 impl MapStructure {
-    /// The north/right map: upright, rolling about world Z.
-    pub fn north() -> Self {
-        Self { is_south: false, gadget: WheelAxisGadget::north() }
+    /// The north/right map: upright, rolling about world Z. `wheel_z` is the
+    /// (ring-scaled) south position of its roll wheel.
+    pub fn north(wheel_z: f32) -> Self {
+        Self { is_south: false, gadget: WheelAxisGadget::north(wheel_z) }
     }
 
     /// The south/left map: record-flipped about its own column `cx`, starting
-    /// rolled to π. `compass_origin` is the reflected map centre.
-    pub fn south(cx: f32, compass_origin: Vec3) -> Self {
-        Self { is_south: true, gadget: WheelAxisGadget::south(cx, compass_origin) }
+    /// rolled to π. `compass_origin` is the reflected map centre; `wheel_z` the
+    /// (ring-scaled) south position of its roll wheel.
+    pub fn south(cx: f32, compass_origin: Vec3, wheel_z: f32) -> Self {
+        Self { is_south: true, gadget: WheelAxisGadget::south(cx, compass_origin, wheel_z) }
     }
 
     /// Whether tile `inst` belongs to this map. (Consumed by the draw/pick split
@@ -86,6 +88,14 @@ impl MapStructure {
     #[allow(dead_code)]
     pub fn owns(&self, inst: &HexInst) -> bool {
         inst.left == self.is_south
+    }
+
+    /// Slide the whole unit — tiles' roll axis, wheel, and compass — to a new
+    /// centre column `cx` and wheel south-position `wheel_z`, keeping its roll.
+    /// Called when the ring count changes the map separation and extent so the
+    /// map and its gadget move together.
+    pub fn set_placement(&mut self, cx: f32, wheel_z: f32) {
+        self.gadget.set_placement(cx, wheel_z);
     }
 
     /// This map's roll/placement transform — shared by draw and pick so they

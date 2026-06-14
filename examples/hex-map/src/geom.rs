@@ -18,11 +18,33 @@ pub const HEX_GAP: f32 = 384.0;
 /// Centre-to-centre distance for edge-adjacent hexes, including the gap.
 pub const HEX_SPACING: f32 = 2.0 * APOTHEM + HEX_GAP;
 
-/// X of the vertical axis the left chart is record-flipped about. Logical
-/// positions reflect through it (`x → 2·axis − x`) to land west (screen-left)
-/// of the first map; combined with each tile's mirror that's a true reflection.
-/// Wide enough that the two (now ring-3) maps clear each other.
-pub const LEFT_AXIS_X: f32 = 4.5 * HEX_SPACING;
+/// Empty world space between the two maps' nearest extents, so they never
+/// overlap as the ring count grows.
+const CLEAR_GAP: f32 = 2500.0;
+/// How far south of a map's outer extent its roll wheel sits.
+const WHEEL_MARGIN: f32 = 600.0;
+
+/// How far a `rings`-ring map reaches from its centre — the point-to-centre
+/// extent (`rings` whole steps plus the corner point). The separation and the
+/// wheel position both scale off this so larger maps stay clear.
+fn map_radius(rings: usize) -> f32 {
+    rings as f32 * HEX_SPACING + HEX_SIZE
+}
+
+/// World X of the south (left) map's **centre column** for `rings` rings — the
+/// separation between the two map centres (north at `x = 0`, south at `x =
+/// sep`). The south map is mirror-flipped about, and rolls about, this column,
+/// and its compass sits on it. It grows with the ring count (two map radii plus
+/// a gap) so the maps stay apart at any ring count.
+pub fn sep(rings: usize) -> f32 {
+    2.0 * map_radius(rings) + CLEAR_GAP
+}
+
+/// World Z (south) of a map's roll wheel for `rings` rings — just south of the
+/// map's outer extent, so a larger map never draws over its own wheel.
+pub fn wheel_z(rings: usize) -> f32 {
+    -(map_radius(rings) + WHEEL_MARGIN)
+}
 
 /// Material index of the hex face fill — CLOUD_MID, a neutral mid-grey in the
 /// mesh palette (so the fill reads grey, not coloured).
@@ -59,7 +81,7 @@ pub const HEX_STEPS: [&[usize]; 19] = [
 
 /// The "left map": tiles placed by the user's connection rules, each entry the
 /// tile's *logical* path from the first map's origin. The whole chart is drawn
-/// **record-flipped** about [`LEFT_AXIS_X`] (logical X reflects, and each tile
+/// **record-flipped** about the south map's centre column (logical X reflects, and each tile
 /// mirrors — `draw_hex(.., flip=true)`). It is a full 19-tile hexagon around the
 /// centre at logical (√3/2, ½): ring-2 (19–30), ring-1 (31–36), centre (37).
 /// Ring-2: seam/west column 19–21 (aligned with the first map's 18/7/8 at the
@@ -182,10 +204,13 @@ pub fn build_hex_instances(rings: usize) -> Vec<HexInst> {
         }
     }
 
-    // Left map: outer ring inward, then its centre (record-flipped, the drawn
-    // position reflected west across LEFT_AXIS_X so it sits screen-left).
-    let reflect = |p: Vec3| Vec3::new(2.0 * LEFT_AXIS_X - p.x, p.y, p.z);
+    // Left map: outer ring inward, then its centre. Record-flipped about the
+    // south map's own centre column `cx = sep(rings)` — each tile mirrors west of
+    // it and the centre lands exactly on `cx` (its roll column), so the map sits
+    // clear, screen-left, however many rings.
+    let cx = sep(rings);
     let c = left_center();
+    let reflect = |p: Vec3| Vec3::new(cx + c.x - p.x, p.y, p.z);
     for k in (1..=rings).rev() {
         for off in left_ring(k) {
             push(&mut v, c + off, reflect(c + off), true, true);
@@ -507,8 +532,9 @@ mod tests {
             assert!(((p(i) - centre).length() / s - 1.0).abs() < 1e-3, "tile {}", i + 19);
         }
 
-        // The chart is drawn reflected to the west (screen-left).
-        assert!(LEFT_AXIS_X > 0.0);
+        // The chart is drawn reflected to the west (screen-left), and the
+        // separation grows with the ring count so larger maps stay clear.
+        assert!(sep(1) > 0.0 && sep(2) > sep(1) && sep(3) > sep(2));
     }
 
     #[test]
