@@ -11,6 +11,7 @@
 //! engine text for now. See `docs/flicker-world-handoff.md`.
 
 mod camera;
+mod celestial;
 mod color;
 mod globe;
 mod scene;

@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 
 use glam::Vec3;
 
-use crate::pipeline::{EpochCtx, EpochTransform};
+use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
 use crate::state::{Boundary, HexState};
 
 /// Epoch 3 parameters.
@@ -52,12 +52,12 @@ pub struct Epoch3 {
     /// continental craton reaches. Sea floor ages from ~0 at a divergent ridge up
     /// toward this at the far (subducting) margin.
     pub max_age: f32,
-    /// Within-epoch **drift time** — how many procedural cycles of plate motion
-    /// elapse. Displacement = rate × time, so more cycles accumulate taller
-    /// convergent belts, deeper rifts, and **longer hotspot island chains** (the
-    /// plate has drifted further over the plume). `1` is the baseline (one cycle =
-    /// today's output unchanged). The first concrete per-epoch length control.
-    pub cycles: u32,
+    /// Within-epoch **drift time** on the shared clock — how long the plates move.
+    /// Displacement = rate × time, so more time accumulates taller convergent belts,
+    /// deeper rifts, and **longer hotspot island chains** (the plate has drifted
+    /// further over the plume). Normalised to [`NOMINAL_DURATION`], so the nominal
+    /// value reproduces today's output.
+    pub duration: u32,
 }
 
 impl Default for Epoch3 {
@@ -79,7 +79,7 @@ impl Default for Epoch3 {
             hotspot_uplift: 0.6,
             hotspot_trail: 0.4,
             max_age: 200.0,
-            cycles: 1,
+            duration: NOMINAL_DURATION,
         }
     }
 }
@@ -242,8 +242,9 @@ impl EpochTransform for Epoch3 {
 
         // Within-epoch drift time: motion is a *rate*, so accumulated deformation
         // (uplift / rift) and the distance a plate has carried off a hotspot both
-        // scale with elapsed cycles. `cycles == 1` leaves the rate as-is.
-        let drift = self.cycles.max(1) as f32;
+        // scale with elapsed time. Normalised to the nominal duration, so the
+        // nominal value leaves the rate as-is (today's output).
+        let drift = self.duration as f32 / NOMINAL_DURATION as f32;
 
         // 2. Per hex: base elevation by crust buoyancy (isostasy); boundary by the
         //    strongest relative motion across a shared edge; add mountains / rifts /
@@ -555,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn more_drift_cycles_accumulate_more_relief() {
+    fn more_drift_time_accumulates_more_relief() {
         let n = 60;
         let (dirs, neighbors) = ring(n);
         let ctx = ctx_for(&dirs, &neighbors);
@@ -563,13 +564,13 @@ mod tests {
         // Positive relief: convergent uplift + hotspot chains. With hotspots on,
         // longer drift time grows the chains and the belts.
         let relief = |layer: &[HexState]| layer.iter().map(|s| s.elevation.max(0.0)).sum::<f32>();
-        let young = Epoch3 { hotspots: 6, hotspot_uplift: 1.0, cycles: 1, ..Epoch3::default() }
+        let young = Epoch3 { hotspots: 6, hotspot_uplift: 1.0, duration: 1, ..Epoch3::default() }
             .apply(&ctx, &prev);
-        let old = Epoch3 { hotspots: 6, hotspot_uplift: 1.0, cycles: 6, ..Epoch3::default() }
+        let old = Epoch3 { hotspots: 6, hotspot_uplift: 1.0, duration: 10, ..Epoch3::default() }
             .apply(&ctx, &prev);
         assert!(
             relief(&old) > relief(&young),
-            "more drift cycles should accumulate more relief ({} vs {})",
+            "more drift time should accumulate more relief ({} vs {})",
             relief(&old),
             relief(&young)
         );

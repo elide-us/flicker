@@ -23,7 +23,7 @@
 //! list) is a later refinement — the per-hex membership is enough to render and
 //! erode against.
 
-use crate::pipeline::{EpochCtx, EpochTransform};
+use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
 use crate::state::{Boundary, HexState, LifeStage};
 
 /// Epoch 5 parameters.
@@ -56,6 +56,11 @@ pub struct Epoch5 {
     /// How strongly a hydrothermal vent boosts the precursor→life transition (the
     /// classic origin-of-life cradle): potential = `prebiotic × (1 + boost × hydro)`.
     pub vent_life_boost: f32,
+    /// Within-epoch **mineralization time** on the shared clock — how long the
+    /// hydrothermal system circulates. Normalised to [`NOMINAL_DURATION`]; the
+    /// nominal value is the baseline, longer matures **longer veins** carrying
+    /// **more metal** up into the crust.
+    pub duration: u32,
 }
 
 impl Default for Epoch5 {
@@ -71,6 +76,7 @@ impl Default for Epoch5 {
             deposit_fraction: 0.35,
             microbial_threshold: 0.12,
             vent_life_boost: 1.0,
+            duration: NOMINAL_DURATION,
         }
     }
 }
@@ -122,6 +128,12 @@ impl EpochTransform for Epoch5 {
             hydro[b].partial_cmp(&hydro[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
         });
 
+        // Mineralization time: longer circulation matures longer veins carrying
+        // more metal. Normalised so the nominal duration is today's output.
+        let maturity = self.duration as f32 / NOMINAL_DURATION as f32;
+        let max_vein_len = self.max_vein_len as f32 * maturity;
+        let deposit_fraction = self.deposit_fraction * maturity as f64;
+
         let mut on_vein = vec![false; n];
         let mut veins = 0usize;
         for &src in &sources {
@@ -132,7 +144,7 @@ impl EpochTransform for Epoch5 {
                 continue;
             }
             // Length scales with the source's heat; min 2 so a vein is a chain.
-            let len = (2.0 + hydro[src] * self.max_vein_len as f32).round() as usize;
+            let len = (2.0 + hydro[src] * max_vein_len).round() as usize;
             let path = self.trace(src, &hydro, ctx, &on_vein, len);
             if path.len() < 2 {
                 continue;
@@ -148,7 +160,7 @@ impl EpochTransform for Epoch5 {
                 let conc = 1.0 - 0.85 * (step as f32 / last); // 1.0 .. 0.15
                 let crust_total = out[h].crust.total();
                 if crust_total > 0.0 {
-                    let add = self.deposit_fraction * crust_total * conc as f64;
+                    let add = deposit_fraction * crust_total * conc as f64;
                     out[h].crust.add(metal, add);
                 }
                 // Strongest membership wins where veins cross.
@@ -328,6 +340,24 @@ mod tests {
         let members = out.iter().filter(|s| s.vein_strength > 0.0).count();
         assert!(cores >= 1, "no vein core");
         assert!(members > cores, "veins never extended past their source hex");
+    }
+
+    #[test]
+    fn longer_mineralization_pumps_more_metal_into_the_crust() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e3) = through_epoch3(&t, &dirs, &neighbors);
+        // Veins add metal to the crust; longer circulation runs longer veins with a
+        // larger deposit fraction, so the total crust mass grows.
+        let crust_mass = |out: &[HexState]| out.iter().map(|s| s.crust.total()).sum::<f64>();
+        let brief = Epoch5 { duration: 1, ..Epoch5::default() }.apply(&ctx, &e3);
+        let mature = Epoch5 { duration: 10, ..Epoch5::default() }.apply(&ctx, &e3);
+        assert!(
+            crust_mass(&mature) > crust_mass(&brief),
+            "longer mineralization should pump more vein metal into the crust ({} vs {})",
+            crust_mass(&mature),
+            crust_mass(&brief)
+        );
     }
 
     #[test]

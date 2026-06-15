@@ -26,7 +26,7 @@ use flicker_materials::PhysicalState;
 use flicker_worldstate::Composition;
 
 use crate::noise::fbm;
-use crate::pipeline::{EpochCtx, EpochTransform};
+use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
 use crate::state::{Biome, HexState, LifeStage};
 
 /// Carbon — coal (on land) / oil (under sea) where organics escape decomposition.
@@ -66,10 +66,17 @@ pub fn watersheds(layer: &[HexState]) -> Vec<Watershed> {
         .collect()
 }
 
+/// Erosion–deposition passes run at the [nominal duration][NOMINAL_DURATION]; the
+/// actual pass count scales with [`Epoch6::duration`] (so the default reproduces
+/// today's eight passes).
+const NOMINAL_EROSION_PASSES: f32 = 8.0;
+
 /// Epoch 6 parameters.
 pub struct Epoch6 {
-    /// Erosion–deposition passes over the hex graph.
-    pub iterations: u32,
+    /// Within-epoch **erosion time** on the shared clock — how long weathering
+    /// runs. Normalised to [`NOMINAL_DURATION`]; the nominal value yields the
+    /// baseline pass count, longer incises more and buries more organics.
+    pub duration: u32,
     /// Base rainfall delivered to every hex each pass (the flow-accumulation
     /// unit).
     pub rain: f32,
@@ -111,7 +118,7 @@ pub struct Epoch6 {
 impl Default for Epoch6 {
     fn default() -> Self {
         Self {
-            iterations: 8,
+            duration: NOMINAL_DURATION,
             rain: 1.0,
             erosion_rate: 0.018,
             flow_exp: 0.8,
@@ -139,6 +146,9 @@ impl EpochTransform for Epoch6 {
             return Vec::new();
         }
         let sea = prev[0].sea_level;
+        // Erosion time → pass count: the nominal duration yields the baseline passes.
+        let passes =
+            ((self.duration as f32 / NOMINAL_DURATION as f32) * NOMINAL_EROSION_PASSES).round().max(1.0) as u32;
 
         let mut elev: Vec<f32> = prev.iter().map(|s| s.elevation).collect();
         let mut sediment = vec![0.0f32; n];
@@ -149,7 +159,7 @@ impl EpochTransform for Epoch6 {
             .collect();
 
         let mut flow = vec![self.rain; n];
-        for _ in 0..self.iterations.max(1) {
+        for _ in 0..passes {
             // Process hexes high → low so each is handled before its outflow.
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_by(|&a, &b| {
@@ -281,7 +291,7 @@ impl EpochTransform for Epoch6 {
                 };
                 s.life_stage = s.life_stage.max(supported);
                 s.biomass = s.biomass.max(land_biomass);
-                s.organics = s.biomass * self.organics_rate * self.iterations.max(1) as f32;
+                s.organics = s.biomass * self.organics_rate * passes as f32;
 
                 // Preservation into the distinct `deposits` ledger. Coal/oil: the
                 // fraction of dead organics that escaped late decomposers buries as

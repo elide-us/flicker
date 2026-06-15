@@ -19,7 +19,7 @@ use std::cmp::Ordering;
 use flicker_materials::{Element, ElementId, PhysicalState, Tables};
 use flicker_worldstate::Composition;
 
-use crate::pipeline::{EpochCtx, EpochTransform};
+use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
 use crate::state::{HexState, LifeStage};
 
 /// The volcanic volatile-formers that outgas into the atmosphere: H (→ water
@@ -88,10 +88,10 @@ pub struct Epoch4 {
     /// planet's air-inventory scale (so the mix is stable regardless of how much
     /// volatile mass the volcanic hexes happened to carry).
     pub atmosphere_mass: f64,
-    /// Within-epoch **cycles** for the chemistry that accumulates over time —
-    /// today gates how long prebiotic precursors brew. `1` is the baseline. (The
-    /// per-epoch length control, threaded into the hydrosphere.)
-    pub cycles: u32,
+    /// Within-epoch **chemistry time** on the shared clock — how long prebiotic
+    /// precursors brew. Normalised to [`NOMINAL_DURATION`], so the nominal value is
+    /// the baseline; a longer hydrosphere era accumulates more precursors.
+    pub duration: u32,
     /// How fast prebiotic precursor compounds accumulate per cycle in a perfect
     /// cradle (warm shallow organic water). `0` disables prebiotic chemistry.
     pub prebiotic_rate: f32,
@@ -108,7 +108,7 @@ impl Default for Epoch4 {
             vapor_scale: 1.0,
             moisture_spread: 3,
             atmosphere_mass: 1000.0,
-            cycles: 1,
+            duration: NOMINAL_DURATION,
             prebiotic_rate: 0.3,
         }
     }
@@ -212,7 +212,7 @@ impl EpochTransform for Epoch4 {
         // Per hex: warm air over water is humid → precipitation + water vapor in
         // the local atmosphere. Cold poles and dry interiors stay arid.
         let warm_ref = self.equator_temp.max(1.0);
-        let chem_cycles = self.cycles.max(1) as f32;
+        let chem = (self.duration as f32 / NOMINAL_DURATION as f32).max(1e-3);
         for (i, s) in out.iter_mut().enumerate() {
             let warmth = (s.temperature / warm_ref).clamp(0.0, 1.0);
             // Atmospheric humidity: warm air holds more water vapor (clouds / the
@@ -240,7 +240,7 @@ impl EpochTransform for Epoch4 {
             };
             let organic = organic_share(s.surface());
             let energy = warmth * (1.0 + s.volcanic);
-            s.prebiotic = (self.prebiotic_rate * chem_cycles * energy * wet * organic).clamp(0.0, 1.0);
+            s.prebiotic = (self.prebiotic_rate * chem * energy * wet * organic).clamp(0.0, 1.0);
             if s.prebiotic >= PREBIOTIC_STAGE {
                 s.life_stage = LifeStage::Prebiotic;
             }
@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn more_cycles_brew_more_precursors() {
+    fn more_chem_time_brews_more_precursors() {
         let t = tables();
         let dirs = [Vec3::X, Vec3::X, Vec3::X, Vec3::X, Vec3::X];
         let neighbors: [Vec<u32>; 5] = [vec![], vec![], vec![], vec![], vec![]];
@@ -538,11 +538,11 @@ mod tests {
             s
         };
         let prev = [mk(-1.0), mk(-0.3), mk(-0.2), mk(0.4), mk(0.5)];
-        let young = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { cycles: 1, ..Epoch4::default() }).apply(&ctx, &prev);
-        let old = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { cycles: 4, ..Epoch4::default() }).apply(&ctx, &prev);
+        let young = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { duration: 1, ..Epoch4::default() }).apply(&ctx, &prev);
+        let old = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { duration: 10, ..Epoch4::default() }).apply(&ctx, &prev);
         assert!(
             old[1].prebiotic > young[1].prebiotic,
-            "more chemistry cycles should brew more precursors in the cradle"
+            "more chemistry time should brew more precursors in the cradle"
         );
     }
 

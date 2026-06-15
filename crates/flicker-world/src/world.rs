@@ -51,6 +51,7 @@ pub const PARAM_DEFS: &[(usize, &str, f64, f64, f64)] = &[
     // Epoch 2 — differentiation.
     (1, "e2_crust_density_max", 3.5, 2.5, 5.0),
     (1, "e2_polar_thickening", 0.3, 0.0, 1.0),
+    (1, "e2_duration", 5.0, 1.0, 10.0),
     // Epoch 3 — tectonics (incl. hotspot volcanism).
     (2, "e3_plates", 8.0, 2.0, 24.0),
     (2, "e3_continental_fraction", 0.4, 0.0, 1.0),
@@ -59,24 +60,25 @@ pub const PARAM_DEFS: &[(usize, &str, f64, f64, f64)] = &[
     (2, "e3_hotspots", 6.0, 0.0, 20.0),
     (2, "e3_hotspot_uplift", 0.6, 0.0, 1.5),
     (2, "e3_hotspot_trail", 0.4, 0.05, 1.5),
-    (2, "e3_cycles", 1.0, 1.0, 8.0),
+    (2, "e3_duration", 5.0, 1.0, 10.0),
     // Epoch 4 — hydrosphere (incl. axial tilt).
     (3, "e4_hydration", 1.0, 0.0, 3.0),
     (3, "e4_equator_temp", 28.0, 0.0, 50.0),
     (3, "e4_pole_temp", -25.0, -60.0, 10.0),
     (3, "e4_axial_tilt", 23.5, 0.0, 90.0),
     (3, "e4_vapor_scale", 1.0, 0.0, 3.0),
-    (3, "e4_cycles", 1.0, 1.0, 8.0),
+    (3, "e4_duration", 5.0, 1.0, 10.0),
     (3, "e4_prebiotic_rate", 0.3, 0.0, 1.0),
     // Epoch 5 — mineralization + microbial life.
     (4, "e5_max_veins", 64.0, 0.0, 256.0),
     (4, "e5_vein_threshold", 0.35, 0.0, 1.0),
     (4, "e5_microbial", 0.12, 0.02, 0.5),
     (4, "e5_vent_life", 1.0, 0.0, 3.0),
+    (4, "e5_duration", 5.0, 1.0, 10.0),
     // Epoch 6 — erosion + flora.
     (5, "e6_rain", 1.0, 0.0, 3.0),
     (5, "e6_erosion_rate", 0.018, 0.0, 0.1),
-    (5, "e6_iterations", 8.0, 1.0, 30.0),
+    (5, "e6_duration", 5.0, 1.0, 10.0),
     (5, "e6_flora", 0.45, 0.0, 1.0),
     (5, "e6_organics", 0.05, 0.0, 0.2),
     (5, "e6_decomposer", 0.6, 0.0, 1.0),
@@ -196,6 +198,107 @@ pub fn generate(tables: &Tables, params: &WorldParams, freq: u32, seed: u64) -> 
     generate_with_seeds(tables, params, freq, &seed_chain(seed))
 }
 
+/// Build the five tunable epoch transforms (2–6) from the current knobs. Shared by
+/// the full chain ([`generate_with_seeds`]) and the single-epoch in-phase render
+/// ([`generate_phase_layer`]).
+fn build_epochs(params: &WorldParams) -> (Epoch2, Epoch3, Epoch4, Epoch5, Epoch6) {
+    let e2 = Epoch2 {
+        crust_density_max: params.get("e2_crust_density_max"),
+        polar_thickening: params.get("e2_polar_thickening") as f32,
+        duration: params.get("e2_duration").round().max(1.0) as u32,
+    };
+    let e3 = Epoch3 {
+        plates: params.get("e3_plates").round().max(1.0) as usize,
+        continental_fraction: params.get("e3_continental_fraction") as f32,
+        mountain_uplift: params.get("e3_mountain_uplift") as f32,
+        rift_drop: params.get("e3_rift_drop") as f32,
+        hotspots: params.get("e3_hotspots").round().max(0.0) as usize,
+        hotspot_uplift: params.get("e3_hotspot_uplift") as f32,
+        hotspot_trail: params.get("e3_hotspot_trail") as f32,
+        duration: params.get("e3_duration").round().max(1.0) as u32,
+        ..Epoch3::default()
+    };
+    let e4 = Epoch4 {
+        hydration: params.get("e4_hydration") as f32,
+        equator_temp: params.get("e4_equator_temp") as f32,
+        pole_temp: params.get("e4_pole_temp") as f32,
+        axial_tilt: params.get("e4_axial_tilt") as f32,
+        vapor_scale: params.get("e4_vapor_scale") as f32,
+        duration: params.get("e4_duration").round().max(1.0) as u32,
+        prebiotic_rate: params.get("e4_prebiotic_rate") as f32,
+        ..Epoch4::default()
+    };
+    let e5 = Epoch5 {
+        max_veins: params.get("e5_max_veins").round().max(0.0) as usize,
+        vein_threshold: params.get("e5_vein_threshold") as f32,
+        microbial_threshold: params.get("e5_microbial") as f32,
+        vent_life_boost: params.get("e5_vent_life") as f32,
+        duration: params.get("e5_duration").round().max(1.0) as u32,
+        ..Epoch5::default()
+    };
+    let e6 = Epoch6 {
+        rain: params.get("e6_rain") as f32,
+        erosion_rate: params.get("e6_erosion_rate") as f32,
+        duration: params.get("e6_duration").round().max(1.0) as u32,
+        floral_threshold: params.get("e6_flora") as f32,
+        organics_rate: params.get("e6_organics") as f32,
+        decomposer_onset: params.get("e6_decomposer") as f32,
+        carbonate_onset: params.get("e6_carbonate") as f32,
+        ..Epoch6::default()
+    };
+    (e2, e3, e4, e5, e6)
+}
+
+/// The single epoch layer for `epoch` at sub-progress `progress` (`0..1`) — runs
+/// **only** that epoch, its `duration` scaled by `progress`, on the already-computed
+/// layer below it (reusing `data`'s grid, so no icosphere rebuild). At `progress` 1
+/// it is the full stored layer. This lets the timeline iterate *within* a phase
+/// (crust differentiating, mountains rising, terrain eroding) instead of snapping to
+/// each epoch's end state. Epoch 1 is the snapshot the clock starts from.
+pub fn generate_phase_layer(
+    tables: &Tables,
+    data: &WorldData,
+    params: &WorldParams,
+    epoch: usize,
+    progress: f32,
+) -> Vec<HexState> {
+    let last = data.layers.len() - 1;
+    if epoch == 0 || epoch > last || progress >= 0.999 {
+        return data.layers[epoch.min(last)].clone();
+    }
+    let (mut e2, mut e3, mut e4, mut e5, mut e6) = build_epochs(params);
+    let ctx = EpochCtx {
+        tables,
+        dirs: &data.sphere.dirs,
+        neighbors: &data.sphere.neighbors,
+        seed: data.seeds[epoch.min(data.seeds.len() - 1)],
+    };
+    let prev = &data.layers[epoch - 1];
+    let scale = |d: u32| ((d as f32) * progress).round() as u32;
+    match epoch {
+        1 => {
+            e2.duration = scale(e2.duration);
+            e2.apply(&ctx, prev)
+        }
+        2 => {
+            e3.duration = scale(e3.duration);
+            e3.apply(&ctx, prev)
+        }
+        3 => {
+            e4.duration = scale(e4.duration);
+            e4.apply(&ctx, prev)
+        }
+        4 => {
+            e5.duration = scale(e5.duration);
+            e5.apply(&ctx, prev)
+        }
+        _ => {
+            e6.duration = scale(e6.duration);
+            e6.apply(&ctx, prev)
+        }
+    }
+}
+
 /// Generate a planet from **per-epoch seeds** (`seeds[k]` drives epoch k's
 /// stochastic choices). Builds the icosahedral grid and runs the six transforms,
 /// each under its own seed, so reseeding one layer (advancing `seeds[k]` and
@@ -230,48 +333,7 @@ pub fn generate_with_seeds(
         .map(|&d| HexState::new(e1.seed_hex(d)))
         .collect();
 
-    let e2 = Epoch2 {
-        crust_density_max: params.get("e2_crust_density_max"),
-        polar_thickening: params.get("e2_polar_thickening") as f32,
-    };
-    let e3 = Epoch3 {
-        plates: params.get("e3_plates").round().max(1.0) as usize,
-        continental_fraction: params.get("e3_continental_fraction") as f32,
-        mountain_uplift: params.get("e3_mountain_uplift") as f32,
-        rift_drop: params.get("e3_rift_drop") as f32,
-        hotspots: params.get("e3_hotspots").round().max(0.0) as usize,
-        hotspot_uplift: params.get("e3_hotspot_uplift") as f32,
-        hotspot_trail: params.get("e3_hotspot_trail") as f32,
-        cycles: params.get("e3_cycles").round().max(1.0) as u32,
-        ..Epoch3::default()
-    };
-    let e4 = Epoch4 {
-        hydration: params.get("e4_hydration") as f32,
-        equator_temp: params.get("e4_equator_temp") as f32,
-        pole_temp: params.get("e4_pole_temp") as f32,
-        axial_tilt: params.get("e4_axial_tilt") as f32,
-        vapor_scale: params.get("e4_vapor_scale") as f32,
-        cycles: params.get("e4_cycles").round().max(1.0) as u32,
-        prebiotic_rate: params.get("e4_prebiotic_rate") as f32,
-        ..Epoch4::default()
-    };
-    let e5 = Epoch5 {
-        max_veins: params.get("e5_max_veins").round().max(0.0) as usize,
-        vein_threshold: params.get("e5_vein_threshold") as f32,
-        microbial_threshold: params.get("e5_microbial") as f32,
-        vent_life_boost: params.get("e5_vent_life") as f32,
-        ..Epoch5::default()
-    };
-    let e6 = Epoch6 {
-        rain: params.get("e6_rain") as f32,
-        erosion_rate: params.get("e6_erosion_rate") as f32,
-        iterations: params.get("e6_iterations").round().max(0.0) as u32,
-        floral_threshold: params.get("e6_flora") as f32,
-        organics_rate: params.get("e6_organics") as f32,
-        decomposer_onset: params.get("e6_decomposer") as f32,
-        carbonate_onset: params.get("e6_carbonate") as f32,
-        ..Epoch6::default()
-    };
+    let (e2, e3, e4, e5, e6) = build_epochs(params);
 
     // Each epoch runs under its own per-layer seed, so reseeding one layer leaves
     // the upstream layers byte-identical (only this layer and those built on it
@@ -429,6 +491,29 @@ mod tests {
         assert!(dry_h < earthlike, "less hydrogen should drain the ocean ({dry_h} vs {earthlike})");
         assert!(wet_h > earthlike, "more hydrogen should flood the world ({wet_h} vs {earthlike})");
         assert!(dry_o < earthlike, "less oxygen should drain the ocean ({dry_o} vs {earthlike})");
+    }
+
+    #[test]
+    fn phase_layer_iterates_within_an_epoch() {
+        let tables = load_tables().expect("tables load");
+        let p = WorldParams::default();
+        let w = generate(&tables, &p, 24, 7);
+        // Tectonics (epoch index 2): at full progress the in-phase layer matches the
+        // stored epoch; early in the phase there's less drift, so less built relief.
+        let relief = |layer: &[HexState]| layer.iter().map(|s| s.elevation.max(0.0)).sum::<f32>();
+        let full = generate_phase_layer(&tables, &w, &p, 2, 1.0);
+        let early = generate_phase_layer(&tables, &w, &p, 2, 0.0);
+        assert_eq!(full.len(), w.layers[2].len());
+        assert!(
+            (relief(&full) - relief(&w.layers[2])).abs() < 1e-3,
+            "full progress should reproduce the stored epoch layer"
+        );
+        assert!(
+            relief(&early) < relief(&full),
+            "early in the phase should show less relief than the finished epoch ({} vs {})",
+            relief(&early),
+            relief(&full)
+        );
     }
 
     #[test]

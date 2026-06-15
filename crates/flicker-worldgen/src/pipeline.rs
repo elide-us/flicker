@@ -24,6 +24,13 @@ use crate::state::HexState;
 /// the last (`EPOCHS - 1`).
 pub const EPOCHS: usize = 6;
 
+/// The **nominal** value of each epoch's `duration` knob on the shared relative
+/// "cycle" clock. Every post-snapshot epoch (2–6) centres its duration here, and
+/// at this value reproduces its baseline output; below it the phase is shorter
+/// (less differentiation / drift / chemistry / mineralization / erosion), above it
+/// longer. Epoch 1 is the snapshot the clock starts from and has no duration.
+pub const NOMINAL_DURATION: u32 = 5;
+
 /// Shared, read-only context the epoch transforms run against: the vocabulary,
 /// each hex's unit-sphere direction, its neighbour indices (for the plate /
 /// erosion epochs), and the world seed.

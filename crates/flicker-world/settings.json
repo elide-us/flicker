@@ -17,7 +17,7 @@
     "video_display_mode": 0.0,
     "video_fps_limit": 1.0,
     "video_quality": 2.0,
-    "video_resolution": 1.0,
+    "video_resolution": 2.0,
     "video_vsync": 1.0
   }
 }

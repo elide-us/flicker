@@ -65,7 +65,7 @@ local function param_rows()
       rows[#rows + 1] = {
         def = pr,
         y = y,
-        r = { x = p.widget_x, y = y + (p.row_h - 8) * 0.5, w = p.slider_w, h = 8 },
+        r = { x = p.widget_x, y = y + (p.row_h - 13) * 0.5, w = p.slider_w, h = 13 },
       }
       y = y + p.row_h
     end
@@ -88,11 +88,72 @@ local function element_rows()
         sym = item.sym,
         x = x,
         y = y,
-        r = { x = x + e.label_w, y = y + (e.row_h - 7) * 0.5, w = e.slider_w, h = 7 },
+        r = { x = x + e.label_w, y = y + (e.row_h - 11) * 0.5, w = e.slider_w, h = 11 },
       }
     end
   end
   return e, rows
+end
+
+-- The celestial (SKY) panel, right-anchored to the screen width: each row a
+-- slider keyed by its CelestialState id. Returns the config, the row rects, the
+-- panel-left x, and a capture rect (so dragging a slider doesn't also orbit).
+local function celestial_rows(sw)
+  local cz = UI.hud.celestial
+  if not cz then
+    return nil, {}, 0, nil
+  end
+  local panel_x = sw - cz.margin_x - cz.width
+  local rows = {}
+  local y = cz.rows_y
+  for _, r in ipairs(cz.rows) do
+    rows[#rows + 1] = {
+      def = r,
+      x = panel_x,
+      y = y,
+      r = { x = panel_x + cz.slider_x_off, y = y + (cz.row_h - 14) * 0.5, w = cz.slider_w, h = 14 },
+    }
+    y = y + cz.row_h
+  end
+  local bottom = y
+  if cz.toggles and cz.toggles_y then
+    bottom = math.max(bottom, cz.toggles_y + #cz.toggles * (cz.toggle_h + cz.toggle_gap))
+  end
+  local cap = { x = panel_x - 8, y = cz.top_y - 4, w = cz.width + cz.margin_x + 8, h = (bottom - cz.top_y) + 8 }
+  return cz, rows, panel_x, cap
+end
+
+-- The SKY overlay toggle buttons (Orbits / Stars / Planets), stacked below the
+-- sliders. Each is a button whose click returns a `toggle_<id>` pulse.
+local function celestial_toggles(sw)
+  local cz = UI.hud.celestial
+  if not (cz and cz.toggles) then
+    return nil, {}, 0
+  end
+  local panel_x = sw - cz.margin_x - cz.width
+  local rows = {}
+  local y = cz.toggles_y
+  for _, t in ipairs(cz.toggles) do
+    rows[#rows + 1] = { def = t, r = { x = panel_x, y = y, w = cz.toggle_w, h = cz.toggle_h } }
+    y = y + cz.toggle_h + cz.toggle_gap
+  end
+  return cz, rows, panel_x
+end
+
+-- The bottom evolution-timeline bar: full width minus margins, ~1 inch tall.
+-- Returns the config and its screen rect (the scrub track).
+local function timeline_bar(sw, sh)
+  local t = UI.hud.timeline
+  if not t then
+    return nil, nil
+  end
+  local rect = {
+    x = t.margin_x,
+    y = sh - t.margin_bottom - t.height,
+    w = sw - 2 * t.margin_x,
+    h = t.height,
+  }
+  return t, rect
 end
 
 function M.update(mx, my, clicked, sw, sh, down)
@@ -126,9 +187,33 @@ function M.update(mx, my, clicked, sw, sh, down)
     end
   end
 
-  if UI.hud.capture then
-    s.ui_capture = point_in(mx, my, UI.hud.capture)
+  local _, crows, _, ccap = celestial_rows(sw)
+  for _, row in ipairs(crows) do
+    local id = row.def.id
+    s[id] = Widgets.slider_update(ws, id, row.r, mx, my, clicked, down, Model[id] or 0, row.def.min, row.def.max)
   end
+
+  local _, ctoggles = celestial_toggles(sw)
+  for _, row in ipairs(ctoggles) do
+    if Widgets.button_update(row.r, mx, my, clicked) then
+      s["toggle_" .. row.def.id] = true
+    end
+  end
+
+  -- The bottom timeline scrubs as one wide 0..1 slider (drag = scrub the movie).
+  local _, tlrect = timeline_bar(sw, sh)
+  if tlrect then
+    s.timeline = Widgets.slider_update(ws, "timeline", tlrect, mx, my, clicked, down, Model.timeline or 0, 0, 1)
+  end
+
+  local capture = UI.hud.capture and point_in(mx, my, UI.hud.capture)
+  if ccap and point_in(mx, my, ccap) then
+    capture = true
+  end
+  if tlrect and point_in(mx, my, tlrect) then
+    capture = true
+  end
+  s.ui_capture = capture or false
   return s
 end
 
@@ -213,6 +298,97 @@ local function elements(cmds)
   end
 end
 
+local function celestial(cmds, sw)
+  local cz, rows, panel_x = celestial_rows(sw)
+  if not cz then
+    return
+  end
+  local hc = cz.header_color
+  cmds[#cmds + 1] =
+    { kind = "text", x = panel_x, y = cz.top_y, text = cz.title, size = cz.header_size, r = hc[1], g = hc[2], b = hc[3], a = hc[4] }
+  local lc = cz.label_color
+  local vc = cz.value_color
+  for _, row in ipairs(rows) do
+    local d = row.def
+    local val = Model[d.id] or 0
+    cmds[#cmds + 1] =
+      { kind = "text", x = row.x, y = row.y, text = d.label, size = cz.label_size, r = lc[1], g = lc[2], b = lc[3], a = lc[4] }
+    Widgets.slider_draw(cmds, row.r, val, d.min, d.max, cz.slider_style)
+    cmds[#cmds + 1] = {
+      kind = "text",
+      x = panel_x + cz.value_x_off,
+      y = row.y,
+      text = string.format(d.fmt or "%.2f", val),
+      size = cz.value_size,
+      r = vc[1], g = vc[2], b = vc[3], a = vc[4],
+    }
+  end
+
+  local cz2, toggles = celestial_toggles(sw)
+  if cz2 then
+    for _, row in ipairs(toggles) do
+      local on = Model["show_" .. row.def.id]
+      local label = row.def.label .. ": " .. (on and "on" or "off")
+      Widgets.button_draw(cmds, row.r, label, cz2.button_style, on)
+    end
+  end
+end
+
+-- The bottom evolution timeline: one labelled segment per epoch, with the
+-- playhead at Model.timeline (0..1). The whole planet's history at a glance.
+local function timeline(cmds, sw, sh)
+  local t, r = timeline_bar(sw, sh)
+  if not t then
+    return
+  end
+  local epochs = UI.hud.epochs or {}
+  local n = #epochs
+  if n == 0 then
+    return
+  end
+  local function rect(x, y, w, h, c)
+    cmds[#cmds + 1] = { kind = "rect", x = x, y = y, w = w, h = h, r = c[1], g = c[2], b = c[3], a = c[4] }
+  end
+  -- Frame + background.
+  rect(r.x - 2, r.y - 2, r.w + 4, r.h + 4, t.border)
+  rect(r.x, r.y, r.w, r.h, t.bg)
+  cmds[#cmds + 1] =
+    { kind = "text", x = r.x + 10, y = r.y + 6, text = t.title, size = t.title_size, r = t.title_color[1], g = t.title_color[2], b = t.title_color[3], a = t.title_color[4] }
+
+  local cur = current_epoch() -- 1-based
+  local seg_top = r.y + 26
+  local seg_h = r.h - 26
+  local label_y = r.y + r.h - 30
+  -- Segment edges are duration-weighted (published as Model.tl_b1..tl_b{n-1});
+  -- fall back to equal widths if absent.
+  local function edge(i)
+    if i <= 0 then return 0 end
+    if i >= n then return 1 end
+    return Model["tl_b" .. i] or (i / n)
+  end
+  for i = 1, n do
+    local left = edge(i - 1)
+    local sx = r.x + left * r.w
+    local sw_i = (edge(i) - left) * r.w
+    local fill = (i % 2 == 0) and t.seg_even or t.seg_odd
+    if i == cur then
+      fill = t.seg_active
+    end
+    rect(sx, seg_top, sw_i, seg_h, fill)
+    if i > 1 then
+      rect(sx, seg_top, 1, seg_h, t.divider)
+    end
+    cmds[#cmds + 1] =
+      { kind = "text", x = sx + 6, y = seg_top + 2, text = tostring(i), size = t.num_size, r = t.num_color[1], g = t.num_color[2], b = t.num_color[3], a = t.num_color[4] }
+    local lc = (i == cur) and t.active_label_color or t.label_color
+    cmds[#cmds + 1] =
+      { kind = "text", x = sx + 6, y = label_y, text = epochs[i].label, size = t.label_size, r = lc[1], g = lc[2], b = lc[3], a = lc[4] }
+  end
+  -- Playhead.
+  local px = r.x + (Model.timeline or 0) * r.w
+  rect(px - t.playhead_w * 0.5, seg_top - 2, t.playhead_w, seg_h + 2, t.playhead)
+end
+
 function M.draw(sw, sh)
   if not (UI and Model) then
     return {}
@@ -223,6 +399,8 @@ function M.draw(sw, sh)
     controls(cmds)
     params(cmds)
     elements(cmds)
+    celestial(cmds, sw)
+    timeline(cmds, sw, sh)
   end
   return cmds
 end

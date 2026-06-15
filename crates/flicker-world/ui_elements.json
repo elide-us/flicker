@@ -101,60 +101,129 @@
   },
 
   "hud": {
-    "capture": { "x": 0, "y": 0, "w": 304, "h": 600 },
+    "capture": { "x": 0, "y": 0, "w": 320, "h": 640 },
+
+    "timeline": {
+      "_comment": "The bottom evolution scrubber. One ~1-inch-tall bar, one segment per epoch; the playhead (Model.timeline 0..1) is dragged or auto-played by the SKY Speed slider.",
+      "height": 92,
+      "margin_x": 24,
+      "margin_bottom": 16,
+      "title": "EVOLUTION  ·  drag to scrub",
+      "title_size": 15,
+      "title_color": [0.60, 0.68, 0.82, 1.0],
+      "bg": [0.05, 0.06, 0.09, 0.92],
+      "border": [0.30, 0.40, 0.56, 1.0],
+      "divider": [0.24, 0.30, 0.42, 1.0],
+      "seg_even": [0.10, 0.12, 0.17, 0.55],
+      "seg_odd": [0.13, 0.16, 0.23, 0.55],
+      "seg_active": [0.20, 0.30, 0.46, 0.8],
+      "num_color": [0.55, 0.62, 0.76, 1.0],
+      "num_size": 14,
+      "label_size": 20,
+      "label_color": [0.82, 0.86, 0.94, 1.0],
+      "active_label_color": [1.0, 0.95, 0.62, 1.0],
+      "playhead": [1.0, 0.84, 0.38, 1.0],
+      "playhead_w": 3
+    },
+
+    "celestial": {
+      "title": "SKY",
+      "margin_x": 16,
+      "width": 210,
+      "top_y": 16,
+      "rows_y": 44,
+      "row_h": 30,
+      "slider_x_off": 72,
+      "slider_w": 86,
+      "value_x_off": 168,
+      "header_size": 18,
+      "header_color": [0.85, 0.85, 0.70, 1.0],
+      "label_size": 16,
+      "label_color": [0.78, 0.81, 0.86, 1.0],
+      "value_size": 15,
+      "value_color": [0.62, 0.68, 0.80, 1.0],
+      "slider_style": {
+        "track": [0.10, 0.11, 0.13, 0.97],
+        "fill": [0.34, 0.55, 0.86, 1.0],
+        "handle": [0.62, 0.80, 1.0, 0.95],
+        "handle_w": 8
+      },
+      "rows": [
+        { "id": "time_of_day", "label": "Time", "min": 0.0, "max": 24.0, "fmt": "%.1fh" },
+        { "id": "play_speed", "label": "Speed", "min": 0.0, "max": 10.0, "fmt": "%.1fx" },
+        { "id": "moon_phase", "label": "Moon", "min": 0.0, "max": 4.0, "fmt": "%.2f" },
+        { "id": "year_month", "label": "Season", "min": 0.0, "max": 12.0, "fmt": "%.1f" },
+        { "id": "axial_tilt_deg", "label": "Tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f°" }
+      ],
+      "toggles_y": 200,
+      "toggle_h": 26,
+      "toggle_gap": 7,
+      "toggle_w": 194,
+      "button_style": {
+        "cell": [0.13, 0.16, 0.23, 0.97],
+        "hot": [0.22, 0.34, 0.50, 0.98],
+        "label": [0.86, 0.92, 1.0, 1.0],
+        "label_size": 16
+      },
+      "toggles": [
+        { "id": "orbits", "label": "Orbits" },
+        { "id": "constellations", "label": "Stars" },
+        { "id": "planets", "label": "Planets" }
+      ]
+    },
 
     "stats": {
       "x": 16,
-      "title": { "y": 16, "size": 22, "color": [0.92, 0.94, 0.98, 1.0] },
-      "cells": { "y": 48, "size": 15, "color": [0.72, 0.84, 0.96, 1.0] },
-      "seed":  { "y": 70, "size": 15, "color": [0.96, 0.86, 0.60, 1.0] },
-      "view":  { "y": 92, "size": 15, "color": [0.78, 0.80, 0.98, 1.0] }
+      "title": { "y": 14, "size": 27, "color": [0.92, 0.94, 0.98, 1.0] },
+      "cells": { "y": 50, "size": 18, "color": [0.72, 0.84, 0.96, 1.0] },
+      "seed":  { "y": 76, "size": 18, "color": [0.96, 0.86, 0.60, 1.0] },
+      "view":  { "y": 100, "size": 18, "color": [0.78, 0.80, 0.98, 1.0] }
     },
 
     "controls": {
       "label_x": 16,
-      "widget_x": 120,
-      "label_size": 14,
+      "widget_x": 128,
+      "label_size": 17,
       "label_color": [0.78, 0.81, 0.86, 1.0],
 
-      "view":   { "label": "Field", "y": 120, "options": ["Elevation", "Biome", "Plates", "Temperature", "Precipitation", "Prebiotic", "Life", "Deposits", "Flow", "Sediment", "Watersheds", "Composition", "Crust", "Terrain"], "w": 150, "h": 22 },
-      "freq":   { "label": "Grid", "y": 152, "min": 6, "max": 48, "step": 4, "w": 150, "h": 24 },
-      "epoch":  { "label": "Epoch", "y": 184, "min": 1, "max": 6, "step": 1, "w": 150, "h": 24 },
-      "reseed": { "label": "New seed", "y": 216, "w": 150, "h": 26 },
+      "view":   { "label": "Field", "y": 128, "options": ["Elevation", "Biome", "Plates", "Temperature", "Precipitation", "Prebiotic", "Life", "Deposits", "Flow", "Sediment", "Watersheds", "Composition", "Crust", "Terrain"], "w": 160, "h": 28 },
+      "freq":   { "label": "Grid", "y": 164, "min": 6, "max": 48, "step": 4, "w": 160, "h": 30 },
+      "epoch":  { "label": "Epoch", "y": 200, "min": 1, "max": 6, "step": 1, "w": 160, "h": 30 },
+      "reseed": { "label": "New seed", "y": 236, "w": 160, "h": 30 },
 
       "stepper_style": {
         "box": [0.10, 0.11, 0.13, 0.97],
         "btn": [0.20, 0.30, 0.44, 0.98],
         "label": [0.90, 0.90, 0.92, 1.0],
-        "label_size": 15
+        "label_size": 18
       },
       "button_style": {
         "cell": [0.13, 0.16, 0.23, 0.97],
         "hot": [0.22, 0.30, 0.44, 0.98],
         "label": [0.86, 0.92, 1.0, 1.0],
-        "label_size": 14
+        "label_size": 17
       },
       "dropdown_style": {
         "cell": [0.10, 0.11, 0.13, 0.97],
         "hot": [0.20, 0.30, 0.44, 0.98],
         "label": [0.90, 0.90, 0.92, 1.0],
-        "label_size": 13
+        "label_size": 16
       }
     },
 
     "params": {
       "label_x": 16,
-      "widget_x": 120,
-      "header_y": 258,
-      "header_size": 14,
+      "widget_x": 128,
+      "header_y": 282,
+      "header_size": 17,
       "header_color": [0.85, 0.85, 0.70, 1.0],
-      "origin_y": 280,
-      "row_h": 24,
-      "label_size": 13,
+      "origin_y": 306,
+      "row_h": 27,
+      "label_size": 16,
       "label_color": [0.78, 0.81, 0.86, 1.0],
-      "value_size": 12,
+      "value_size": 15,
       "value_color": [0.62, 0.68, 0.80, 1.0],
-      "slider_w": 110,
+      "slider_w": 104,
       "slider_style": {
         "track": [0.10, 0.11, 0.13, 0.97],
         "fill": [0.34, 0.55, 0.86, 1.0],
@@ -165,16 +234,16 @@
 
     "elements": {
       "header": "ELEMENT MIX (relative · Epoch 1)",
-      "header_y": 386,
-      "header_size": 14,
+      "header_y": 436,
+      "header_size": 16,
       "header_color": [0.85, 0.85, 0.70, 1.0],
-      "origin_y": 406,
-      "row_h": 22,
+      "origin_y": 460,
+      "row_h": 25,
       "cols": 2,
-      "col_x": [16, 158],
-      "label_w": 26,
-      "slider_w": 70,
-      "label_size": 13,
+      "col_x": [16, 168],
+      "label_w": 30,
+      "slider_w": 78,
+      "label_size": 15,
       "label_color": [0.80, 0.84, 0.92, 1.0],
       "max": 60.0,
       "items": [
@@ -193,6 +262,7 @@
         { "id": "e1_frequency", "label": "Province scale", "min": 0.5, "max": 6.0 }
       ]},
       { "label": "Differentiation", "views": ["Crust", "Composition"], "params": [
+        { "id": "e2_duration", "label": "Molten era", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
         { "id": "e2_crust_density_max", "label": "Crust density cap", "min": 2.5, "max": 5.0 },
         { "id": "e2_polar_thickening", "label": "Polar thickening", "min": 0.0, "max": 1.0 }
       ]},
@@ -204,7 +274,7 @@
         { "id": "e3_hotspots", "label": "Hotspots", "min": 0.0, "max": 20.0, "fmt": "%.0f" },
         { "id": "e3_hotspot_uplift", "label": "Hotspot uplift", "min": 0.0, "max": 1.5 },
         { "id": "e3_hotspot_trail", "label": "Hotspot trail", "min": 0.05, "max": 1.5 },
-        { "id": "e3_cycles", "label": "Drift time", "min": 1.0, "max": 8.0, "fmt": "%.0f" }
+        { "id": "e3_duration", "label": "Drift time", "min": 1.0, "max": 10.0, "fmt": "%.0f" }
       ]},
       { "label": "Hydrosphere", "views": ["Elevation", "Temperature", "Precipitation", "Prebiotic", "Terrain"], "params": [
         { "id": "e4_hydration", "label": "Hydration", "min": 0.0, "max": 3.0 },
@@ -212,19 +282,20 @@
         { "id": "e4_pole_temp", "label": "Pole C", "min": -60.0, "max": 10.0, "fmt": "%.0f" },
         { "id": "e4_axial_tilt", "label": "Axial tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f" },
         { "id": "e4_vapor_scale", "label": "Rain / humidity", "min": 0.0, "max": 3.0 },
-        { "id": "e4_cycles", "label": "Chem cycles", "min": 1.0, "max": 8.0, "fmt": "%.0f" },
+        { "id": "e4_duration", "label": "Chem time", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
         { "id": "e4_prebiotic_rate", "label": "Precursor rate", "min": 0.0, "max": 1.0 }
       ]},
       { "label": "Mineralization", "views": ["Life", "Terrain", "Elevation", "Temperature", "Prebiotic"], "params": [
         { "id": "e5_max_veins", "label": "Max veins", "min": 0.0, "max": 256.0, "fmt": "%.0f" },
         { "id": "e5_vein_threshold", "label": "Vein threshold", "min": 0.0, "max": 1.0 },
         { "id": "e5_microbial", "label": "Life threshold", "min": 0.02, "max": 0.5 },
-        { "id": "e5_vent_life", "label": "Vent boost", "min": 0.0, "max": 3.0 }
+        { "id": "e5_vent_life", "label": "Vent boost", "min": 0.0, "max": 3.0 },
+        { "id": "e5_duration", "label": "Vein time", "min": 1.0, "max": 10.0, "fmt": "%.0f" }
       ]},
       { "label": "Erosion", "views": ["Biome", "Elevation", "Flow", "Sediment", "Watersheds", "Deposits", "Terrain", "Life", "Temperature", "Precipitation"], "params": [
         { "id": "e6_rain", "label": "Rain", "min": 0.0, "max": 3.0 },
         { "id": "e6_erosion_rate", "label": "Erosion rate", "min": 0.0, "max": 0.1, "fmt": "%.3f" },
-        { "id": "e6_iterations", "label": "Iterations", "min": 1.0, "max": 30.0, "fmt": "%.0f" },
+        { "id": "e6_duration", "label": "Erosion time", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
         { "id": "e6_flora", "label": "Flora threshold", "min": 0.0, "max": 1.0 },
         { "id": "e6_organics", "label": "Peat rate", "min": 0.0, "max": 0.2, "fmt": "%.3f" },
         { "id": "e6_decomposer", "label": "Decomposer onset", "min": 0.0, "max": 1.0 },

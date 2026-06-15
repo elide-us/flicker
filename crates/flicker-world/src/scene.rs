@@ -12,8 +12,7 @@ use std::time::Duration;
 
 use flicker::app::{InputState, Key};
 use flicker::render::{
-    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, TextureHandle, Vec2,
-    Vec3,
+    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ScriptHost, ValueMap};
@@ -21,16 +20,28 @@ use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_materials::Tables;
 
 use crate::camera::OrbitCam;
+use crate::celestial::{self, CelestialState};
 use crate::color::ViewMode;
 use crate::globe;
-use flicker_worldgen::FieldSampler;
+use flicker_worldgen::{FieldSampler, HexState};
 
 use crate::world::{
-    generate, generate_with_seeds, load_tables, mutate_epoch_params, next_seed, WorldData,
-    WorldParams, ABUNDANCE_DEFS, EPOCH_LABELS, MAX_FREQ, MIN_FREQ, PARAM_DEFS,
+    generate, generate_phase_layer, generate_with_seeds, load_tables, mutate_epoch_params,
+    next_seed, WorldData, WorldParams, ABUNDANCE_DEFS, EPOCH_LABELS, MAX_FREQ, MIN_FREQ, PARAM_DEFS,
 };
 
 const FREQ_STEP: u32 = 4;
+/// Real-seconds for the evolution timeline to play through every epoch at speed 1.
+const TIMELINE_SECONDS: f32 = 60.0;
+/// The duration knob (shared 1..10 clock) that sets each epoch's weight on the
+/// timeline. Epoch 1 has none — it's the snapshot the clock starts from.
+const EPOCH_DURATION_IDS: [&str; 6] =
+    ["", "e2_duration", "e3_duration", "e4_duration", "e5_duration", "e6_duration"];
+/// Timeline weight of the Epoch-1 snapshot — short but visible.
+const SNAPSHOT_WEIGHT: f32 = 2.0;
+/// Sub-steps each phase is iterated through (stop-motion granularity): the in-phase
+/// layer is re-derived when the playhead crosses one of these within an epoch.
+const PHASE_STEPS: u32 = 14;
 const TEXT: [f32; 4] = [0.92, 0.94, 0.98, 1.0];
 const DIM: [f32; 4] = [0.70, 0.75, 0.85, 1.0];
 
@@ -94,6 +105,24 @@ pub struct World {
     data: WorldData,
     params: WorldParams,
     cam: OrbitCam,
+    celestial: CelestialState,
+    /// Cached constellation figures (deterministic; built once) + the planet disc
+    /// billboard texture (loaded in `enter`), and the overlay toggles.
+    constellations: Vec<Vec<Vec3>>,
+    disc: Option<TextureHandle>,
+    show_orbits: bool,
+    show_constellations: bool,
+    show_planets: bool,
+    /// Evolution timeline — the source of truth is `(epoch, phase_t)`: which epoch
+    /// and how far *through* it (`0..1`). The global scrubber position is derived
+    /// from these via the weighted bounds, so a duration change keeps the marker in
+    /// its epoch. `timeline_speed` is the top-right "Speed" (playback rate; 0 =
+    /// paused). `phase_layer` is the in-progress layer rendered at this sub-time,
+    /// re-derived (throttled by `phase_key`) as the playhead advances.
+    phase_t: f32,
+    timeline_speed: f32,
+    phase_layer: Vec<HexState>,
+    phase_key: (usize, u32),
     mode: ViewMode,
     epoch: usize,
     mesh: Option<MeshHandle>,
@@ -111,11 +140,22 @@ pub struct World {
 impl World {
     pub fn new(tables: Tables, params: WorldParams, data: WorldData) -> Self {
         let epoch = 0; // start on Epoch 1 — the composition foundation
+        let phase_layer = data.layers[epoch].clone();
         Self {
             tables,
             data,
             params,
             cam: OrbitCam::new(globe::RADIUS),
+            celestial: CelestialState::default(),
+            constellations: celestial::generate_constellations(),
+            disc: None,
+            show_orbits: true,
+            show_constellations: true,
+            show_planets: true,
+            phase_t: 1.0, // start showing Epoch 1 fully formed
+            timeline_speed: 0.0, // paused — drag the SKY "Speed" up to play the movie
+            phase_layer,
+            phase_key: (epoch, PHASE_STEPS),
             mode: natural_view(epoch),
             epoch,
             mesh: None,
@@ -136,9 +176,101 @@ impl World {
         }
         let sampler = FieldSampler::new(&self.tables, self.data.seeds[0]);
         let (verts, indices) =
-            globe::build(&self.data, self.epoch, self.mode, globe::RADIUS, &sampler);
+            globe::build(&self.data, &self.phase_layer, self.mode, globe::RADIUS, &sampler);
         self.mesh = Some(renderer.upload_mesh(&verts, MeshIndices::U32(&indices)));
         self.dirty = false;
+    }
+
+    /// Re-derive the in-progress layer for the current epoch at the quantised
+    /// sub-progress (`phase_key`), and flag the mesh for rebuild. Cheap — runs only
+    /// the one epoch on the layer below it (see [`generate_phase_layer`]).
+    fn refresh_phase(&mut self) {
+        let progress = self.phase_key.1 as f32 / PHASE_STEPS as f32;
+        self.phase_layer =
+            generate_phase_layer(&self.tables, &self.data, &self.params, self.epoch, progress);
+        self.dirty = true;
+    }
+
+    /// The global scrubber position `0..1`, derived from `(epoch, phase_t)` against
+    /// the current weighted bounds — so changing a duration keeps the marker inside
+    /// its own (now resized) segment.
+    fn playhead(&self) -> f32 {
+        let b = self.epoch_bounds();
+        let e = self.epoch.min(self.data.epochs() - 1);
+        b[e] + self.phase_t.clamp(0.0, 1.0) * (b[e + 1] - b[e])
+    }
+
+    /// Each epoch's weight on the evolution timeline: its duration knob (the shared
+    /// 1..10 clock) for Epochs 2–6, a fixed short cap for the Epoch-1 snapshot — so
+    /// a long molten era visibly widens its segment and the movie lingers there.
+    fn epoch_weights(&self) -> Vec<f32> {
+        (0..self.data.epochs())
+            .map(|e| match EPOCH_DURATION_IDS.get(e) {
+                Some(id) if !id.is_empty() => (self.params.get(id) as f32).max(0.1),
+                _ => SNAPSHOT_WEIGHT,
+            })
+            .collect()
+    }
+
+    /// Cumulative normalised segment boundaries `[0.0, …, 1.0]` (len = epochs + 1),
+    /// proportional to [`Self::epoch_weights`]. Drives both the playhead↔epoch
+    /// mapping and the HUD segment widths.
+    fn epoch_bounds(&self) -> Vec<f32> {
+        let weights = self.epoch_weights();
+        let total = weights.iter().sum::<f32>().max(1e-3);
+        let mut bounds = Vec::with_capacity(weights.len() + 1);
+        let mut acc = 0.0;
+        bounds.push(0.0);
+        for w in weights {
+            acc += w;
+            bounds.push(acc / total);
+        }
+        bounds
+    }
+
+    /// The epoch whose weighted segment contains playhead position `t`.
+    fn epoch_at(&self, t: f32) -> usize {
+        let bounds = self.epoch_bounds();
+        let last = self.data.epochs() - 1;
+        (0..=last).find(|&e| t < bounds[e + 1]).unwrap_or(last)
+    }
+
+    /// Draw the celestial overlays over the globe — depth-tested orbital-path lines,
+    /// the planets as billboards on their ecliptic rings, and the constellation
+    /// figures on a distant sphere — each gated by its HUD toggle.
+    fn draw_overlays(&self, renderer: &mut Renderer) {
+        let r = globe::RADIUS;
+        if self.show_orbits {
+            let (sun_r, moon_r) = (r * 1.16, r * 1.34);
+            renderer.draw_lines(&self.celestial.sun_ring(sun_r), [0.95, 0.66, 0.28, 0.85]);
+            renderer.draw_lines(&self.celestial.moon_ring(moon_r), [0.50, 0.60, 0.90, 0.85]);
+            let mark = r * 0.06;
+            renderer.draw_lines(&celestial::cross_marker(self.celestial.sun_dir() * sun_r, mark), [1.0, 0.85, 0.45, 1.0]);
+            renderer.draw_lines(&celestial::cross_marker(self.celestial.moon_dir() * moon_r, mark), [0.72, 0.84, 1.0, 1.0]);
+        }
+        if let (true, Some(disc)) = (self.show_planets, self.disc) {
+            for p in &celestial::PLANETS {
+                renderer.draw_lines(&self.celestial.ecliptic_ring(r * p.orbit), [0.42, 0.40, 0.52, 0.40]);
+                let pos = self.celestial.planet_dir(p) * (r * p.orbit);
+                renderer.draw_billboard(disc, pos, Vec2::splat(p.size), Vec2::ZERO, Vec2::ONE, p.color);
+            }
+        }
+        if self.show_constellations {
+            let sky = r * 12.0; // beyond the camera's max orbit — a fixed backdrop
+            let mark = sky * 0.006;
+            let mut figures: Vec<(Vec3, Vec3)> = Vec::new();
+            let mut stars: Vec<(Vec3, Vec3)> = Vec::new();
+            for cons in &self.constellations {
+                for pair in cons.windows(2) {
+                    figures.push((pair[0] * sky, pair[1] * sky));
+                }
+                for &s in cons {
+                    stars.extend(celestial::cross_marker(s * sky, mark));
+                }
+            }
+            renderer.draw_lines(&figures, [0.50, 0.58, 0.82, 0.55]);
+            renderer.draw_lines(&stars, [0.94, 0.96, 1.0, 0.90]);
+        }
     }
 
     /// Engine values published to the HUD script each frame, including the
@@ -153,7 +285,25 @@ impl World {
             .with("view_mode", self.mode.index())
             .with("view_label", self.mode.label())
             .with("epoch", (self.epoch + 1) as u32)
-            .with("epoch_label", EPOCH_LABELS[self.epoch]);
+            .with("epoch_label", EPOCH_LABELS[self.epoch])
+            // Celestial cycle — published every frame so the sliders track the
+            // auto-advancing clock; harvested back in `apply_ui`.
+            .with("time_of_day", self.celestial.time_of_day as f64)
+            .with("moon_phase", self.celestial.moon_phase as f64)
+            .with("year_month", self.celestial.year_month as f64)
+            .with("axial_tilt_deg", self.celestial.axial_tilt.to_degrees() as f64)
+            // Evolution timeline: the marker position (derived from epoch+phase) +
+            // its playback speed (the repurposed top-right "Speed" slider).
+            .with("timeline", self.playhead() as f64)
+            .with("play_speed", self.timeline_speed as f64)
+            .with("show_orbits", self.show_orbits)
+            .with("show_constellations", self.show_constellations)
+            .with("show_planets", self.show_planets);
+        // Duration-weighted timeline segment boundaries (`tl_b1`..`tl_b{n-1}`).
+        let bounds = self.epoch_bounds();
+        for (i, b) in bounds.iter().enumerate().take(bounds.len() - 1).skip(1) {
+            m = m.with(format!("tl_b{i}"), *b as f64);
+        }
         for (ep, id, _, _, _) in PARAM_DEFS {
             if *ep == self.epoch {
                 m = m.with(*id, self.params.get(id));
@@ -182,7 +332,7 @@ impl World {
         if let Some(e) = results.number("epoch") {
             let e = (e.round() as i64 - 1).clamp(0, self.data.epochs() as i64 - 1) as usize;
             if e != self.epoch {
-                self.set_epoch(e);
+                self.set_epoch(e); // jump to that epoch, fully formed
             }
         }
         if let Some(f) = results.number("freq") {
@@ -190,6 +340,47 @@ impl World {
             if f != self.data.freq {
                 self.regen = Some((f, self.data.seeds.clone()));
             }
+        }
+        // Evolution timeline: dragging the bottom scrubber sets the epoch *and* the
+        // sub-position within it (so it scrubs through a phase, not just between
+        // phases). Idempotent when not dragging (the slider echoes the marker).
+        if let Some(v) = results.number("timeline") {
+            let t = (v as f32).clamp(0.0, 1.0);
+            let e = self.epoch_at(t);
+            let b = self.epoch_bounds();
+            let span = (b[e + 1] - b[e]).max(1e-4);
+            if e != self.epoch {
+                self.epoch = e;
+                self.mode = natural_view(e);
+                self.dirty = true;
+            }
+            self.phase_t = ((t - b[e]) / span).clamp(0.0, 1.0);
+        }
+        if let Some(v) = results.number("play_speed") {
+            self.timeline_speed = v as f32;
+        }
+        // Celestial cycle sliders — always live (no regen; just retune the sky).
+        if let Some(v) = results.number("time_of_day") {
+            self.celestial.time_of_day = v as f32;
+        }
+        if let Some(v) = results.number("moon_phase") {
+            self.celestial.moon_phase = v as f32;
+        }
+        if let Some(v) = results.number("year_month") {
+            self.celestial.year_month = v as f32;
+        }
+        if let Some(v) = results.number("axial_tilt_deg") {
+            self.celestial.axial_tilt = (v as f32).to_radians();
+        }
+        // Overlay toggles — each is a button pulse that flips the flag.
+        if results.is_on("toggle_orbits") {
+            self.show_orbits = !self.show_orbits;
+        }
+        if results.is_on("toggle_constellations") {
+            self.show_constellations = !self.show_constellations;
+        }
+        if results.is_on("toggle_planets") {
+            self.show_planets = !self.show_planets;
         }
         if results.is_on("reseed") {
             // Reseed wholesale-replaces params with a mutated set. The slider
@@ -249,8 +440,9 @@ impl World {
         if edges.freq_up && !self.prev.freq_up {
             self.regen = Some(((self.data.freq + FREQ_STEP).min(MAX_FREQ), self.data.seeds.clone()));
         }
-        let last = self.data.epochs() - 1;
-        if edges.epoch_up && !self.prev.epoch_up && self.epoch < last {
+        // ↑/↓ step one epoch (shown fully formed).
+        let segs = self.data.epochs();
+        if edges.epoch_up && !self.prev.epoch_up && self.epoch + 1 < segs {
             self.set_epoch(self.epoch + 1);
         }
         if edges.epoch_down && !self.prev.epoch_down && self.epoch > 0 {
@@ -265,6 +457,7 @@ impl World {
     fn set_epoch(&mut self, epoch: usize) {
         self.epoch = epoch.min(self.data.epochs() - 1);
         self.mode = natural_view(self.epoch);
+        self.phase_t = 1.0; // stepping/keying to an epoch shows it fully formed
         self.dirty = true;
     }
 
@@ -301,6 +494,7 @@ fn natural_view(epoch: usize) -> ViewMode {
 impl Scene for World {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+        self.disc = Some(renderer.load_texture(&celestial::disc_texture(), 16, 16));
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, UI_ELEMENTS);
@@ -318,7 +512,7 @@ impl Scene for World {
         }
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         // Esc opens the pause overlay (the world freezes beneath it).
         let esc = input.key_down(Key::Escape);
         let esc_edge = esc && !self.esc_prev;
@@ -348,6 +542,41 @@ impl Scene for World {
         }
 
         self.cam.update(input, !self.ui_capture);
+        self.celestial.update(dt); // sweep the sun → the day/night terminator moves
+
+        // Evolution playback: advance *through* the current phase, then roll into the
+        // next when it completes. Each phase's real-time is proportional to its
+        // duration weight, so the marker sweeps the bar at a steady visual pace and
+        // the whole movie runs ~TIMELINE_SECONDS at speed 1.
+        if self.timeline_speed > 0.0 {
+            let weights = self.epoch_weights();
+            let total = weights.iter().sum::<f32>().max(1e-3);
+            let last = self.data.epochs() - 1;
+            loop {
+                let w = weights[self.epoch.min(last)].max(0.1);
+                self.phase_t += dt.as_secs_f32() * self.timeline_speed * total / (w * TIMELINE_SECONDS);
+                if self.phase_t < 1.0 {
+                    break;
+                }
+                if self.epoch < last {
+                    self.epoch += 1;
+                    self.mode = natural_view(self.epoch);
+                    self.phase_t -= 1.0;
+                } else {
+                    self.phase_t = 1.0;
+                    break;
+                }
+            }
+        }
+
+        // Re-derive the in-progress layer only when the quantised sub-step changes
+        // (stop-motion), so playback doesn't regenerate every frame.
+        let step = (self.phase_t * PHASE_STEPS as f32).round() as u32;
+        let key = (self.epoch, step);
+        if key != self.phase_key {
+            self.phase_key = key;
+            self.refresh_phase();
+        }
         Transition::None
     }
 
@@ -355,21 +584,19 @@ impl Scene for World {
         if let Some((freq, seeds)) = self.regen.take() {
             self.data = generate_with_seeds(&self.tables, &self.params, freq, &seeds);
             self.epoch = self.epoch.min(self.data.epochs() - 1);
-            self.dirty = true;
+            self.refresh_phase(); // re-derive the in-progress layer for the new world
         }
         if self.dirty {
             self.rebuild_mesh(renderer);
         }
 
         renderer.set_camera(&self.cam.camera());
-        renderer.set_scene(SceneLighting {
-            sun_dir: Vec3::new(0.4, 0.9, 0.35).normalize(),
-            ..SceneLighting::default()
-        });
+        renderer.set_scene(self.celestial.lighting());
         renderer.draw_sky();
         if let Some(handle) = self.mesh {
             renderer.draw_mesh(handle, Mat4::IDENTITY, MeshDrawOptions::default());
         }
+        self.draw_overlays(renderer);
 
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
             let _ = script.set_model(&self.hud_model());
@@ -447,5 +674,40 @@ mod tests {
 
         let cmds = script.draw(1280.0, 720.0).expect("draw runs");
         assert!(!cmds.is_empty(), "element grid should emit draw commands");
+    }
+
+    /// The always-on SKY panel renders and round-trips a celestial slider, so the
+    /// JSON + Lua celestial wiring is caught headlessly.
+    #[test]
+    fn celestial_panel_runs_and_round_trips() {
+        let script = ScriptHost::from_file(HUD_SCRIPT).expect("world_ui.lua loads");
+        load_ui_json(&script, UI_ELEMENTS);
+        load_widgets(&script);
+
+        let model = ValueMap::new()
+            .with("cells", 5762usize)
+            .with("freq", 24u32)
+            .with("seed", "0x0ec0de01")
+            .with("view_mode", 1u32)
+            .with("view_label", "elevation")
+            .with("epoch", 4u32)
+            .with("epoch_label", "Hydrosphere")
+            .with("time_of_day", 8.0_f64)
+            .with("play_speed", 1.0_f64)
+            .with("moon_phase", 2.0_f64)
+            .with("year_month", 3.0_f64)
+            .with("axial_tilt_deg", 23.5_f64)
+            .with("timeline", 0.5_f64);
+        script.set_model(&model).expect("publish model");
+
+        let input = InputState::new();
+        let results = script.update(&input, 1280.0, 720.0).expect("update runs");
+        assert!(results.number("time_of_day").is_some(), "time slider value returned");
+        assert!(results.number("axial_tilt_deg").is_some(), "tilt slider value returned");
+        // The bottom timeline scrubber round-trips its playhead value.
+        assert!(results.number("timeline").is_some(), "timeline scrubber value returned");
+
+        let cmds = script.draw(1280.0, 720.0).expect("draw runs");
+        assert!(!cmds.is_empty(), "SKY panel should emit draw commands");
     }
 }

@@ -8,7 +8,7 @@
 //! colour. Triangles wind outward (the pipeline back-face culls with a CCW front).
 
 use flicker::render::{MeshVertex, Vec3};
-use flicker_worldgen::FieldSampler;
+use flicker_worldgen::{FieldSampler, HexState};
 
 use crate::color::{cell_material, hardness_terrain, ViewMode};
 use crate::world::{ranges_for, WorldData};
@@ -33,16 +33,15 @@ const MICRO_CLAMP: f32 = 0.10 * RADIUS;
 /// `epoch` coloured by `mode`. `sampler` drives the Terrain view's sub-hex relief.
 pub fn build(
     data: &WorldData,
-    epoch: usize,
+    states: &[HexState],
     mode: ViewMode,
     radius: f32,
     sampler: &FieldSampler,
 ) -> (Vec<MeshVertex>, Vec<u32>) {
     if mode == ViewMode::Terrain {
-        return build_terrain(data, epoch, radius, sampler);
+        return build_terrain(data, states, radius, sampler);
     }
 
-    let states = &data.layers[epoch.min(data.layers.len() - 1)];
     let ranges = ranges_for(states);
     let mut verts: Vec<MeshVertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
@@ -88,11 +87,10 @@ pub fn build(
 /// the shared 3D position.
 fn build_terrain(
     data: &WorldData,
-    epoch: usize,
+    states: &[HexState],
     radius: f32,
     sampler: &FieldSampler,
 ) -> (Vec<MeshVertex>, Vec<u32>) {
-    let states = &data.layers[epoch.min(data.layers.len() - 1)];
     let n = states.len();
 
     // Neighbour-smoothed macro elevation + orogeny (reduce per-hex stepping).
