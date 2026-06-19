@@ -92,6 +92,8 @@ pub struct SceneUniform {
     pub camera_pos: [f32; 4],
     pub fog_color: [f32; 4],
     pub grade: [f32; 4],
+    pub point_pos: [f32; 4],   // xyz = point-light world position; w unused
+    pub point_color: [f32; 4], // rgb = point-light radiance; w unused
 }
 
 const SCENE_UNIFORM_SIZE: u64 = std::mem::size_of::<SceneUniform>() as u64;
@@ -112,6 +114,8 @@ impl Default for SceneUniform {
             camera_pos: [0.0, 0.0, 0.0, 0.0],
             fog_color: [0.0, 0.0, 0.0, 0.0],
             grade: [0.0, 0.0, 0.0, 0.0],
+            point_pos: [0.0, 0.0, 0.0, 0.0],
+            point_color: [0.0, 0.0, 0.0, 0.0],
         }
     }
 }

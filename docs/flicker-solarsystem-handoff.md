@@ -3,14 +3,16 @@
 **Status:** The **formation simulation is complete and the user loves the results** (§1) — emergent,
 mostly-non-habitable, diverse solar systems whose protoplanets carry a real composition for Epoch 1.
 The **active work is the CINEMATIC visual pass** (§A): a volumetric raymarched dust cloud, a galactic
-star-field background, in-shader star occlusion + god rays, and a slow Star-Trek-titles camera. It's in
-a **great place and being iteratively refined** — the user dials the look by eye and tells Claude what to
-push. *Continue refining the cinematic pass.* The sim itself is stable; don't re-tune it (see the EMERGENT
-warning in §1).
+star-field background, in-shader star occlusion + god rays, a slow Star-Trek-titles camera, and — newest —
+**planets composed into star-lit 3D spheres from their element composition** (gas-giant swirls, atmospheric
+glow, moons; `planet.rs`). It's in a **great place and being iteratively refined** — the user dials the look
+by eye and tells Claude what to push. *Continue refining the cinematic pass.* The sim itself is stable; don't
+re-tune it (see the EMERGENT warning in §1).
 
-New session: read this, then **`scene.rs`** + **`crates/flicker-render/src/shaders/volumetric.wgsl`** +
-`pipeline_volumetric.rs` (the active cinematic surface), and the sim files
-`examples/flicker-solarsystem/src/{material,body,disk,collide,sim,habitability}.rs` as reference.
+New session: read this, then **`scene.rs`** + **`planet.rs`** (composed planet spheres) +
+**`crates/flicker-render/src/shaders/volumetric.wgsl`** + `pipeline_volumetric.rs` (the active cinematic
+surface), and the sim files `examples/flicker-solarsystem/src/{material,body,disk,collide,sim,habitability}.rs`
+as reference.
 
 **Audience:** Claude Code (impl), Elideus (review). **Verification is visual** (`cargo run -p
 flicker-solarsystem`); Claude keeps `cargo build/clippy/test` green. Per `user-verifies-app-themselves`.
@@ -42,9 +44,12 @@ The viewer plays the recorded formation back as a **cinematic**, not a data viz.
 - **Camera** (`camera.rs` + `scene.rs::cinematic_pose(t)`): opens **edge-on just below the disk plane, well out**
   (looking *through* the cloud at the occluded star), then slowly **rises above and glides in**. A languid
   ~50 s pass (`speed 0.020`, slowed from a frantic 0.032); opens ~15 % tighter (`outer * 2.72`, was `3.2`).
-  Once the system **settles (coast)** the cinematic doesn't stop — it keeps a **slow turntable orbit**
-  (`COAST_ORBIT_RATE` × `coast_cam`, a wall-clock that runs *even while frozen*, so the locked beauty shot keeps
-  turning around fixed bodies). **Dragging hands off to manual** orbit (`OrbitCam::update(.., active)` +
+  Once the system **settles (coast)** the cinematic doesn't stop — it becomes a **comet camera**
+  (`comet_pose(coast_cam)`): a continuous, somewhat-erratic swoop out to ~the glide's opening distance, diving
+  back in past the star, out again from a new direction — always aimed at the centre. Eased in from the glide's
+  final pose over `COMET_EASE_IN`; `coast_cam` runs *even while frozen* so the sweep never stops. (Replaced an
+  earlier slow turntable orbit that read as the sky rotating — a misfire.) Knobs: `COMET_RATE` (swoop period),
+  `d_near`/`d_far` in `comet_pose`. **Dragging hands off to manual** orbit (`OrbitCam::update(.., active)` +
   `set_pose`); **reseed/`R` (and `[`/`]`) re-arm *and resume* the cinematic** — `rerun()` sets `play = true`, so a
   fresh roll always plays even if the previous system was frozen to lock its seed (that omission was why the
   cinematic looked "gone, just pan/zoom" after a freeze).
@@ -63,17 +68,84 @@ the warp strength, the in-scatter `lit`/god-ray term, the `core` star profile. I
 yaw ramps; `speed`. **Watch performance:** the raymarch + per-step shadow taps are heavy and Claude is blind to
 framerate — if it's choppy on the M5 Pro, cut `STEPS`/shadow taps/octaves first.
 
+### Composed 3D planets — LANDED (slice 1, `planet.rs`)
+
+Planets/giants are no longer flat glow-dots: each is a **UV-sphere composed from its element
+composition and lit by the star** (`examples/flicker-solarsystem/src/planet.rs` + the body loop in
+`scene.rs::render`). How it works:
+- **Surface patterns from gravity + pressure + composition** (slice 2) — `composition_color` sets the bulk
+  tint; then patterns are driven by physical drivers read off the body itself: **gas giants** (`gas_surface`)
+  get zonal bands whose **count grows with mass** (gravity → more jets) + a drifting storm oval, animated by
+  the free-running `wall` clock so they swirl even while frozen; **rocky/icy worlds** (`rocky_surface`) get
+  noise continents whose **relief is flattened by mass** (gravity), **polar ice caps sized by ice fraction**,
+  and a metallic-grey smooth look for iron-dominated worlds. All emergent from the `Composition`.
+- **Per-planet day/night terminator via a real light source** — the star is an engine **point light** at
+  the origin (`SceneLighting::point_pos`/`point_color`, new — see §2), so `mesh.wgsl` shades each fragment
+  from its own direction to the star: every planet gets a correct terminator, no baking. (Earlier this was a
+  CPU bake into vertex colours — replaced.) `sphere_vertices` now packs only the *unlit surface colour* (via
+  the direct-RGB666 escape) + the unit-position normal; the scene sets `ambient ≈ 0.07`, `point_color` warm,
+  sun/moon off (dark starfield). This is the "real light source" the user asked for.
+- **Atmospheric glow** — a composition-tinted additive billboard halo (thick for gas giants, a thin rim
+  otherwise). **Rings are procedural + conditional, NOT on every giant** (`scene.rs::ring_spec`, a classifier
+  like the habitability verdict): a giant grows a ring only from a satellite it **tidally shredded** — a
+  captured body below `RING_MOON_MAX` is disrupted inside the Roche limit and *becomes* the ring (bigger
+  captured moons survive as spheres; moon orbits aren't tracked, so satellite *size* proxies "inside Roche").
+  Ring brightness scales with the shredded mass, hue with how icy it was (bright water-ice vs dark rocky).
+  Geometry is one cached unit annulus (`planet::ring_mesh`, uploaded once in `enter`), drawn tilted
+  (`ring_tilt`), scaled to the giant, and **tinted** per the `RingSpec` via `MeshDrawOptions.tint`. **Moons**
+  are the *surviving* (un-shredded) captures, small lit spheres on a **tilted** orbit (so they clear the
+  giant's silhouette) with a soft glow (`MAX_MOON_SPHERES`). *(Art vs reality: the camera/glow are art; rings,
+  like moons, are a simulation reality with physical drivers — per the user's correction.)*
+- **Per-frame rebuild** of the *spheres* (rings are cached): uploaded each frame (freed the next) so the
+  terminator stays correct as bodies orbit — `scene.rs::body_meshes` holds the handles. **Perf watch:** ~tens
+  of small `upload_mesh`/`free_mesh` per frame; fine next to the volumetric, but if it hitches on the M5,
+  cache + re-bake-on-move (only gas giants need per-frame for the swirl) or drop `PLANET_RINGS/SECTORS`.
+  Knobs: `SWIRL_RATE` (0.57), the `lit`/`gas_surface`/`rocky_surface` constants, glow `gscale`/alpha, ring
+  `ring_mesh(inner,outer,..)` + `ring_tilt`.
+
+### Composed hex-world globes — LANDED for rocky/icy worlds (`worldglobe.rs`)
+
+Settled **rocky/icy** planets now render as **flicker-world-style hex-sphere globes composed via Epoch 1
+only** (not the full epoch chain — the user's scope: "we only need to compute Epoch 1 for these"). Reuses the
+real world-gen *libraries* (`flicker-world` itself is **bin-only**, can't be depended on): `flicker_worldgrid::
+icosphere_with_outlines(freq)` (ISEA hex topology) + `flicker_worldgen::Epoch1::seed_hex(dir) -> Composition`
+(spreads the planet's element abundance — heavy→equator, volatile→pole + fBm). `worldglobe::build_globe(tables,
+abundance, freq, seed)` fan-triangulates each cell (centre→outline, wound outward to match the back-face cull,
+mirroring `flicker-world/src/globe.rs`) and colours it by the cell composition (muted primordial element tints
+copied from `flicker-world/src/color.rs`). The bridge is `material::Composition::to_epoch1_abundance` (5-class →
+symbol-keyed mass-%) → `Epoch1Params.abundance`. Lit by the engine **star point light** (above).
+- **Cached by composition** (`scene.rs::globe_cache` / `globe_key`): a settled planet's composition is fixed, so
+  its globe is built **once** and redrawn with the orbit transform (point light handles the moving terminator);
+  evicted when unused (reseed / scrub back). `GLOBE_FREQ = 9` (812 cells).
+- **Gated to the coast.** Globes show only once the system **settles** (`coasting`); during formation, planets
+  are still procedural swirl-spheres (cheap; forming blobs aren't worlds yet) — so a planet *resolves into its
+  composed world* when the system settles. Nice beat, and keeps the per-planet globe build off the chaotic
+  many-embryo formation phase.
+
+**Still to do on this thread:**
+- **Gas giants = a "solid ball of air"** (NOT yet globe-ified — they remain swirl-spheres). Epoch-1 has no
+  atmosphere; from outside we see only the top of the atmosphere, so render it as a "solid" surface whose
+  material *is* gas. Pressure → water-world-like fluid surface, but **gas motion is far more violent → tiles
+  must strongly express swirl** (mark gas/volatile worlds as rotationally volatile in the material system). The
+  user OK'd **enhancing Epoch-1 rendering** for this.
+- **Per-type frequency / sizes:** planet sizes are physically calculated (watch precision). Rocky small
+  (~Mercury) — could go *finer*; gas giants huge but monotonous → *coarser* freq. Currently one `GLOBE_FREQ`.
+- **Deeper composition** — Epoch 1 only distributes elements; richer surface (density/pressure colour, axial
+  spin) still open. The next *major* integration (the user's note): select a playable rocky world as the
+  **blueprint** and start the full epoch sim from it, capturing the celestial state for the game.
+
+Other deepenings still open: ring **shadows + translucency** (rings opaque now), richer **moon capture** (~half
+of systems capture ≥1 moon, most tiny → faint rings; moons are also mis-sized — by the *giant's* radius, not
+their own mass — fix when re-rendering), depth-correct dust occlusion of the meshes (below).
+
 **Cinematic next features (in priority-ish order):**
-1. **Depth-correct body occlusion** — the dust occludes the *star* but not the *planet/body billboards* (they
-   draw after). For lanes crossing in front of bodies: make the depth buffer sampleable
-   (`pipeline_mesh.rs::create_depth_view` + `| wgpu::TextureUsages::TEXTURE_BINDING`) and have `volumetric.wgsl`
-   read it to bound rays / composite in 3D.
-2. **3D Epoch-1 planet spheres at the end** — each final planet resolves into a lit, rotating,
-   composition-coloured **sphere** (the browseable "starting points" the user cherry-picks). Engine is ready:
-   `upload_mesh`/`draw_mesh`/`set_scene` + per-vertex RGB (`mesh.wgsl` `direct()` path); write a ~80-line
-   standalone icosphere/UV-sphere builder (do **not** entangle flicker-world's hex globe), colour vertices from
-   the body's `Composition` (blend of `MaterialClass::color`), light with a star `SceneLighting`.
-3. **Brighter galactic-core bulge** behind the disk (the sky's Milky-Way band is faint at `0.05` — boosting it
+0. **Comet objects + motion lines** — the new comet *camera* (`comet_pose`) is in; actual **comets as bodies**
+   with streaking **motion-line trails** don't exist yet (user flagged it while describing the comet camera).
+1. **Depth-correct body occlusion** — the dust occludes the *star* but not the *planet spheres* (they draw
+   in the mesh pass, after the volumetric). For lanes crossing in front of bodies: make the depth buffer
+   sampleable (`pipeline_mesh.rs::create_depth_view` + `| wgpu::TextureUsages::TEXTURE_BINDING`) and have
+   `volumetric.wgsl` read it to bound rays / composite in 3D.
+2. **Brighter galactic-core bulge** behind the disk (the sky's Milky-Way band is faint at `0.05` — boosting it
    touches shared `sky.wgsl`, or add a separate bright-core element just for this scene).
 4. **Click a world → enter Epoch 1** (the flow into `flicker-world` mode — affordance/hook only; the transition
    itself is slice C, below).
@@ -190,10 +262,25 @@ for more realism — **never** a target multiplier.
   so the scene runs the live verdict/classification/export off the *current* moment (the last snapshot is
   the final state — there's no separate `finals`). `Timeline.nebula` = initial conditions.
 - `habitability.rs` — `assess(&Body) -> Verdict`.
+- `planet.rs` — **composing a body into a 3D sphere from its `Composition`** (see §A "Composed 3D planets"):
+  `UnitSphere` (UV-sphere geometry), `composition_color` (class-tint blend), `sphere_vertices` (per-vertex
+  *unlit* surface colour, direct-RGB escape — the engine star **point light** shades it), `gas_surface`/
+  `rocky_surface` (mass-/composition-driven bands, storms, continents, ice caps, metallic worlds), `ring_mesh`
+  (the ring annulus geometry; the *driver* is `scene.rs::ring_spec`). Pure CPU.
+- `worldglobe.rs` — **composing a settled planet into a flicker-world hex-sphere globe via Epoch 1** (see §A
+  "Composed hex-world globes"): `build_globe(tables, abundance, freq, seed)` (icosphere + `Epoch1::seed_hex`
+  per cell + outward-wound fan + composition tint), `composition_color`/`element_rgb` (mirror flicker-world's
+  primordial palette). Reuses `flicker-worldgrid`/`flicker-worldgen`/`flicker-worldstate` (new deps).
+- **Engine addition (reusable, non-breaking): star point light.** `SceneLighting::point_pos`/`point_color`
+  (`crates/flicker-render/src/mesh.rs`) + `SceneUniform` (`pipeline_mesh.rs`) + `scene_to_uniform`
+  (`renderer.rs`) + `mesh.wgsl` fs term: per-fragment lit from `normalize(point_pos − world_pos)`. Default
+  black (off) → existing scenes (flicker-world/voxel-cluster/hex-world all use `..default()`) unchanged. This
+  is what lets many planets around one star each light from their own direction.
 - `scene.rs` — the **cinematic** playback render (the full picture is in **§A**): galactic sky background,
   the **volumetric** dust cloud (`set_disk_cloud`), the in-shader-occluded star + god rays, the choreographed
-  `cinematic_pose(t)` camera, and on top — bodies/moons/flashes as `draw_billboard_additive` glow, **per-planet
-  orbit ellipses** (`orbit_ellipse(&Body)`), **blue rings** on habitable worlds, the live HUD. **Everything is
+  `cinematic_pose(t)` camera, the **composed planet/giant/moon spheres** (`planet::sphere_vertices` →
+  `upload_mesh`/`draw_mesh` each frame, handles in `body_meshes`) + atmospheric glow, and **per-planet
+  orbit ellipses** (`orbit_ellipse(&Body)`), **blue rings** on habitable worlds, belt billboards, the live HUD. **Everything is
   LIVE** off `current_bodies()` (the current snapshot): the protoplanet list, the planet/giant/dwarf counts,
   the rings and the export all update as the system evolves; `displayed()` = top-mass + *all* habitable so the
   rings always match listed rows. `camera.rs` — `OrbitCam` doubles as the cinematic camera (`set_pose` + an

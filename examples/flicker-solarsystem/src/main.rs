@@ -32,8 +32,10 @@ mod collide;
 mod disk;
 mod habitability;
 mod material;
+mod planet;
 mod scene;
 mod sim;
+mod worldglobe;
 
 use anyhow::Result;
 use flicker::app::run;

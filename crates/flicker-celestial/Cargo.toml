@@ -1,0 +1,19 @@
+[package]
+name = "flicker-celestial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The unified **celestial simulation** crate (see docs/flicker-celestial-spec.md).
+# Owns the *data models* (this slice — `model`): a star system as a recursive tree
+# of bodies and satellites carrying the four physical fields (composition, gravity,
+# density, pressure). The functional blocks that operate on the model —
+# `formation` (cloud → system) and `evolution` (the hierarchical N-body) — are
+# deferred to later slices. This crate is **data + logic, no GPU**: renderers and
+# the epoch sim are *consumers*. Reuses the conserved element ledger
+# (flicker-worldstate::Composition) and the material vocabulary (flicker-materials);
+# orbital state uses f64 vectors (glam::DVec3).
+[dependencies]
+flicker-worldstate.workspace = true
+flicker-materials.workspace = true
+glam.workspace = true

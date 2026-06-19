@@ -80,18 +80,6 @@ impl MaterialClass {
             Self::Gas => "gas",
         }
     }
-
-    /// Display tint (RGB), warm/metallic → icy/pale, used to colour bodies by their
-    /// dominant class.
-    pub fn color(self) -> [f32; 3] {
-        match self {
-            Self::Metal => [0.74, 0.70, 0.62],
-            Self::Silicate => [0.78, 0.52, 0.34],
-            Self::Carbon => [0.32, 0.30, 0.30],
-            Self::Ice => [0.62, 0.86, 0.96],
-            Self::Gas => [0.74, 0.78, 0.92],
-        }
-    }
 }
 
 /// Each class → its Prism-element makeup as **relative mass weights** (normalised

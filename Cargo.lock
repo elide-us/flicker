@@ -691,6 +691,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-celestial"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "flicker-worldstate",
+ "glam",
+]
+
+[[package]]
 name = "flicker-core"
 version = "0.1.0"
 dependencies = [
@@ -777,7 +786,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-celestial",
  "flicker-materials",
+ "flicker-worldgen",
+ "flicker-worldgrid",
+ "flicker-worldstate",
  "glam",
  "tracing",
  "tracing-subscriber",

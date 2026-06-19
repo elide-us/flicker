@@ -48,6 +48,8 @@ struct Scene {
     camera_pos: vec4<f32>,  // xyz = world camera position (fog distance, later)
     fog_color: vec4<f32>,   // rgb = fog colour; w = fog density (later)
     grade: vec4<f32>,       // rgb = colour-grade tint; w = grade strength (later)
+    point_pos: vec4<f32>,   // xyz = point-light world position (e.g. a star); w unused
+    point_color: vec4<f32>, // rgb = point-light radiance; black = off
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -180,7 +182,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // example-side day-arc math, so no explicit night branch is needed.
     let sun = scene.sun_color.rgb * max(dot(in.world_normal, scene.sun_dir.xyz), 0.0);
     let moon = scene.moon_color.rgb * max(dot(in.world_normal, scene.moon_dir.xyz), 0.0);
-    let shaded = base * (scene.ambient.rgb + sun + moon);
+    // Point light (e.g. a central star): lit from each fragment's own direction to the light,
+    // so bodies at different world positions get correct, individual day/night terminators.
+    let to_point = scene.point_pos.xyz - in.world_position;
+    let point_dir = to_point / max(length(to_point), 1e-4);
+    let point = scene.point_color.rgb * max(dot(in.world_normal, point_dir), 0.0);
+    let shaded = base * (scene.ambient.rgb + sun + moon + point);
     let lit = vec4<f32>(shaded, 1.0) * per_draw.tint;
 
     // Distance fog (forward): exponential by view distance, blending the lit

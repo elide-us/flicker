@@ -4,14 +4,17 @@
 //! fades as it accretes. The HUD lists the survivors with a habitability verdict and,
 //! for the selected one, the element-abundance vector it would hand to Epoch 1.
 
+use std::collections::{HashMap, HashSet};
 use std::f32::consts::TAU;
 use std::time::Duration;
 
 use flicker::app::{InputState, Key};
 use flicker::render::{
-    Renderer, SceneLighting, TextureHandle, Vec2, Vec3, VolumetricDisk, MAX_VOLUMETRIC_BODIES,
+    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, TextureHandle, Vec2,
+    Vec3, VolumetricDisk, MAX_VOLUMETRIC_BODIES,
 };
 use flicker::scene::{Scene, Transition};
+use flicker_celestial::hex::{hex_freq_for_radius, HEX_FREQ_GIANT};
 use flicker_materials::Tables;
 
 use crate::astro::{earth_masses, G, M_EARTH, M_STAR};
@@ -19,8 +22,10 @@ use crate::body::{cleared_neighborhood, Body, BodyKind};
 use crate::camera::OrbitCam;
 use crate::disk::{self, DISK_INNER, DISK_OUTER, HZ_INNER, HZ_OUTER, SNOW_LINE};
 use crate::habitability::assess;
-use crate::material::{load_tables, MaterialClass};
+use crate::material::{load_tables, Composition, MaterialClass};
+use crate::planet;
 use crate::sim::{self, Timeline};
+use crate::worldglobe;
 
 const TEXT: [f32; 4] = [0.90, 0.92, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.78, 1.0];
@@ -31,11 +36,25 @@ const FROZEN: [f32; 4] = [0.40, 0.82, 1.0, 1.0];
 /// ~150 Myr spans a realistic terrestrial giant-impact phase.
 const RUN_MYR: f32 = 150.0;
 /// Physical radii are ~10⁻⁵ AU; scale them up so bodies are visible at disk scale.
-const VISUAL_INFLATION: f64 = 6000.0;
-const MIN_BODY: f32 = 0.18;
-const MAX_BODY: f32 = 2.4;
+/// (Halved from 6000/0.18/2.4 — planets read ~50% smaller overall.)
+const VISUAL_INFLATION: f64 = 3000.0;
+const MIN_BODY: f32 = 0.09;
+const MAX_BODY: f32 = 1.2;
 /// Below this mass a survivor is a leftover planetesimal / belt object, not a planet.
 const BELT_MASS: f64 = 0.03 * M_EARTH;
+/// Moons drawn per body (the most massive few), as small hex globes.
+const MAX_MOON_SPHERES: usize = 3;
+/// Coarse hex resolution used for actively-forming bodies (many at once) and for moons —
+/// the viewer LOD; settled/frozen bodies use their full size-based `hex_freq` instead.
+const COARSE_FREQ: u32 = 6;
+/// Ring driver — a captured satellite below this mass is tidally shredded (Roche-limit
+/// disruption) into a ring instead of surviving as a moon. We don't track moon orbits, so
+/// satellite *size* proxies "inside the Roche limit": small bodies disrupt, big ones survive.
+const RING_MOON_MAX: f64 = 0.04 * M_EARTH;
+/// Minimum shredded mass for a visible ring; below it the debris is too sparse to show.
+const RING_MIN_MASS: f64 = 0.003 * M_EARTH;
+/// Shredded mass that reads as a full-strength (brightest) ring.
+const RING_REF_MASS: f64 = 0.05 * M_EARTH;
 
 pub struct SolarSystem {
     cam: OrbitCam,
@@ -52,8 +71,8 @@ pub struct SolarSystem {
     /// Keplerian coast) instead of freezing — `coast_year` is the sim-time elapsed since.
     coasting: bool,
     coast_year: f64,
-    /// Wall-clock seconds since the coast began — drives the settled-system camera orbit.
-    /// Runs even while frozen, so the locked "beauty shot" keeps turning around fixed bodies.
+    /// Wall-clock seconds since the coast began — drives the **comet camera** path. Runs even
+    /// while frozen, so the comet sweep never stops while the bodies stay fixed.
     coast_cam: f32,
     /// A free-running clock (seconds, advances while playing) for cosmetic animation — moon
     /// orbits and the habitable-ring pulse — so they keep moving through the coast too.
@@ -61,6 +80,13 @@ pub struct SolarSystem {
     /// The bodies at the current instant: the recorded snapshot while forming, the final
     /// system Kepler-advanced while coasting. Render, list, rings, and export all read this.
     live: Vec<Body>,
+    /// This frame's uploaded body-sphere meshes, freed at the start of the next render.
+    body_meshes: Vec<MeshHandle>,
+    /// Composed flicker-world hex globes for **settled** rocky/icy worlds, cached by composition
+    /// (`globe_key`) — built once, redrawn with the orbit transform, evicted when unused.
+    globe_cache: HashMap<u64, MeshHandle>,
+    /// A unit banded ring annulus uploaded once; drawn per giant (tilted, scaled, tinted).
+    ring_mesh: Option<MeshHandle>,
     selected: usize,
     /// While true the camera is choreographed by the formation clock; the first drag hands
     /// manual control back, a reseed re-arms it.
@@ -95,6 +121,9 @@ impl SolarSystem {
             coast_cam: 0.0,
             anim_time: 0.0,
             live,
+            body_meshes: Vec::new(),
+            globe_cache: HashMap::new(),
+            ring_mesh: None,
             selected: 0,
             cinematic: true,
             disc: None,
@@ -260,9 +289,82 @@ fn kepler_advance(body: &Body, dt_year: f64) -> Body {
     out
 }
 
-/// Settled-system turntable speed (radians/sec of yaw) — the slow orbit the cinematic keeps
-/// once the formation is done, so the camera never just sits there. Tunable by eye.
-const COAST_ORBIT_RATE: f32 = 0.05;
+/// Comet-camera radial swoop rate (rad/s of the in/out cycle) — period ≈ 2π/rate ≈ 16 s.
+const COMET_RATE: f32 = 0.38;
+/// Seconds to ease from the glide-in's final pose into the comet path (seamless handoff).
+const COMET_EASE_IN: f32 = 4.0;
+
+/// The **comet camera** path during the coast (replaces the old turntable): a continuous,
+/// somewhat-erratic swoop — racing out to ~where the opening glide began, diving back in toward
+/// the star, then out again from a new direction — always aimed at the system centre. `s` is
+/// seconds since the coast began; the incommensurate frequencies keep it from quite repeating.
+fn comet_pose(s: f32) -> (f32, f32, f32) {
+    let outer = DISK_OUTER as f32;
+    let d_far = outer * 2.72; // out to about where the opening glide began
+    let d_near = outer * 0.25; // a close dive past the star
+    // Radial swoop in/out; the power skews it to **linger far and dive quickly** (comet-like).
+    let swoop = 0.5 - 0.5 * (s * COMET_RATE).cos();
+    let distance = d_near + (d_far - d_near) * swoop.powf(0.65);
+    // Direction wanders so each dive comes from a new angle: yaw sweeps + wobble, pitch rises and
+    // dips above/below the disk plane.
+    let yaw = s * 0.22 + 0.8 * (s * 0.41).sin();
+    let pitch = 0.8 * (s * 0.29).sin() + 0.25 * (s * 0.73).cos();
+    (yaw, pitch, distance)
+}
+
+/// A stable per-composition key for caching a planet's composed globe — so a settled planet
+/// reuses one built mesh across frames (composition only changes at collisions, never during the
+/// coast). FNV-1a over the five class masses, rounded to shed float noise.
+fn globe_key(comp: &Composition) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &m in &comp.mass {
+        let q = (m * 1.0e12) as u64; // masses ~1e-6..1e-3 M☉
+        h = (h ^ q).wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// A gentle, per-giant tilt for its ring plane (derived from position for variety) so rings
+/// read as tilted discs rather than lying flat in every orbit plane.
+fn ring_tilt(pos: Vec3) -> Mat4 {
+    let ax = 0.38 + 0.30 * (pos.x * 0.6).sin();
+    let az = 0.22 * (pos.z * 0.5).cos();
+    Mat4::from_rotation_x(ax) * Mat4::from_rotation_z(az)
+}
+
+/// A giant's emergent ring (a render-time classifier, like the habitability verdict — it never
+/// feeds the sim). `ice` is the icy fraction of the shredded debris (→ a bright water-ice ring
+/// vs a dark rocky one), `strength` its normalised mass (→ prominence).
+struct RingSpec {
+    ice: f32,
+    strength: f32,
+}
+
+/// **Procedural ring driver.** A giant grows a ring from satellites it **tidally shredded** —
+/// captured bodies small enough to disrupt inside the Roche limit (`RING_MOON_MAX`). The ring
+/// *is* that debris; bigger captured moons survive (rendered as spheres). So rings are
+/// **conditional**: a giant that shredded nothing has none, an icy shred makes a bright ring, a
+/// rocky one a dark faint ring. Not art-applied to every giant.
+fn ring_spec(body: &Body) -> Option<RingSpec> {
+    if body.kind != BodyKind::Giant {
+        return None;
+    }
+    let mut mass = 0.0;
+    let mut ice = 0.0;
+    for m in &body.moons {
+        if m.mass < RING_MOON_MAX {
+            mass += m.mass;
+            ice += m.comp.get(MaterialClass::Ice);
+        }
+    }
+    if mass < RING_MIN_MASS {
+        return None;
+    }
+    Some(RingSpec {
+        ice: (ice / mass) as f32,
+        strength: (mass / RING_REF_MASS).clamp(0.2, 1.0) as f32,
+    })
+}
 
 /// The choreographed camera pose `(yaw, pitch, distance)` at formation time `t ∈ [0,1]`.
 /// It opens **just below the disk plane, edge-on and well out** — looking *through* the dust
@@ -312,6 +414,11 @@ impl Scene for SolarSystem {
         renderer.clear_color = [0.006, 0.008, 0.014, 1.0]; // deep space
         self.disc = Some(renderer.load_texture(&disk::disc_texture(), 16, 16));
         self.ring = Some(renderer.load_texture(&disk::ring_texture(), 32, 32));
+        if self.ring_mesh.is_none() {
+            // A unit ring annulus (radii in giant-radii); coloured per giant at draw time.
+            let (rv, ri) = planet::ring_mesh(1.35, 1.95, 72, 9);
+            self.ring_mesh = Some(renderer.upload_mesh(&rv, MeshIndices::U32(&ri)));
+        }
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
@@ -325,11 +432,16 @@ impl Scene for SolarSystem {
             if input.mouse_left {
                 self.cinematic = false; // user grabbed the camera
             } else if self.coasting {
-                // Settled system: keep the cinematic alive with a slow turntable orbit from the
-                // final glide pose — a continuous beauty shot, not a freeze-frame. Runs off its
-                // own clock so it keeps turning even while the seed is frozen/locked.
-                let (yaw_end, pitch, distance) = cinematic_pose(1.0);
-                self.cam.set_pose(yaw_end + COAST_ORBIT_RATE * self.coast_cam, pitch, distance);
+                // Settled system: a continuous **comet camera** — swoops out to ~where the opening
+                // glide began, dives back in toward the star, out again from a new direction,
+                // forever — always aimed at the system centre. Eased in from the glide's final pose
+                // so the handoff is seamless. Driven by `coast_cam`, which advances even while
+                // frozen, so the sweep never stops.
+                let comet = comet_pose(self.coast_cam);
+                let blend = (self.coast_cam / COMET_EASE_IN).clamp(0.0, 1.0);
+                let e = blend * blend * (3.0 - 2.0 * blend); // smoothstep
+                let (sy, sp, sd) = cinematic_pose(1.0);
+                self.cam.set_pose(sy + (comet.0 - sy) * e, sp + (comet.1 - sp) * e, sd + (comet.2 - sd) * e);
             } else {
                 let (yaw, pitch, distance) = cinematic_pose(self.t);
                 self.cam.set_pose(yaw, pitch, distance);
@@ -406,8 +518,8 @@ impl Scene for SolarSystem {
             self.coasting = true; // cross from forming into the orbiting coast
         }
         if self.coasting {
-            // The settled-camera orbit clock — advances regardless of `play`, so the locked
-            // beauty shot keeps turning while the bodies stay fixed.
+            // The comet-camera clock — advances regardless of `play`, so the comet sweep
+            // continues while the bodies stay fixed.
             self.coast_cam += dt.as_secs_f32();
         }
         self.refresh_live();
@@ -428,6 +540,13 @@ impl Scene for SolarSystem {
             sun_color: Vec3::ZERO,
             moon_dir: Vec3::new(0.0, -1.0, 0.0),
             moon_color: Vec3::ZERO,
+            // The star is a **point light at the origin**: every planet mesh is shaded
+            // per-fragment from its own direction to the star (a correct day/night terminator),
+            // over a faint ambient floor so the night side isn't pure black. The parallel
+            // sun/moon lights stay off, so the starfield sky stays dark.
+            ambient: Vec3::splat(0.07),
+            point_pos: Vec3::ZERO,
+            point_color: Vec3::new(1.0, 0.94, 0.84), // warm starlight
             sky_zenith: Vec3::new(0.004, 0.006, 0.014),
             sky_horizon: Vec3::new(0.007, 0.010, 0.022),
             ..SceneLighting::default()
@@ -442,28 +561,123 @@ impl Scene for SolarSystem {
         // consumed, driven by the sim — not a decorative field on a timer.
         self.set_disk_cloud(renderer);
 
-        // The bodies at the current instant — recorded while forming, Kepler-coasted once the
-        // system has settled. `self.live` is the single source the list/rings/export share.
-        for b in &self.live {
-            let pos = b.pos.as_vec3();
-            let c = b.dominant().map(MaterialClass::color).unwrap_or([0.7, 0.7, 0.72]);
-            let size = if b.kind == BodyKind::Giant {
-                // Gas giant: a faint envelope halo behind the core.
-                let size = body_size(b.physical_radius(), b.kind);
-                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size * 1.9), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 0.18]);
-                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
-                size
-            } else if b.mass < BELT_MASS {
-                // Leftover planetesimal / belt object — small, dim, faintly icy-grey.
-                renderer.draw_billboard_additive(disc, pos, Vec2::splat(0.06), Vec2::ZERO, Vec2::ONE, [0.60, 0.62, 0.68, 0.55]);
-                0.06
-            } else {
-                // A planet.
-                let size = body_size(b.physical_radius(), b.kind);
-                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
-                size
-            };
-            self.draw_moons(renderer, disc, pos, size, b.moons.len() as u32);
+        // The bodies at the current instant — recorded while forming, Kepler-coasted once
+        // settled. Planets/giants are **composed into star-lit 3D spheres from their element
+        // composition** (gas giants get swirling banded atmospheres), with an atmospheric glow
+        // halo and small lit moon spheres; belt objects stay dim billboards.
+        //
+        // Free last frame's meshes (drawn last frame → safe now), then rebuild this frame's so
+        // the day/night terminator stays correct as the bodies orbit. Cheap vs the volumetric.
+        for h in self.body_meshes.drain(..) {
+            renderer.free_mesh(h);
+        }
+        // Snapshot what we draw so we can upload meshes while pushing handles into
+        // `self.body_meshes` (we can't hold a `&self.live` borrow across that mutation).
+        struct Draw {
+            pos: Vec3,
+            comp: Composition,
+            size: f32,
+            /// Hex-globe resolution (spec §8): a solid world scales `freq` with its size
+            /// (Mercury≈48 / Earth≈100); a gas giant is pinned at the Mercury count.
+            hex_freq: u32,
+            belt: bool,
+            moons: Vec<Composition>,
+            ring: Option<RingSpec>,
+        }
+        let draws: Vec<Draw> = self
+            .live
+            .iter()
+            .map(|b| {
+                let giant = b.kind == BodyKind::Giant;
+                Draw {
+                    pos: b.pos.as_vec3(),
+                    comp: b.comp.clone(),
+                    size: body_size(b.physical_radius(), b.kind),
+                    // Only giants are pinned/capped; solid worlds scale by their real size.
+                    hex_freq: if giant {
+                        HEX_FREQ_GIANT
+                    } else {
+                        hex_freq_for_radius(b.physical_radius())
+                    },
+                    belt: b.kind == BodyKind::Debris || b.mass < BELT_MASS,
+                    // Surviving moons only — the small ones a giant shredded become its ring.
+                    moons: b
+                        .moons
+                        .iter()
+                        .filter(|m| !(giant && m.mass < RING_MOON_MAX))
+                        .map(|m| m.comp.clone())
+                        .collect(),
+                    ring: ring_spec(b),
+                }
+            })
+            .collect();
+
+        let mut globe_used: HashSet<u64> = HashSet::new();
+        for d in &draws {
+            if d.belt {
+                // Leftover planetesimal / belt object — too small to sphere; a dim grey dot.
+                renderer.draw_billboard_additive(disc, d.pos, Vec2::splat(0.06), Vec2::ZERO, Vec2::ONE, [0.60, 0.62, 0.68, 0.55]);
+                continue;
+            }
+            let model = Mat4::from_translation(d.pos) * Mat4::from_scale(Vec3::splat(d.size));
+            // ONE builder for EVERY body — a composition hex globe (Epoch-1), cached by
+            // composition+freq and lit by the star point light. Giants are simply capped to a
+            // coarse freq via `hex_freq`; nothing renders any other way. Coarse while actively
+            // forming (many bodies), full resolution once stopped/settled.
+            let freq = if self.coasting || !self.play { d.hex_freq } else { COARSE_FREQ };
+            let key = globe_key(&d.comp) ^ ((freq as u64) << 40);
+            globe_used.insert(key);
+            if !self.globe_cache.contains_key(&key) {
+                let abundance = d.comp.to_epoch1_abundance(&self.tables);
+                let (v, i) = worldglobe::build_globe(&self.tables, abundance, freq, key);
+                let handle = renderer.upload_mesh(&v, MeshIndices::U32(&i));
+                self.globe_cache.insert(key, handle);
+            }
+            renderer.draw_mesh(self.globe_cache[&key], model, MeshDrawOptions::default());
+
+            // A ring — only on giants that actually shredded a satellite (`ring_spec`), its
+            // brightness from the debris mass and its hue from how icy that debris was. The
+            // cached unit ring is tilted, scaled to the giant, and tinted accordingly.
+            if let (Some(spec), Some(rh)) = (&d.ring, self.ring_mesh) {
+                let bright = 0.45 + 0.55 * spec.strength;
+                let tint = [
+                    (0.55 + 0.29 * spec.ice) * bright, // rocky tan → icy white-blue
+                    (0.50 + 0.37 * spec.ice) * bright,
+                    (0.46 + 0.47 * spec.ice) * bright,
+                    1.0,
+                ];
+                let model = Mat4::from_translation(d.pos) * ring_tilt(d.pos) * Mat4::from_scale(Vec3::splat(d.size));
+                renderer.draw_mesh(rh, model, MeshDrawOptions { wireframe: false, tint });
+            }
+
+            // Moons — the same scheme, just small: a composition hex globe each (cached,
+            // coarse), on a tilted orbit so they clear the body's silhouette. No glow.
+            let n = d.moons.len().min(MAX_MOON_SPHERES);
+            for (i, mcomp) in d.moons.iter().take(n).enumerate() {
+                let orbit_r = d.size * (1.5 + 0.4 * i as f32) + 0.2;
+                let phase = self.anim_time * 0.5 + i as f32 * (TAU / n as f32 + 1.7);
+                let incl = 0.5_f32;
+                let off = Vec3::new(orbit_r * phase.cos(), orbit_r * incl.sin() * phase.sin(), orbit_r * incl.cos() * phase.sin());
+                let mpos = d.pos + off;
+                let msize = (d.size * 0.22).clamp(0.12, 0.34);
+                let mkey = globe_key(mcomp) ^ ((COARSE_FREQ as u64) << 40);
+                globe_used.insert(mkey);
+                if !self.globe_cache.contains_key(&mkey) {
+                    let abundance = mcomp.to_epoch1_abundance(&self.tables);
+                    let (v, ix) = worldglobe::build_globe(&self.tables, abundance, COARSE_FREQ, mkey);
+                    let handle = renderer.upload_mesh(&v, MeshIndices::U32(&ix));
+                    self.globe_cache.insert(mkey, handle);
+                }
+                let mmodel = Mat4::from_translation(mpos) * Mat4::from_scale(Vec3::splat(msize));
+                renderer.draw_mesh(self.globe_cache[&mkey], mmodel, MeshDrawOptions::default());
+            }
+        }
+        // Evict cached globes whose planet is no longer drawn (reseed / scrubbed back to forming).
+        let stale: Vec<u64> = self.globe_cache.keys().copied().filter(|k| !globe_used.contains(k)).collect();
+        for k in stale {
+            if let Some(h) = self.globe_cache.remove(&k) {
+                renderer.free_mesh(h);
+            }
         }
 
         self.flashes(renderer, disc);
@@ -555,19 +769,6 @@ impl SolarSystem {
             glow: Vec3::new(1.0, 0.55, 0.26),  // warm star-lit centre
             gaps,
         });
-    }
-
-    /// Little satellites orbiting a body, animated by playback time. Capped so a giant's
-    /// moon system reads without clutter.
-    fn draw_moons(&self, renderer: &mut Renderer, disc: TextureHandle, center: Vec3, body_size: f32, count: u32) {
-        let n = count.min(6);
-        for i in 0..n {
-            let orbit_r = body_size * (1.3 + 0.22 * i as f32) + 0.10;
-            // Free-running clock so moons keep orbiting through the coast, not just the formation.
-            let phase = self.anim_time + i as f32 / n.max(1) as f32 * TAU;
-            let off = Vec3::new(orbit_r * phase.cos(), 0.0, orbit_r * phase.sin());
-            renderer.draw_billboard_additive(disc, center + off, Vec2::splat(0.05), Vec2::ZERO, Vec2::ONE, [0.85, 0.86, 0.92, 0.95]);
-        }
     }
 
     /// Draw a pulsing blue ring around each **currently** habitable world — the same bodies

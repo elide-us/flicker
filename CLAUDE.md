@@ -145,12 +145,27 @@ The project has pivoted several times. **Current authoritative direction:**
   with per-epoch knob panels. → `docs/flicker-world-handoff.md`.
 - **Epoch design of record** → `docs/clayengine_world_generation_spec_v2.md`
   (§"Epoch specifications", Phase-1-simple / Phase-2-sophisticated per epoch).
+- **BIG REFACTOR (in progress) — unify celestial systems into `flicker-celestial`**
+  → `docs/flicker-celestial-spec.md` (design of record). A new lib crate owning the
+  **Body/Satellite recursive tree** (bodies, rings, belts, comets; gravity/density/
+  pressure + composition), **formation** (fuzzy cloud→system, less aggressive
+  consumption, giants capture many moons) and **evolution** (the hierarchical
+  order-of-magnitude N-body "three-body trick"). Two co-equal objectives: **effective
+  visualizations** + **accurate data**. Renderers/epoch-sim *consume* the model. Hex
+  = planet-scale macro-voxel; hex budget is a pinned constant (giants scale in *size*
+  only, not data). **Slice 1 (the data model) is LANDED** → `docs/flicker-celestial-data-model-handoff.md`:
+  `Body`/`Satellite`/`Disc`/`System` built + tested. Load-bearing call: a `Body`
+  carries **both** a conserved element `Composition` *and* a condensation-class
+  breakdown (the physics truth — bulk density can't come from elemental densities,
+  since the table's oxygen is a gas), kept in sync via `deposit`/`strip`. Next:
+  formation, evolution, hex abstraction (consumers; not yet built).
 
 ### Abandoned / superseded (left in tree, do NOT resurrect or reuse as a path)
 - The **flat two-map / bent-rings / σ-zipper** hex model in `examples/hex-map`
   (`topology.rs`, `gadget.rs`, `snap_map*.rs`, spiral ordering, record-flip viz).
-  Its flat *within-hex* math (`examples/hex-map/src/geom.rs`) may be referenced as
-  a copy source; nothing else.
+  **Slated for deletion** in the `flicker-celestial` refactor (user-flagged cleanup —
+  it confuses "what is right" vs modern flicker-world). Its flat *within-hex* math
+  (`examples/hex-map/src/geom.rs`) may be referenced as a copy source first; nothing else.
 - The **polar-cap defect-concentration** sketch (concentrating curvature at poles).
 - `flicker-worldsim` — a redundant world-sim crate that was an anti-pattern; the
   renderer + celestial sim already live in the voxel path. (Reflected in memory
@@ -186,6 +201,7 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 | `flicker-worldgrid` | **Topology only** for the ISEA hex-sphere: `pentagon_patch(rings)`, `icosphere(freq)` → `{dirs, neighbors, area, is_pentagon, shard, id}`. Feeds `EpochCtx`. | Slices 1–3 done; ISEA projection (3b) + ledger `CellId↔CellCoord` (4) pending |
 | `flicker-worldstate` | The conserved ledger substrate: `Composition` (sparse element→mass, conservation-safe add/remove/merge), `Cell`, `Ledger`. | defined; Epoch-output→Ledger hookup deferred |
 | `flicker-worldgen` | The epoch pipeline (`epoch1..6.rs`), `HexState`, `EpochCtx`, `FieldSampler` (per-cell hardness/relief/vein fields). | Epochs 1–6 built; see §5 |
+| `flicker-celestial` | The unified celestial sim (§3 refactor): `model` (Body/Satellite/Disc/System + Cloud reservoir + the four physical fields), `formation` (Nebula + `materialize_cloud`: analytic disk → conserved Cloud), `hex` (spec-§8 budget: `hex_freq_for_radius` Mercury≈48/Earth≈100 + `HEX_FREQ_GIANT`=48). `evolution` + body seeding deferred. No GPU. | Slices 1–2 + hex invariant done → `docs/flicker-celestial-data-model-handoff.md` |
 
 ### Apps & examples
 - `crates/flicker-world` — **the current app**: icosphere viewer + epoch-viz + app

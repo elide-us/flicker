@@ -170,6 +170,13 @@ pub struct SceneLighting {
     pub grade: Vec3,
     /// Colour-grade strength in `0..1`. `0.0` ⇒ no grade. Later slice.
     pub grade_strength: f32,
+    /// World position of a **point light** (e.g. a central star). Each fragment is lit from
+    /// `normalize(point_pos − world_position)`, so bodies at different positions are correctly
+    /// lit from their own direction — unlike the parallel `sun`/`moon`. No distance falloff.
+    pub point_pos: Vec3,
+    /// Point-light radiance (linear RGB). Black ⇒ the point light is off (the default), so
+    /// scenes that don't set it are unchanged.
+    pub point_color: Vec3,
     /// World→celestial rotation for the procedural night sky (stars + Milky
     /// Way). A view ray transformed by this lands in a sky-fixed frame, so the
     /// stars rotate with time of day and tilt with latitude. Identity leaves
@@ -193,6 +200,8 @@ impl Default for SceneLighting {
             fog_density: 0.0,
             grade: Vec3::ZERO,
             grade_strength: 0.0,
+            point_pos: Vec3::ZERO,
+            point_color: Vec3::ZERO, // off by default — scenes opt in
             star_rotation: Mat4::IDENTITY,
         }
     }

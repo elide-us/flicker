@@ -708,6 +708,8 @@ fn scene_to_uniform(s: &SceneLighting, camera_pos: Vec3) -> SceneUniform {
         camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
         fog_color: [s.fog_color.x, s.fog_color.y, s.fog_color.z, s.fog_density],
         grade: [s.grade.x, s.grade.y, s.grade.z, s.grade_strength],
+        point_pos: [s.point_pos.x, s.point_pos.y, s.point_pos.z, 0.0],
+        point_color: [s.point_color.x, s.point_color.y, s.point_color.z, 0.0],
     }
 }
 
