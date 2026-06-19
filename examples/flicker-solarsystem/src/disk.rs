@@ -57,15 +57,19 @@ const Z_MIN: f64 = 0.5;
 const Z_MAX: f64 = 2.2;
 /// Multiplier on solids past the snow line (ice condensation).
 const ICE_BOOST: f64 = 4.2;
-/// Feeding-zone width in mutual Hill radii (oligarchic spacing). Wider → fewer, chunkier
-/// embryos, which interact more strongly and merge more decisively.
-const SPACING_B: f64 = 8.5;
-/// Core mass (M☉) past the snow line above which a body captures a gas envelope — a fixed
-/// physical gas-accretion threshold. Metallicity does **not** gate this (a massive core
-/// accretes gas regardless); instead it raises the *solid* surface density, so metal-rich
-/// disks grow bigger cores and thus more giants — the real correlation, working through
-/// core mass. How many cross it is emergent; there is no cap on the giant count.
-const CRIT_CORE: f64 = 6.0 * crate::astro::M_EARTH;
+/// Feeding-zone width in mutual Hill radii (oligarchic spacing) — the range each forming
+/// embryo sweeps clean of solids. Wider → fewer, chunkier embryos, which interact more
+/// strongly and merge more decisively (so the system settles to fewer final bodies).
+/// At the upper end of the oligarchic literature (~5–10 R_Hill, Kokubo & Ida).
+const SPACING_B: f64 = 10.0;
+/// Core mass (M☉) past the snow line needed to capture a gas envelope — the canonical
+/// **critical core mass ~10 M⊕** for runaway gas accretion (Mizuno 1980; Pollack et al.
+/// 1996), at which the envelope can no longer stay in hydrostatic balance and gas runs in.
+/// (Was 6 M⊕ — too low, so far too many marginal cores qualified.) Metallicity doesn't gate
+/// this directly; it raises the *solid* density, so metal-rich disks grow bigger cores and
+/// cross it more readily — the real correlation, working through core mass. How many cross it
+/// is still emergent; the **gas budget** below — not a count cap — limits how many get gas.
+const CRIT_CORE: f64 = 10.0 * crate::astro::M_EARTH;
 /// Core mass (M☉) above which gas accretion runs away → a true gas giant (vs a modest-
 /// envelope ice giant below it).
 const RUNAWAY_CORE: f64 = 12.0 * crate::astro::M_EARTH;
@@ -74,6 +78,18 @@ const RUNAWAY_CORE: f64 = 12.0 * crate::astro::M_EARTH;
 const ICE_GIANT_ENVELOPE: f64 = 1.5;
 const GAS_GIANT_ENVELOPE: f64 = 22.0;
 const ENVELOPE_CAP: f64 = 380.0 * crate::astro::M_EARTH;
+/// Nebular gas-to-solid mass ratio (~solar; Hayashi 1981). The disk's H/He gas tracks the
+/// **base** surface density (metallicity scales the dust/solids, not the gas).
+const GAS_TO_SOLID: f64 = 100.0;
+/// Fraction of the disk's gas that actually ends up in giant envelopes — the rest is accreted
+/// by the star or photoevaporated before/while cores grow. Small and observationally
+/// uncertain; this finite reservoir is *why giants are rare*. The dominant lever on giant
+/// count — turn it down for fewer giants, up for more. (Replaces the old "promote every
+/// past-snow-line core" rule that produced unphysical 6–12-giant systems.)
+const GAS_CAPTURE_EFFICIENCY: f64 = 0.20;
+/// Minimum envelope (M☉) for a core to count as a giant; once the reservoir drops below this
+/// the remaining cores stay bare (failed cores / large rocky-icy bodies).
+const MIN_GIANT_ENVELOPE: f64 = 1.0 * crate::astro::M_EARTH;
 /// A small inner-disk water reservoir (hydrated silicates / water adsorbed on grains),
 /// ramping up toward the snow line. A real and genuinely debated contributor to inner-
 /// planet water — alongside later delivery from beyond the snow line — and uncertain in
@@ -235,8 +251,23 @@ pub fn seed_embryos(seed: u64, nebula: &Nebula) -> Vec<Body> {
         r = r1;
     }
 
-    promote_giants(&mut bodies, &mut rng);
+    promote_giants(&mut bodies, nebula, &mut rng);
     bodies
+}
+
+/// Total nebular **gas** mass (M☉) in the modelled disk: the base surface-density power law
+/// (no ice boost — gas doesn't condense) times the gas-to-solid ratio. This is the reservoir
+/// giants draw their envelopes from.
+fn disk_gas_mass(sigma_1au: f64) -> f64 {
+    let steps = 128;
+    let dr = (DISK_OUTER - DISK_INNER) / steps as f64;
+    let mut sum_g = 0.0;
+    for i in 0..steps {
+        let r = DISK_INNER + (i as f64 + 0.5) * dr; // AU
+        let sigma_gas = GAS_TO_SOLID * sigma_1au * r.powf(-1.5); // g/cm²
+        sum_g += sigma_gas * TAU * (r * AU_CM) * (dr * AU_CM);
+    }
+    sum_g / M_SUN_G
 }
 
 /// Build one solid embryo at `center` (AU) holding `solids` (M☉) of local composition,
@@ -264,27 +295,40 @@ fn make_embryo(center: f64, solids: f64, rng: &mut Rng) -> Body {
     Body::new(pos, vel, comp, BodyKind::Protoplanet)
 }
 
-/// Promote cores to giants — **emergently**, with no fixed count. Every past-snow-line
-/// core that exceeds this nebula's (metallicity-scaled) gas-capture threshold takes an
-/// envelope: a modest one (→ ice giant) below the runaway core mass, a large jittered one
-/// (→ gas giant) above it. So how many giants form, and of what kind and mass, falls out
-/// of the disk's mass and metallicity — a light/metal-poor disk may make none, a heavy/
-/// metal-rich one several.
-fn promote_giants(bodies: &mut [Body], rng: &mut Rng) {
-    for b in bodies.iter_mut() {
-        if b.helio_radius() <= SNOW_LINE || b.mass <= CRIT_CORE {
-            continue;
+/// Promote cores to giants — **emergently**, gated by a finite gas budget. Past-snow-line
+/// cores above the gas-capture threshold are candidates; the disk holds only so much gas
+/// (`GAS_CAPTURE_EFFICIENCY` of its total), and the cores nearest the snow line reach
+/// critical mass **first** — while the gas is still there — so they win it and become the
+/// gas giants. Processed inner→outer, each draws its envelope from the reservoir until it's
+/// spent; remaining cores stay bare (failed cores → ice-giant cores / large icy bodies, as
+/// Uranus/Neptune did). So giant *count, kind, and mass* fall out of disk mass + metallicity
+/// + how much gas there was to go around — a light disk makes none, a heavy one only a few.
+fn promote_giants(bodies: &mut [Body], nebula: &Nebula, rng: &mut Rng) {
+    let mut gas_budget = GAS_CAPTURE_EFFICIENCY * disk_gas_mass(nebula.sigma_1au);
+
+    // Candidate cores (past the snow line, above the critical mass), inner→outer — the order
+    // they reach critical mass and tap the still-present nebular gas.
+    let mut idx: Vec<usize> = (0..bodies.len())
+        .filter(|&i| bodies[i].helio_radius() > SNOW_LINE && bodies[i].mass > CRIT_CORE)
+        .collect();
+    idx.sort_by(|&a, &b| bodies[a].helio_radius().total_cmp(&bodies[b].helio_radius()));
+
+    for i in idx {
+        if gas_budget < MIN_GIANT_ENVELOPE {
+            break; // the gas is gone — the remaining outer cores stay bare
         }
-        let core = b.mass;
+        let core = bodies[i].mass;
         let jitter = 0.5 + rng.f64(); // 0.5..1.5 — giants aren't clones
-        let envelope = if core > RUNAWAY_CORE {
+        let desired = if core > RUNAWAY_CORE {
             (GAS_GIANT_ENVELOPE * core * jitter).min(ENVELOPE_CAP)
         } else {
             ICE_GIANT_ENVELOPE * core * jitter
         };
-        b.comp.add(&Composition::of(MaterialClass::Gas, envelope));
-        b.sync_mass();
-        b.kind = BodyKind::Giant;
+        let envelope = desired.min(gas_budget); // only what the reservoir still holds
+        gas_budget -= envelope;
+        bodies[i].comp.add(&Composition::of(MaterialClass::Gas, envelope));
+        bodies[i].sync_mass();
+        bodies[i].kind = BodyKind::Giant;
     }
 }
 
@@ -447,5 +491,23 @@ mod tests {
         let heavy = seed_embryos(3, &Nebula::new(3, 0.98));
         let g = |v: &[Body]| v.iter().filter(|b| b.kind == BodyKind::Giant).count();
         assert!(g(&heavy) >= g(&light), "heavier/metal-richer disks make more giants");
+    }
+
+    #[test]
+    fn gas_budget_keeps_giants_few() {
+        // A very heavy, metal-rich disk has many past-snow-line cores above the critical
+        // mass — but the finite gas reservoir only lets the innermost few become giants, not
+        // all of them (the old ungated rule promoted every one → 6–12-giant systems).
+        let neb = Nebula::new(11, 1.0);
+        let bodies = seed_embryos(11, &neb);
+        let giants = bodies.iter().filter(|b| b.kind == BodyKind::Giant).count();
+        // Cores massive enough to have captured gas under the old rule (core = mass − envelope).
+        let eligible = bodies
+            .iter()
+            .filter(|b| b.helio_radius() > SNOW_LINE && (b.mass - b.comp.get(MaterialClass::Gas)) > CRIT_CORE)
+            .count();
+        assert!(giants >= 1, "a heavy disk still forms a few giants, got {giants}");
+        assert!(giants <= 5, "even a max disk stays in a realistic giant range, got {giants}");
+        assert!(giants < eligible, "the gas budget gates giants: {giants} formed of {eligible} eligible cores");
     }
 }

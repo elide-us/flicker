@@ -70,6 +70,13 @@ const MIN_DEBRIS_MASS: f64 = 0.01 * M_EARTH;
 const MOON_MAX_RATIO: f64 = 0.12;
 /// Capture only when the approach is slower than this fraction of the *target's* escape speed.
 const MOON_CAPTURE_VINF: f64 = 1.3;
+/// Giants capture far more readily than a bare rock: a deep potential well plus a
+/// circumplanetary gas disk lets them bind a passing body over a **much wider approach
+/// angle** ([`GIANT_B_GRAZE`], vs the grazing-only [`B_GRAZE`]) and up to a slightly larger
+/// mass ratio. This is how a **remote giant** assembles a satellite system out of the dwarfs
+/// and icy bodies that wander through its Hill sphere, instead of simply swallowing them.
+const GIANT_MOON_MAX_RATIO: f64 = 0.15;
+const GIANT_B_GRAZE: f64 = 0.35;
 
 /// Resolve a collision between two overlapping bodies.
 pub fn resolve(a: &Body, b: &Body) -> Outcome {
@@ -99,9 +106,17 @@ pub fn resolve(a: &Body, b: &Body) -> Outcome {
     let site = proj.pos + (target.pos - proj.pos) * (r_p / (r_t + r_p));
 
     // --- regime selection ---------------------------------------------------
-    // Moon capture: a much smaller body grazing slowly is bound into orbit, not swallowed.
+    // Moon capture: a much smaller body, passing slowly, is bound into orbit rather than
+    // swallowed. Giants capture over a wider approach angle and a slightly larger mass ratio
+    // (deep well + circumplanetary drag), so remote giants build up satellite systems from the
+    // passing dwarfs and icy bodies instead of merging them.
     let v_esc_t = target_escape(target);
-    if m_p / m_t < MOON_MAX_RATIO && v_inf < MOON_CAPTURE_VINF * v_esc_t && b_param >= B_GRAZE {
+    let (moon_ratio, moon_graze) = if target.is_giant() {
+        (GIANT_MOON_MAX_RATIO, GIANT_B_GRAZE)
+    } else {
+        (MOON_MAX_RATIO, B_GRAZE)
+    };
+    if m_p / m_t < moon_ratio && v_inf < MOON_CAPTURE_VINF * v_esc_t && b_param >= moon_graze {
         return capture(target, proj, site);
     }
     if v_inf <= MERGE_VINF * v_esc {
@@ -339,6 +354,13 @@ mod tests {
         Body::new(pos, vel, c, BodyKind::Protoplanet)
     }
 
+    fn giant(mass_me: f64, pos: DVec3, vel: DVec3) -> Body {
+        // A gas-enveloped giant: mostly H/He over a small rocky core.
+        let mut c = Composition::of(MaterialClass::Gas, 0.92 * mass_me * M_EARTH);
+        c.add(&Composition::of(MaterialClass::Silicate, 0.08 * mass_me * M_EARTH));
+        Body::new(pos, vel, c, BodyKind::Giant)
+    }
+
     fn total_mass(bodies: &[Body]) -> f64 {
         bodies.iter().map(|b| b.mass).sum()
     }
@@ -375,6 +397,25 @@ mod tests {
         // The moon is bookkept separately: the planet's own mass is unchanged.
         assert!((out.bodies[0].mass - big.mass).abs() < 1e-30);
         assert!((out.bodies[0].moons[0].mass - small.mass).abs() < 1e-30);
+    }
+
+    #[test]
+    fn a_giant_captures_on_a_wider_approach_than_a_rock() {
+        // A small body passing slowly at a moderate angle (b ≈ 0.5): grazing enough for a
+        // giant's wide capture cone, but not for a bare rock (which needs b ≥ B_GRAZE).
+        let off = DVec3::new(1.732e-3, 0.0, 1.0e-3); // |dz|/|d| = 0.5 → b ≈ 0.5
+        let proj_vel = DVec3::new(-1.0e-3, 0.0, 0.0); // very slow approach
+        // Giant target → binds the dwarf/icy body as a moon.
+        let g = giant(50.0, DVec3::ZERO, DVec3::ZERO);
+        let small = rock(0.3, off, proj_vel);
+        let out = resolve(&g, &small);
+        assert_eq!(out.regime, Regime::Capture, "a giant binds the slow small body as a moon");
+        assert_eq!(out.bodies.len(), 1, "one body remains — the giant");
+        assert_eq!(out.bodies[0].moons.len(), 1, "with one captured moon");
+        // Same mass + geometry onto a bare rock → not a capture (it just merges).
+        let r = rock(50.0, DVec3::ZERO, DVec3::ZERO);
+        let small2 = rock(0.3, off, proj_vel);
+        assert_ne!(resolve(&r, &small2).regime, Regime::Capture, "a rock needs a grazing pass to capture");
     }
 
     #[test]

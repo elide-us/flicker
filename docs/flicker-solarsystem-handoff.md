@@ -21,6 +21,63 @@ it artful."* The *data* (sim) is correct; the *visuals* are allowed to lie for b
 
 ---
 
+## A. The cinematic pass — ACTIVE WORK (start here)
+
+The viewer plays the recorded formation back as a **cinematic**, not a data viz. Current state (all in
+`scene.rs` + the engine pieces in §2):
+
+- **Galactic star-field background** — the engine **sky pass**, enabled in `scene.rs::render` via
+  `renderer.draw_sky()` + a `SceneLighting{}` with **sun *and* moon pushed below the horizon** (full night →
+  pure Milky-Way band + procedural star field, no sun/moon discs) and a near-black sky gradient. This is the
+  "best starfield" (same one voxel-cluster uses). It exists so the **dark dust occludes the stars into lanes**.
+- **Volumetric dust cloud** (`crates/flicker-render/src/shaders/volumetric.wgsl`, driven by
+  `scene.rs::set_disk_cloud` → `Renderer::set_volumetric_disk(VolumetricDisk{..})`): a full-screen raymarch of
+  a flared annular disk, **domain-warped + billowing** (per-position scale-height) so it's *blobby*, not a
+  pancake; tuned **dark** (occludes the star-field → dark lanes) with a warm glowing centre. **Sim-driven**:
+  dissipates inside-out with `formation = t`, carves **annular gaps only at the giants' orbits** (NOT every
+  embryo — 32 embryo gaps shred the whole cloud).
+- **Star rendered *inside* the shader** so the dust **occludes it** (`inscatter += star_col*core*trans`); the
+  in-scatter is **shadow-marched toward the star** (`shadow_to_star`) → **god rays** through the gaps. (There is
+  no star billboard — that would draw on top and never be blocked.)
+- **Camera** (`camera.rs` + `scene.rs::cinematic_pose(t)`): opens **edge-on just below the disk plane, well out**
+  (looking *through* the cloud at the occluded star), then slowly **rises above and glides in**. A languid
+  ~50 s pass (`speed 0.020`, slowed from a frantic 0.032); opens ~15 % tighter (`outer * 2.72`, was `3.2`).
+  Once the system **settles (coast)** the cinematic doesn't stop — it keeps a **slow turntable orbit**
+  (`COAST_ORBIT_RATE` × `coast_cam`, a wall-clock that runs *even while frozen*, so the locked beauty shot keeps
+  turning around fixed bodies). **Dragging hands off to manual** orbit (`OrbitCam::update(.., active)` +
+  `set_pose`); **reseed/`R` (and `[`/`]`) re-arm *and resume* the cinematic** — `rerun()` sets `play = true`, so a
+  fresh roll always plays even if the previous system was frozen to lock its seed (that omission was why the
+  cinematic looked "gone, just pan/zoom" after a freeze).
+- **The formation never freezes.** When playback reaches `t = 1` the system crosses into a **Keplerian coast**
+  (`scene.rs::kepler_advance` + `coast_year`/`coast_rate`): the settled survivors keep orbiting their conics
+  forever at the same pace the formation ended on — no pause, no 150 Myr stop. The HUD clock climbs past 150 Myr
+  and reads `coasting`. Pure playback continuation (no sim/physics change); the sim + Epoch-1 export are untouched.
+- On top (additive billboards / lines, see §2): the bodies as glow dots, moons, collision flashes, **per-planet
+  orbit ellipses**, **blue rings** on currently-habitable worlds, and the live HUD. All read `scene.rs::live`
+  (the single per-frame body set — recorded snapshot while forming, Kepler-coasted while settled).
+
+**Where the look lives (all blind-tuned — push these on user feedback):** in `volumetric.wgsl` — `STEPS` (44),
+`shadow_to_star` taps (4), `fbm2/fbm3` octaves, `cloud` contrast (`pow(turb,1.7)*1.9`), `vbump` billow range,
+the warp strength, the in-scatter `lit`/god-ray term, the `core` star profile. In `scene.rs::set_disk_cloud` —
+`density` (2.2), `tint` (dark), `glow` (warm), `scale_height`, gap width. In `cinematic_pose` — pitch/distance/
+yaw ramps; `speed`. **Watch performance:** the raymarch + per-step shadow taps are heavy and Claude is blind to
+framerate — if it's choppy on the M5 Pro, cut `STEPS`/shadow taps/octaves first.
+
+**Cinematic next features (in priority-ish order):**
+1. **Depth-correct body occlusion** — the dust occludes the *star* but not the *planet/body billboards* (they
+   draw after). For lanes crossing in front of bodies: make the depth buffer sampleable
+   (`pipeline_mesh.rs::create_depth_view` + `| wgpu::TextureUsages::TEXTURE_BINDING`) and have `volumetric.wgsl`
+   read it to bound rays / composite in 3D.
+2. **3D Epoch-1 planet spheres at the end** — each final planet resolves into a lit, rotating,
+   composition-coloured **sphere** (the browseable "starting points" the user cherry-picks). Engine is ready:
+   `upload_mesh`/`draw_mesh`/`set_scene` + per-vertex RGB (`mesh.wgsl` `direct()` path); write a ~80-line
+   standalone icosphere/UV-sphere builder (do **not** entangle flicker-world's hex globe), colour vertices from
+   the body's `Composition` (blend of `MaterialClass::color`), light with a star `SceneLighting`.
+3. **Brighter galactic-core bulge** behind the disk (the sky's Milky-Way band is faint at `0.05` — boosting it
+   touches shared `sky.wgsl`, or add a separate bright-core element just for this scene).
+4. **Click a world → enter Epoch 1** (the flow into `flicker-world` mode — affordance/hook only; the transition
+   itself is slice C, below).
+
 ## 0. Prism alignment (a hard constraint — verified with the user)
 
 The sim's chemistry stays **strictly inside Prism's limited periodic table**
@@ -49,15 +106,26 @@ Prism to **27 elements** (design ceiling 30). One ripple fixed: the count assert
    snow line; plus a small **inner-disk hydration floor** (`HYDRATION_FLOOR`, hydrated silicates — a
    real, debated water source) ramping up toward the snow line.
 2. **Embryos + giants (analytic seeding, `disk.rs::seed_embryos`).** Tile `[DISK_INNER 0.3, DISK_OUTER 15]`
-   into `SPACING_B`-Hill-radius feeding zones; each zone's solids → one embryo of local composition. Embryos
+   into `SPACING_B`-Hill-radius feeding zones (now **`SPACING_B 10.0`**, widened from 8.5 — the upper end of the
+   oligarchic range, for **fewer, chunkier embryos → fewer final bodies**); each zone's solids → one embryo of
+   local composition. (For an even sparser system, the complementary knob is `sim.rs::ACCRETION_FOCUSING`, the
+   N-body runaway-clearing reach — left at its physical 1.0.) Embryos
    are seeded **already dynamically excited** (e ≲ 0.12, the eccentricity a swarm reaches *entering* the
    giant-impact phase) so they cross and collide immediately — the slow mutual stirring that pumps e up takes
    far more orbits than the compressed run covers; collisions then damp e back down, as in reality.
-   `promote_giants` gives an H/He envelope to **every** past-snow-line core above a **fixed** gas-capture
-   threshold (`CRIT_CORE 6 M⊕`) — **no count cap**: modest envelope below `RUNAWAY_CORE 12` (→ ice giant),
-   large jittered envelope above (→ gas giant). Giant **count/kind/mass are emergent** (0 in a light disk,
-   several in a heavy metal-rich one). (Disk capped at ~15 AU: bodies past it complete only ~1–2 orbits in
-   the compressed run, so they can't evolve.)
+   `promote_giants` is **gas-budget gated** (this is what keeps giants realistic — 0–4/system, was an
+   unphysical 6–12). Candidate cores are past the snow line above the **critical core mass `CRIT_CORE 10 M⊕`**
+   (Mizuno/Pollack, raised from 6). The disk holds a finite gas reservoir (`GAS_CAPTURE_EFFICIENCY 0.20` of
+   its total gas, `disk_gas_mass`); cores are served **inner→outer** (nearest the snow line reach critical
+   mass first, while gas remains) — each draws its envelope (modest below `RUNAWAY_CORE 12` → ice giant, large
+   jittered above → gas giant, capped `ENVELOPE_CAP`) until the reservoir is **spent**, after which the
+   remaining outer cores stay **bare** (failed cores → ice-giant cores / large icy bodies, à la Uranus/Neptune).
+   Giant **count/kind/mass stay emergent** — driven now by disk mass + metallicity *and how much gas there was
+   to share*: 0 in a light disk, a few in a heavy metal-rich one. **`GAS_CAPTURE_EFFICIENCY` is the main giant-
+   count lever** (down → fewer). (Disk capped at ~15 AU: bodies past it complete only ~1–2 orbits in the
+   compressed run, so they can't evolve.) *Open follow-up:* heavy disks leave **over-massive bare cores**
+   (tens of M⊕) past the snow line — the analytic isolation mass runs high out there; tune via disk
+   truncation / `SPACING_B` / a core-mass ceiling if they read too big.
 3. **N-body giant-impact phase (`sim.rs::run`).** Velocity-Verlet (leapfrog), star + mutual gravity,
    softened. A collision fires when the separation drops below the **gravitationally-focused capture
    distance**: the inflated geometric reach (`body.rs::COLLISION_INFLATION = 1200`, the time-compression
@@ -70,9 +138,13 @@ Prism to **27 elements** (design ceiling 30). One ripple fixed: the count assert
 4. **Collisions (`collide.rs`, Leinhardt-Stewart-flavoured).** From approach speed `v_inf` vs mutual
    escape `v_esc` and impact parameter `b`: **merge** (gentle), **hit-and-run** (fast + grazing,
    comparable sizes — two bodies bounce apart), **erosion/disruption** (head-on — largest remnant
-   from a simplified `Q*_RD` law + debris), and **moon capture** (a body `< MOON_MAX_RATIO` of the
-   target, passing slowly + grazing → bound as a `Moon`, bookkept on the planet, *not* merged into its
-   mass/composition; mostly happens to giants — realistic). Composition layers core→envelope; collisions
+   from a simplified `Q*_RD` law + debris), and **moon capture** (a small body passing slowly + grazing →
+   bound as a `Moon`, bookkept on the planet, *not* merged into its mass/composition). Capture is
+   **giant-aware**: a giant target binds over a much **wider approach cone** (`GIANT_B_GRAZE 0.35` vs the
+   rock-only `B_GRAZE 0.7`) and a slightly larger mass ratio (`GIANT_MOON_MAX_RATIO 0.15` vs `MOON_MAX_RATIO
+   0.12`) — deep well + circumplanetary drag — so **remote giants assemble satellite systems from passing
+   dwarfs/icy bodies** instead of swallowing them (all giants form past the snow line, so "giant" = "remote").
+   Composition layers core→envelope; collisions
    **strip outermost-first** (→ iron-rich / desiccated remnants); merges carry moons. Mass + momentum
    conserved exactly. Moons ride with the largest remnant.
 5. **Classify, verdict + export (`body.rs`, `habitability.rs`, `material.rs`).** Survivors are labelled the
@@ -118,22 +190,14 @@ for more realism — **never** a target multiplier.
   so the scene runs the live verdict/classification/export off the *current* moment (the last snapshot is
   the final state — there's no separate `finals`). `Timeline.nebula` = initial conditions.
 - `habitability.rs` — `assess(&Body) -> Verdict`.
-- `scene.rs` — **CINEMATIC** playback render. All glow goes through `draw_billboard_additive` (no depth
-  write → no artifacts; additive → bloom): a layered **star bloom**, a dense (~18k) **glowing dust nebula**
-  that dissipates by ~⅘, the bodies (planets/giants/moons/belt) as glow, collision flashes, **blue rings**
-  on habitable worlds. **Per-planet orbit ellipses** (`orbit_ellipse(&Body)` from the state vector, incl.
-  eccentric ones). **Choreographed camera** (`cinematic_pose(t)` + `camera.rs`): rises from below the disk
-  plane through the dust to above it and glides into the inner/HZ region as the cloud clears; **dragging
-  hands off to manual orbit** (`OrbitCam::update(.., active)`/`set_pose`), reseed re-arms. **Everything LIVE**
-  off `current_bodies()` (list/rings/counts/export); `displayed()` = top-mass + *all* habitable so rings
-  match rows. HUD as before.
-  The disk is now a real **volumetric raymarched dust cloud** (`set_disk_cloud` → `Renderer::set_volumetric_disk`),
-  not sprites — driven by the sim (dissipates inside-out with `formation=t`, carves **annular gaps** at the
-  **giants'** orbits via Hill radius — only giants, else 32 embryo-gaps shred the cloud). Sprite field deleted.
-  A **deep-space galactic background** is drawn behind it via the existing **sky pass** (`renderer.draw_sky()`
-  + a `SceneLighting` with sun *and* moon pushed below the horizon → pure Milky-Way-band + star field, no discs);
-  the dust composites over it, so **dense dust occludes the stars into dark lanes** (the galactic-core look) —
-  the dust is tuned *dark* (occluding) with a warm glowing centre, not bright/white.
+- `scene.rs` — the **cinematic** playback render (the full picture is in **§A**): galactic sky background,
+  the **volumetric** dust cloud (`set_disk_cloud`), the in-shader-occluded star + god rays, the choreographed
+  `cinematic_pose(t)` camera, and on top — bodies/moons/flashes as `draw_billboard_additive` glow, **per-planet
+  orbit ellipses** (`orbit_ellipse(&Body)`), **blue rings** on habitable worlds, the live HUD. **Everything is
+  LIVE** off `current_bodies()` (the current snapshot): the protoplanet list, the planet/giant/dwarf counts,
+  the rings and the export all update as the system evolves; `displayed()` = top-mass + *all* habitable so the
+  rings always match listed rows. `camera.rs` — `OrbitCam` doubles as the cinematic camera (`set_pose` + an
+  `active` flag for the manual handoff).
 - Dep added: `flicker-materials.workspace = true`. **Engine additions (reusable, non-breaking):**
   (1) **additive, no-depth-write billboard pipeline** (`pipeline_billboard.rs` 2nd pipeline +
   `Renderer::draw_billboard_additive`); (2) **volumetric raymarch pass** — `pipeline_volumetric.rs` +
@@ -141,8 +205,16 @@ for more realism — **never** a target multiplier.
   turbulence + inside-out dissipation + annular gaps; premultiplied "over"), `Renderer::set_volumetric_disk(VolumetricDisk{..})`,
   exported via `flicker::render`. Both have GPU shader-validation tests. Existing `draw_billboard`/sky untouched.
 
-**Controls:** drag = take manual camera control · wheel zoom · Space play/pause · ←/→ scrub · ↑/↓ select ·
-`[`/`]` dial supernova · R reseed · Esc. Cosmetic span ~150 Myr; camera is cinematic until you drag.
+**Controls:** drag = take manual camera control · wheel zoom · **Space = play / freeze** · ←/→ scrub · ↑/↓ select ·
+`[`/`]` dial supernova · R reseed · Esc. Formation spans a cosmetic ~150 Myr, then the system **coasts on**
+(keeps orbiting past 150 Myr); camera is cinematic until you drag. ← rewinds out of the coast.
+
+**Space is the freeze / Epoch-1 seed-lock.** Pausing (`!self.play`) holds the *current configuration* fixed —
+all bodies + their live compositions at that instant become the committed Epoch-1 seed (the HUD reads
+`❚❚ FROZEN · Epoch-1 seed locked` and the export panel `Epoch-1 SEED — LOCKED`, both in cyan). Nothing is
+snapshotted separately: everything is already recalculated on the fly off `scene.rs::live`, so freezing just
+stops the clock and the displayed/selected world's export *is* the seed. Space again resumes; ↑/↓ still re-pick
+which frozen world is the seed.
 
 ## 3. Deferred (next slices)
 
@@ -150,23 +222,13 @@ for more realism — **never** a target multiplier.
   `Epoch1Params.abundance` (`crates/flicker-world/src/world.rs` `ABUNDANCE_DEFS`, `epoch1.rs`) —
   the function + HUD display exist; the cross-crate hand-off does not. (Note: `ABUNDANCE_DEFS` has
   14 symbols and no `Mg`/`Ni`; decide whether to extend it or fold those when wiring.)
-- **Cinematic, next steps:** The cloud is now **blobby/billowing** (domain-warped noise + per-position
-  scale-height variation, `density()` in `volumetric.wgsl`), the **star is rendered inside the shader** so
-  the dust **occludes** it (`inscatter += star_col*core*trans`), and the in-scatter is **shadowed toward the
-  star** → **god rays** through the gaps (`shadow_to_star`). Camera opens edge-on just below the plane, well
-  out, and the pass is slowed (`speed 0.032`, ~30 s). Remaining: the dust still doesn't occlude the
-  **planet/body** billboards (only the star) — that needs sampleable depth (`create_depth_view` +
-  `| TEXTURE_BINDING`); a brighter **galactic-core bulge** (sky's Milky-Way band is faint `0.05` — shared
-  `sky.wgsl`); **perf** — the raymarch + shadow taps are blind to framerate (reduce `STEPS`/shadow taps/fbm
-  octaves if choppy on the M5 Pro). All look constants still **blind-tuned** — expect color/shape iteration.
-  (2) **3D Epoch-1 planet spheres at the end** — lit/rotating/composition-coloured (the browseable "starting
-  points"); engine ready (`upload_mesh`/`draw_mesh`/`set_scene` + per-vertex RGB; ~80-line sphere builder).
-  (3) Explicit **god-ray** streaks. (4) **Click a world → enter Epoch 1** (flow into `flicker-world` — hook only).
+- **Cinematic refinement + next features → see §A** (the active work: look-tuning knobs, depth-correct body
+  occlusion, 3D Epoch-1 planet spheres, brighter galactic-core bulge, click-to-Epoch hook, perf).
 - **Richer asteroid belts.** Belt objects exist (leftover small survivors, classified + rendered + counted)
   and emerge mainly in low-mass disks. A *giant-sculpted* main belt (resonances suppressing accretion in a
   specific annulus, leaving a ring of planetesimals just inside a giant) is not yet modelled — would need
-  seeding a separate planetesimal population and/or resonance stirring. Likewise a possible **gas-budget
-  limit** on giants (finite disk gas → caps how many runaway giants can form) if counts read too high.
+  seeding a separate planetesimal population and/or resonance stirring. (The **gas-budget limit** on giants
+  is now **implemented** — see §1.2 — giants are gas-rationed inner→outer, 0–4/system.)
 - Background-threaded precompute (currently a synchronous ~150–300 ms hitch on enter/reseed/dial);
   outer disk beyond ~22 AU (evolves too slowly to simulate watchably); rogue-planet *capture* by other
   systems (the user's musing — a body ejected here arriving elsewhere); multi-star ignition.
@@ -174,8 +236,13 @@ for more realism — **never** a target multiplier.
 
 ## 4. Verify
 
-`source ~/.cargo/env && cargo build/clippy/test -p flicker-solarsystem` — 21 tests, clippy clean.
-Mg touched shared data: `cargo test -p flicker-materials -p flicker-worldgen -p flicker-world` green.
-Visual (user): `cargo run -p flicker-solarsystem` — embryos orbit, collide (flashes), merge/scatter,
-some eject; settles to a few protoplanets; HUD lists each with mass/orbit/water% and a
-playable/not-playable verdict (most *not*), plus the selected survivor's element-export vector.
+`source ~/.cargo/env && cargo build/clippy/test -p flicker-solarsystem -p flicker-render` — **25 tests
+(solarsystem) + 4 (render, incl. GPU shader-validation for billboard/sky/volumetric), clippy clean**. The
+engine additions are non-breaking: also build `flicker-render -p flicker-world` (0 errors) when touching the
+render crate. Mg touched shared data: `cargo test -p flicker-materials -p flicker-worldgen -p flicker-world` green.
+
+Visual (user): `cargo run -p flicker-solarsystem` — a slow cinematic pass: camera opens edge-on under the disk
+plane looking through a dark volumetric dust cloud at a star occluded by it (god rays through the gaps),
+against a Milky-Way star field; the cloud dissipates inside-out and gaps open at the giants as the system
+forms; the camera rises and glides into the inner system; a few protoplanets settle, habitable ones blue-ringed.
+Drag for manual camera, ↑/↓ select a world to see its Epoch-1 export, `[`/`]` dial the supernova, `R` reseed.

@@ -25,6 +25,8 @@ use crate::sim::{self, Timeline};
 const TEXT: [f32; 4] = [0.90, 0.92, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.78, 1.0];
 const GOOD: [f32; 4] = [0.55, 0.92, 0.60, 1.0];
+/// Frozen / committed state — Space holds the configuration as the Epoch-1 seed.
+const FROZEN: [f32; 4] = [0.40, 0.82, 1.0, 1.0];
 /// The time slider's `0..1` maps to this many millions of years (cosmetic — see `sim`).
 /// ~150 Myr spans a realistic terrestrial giant-impact phase.
 const RUN_MYR: f32 = 150.0;
@@ -42,10 +44,23 @@ pub struct SolarSystem {
     seed: u64,
     /// Seeding-supernova size `0..1` — the master initial-condition dial.
     supernova: f64,
-    /// Normalised playback time `0..1`.
+    /// Normalised playback time `0..1` (the formation phase).
     t: f32,
     play: bool,
     speed: f32,
+    /// Once the formation reaches `t = 1`, the settled system **keeps orbiting** (an exact
+    /// Keplerian coast) instead of freezing — `coast_year` is the sim-time elapsed since.
+    coasting: bool,
+    coast_year: f64,
+    /// Wall-clock seconds since the coast began — drives the settled-system camera orbit.
+    /// Runs even while frozen, so the locked "beauty shot" keeps turning around fixed bodies.
+    coast_cam: f32,
+    /// A free-running clock (seconds, advances while playing) for cosmetic animation — moon
+    /// orbits and the habitable-ring pulse — so they keep moving through the coast too.
+    anim_time: f32,
+    /// The bodies at the current instant: the recorded snapshot while forming, the final
+    /// system Kepler-advanced while coasting. Render, list, rings, and export all read this.
+    live: Vec<Body>,
     selected: usize,
     /// While true the camera is choreographed by the formation clock; the first drag hands
     /// manual control back, a reseed re-arms it.
@@ -64,15 +79,22 @@ impl SolarSystem {
     pub fn new() -> Self {
         let seed = 0xACC2_E71D;
         let supernova = disk::random_supernova(seed);
+        let timeline = sim::run(seed, supernova);
+        let live = timeline.snapshots.first().map(|s| s.bodies.clone()).unwrap_or_default();
         Self {
             cam: OrbitCam::new(DISK_OUTER as f32),
             tables: load_tables(),
-            timeline: sim::run(seed, supernova),
+            timeline,
             seed,
             supernova,
             t: 0.0,
             play: true,
-            speed: 0.032, // a slow, ~30 s cinematic pass
+            speed: 0.020, // a slow, ~50 s cinematic pass (eased back from the old frantic 0.032)
+            coasting: false,
+            coast_year: 0.0,
+            coast_cam: 0.0,
+            anim_time: 0.0,
+            live,
             selected: 0,
             cinematic: true,
             disc: None,
@@ -90,8 +112,14 @@ impl SolarSystem {
     fn rerun(&mut self) {
         self.timeline = sim::run(self.seed, self.supernova);
         self.t = 0.0;
+        self.coasting = false;
+        self.coast_year = 0.0;
+        self.coast_cam = 0.0;
+        self.live = self.timeline.snapshots.first().map(|s| s.bodies.clone()).unwrap_or_default();
         self.selected = 0;
         self.cinematic = true; // re-arm the choreographed camera for the new run
+        self.play = true; // ...and *resume* it — a fresh roll always plays its cinematic, even
+                          // if the previous system was frozen to lock its Epoch-1 seed.
     }
 
     /// New random system: fresh seed *and* a fresh random supernova size.
@@ -174,6 +202,68 @@ fn orbit_ellipse(body: &Body) -> Vec<(Vec3, Vec3)> {
         .collect()
 }
 
+/// Advance a **settled** body along its Keplerian orbit by `dt_year`, returning a clone with
+/// updated position/velocity. The formation is over (no more collisions), so each survivor
+/// simply coasts on the very conic [`orbit_ellipse`] draws — the same `μ = G(M☆ + m)`, so the
+/// body stays exactly on its rendered ellipse. Exact, cheap, drift-free; this is what lets the
+/// finished system "keep going" forever instead of freezing. Unbound/degenerate orbits pass
+/// through unchanged (there is no closed orbit to coast).
+fn kepler_advance(body: &Body, dt_year: f64) -> Body {
+    use glam::DVec3;
+    let mut out = body.clone();
+    let mu = G * (M_STAR + body.mass);
+    let r_vec = body.pos;
+    let v_vec = body.vel;
+    let r = r_vec.length();
+    if r <= 0.0 || mu <= 0.0 {
+        return out;
+    }
+    let v2 = v_vec.length_squared();
+    if 0.5 * v2 - mu / r >= 0.0 {
+        return out; // unbound — let it drift on its recorded state
+    }
+    let a = -mu / (v2 - 2.0 * mu / r); // = -μ / (2·energy)
+    let h_vec = r_vec.cross(v_vec);
+    if h_vec.length_squared() <= 0.0 {
+        return out;
+    }
+    let e_vec = ((v2 - mu / r) * r_vec - r_vec.dot(v_vec) * v_vec) / mu;
+    let e = e_vec.length();
+    if e >= 1.0 {
+        return out;
+    }
+    let n_hat = h_vec.normalize();
+    let p_hat = if e > 1e-6 {
+        e_vec / e
+    } else {
+        // Circular orbit: periapsis is arbitrary — pick any in-plane axis (as orbit_ellipse does).
+        let aref = if n_hat.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+        (aref - n_hat * aref.dot(n_hat)).normalize()
+    };
+    let q_hat = n_hat.cross(p_hat);
+    // Current true → eccentric → mean anomaly, advance the mean anomaly, solve back to true.
+    let nu0 = r_vec.dot(q_hat).atan2(r_vec.dot(p_hat));
+    let ecc0 = ((1.0 - e).sqrt() * (nu0 * 0.5).sin()).atan2((1.0 + e).sqrt() * (nu0 * 0.5).cos());
+    let m0 = ecc0 - e * ecc0.sin();
+    let mean_motion = (mu / (a * a * a)).sqrt();
+    let m = m0 + mean_motion * dt_year;
+    let mut ea = m; // Newton iteration on Kepler's equation M = E − e·sin E
+    for _ in 0..8 {
+        ea -= (ea - e * ea.sin() - m) / (1.0 - e * ea.cos());
+    }
+    let nu = 2.0 * ((1.0 + e).sqrt() * (ea * 0.5).sin()).atan2((1.0 - e).sqrt() * (ea * 0.5).cos());
+    let rr = a * (1.0 - e * ea.cos());
+    let p = a * (1.0 - e * e);
+    let speed = (mu / p).sqrt();
+    out.pos = (p_hat * nu.cos() + q_hat * nu.sin()) * rr;
+    out.vel = (p_hat * (-nu.sin()) + q_hat * (e + nu.cos())) * speed;
+    out
+}
+
+/// Settled-system turntable speed (radians/sec of yaw) — the slow orbit the cinematic keeps
+/// once the formation is done, so the camera never just sits there. Tunable by eye.
+const COAST_ORBIT_RATE: f32 = 0.05;
+
 /// The choreographed camera pose `(yaw, pitch, distance)` at formation time `t ∈ [0,1]`.
 /// It opens **just below the disk plane, edge-on and well out** — looking *through* the dust
 /// toward the star (which the cloud occludes, with rays leaking through the gaps) — then
@@ -188,7 +278,7 @@ fn cinematic_pose(t: f32) -> (f32, f32, f32) {
     let outer = DISK_OUTER as f32;
     let yaw = lerp(0.15, 1.05); // slow drift for parallax
     let pitch = lerp(-0.12, 0.66); // just below the plane (edge-on) → above it
-    let distance = lerp(outer * 3.2, outer * 0.52); // well out, looking through the cloud → in
+    let distance = lerp(outer * 2.72, outer * 0.52); // open ~15% tighter, looking through the cloud → in
     (yaw, pitch, distance)
 }
 
@@ -228,12 +318,18 @@ impl Scene for SolarSystem {
         if input.key_down(Key::Escape) {
             return Transition::Quit;
         }
-        // Camera: while the cinematic is armed it's driven by the formation clock; the first
-        // drag hands manual control back.
+        // Camera: while the cinematic is armed it's driven by the formation clock, then keeps a
+        // slow orbit once the system settles; the first drag hands manual control back.
         self.cam.update(input, !self.cinematic);
         if self.cinematic {
             if input.mouse_left {
                 self.cinematic = false; // user grabbed the camera
+            } else if self.coasting {
+                // Settled system: keep the cinematic alive with a slow turntable orbit from the
+                // final glide pose — a continuous beauty shot, not a freeze-frame. Runs off its
+                // own clock so it keeps turning even while the seed is frozen/locked.
+                let (yaw_end, pitch, distance) = cinematic_pose(1.0);
+                self.cam.set_pose(yaw_end + COAST_ORBIT_RATE * self.coast_cam, pitch, distance);
             } else {
                 let (yaw, pitch, distance) = cinematic_pose(self.t);
                 self.cam.set_pose(yaw, pitch, distance);
@@ -277,28 +373,50 @@ impl Scene for SolarSystem {
         }
         self.prev_down = down;
 
-        // ←/→ scrub; Space-driven playback otherwise.
+        // Advance the clock. ←/→ scrub the formation, Space-driven playback otherwise. Once the
+        // formation reaches the end the system doesn't freeze — it settles into a Keplerian
+        // **coast** and just keeps orbiting (no pause, no 150 Myr stop).
+        if self.play {
+            self.anim_time += dt.as_secs_f32();
+        }
         let scrub = dt.as_secs_f32() * 0.4;
         if input.key_down(Key::Left) {
+            // Rewinding drops out of the coast and back into the recorded formation.
+            self.coasting = false;
+            self.coast_year = 0.0;
+            self.coast_cam = 0.0;
             self.t = (self.t - scrub).max(0.0);
         }
         if input.key_down(Key::Right) {
-            self.t = (self.t + scrub).min(1.0);
-        }
-        if self.play {
-            self.t += dt.as_secs_f32() * self.speed;
-            if self.t >= 1.0 {
-                self.t = 1.0;
-                self.play = false; // hold on the final system
+            if self.coasting {
+                self.coast_year += scrub as f64 * self.coast_rate();
+            } else {
+                self.t += scrub;
             }
         }
+        if self.play {
+            if self.coasting {
+                self.coast_year += dt.as_secs_f32() as f64 * self.coast_rate();
+            } else {
+                self.t += dt.as_secs_f32() * self.speed;
+            }
+        }
+        if !self.coasting && self.t >= 1.0 {
+            self.t = 1.0;
+            self.coasting = true; // cross from forming into the orbiting coast
+        }
+        if self.coasting {
+            // The settled-camera orbit clock — advances regardless of `play`, so the locked
+            // beauty shot keeps turning while the bodies stay fixed.
+            self.coast_cam += dt.as_secs_f32();
+        }
+        self.refresh_live();
         Transition::None
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
         renderer.set_camera(&self.cam.camera());
         let Some(disc) = self.disc else { return };
-        let t = self.t;
 
         // Deep-space galactic background: the sky pass renders a Milky Way band + star field
         // at "night", so we push the sun *and* moon below the horizon (full night, no discs)
@@ -324,29 +442,28 @@ impl Scene for SolarSystem {
         // consumed, driven by the sim — not a decorative field on a timer.
         self.set_disk_cloud(renderer);
 
-        // The bodies at the current playback instant.
-        if let Some(snap) = self.timeline.sample(t as f64) {
-            for b in &snap.bodies {
-                let pos = b.pos.as_vec3();
-                let c = b.dominant().map(MaterialClass::color).unwrap_or([0.7, 0.7, 0.72]);
-                let size = if b.kind == BodyKind::Giant {
-                    // Gas giant: a faint envelope halo behind the core.
-                    let size = body_size(b.physical_radius(), b.kind);
-                    renderer.draw_billboard_additive(disc, pos, Vec2::splat(size * 1.9), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 0.18]);
-                    renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
-                    size
-                } else if b.mass < BELT_MASS {
-                    // Leftover planetesimal / belt object — small, dim, faintly icy-grey.
-                    renderer.draw_billboard_additive(disc, pos, Vec2::splat(0.06), Vec2::ZERO, Vec2::ONE, [0.60, 0.62, 0.68, 0.55]);
-                    0.06
-                } else {
-                    // A planet.
-                    let size = body_size(b.physical_radius(), b.kind);
-                    renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
-                    size
-                };
-                self.draw_moons(renderer, disc, pos, size, b.moons.len() as u32);
-            }
+        // The bodies at the current instant — recorded while forming, Kepler-coasted once the
+        // system has settled. `self.live` is the single source the list/rings/export share.
+        for b in &self.live {
+            let pos = b.pos.as_vec3();
+            let c = b.dominant().map(MaterialClass::color).unwrap_or([0.7, 0.7, 0.72]);
+            let size = if b.kind == BodyKind::Giant {
+                // Gas giant: a faint envelope halo behind the core.
+                let size = body_size(b.physical_radius(), b.kind);
+                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size * 1.9), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 0.18]);
+                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
+                size
+            } else if b.mass < BELT_MASS {
+                // Leftover planetesimal / belt object — small, dim, faintly icy-grey.
+                renderer.draw_billboard_additive(disc, pos, Vec2::splat(0.06), Vec2::ZERO, Vec2::ONE, [0.60, 0.62, 0.68, 0.55]);
+                0.06
+            } else {
+                // A planet.
+                let size = body_size(b.physical_radius(), b.kind);
+                renderer.draw_billboard_additive(disc, pos, Vec2::splat(size), Vec2::ZERO, Vec2::ONE, [c[0], c[1], c[2], 1.0]);
+                size
+            };
+            self.draw_moons(renderer, disc, pos, size, b.moons.len() as u32);
         }
 
         self.flashes(renderer, disc);
@@ -379,12 +496,33 @@ impl Scene for SolarSystem {
 
 impl SolarSystem {
     /// The bodies at the current playback instant — what the render, the list, the rings and
-    /// the export all read, so they always agree and update live as the system evolves.
+    /// the export all read, so they always agree and update live as the system evolves. Kept
+    /// current by [`Self::refresh_live`] each update.
     fn current_bodies(&self) -> &[Body] {
-        self.timeline
-            .sample(self.t as f64)
-            .map(|s| s.bodies.as_slice())
-            .unwrap_or(&[])
+        &self.live
+    }
+
+    /// Sim-years of orbital coast per second of playback — matched to the formation's own
+    /// year-rate so the settled system keeps turning at the exact pace it ended on.
+    fn coast_rate(&self) -> f64 {
+        self.timeline.span_year * self.speed as f64
+    }
+
+    /// Recompute [`Self::live`] for the current instant: the recorded snapshot while the
+    /// formation plays, or the final settled system Kepler-advanced by `coast_year` once it
+    /// has crossed into the coast.
+    fn refresh_live(&mut self) {
+        self.live = if self.coasting {
+            match self.timeline.snapshots.last() {
+                Some(s) => s.bodies.iter().map(|b| kepler_advance(b, self.coast_year)).collect(),
+                None => Vec::new(),
+            }
+        } else {
+            self.timeline
+                .sample(self.t as f64)
+                .map(|s| s.bodies.clone())
+                .unwrap_or_default()
+        };
     }
 
     /// Configure the volumetric dust cloud for this frame: disk geometry + the formation
@@ -425,7 +563,8 @@ impl SolarSystem {
         let n = count.min(6);
         for i in 0..n {
             let orbit_r = body_size * (1.3 + 0.22 * i as f32) + 0.10;
-            let phase = self.t * TAU * 5.0 + i as f32 / n.max(1) as f32 * TAU;
+            // Free-running clock so moons keep orbiting through the coast, not just the formation.
+            let phase = self.anim_time + i as f32 / n.max(1) as f32 * TAU;
             let off = Vec3::new(orbit_r * phase.cos(), 0.0, orbit_r * phase.sin());
             renderer.draw_billboard_additive(disc, center + off, Vec2::splat(0.05), Vec2::ZERO, Vec2::ONE, [0.85, 0.86, 0.92, 0.95]);
         }
@@ -435,7 +574,7 @@ impl SolarSystem {
     /// the list marks PLAYABLE, so the rings and the list always agree as the system evolves.
     fn mark_viable_worlds(&self, renderer: &mut Renderer) {
         let Some(ringtex) = self.ring else { return };
-        let pulse = 0.55 + 0.25 * (self.t * 8.0).sin().abs();
+        let pulse = 0.55 + 0.25 * (self.anim_time * 2.5).sin().abs();
         for body in self.current_bodies() {
             if !assess(body).playable {
                 continue;
@@ -483,15 +622,30 @@ impl SolarSystem {
 
     fn hud(&self, renderer: &mut Renderer) {
         renderer.draw_text("flicker · solar-system formation", Vec2::new(16.0, 16.0), 24.0, TEXT);
-        let myr = self.t * RUN_MYR;
+        // Cosmetic clock: formation maps 0..1 → 0..RUN_MYR; the coast keeps climbing past it.
+        let span = self.timeline.span_year.max(1.0e-9);
+        let sim_year = if self.coasting {
+            span + self.coast_year
+        } else {
+            self.t as f64 * span
+        };
+        let myr = (sim_year / span) as f32 * RUN_MYR;
+        // Space = freeze: a paused run is the **committed Epoch-1 seed** — the current
+        // configuration (all bodies + their live compositions) is held fixed at this instant.
+        let (status, status_col) = if self.play {
+            let phase = if self.coasting { "coasting" } else { "forming" };
+            (format!("▶ playing · {phase}"), [0.96, 0.86, 0.60, 1.0])
+        } else {
+            ("❚❚ FROZEN · Epoch-1 seed locked".to_string(), FROZEN)
+        };
         renderer.draw_text(
-            &format!("T = {myr:.1} Myr (scaled)   {}", if self.play { "▶ playing" } else { "❚❚ paused" }),
+            &format!("T = {myr:.1} Myr (scaled)   {status}"),
             Vec2::new(16.0, 50.0),
             18.0,
-            [0.96, 0.86, 0.60, 1.0],
+            status_col,
         );
         renderer.draw_text(
-            "Space play/pause · ←/→ scrub · ↑/↓ select · [ ] supernova · R reseed · drag · wheel · Esc",
+            "Space play/freeze (lock Epoch-1 seed) · ←/→ scrub · ↑/↓ select · [ ] supernova · R reseed · drag · wheel · Esc",
             Vec2::new(16.0, 74.0),
             13.0,
             DIM,
@@ -580,15 +734,22 @@ impl SolarSystem {
         let Some(body) = body else {
             return;
         };
+        // Frozen (Space) = this is the locked seed; playing = a live preview that updates as
+        // the configuration evolves. Same numbers either way — freezing just holds them fixed.
+        let (label, col) = if self.play {
+            ("Epoch-1 composition (live · Space freezes the seed)", TEXT)
+        } else {
+            ("Epoch-1 SEED — LOCKED", FROZEN)
+        };
         renderer.draw_text(
             &format!(
-                "Epoch-1 composition of selected ({:.2} M⊕, {:.1} g/cm³):",
+                "{label} · selected {:.2} M⊕, {:.1} g/cm³:",
                 earth_masses(body.mass),
                 body.comp.density()
             ),
             Vec2::new(16.0, y),
             14.0,
-            TEXT,
+            col,
         );
         y += 22.0;
         let ab = body.comp.to_epoch1_abundance(&self.tables);
