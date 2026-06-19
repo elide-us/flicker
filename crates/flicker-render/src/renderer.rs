@@ -29,6 +29,7 @@ use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
+use crate::pipeline_volumetric::{VolumetricDisk, VolumetricDiskUniform, VolumetricPipeline};
 use crate::texture::{LoadedTexture, TextureHandle};
 
 /// The renderer owns the GPU device, the surface, and every pipeline.
@@ -53,6 +54,7 @@ pub struct Renderer {
     lines: LinesPipeline,
     billboard: BillboardPipeline,
     sky: SkyPipeline,
+    volumetric: VolumetricPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -79,6 +81,9 @@ pub struct Renderer {
     /// uploaded in `end_frame`. Defaults to the pre-uniform hardcoded look, so
     /// a scene that never calls [`Renderer::set_scene`] renders unchanged.
     scene: SceneLighting,
+    /// This frame's volumetric-disk params (the cloud), or `None`. Reset each
+    /// [`Renderer::begin_frame`]; set by [`Renderer::set_volumetric_disk`].
+    volumetric_params: Option<VolumetricDisk>,
     /// Whether to draw the procedural sky behind the 3D scene this frame.
     /// Reset to `false` each [`Renderer::begin_frame`] and raised by
     /// [`Renderer::draw_sky`], so menus/loading (no 3D) keep their flat
@@ -155,6 +160,7 @@ impl Renderer {
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
+        let volumetric = VolumetricPipeline::new(&device, surface_format);
 
         Ok(Self {
             window,
@@ -171,6 +177,8 @@ impl Renderer {
             lines,
             billboard,
             sky,
+            volumetric,
+            volumetric_params: None,
             depth_texture,
             depth_view,
             textures: Vec::new(),
@@ -351,6 +359,7 @@ impl Renderer {
         self.lines.clear();
         self.billboard.clear();
         self.draw_sky = false;
+        self.volumetric_params = None;
         self.current_layer = 0.0;
     }
 
@@ -447,6 +456,15 @@ impl Renderer {
         self.draw_sky = true;
     }
 
+    /// Draw a **volumetric dust disk** this frame: a raymarched protoplanetary-disk cloud
+    /// (dark dust + warm star-lit inner glow) whose density dissipates inside-out with
+    /// `params.formation` and carves gaps around `params.bodies`. Drawn just after the sky and
+    /// composited over it. Per-frame, like `draw_sky`; a no-op unless a camera is set (it needs
+    /// the view ray).
+    pub fn set_volumetric_disk(&mut self, params: VolumetricDisk) {
+        self.volumetric_params = Some(params);
+    }
+
     /// Queue a mesh for rendering this frame.
     ///
     /// `model` is the cluster-local-to-world transform; the camera (set
@@ -507,6 +525,24 @@ impl Renderer {
             .push(texture, world_position, world_size, uv_min, uv_max, color);
     }
 
+    /// Queue a camera-facing world-space billboard with **additive** blending — for soft
+    /// glows (star bloom, dust clouds, impact flashes). Same arguments as
+    /// [`Self::draw_billboard`], but the sampled texel is *added* to the target (scaled by
+    /// its alpha) and **no depth is written**, so overlapping glows stack into a halo
+    /// instead of clipping each other into hard cutouts. Drawn after all alpha billboards.
+    pub fn draw_billboard_additive(
+        &mut self,
+        texture: TextureHandle,
+        world_position: Vec3,
+        world_size: Vec2,
+        uv_min: Vec2,
+        uv_max: Vec2,
+        color: [f32; 4],
+    ) {
+        self.billboard
+            .push_additive(texture, world_position, world_size, uv_min, uv_max, color);
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
@@ -526,10 +562,15 @@ impl Renderer {
             self.mesh.set_camera_matrix(&self.queue, view_projection);
             self.billboard
                 .set_camera(&self.queue, cam.view(), view_projection);
+            let inv_vp = view_projection.inverse();
             if sky_this_frame {
-                self.sky.set_uniform(
+                self.sky
+                    .set_uniform(&self.queue, scene_to_sky_uniform(&self.scene, inv_vp, camera_pos));
+            }
+            if let Some(params) = &self.volumetric_params {
+                self.volumetric.set_uniform(
                     &self.queue,
-                    scene_to_sky_uniform(&self.scene, view_projection.inverse(), camera_pos),
+                    VolumetricDiskUniform::from_params(params, inv_vp, camera_pos),
                 );
             }
         }
@@ -606,6 +647,11 @@ impl Renderer {
             // so the mesh paints over it wherever terrain exists.
             if sky_this_frame {
                 self.sky.render(&mut pass);
+            }
+            // Volumetric dust disk over the sky background (also fullscreen, no depth write);
+            // the 3D scene + glow draws after, on top.
+            if self.volumetric_params.is_some() && self.camera.is_some() {
+                self.volumetric.render(&mut pass);
             }
 
             // 3D mesh first; immediate-mode lines layer on top of the

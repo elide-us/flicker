@@ -151,24 +151,8 @@
       "rows": [
         { "id": "time_of_day", "label": "Time", "min": 0.0, "max": 24.0, "fmt": "%.1fh" },
         { "id": "play_speed", "label": "Speed", "min": 0.0, "max": 10.0, "fmt": "%.1fx" },
-        { "id": "moon_phase", "label": "Moon", "min": 0.0, "max": 4.0, "fmt": "%.2f" },
         { "id": "year_month", "label": "Season", "min": 0.0, "max": 12.0, "fmt": "%.1f" },
         { "id": "axial_tilt_deg", "label": "Tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f°" }
-      ],
-      "toggles_y": 200,
-      "toggle_h": 26,
-      "toggle_gap": 7,
-      "toggle_w": 194,
-      "button_style": {
-        "cell": [0.13, 0.16, 0.23, 0.97],
-        "hot": [0.22, 0.34, 0.50, 0.98],
-        "label": [0.86, 0.92, 1.0, 1.0],
-        "label_size": 16
-      },
-      "toggles": [
-        { "id": "orbits", "label": "Orbits" },
-        { "id": "constellations", "label": "Stars" },
-        { "id": "planets", "label": "Planets" }
       ]
     },
 

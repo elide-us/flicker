@@ -115,29 +115,8 @@ local function celestial_rows(sw)
     }
     y = y + cz.row_h
   end
-  local bottom = y
-  if cz.toggles and cz.toggles_y then
-    bottom = math.max(bottom, cz.toggles_y + #cz.toggles * (cz.toggle_h + cz.toggle_gap))
-  end
-  local cap = { x = panel_x - 8, y = cz.top_y - 4, w = cz.width + cz.margin_x + 8, h = (bottom - cz.top_y) + 8 }
+  local cap = { x = panel_x - 8, y = cz.top_y - 4, w = cz.width + cz.margin_x + 8, h = (y - cz.top_y) + 8 }
   return cz, rows, panel_x, cap
-end
-
--- The SKY overlay toggle buttons (Orbits / Stars / Planets), stacked below the
--- sliders. Each is a button whose click returns a `toggle_<id>` pulse.
-local function celestial_toggles(sw)
-  local cz = UI.hud.celestial
-  if not (cz and cz.toggles) then
-    return nil, {}, 0
-  end
-  local panel_x = sw - cz.margin_x - cz.width
-  local rows = {}
-  local y = cz.toggles_y
-  for _, t in ipairs(cz.toggles) do
-    rows[#rows + 1] = { def = t, r = { x = panel_x, y = y, w = cz.toggle_w, h = cz.toggle_h } }
-    y = y + cz.toggle_h + cz.toggle_gap
-  end
-  return cz, rows, panel_x
 end
 
 -- The bottom evolution-timeline bar: full width minus margins, ~1 inch tall.
@@ -191,13 +170,6 @@ function M.update(mx, my, clicked, sw, sh, down)
   for _, row in ipairs(crows) do
     local id = row.def.id
     s[id] = Widgets.slider_update(ws, id, row.r, mx, my, clicked, down, Model[id] or 0, row.def.min, row.def.max)
-  end
-
-  local _, ctoggles = celestial_toggles(sw)
-  for _, row in ipairs(ctoggles) do
-    if Widgets.button_update(row.r, mx, my, clicked) then
-      s["toggle_" .. row.def.id] = true
-    end
   end
 
   -- The bottom timeline scrubs as one wide 0..1 slider (drag = scrub the movie).
@@ -322,15 +294,6 @@ local function celestial(cmds, sw)
       size = cz.value_size,
       r = vc[1], g = vc[2], b = vc[3], a = vc[4],
     }
-  end
-
-  local cz2, toggles = celestial_toggles(sw)
-  if cz2 then
-    for _, row in ipairs(toggles) do
-      local on = Model["show_" .. row.def.id]
-      local label = row.def.label .. ": " .. (on and "on" or "off")
-      Widgets.button_draw(cmds, row.r, label, cz2.button_style, on)
-    end
   end
 end
 

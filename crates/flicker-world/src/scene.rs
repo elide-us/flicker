@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use flicker::app::{InputState, Key};
 use flicker::render::{
-    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2, Vec3,
+    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ScriptHost, ValueMap};
@@ -20,7 +20,7 @@ use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_materials::Tables;
 
 use crate::camera::OrbitCam;
-use crate::celestial::{self, CelestialState};
+use crate::celestial::CelestialState;
 use crate::color::ViewMode;
 use crate::globe;
 use flicker_worldgen::{FieldSampler, HexState};
@@ -106,13 +106,6 @@ pub struct World {
     params: WorldParams,
     cam: OrbitCam,
     celestial: CelestialState,
-    /// Cached constellation figures (deterministic; built once) + the planet disc
-    /// billboard texture (loaded in `enter`), and the overlay toggles.
-    constellations: Vec<Vec<Vec3>>,
-    disc: Option<TextureHandle>,
-    show_orbits: bool,
-    show_constellations: bool,
-    show_planets: bool,
     /// Evolution timeline — the source of truth is `(epoch, phase_t)`: which epoch
     /// and how far *through* it (`0..1`). The global scrubber position is derived
     /// from these via the weighted bounds, so a duration change keeps the marker in
@@ -147,15 +140,10 @@ impl World {
             params,
             cam: OrbitCam::new(globe::RADIUS),
             celestial: CelestialState::default(),
-            constellations: celestial::generate_constellations(),
-            disc: None,
-            show_orbits: true,
-            show_constellations: true,
-            show_planets: true,
-            phase_t: 1.0, // start showing Epoch 1 fully formed
+            phase_t: 0.0, // marker at the very start of Epoch 1 (the snapshot)
             timeline_speed: 0.0, // paused — drag the SKY "Speed" up to play the movie
             phase_layer,
-            phase_key: (epoch, PHASE_STEPS),
+            phase_key: (epoch, 0),
             mode: natural_view(epoch),
             epoch,
             mesh: None,
@@ -235,44 +223,6 @@ impl World {
         (0..=last).find(|&e| t < bounds[e + 1]).unwrap_or(last)
     }
 
-    /// Draw the celestial overlays over the globe — depth-tested orbital-path lines,
-    /// the planets as billboards on their ecliptic rings, and the constellation
-    /// figures on a distant sphere — each gated by its HUD toggle.
-    fn draw_overlays(&self, renderer: &mut Renderer) {
-        let r = globe::RADIUS;
-        if self.show_orbits {
-            let (sun_r, moon_r) = (r * 1.16, r * 1.34);
-            renderer.draw_lines(&self.celestial.sun_ring(sun_r), [0.95, 0.66, 0.28, 0.85]);
-            renderer.draw_lines(&self.celestial.moon_ring(moon_r), [0.50, 0.60, 0.90, 0.85]);
-            let mark = r * 0.06;
-            renderer.draw_lines(&celestial::cross_marker(self.celestial.sun_dir() * sun_r, mark), [1.0, 0.85, 0.45, 1.0]);
-            renderer.draw_lines(&celestial::cross_marker(self.celestial.moon_dir() * moon_r, mark), [0.72, 0.84, 1.0, 1.0]);
-        }
-        if let (true, Some(disc)) = (self.show_planets, self.disc) {
-            for p in &celestial::PLANETS {
-                renderer.draw_lines(&self.celestial.ecliptic_ring(r * p.orbit), [0.42, 0.40, 0.52, 0.40]);
-                let pos = self.celestial.planet_dir(p) * (r * p.orbit);
-                renderer.draw_billboard(disc, pos, Vec2::splat(p.size), Vec2::ZERO, Vec2::ONE, p.color);
-            }
-        }
-        if self.show_constellations {
-            let sky = r * 12.0; // beyond the camera's max orbit — a fixed backdrop
-            let mark = sky * 0.006;
-            let mut figures: Vec<(Vec3, Vec3)> = Vec::new();
-            let mut stars: Vec<(Vec3, Vec3)> = Vec::new();
-            for cons in &self.constellations {
-                for pair in cons.windows(2) {
-                    figures.push((pair[0] * sky, pair[1] * sky));
-                }
-                for &s in cons {
-                    stars.extend(celestial::cross_marker(s * sky, mark));
-                }
-            }
-            renderer.draw_lines(&figures, [0.50, 0.58, 0.82, 0.55]);
-            renderer.draw_lines(&stars, [0.94, 0.96, 1.0, 0.90]);
-        }
-    }
-
     /// Engine values published to the HUD script each frame, including the
     /// selected epoch's current knob values (keyed by param id).
     fn hud_model(&self) -> ValueMap {
@@ -286,19 +236,15 @@ impl World {
             .with("view_label", self.mode.label())
             .with("epoch", (self.epoch + 1) as u32)
             .with("epoch_label", EPOCH_LABELS[self.epoch])
-            // Celestial cycle — published every frame so the sliders track the
+            // Sun-for-heat cycle — published every frame so the sliders track the
             // auto-advancing clock; harvested back in `apply_ui`.
             .with("time_of_day", self.celestial.time_of_day as f64)
-            .with("moon_phase", self.celestial.moon_phase as f64)
             .with("year_month", self.celestial.year_month as f64)
             .with("axial_tilt_deg", self.celestial.axial_tilt.to_degrees() as f64)
             // Evolution timeline: the marker position (derived from epoch+phase) +
-            // its playback speed (the repurposed top-right "Speed" slider).
+            // its playback speed (the "Speed" slider).
             .with("timeline", self.playhead() as f64)
-            .with("play_speed", self.timeline_speed as f64)
-            .with("show_orbits", self.show_orbits)
-            .with("show_constellations", self.show_constellations)
-            .with("show_planets", self.show_planets);
+            .with("play_speed", self.timeline_speed as f64);
         // Duration-weighted timeline segment boundaries (`tl_b1`..`tl_b{n-1}`).
         let bounds = self.epoch_bounds();
         for (i, b) in bounds.iter().enumerate().take(bounds.len() - 1).skip(1) {
@@ -346,41 +292,34 @@ impl World {
         // phases). Idempotent when not dragging (the slider echoes the marker).
         if let Some(v) = results.number("timeline") {
             let t = (v as f32).clamp(0.0, 1.0);
-            let e = self.epoch_at(t);
-            let b = self.epoch_bounds();
-            let span = (b[e + 1] - b[e]).max(1e-4);
-            if e != self.epoch {
-                self.epoch = e;
-                self.mode = natural_view(e);
-                self.dirty = true;
+            // Only act on a *real* drag. When the scrubber isn't being dragged it
+            // echoes back the published marker (`playhead()`); re-deriving from that
+            // echo flips `phase_t==1.0` (an epoch's right edge) into the next epoch
+            // at phase 0 — the startup "Epoch 2, solid color" bug.
+            if (t - self.playhead()).abs() > 1e-3 {
+                let e = self.epoch_at(t);
+                let b = self.epoch_bounds();
+                let span = (b[e + 1] - b[e]).max(1e-4);
+                if e != self.epoch {
+                    self.epoch = e;
+                    self.mode = natural_view(e);
+                    self.dirty = true;
+                }
+                self.phase_t = ((t - b[e]) / span).clamp(0.0, 1.0);
             }
-            self.phase_t = ((t - b[e]) / span).clamp(0.0, 1.0);
         }
         if let Some(v) = results.number("play_speed") {
             self.timeline_speed = v as f32;
         }
-        // Celestial cycle sliders — always live (no regen; just retune the sky).
+        // Sun-for-heat sliders — always live (no regen; just move the sun).
         if let Some(v) = results.number("time_of_day") {
             self.celestial.time_of_day = v as f32;
-        }
-        if let Some(v) = results.number("moon_phase") {
-            self.celestial.moon_phase = v as f32;
         }
         if let Some(v) = results.number("year_month") {
             self.celestial.year_month = v as f32;
         }
         if let Some(v) = results.number("axial_tilt_deg") {
             self.celestial.axial_tilt = (v as f32).to_radians();
-        }
-        // Overlay toggles — each is a button pulse that flips the flag.
-        if results.is_on("toggle_orbits") {
-            self.show_orbits = !self.show_orbits;
-        }
-        if results.is_on("toggle_constellations") {
-            self.show_constellations = !self.show_constellations;
-        }
-        if results.is_on("toggle_planets") {
-            self.show_planets = !self.show_planets;
         }
         if results.is_on("reseed") {
             // Reseed wholesale-replaces params with a mutated set. The slider
@@ -494,7 +433,6 @@ fn natural_view(epoch: usize) -> ViewMode {
 impl Scene for World {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
-        self.disc = Some(renderer.load_texture(&celestial::disc_texture(), 16, 16));
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, UI_ELEMENTS);
@@ -591,12 +529,11 @@ impl Scene for World {
         }
 
         renderer.set_camera(&self.cam.camera());
-        renderer.set_scene(self.celestial.lighting());
-        renderer.draw_sky();
+        renderer.set_scene(self.celestial.lighting()); // orbiting sun → heat-map terminator
+        renderer.draw_sky(); // sun + stars on the skybox
         if let Some(handle) = self.mesh {
             renderer.draw_mesh(handle, Mat4::IDENTITY, MeshDrawOptions::default());
         }
-        self.draw_overlays(renderer);
 
         if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
             let _ = script.set_model(&self.hud_model());

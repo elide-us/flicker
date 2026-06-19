@@ -772,6 +772,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-solarsystem"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-materials",
+ "glam",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-ui"
 version = "0.1.0"
 dependencies = [
