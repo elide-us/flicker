@@ -56,6 +56,11 @@ pub struct MeshDrawOptions {
     /// Multiplied with the Lambertian-shaded base color. `[1.0; 4]` is
     /// "no tint".
     pub tint: [f32; 4],
+    /// Glossiness `0..1`: `0` is matte (Lambertian only, the default); higher adds a soft **limb
+    /// sheen** from the point light (a star) for liquid / icy / wet-looking surfaces — a
+    /// Fresnel grazing-edge brightening, *not* a mirror hot-spot (which reads as a marble at planet
+    /// scale). The sheen strengthens with gloss.
+    pub gloss: f32,
 }
 
 impl Default for MeshDrawOptions {
@@ -63,6 +68,7 @@ impl Default for MeshDrawOptions {
         Self {
             wireframe: false,
             tint: [1.0, 1.0, 1.0, 1.0],
+            gloss: 0.0,
         }
     }
 }

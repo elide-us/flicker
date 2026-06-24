@@ -17,6 +17,10 @@ struct Disk {
 };
 
 @group(0) @binding(0) var<uniform> disk: Disk;
+// The opaque pass's depth buffer (read-only). Lets the cloud stop each ray at the nearest solid
+// body — so bodies sit *inside* the dust (front dust hazes them, back dust is occluded) and a body
+// in front of the star occludes it, instead of the cloud/star always drawing behind everything.
+@group(0) @binding(1) var depth_tex: texture_depth_2d;
 
 struct VertexOut {
     @builtin(position) clip_position: vec4<f32>,
@@ -192,6 +196,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let ro = disk.camera_pos.xyz;
     let rd = normalize(world - ro);
 
+    // Distance to the nearest opaque body along this ray, from the depth buffer. `d >= 1` is the
+    // cleared far plane (no body) → treat as infinite. Reconstruct the surface's world position
+    // from (ndc, d) and measure along the ray, so the cloud can clamp to it.
+    let d = textureLoad(depth_tex, vec2<i32>(in.clip_position.xy), 0);
+    var surf_dist = 1.0e9;
+    if (d < 0.99999) {
+        let surf = disk.inv_view_proj * vec4<f32>(in.ndc, d, 1.0);
+        surf_dist = length(surf.xyz / surf.w - ro);
+    }
+
     let inner = disk.geom.x;
     let outer = disk.geom.y;
     let sh = disk.geom.w;
@@ -203,7 +217,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     let sl = slab_range(ro, rd, hmax);
     let t0 = max(sl.x, 0.0);
-    let t1 = min(sl.y, outer * 4.0);
+    // Clamp the march to the nearest body: dust behind a body is occluded by it.
+    let t1 = min(min(sl.y, outer * 4.0), surf_dist);
     if (t1 > t0) {
         let STEPS = 44;
         let dt = (t1 - t0) / f32(STEPS);
@@ -231,13 +246,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
     }
 
-    // The central star, rendered here so the dust **occludes** it: a hot bright core + bloom,
-    // dimmed by `trans` (the dust this ray passed through on its way to the star).
+    // The central star (at the origin), rendered here so the dust **occludes** it: a hot bright
+    // core + bloom, dimmed by `trans` (the dust this ray passed through). A solid body in front of
+    // the star also occludes it — so a planet transiting the star eclipses it.
     let star_dir = normalize(-ro);
     let align = max(dot(rd, star_dir), 0.0);
     let core = pow(align, 7000.0) * 2.6 + pow(align, 220.0) * 0.5 + pow(align, 26.0) * 0.10;
     let star_col = vec3<f32>(1.0, 0.93, 0.80);
-    inscatter = inscatter + star_col * core * trans;
+    let star_vis = select(1.0, 0.0, surf_dist < length(ro)); // body nearer than the star → eclipse
+    inscatter = inscatter + star_col * core * trans * star_vis;
 
     let alpha = 1.0 - trans;
     return vec4<f32>(inscatter, alpha);

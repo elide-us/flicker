@@ -10,19 +10,18 @@
 //!
 //! ```text
 //! flicker-celestial
-//! ├── model/      data only: Body, Satellite (tree), System, Cloud, the four fields
+//! ├── model/      data only: Body, Satellite (tree), System, Cloud, HexWorld, the four fields
 //! ├── formation/  nebula → conserved Cloud (materialisation done; seeding next)
-//! └── evolution/  System(t) → System(t+1)            (DEFERRED — not in this slice)
+//! └── evolution/  iterate a body's HexWorld over time (skeleton: lifecycle + step seam)
 //! ```
 //!
 //! `model` knows nothing of formation/evolution; those (and the renderers + epoch
 //! sim, which live *outside* this crate) consume the model. This crate has **no GPU
 //! dependency** — rendering is a consumer's job.
 //!
-//! # This slice: the data model only
+//! # What's built
 //!
-//! Per the refactor plan (spec §10, step 2) the data model comes first and
-//! *nothing else until it is clean*. [`model`] defines:
+//! [`model`] — the data:
 //!
 //! - [`Body`](model::Body) — a physical object carrying the four fields:
 //!   **composition** (the conserved element-mass truth) and the **gravity /
@@ -35,6 +34,14 @@
 //! - [`Cloud`](model::Cloud) — the system's material reservoir, as pure conservation
 //!   accounting (no visual): bodies grow by absorbing its mass (removed from the
 //!   cloud, inserted into the body), leaving a conserved remainder.
+//! - [`HexWorld`](model::HexWorld) — a body's surface as a hex grid of conserved
+//!   composition (the planet-scale macro-voxel, §8): the world-storage foundation.
+//!
+//! [`formation`] materialises a nebula into the conserved [`Cloud`]. [`evolution`] iterates a
+//! body's [`HexWorld`] over a mega-year lifecycle ([`BodyEvolution`]) — the world-gen epochs run
+//! *per body and stepped*, with emergent stage transitions (no per-type terminations). Both are
+//! early: formation has the materialisation (seeding next); evolution has the lifecycle skeleton
+//! + step seam (the per-stage transforms next). See `docs/flicker-celestial-evolution-handoff.md`.
 //!
 //! # Units
 //!
@@ -43,12 +50,14 @@
 //! surface quantities are reported in SI/CGS with explicit unit suffixes
 //! (`_si` = m/s², g/cm³, GPa). See [`units`].
 
+pub mod evolution;
 pub mod formation;
 pub mod hex;
 pub mod model;
 pub mod units;
 
+pub use evolution::{BodyEvolution, Stage};
 pub use model::{
     Body, BodyKind, ClassComposition, Classification, Cloud, CloudRing, CondensationClass, Disc,
-    DiscClass, DiscGap, Satellite, System,
+    DiscClass, DiscGap, HexWorld, Satellite, System,
 };

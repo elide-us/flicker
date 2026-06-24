@@ -220,9 +220,9 @@ pub fn draw_tile(
         // rides the tile's placement (centre, fence tilt, then map roll).
         let model = *xform * Mat4::from_translation(center) * tilt;
         let tint = if lit { TERRAIN_HOVER_TINT } else { [1.0, 1.0, 1.0, 1.0] };
-        renderer.draw_mesh(t.ground, model, MeshDrawOptions { wireframe: false, tint });
+        renderer.draw_mesh(t.ground, model, MeshDrawOptions { wireframe: false, tint, ..Default::default() });
         if let Some(w) = t.water {
-            renderer.draw_mesh(w, model, MeshDrawOptions { wireframe: false, tint });
+            renderer.draw_mesh(w, model, MeshDrawOptions { wireframe: false, tint, ..Default::default() });
         }
     } else if let Some(mesh) = assets.fill_mesh {
         // Fallback when the vocabulary failed to load: the plain grey fill.
@@ -231,7 +231,7 @@ pub fn draw_tile(
             * tilt
             * Mat4::from_translation(Vec3::new(0.0, -FILL_INSET, 0.0));
         let tint = if lit { HOVER_TINT } else { FILL_TINT };
-        renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
+        renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint, ..Default::default() });
     }
     draw_hex(renderer, assets, center, number, flip, tilt, xform);
 }

@@ -467,13 +467,14 @@ impl MeshPipeline {
     }
 
     /// Queue a mesh for rendering this frame.
-    pub fn push(&mut self, handle: MeshHandle, model: Mat4, tint: [f32; 4], wireframe: bool) {
+    pub fn push(&mut self, handle: MeshHandle, model: Mat4, tint: [f32; 4], wireframe: bool, gloss: f32) {
         self.queued.push(MeshDraw {
             handle,
             per_draw: PerDraw {
                 model: model.to_cols_array_2d(),
                 tint,
-                flags: [if wireframe { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+                // flags.x = wireframe, flags.y = gloss (specular strength).
+                flags: [if wireframe { 1.0 } else { 0.0 }, gloss, 0.0, 0.0],
             },
         });
     }
@@ -646,7 +647,9 @@ pub fn create_depth_view(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // RENDER_ATTACHMENT to write depth in the opaque pass; TEXTURE_BINDING so the volumetric
+        // pass can *sample* that depth (read-only) to clamp its rays at solid bodies.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

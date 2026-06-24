@@ -17,3 +17,8 @@ license.workspace = true
 flicker-worldstate.workspace = true
 flicker-materials.workspace = true
 glam.workspace = true
+# HexWorld derives serde so an evolved planet's state can be captured for the game.
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

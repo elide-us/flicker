@@ -14,8 +14,9 @@ use flicker::render::{
     Vec3, VolumetricDisk, MAX_VOLUMETRIC_BODIES,
 };
 use flicker::scene::{Scene, Transition};
-use flicker_celestial::hex::{hex_freq_for_radius, HEX_FREQ_GIANT};
+use flicker_celestial::hex::{hex_freq_for_giant, hex_freq_for_radius};
 use flicker_materials::Tables;
+use flicker_worldgen::HexState;
 
 use crate::astro::{earth_masses, G, M_EARTH, M_STAR};
 use crate::body::{cleared_neighborhood, Body, BodyKind};
@@ -35,11 +36,18 @@ const FROZEN: [f32; 4] = [0.40, 0.82, 1.0, 1.0];
 /// The time slider's `0..1` maps to this many millions of years (cosmetic — see `sim`).
 /// ~150 Myr spans a realistic terrestrial giant-impact phase.
 const RUN_MYR: f32 = 150.0;
+/// Sim-years of orbital coast advanced per second of playback **once the system settles**. The
+/// formation is a fast geological time-lapse; the coast drops to this **calm, watchable orbital
+/// pace** so a settled body (a gas giant especially) is stable enough to track while its surface
+/// evolves — not the old `span_year × speed`, which whipped bodies thousands of orbits/sec into a
+/// blur. A planet at 1 AU takes ~`1/COAST_YEARS_PER_SEC` s per orbit; outer giants are slower.
+/// Tuning knob — raise for livelier orbits, lower to nearly still the system for close study.
+const COAST_YEARS_PER_SEC: f64 = 0.3;
 /// Physical radii are ~10⁻⁵ AU; scale them up so bodies are visible at disk scale.
-/// (Halved from 6000/0.18/2.4 — planets read ~50% smaller overall.)
-const VISUAL_INFLATION: f64 = 3000.0;
-const MIN_BODY: f32 = 0.09;
-const MAX_BODY: f32 = 1.2;
+/// (Halved again from 3000/0.09/1.2 — bodies were reading ~2× too large overall.)
+const VISUAL_INFLATION: f64 = 1500.0;
+const MIN_BODY: f32 = 0.045;
+const MAX_BODY: f32 = 0.6;
 /// Below this mass a survivor is a leftover planetesimal / belt object, not a planet.
 const BELT_MASS: f64 = 0.03 * M_EARTH;
 /// Moons drawn per body (the most massive few), as small hex globes.
@@ -56,6 +64,99 @@ const RING_MIN_MASS: f64 = 0.003 * M_EARTH;
 /// Shredded mass that reads as a full-strength (brightest) ring.
 const RING_REF_MASS: f64 = 0.05 * M_EARTH;
 
+/// Mega-years advanced per evolution step. A tuning knob.
+const EVO_STEP_MYR: f64 = 0.5;
+/// Simulated age (MYR) at which a body's evolution **pegs** (stops stepping): a solid finishes
+/// differentiating, a gas giant finishes developing its swirl. After this it just holds its baked
+/// state — no more steps, no more uploads. A tuning knob (later replaced by the convergence gate).
+const EVO_COMPLETE_MYR: f64 = 10.0;
+/// Real seconds a body holds each flat-shaded state before swapping to the next — the art-directed
+/// evolution cadence. **Nothing redraws between steps** (no per-frame upload); a step is one cheap
+/// sim step + one mesh swap. A tuning knob.
+const STEP_INTERVAL: f32 = 1.2;
+/// **Viewer LOD** for an evolving globe — the icosphere `freq` it's *rendered* at, capped here so a
+/// step's mesh build + upload stays cheap. The body's real size→hex budget (Earth ≈ 100) is the
+/// **data** (verified in `flicker-celestial::hex` tests); rendering an evolving 100k-cell globe each
+/// step craters the frame rate, and at disk distance the hexes are sub-pixel anyway. Size shows
+/// through the body's on-screen *size*, not its tile count. Smaller bodies keep their own `freq`.
+const VIEWER_EVO_FREQ: u32 = 20;
+
+/// A body's cached globe: its current evolution state (a grid of [`HexState`]), the **flat-shaded**
+/// mesh of that state, and the per-body clock. Every body evolves through the system cutoff
+/// (Epoch 3): a **gaseous** body advects its liquefied air ([`worldglobe::step_gas`]); a **solid**
+/// body differentiates a crust ([`worldglobe::step_solid`] → Epoch 2, iron draining out as it
+/// matures). The evolution is shown by **swapping** the flat mesh to the next state once per
+/// `STEP_INTERVAL` — no crossfade, no per-frame work. Once `EVO_COMPLETE_MYR` is reached the body
+/// pegs (static). The icosphere is cached in `topo` so a swap never rebuilds it. Evicted when no
+/// longer drawn.
+struct Globe {
+    /// Cached icosphere topology — built **once** and reused for every step + mesh swap, so the
+    /// (expensive) icosphere is never rebuilt per frame.
+    topo: worldglobe::Topo,
+    /// World seed (the shared `EpochCtx` seed for the solid stages).
+    seed: u64,
+    /// The body's current evolution state.
+    state: Vec<HexState>,
+    /// Simulated age (MYR) — drives the solid differentiation `settle` and the peg.
+    age_myr: f64,
+    mesh: MeshHandle,
+    /// Real-time accumulator toward the next step (the art cadence).
+    accum: f32,
+    /// Evolution complete → holds its baked state (no more steps or uploads).
+    pegged: bool,
+    /// Gas (advects) vs solid (differentiates).
+    gas: bool,
+    /// Surface glossiness `0..1` — a wet/icy specular sheen for water-rich (liquid) worlds; 0 for
+    /// dry rock and gas (matte). Fixed per body (its water content doesn't change here).
+    gloss: f32,
+}
+
+impl Globe {
+    /// Materialise a globe from its initial state `states` (Epoch-1 seed / gas swirl) on the cached
+    /// `topo`, uploading the flat-shaded mesh of that state. `gloss` gives liquid worlds a sheen.
+    fn new(renderer: &mut Renderer, topo: worldglobe::Topo, states: Vec<HexState>, seed: u64, gas: bool, gloss: f32) -> Self {
+        let (v, i) = worldglobe::globe_mesh(&states, &topo);
+        let mesh = renderer.upload_mesh(&v, MeshIndices::U32(&i));
+        // Stagger each body's step phase across `[0, STEP_INTERVAL)` (deterministic from `seed`) so
+        // bodies don't all rebuild on the same frame — spreads the swaps out, no synchronized hitch.
+        let accum = (seed % 997) as f32 / 997.0 * STEP_INTERVAL;
+        Self { topo, seed, state: states, age_myr: 0.0, mesh, accum, pegged: false, gas, gloss }
+    }
+
+    /// One evolution step: gas advects its air; a solid differentiates at the `settle` its age maps to.
+    fn step_once(state: &[HexState], topo: &worldglobe::Topo, seed: u64, gas: bool, age_myr: f64, tables: &Tables) -> Vec<HexState> {
+        if gas {
+            worldglobe::step_gas(state, topo, EVO_STEP_MYR)
+        } else {
+            let settle = (age_myr / EVO_COMPLETE_MYR).clamp(0.0, 1.0);
+            worldglobe::step_solid(state, tables, topo, seed, settle)
+        }
+    }
+
+    /// Advance the evolution on the art cadence, then draw. The body holds its current flat-shaded
+    /// state; every `STEP_INTERVAL` real seconds it takes **one** cheap sim step and **swaps** the
+    /// mesh to the new state — at most one re-upload per frame, none in between (the cached `topo`
+    /// makes the swap cheap — no icosphere rebuild). Once `EVO_COMPLETE_MYR` is reached the body
+    /// pegs and never re-uploads again.
+    fn advance(&mut self, renderer: &mut Renderer, tables: &Tables, dt: f32, model: Mat4) {
+        if !self.pegged {
+            self.accum += dt;
+            if self.accum >= STEP_INTERVAL {
+                self.accum = 0.0; // one step per advance — a long frame can't burst many
+                self.age_myr += EVO_STEP_MYR;
+                self.state = Self::step_once(&self.state, &self.topo, self.seed, self.gas, self.age_myr, tables);
+                let (v, i) = worldglobe::globe_mesh(&self.state, &self.topo);
+                renderer.free_mesh(self.mesh);
+                self.mesh = renderer.upload_mesh(&v, MeshIndices::U32(&i));
+                if self.age_myr >= EVO_COMPLETE_MYR {
+                    self.pegged = true;
+                }
+            }
+        }
+        renderer.draw_mesh(self.mesh, model, MeshDrawOptions { gloss: self.gloss, ..Default::default() });
+    }
+}
+
 pub struct SolarSystem {
     cam: OrbitCam,
     tables: Tables,
@@ -71,20 +172,22 @@ pub struct SolarSystem {
     /// Keplerian coast) instead of freezing — `coast_year` is the sim-time elapsed since.
     coasting: bool,
     coast_year: f64,
-    /// Wall-clock seconds since the coast began — drives the **comet camera** path. Runs even
-    /// while frozen, so the comet sweep never stops while the bodies stay fixed.
-    coast_cam: f32,
     /// A free-running clock (seconds, advances while playing) for cosmetic animation — moon
     /// orbits and the habitable-ring pulse — so they keep moving through the coast too.
     anim_time: f32,
+    /// The `anim_time` at the previous frame, so `render` can derive this frame's evolution
+    /// advance (the clock pauses with playback, freezing the simulation — never per-frame busywork).
+    last_evo_time: f32,
     /// The bodies at the current instant: the recorded snapshot while forming, the final
     /// system Kepler-advanced while coasting. Render, list, rings, and export all read this.
     live: Vec<Body>,
     /// This frame's uploaded body-sphere meshes, freed at the start of the next render.
     body_meshes: Vec<MeshHandle>,
-    /// Composed flicker-world hex globes for **settled** rocky/icy worlds, cached by composition
-    /// (`globe_key`) — built once, redrawn with the orbit transform, evicted when unused.
-    globe_cache: HashMap<u64, MeshHandle>,
+    /// Per-settled-body globes, cached by composition+freq (`globe_key`): each holds the two
+    /// materialised [`HexWorld`] grids the surface morphs between (the stored material truth the
+    /// evolution iteration steps over) and the disposable mesh derived from them. Built once, the
+    /// mesh re-derived only when its blend level changes, evicted when the body stops being drawn.
+    globe_cache: HashMap<u64, Globe>,
     /// A unit banded ring annulus uploaded once; drawn per giant (tilted, scaled, tinted).
     ring_mesh: Option<MeshHandle>,
     selected: usize,
@@ -118,8 +221,8 @@ impl SolarSystem {
             speed: 0.020, // a slow, ~50 s cinematic pass (eased back from the old frantic 0.032)
             coasting: false,
             coast_year: 0.0,
-            coast_cam: 0.0,
             anim_time: 0.0,
+            last_evo_time: 0.0,
             live,
             body_meshes: Vec::new(),
             globe_cache: HashMap::new(),
@@ -143,7 +246,6 @@ impl SolarSystem {
         self.t = 0.0;
         self.coasting = false;
         self.coast_year = 0.0;
-        self.coast_cam = 0.0;
         self.live = self.timeline.snapshots.first().map(|s| s.bodies.clone()).unwrap_or_default();
         self.selected = 0;
         self.cinematic = true; // re-arm the choreographed camera for the new run
@@ -289,29 +391,6 @@ fn kepler_advance(body: &Body, dt_year: f64) -> Body {
     out
 }
 
-/// Comet-camera radial swoop rate (rad/s of the in/out cycle) — period ≈ 2π/rate ≈ 16 s.
-const COMET_RATE: f32 = 0.38;
-/// Seconds to ease from the glide-in's final pose into the comet path (seamless handoff).
-const COMET_EASE_IN: f32 = 4.0;
-
-/// The **comet camera** path during the coast (replaces the old turntable): a continuous,
-/// somewhat-erratic swoop — racing out to ~where the opening glide began, diving back in toward
-/// the star, then out again from a new direction — always aimed at the system centre. `s` is
-/// seconds since the coast began; the incommensurate frequencies keep it from quite repeating.
-fn comet_pose(s: f32) -> (f32, f32, f32) {
-    let outer = DISK_OUTER as f32;
-    let d_far = outer * 2.72; // out to about where the opening glide began
-    let d_near = outer * 0.25; // a close dive past the star
-    // Radial swoop in/out; the power skews it to **linger far and dive quickly** (comet-like).
-    let swoop = 0.5 - 0.5 * (s * COMET_RATE).cos();
-    let distance = d_near + (d_far - d_near) * swoop.powf(0.65);
-    // Direction wanders so each dive comes from a new angle: yaw sweeps + wobble, pitch rises and
-    // dips above/below the disk plane.
-    let yaw = s * 0.22 + 0.8 * (s * 0.41).sin();
-    let pitch = 0.8 * (s * 0.29).sin() + 0.25 * (s * 0.73).cos();
-    (yaw, pitch, distance)
-}
-
 /// A stable per-composition key for caching a planet's composed globe — so a settled planet
 /// reuses one built mesh across frames (composition only changes at collisions, never during the
 /// coast). FNV-1a over the five class masses, rounded to shed float noise.
@@ -387,7 +466,7 @@ fn cinematic_pose(t: f32) -> (f32, f32, f32) {
 /// Visible billboard size (AU) for a body of the given physical radius and kind.
 fn body_size(radius_au: f64, kind: BodyKind) -> f32 {
     let base = (radius_au * VISUAL_INFLATION) as f32;
-    let lo = if kind == BodyKind::Debris { 0.07 } else { MIN_BODY };
+    let lo = if kind == BodyKind::Debris { 0.035 } else { MIN_BODY };
     base.clamp(lo, MAX_BODY)
 }
 
@@ -432,16 +511,11 @@ impl Scene for SolarSystem {
             if input.mouse_left {
                 self.cinematic = false; // user grabbed the camera
             } else if self.coasting {
-                // Settled system: a continuous **comet camera** — swoops out to ~where the opening
-                // glide began, dives back in toward the star, out again from a new direction,
-                // forever — always aimed at the system centre. Eased in from the glide's final pose
-                // so the handoff is seamless. Driven by `coast_cam`, which advances even while
-                // frozen, so the sweep never stops.
-                let comet = comet_pose(self.coast_cam);
-                let blend = (self.coast_cam / COMET_EASE_IN).clamp(0.0, 1.0);
-                let e = blend * blend * (3.0 - 2.0 * blend); // smoothstep
-                let (sy, sp, sd) = cinematic_pose(1.0);
-                self.cam.set_pose(sy + (comet.0 - sy) * e, sp + (comet.1 - sp) * e, sd + (comet.2 - sd) * e);
+                // Settled system: hold a stable settled view (the old comet flyby is gone — it
+                // swept the camera every frame, so a slow frame read as a random new angle). Drag
+                // to take manual orbit control.
+                let (yaw, pitch, distance) = cinematic_pose(1.0);
+                self.cam.set_pose(yaw, pitch, distance);
             } else {
                 let (yaw, pitch, distance) = cinematic_pose(self.t);
                 self.cam.set_pose(yaw, pitch, distance);
@@ -496,7 +570,6 @@ impl Scene for SolarSystem {
             // Rewinding drops out of the coast and back into the recorded formation.
             self.coasting = false;
             self.coast_year = 0.0;
-            self.coast_cam = 0.0;
             self.t = (self.t - scrub).max(0.0);
         }
         if input.key_down(Key::Right) {
@@ -516,11 +589,6 @@ impl Scene for SolarSystem {
         if !self.coasting && self.t >= 1.0 {
             self.t = 1.0;
             self.coasting = true; // cross from forming into the orbiting coast
-        }
-        if self.coasting {
-            // The comet-camera clock — advances regardless of `play`, so the comet sweep
-            // continues while the bodies stay fixed.
-            self.coast_cam += dt.as_secs_f32();
         }
         self.refresh_live();
         Transition::None
@@ -593,9 +661,9 @@ impl Scene for SolarSystem {
                     pos: b.pos.as_vec3(),
                     comp: b.comp.clone(),
                     size: body_size(b.physical_radius(), b.kind),
-                    // Only giants are pinned/capped; solid worlds scale by their real size.
+                    // Both scale by real size; a giant just uses half the tiles (coarser hexes).
                     hex_freq: if giant {
-                        HEX_FREQ_GIANT
+                        hex_freq_for_giant(b.physical_radius())
                     } else {
                         hex_freq_for_radius(b.physical_radius())
                     },
@@ -612,6 +680,14 @@ impl Scene for SolarSystem {
             })
             .collect();
 
+        // This frame's evolution advance, in crossfade-fractions (≡ simulation steps): the wall
+        // time elapsed since last frame × the pace. Derived from `anim_time`, which only advances
+        // during playback, so pausing freezes the simulation. Clamped so a long frame can't burst.
+        // Real seconds since last frame (the evolution cadence runs on this, capped one step/frame).
+        // `anim_time` only advances during playback, so pausing freezes the evolution.
+        let dt = (self.anim_time - self.last_evo_time).max(0.0);
+        self.last_evo_time = self.anim_time;
+
         let mut globe_used: HashSet<u64> = HashSet::new();
         for d in &draws {
             if d.belt {
@@ -624,16 +700,37 @@ impl Scene for SolarSystem {
             // composition+freq and lit by the star point light. Giants are simply capped to a
             // coarse freq via `hex_freq`; nothing renders any other way. Coarse while actively
             // forming (many bodies), full resolution once stopped/settled.
-            let freq = if self.coasting || !self.play { d.hex_freq } else { COARSE_FREQ };
+            // Render at a capped viewer LOD: settled bodies use their size-derived `hex_freq` but
+            // clamped to `VIEWER_EVO_FREQ` so an evolving globe's per-step mesh build + upload stays
+            // cheap; coarse while actively forming (many transient bodies churning).
+            let freq = if self.coasting || !self.play {
+                d.hex_freq.min(VIEWER_EVO_FREQ)
+            } else {
+                COARSE_FREQ
+            };
             let key = globe_key(&d.comp) ^ ((freq as u64) << 40);
             globe_used.insert(key);
             if !self.globe_cache.contains_key(&key) {
-                let abundance = d.comp.to_epoch1_abundance(&self.tables);
-                let (v, i) = worldglobe::build_globe(&self.tables, abundance, freq, key);
-                let handle = renderer.upload_mesh(&v, MeshIndices::U32(&i));
-                self.globe_cache.insert(key, handle);
+                // The composition picks the distribution: a gas-dominated body is liquefied air
+                // (differential-rotation swirl), everything else an Epoch-1 solid spread. That grid
+                // is the initial state (S₀); the `Globe` then evolves it through Epoch 3 — a gas
+                // giant advects its air, a solid differentiates its crust (iron draining out). The
+                // icosphere is built **once** here and cached in the `Globe` (never rebuilt per frame).
+                let topo = worldglobe::Topo::new(freq);
+                let is_gas = d.comp.dominant() == Some(MaterialClass::Gas);
+                let states = if is_gas {
+                    let n_bands = (6.0 + (d.comp.total() / M_EARTH).max(1.0).log10() as f32 * 4.0).clamp(6.0, 18.0);
+                    worldglobe::materialize_gas(&topo, n_bands)
+                } else {
+                    let abundance = d.comp.to_epoch1_abundance(&self.tables);
+                    worldglobe::materialize_solid(&self.tables, abundance, &topo, key)
+                };
+                // Liquid look: water/ice-rich solids get a wet/icy sheen (gloss scales with water
+                // content; full by ~50% water); gas and dry rock stay matte. Tweak the factor here.
+                let gloss = if is_gas { 0.0 } else { (d.comp.water_fraction() * 2.0).clamp(0.0, 1.0) as f32 };
+                self.globe_cache.insert(key, Globe::new(renderer, topo, states, key, is_gas, gloss));
             }
-            renderer.draw_mesh(self.globe_cache[&key], model, MeshDrawOptions::default());
+            self.globe_cache.get_mut(&key).unwrap().advance(renderer, &self.tables, dt, model);
 
             // A ring — only on giants that actually shredded a satellite (`ring_spec`), its
             // brightness from the debris mass and its hue from how icy that debris was. The
@@ -647,7 +744,7 @@ impl Scene for SolarSystem {
                     1.0,
                 ];
                 let model = Mat4::from_translation(d.pos) * ring_tilt(d.pos) * Mat4::from_scale(Vec3::splat(d.size));
-                renderer.draw_mesh(rh, model, MeshDrawOptions { wireframe: false, tint });
+                renderer.draw_mesh(rh, model, MeshDrawOptions { wireframe: false, tint, ..Default::default() });
             }
 
             // Moons — the same scheme, just small: a composition hex globe each (cached,
@@ -663,20 +760,22 @@ impl Scene for SolarSystem {
                 let mkey = globe_key(mcomp) ^ ((COARSE_FREQ as u64) << 40);
                 globe_used.insert(mkey);
                 if !self.globe_cache.contains_key(&mkey) {
+                    let topo = worldglobe::Topo::new(COARSE_FREQ);
                     let abundance = mcomp.to_epoch1_abundance(&self.tables);
-                    let (v, ix) = worldglobe::build_globe(&self.tables, abundance, COARSE_FREQ, mkey);
-                    let handle = renderer.upload_mesh(&v, MeshIndices::U32(&ix));
-                    self.globe_cache.insert(mkey, handle);
+                    let states = worldglobe::materialize_solid(&self.tables, abundance, &topo, mkey);
+                    // Moons are solid → they differentiate a crust, then hold; icy moons get a sheen.
+                    let gloss = (mcomp.water_fraction() * 2.0).clamp(0.0, 1.0) as f32;
+                    self.globe_cache.insert(mkey, Globe::new(renderer, topo, states, mkey, false, gloss));
                 }
                 let mmodel = Mat4::from_translation(mpos) * Mat4::from_scale(Vec3::splat(msize));
-                renderer.draw_mesh(self.globe_cache[&mkey], mmodel, MeshDrawOptions::default());
+                self.globe_cache.get_mut(&mkey).unwrap().advance(renderer, &self.tables, dt, mmodel);
             }
         }
         // Evict cached globes whose planet is no longer drawn (reseed / scrubbed back to forming).
         let stale: Vec<u64> = self.globe_cache.keys().copied().filter(|k| !globe_used.contains(k)).collect();
         for k in stale {
-            if let Some(h) = self.globe_cache.remove(&k) {
-                renderer.free_mesh(h);
+            if let Some(g) = self.globe_cache.remove(&k) {
+                renderer.free_mesh(g.mesh);
             }
         }
 
@@ -716,10 +815,12 @@ impl SolarSystem {
         &self.live
     }
 
-    /// Sim-years of orbital coast per second of playback — matched to the formation's own
-    /// year-rate so the settled system keeps turning at the exact pace it ended on.
+    /// Sim-years of orbital coast per second of playback. The formation is a fast geological
+    /// time-lapse, but the settled system drops to [`COAST_YEARS_PER_SEC`] — a calm, watchable
+    /// orbital pace — so a gas giant is a stable object you can track while its surface evolves,
+    /// instead of the old `span_year × speed` blur (thousands of orbits per second).
     fn coast_rate(&self) -> f64 {
-        self.timeline.span_year * self.speed as f64
+        COAST_YEARS_PER_SEC
     }
 
     /// Recompute [`Self::live`] for the current instant: the recorded snapshot while the

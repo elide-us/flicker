@@ -160,7 +160,9 @@ impl Renderer {
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
-        let volumetric = VolumetricPipeline::new(&device, surface_format);
+        let mut volumetric = VolumetricPipeline::new(&device, surface_format);
+        // Bind the scene depth so the volumetric can sample it (clamp rays at bodies).
+        volumetric.set_depth(&device, &depth_view);
 
         Ok(Self {
             window,
@@ -264,6 +266,8 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
+        // Rebind the recreated depth view into the volumetric's bind group.
+        self.volumetric.set_depth(&self.device, &self.depth_view);
     }
 
     /// Current logical size of the rendering surface, in pixels.
@@ -471,7 +475,7 @@ impl Renderer {
     /// via [`Renderer::set_camera`]) supplies the view and projection.
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
-        self.mesh.push(mesh, model, options.tint, options.wireframe);
+        self.mesh.push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
 
     /// Draw a wireframe axis-aligned bounding box this frame. Lives in
@@ -615,9 +619,11 @@ impl Renderer {
                 label: Some("flicker.frame_encoder"),
             });
 
+        // Pass 1 — opaque scene: sky background, then 3D meshes (writing depth), lines, and
+        // world-space billboards. The depth is **stored** so the volumetric pass can sample it.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flicker.main_pass"),
+                label: Some("flicker.opaque_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -643,32 +649,48 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Procedural sky behind everything (fullscreen, no depth write),
-            // so the mesh paints over it wherever terrain exists.
+            // Procedural sky behind everything (fullscreen, no depth write), so the mesh paints
+            // over it wherever bodies exist. Then 3D meshes (write depth), lines (test, no write),
+            // and world-space depth-tested billboards.
             if sky_this_frame {
                 self.sky.render(&mut pass);
             }
-            // Volumetric dust disk over the sky background (also fullscreen, no depth write);
-            // the 3D scene + glow draws after, on top.
+            self.mesh.render(&mut pass, &self.meshes);
+            self.lines.render(&mut pass);
+            self.billboard.render(&mut pass, &self.textures);
+        }
+
+        // Pass 2 — the **depth-aware** volumetric over the opaque scene, then 2D overlays. Depth is
+        // bound **read-only** here (no pass-2 pipeline writes depth), which lets the volumetric
+        // *sample* the same depth buffer (bound in its group) to clamp its rays at solid bodies —
+        // so the dust and star sit in correct depth with the bodies instead of always behind them.
+        // 2D overlays paint last, on top of everything.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("flicker.overlay_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: None, // read-only → the volumetric may sample this depth in-pass
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
             if self.volumetric_params.is_some() && self.camera.is_some() {
                 self.volumetric.render(&mut pass);
             }
 
-            // 3D mesh first; immediate-mode lines layer on top of the
-            // mesh (still in 3D space, depth-tested but not depth-
-            // writing); then 2D overlays on top.
-            self.mesh.render(&mut pass, &self.meshes);
-            self.lines.render(&mut pass);
-            // World-space, depth-tested billboards layer with the 3D scene
-            // (occluded by terrain in front); 2D overlays still draw on top.
-            self.billboard.render(&mut pass, &self.textures);
-
-            // 2D in painter's order: walk the union of layers used by the three
-            // 2D pipelines, ascending, drawing triangle → sprite → text within
-            // each layer. A higher-layer overlay's sprites *and* text therefore
-            // cover a lower layer's text (which a single all-text-last pass
-            // could not). With everything at the default layer 0 this is exactly
-            // triangle → sprite → text, identical to the prior fixed order.
+            // 2D in painter's order: walk the union of layers used by the three 2D pipelines,
+            // ascending, drawing triangle → sprite → text within each layer (unchanged).
             let mut layers: Vec<f32> = Vec::new();
             layers.extend(self.triangle.layers());
             layers.extend(self.sprite.layers());

@@ -145,20 +145,19 @@ The project has pivoted several times. **Current authoritative direction:**
   with per-epoch knob panels. → `docs/flicker-world-handoff.md`.
 - **Epoch design of record** → `docs/clayengine_world_generation_spec_v2.md`
   (§"Epoch specifications", Phase-1-simple / Phase-2-sophisticated per epoch).
-- **BIG REFACTOR (in progress) — unify celestial systems into `flicker-celestial`**
-  → `docs/flicker-celestial-spec.md` (design of record). A new lib crate owning the
-  **Body/Satellite recursive tree** (bodies, rings, belts, comets; gravity/density/
-  pressure + composition), **formation** (fuzzy cloud→system, less aggressive
-  consumption, giants capture many moons) and **evolution** (the hierarchical
-  order-of-magnitude N-body "three-body trick"). Two co-equal objectives: **effective
-  visualizations** + **accurate data**. Renderers/epoch-sim *consume* the model. Hex
-  = planet-scale macro-voxel; hex budget is a pinned constant (giants scale in *size*
-  only, not data). **Slice 1 (the data model) is LANDED** → `docs/flicker-celestial-data-model-handoff.md`:
-  `Body`/`Satellite`/`Disc`/`System` built + tested. Load-bearing call: a `Body`
-  carries **both** a conserved element `Composition` *and* a condensation-class
-  breakdown (the physics truth — bulk density can't come from elemental densities,
-  since the table's oxygen is a gas), kept in sync via `deposit`/`strip`. Next:
-  formation, evolution, hex abstraction (consumers; not yet built).
+- **Celestial / system formation = `examples/flicker-sol2`.** Currently **only the ejecta-cloud
+  *distribution* viewer** (the "Stage 1" view): one colour ring per Prism element at its
+  atomic-weight cast distance (heavier = nearer), differentially sheared + clumpy (`cloud.rs`),
+  with overdensity **dots** (`detect.rs`) and distribution sliders. The user confirmed this view
+  is right. **The formation simulation was REMOVED (2026-06-23) after four failed attempts**
+  (condensation disk → Hill-grid accretion → sub-disk moons → aggregate field); `disk.rs`,
+  `accrete.rs`, `subdisk.rs`, `aggregate.rs`, `field.rs` are deleted. The eventual rebuild must
+  **derive from the existing starting values** (Prism table, the cloud distribution, cast params,
+  seed) — NOT invent new tables or a parallel system. **EVERYTHING IS DERIVED FROM THE STARTING
+  VALUES.** Model of record + the failure post-mortem: MCP memory (decision "flicker-sol2
+  formation sim ROLLED BACK", spec "aggregation model"). → `docs/flicker-sol2-handoff.md`.
+  **The earlier `flicker-celestial` refactor is ABANDONED / superseded by this** — see
+  Abandoned below. Do NOT build on it or resurrect its model.
 
 ### Abandoned / superseded (left in tree, do NOT resurrect or reuse as a path)
 - The **flat two-map / bent-rings / σ-zipper** hex model in `examples/hex-map`
@@ -170,6 +169,12 @@ The project has pivoted several times. **Current authoritative direction:**
 - `flicker-worldsim` — a redundant world-sim crate that was an anti-pattern; the
   renderer + celestial sim already live in the voxel path. (Reflected in memory
   `voxel-cluster-is-the-renderer`.)
+- **`flicker-celestial`** (the crate + `docs/flicker-celestial-*.md`, `examples/flicker-solarsystem`) —
+  the condensation/Body-tree/N-body refactor. **Abandoned/superseded by `flicker-sol2`**
+  (user, 2026-06-23: "almost everything in that simulation is just completely fucked and
+  doesn't do anything the way we want it to"). Left in tree as history; do NOT consume,
+  extend, or treat its docs as the design of record. The real system-formation work is
+  flicker-sol2.
 
 ---
 
@@ -201,13 +206,24 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 | `flicker-worldgrid` | **Topology only** for the ISEA hex-sphere: `pentagon_patch(rings)`, `icosphere(freq)` → `{dirs, neighbors, area, is_pentagon, shard, id}`. Feeds `EpochCtx`. | Slices 1–3 done; ISEA projection (3b) + ledger `CellId↔CellCoord` (4) pending |
 | `flicker-worldstate` | The conserved ledger substrate: `Composition` (sparse element→mass, conservation-safe add/remove/merge), `Cell`, `Ledger`. | defined; Epoch-output→Ledger hookup deferred |
 | `flicker-worldgen` | The epoch pipeline (`epoch1..6.rs`), `HexState`, `EpochCtx`, `FieldSampler` (per-cell hardness/relief/vein fields). | Epochs 1–6 built; see §5 |
-| `flicker-celestial` | The unified celestial sim (§3 refactor): `model` (Body/Satellite/Disc/System + Cloud reservoir + the four physical fields), `formation` (Nebula + `materialize_cloud`: analytic disk → conserved Cloud), `hex` (spec-§8 budget: `hex_freq_for_radius` Mercury≈48/Earth≈100 + `HEX_FREQ_GIANT`=48). `evolution` + body seeding deferred. No GPU. | Slices 1–2 + hex invariant done → `docs/flicker-celestial-data-model-handoff.md` |
+| `flicker-celestial` | ~~unified celestial sim~~ — **ABANDONED/superseded by `flicker-sol2`** (§3). Left in tree as history; do NOT consume or extend. | abandoned |
 
 ### Apps & examples
 - `crates/flicker-world` — **the current app**: icosphere viewer + epoch-viz + app
   shell (Menu/Loading/World/Pause/Settings), Lua HUD, logo splash, rebind capture.
   `cargo run -p flicker-world`. Controls: drag=rotate, wheel=zoom, V=cycle field,
   ↑/↓=epoch, R=reseed (per-layer), `[`/`]`=grid freq.
+- `examples/flicker-sol2` — **supernova ejecta-cloud distribution viewer** (Stage-1 only; the
+  formation sim was removed 2026-06-23 — see §3). A 2D top-down cloud with one colour ring per
+  Prism element at its atomic-weight **cast distance** (heavier = nearer), differentially sheared
+  + clumpy + meandering (`src/cloud.rs`); a focus deck (hover/←→) shows one element's density
+  gradient; `src/detect.rs` (toggle **B**) marks overdensity **dots**. Distribution dials only;
+  pressing keys past the sliders does nothing now (no formation). The view is confirmed correct;
+  the eventual formation rebuild must **derive from these starting values** (the cloud, the
+  Prism table, cast params, seed) — not invent a new system. `cargo run -p flicker-sol2`;
+  `[`/`]` explosion · ↑/↓ falloff · `,`/`.` gradient · `;`/`'` clump · ←/→/hover focus · wheel
+  zoom · Space pause · N reclump · B dots · R reset. flicker-render(2D)+flicker-scene+flicker-app;
+  consumes only flicker-materials. → `docs/flicker-sol2-handoff.md`.
 - `examples/voxel-cluster` — primary voxel demo: 3×3 cluster field, contour+mesh,
   fly camera, dynamic LOD + async re-mesh, Lua debug HUD, pause/settings.
 - `examples/hex-sphere` — **headless** topology test: builds the icosphere, prints

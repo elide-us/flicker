@@ -14,15 +14,19 @@
 //!   ring↔belt [`Disc`] continuum.
 //! - [`system`] — [`System`], the tree wrapper, with walks and IAU
 //!   [`Classification`].
+//! - [`world`] — [`HexWorld`], a body's surface as a hex grid of conserved composition (the
+//!   planet-scale macro-voxel, §8) — the storage the evolution iteration steps over.
 
 pub mod body;
 pub mod cloud;
 pub mod condensation;
 pub mod satellite;
 pub mod system;
+pub mod world;
 
 pub use body::{Body, BodyKind};
 pub use cloud::{Cloud, CloudRing};
 pub use condensation::{ClassComposition, CondensationClass};
 pub use satellite::{Disc, DiscClass, DiscGap, Satellite, RING_BELT_SURFACE_DENSITY};
 pub use system::{classify, cleared_neighborhood, Classification, System, COMET_MIN_ECCENTRICITY};
+pub use world::HexWorld;

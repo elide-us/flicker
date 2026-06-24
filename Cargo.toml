@@ -28,6 +28,7 @@ members = [
     "examples/hex-map",
     "examples/hex-sphere",
     "examples/flicker-solarsystem",
+    "examples/flicker-sol2",
 ]
 
 [workspace.package]

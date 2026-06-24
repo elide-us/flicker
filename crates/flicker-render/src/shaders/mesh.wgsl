@@ -187,7 +187,23 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let to_point = scene.point_pos.xyz - in.world_position;
     let point_dir = to_point / max(length(to_point), 1e-4);
     let point = scene.point_color.rgb * max(dot(in.world_normal, point_dir), 0.0);
-    let shaded = base * (scene.ambient.rgb + sun + moon + point);
+    // Liquid/icy **sheen** (per-draw gloss = `flags.y`). NOT a mirror specular — a tight hot-spot
+    // reads as a marble, wrong at planet scale. Instead the wet cue is a soft **limb sheen**:
+    // brightest where the view grazes the surface (Fresnel, the planet's lit edge), with only a
+    // faint, broad sunward lift — an ocean/atmosphere look, no bright reflection dot. Lit side
+    // only, scaled by gloss; matte surfaces (gloss 0) skip it and read exactly as before.
+    let gloss = per_draw.flags.y;
+    var sheen = vec3<f32>(0.0);
+    if (gloss > 0.001) {
+        let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
+        let ndl = max(dot(in.world_normal, point_dir), 0.0);
+        let ndv = max(dot(in.world_normal, view_dir), 0.0);
+        let fresnel = pow(1.0 - ndv, 3.0); // grazing-angle limb brightening
+        let half_vec = normalize(point_dir + view_dir);
+        let broad = pow(max(dot(in.world_normal, half_vec), 0.0), 3.0); // very broad, faint
+        sheen = scene.point_color.rgb * (0.35 * fresnel + 0.10 * broad) * ndl * gloss;
+    }
+    let shaded = base * (scene.ambient.rgb + sun + moon + point) + sheen;
     let lit = vec4<f32>(shaded, 1.0) * per_draw.tint;
 
     // Distance fog (forward): exponential by view distance, blending the lit

@@ -697,6 +697,8 @@ dependencies = [
  "flicker-materials",
  "flicker-worldstate",
  "glam",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -778,6 +780,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "flicker-sol2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-materials",
+ "tracing-subscriber",
 ]
 
 [[package]]

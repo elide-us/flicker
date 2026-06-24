@@ -89,10 +89,25 @@ impl MaterialClass {
 /// for an Earth-like body; **Mg is a major silicate component** now that it's in
 /// the table.
 pub const CLASS_ELEMENTS: [(MaterialClass, &[(&str, f64)]); 5] = [
-    // Fe/Ni metal core, with the usual siderophile minors.
+    // Fe/Ni metal core, with siderophile minors (Co) and the siderophile/chalcophile trace
+    // metals that condense with iron or its sulfides — the ore accents (Cu/Zn/Pb/Sn/Ag/Pt/Au).
+    // Traces are slightly art-inflated for visibility but kept in rarity order (Au/Pt rarest).
     (
         MaterialClass::Metal,
-        &[("Fe", 0.85), ("Ni", 0.10), ("Co", 0.02), ("S", 0.02), ("P", 0.01)],
+        &[
+            ("Fe", 0.85),
+            ("Ni", 0.10),
+            ("Co", 0.02),
+            ("S", 0.02),
+            ("P", 0.01),
+            ("Cu", 0.006),
+            ("Zn", 0.003),
+            ("Pb", 0.0025),
+            ("Sn", 0.0012),
+            ("Ag", 0.0008),
+            ("Pt", 0.0005),
+            ("Au", 0.0004),
+        ],
     ),
     // Bulk-silicate rock — O/Mg/Si dominated, Mg-bearing (Prism now has Mg).
     (
@@ -108,6 +123,7 @@ pub const CLASS_ELEMENTS: [(MaterialClass, &[(&str, f64)]); 5] = [
             ("K", 0.004),
             ("Ti", 0.002),
             ("Cr", 0.003),
+            ("U", 0.0006), // lithophile/incompatible — concentrates in silicate crust
         ],
     ),
     // Refractory carbon / organics (CHON, carbon-rich).

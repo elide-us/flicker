@@ -112,10 +112,13 @@ impl VolumetricDiskUniform {
     }
 }
 
-/// The volumetric-disk pipeline. One uniform, one bind group, no vertex buffer.
+/// The volumetric-disk pipeline. A uniform + the scene depth texture, no vertex buffer. The bind
+/// group depends on the depth view (which is recreated on resize), so it's (re)built via
+/// [`set_depth`](VolumetricPipeline::set_depth) rather than once at construction.
 pub struct VolumetricPipeline {
     pipeline: wgpu::RenderPipeline,
-    bind_group: wgpu::BindGroup,
+    bind_group_layout: wgpu::BindGroupLayout,
+    bind_group: Option<wgpu::BindGroup>,
     uniform_buf: wgpu::Buffer,
 }
 
@@ -128,16 +131,29 @@ impl VolumetricPipeline {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("flicker.volumetric.bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(DISK_UNIFORM_SIZE),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: std::num::NonZeroU64::new(DISK_UNIFORM_SIZE),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // The opaque pass's depth buffer, sampled (read-only) to clamp rays at bodies.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -195,23 +211,34 @@ impl VolumetricPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        // Seed a sane default so the first frame (before any upload) is valid.
-        // (write happens via set_uniform each frame the disk is requested.)
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flicker.volumetric.bind_group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
+        // The bind group is built once the scene depth view is known (and rebuilt on resize); see
+        // `set_depth`. Until then `render` is a no-op.
 
         Self {
             pipeline,
-            bind_group,
+            bind_group_layout,
+            bind_group: None,
             uniform_buf,
         }
+    }
+
+    /// (Re)build the bind group against the current scene **depth view**. Call once after the depth
+    /// texture is created and again whenever it's recreated (resize).
+    pub fn set_depth(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView) {
+        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flicker.volumetric.bind_group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+            ],
+        }));
     }
 
     pub fn set_uniform(&self, queue: &wgpu::Queue, uniform: VolumetricDiskUniform) {
@@ -219,8 +246,11 @@ impl VolumetricPipeline {
     }
 
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        let Some(bind_group) = &self.bind_group else {
+            return; // depth not bound yet
+        };
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
