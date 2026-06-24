@@ -79,6 +79,7 @@ impl CastParams {
 pub struct ElementCast {
     pub symbol: String,
     pub name: String,
+    pub number: u8,
     pub atomic_mass: f32,
     pub color: [f32; 3],
 }
@@ -99,6 +100,7 @@ impl Ejecta {
             .map(|e| ElementCast {
                 symbol: e.symbol.clone(),
                 name: e.name.clone(),
+                number: e.number,
                 atomic_mass: e.atomic_mass,
                 color: element_rgb(e.number),
             })

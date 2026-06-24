@@ -154,8 +154,16 @@ The project has pivoted several times. **Current authoritative direction:**
   `accrete.rs`, `subdisk.rs`, `aggregate.rs`, `field.rs` are deleted. The eventual rebuild must
   **derive from the existing starting values** (Prism table, the cloud distribution, cast params,
   seed) — NOT invent new tables or a parallel system. **EVERYTHING IS DERIVED FROM THE STARTING
-  VALUES.** Model of record + the failure post-mortem: MCP memory (decision "flicker-sol2
-  formation sim ROLLED BACK", spec "aggregation model"). → `docs/flicker-sol2-handoff.md`.
+  VALUES.** **Locked direction (2026-06-23):** the per-element cloud *tonnage* is DERIVED from
+  two dials — supernova **Mass** (total origin mass = the existing explosion dial) + **Metallicity**
+  (the metals-vs-H/He fraction; Sun ≈ 1.4%) — split across elements by the **cosmic abundance
+  curve** (real SN-nucleosynthesis output: iron peak, post-iron cliff), distributed in angle by the
+  existing cloud field and radius by the existing cast (WHERE = f(atomic mass); HOW MUCH =
+  f(atomic number)). Formation is an **inward gravitational collapse run on the existing cast
+  cloud** (NOT a separate condensation disk): the dominant central lump becomes the star, a 2nd/3rd
+  is a valid emergent sun. (Collapse mechanics not yet designed.) Model of record + the failure
+  post-mortem: MCP memory (decisions "flicker-sol2 mass source LOCKED" + "flicker-sol2 formation sim
+  ROLLED BACK", spec "aggregation model"). → `docs/flicker-sol2-handoff.md`.
   **The earlier `flicker-celestial` refactor is ABANDONED / superseded by this** — see
   Abandoned below. Do NOT build on it or resurrect its model.
 

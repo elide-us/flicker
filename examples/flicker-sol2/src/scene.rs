@@ -1,13 +1,12 @@
-//! The viewer scene — the **ejecta cloud** (cast material distribution).
+//! The viewer scene — two modes over the same data. **Distribution view:** each Prism element is
+//! a colour ring at its atomic-weight cast distance, clumpy + sheared (`crate::cloud`), with
+//! overdensity **dots** marking where matter concentrates (`crate::detect`). **Collapse** (press
+//! `Enter`): the cloud's clumps plus the conserved mass layer ignite into a planetary system —
+//! a central star and an orbiting disk that accretes into planets (`crate::collapse`).
 //!
-//! Each Prism element is a colour ring at its atomic-weight cast distance; the cloud is clumpy,
-//! meandering, and differentially **sheared** (`crate::cloud`), and overdensity **dots** mark
-//! where matter concentrates (`crate::detect`, toggle `B`). This is the material-distribution
-//! view only — the formation simulation that grew bodies from it has been removed (it was wrong
-//! four different ways); when it is rebuilt it must *derive from these starting values*.
-//!
-//! Dials: `[`/`]` explosion (cast reach) · ↑/↓ falloff · `,`/`.` gradient · `;`/`'` clump ·
-//! ←/→ or hover focus an element · wheel/`-`/`=` zoom · Space pause · N reclump · B dots · R reset.
+//! Dials: `[`/`]` explosion (cast reach) · ↑/↓ falloff · `;`/`'` clump · `9`/`0` mass ·
+//! `7`/`8` metallicity · ←/→ or hover focus a ring · wheel/`-`/`=` zoom · Enter ignite ·
+//! Tab new system · Space pause · N reclump · B dots · G gravity well · R reset.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
@@ -17,9 +16,12 @@ use flicker::render::{Renderer, Vec2};
 use flicker::scene::{Scene, Transition};
 
 use crate::cloud::CloudField;
+use crate::collapse::{BodyType, Sim};
 use crate::detect::{self, View as DetectView};
 use crate::draw;
+use crate::mass::{CloudMass, MassParams, EARTH_PER_SUN};
 use crate::model::{self, CastParams, Ejecta};
+use crate::well;
 
 // ── tuning ──────────────────────────────────────────────────────────────────────
 const DEFAULT_AU_AT_EDGE: f32 = 90.0;
@@ -33,13 +35,25 @@ const FOCUS_INNER_FRAC: f32 = 0.40;
 const FOCUS_OUTER_FRAC: f32 = 1.10;
 const FOCUS_PEAK_ALPHA: f32 = 0.60;
 const FOCUS_STEPS: usize = 36;
-const SHARP_MIN: f32 = 0.6;
-const SHARP_MAX: f32 = 4.0;
-const SHARP_DEFAULT: f32 = 2.0;
+/// Fixed steepness of the focus-band radial gradient (was the removed `,`/`.` dial).
+const FOCUS_SHARPNESS: f32 = 2.0;
 
 const CLUMP_STRENGTH_DEFAULT: f32 = 0.6;
 const CLUMP_STRENGTH_MAX: f32 = 1.2;
 const CLOUD_SEED0: u32 = 0xC10D_5EED;
+
+/// Simulated years per real second while the collapse runs (a watch-speed dial).
+const SIM_YEARS_PER_SEC: f32 = 6.0;
+/// Motes sampled per element when igniting the collapse.
+const MOTES_PER_EL: usize = 24;
+/// Body draw size: physical radius × this boost, floored so small worlds still read. (We draw
+/// well above true scale on purpose — real planets would be invisible specks.)
+const BODY_DRAW_BOOST: f32 = 1.6;
+const BODY_DRAW_MIN_PX: f32 = 3.0;
+/// Motion-vector arrow length: screen px per (AU/yr) of speed, clamped readable.
+const MOTION_SCALE: f32 = 10.0;
+const MOTION_MIN_PX: f32 = 8.0;
+const MOTION_MAX_PX: f32 = 48.0;
 
 const TITLE: [f32; 4] = [0.92, 0.94, 0.99, 1.0];
 const DIM: [f32; 4] = [0.60, 0.64, 0.76, 1.0];
@@ -70,16 +84,22 @@ impl Layout {
 pub struct CloudView {
     ejecta: Ejecta,
     params: CastParams,
+    mass: MassParams,
+    cloud_mass: CloudMass,
     au_at_edge: f32,
     focus: usize,
-    gradient_sharpness: f32,
     cloud: CloudField,
     time: f32,
     paused: bool,
     anchor_au: f32,
     show_bodies: bool,
+    show_well: bool,
     last_candidates: usize,
+    sim: Option<Sim>,
     prev_r: bool,
+    prev_enter: bool,
+    prev_tab: bool,
+    prev_g: bool,
     prev_left: bool,
     prev_right: bool,
     prev_space: bool,
@@ -93,19 +113,27 @@ impl CloudView {
         let ejecta = Ejecta::from_tables(&tables);
         let n = ejecta.elements.len();
         let focus = ejecta.elements.iter().position(|e| e.symbol == "Fe").unwrap_or(0);
+        let mass = MassParams::default();
+        let cloud_mass = CloudMass::derive(&ejecta, &mass);
         Self {
             ejecta,
+            mass,
+            cloud_mass,
             params: CastParams::default(),
             au_at_edge: DEFAULT_AU_AT_EDGE,
             focus,
-            gradient_sharpness: SHARP_DEFAULT,
             cloud: CloudField::new(n, CLOUD_SEED0, CLUMP_STRENGTH_DEFAULT),
             time: 0.0,
             paused: false,
             anchor_au: 1.0,
             show_bodies: true,
+            show_well: false,
             last_candidates: 0,
+            sim: None,
             prev_r: false,
+            prev_enter: false,
+            prev_tab: false,
+            prev_g: false,
             prev_left: false,
             prev_right: false,
             prev_space: false,
@@ -157,7 +185,7 @@ impl CloudView {
         let r_out = r_star * FOCUS_OUTER_FRAC;
         let band_w = (r_out - r_in).max(1.0);
         let step_w = band_w / FOCUS_STEPS as f32;
-        let p = self.gradient_sharpness;
+        let p = FOCUS_SHARPNESS;
         let cloud = &self.cloud;
         let i = self.focus;
         let col = el.color;
@@ -256,15 +284,14 @@ impl CloudView {
     }
 
     fn draw_hud(&self, r: &mut Renderer) {
-        r.draw_text("flicker · sol2 — supernova ejecta cloud", Vec2::new(16.0, 16.0), 22.0, TITLE);
+        r.draw_text("flicker · sol2 — supernova ejecta → system formation", Vec2::new(16.0, 16.0), 22.0, TITLE);
         let motion = if self.paused { "  ·  ⏸ paused" } else { "" };
         r.draw_text(
             &format!(
-                "explosion {:.2}  ·  reach {:.0} AU  ·  falloff {:.2}  ·  gradient {:.1}  ·  clump {:.2}  ·  view edge {:.0} AU{}",
+                "explosion {:.2}  ·  reach {:.0} AU  ·  falloff {:.2}  ·  clump {:.2}  ·  view edge {:.0} AU{}",
                 self.params.explosion,
                 self.params.reach_au(),
                 self.params.falloff,
-                self.gradient_sharpness,
                 self.cloud.strength,
                 self.au_at_edge,
                 motion,
@@ -274,13 +301,13 @@ impl CloudView {
             ACCENT,
         );
         r.draw_text(
-            "[ ] explosion · ↑/↓ falloff · ,/. gradient · ;/' clump · ←/→ focus · wheel/-/= zoom",
+            "[ ] explosion · ↑/↓ falloff · ;/' clump · ←/→ focus · wheel/-/= zoom",
             Vec2::new(16.0, 68.0),
             13.0,
             DIM,
         );
         r.draw_text(
-            "Space pause · N reclump · B dots · R reset · Esc",
+            "Enter ignite · Tab new system · 9/0 mass · 7/8 metallicity · Space pause · N reclump · B dots · G well · R reset · Esc",
             Vec2::new(16.0, 86.0),
             13.0,
             DIM,
@@ -293,6 +320,159 @@ impl CloudView {
             14.0,
             [el.color[0] * 0.4 + 0.55, el.color[1] * 0.4 + 0.55, el.color[2] * 0.4 + 0.55, 1.0],
         );
+    }
+
+    /// The conserved **mass layer** readout: total tonnage, the metals fraction, a
+    /// conservation check, and the per-element tonnages — so the cosmic-abundance shape
+    /// (H/He bulk, iron peak, uranium trace) is verifiable at a glance.
+    fn draw_mass_panel(&self, r: &mut Renderer) {
+        let ej = &self.ejecta;
+        let cm = &self.cloud_mass;
+        let total = cm.total();
+        let metals = cm.metals(ej);
+        let zpct = if total > 0.0 { metals / total * 100.0 } else { 0.0 };
+        r.draw_text(
+            &format!(
+                "cloud mass {:.2} M_sun  ·  metals {:.2}%  ·  sum {:.3} M_sun (conserved)",
+                self.mass.total, zpct, total,
+            ),
+            Vec2::new(16.0, 136.0),
+            14.0,
+            [0.80, 0.86, 0.74, 1.0],
+        );
+
+        // Rank by tonnage; show the heaviest budgets, and always uranium (the HZ-world
+        // trace) so its presence-but-tininess reads.
+        let mut order: Vec<usize> = (0..ej.elements.len()).collect();
+        order.sort_by(|&a, &b| cm.tonnage[b].total_cmp(&cm.tonnage[a]));
+        let mut show: Vec<usize> = order.into_iter().take(11).collect();
+        if let Some(u) = ej.elements.iter().position(|e| e.symbol == "U") {
+            if !show.contains(&u) {
+                show.push(u);
+            }
+        }
+        for (row, chunk) in show.chunks(6).enumerate() {
+            let line = chunk
+                .iter()
+                .map(|&i| format!("{} {}", ej.elements[i].symbol, fmt_earth(cm.tonnage[i] * EARTH_PER_SUN)))
+                .collect::<Vec<_>>()
+                .join("  ·  ");
+            r.draw_text(&format!("{line}   M_earth"), Vec2::new(16.0, 158.0 + row as f32 * 18.0), 13.0, DIM);
+        }
+    }
+
+    /// Each body's **motion vector**: a forward arrow in its direction of travel, plus a dotted
+    /// trail behind it. This shows where each body is actually going — honest once orbits are
+    /// eccentric or inclined, unlike a radius circle that just assumes a perfect ring.
+    fn draw_motion(&self, r: &mut Renderer, l: &Layout) {
+        let Some(sim) = &self.sim else {
+            return;
+        };
+        for i in 0..sim.mass.len() {
+            if !sim.alive[i] {
+                continue;
+            }
+            let speed = sim.vel[i].length();
+            if speed < 1e-4 {
+                continue; // the pinned star isn't moving
+            }
+            let p = sim.pos[i];
+            let pos_px = Vec2::new(l.center.x + p.x * l.px_per_au, l.center.y + p.y * l.px_per_au);
+            let dir = sim.vel[i] / speed;
+            let len = (speed * MOTION_SCALE).clamp(MOTION_MIN_PX, MOTION_MAX_PX);
+            let step = Vec2::new(dir.x, dir.y) * len;
+            let c = sim.classify(i).color();
+            draw::arrow(r, pos_px, pos_px + step, 1.5, 7.0, [c[0], c[1], c[2], 0.85]);
+            draw::dotted(r, pos_px, pos_px - step, 1.0, [c[0], c[1], c[2], 0.35], 4.0, 4.0);
+        }
+    }
+
+    /// Render the collapse: planets as discs sized by mass (boosted for legibility) and tinted by
+    /// emergent type. The **star** (body 0) draws as a small fixed dot — at true scale it's a
+    /// ~1:1,000,000 speck, and its accretion/gravity reach is unchanged, so it stays bossy without
+    /// swallowing the inner system on screen.
+    fn draw_collapse(&self, r: &mut Renderer, l: &Layout) {
+        let Some(sim) = &self.sim else {
+            return;
+        };
+        for i in 0..sim.mass.len() {
+            if !sim.alive[i] {
+                continue;
+            }
+            let p = sim.pos[i];
+            let sp = Vec2::new(l.center.x + p.x * l.px_per_au, l.center.y + p.y * l.px_per_au);
+            if i == 0 {
+                draw::disc(r, sp, 9.0, [1.0, 0.86, 0.55, 0.95], 30);
+                draw::disc(r, sp, 5.0, [1.0, 0.98, 0.92, 1.0], 24);
+                continue;
+            }
+            let rad = (sim.radius_au(i) * l.px_per_au * BODY_DRAW_BOOST).clamp(BODY_DRAW_MIN_PX, l.view_radius_px * 0.5);
+            let c = sim.classify(i).color();
+            draw::disc(r, sp, rad, [c[0], c[1], c[2], 0.92], 20);
+        }
+    }
+
+    /// The collapse status line: elapsed time, body count, the largest (the star), and a
+    /// running conservation check (live sum vs the starting tonnage).
+    fn draw_sim_status(&self, r: &mut Renderer) {
+        let Some(sim) = &self.sim else {
+            return;
+        };
+        r.draw_text(
+            &format!(
+                "COLLAPSE  ·  t {:.0} yr  ·  {} bodies  ·  star {:.3} M_sun  ·  sum {:.3} / {:.3} M_sun",
+                sim.time,
+                sim.live_count(),
+                sim.largest_mass(),
+                sim.total_mass(),
+                sim.init_total(),
+            ),
+            Vec2::new(16.0, 200.0),
+            14.0,
+            ACCENT,
+        );
+        // System makeup by emergent type.
+        let (mut star, mut gg, mut ig, mut rock, mut small) = (0, 0, 0, 0, 0);
+        for i in 0..sim.mass.len() {
+            if !sim.alive[i] {
+                continue;
+            }
+            match sim.classify(i) {
+                BodyType::Star => star += 1,
+                BodyType::GasGiant => gg += 1,
+                BodyType::IceGiant => ig += 1,
+                BodyType::RockyPlanet => rock += 1,
+                BodyType::IcyBody | BodyType::Asteroid => small += 1,
+            }
+        }
+        r.draw_text(
+            &format!("{star} star · {gg} gas giant · {ig} ice giant · {rock} rocky · {small} small bodies"),
+            Vec2::new(16.0, 220.0),
+            13.0,
+            DIM,
+        );
+    }
+
+    /// Legend for the collapse view: what each body colour means.
+    fn draw_type_legend(&self, r: &mut Renderer) {
+        let size = r.size();
+        let x = size.x - 176.0;
+        let mut y = 74.0;
+        r.draw_text("body types", Vec2::new(x, y), 14.0, TITLE);
+        y += 22.0;
+        for t in [
+            BodyType::Star,
+            BodyType::GasGiant,
+            BodyType::IceGiant,
+            BodyType::RockyPlanet,
+            BodyType::IcyBody,
+            BodyType::Asteroid,
+        ] {
+            let c = t.color();
+            draw::rect(r, Vec2::new(x, y + 2.0), Vec2::new(11.0, 11.0), [c[0], c[1], c[2], 1.0]);
+            r.draw_text(t.label(), Vec2::new(x + 18.0, y), 13.0, DIM);
+            y += 17.0;
+        }
     }
 
     fn draw_legend(&self, r: &mut Renderer) {
@@ -337,10 +517,12 @@ impl Scene for CloudView {
             (self.params.explosion + axis(Key::LeftBracket, Key::RightBracket) * 0.5 * dt).clamp(0.0, 1.0);
         self.params.falloff =
             (self.params.falloff + axis(Key::Down, Key::Up) * 0.6 * dt).clamp(FALLOFF_MIN, FALLOFF_MAX);
-        self.gradient_sharpness =
-            (self.gradient_sharpness + axis(Key::Comma, Key::Period) * 2.0 * dt).clamp(SHARP_MIN, SHARP_MAX);
         self.cloud.strength =
             (self.cloud.strength + axis(Key::Semicolon, Key::Apostrophe) * 0.6 * dt).clamp(0.0, CLUMP_STRENGTH_MAX);
+        self.mass.total =
+            (self.mass.total + axis(Key::Digit9, Key::Digit0) * 1.0 * dt).clamp(0.1, 10.0);
+        self.mass.metallicity =
+            (self.mass.metallicity + axis(Key::Digit7, Key::Digit8) * 0.03 * dt).clamp(0.0, 0.10);
 
         let zoom_keys = axis(Key::Minus, Key::Equal);
         let factor = (-(zoom_keys * 1.6 * dt) - input.mouse_wheel_delta * 0.12).exp();
@@ -349,10 +531,11 @@ impl Scene for CloudView {
         let r_down = input.key_down(Key::R);
         if r_down && !self.prev_r {
             self.params = CastParams::default();
+            self.mass = MassParams::default();
             self.au_at_edge = DEFAULT_AU_AT_EDGE;
-            self.gradient_sharpness = SHARP_DEFAULT;
             self.cloud.strength = CLUMP_STRENGTH_DEFAULT;
             self.time = 0.0;
+            self.sim = None;
         }
         self.prev_r = r_down;
 
@@ -384,6 +567,38 @@ impl Scene for CloudView {
             self.show_bodies = !self.show_bodies;
         }
         self.prev_b = bkey;
+        let gkey = input.key_down(Key::G);
+        if gkey && !self.prev_g {
+            self.show_well = !self.show_well;
+        }
+        self.prev_g = gkey;
+        let enter = input.key_down(Key::Enter);
+        if enter && !self.prev_enter {
+            // Ignite the collapse: sample the current conserved cloud into motes and let
+            // them fall. R clears it back to the distribution view.
+            self.sim = Some(Sim::from_cloud(
+                &self.ejecta,
+                &self.params,
+                &self.cloud,
+                &self.cloud_mass,
+                MOTES_PER_EL,
+            ));
+        }
+        self.prev_enter = enter;
+        let tab = input.key_down(Key::Tab);
+        if tab && !self.prev_tab {
+            // New system: roll a fresh cloud seed and ignite the collapse from it.
+            let s = self.cloud.seed.wrapping_mul(0x9E37_79B1).wrapping_add(0x6D2B_79F5);
+            self.cloud.reseed(s);
+            self.sim = Some(Sim::from_cloud(
+                &self.ejecta,
+                &self.params,
+                &self.cloud,
+                &self.cloud_mass,
+                MOTES_PER_EL,
+            ));
+        }
+        self.prev_tab = tab;
 
         if !self.paused {
             self.time += dt;
@@ -396,6 +611,14 @@ impl Scene for CloudView {
             rmax = rmax.max(d);
         }
         self.anchor_au = (rmin.max(0.01) * rmax.max(0.01)).sqrt();
+        self.cloud_mass = CloudMass::derive(&self.ejecta, &self.mass);
+
+        let paused = self.paused;
+        if let Some(sim) = self.sim.as_mut() {
+            if !paused {
+                sim.step(dt * SIM_YEARS_PER_SEC);
+            }
+        }
 
         // Hover-to-focus.
         let l = Layout::new(renderer.size(), self.au_at_edge);
@@ -410,23 +633,53 @@ impl Scene for CloudView {
     fn render(&mut self, renderer: &mut Renderer) {
         let l = Layout::new(renderer.size(), self.au_at_edge);
         self.draw_reference_rings(renderer, &l);
-        self.draw_focus_band(renderer, &l);
-        self.draw_element_rings(renderer, &l);
-        self.draw_axes(renderer, &l);
-        draw::disc(renderer, l.center, 9.0, [1.0, 0.86, 0.55, 0.9], 30);
-        draw::disc(renderer, l.center, 5.0, [1.0, 0.98, 0.92, 1.0], 24);
-        if self.show_bodies {
-            self.draw_candidates(renderer, &l);
+        if let Some(sim) = &self.sim {
+            if self.show_well {
+                let bodies: Vec<(Vec2, f32)> = (0..sim.mass.len())
+                    .filter(|&i| sim.alive[i])
+                    .map(|i| (sim.pos[i], sim.mass[i]))
+                    .collect();
+                well::draw(renderer, l.center, l.px_per_au, self.au_at_edge, &bodies);
+            }
+            self.draw_motion(renderer, &l);
+            self.draw_collapse(renderer, &l);
         } else {
-            self.last_candidates = 0;
+            self.draw_focus_band(renderer, &l);
+            self.draw_element_rings(renderer, &l);
+            if self.show_bodies {
+                self.draw_candidates(renderer, &l);
+            } else {
+                self.last_candidates = 0;
+            }
+            draw::disc(renderer, l.center, 9.0, [1.0, 0.86, 0.55, 0.9], 30);
+            draw::disc(renderer, l.center, 5.0, [1.0, 0.98, 0.92, 1.0], 24);
         }
+        self.draw_axes(renderer, &l);
         self.draw_hud(renderer);
-        self.draw_legend(renderer);
+        self.draw_mass_panel(renderer);
+        self.draw_sim_status(renderer);
+        if self.sim.is_some() {
+            self.draw_type_legend(renderer);
+        } else {
+            self.draw_legend(renderer);
+        }
     }
 }
 
 fn ring_segs(radius: f32) -> usize {
     ((radius / 3.0) as usize).clamp(40, 128)
+}
+
+/// Format an Earth-mass tonnage: plain for sizeable budgets, scientific for traces (so
+/// uranium reads as a small-but-nonzero number rather than rounding to zero).
+fn fmt_earth(m_earth: f32) -> String {
+    if m_earth >= 100.0 {
+        format!("{m_earth:.0}")
+    } else if m_earth >= 0.01 {
+        format!("{m_earth:.2}")
+    } else {
+        format!("{m_earth:.1e}")
+    }
 }
 
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {

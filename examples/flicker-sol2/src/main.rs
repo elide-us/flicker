@@ -19,10 +19,13 @@
 //! focus an element · wheel or `-`/`=` zoom · Space pause · N reclump · B dots · R reset · Esc.
 
 mod cloud;
+mod collapse;
 mod detect;
 mod draw;
+mod mass;
 mod model;
 mod scene;
+mod well;
 
 use anyhow::Result;
 use flicker::app::run;

@@ -93,6 +93,23 @@ pub fn line(r: &mut Renderer, a: Vec2, b: Vec2, thickness: f32, color: [f32; 4])
     r.draw_triangle(a + n, b - n, b + n, color);
 }
 
+/// A dotted line from `a` to `b` — dashes `dash` px long separated by `gap` px.
+pub fn dotted(r: &mut Renderer, a: Vec2, b: Vec2, thickness: f32, color: [f32; 4], dash: f32, gap: f32) {
+    let d = b - a;
+    let len = d.length();
+    if len < 1e-4 {
+        return;
+    }
+    let dir = d / len;
+    let mut t = 0.0;
+    while t < len {
+        let s = a + dir * t;
+        let e = a + dir * (t + dash).min(len);
+        line(r, s, e, thickness, color);
+        t += dash + gap;
+    }
+}
+
 /// An arrow from `from` to `to`: a line shaft plus a triangular head of size `head`.
 pub fn arrow(r: &mut Renderer, from: Vec2, to: Vec2, thickness: f32, head: f32, color: [f32; 4]) {
     let d = to - from;
