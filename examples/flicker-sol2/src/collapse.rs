@@ -68,6 +68,27 @@ const DRAG_FLOOR: f32 = 0.02;
 /// than this so fast inner orbits stay stable.
 const MAX_DT: f32 = 0.02;
 
+/// Bulk densities by material class (g/cc) for the **physical** (collision / Roche) radius —
+/// derived from each body's composition, never a per-body input. A gas giant is large and
+/// puffy, rock is small and dense, ice between. Volume-additive blend (`1/ρ = Σ fₑ/ρₑ`).
+const RHO_GAS_GCC: f32 = 1.0;
+const RHO_ICE_GCC: f32 = 1.6;
+const RHO_ROCK_GCC: f32 = 4.0;
+/// g/cc → M☉/AU³ (1 M☉ = 1.989e33 g, 1 AU = 1.496e13 cm), so the physical radius lands in AU.
+const GCC_TO_MSUN_AU3: f32 = 1.683e6;
+/// Fraction of a planet's Hill radius within which a *bound* body is RETAINED as that planet's
+/// satellite — even if the star momentarily out-pulls it on raw force (which happens as a host
+/// migrates inward and its Hill radius shrinks toward the star). The real prograde-satellite
+/// stability limit. This retains an already-bound moon through migration; it is **not** a
+/// reach-in capture — becoming bound still happens through the honest force dynamics + drag.
+const HILL_FRAC: f32 = 0.5;
+/// Tidal-disruption ("Roche") scale, as a fraction of the host's accretion radius. The *real*
+/// Roche limit (`R_host·(2ρ_host/ρ_body)^(1/3)`) is sub-softening at true planetary radii, so a
+/// true-scale ring would never resolve — exactly why bodies are drawn boosted and accretion uses
+/// an inflated reach. We keep the **density-ratio physics** (the emergent part: icy bodies shred,
+/// dense ones hold together) and scale it to the sim's resolvable accretion scale via this dial.
+const TIDAL_FRAC: f32 = 0.1;
+
 /// Body-type mass thresholds (solar masses) — read off what a body became, for display.
 const STAR_MASS: f32 = 0.08; // ~hydrogen-fusion limit (≈ 80 Jupiter masses)
 const GIANT_MASS: f32 = 9.0e-5; // ≈ 30 Earth masses
@@ -86,15 +107,16 @@ pub enum BodyType {
 }
 
 impl BodyType {
-    /// Display tint for this type.
+    /// Display tint for this type — six distinct, saturated hues so types read apart at a glance
+    /// (gold / amber / blue / red / cyan / stone), each still evocative of the material.
     pub fn color(self) -> [f32; 3] {
         match self {
-            BodyType::Star => [1.00, 0.90, 0.55],
-            BodyType::GasGiant => [0.85, 0.72, 0.50],
-            BodyType::IceGiant => [0.50, 0.72, 0.92],
-            BodyType::RockyPlanet => [0.72, 0.52, 0.38],
-            BodyType::IcyBody => [0.74, 0.86, 0.92],
-            BodyType::Asteroid => [0.58, 0.55, 0.52],
+            BodyType::Star => [1.00, 0.82, 0.18],     // gold
+            BodyType::GasGiant => [0.96, 0.56, 0.16], // amber-orange (Jupiter)
+            BodyType::IceGiant => [0.26, 0.50, 1.00], // deep blue (Neptune)
+            BodyType::RockyPlanet => [0.90, 0.30, 0.24], // red (Mars/rust)
+            BodyType::IcyBody => [0.40, 0.88, 0.92],  // bright cyan
+            BodyType::Asteroid => [0.64, 0.62, 0.52], // neutral stone
         }
     }
 
@@ -123,6 +145,10 @@ pub struct Sim {
     /// Per-element mass, flat: mote `i`, element `e` is `comp[i * n_el + e]`.
     pub comp: Vec<f32>,
     pub alive: Vec<bool>,
+    /// How much of body `i`'s mass is actually an orbiting **ring** (tidally-shredded satellite
+    /// debris), not solid body. A subset of `mass[i]` (so total mass stays conserved); the
+    /// renderer draws this fraction as a disc around the body. 0 for bodies with no ring.
+    pub ring_mass: Vec<f32>,
     /// Per-element atomic numbers (length `n_el`), for composition-based body typing.
     pub el_numbers: Vec<u8>,
     /// Elapsed simulated time, years.
@@ -217,6 +243,7 @@ impl Sim {
             mass,
             comp,
             alive: vec![true; n],
+            ring_mass: vec![0.0; n],
             el_numbers,
             time: 0.0,
             init_total,
@@ -282,26 +309,33 @@ impl Sim {
         let fade = (-self.time / GAS_TAU).exp();
         let k_active = (DRAG * fade * dt).clamp(0.0, 1.0);
         let k_floor = (DRAG_FLOOR * dt).clamp(0.0, 1.0);
+        let soft2 = SOFTENING * SOFTENING;
         let n = self.mass.len();
         for i in 1..n {
             if !self.alive[i] {
                 continue;
             }
-            // Primary = the heavier body pulling `i` hardest, by the real G·m/r² force (not a
-            // Hill range). The star (body 0) always qualifies; a planet wins only when it
-            // genuinely out-pulls the star — and then `i` is that planet's moon. Capture falls
-            // out of the forces; we never reach in and grab.
+            // The body `i` orbits: its force-dominant attractor (honest capture), or a planet it
+            // remains a bound satellite of within the Hill radius (retention through the host's
+            // inward migration). Capture falls out of the forces; we never reach in and grab.
             let pi = self.pos[i];
-            let prim = self.primary_of(i, pi);
+            let prim = self.host_of(i, pi);
             let rel = pi - self.pos[prim];
             let r = rel.length().max(1e-3);
-            let v_circ = (G * self.mass[prim] / r).sqrt();
+            // Circular speed in the *softened* well the integrator actually uses, so the drag
+            // target is a true fixed point. This only bites for tight orbits (r ~ SOFTENING) —
+            // i.e. moons, where the bare √(Gm/r) would over-spin them onto a decaying orbit; for
+            // the wide disk (r ≫ SOFTENING) it is identical to Keplerian.
+            let v_circ = (G * self.mass[prim] * r * r / (r * r + soft2).powf(1.5)).sqrt();
             let t_hat = Vec2::new(-rel.y / r, rel.x / r);
             let v_prim = self.vel[prim];
-            // Circularise `i` around its primary's frame: fading drag → slightly sub-circular
-            // (migration + accretion), perpetual floor → exactly circular (stable orbits).
+            // Around the STAR, the fading drag is slightly sub-circular so disk solids migrate
+            // in, cross, and accrete into planets. Around a PLANET (a satellite), it targets
+            // exactly circular — circularise the captured moon, never feed it inward to its
+            // death. The perpetual floor always targets circular (stable settled orbits).
+            let active_frac = if prim == 0 { DRAG_TARGET_FRAC } else { 1.0 };
             let mut v = self.vel[i];
-            v += (v_prim + t_hat * (DRAG_TARGET_FRAC * v_circ) - v) * k_active;
+            v += (v_prim + t_hat * (active_frac * v_circ) - v) * k_active;
             v += (v_prim + t_hat * v_circ - v) * k_floor;
             self.vel[i] = v;
         }
@@ -325,6 +359,100 @@ impl Sim {
             }
         }
         prim
+    }
+
+    /// The body `i` orbits: its force-dominant attractor (`primary_of` — the honest capture
+    /// test), or, when the star wins on raw force, the planet `i` is nonetheless a *bound*
+    /// satellite of and sitting within `HILL_FRAC` of its Hill radius. The second clause RETAINS
+    /// a moon through its host's inward migration (when the closing star would otherwise strip it
+    /// on instantaneous force alone) — retention of an existing satellite, never a grab.
+    fn host_of(&self, i: usize, p: Vec2) -> usize {
+        let prim = self.primary_of(i, p);
+        if prim != 0 {
+            return prim;
+        }
+        let star_m = self.mass[0].max(1e-30);
+        let vi = self.vel[i];
+        let (mut best, mut best_sep) = (0usize, f32::MAX);
+        for j in 1..self.mass.len() {
+            if j == i || !self.alive[j] || self.mass[j] <= self.mass[i] {
+                continue;
+            }
+            let sep = (p - self.pos[j]).length();
+            let r_hill = self.pos[j].length() * (self.mass[j] / (3.0 * star_m)).cbrt();
+            if sep >= HILL_FRAC * r_hill || sep >= best_sep {
+                continue;
+            }
+            // Bound to j? (negative specific relative orbital energy.)
+            let mu = G * (self.mass[j] + self.mass[i]);
+            let eps = 0.5 * (vi - self.vel[j]).length_squared() - mu / sep.max(1e-9);
+            if eps < 0.0 {
+                best = j;
+                best_sep = sep;
+            }
+        }
+        best
+    }
+
+    /// The body `i` currently orbits: `0` (the star) for a planet, or the planet index it is a
+    /// captured moon of. Public view of `host_of` (the renderer uses it to tell moons apart).
+    pub fn orbit_host(&self, i: usize) -> usize {
+        self.host_of(i, self.pos[i])
+    }
+
+    /// Bulk density of body `i` (M☉/AU³), volume-additive over its gas/ice/rock composition
+    /// (`1/ρ = Σ fₑ/ρₑ`). Derived from `comp` — no per-body density input. Drives the physical
+    /// collision radius and the Roche radius (a gas giant puffy, a rocky body dense).
+    fn density(&self, i: usize) -> f32 {
+        let row = &self.comp[i * self.n_el..(i + 1) * self.n_el];
+        let m = self.mass[i].max(1e-30);
+        let mut inv_rho = 0.0f32; // Σ fₑ/ρₑ in (g/cc)⁻¹
+        for (e, &w) in row.iter().enumerate() {
+            let rho_e = match self.el_numbers[e] {
+                1 | 2 => RHO_GAS_GCC,
+                6..=8 => RHO_ICE_GCC,
+                _ => RHO_ROCK_GCC,
+            };
+            inv_rho += (w / m) / rho_e;
+        }
+        let rho_gcc = if inv_rho > 0.0 { 1.0 / inv_rho } else { RHO_ROCK_GCC };
+        rho_gcc * GCC_TO_MSUN_AU3
+    }
+
+    /// Physical (collision) radius of body `i` in AU: `R = (3m / 4πρ)^(1/3)`, with ρ from its
+    /// composition. **Microscopic next to the accretion reach** (`radius_au`) — and that gap is
+    /// exactly what leaves room for a satellite to orbit instead of being swallowed.
+    fn phys_radius(&self, i: usize) -> f32 {
+        (3.0 * self.mass[i] / (4.0 * std::f32::consts::PI * self.density(i))).cbrt()
+    }
+
+    /// Tidal-disruption ("Roche") radius (AU) of host `a` for satellite `b`. The rigid-body Roche
+    /// limit is `R_a·(2·ρ_a/ρ_b)^(1/3)`; we keep that **density ratio** (the emergent physics) but
+    /// scale it to the sim's resolvable accretion radius (`radius_au`, not the true `phys_radius`,
+    /// which is sub-softening) via `TIDAL_FRAC`. A satellite whose pericenter dips inside this is
+    /// torn into a ring instead of holding as a moon: a low-density icy body shreds far out (wide
+    /// ring), a dense rock barely shreds (just stays a close moon or merges) — so ice giants ring
+    /// and captured rocks tend to survive or fall in.
+    fn roche_radius(&self, a: usize, b: usize) -> f32 {
+        self.radius_au(a) * TIDAL_FRAC * (2.0 * self.density(a) / self.density(b).max(1e-30)).cbrt()
+    }
+
+    /// Pericenter and apocenter (AU) of body `b`'s orbit about body `a`, from their real relative
+    /// position and velocity (the conic from specific energy + angular momentum). Apocenter is
+    /// +∞ for an unbound (e ≥ 1) orbit. The honest "is it orbiting — where, and how tightly?"
+    /// test that decides moon vs ring vs collision. No Hill range, no reach-in grab.
+    fn orbit_peri_apo(&self, a: usize, b: usize) -> (f32, f32) {
+        let d = self.pos[b] - self.pos[a];
+        let w = self.vel[b] - self.vel[a];
+        let r = d.length().max(1e-9);
+        let mu = (G * (self.mass[a] + self.mass[b])).max(1e-30);
+        let lz = d.x * w.y - d.y * w.x;
+        let p = lz * lz / mu;
+        let eps = 0.5 * w.length_squared() - mu / r;
+        let e = (1.0 + 2.0 * eps * lz * lz / (mu * mu)).max(0.0).sqrt();
+        let peri = p / (1.0 + e);
+        let apo = if e < 1.0 { p / (1.0 - e) } else { f32::INFINITY };
+        (peri, apo)
     }
 
     /// One symplectic-Euler step: accelerate every live mote by every other, then kick + drift.
@@ -370,11 +498,40 @@ impl Sim {
                 if !self.alive[j] {
                     continue;
                 }
+                // Detection gate: only consider pairs whose accretion reaches overlap — a cheap
+                // early-out; the real decision is the orbit test below.
                 let reach = RADIUS_K * (self.mass[i].cbrt() + self.mass[j].cbrt());
                 if (self.pos[i] - self.pos[j]).length_squared() >= reach * reach {
                     continue;
                 }
                 let (a, b) = if self.mass[i] >= self.mass[j] { (i, j) } else { (j, i) };
+                // Protection/rings apply only to satellites of a PLANET, never of the star. A
+                // planet has a *bounded* domain — its Hill/L1 sphere, set by the L1 point with the
+                // star — inside which satellites legitimately orbit. The star is the root dominant
+                // with no outer L1 boundary, so close material is ABSORBED (falls through to the
+                // contact merge), not held as a "moon of the star". `a != 0` is that distinction.
+                //
+                // For a genuine satellite of a planet (`a` is `b`'s dominant attractor — b truly
+                // orbits a), its orbit decides its fate:
+                //   • pericenter inside the surface           → a real hit → merge into the body.
+                //   • whole orbit inside the tidal/Roche zone → a close, settled moon torn apart
+                //     by tides → SHREDDED into a ring (`to_ring`).
+                //   • otherwise                               → a MOON; leave it in orbit.
+                // Gating the ring on *apocenter* (the whole orbit, not just pericenter) keeps
+                // eccentric infalling debris out of the rings — that merges/accretes as normal —
+                // so only genuinely close, circularised satellites ring. Sibling and moon–moon
+                // pairs aren't satellites of each other and fall straight through to the merge.
+                let mut to_ring = false;
+                if a != 0 && a == self.host_of(b, self.pos[b]) {
+                    let (q, apo) = self.orbit_peri_apo(a, b);
+                    if q > self.phys_radius(a) + self.phys_radius(b) {
+                        if apo < self.roche_radius(a, b) {
+                            to_ring = true;
+                        } else {
+                            continue;
+                        }
+                    }
+                }
                 let (ma, mb) = (self.mass[a], self.mass[b]);
                 let mt = ma + mb;
                 if a != 0 {
@@ -387,6 +544,12 @@ impl Sim {
                     self.comp[a * self.n_el + e] += self.comp[b * self.n_el + e];
                 }
                 self.mass[a] = mt;
+                if to_ring {
+                    // Shredded debris orbits `a` as a ring. Its mass + composition stay folded
+                    // into `a` (conserved exactly, like a merge); `ring_mass` records how much is
+                    // ring so the renderer draws it as a disc instead of growing the body.
+                    self.ring_mass[a] += mb;
+                }
                 self.alive[b] = false;
                 if a != i {
                     // i was absorbed into j; nothing more to merge onto i.
@@ -511,6 +674,120 @@ mod tests {
             .map(|i| s.mass[i])
             .sum();
         assert!(bound > 0.95 * s.total_mass(), "system stays bound: {bound} of {}", s.total_mass());
+    }
+
+    #[test]
+    fn a_moon_stays_in_orbit_around_its_planet() {
+        // A star, a gas-giant planet on a circular orbit, and a small rocky moon on a circular
+        // orbit about the planet — far outside the planet's (microscopic) physical radius but
+        // inside its sphere of influence. With the angular-momentum-aware merge + the satellite
+        // drag, the moon must SURVIVE (not be swallowed) and keep orbiting its planet.
+        let n_el = 3; // [H (gas), O (ice), Fe (rock)]
+        let el_numbers = vec![1u8, 8, 26];
+        let (star_m, planet_m, moon_m) = (1.0f32, 5.0e-3f32, 1.0e-7f32);
+        let (planet_r, moon_r) = (5.0f32, 0.15f32);
+
+        let planet_p = Vec2::new(planet_r, 0.0);
+        let moon_p = planet_p + Vec2::new(moon_r, 0.0);
+        let v_planet = Vec2::new(0.0, (G * star_m / planet_r).sqrt());
+        let v_moon = v_planet + Vec2::new(0.0, (G * planet_m / moon_r).sqrt());
+
+        let mut comp = vec![0.0f32; 3 * n_el];
+        comp[0] = star_m; // star = H
+        comp[n_el] = planet_m; // planet = H (gas giant)
+        comp[2 * n_el + 2] = moon_m; // moon = Fe (rock)
+        let init_total = star_m + planet_m + moon_m;
+        let mut s = Sim {
+            n_el,
+            pos: vec![Vec2::ZERO, planet_p, moon_p],
+            vel: vec![Vec2::ZERO, v_planet, v_moon],
+            mass: vec![star_m, planet_m, moon_m],
+            comp,
+            alive: vec![true; 3],
+            ring_mass: vec![0.0; 3],
+            el_numbers,
+            time: 100.0, // past the gas era — only the circularising floor drag acts
+            init_total,
+        };
+
+        for _ in 0..3000 {
+            s.step(0.02);
+        }
+        assert!(s.alive[2], "the moon survived (was not swallowed by its planet)");
+        let d = (s.pos[2] - s.pos[1]).length();
+        assert!((0.02..0.6).contains(&d), "moon stays in orbit about its planet (d = {d} AU)");
+    }
+
+    #[test]
+    fn an_icy_satellite_inside_roche_shreds_into_a_ring() {
+        // Star (far, dominant), a gas-giant host, and a low-density ICY satellite on a circular
+        // orbit whose whole orbit sits inside the host's tidal/Roche zone. It must be torn into a
+        // ring (host gains ring mass; the satellite is gone), not survive as a moon — and mass is
+        // conserved. `merge()` is a pure decision on the current state, so this exercises the
+        // shred branch directly without needing the integrator to hold a sub-resolution orbit.
+        let n_el = 3; // [H (gas), O (ice), Fe (rock)]
+        let (star_m, host_m, sat_m) = (1.0f32, 5.0e-3f32, 1.0e-7f32);
+        let host_p = Vec2::new(5.0, 0.0);
+
+        let mut comp = vec![0.0f32; 3 * n_el];
+        comp[0] = star_m; // star = H
+        comp[n_el] = host_m; // host = H (gas giant, low density)
+        comp[2 * n_el + 1] = sat_m; // satellite = O (icy, shreds easily)
+        let mut s = Sim {
+            n_el,
+            pos: vec![Vec2::ZERO, host_p, host_p],
+            vel: vec![Vec2::ZERO, Vec2::ZERO, Vec2::ZERO],
+            mass: vec![star_m, host_m, sat_m],
+            comp,
+            alive: vec![true; 3],
+            ring_mass: vec![0.0; 3],
+            el_numbers: vec![1u8, 8, 26],
+            time: 0.0,
+            init_total: star_m + host_m + sat_m,
+        };
+        // Place the satellite on a circular orbit inside the host's Roche radius (and outside its
+        // tiny surface), so apocenter < roche → shred.
+        let roche = s.roche_radius(1, 2);
+        let surface = s.phys_radius(1) + s.phys_radius(2);
+        assert!(roche > surface, "icy body has a real tidal shell: roche {roche} > surface {surface}");
+        let r = 0.5 * (surface + roche);
+        s.pos[2] = host_p + Vec2::new(r, 0.0);
+        s.vel[2] = Vec2::new(0.0, (G * host_m / r).sqrt()); // circular ⇒ peri ≈ apo ≈ r
+
+        let before = s.total_mass();
+        s.merge();
+        assert!(!s.alive[2], "the icy satellite was shredded (no longer a standalone body)");
+        assert!(s.ring_mass[1] > 0.0, "its host gained a ring ({} M_sun)", s.ring_mass[1]);
+        assert!((s.total_mass() - before).abs() < 1e-12, "mass conserved through shredding");
+    }
+
+    #[test]
+    fn the_star_absorbs_close_bodies_rather_than_hosting_moons() {
+        // A body deep inside the star's reach must merge INTO the star (the root dominant absorbs
+        // its domain) — it must not be held as a protected "moon of the star". Contrast with
+        // `a_moon_stays_in_orbit_around_its_planet`, where a planet's bounded Hill/L1 domain DOES
+        // host a protected moon.
+        let n_el = 3;
+        let (star_m, body_m) = (1.0f32, 1.0e-5f32);
+        let mut comp = vec![0.0f32; 2 * n_el];
+        comp[0] = star_m; // star = H
+        comp[n_el + 2] = body_m; // body = Fe (rock)
+        let mut s = Sim {
+            n_el,
+            pos: vec![Vec2::ZERO, Vec2::new(0.2, 0.0)],
+            vel: vec![Vec2::ZERO, Vec2::new(0.0, (G * star_m / 0.2).sqrt())],
+            mass: vec![star_m, body_m],
+            comp,
+            alive: vec![true; 2],
+            ring_mass: vec![0.0; 2],
+            el_numbers: vec![1u8, 8, 26],
+            time: 0.0,
+            init_total: star_m + body_m,
+        };
+        // 0.2 AU is well inside the star's accretion reach (~0.8 AU) but far outside its surface.
+        s.merge();
+        assert!(!s.alive[1], "the close inner body was absorbed by the star, not kept as a moon");
+        assert!(s.ring_mass[0] == 0.0, "the star grows no ring");
     }
 
     #[test]

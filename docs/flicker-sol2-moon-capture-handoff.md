@@ -10,6 +10,98 @@ Read `docs/flicker-sol2-handoff.md` first for the full pipeline; this picks up f
 
 ---
 
+## UPDATE 2026-06-24 (session 2) — moon stability + retention + rings LANDED (all in `collapse.rs`/`scene.rs`)
+
+The next-phase work below is **built**. 19 tests pass, clippy clean, conserved 1.0000, star 0.966.
+The model stayed honest (no Hill *grab*; capture is still the force test). What changed:
+
+**Slice 1 — moon stability (the "moons all collapse into the planet" fix).**
+- **Collision radius ≠ accretion reach.** New `density(i)` (volume-additive over gas/ice/rock
+  composition — derived, no table) + `phys_radius(i) = (3m/4πρ)^(1/3)`: a real, microscopic
+  physical radius, distinct from the inflated `RADIUS_K·∛m` accretion reach. That gap is the room
+  a moon needs.
+- **Angular-momentum-aware merge** (`orbit_peri_apo`): within the reach, a *genuine satellite* is
+  protected — merged only if its orbit's pericenter dips inside the collision radius (a real hit).
+  Sibling and moon–moon pairs still contact-merge, so planet accretion + co-accretion are intact.
+- **Satellite drag fix** (`dissipate`): softening-consistent circular speed (a true fixed point
+  for tight orbits), and bodies orbiting a *planet* circularise (no sub-circular inward migration
+  that fed moons to their death). The migration drag still applies to bodies orbiting the *star*.
+
+**Retention through migration (`host_of`).** Diagnosis: moons were stripped because as a host
+migrates inward, the closing star wins on instantaneous force, `primary_of` flips to the star, the
+moon loses satellite protection, and the big reach eats it. Fix: `host_of` keeps a body a planet's
+satellite if it's *bound* and within `HILL_FRAC` (0.5) of that planet's Hill radius, even when the
+star out-pulls on raw force. **Retention of an already-bound moon, not a grab** — capture is still
+the honest `primary_of` force test. Used by both `dissipate` and `merge`.
+- **Result:** moons are now a stable fixed point in a settled system (test). In the real sim:
+  healthy radial spread (~0.8–44 AU), star dominant, **~1–3 *settled* moons** per system. The
+  early "24–44 moons" are transient pairs in a still-merging disk and consolidate legitimately.
+  Moon abundance is emergently **low** — most infalling material is gravitationally focused into
+  the planet (plunges) before the gas drag can circularise it. Raising it honestly needs **finer
+  integration near planets** (adaptive substeps so the circumplanetary drag can circularise
+  infalling material) / stronger circumplanetary drag — a separate slice, NOT done.
+- **Rejected:** softening the gas-era migration (`DRAG_TARGET_FRAC` 0.95→0.98) to slow Hill-radius
+  collapse — it retains a couple more moons mid-run but **triples the leftover-body count** (the
+  known "too many bodies" issue) for ~no steady-state gain. Reverted; left at 0.95.
+
+**Slice 2 — tidal shear → rings (`roche_radius`, `ring_mass`).** A *close, settled* satellite whose
+**whole orbit** (apocenter, not just pericenter) sits inside its host's tidal/Roche radius is
+shredded into a ring instead of held as a moon. The apocenter gate keeps eccentric **infalling
+debris out of the rings** (that still accretes) — only genuinely close circularised satellites ring.
+- **Density physics is emergent + real:** `roche = R·(2ρ_host/ρ_body)^(1/3)` — a low-density **icy**
+  body shreds (wide ring), a dense **rock** barely does (stays a moon / merges). So ice giants ring,
+  captured rocks survive.
+- **Scale caveat (load-bearing):** the *true* Roche limit is **sub-softening** at real planetary
+  radii, so a true-scale ring never resolves. We keep the density **ratio** but scale it to the
+  sim's resolvable accretion radius via **`TIDAL_FRAC` (0.1)** — the same inflation principle as the
+  accretion reach / `BODY_DRAW_BOOST`. `TIDAL_FRAC` is the **ring-prominence dial**: 0.1 → ~3–4
+  ringed bodies/system, modest ring fractions, moons preserved; ~0.2 starts making ring-dominated
+  blobs (infalling material rings). `ring_mass[i]` is the per-body ring tonnage (a subset of
+  `mass[i]`, so total mass is conserved exactly); the renderer draws it as a translucent icy
+  annulus and the status line shows `N ringed`.
+
+**Star-moon fix (post first visual verify).** The user verified: system looked right *except the
+**star was also capturing moons*** (small bodies hugging the central star + an inner spiral of
+unmerged debris). Root cause: the satellite protection was applied symmetrically, so because the
+star is everyone's dominant attractor, inner bodies became "the star's satellites" and were
+shielded from merging into it (the committed sim had absorbed them within the star's reach). Fix +
+the user's framing (the 3-body precedence shifts at the **L1 point**): a *planet* has a **bounded**
+domain — its Hill/L1 sphere, set by the L1 point with the star — inside which satellites orbit and
+are protected; the **star is the root dominant with no outer L1 boundary**, so close material is
+ABSORBED, not hosted. Implemented as `a != 0 &&` on the satellite-protection branch in `merge`
+(the star, always the heaviest in a pair ⇒ `a==0`, falls straight through to the contact merge).
+Verified headless: **0 bodies inside the star's reach, 0 star-moons, planet moons preserved (~2),
+clean inner edge ~0.9–1.5 AU**. Test: `the_star_absorbs_close_bodies_rather_than_hosting_moons`.
+
+**New tuning dials:** `HILL_FRAC` (moon retention), `TIDAL_FRAC` (ring prominence), `RHO_*_GCC`
+(class densities). The user verifies visually and may dial these.
+
+**Visualization polish (same session, all `scene.rs` / `BodyType::color`).**
+- **Distinct body palette** — six saturated hues (gold star / amber gas giant / blue ice giant /
+  red rocky / cyan icy / stone asteroid), replacing the old near-identical pastels; drives discs,
+  motion vectors, and the legend.
+- **Curved motion vectors.** `draw_motion` now draws each body's vector as an **osculating-circle
+  arc** (curvature from the star's gravity: `n̂` = the ⟂-to-velocity part of `a`, `R_c = v²/|a⊥|`),
+  starting tangent to the true velocity and bowing around the star — for a circular orbit it lies
+  on the orbit ring, for an eccentric/perturbed one it bends correctly, so it tracks the well's
+  shape. Forward arc carries the arrowhead; the dotted trail is the mirror arc behind. Arc length
+  scales with orbital range (`MOTION_ORBIT_FRAC`), sweep capped (`MOTION_ARC_MAX_SWEEP`), radial/
+  degenerate cases fall back to a straight arrow. Curvature is star-only (dominant for every body
+  that draws an arc; moons draw none). `Sim::orbit_host(i)` exposes host_of for the renderer.
+- **Captured moons draw no vector** (absolute velocity mirrors the host; relative motion is
+  sub-pixel at system zoom — the moon disc beside its planet reads as a satellite).
+
+**User validation (2026-06-24):** *"a truly great result … every time the system gets to around
+1.5 BY it is looking very much like our natural system."* The emergent systems land in the
+Sol-like band on their own — the model + the moon/ring/viz work is confirmed good.
+
+**Still open (NOT done):** denser moon systems (finer integration near planets); rendering moons as
+discs near their planet (they draw via `draw_collapse`/`draw_motion` already, but no dedicated moon
+disc/orbit); the 3D question (user chose **2D now**); body-consolidation pass for the high
+gas-giant count.
+
+---
+
 ## Where the sim stands (the thing moons build on)
 
 The **star-extraction model** (decided this session, see the main handoff "Star-extraction model"):

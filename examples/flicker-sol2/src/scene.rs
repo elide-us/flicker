@@ -50,10 +50,16 @@ const MOTES_PER_EL: usize = 24;
 /// well above true scale on purpose — real planets would be invisible specks.)
 const BODY_DRAW_BOOST: f32 = 1.6;
 const BODY_DRAW_MIN_PX: f32 = 3.0;
-/// Motion-vector arrow length: screen px per (AU/yr) of speed, clamped readable.
-const MOTION_SCALE: f32 = 10.0;
+/// Motion-vector arc length as a fraction of the body's orbital range (its pixel distance from
+/// the star), so each arc reads as a consistent slice of its orbit — inner fast bodies don't
+/// dwarf outer slow ones. Clamped readable.
+const MOTION_ORBIT_FRAC: f32 = 0.16;
 const MOTION_MIN_PX: f32 = 8.0;
-const MOTION_MAX_PX: f32 = 48.0;
+const MOTION_MAX_PX: f32 = 60.0;
+/// Largest angle (radians) a motion arc may sweep, so a tightly-curved body doesn't draw a loop.
+const MOTION_ARC_MAX_SWEEP: f32 = 1.2;
+/// Gravitational constant in AU³/(M☉·yr²) — `4π²`, matching the sim — for the arc's curvature.
+const G_SIM: f32 = 39.478_418;
 
 const TITLE: [f32; 4] = [0.92, 0.94, 0.99, 1.0];
 const DIM: [f32; 4] = [0.60, 0.64, 0.76, 1.0];
@@ -368,22 +374,79 @@ impl CloudView {
         let Some(sim) = &self.sim else {
             return;
         };
-        for i in 0..sim.mass.len() {
+        let star_m = sim.mass[0];
+        let to_px = |au: Vec2| Vec2::new(l.center.x + au.x * l.px_per_au, l.center.y + au.y * l.px_per_au);
+        for i in 1..sim.mass.len() {
+            // (body 0 is the pinned star — no vector)
             if !sim.alive[i] {
                 continue;
             }
-            let speed = sim.vel[i].length();
-            if speed < 1e-4 {
-                continue; // the pinned star isn't moving
+            // Captured moons get no arc: their absolute velocity just mirrors the host's orbit,
+            // and their motion *around* the host is sub-pixel at system zoom — the moon disc beside
+            // its planet already reads as a satellite.
+            if sim.orbit_host(i) != 0 {
+                continue;
             }
+            let speed = sim.vel[i].length();
             let p = sim.pos[i];
-            let pos_px = Vec2::new(l.center.x + p.x * l.px_per_au, l.center.y + p.y * l.px_per_au);
+            let r_au = p.length();
+            if speed < 1e-4 || r_au < 1e-4 {
+                continue;
+            }
             let dir = sim.vel[i] / speed;
-            let len = (speed * MOTION_SCALE).clamp(MOTION_MIN_PX, MOTION_MAX_PX);
-            let step = Vec2::new(dir.x, dir.y) * len;
+            // Arc length scales with orbital range so each reads as a consistent slice of its orbit.
+            let len_px = (r_au * l.px_per_au * MOTION_ORBIT_FRAC).clamp(MOTION_MIN_PX, MOTION_MAX_PX);
+            let len_au = len_px / l.px_per_au.max(1e-6);
+
+            // Curvature from the star's gravity (the dominant well): the path bows around the star.
+            // Osculating circle — centre at `p + n̂·R_c`, with `n̂` the bend direction (the part of
+            // gravity ⟂ to velocity) and `R_c = v²/|a⊥|`. For a circular orbit this is the orbit
+            // ring itself; for an eccentric/perturbed body it bends correctly. The arc starts along
+            // the true velocity, so direction stays honest.
+            let a = p * (-G_SIM * star_m / (r_au * r_au * r_au)); // accel toward the star
+            let a_perp = a - dir * a.dot(dir);
+            let a_perp_mag = a_perp.length();
             let c = sim.classify(i).color();
-            draw::arrow(r, pos_px, pos_px + step, 1.5, 7.0, [c[0], c[1], c[2], 0.85]);
-            draw::dotted(r, pos_px, pos_px - step, 1.0, [c[0], c[1], c[2], 0.35], 4.0, 4.0);
+            let arrow_c = [c[0], c[1], c[2], 0.85];
+            let trail_c = [c[0], c[1], c[2], 0.35];
+
+            if a_perp_mag < 1e-6 {
+                // Effectively straight (radial motion / negligible curvature) — fall back to a line.
+                let tip = to_px(p) + dir * len_px;
+                draw::arrow(r, to_px(p), tip, 1.5, 7.0, arrow_c);
+                draw::dotted(r, to_px(p), to_px(p) - dir * len_px, 1.0, trail_c, 4.0, 4.0);
+                continue;
+            }
+            let r_c = speed * speed / a_perp_mag; // radius of curvature (AU)
+            let center = p + a_perp / a_perp_mag * r_c; // centre of the osculating circle (AU)
+            let rel0 = p - center; // points from centre to the body
+            // Sweep in the velocity's sense; cap the angle so a tight curve doesn't loop.
+            let tang_ccw = Vec2::new(-rel0.y, rel0.x);
+            let sign = if tang_ccw.dot(sim.vel[i]) >= 0.0 { 1.0 } else { -1.0 };
+            let sweep = sign * (len_au / r_c).min(MOTION_ARC_MAX_SWEEP);
+            let segs = ((len_px / 5.0) as usize).clamp(4, 14);
+            let arc_pt = |phi: f32| {
+                let (s, cs) = phi.sin_cos();
+                center + Vec2::new(rel0.x * cs - rel0.y * s, rel0.x * s + rel0.y * cs)
+            };
+            // Forward arc → arrowhead at the tip.
+            let mut prev = to_px(p);
+            for k in 1..=segs {
+                let pt = to_px(arc_pt(sweep * k as f32 / segs as f32));
+                if k == segs {
+                    draw::arrow(r, prev, pt, 1.5, 7.0, arrow_c);
+                } else {
+                    draw::line(r, prev, pt, 1.5, arrow_c);
+                }
+                prev = pt;
+            }
+            // Backward arc → dotted trail.
+            let mut prevb = to_px(p);
+            for k in 1..=segs {
+                let pt = to_px(arc_pt(-sweep * k as f32 / segs as f32));
+                draw::dotted(r, prevb, pt, 1.0, trail_c, 4.0, 4.0);
+                prevb = pt;
+            }
         }
     }
 
@@ -402,12 +465,20 @@ impl CloudView {
             let p = sim.pos[i];
             let sp = Vec2::new(l.center.x + p.x * l.px_per_au, l.center.y + p.y * l.px_per_au);
             if i == 0 {
-                draw::disc(r, sp, 9.0, [1.0, 0.86, 0.55, 0.95], 30);
-                draw::disc(r, sp, 5.0, [1.0, 0.98, 0.92, 1.0], 24);
+                draw::disc(r, sp, 9.0, [1.0, 0.82, 0.20, 0.95], 30);
+                draw::disc(r, sp, 5.0, [1.0, 0.98, 0.90, 1.0], 24);
                 continue;
             }
             let rad = (sim.radius_au(i) * l.px_per_au * BODY_DRAW_BOOST).clamp(BODY_DRAW_MIN_PX, l.view_radius_px * 0.5);
             let c = sim.classify(i).color();
+            // Tidally-shredded ring (Roche): a translucent icy annulus just outside the body,
+            // its prominence set by how much of the body's mass is ring.
+            if sim.ring_mass[i] > 0.0 {
+                let frac = (sim.ring_mass[i] / sim.mass[i].max(1e-30)).clamp(0.0, 1.0);
+                let segs = ((rad * 2.0 / 2.0) as usize).clamp(28, 96);
+                let a = (0.20 + 0.5 * frac).min(0.7);
+                draw::ring(r, sp, rad * 2.0, rad * 1.0, [0.82, 0.88, 0.95, a], segs);
+            }
             draw::disc(r, sp, rad, [c[0], c[1], c[2], 0.92], 20);
         }
     }
@@ -431,11 +502,14 @@ impl CloudView {
             14.0,
             ACCENT,
         );
-        // System makeup by emergent type.
-        let (mut star, mut gg, mut ig, mut rock, mut small) = (0, 0, 0, 0, 0);
+        // System makeup by emergent type, plus ringed bodies.
+        let (mut star, mut gg, mut ig, mut rock, mut small, mut ringed) = (0, 0, 0, 0, 0, 0);
         for i in 0..sim.mass.len() {
             if !sim.alive[i] {
                 continue;
+            }
+            if sim.ring_mass[i] > 0.0 {
+                ringed += 1;
             }
             match sim.classify(i) {
                 BodyType::Star => star += 1,
@@ -446,7 +520,7 @@ impl CloudView {
             }
         }
         r.draw_text(
-            &format!("{star} star · {gg} gas giant · {ig} ice giant · {rock} rocky · {small} small bodies"),
+            &format!("{star} star · {gg} gas giant · {ig} ice giant · {rock} rocky · {small} small bodies · {ringed} ringed"),
             Vec2::new(16.0, 220.0),
             13.0,
             DIM,
