@@ -160,4 +160,45 @@ function W.section_header_draw(cmds, r, text, s)
   label(cmds, r.x + 8, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "left")
 end
 
+-- CHECKBOX -----------------------------------------------------------------
+-- A momentary toggle box: returns the *new* boolean state, flipping `value`
+-- only on the frame the box is clicked. Stateless (the value lives in the
+-- engine Model, like every other widget). `r` is the box rect.
+function W.checkbox_update(r, mx, my, clicked, value)
+  if clicked and point_in(mx, my, r.x, r.y, r.w, r.h) then
+    return not value
+  end
+  return value
+end
+
+-- `s` = { box, check, border?, pad? }. Draws the box, an optional 1px border,
+-- and an inset filled mark when `value` is true.
+function W.checkbox_draw(cmds, r, value, s)
+  rect(cmds, r.x, r.y, r.w, r.h, s.box)
+  if s.border then
+    rect(cmds, r.x, r.y, r.w, 1, s.border)
+    rect(cmds, r.x, r.y + r.h - 1, r.w, 1, s.border)
+    rect(cmds, r.x, r.y, 1, r.h, s.border)
+    rect(cmds, r.x + r.w - 1, r.y, 1, r.h, s.border)
+  end
+  if value then
+    local p = s.pad or 4
+    rect(cmds, r.x + p, r.y + p, r.w - 2 * p, r.h - 2 * p, s.check)
+  end
+end
+
+-- PANEL --------------------------------------------------------------------
+-- A filled background rect with an optional 1px frame — the common backing for
+-- a control cluster (stats overlay, knob panel). Stateless. `s` = { bg,
+-- border? }. Draw it first, then place widgets/labels on top.
+function W.panel_draw(cmds, r, s)
+  rect(cmds, r.x, r.y, r.w, r.h, s.bg)
+  if s.border then
+    rect(cmds, r.x, r.y, r.w, 1, s.border)
+    rect(cmds, r.x, r.y + r.h - 1, r.w, 1, s.border)
+    rect(cmds, r.x, r.y, 1, r.h, s.border)
+    rect(cmds, r.x + r.w - 1, r.y, 1, r.h, s.border)
+  end
+end
+
 return W

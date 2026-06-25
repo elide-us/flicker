@@ -7,6 +7,7 @@ members = [
     "crates/flicker-worldgen",
     "crates/flicker-worldgrid",
     "crates/flicker-celestial",
+    "crates/flicker-system",
     "crates/flicker-world",
     "crates/flicker-primitive",
     "crates/flicker-core",
@@ -93,6 +94,7 @@ flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
 flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
 flicker-worldgrid = { version = "0.1.0", path = "crates/flicker-worldgrid" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
+flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "crates/flicker-primitive" }
 flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
 flicker-render = { version = "0.1.0", path = "crates/flicker-render" }

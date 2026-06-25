@@ -1,0 +1,19 @@
+[package]
+name = "flicker-system"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The star-system formation simulation (Phase 1 + Phase 2), boxed up as a GPU-free
+# library with a clean API: `SystemConfig` in (every lever), `SystemState` /
+# `Epoch3Handoff` out. The supernova ejecta cloud (cast by atomic weight) collapses
+# under gravity into a star + planets/moons/rings; the selected habitable-zone world's
+# exact conserved composition is the Epoch-3 seed for the single-world planet sim.
+# Extracted from `examples/flicker-sol2` (which is now a thin viewer over this crate).
+# NOT `flicker-celestial` (abandoned). See docs/flicker-sol2-epoch3-pipeline-roadmap.md.
+[dependencies]
+# Math only — Vec2 for body positions/velocities. No GPU, no engine deps: this is a
+# headless simulation library the viewer (and later the planet sim) consume.
+glam.workspace = true
+# The Prism vocabulary — the authoritative 27-element periodic table with real atomic masses.
+flicker-materials.workspace = true

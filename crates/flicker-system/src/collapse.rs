@@ -24,75 +24,25 @@
 
 use std::f32::consts::TAU;
 
-use flicker::render::Vec2;
+use glam::Vec2;
 
 use crate::cloud::CloudField;
+use crate::config::Tuning;
 use crate::mass::CloudMass;
 use crate::model::{CastParams, Ejecta};
 
+// All the tunable levers (softening, drag, densities, Hill/Roche fractions, body-type and
+// playability thresholds, …) now live in `Tuning` (see `config.rs`) and are read off `Sim::tuning`
+// — so the whole simulation is driven by `SystemConfig`. Only true physical/numerical constants
+// remain here.
+
 /// Gravitational constant in AU³ / (M☉ · yr²) — `4π²`.
 const G: f32 = 39.478_418;
-/// Plummer softening (AU): keeps gravity finite at tiny separations. Numerical hygiene,
-/// not a physics clamp — merging removes close pairs before it matters.
-const SOFTENING: f32 = 0.05;
-/// Body radius from mass: `r = RADIUS_K · mass^(1/3)` (AU) — the contact distance for
-/// merging and the drawn size. Tuned so accretion happens at sensible separations.
-const RADIUS_K: f32 = 0.8;
-/// Fraction of the cloud's gas (H/He) extracted straight into the central star — the "cheat".
-/// The H/He is cast outward, so we can't stably simulate it collapsing inward; we steal most of
-/// it and place it at the centre, and that dominant central mass is what makes the rest stable.
-/// Must be < 1 so the leftover gas stays in the disk to build the gas giants. Lower → bigger
-/// giants / a less dominant star.
-const STAR_GAS_FRAC: f32 = 0.98;
-/// Disk parcels orbit the star at this fraction of the circular speed (1.0 = a proper Keplerian
-/// disk). Gas drag then circularises and accretes them into planets.
-const DISK_SPIN: f32 = 1.0;
-/// Drag rate (per year). Gas parcels get their motion **bled toward rest** (so they keep
-/// falling to the centre); solid parcels get **circularised** toward their orbit (so they
-/// settle as stable planets). Fades over `GAS_TAU` as the gas disperses, atop a small
-/// perpetual floor. Real disk dissipation, not a clamp.
-const DRAG: f32 = 0.6;
-/// Solid-drag target (fraction of circular speed) for the **fading** part of the drag —
-/// slightly sub-Keplerian, so while the gas is present the solids migrate inward, cross, and
-/// accrete into a few planets. The perpetual floor then targets exactly circular, so the
-/// settled planets stay put instead of draining into the star.
-const DRAG_TARGET_FRAC: f32 = 0.95;
-/// Gas-dispersal timescale (years): the drag fades as `exp(-t / GAS_TAU)`, mirroring a real
-/// disk's gas blowing off after the collapse — strong while it settles, then gone.
-const GAS_TAU: f32 = 35.0;
-/// A small perpetual drag floor (per year) that never fades — keeps the settled solids gently
-/// circularised so the system stays bound long after the gas is gone, instead of a bare
-/// many-body N-body going chaotic and ejecting everything.
-const DRAG_FLOOR: f32 = 0.02;
+/// g/cc → M☉/AU³ (1 M☉ = 1.989e33 g, 1 AU = 1.496e13 cm), so the physical radius lands in AU.
+const GCC_TO_MSUN_AU3: f32 = 1.683e6;
 /// Largest integration step (years) — a frame's sim-time is split into substeps no longer
 /// than this so fast inner orbits stay stable.
 const MAX_DT: f32 = 0.02;
-
-/// Bulk densities by material class (g/cc) for the **physical** (collision / Roche) radius —
-/// derived from each body's composition, never a per-body input. A gas giant is large and
-/// puffy, rock is small and dense, ice between. Volume-additive blend (`1/ρ = Σ fₑ/ρₑ`).
-const RHO_GAS_GCC: f32 = 1.0;
-const RHO_ICE_GCC: f32 = 1.6;
-const RHO_ROCK_GCC: f32 = 4.0;
-/// g/cc → M☉/AU³ (1 M☉ = 1.989e33 g, 1 AU = 1.496e13 cm), so the physical radius lands in AU.
-const GCC_TO_MSUN_AU3: f32 = 1.683e6;
-/// Fraction of a planet's Hill radius within which a *bound* body is RETAINED as that planet's
-/// satellite — even if the star momentarily out-pulls it on raw force (which happens as a host
-/// migrates inward and its Hill radius shrinks toward the star). The real prograde-satellite
-/// stability limit. This retains an already-bound moon through migration; it is **not** a
-/// reach-in capture — becoming bound still happens through the honest force dynamics + drag.
-const HILL_FRAC: f32 = 0.5;
-/// Tidal-disruption ("Roche") scale, as a fraction of the host's accretion radius. The *real*
-/// Roche limit (`R_host·(2ρ_host/ρ_body)^(1/3)`) is sub-softening at true planetary radii, so a
-/// true-scale ring would never resolve — exactly why bodies are drawn boosted and accretion uses
-/// an inflated reach. We keep the **density-ratio physics** (the emergent part: icy bodies shred,
-/// dense ones hold together) and scale it to the sim's resolvable accretion scale via this dial.
-const TIDAL_FRAC: f32 = 0.1;
-
-/// Body-type mass thresholds (solar masses) — read off what a body became, for display.
-const STAR_MASS: f32 = 0.08; // ~hydrogen-fusion limit (≈ 80 Jupiter masses)
-const GIANT_MASS: f32 = 9.0e-5; // ≈ 30 Earth masses
-const PLANET_MASS: f32 = 1.5e-7; // ≈ 0.05 Earth masses
 
 /// What a body turned out to be — read off its mass + composition for display only. The
 /// simulation never branches on this; the type is emergent, never selected.
@@ -153,6 +103,8 @@ pub struct Sim {
     pub el_numbers: Vec<u8>,
     /// Elapsed simulated time, years.
     pub time: f32,
+    /// The physics / typing / playability levers this run uses (from `SystemConfig`).
+    pub tuning: Tuning,
     init_total: f32,
 }
 
@@ -170,6 +122,7 @@ impl Sim {
         cloud: &CloudField,
         cm: &CloudMass,
         per_el: usize,
+        tuning: Tuning,
     ) -> Self {
         let n_el = ej.elements.len();
         let mut pos = Vec::new();
@@ -177,12 +130,12 @@ impl Sim {
         let mut mass = Vec::new();
         let mut comp = Vec::new();
 
-        // Body 0 = the star: STAR_GAS_FRAC of the gas (H/He), placed at the centre, at rest.
+        // Body 0 = the star: `star_gas_frac` of the gas (H/He), placed at the centre, at rest.
         let mut star_comp = vec![0.0f32; n_el];
         let mut star_mass = 0.0f32;
         for (i, e) in ej.elements.iter().enumerate() {
             if e.number <= 2 {
-                let take = cm.tonnage[i] * STAR_GAS_FRAC;
+                let take = cm.tonnage[i] * tuning.star_gas_frac;
                 star_comp[i] = take;
                 star_mass += take;
             }
@@ -199,7 +152,7 @@ impl Sim {
         let seed = cloud.seed;
         for (i, e) in ej.elements.iter().enumerate() {
             let tonnage = if e.number <= 2 {
-                cm.tonnage[i] * (1.0 - STAR_GAS_FRAC)
+                cm.tonnage[i] * (1.0 - tuning.star_gas_frac)
             } else {
                 cm.tonnage[i]
             };
@@ -225,7 +178,7 @@ impl Sim {
                 let v_circ = (G * star_mass.max(1e-9) / r).sqrt();
                 let t_hat = Vec2::new(-p.y / r, p.x / r);
                 pos.push(p);
-                vel.push(t_hat * (DISK_SPIN * v_circ));
+                vel.push(t_hat * (tuning.disk_spin * v_circ));
                 mass.push(m);
                 let base = comp.len();
                 comp.extend(std::iter::repeat_n(0.0, n_el));
@@ -246,6 +199,7 @@ impl Sim {
             ring_mass: vec![0.0; n],
             el_numbers,
             time: 0.0,
+            tuning,
             init_total,
         }
     }
@@ -255,7 +209,7 @@ impl Sim {
     /// a thing the simulation acts on.
     pub fn classify(&self, i: usize) -> BodyType {
         let m = self.mass[i];
-        if m >= STAR_MASS {
+        if m >= self.tuning.star_mass {
             return BodyType::Star;
         }
         let row = &self.comp[i * self.n_el..(i + 1) * self.n_el];
@@ -267,7 +221,7 @@ impl Sim {
                 _ => rock += w,
             }
         }
-        if m > GIANT_MASS {
+        if m > self.tuning.giant_mass {
             if gas >= ice && gas >= rock {
                 BodyType::GasGiant
             } else if ice >= rock {
@@ -275,7 +229,7 @@ impl Sim {
             } else {
                 BodyType::RockyPlanet
             }
-        } else if m > PLANET_MASS {
+        } else if m > self.tuning.planet_mass {
             if rock >= gas + ice {
                 BodyType::RockyPlanet
             } else {
@@ -286,6 +240,32 @@ impl Sim {
         } else {
             BodyType::IcyBody
         }
+    }
+
+    /// Whether body `i` is currently a PLAYABLE world — a narrow physical gate, re-evaluated every
+    /// frame so a body can gain or lose it as it migrates / grows / its star changes (emergent,
+    /// never selected): a **rocky** body (solid surface), in the star's **habitable zone**
+    /// (liquid-water *temperature* — distance scales with √luminosity, `L ≈ M★^3.5` on the main
+    /// sequence), and massive enough to hold ~1 atm of *pressure* but not so massive it runs away
+    /// to a giant. Temperature + pressure is the user's stated criterion; composition is NOT a
+    /// gate (terrestrials form dry and get water delivered later) — but the chosen world's exact
+    /// composition (`comp[i]`) is what feeds the next phase.
+    pub fn is_playable(&self, i: usize) -> bool {
+        if i == 0 || !self.alive[i] {
+            return false;
+        }
+        let m = self.mass[i];
+        if !(self.tuning.playable_mass_min..=self.tuning.playable_mass_max).contains(&m) {
+            return false;
+        }
+        if self.classify(i) != BodyType::RockyPlanet {
+            return false;
+        }
+        // Habitable zone: equilibrium temperature in the liquid-water band ⇒ orbital distance
+        // scales with √(stellar luminosity).
+        let sqrt_l = self.mass[0].max(1e-6).powf(3.5).sqrt();
+        let r = self.pos[i].length();
+        (self.tuning.hz_inner_frac * sqrt_l..=self.tuning.hz_outer_frac * sqrt_l).contains(&r)
     }
 
     /// Advance the collapse by `dt` years: gravity (direct sum, softened) integrated with
@@ -306,10 +286,10 @@ impl Sim {
     /// parcels migrate inward, cross, and accrete into a few planets. A perpetual floor targets
     /// exactly circular so the settled planets stay put. The star (body 0) is pinned and skipped.
     fn dissipate(&mut self, dt: f32) {
-        let fade = (-self.time / GAS_TAU).exp();
-        let k_active = (DRAG * fade * dt).clamp(0.0, 1.0);
-        let k_floor = (DRAG_FLOOR * dt).clamp(0.0, 1.0);
-        let soft2 = SOFTENING * SOFTENING;
+        let fade = (-self.time / self.tuning.gas_tau).exp();
+        let k_active = (self.tuning.drag * fade * dt).clamp(0.0, 1.0);
+        let k_floor = (self.tuning.drag_floor * dt).clamp(0.0, 1.0);
+        let soft2 = self.tuning.softening * self.tuning.softening;
         let n = self.mass.len();
         for i in 1..n {
             if !self.alive[i] {
@@ -333,7 +313,7 @@ impl Sim {
             // in, cross, and accrete into planets. Around a PLANET (a satellite), it targets
             // exactly circular — circularise the captured moon, never feed it inward to its
             // death. The perpetual floor always targets circular (stable settled orbits).
-            let active_frac = if prim == 0 { DRAG_TARGET_FRAC } else { 1.0 };
+            let active_frac = if prim == 0 { self.tuning.drag_target_frac } else { 1.0 };
             let mut v = self.vel[i];
             v += (v_prim + t_hat * (active_frac * v_circ) - v) * k_active;
             v += (v_prim + t_hat * v_circ - v) * k_floor;
@@ -380,7 +360,7 @@ impl Sim {
             }
             let sep = (p - self.pos[j]).length();
             let r_hill = self.pos[j].length() * (self.mass[j] / (3.0 * star_m)).cbrt();
-            if sep >= HILL_FRAC * r_hill || sep >= best_sep {
+            if sep >= self.tuning.hill_frac * r_hill || sep >= best_sep {
                 continue;
             }
             // Bound to j? (negative specific relative orbital energy.)
@@ -409,13 +389,13 @@ impl Sim {
         let mut inv_rho = 0.0f32; // Σ fₑ/ρₑ in (g/cc)⁻¹
         for (e, &w) in row.iter().enumerate() {
             let rho_e = match self.el_numbers[e] {
-                1 | 2 => RHO_GAS_GCC,
-                6..=8 => RHO_ICE_GCC,
-                _ => RHO_ROCK_GCC,
+                1 | 2 => self.tuning.rho_gas_gcc,
+                6..=8 => self.tuning.rho_ice_gcc,
+                _ => self.tuning.rho_rock_gcc,
             };
             inv_rho += (w / m) / rho_e;
         }
-        let rho_gcc = if inv_rho > 0.0 { 1.0 / inv_rho } else { RHO_ROCK_GCC };
+        let rho_gcc = if inv_rho > 0.0 { 1.0 / inv_rho } else { self.tuning.rho_rock_gcc };
         rho_gcc * GCC_TO_MSUN_AU3
     }
 
@@ -434,7 +414,7 @@ impl Sim {
     /// ring), a dense rock barely shreds (just stays a close moon or merges) — so ice giants ring
     /// and captured rocks tend to survive or fall in.
     fn roche_radius(&self, a: usize, b: usize) -> f32 {
-        self.radius_au(a) * TIDAL_FRAC * (2.0 * self.density(a) / self.density(b).max(1e-30)).cbrt()
+        self.radius_au(a) * self.tuning.tidal_frac * (2.0 * self.density(a) / self.density(b).max(1e-30)).cbrt()
     }
 
     /// Pericenter and apocenter (AU) of body `b`'s orbit about body `a`, from their real relative
@@ -458,7 +438,7 @@ impl Sim {
     /// One symplectic-Euler step: accelerate every live mote by every other, then kick + drift.
     fn integrate(&mut self, h: f32) {
         let n = self.mass.len();
-        let soft2 = SOFTENING * SOFTENING;
+        let soft2 = self.tuning.softening * self.tuning.softening;
         let mut acc = vec![Vec2::ZERO; n];
         for (i, a_i) in acc.iter_mut().enumerate() {
             // Body 0 is the pinned star — it exerts gravity (below) but does not move.
@@ -500,7 +480,7 @@ impl Sim {
                 }
                 // Detection gate: only consider pairs whose accretion reaches overlap — a cheap
                 // early-out; the real decision is the orbit test below.
-                let reach = RADIUS_K * (self.mass[i].cbrt() + self.mass[j].cbrt());
+                let reach = self.tuning.radius_k * (self.mass[i].cbrt() + self.mass[j].cbrt());
                 if (self.pos[i] - self.pos[j]).length_squared() >= reach * reach {
                     continue;
                 }
@@ -561,7 +541,7 @@ impl Sim {
 
     /// The drawn / merge radius of mote `i` (AU).
     pub fn radius_au(&self, i: usize) -> f32 {
-        RADIUS_K * self.mass[i].cbrt()
+        self.tuning.radius_k * self.mass[i].cbrt()
     }
 
     /// Live mote count (bodies + not-yet-merged parcels).
@@ -612,6 +592,7 @@ fn rand01(h: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Tuning;
     use crate::mass::{CloudMass, MassParams};
     use crate::model::{load_tables, Ejecta};
 
@@ -620,7 +601,7 @@ mod tests {
         let cast = CastParams::default();
         let cloud = CloudField::new(ej.elements.len(), 0xC10D_5EED, 0.6);
         let cm = CloudMass::derive(&ej, &MassParams::default());
-        Sim::from_cloud(&ej, &cast, &cloud, &cm, 12)
+        Sim::from_cloud(&ej, &cast, &cloud, &cm, 12, Tuning::default())
     }
 
     #[test]
@@ -707,6 +688,7 @@ mod tests {
             ring_mass: vec![0.0; 3],
             el_numbers,
             time: 100.0, // past the gas era — only the circularising floor drag acts
+            tuning: Tuning::default(),
             init_total,
         };
 
@@ -743,6 +725,7 @@ mod tests {
             ring_mass: vec![0.0; 3],
             el_numbers: vec![1u8, 8, 26],
             time: 0.0,
+            tuning: Tuning::default(),
             init_total: star_m + host_m + sat_m,
         };
         // Place the satellite on a circular orbit inside the host's Roche radius (and outside its
@@ -782,12 +765,43 @@ mod tests {
             ring_mass: vec![0.0; 2],
             el_numbers: vec![1u8, 8, 26],
             time: 0.0,
+            tuning: Tuning::default(),
             init_total: star_m + body_m,
         };
         // 0.2 AU is well inside the star's accretion reach (~0.8 AU) but far outside its surface.
         s.merge();
         assert!(!s.alive[1], "the close inner body was absorbed by the star, not kept as a moon");
         assert!(s.ring_mass[0] == 0.0, "the star grows no ring");
+    }
+
+    #[test]
+    fn playable_worlds_emerge_and_obey_the_gate() {
+        // The gate must actually fire for some emergent systems (else the highlight is dead code),
+        // and every world it flags must obey the physical gate: rocky, in the HZ, in the mass band.
+        let ej = Ejecta::from_tables(&load_tables());
+        let cast = CastParams::default();
+        let cm = CloudMass::derive(&ej, &MassParams::default());
+        let t = Tuning::default();
+        let sqrt_l = 0.966f32.powf(3.5).sqrt();
+        let (hz_in, hz_out) = (t.hz_inner_frac * sqrt_l, t.hz_outer_frac * sqrt_l);
+        let mut total = 0usize;
+        for seed in [0xC10D_5EED_u32, 0x1111_2222, 0xABCD_0001, 0xDEAD_BEEF, 0x5A5A_1234] {
+            let cloud = CloudField::new(ej.elements.len(), seed, 0.6);
+            let mut s = Sim::from_cloud(&ej, &cast, &cloud, &cm, 24, t);
+            for _ in 0..40000 {
+                s.step(0.02);
+            }
+            for i in 1..s.mass.len() {
+                if s.is_playable(i) {
+                    total += 1;
+                    assert_eq!(s.classify(i), BodyType::RockyPlanet, "playable world is rocky");
+                    assert!((t.playable_mass_min..=t.playable_mass_max).contains(&s.mass[i]), "in mass band");
+                    let r = s.pos[i].length();
+                    assert!((hz_in..=hz_out).contains(&r), "in the habitable zone");
+                }
+            }
+        }
+        assert!(total > 0, "at least one playable world emerges across the seed set");
     }
 
     #[test]

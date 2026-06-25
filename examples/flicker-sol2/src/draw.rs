@@ -10,16 +10,6 @@ use std::f32::consts::TAU;
 
 use flicker::render::{Renderer, Vec2};
 
-/// A filled axis-aligned rectangle (two triangles). `pos` is the top-left corner.
-pub fn rect(r: &mut Renderer, pos: Vec2, size: Vec2, color: [f32; 4]) {
-    let a = pos;
-    let b = Vec2::new(pos.x + size.x, pos.y);
-    let c = Vec2::new(pos.x + size.x, pos.y + size.y);
-    let d = Vec2::new(pos.x, pos.y + size.y);
-    r.draw_triangle(a, b, c, color);
-    r.draw_triangle(a, c, d, color);
-}
-
 /// A filled disc (triangle fan) of `segs` segments.
 pub fn disc(r: &mut Renderer, center: Vec2, radius: f32, color: [f32; 4], segs: usize) {
     let mut prev = Vec2::new(center.x + radius, center.y);

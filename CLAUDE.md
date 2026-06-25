@@ -215,6 +215,7 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 | `flicker-worldstate` | The conserved ledger substrate: `Composition` (sparse element→mass, conservation-safe add/remove/merge), `Cell`, `Ledger`. | defined; Epoch-output→Ledger hookup deferred |
 | `flicker-worldgen` | The epoch pipeline (`epoch1..6.rs`), `HexState`, `EpochCtx`, `FieldSampler` (per-cell hardness/relief/vein fields). | Epochs 1–6 built; see §5 |
 | `flicker-celestial` | ~~unified celestial sim~~ — **ABANDONED/superseded by `flicker-sol2`** (§3). Left in tree as history; do NOT consume or extend. | abandoned |
+| `flicker-system` | **The boxed-up star-system formation sim** (Phase 1+2), GPU-free lib extracted from `examples/flicker-sol2` (Workstream A, 2026-06-24). API: `SystemConfig`/`Tuning` in, `System` facade, `SystemState`/`Epoch3Handoff` out. NOT `flicker-celestial`. → `docs/flicker-sol2-epoch3-pipeline-roadmap.md`. | active |
 
 ### Apps & examples
 - `crates/flicker-world` — **the current app**: icosphere viewer + epoch-viz + app

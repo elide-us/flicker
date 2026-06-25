@@ -1,27 +1,33 @@
-//! The viewer scene — two modes over the same data. **Distribution view:** each Prism element is
-//! a colour ring at its atomic-weight cast distance, clumpy + sheared (`crate::cloud`), with
-//! overdensity **dots** marking where matter concentrates (`crate::detect`). **Collapse** (press
-//! `Enter`): the cloud's clumps plus the conserved mass layer ignite into a planetary system —
-//! a central star and an orbiting disk that accretes into planets (`crate::collapse`).
+//! The simulation scene — a thin shell over [`flicker_system::System`], driven by a Lua HUD.
 //!
-//! Dials: `[`/`]` explosion (cast reach) · ↑/↓ falloff · `;`/`'` clump · `9`/`0` mass ·
-//! `7`/`8` metallicity · ←/→ or hover focus a ring · wheel/`-`/`=` zoom · Enter ignite ·
-//! Tab new system · Space pause · N reclump · B dots · G gravity well · R reset.
+//! Two modes over the same data. **Distribution view (Phase 1):** each Prism element is a colour
+//! ring at its atomic-weight cast distance, clumpy + sheared, with overdensity **dots** (the
+//! Phase-1 hot spots). **Collapse (Phase 2):** the cloud ignites into a planetary system — a
+//! central star and an orbiting disk that accretes into planets, moons and rings, with the
+//! habitable world highlighted.
+//!
+//! The scene holds no simulation state of its own — it feeds a `SystemConfig` (the dials) into the
+//! `System` and renders what comes back. The simulation graphics are drawn here in Rust; every
+//! control and readout lives in the Lua HUD (`scripts/sim_ui.lua` + `ui_elements.json`): a
+//! bottom-right control panel (phase nav, dial sliders, toggles, buttons) and a top-right stats
+//! readout. Esc opens the pause overlay.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::time::Duration;
 
 use flicker::app::{InputState, Key};
-use flicker::render::{Renderer, Vec2};
+use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, Transition};
+use flicker::script::{ScriptHost, Value, ValueMap};
+use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker_system::{BodyType, CastParams, MassParams, System, SystemConfig, EARTH_PER_SUN};
 
-use crate::cloud::CloudField;
-use crate::collapse::{BodyType, Sim};
-use crate::detect::{self, View as DetectView};
 use crate::draw;
-use crate::mass::{CloudMass, MassParams, EARTH_PER_SUN};
-use crate::model::{self, CastParams, Ejecta};
+use crate::shell::Pause;
 use crate::well;
+
+const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/sim_ui.lua");
+const UI_ELEMENTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
 
 // ── tuning ──────────────────────────────────────────────────────────────────────
 const DEFAULT_AU_AT_EDGE: f32 = 90.0;
@@ -35,17 +41,16 @@ const FOCUS_INNER_FRAC: f32 = 0.40;
 const FOCUS_OUTER_FRAC: f32 = 1.10;
 const FOCUS_PEAK_ALPHA: f32 = 0.60;
 const FOCUS_STEPS: usize = 36;
-/// Fixed steepness of the focus-band radial gradient (was the removed `,`/`.` dial).
+/// Fixed steepness of the focus-band radial gradient.
 const FOCUS_SHARPNESS: f32 = 2.0;
 
+/// Viewer-side clamp range for the clump dial (the default lives in `SystemConfig`).
 const CLUMP_STRENGTH_DEFAULT: f32 = 0.6;
 const CLUMP_STRENGTH_MAX: f32 = 1.2;
-const CLOUD_SEED0: u32 = 0xC10D_5EED;
 
-/// Simulated years per real second while the collapse runs (a watch-speed dial).
+/// Default simulated years per real second while the collapse runs — the speed dial's start value.
 const SIM_YEARS_PER_SEC: f32 = 6.0;
-/// Motes sampled per element when igniting the collapse.
-const MOTES_PER_EL: usize = 24;
+const SPEED_MAX: f32 = 60.0;
 /// Body draw size: physical radius × this boost, floored so small worlds still read. (We draw
 /// well above true scale on purpose — real planets would be invisible specks.)
 const BODY_DRAW_BOOST: f32 = 1.6;
@@ -58,13 +63,19 @@ const MOTION_MIN_PX: f32 = 8.0;
 const MOTION_MAX_PX: f32 = 60.0;
 /// Largest angle (radians) a motion arc may sweep, so a tightly-curved body doesn't draw a loop.
 const MOTION_ARC_MAX_SWEEP: f32 = 1.2;
+/// Playable-world highlight: a pulsing green ring. Pulse rate (Hz) and the green tint.
+const PLAYABLE_PULSE_HZ: f32 = 0.7;
+const PLAYABLE_GREEN: [f32; 3] = [0.30, 1.00, 0.45];
 /// Gravitational constant in AU³/(M☉·yr²) — `4π²`, matching the sim — for the arc's curvature.
 const G_SIM: f32 = 39.478_418;
 
-const TITLE: [f32; 4] = [0.92, 0.94, 0.99, 1.0];
 const DIM: [f32; 4] = [0.60, 0.64, 0.76, 1.0];
-const ACCENT: [f32; 4] = [0.96, 0.86, 0.60, 1.0];
 const GRID: [f32; 4] = [0.40, 0.46, 0.60, 0.18];
+
+/// Advance a seed deterministically (a genuinely different cloud).
+fn next_seed(seed: u32) -> u32 {
+    seed.wrapping_mul(0x9E37_79B1).wrapping_add(0x6D2B_79F5)
+}
 
 /// Screen-space layout from window size + zoom. Shared by update (hover) and render.
 struct Layout {
@@ -86,76 +97,62 @@ impl Layout {
     }
 }
 
-/// The viewer.
-pub struct CloudView {
-    ejecta: Ejecta,
-    params: CastParams,
-    mass: MassParams,
-    cloud_mass: CloudMass,
+/// The simulation scene — a thin shell of view state over the `System` (which owns all sim state).
+pub struct Sim {
+    system: System,
     au_at_edge: f32,
     focus: usize,
-    cloud: CloudField,
     time: f32,
+    /// Always-advancing clock (ignores pause) — drives the playable-world highlight pulse so it
+    /// keeps breathing while the sim is paused for inspection.
+    anim: f32,
     paused: bool,
+    /// Simulated years per real second (the "Speed" dial).
+    speed: f32,
     anchor_au: f32,
     show_bodies: bool,
     show_well: bool,
     last_candidates: usize,
-    sim: Option<Sim>,
-    prev_r: bool,
-    prev_enter: bool,
-    prev_tab: bool,
-    prev_g: bool,
-    prev_left: bool,
-    prev_right: bool,
-    prev_space: bool,
-    prev_n: bool,
-    prev_b: bool,
+    script: Option<ScriptHost>,
+    white: Option<TextureHandle>,
+    /// `true` when the cursor is over the Lua control panel — suppresses world hover/zoom so a
+    /// slider drag doesn't also re-focus a ring or zoom the view.
+    ui_capture: bool,
+    esc_prev: bool,
 }
 
-impl CloudView {
+impl Sim {
     pub fn new() -> Self {
-        let tables = model::load_tables();
-        let ejecta = Ejecta::from_tables(&tables);
-        let n = ejecta.elements.len();
-        let focus = ejecta.elements.iter().position(|e| e.symbol == "Fe").unwrap_or(0);
-        let mass = MassParams::default();
-        let cloud_mass = CloudMass::derive(&ejecta, &mass);
+        let system = System::new(SystemConfig::default());
+        let focus = system.ejecta().elements.iter().position(|e| e.symbol == "Fe").unwrap_or(0);
         Self {
-            ejecta,
-            mass,
-            cloud_mass,
-            params: CastParams::default(),
+            system,
             au_at_edge: DEFAULT_AU_AT_EDGE,
             focus,
-            cloud: CloudField::new(n, CLOUD_SEED0, CLUMP_STRENGTH_DEFAULT),
             time: 0.0,
+            anim: 0.0,
             paused: false,
+            speed: SIM_YEARS_PER_SEC,
             anchor_au: 1.0,
             show_bodies: true,
             show_well: false,
             last_candidates: 0,
-            sim: None,
-            prev_r: false,
-            prev_enter: false,
-            prev_tab: false,
-            prev_g: false,
-            prev_left: false,
-            prev_right: false,
-            prev_space: false,
-            prev_n: false,
-            prev_b: false,
+            script: None,
+            white: None,
+            ui_capture: false,
+            esc_prev: false,
         }
     }
 
     fn rot(&self, au: f32) -> f32 {
-        self.cloud.omega(au, self.anchor_au) * self.time
+        self.system.cloud().omega(au, self.anchor_au) * self.time
     }
 
     fn nearest_ring(&self, cursor_au: f32, px_per_au: f32) -> Option<usize> {
+        let cast = self.system.config().cast;
         let mut best: Option<(usize, f32)> = None;
-        for (i, el) in self.ejecta.elements.iter().enumerate() {
-            let d = (self.params.distance_au(el.atomic_mass) - cursor_au).abs() * px_per_au;
+        for (i, el) in self.system.ejecta().elements.iter().enumerate() {
+            let d = (cast.distance_au(el.atomic_mass) - cursor_au).abs() * px_per_au;
             let better = match best {
                 Some((_, b)) => d < b,
                 None => true,
@@ -165,6 +162,178 @@ impl CloudView {
             }
         }
         best.filter(|&(_, d)| d <= 8.0).map(|(i, _)| i)
+    }
+
+    /// Engine values published to the HUD script each frame: the dial positions (so the sliders
+    /// track them), the conserved-mass readout, the focus element, and — once ignited — the
+    /// collapse status.
+    fn hud_model(&self) -> ValueMap {
+        let cast = self.system.config().cast;
+        let mass = self.system.config().mass;
+        let ej = self.system.ejecta();
+        let cm = self.system.cloud_mass();
+        let total = cm.total();
+        let metals = cm.metals(ej);
+        let metals_pct = if total > 0.0 { metals / total * 100.0 } else { 0.0 };
+
+        // Top tonnage line (Earth masses), with uranium always shown (the HZ-world trace).
+        let mut order: Vec<usize> = (0..ej.elements.len()).collect();
+        order.sort_by(|&a, &b| cm.tonnage[b].total_cmp(&cm.tonnage[a]));
+        let mut show: Vec<usize> = order.into_iter().take(6).collect();
+        if let Some(u) = ej.elements.iter().position(|e| e.symbol == "U") {
+            if !show.contains(&u) {
+                show.push(u);
+            }
+        }
+        let mass_line = show
+            .iter()
+            .map(|&i| format!("{} {}", ej.elements[i].symbol, fmt_earth(cm.tonnage[i] * EARTH_PER_SUN)))
+            .collect::<Vec<_>>()
+            .join("  ·  ")
+            + "  M_e";
+
+        let el = &ej.elements[self.focus];
+        let focus_sym = el.symbol.clone();
+        let focus_name = el.name.clone();
+        let focus_au = cast.distance_au(el.atomic_mass);
+        let ignited = self.system.is_ignited();
+
+        let mut m = ValueMap::new()
+            .with("explosion", cast.explosion)
+            .with("falloff", cast.falloff)
+            .with("clump", self.system.cloud().strength)
+            .with("mass", mass.total)
+            .with("metallicity", mass.metallicity)
+            .with("speed", self.speed)
+            .with("view_edge", self.au_at_edge)
+            .with("reach_au", cast.reach_au())
+            .with("metals_pct", metals_pct)
+            .with("cloud_sum", total)
+            .with("focus_sym", focus_sym)
+            .with("focus_name", focus_name)
+            .with("focus_au", focus_au)
+            .with("candidates", self.last_candidates)
+            .with("mass_line", mass_line)
+            .with("paused", self.paused)
+            .with("dots", self.show_bodies)
+            .with("well", self.show_well)
+            .with("ignited", ignited)
+            .with("phase", if ignited { 2u32 } else { 1u32 });
+
+        if let Some(sim) = self.system.sim() {
+            let (mut star, mut gg, mut ig, mut rock, mut small, mut ringed, mut playable) =
+                (0, 0, 0, 0, 0, 0, 0);
+            for i in 0..sim.mass.len() {
+                if !sim.alive[i] {
+                    continue;
+                }
+                if sim.ring_mass[i] > 0.0 {
+                    ringed += 1;
+                }
+                if sim.is_playable(i) {
+                    playable += 1;
+                }
+                match sim.classify(i) {
+                    BodyType::Star => star += 1,
+                    BodyType::GasGiant => gg += 1,
+                    BodyType::IceGiant => ig += 1,
+                    BodyType::RockyPlanet => rock += 1,
+                    BodyType::IcyBody | BodyType::Asteroid => small += 1,
+                }
+            }
+            let type_line = format!(
+                "{star} star · {gg} gas · {ig} ice · {rock} rocky · {small} small · {ringed} ringed · {playable} playable"
+            );
+            m = m
+                .with("sim_time", sim.time)
+                .with("bodies", sim.live_count())
+                .with("star_mass", sim.largest_mass())
+                .with("sum_mass", sim.total_mass())
+                .with("init_mass", sim.init_total())
+                .with("type_line", type_line);
+        }
+        m
+    }
+
+    /// Apply the HUD script's returned results to the config + view state.
+    fn apply_ui(&mut self, results: &ValueMap) {
+        self.ui_capture = results.is_on("ui_capture");
+
+        // Reset wholesale-restores defaults. The sliders this frame still echo the *old* model, so
+        // skip harvesting them (next frame they read the reset values).
+        if results.is_on("reset") {
+            {
+                let c = self.system.config_mut();
+                c.cast = CastParams::default();
+                c.mass = MassParams::default();
+                c.clump = CLUMP_STRENGTH_DEFAULT;
+            }
+            self.system.sync_distribution();
+            self.system.clear();
+            self.au_at_edge = DEFAULT_AU_AT_EDGE;
+            self.speed = SIM_YEARS_PER_SEC;
+            self.time = 0.0;
+            self.paused = false;
+            return;
+        }
+
+        // Dial sliders → the config, then re-derive the Phase-1 distribution.
+        {
+            let mut c = *self.system.config();
+            if let Some(v) = results.number("explosion") {
+                c.cast.explosion = (v as f32).clamp(0.0, 1.0);
+            }
+            if let Some(v) = results.number("falloff") {
+                c.cast.falloff = (v as f32).clamp(FALLOFF_MIN, FALLOFF_MAX);
+            }
+            if let Some(v) = results.number("clump") {
+                c.clump = (v as f32).clamp(0.0, CLUMP_STRENGTH_MAX);
+            }
+            if let Some(v) = results.number("mass") {
+                c.mass.total = (v as f32).clamp(0.1, 10.0);
+            }
+            if let Some(v) = results.number("metallicity") {
+                c.mass.metallicity = (v as f32).clamp(0.0, 0.10);
+            }
+            *self.system.config_mut() = c;
+        }
+        self.system.sync_distribution();
+
+        if let Some(v) = results.number("speed") {
+            self.speed = (v as f32).clamp(0.0, SPEED_MAX);
+        }
+        if let Some(v) = results.number("view_edge") {
+            self.au_at_edge = (v as f32).clamp(MIN_AU_AT_EDGE, MAX_AU_AT_EDGE);
+        }
+
+        // Toggles.
+        if let Some(Value::Bool(b)) = results.get("pause") {
+            self.paused = *b;
+        }
+        if let Some(Value::Bool(b)) = results.get("dots") {
+            self.show_bodies = *b;
+        }
+        if let Some(Value::Bool(b)) = results.get("well") {
+            self.show_well = *b;
+        }
+
+        // Action buttons: reseed (fresh cloud) / new system (reseed + ignite).
+        if results.is_on("new_system") {
+            let s = next_seed(self.system.config().seed);
+            self.system.reseed(s);
+            self.system.ignite();
+        } else if results.is_on("reseed") {
+            let s = next_seed(self.system.config().seed);
+            self.system.reseed(s);
+        }
+
+        // Phase nav: Phase 1 = distribution (clear the collapse), Phase 2 = ignite the collapse.
+        if results.is_on("phase1") {
+            self.system.clear();
+        }
+        if results.is_on("phase2") {
+            self.system.ignite();
+        }
     }
 
     fn draw_reference_rings(&self, r: &mut Renderer, l: &Layout) {
@@ -181,8 +350,8 @@ impl CloudView {
     }
 
     fn draw_focus_band(&self, r: &mut Renderer, l: &Layout) {
-        let el = &self.ejecta.elements[self.focus];
-        let au = self.params.distance_au(el.atomic_mass);
+        let el = &self.system.ejecta().elements[self.focus];
+        let au = self.system.config().cast.distance_au(el.atomic_mass);
         let r_star = l.radius_px(au);
         if r_star < 3.0 || r_star > l.view_radius_px * 2.0 {
             return;
@@ -192,7 +361,7 @@ impl CloudView {
         let band_w = (r_out - r_in).max(1.0);
         let step_w = band_w / FOCUS_STEPS as f32;
         let p = FOCUS_SHARPNESS;
-        let cloud = &self.cloud;
+        let cloud = self.system.cloud();
         let i = self.focus;
         let col = el.color;
         let anchor = self.anchor_au;
@@ -223,10 +392,12 @@ impl CloudView {
     }
 
     fn draw_element_rings(&self, r: &mut Renderer, l: &Layout) {
-        let n = self.ejecta.elements.len().max(1);
-        let cloud = &self.cloud;
-        for (i, el) in self.ejecta.elements.iter().enumerate() {
-            let au = self.params.distance_au(el.atomic_mass);
+        let ejecta = self.system.ejecta();
+        let cast = self.system.config().cast;
+        let n = ejecta.elements.len().max(1);
+        let cloud = self.system.cloud();
+        for (i, el) in ejecta.elements.iter().enumerate() {
+            let au = cast.distance_au(el.atomic_mass);
             let radius = l.radius_px(au);
             if radius < 2.0 || radius > l.view_radius_px * 1.6 {
                 continue;
@@ -259,22 +430,24 @@ impl CloudView {
         }
     }
 
-    /// Overdensity **dots** — where the sheared, clumpy material concentrates (the seeds a future
-    /// formation sim would aggregate bodies from). Toggle with `B`.
+    /// Overdensity **dots** — the Phase-1 hot spots, where the sheared clumpy material
+    /// concentrates (the seeds bodies aggregate from). Toggle with the Dots checkbox.
     fn draw_candidates(&mut self, r: &mut Renderer, l: &Layout) {
-        let view = DetectView {
-            center: l.center,
-            px_per_au: l.px_per_au,
-            view_radius_px: l.view_radius_px,
-        };
-        let cands = detect::detect(&self.ejecta, &self.params, &self.cloud, self.time, self.anchor_au, &view);
-        for c in &cands {
-            let s = (c.strength / 0.8).clamp(0.0, 1.0);
+        let spots = self.system.hot_spots(self.time);
+        let mut drawn = 0usize;
+        for h in &spots {
+            let rr = h.au * l.px_per_au;
+            if rr < 2.0 || rr > l.view_radius_px * 1.7 {
+                continue;
+            }
+            let pos = Vec2::new(l.center.x + rr * h.theta.cos(), l.center.y + rr * h.theta.sin());
+            let s = (h.strength / 0.8).clamp(0.0, 1.0);
             let core = 2.0 + 5.0 * s;
-            draw::disc(r, c.pos, core * 2.0, [0.95, 0.86, 0.62, 0.12 + 0.12 * s], 16);
-            draw::disc(r, c.pos, core, [1.0, 0.95, 0.80, 0.7], 16);
+            draw::disc(r, pos, core * 2.0, [0.95, 0.86, 0.62, 0.12 + 0.12 * s], 16);
+            draw::disc(r, pos, core, [1.0, 0.95, 0.80, 0.7], 16);
+            drawn += 1;
         }
-        self.last_candidates = cands.len();
+        self.last_candidates = drawn;
     }
 
     fn draw_axes(&self, r: &mut Renderer, l: &Layout) {
@@ -289,89 +462,12 @@ impl CloudView {
         r.draw_text("+Z", Vec2::new(c.x - zl - 24.0, c.y - zl - 14.0), 12.0, [0.62, 0.70, 1.0, 0.95]);
     }
 
-    fn draw_hud(&self, r: &mut Renderer) {
-        r.draw_text("flicker · sol2 — supernova ejecta → system formation", Vec2::new(16.0, 16.0), 22.0, TITLE);
-        let motion = if self.paused { "  ·  ⏸ paused" } else { "" };
-        r.draw_text(
-            &format!(
-                "explosion {:.2}  ·  reach {:.0} AU  ·  falloff {:.2}  ·  clump {:.2}  ·  view edge {:.0} AU{}",
-                self.params.explosion,
-                self.params.reach_au(),
-                self.params.falloff,
-                self.cloud.strength,
-                self.au_at_edge,
-                motion,
-            ),
-            Vec2::new(16.0, 46.0),
-            14.0,
-            ACCENT,
-        );
-        r.draw_text(
-            "[ ] explosion · ↑/↓ falloff · ;/' clump · ←/→ focus · wheel/-/= zoom",
-            Vec2::new(16.0, 68.0),
-            13.0,
-            DIM,
-        );
-        r.draw_text(
-            "Enter ignite · Tab new system · 9/0 mass · 7/8 metallicity · Space pause · N reclump · B dots · G well · R reset · Esc",
-            Vec2::new(16.0, 86.0),
-            13.0,
-            DIM,
-        );
-        let el = &self.ejecta.elements[self.focus];
-        let dots = if self.show_bodies { format!("  ·  {} density dots", self.last_candidates) } else { String::new() };
-        r.draw_text(
-            &format!("focus {} ({})  {:.1} AU{}", el.symbol, el.name, self.params.distance_au(el.atomic_mass), dots),
-            Vec2::new(16.0, 108.0),
-            14.0,
-            [el.color[0] * 0.4 + 0.55, el.color[1] * 0.4 + 0.55, el.color[2] * 0.4 + 0.55, 1.0],
-        );
-    }
-
-    /// The conserved **mass layer** readout: total tonnage, the metals fraction, a
-    /// conservation check, and the per-element tonnages — so the cosmic-abundance shape
-    /// (H/He bulk, iron peak, uranium trace) is verifiable at a glance.
-    fn draw_mass_panel(&self, r: &mut Renderer) {
-        let ej = &self.ejecta;
-        let cm = &self.cloud_mass;
-        let total = cm.total();
-        let metals = cm.metals(ej);
-        let zpct = if total > 0.0 { metals / total * 100.0 } else { 0.0 };
-        r.draw_text(
-            &format!(
-                "cloud mass {:.2} M_sun  ·  metals {:.2}%  ·  sum {:.3} M_sun (conserved)",
-                self.mass.total, zpct, total,
-            ),
-            Vec2::new(16.0, 136.0),
-            14.0,
-            [0.80, 0.86, 0.74, 1.0],
-        );
-
-        // Rank by tonnage; show the heaviest budgets, and always uranium (the HZ-world
-        // trace) so its presence-but-tininess reads.
-        let mut order: Vec<usize> = (0..ej.elements.len()).collect();
-        order.sort_by(|&a, &b| cm.tonnage[b].total_cmp(&cm.tonnage[a]));
-        let mut show: Vec<usize> = order.into_iter().take(11).collect();
-        if let Some(u) = ej.elements.iter().position(|e| e.symbol == "U") {
-            if !show.contains(&u) {
-                show.push(u);
-            }
-        }
-        for (row, chunk) in show.chunks(6).enumerate() {
-            let line = chunk
-                .iter()
-                .map(|&i| format!("{} {}", ej.elements[i].symbol, fmt_earth(cm.tonnage[i] * EARTH_PER_SUN)))
-                .collect::<Vec<_>>()
-                .join("  ·  ");
-            r.draw_text(&format!("{line}   M_earth"), Vec2::new(16.0, 158.0 + row as f32 * 18.0), 13.0, DIM);
-        }
-    }
-
-    /// Each body's **motion vector**: a forward arrow in its direction of travel, plus a dotted
-    /// trail behind it. This shows where each body is actually going — honest once orbits are
-    /// eccentric or inclined, unlike a radius circle that just assumes a perfect ring.
+    /// Each body's **motion vector** as a curved arc that bows around the gravity well (the
+    /// osculating circle from the star's gravity): a forward arc with an arrowhead, plus a dotted
+    /// trail behind. For a circular orbit the arc lies on the orbit ring; for an eccentric one it
+    /// bends correctly. Captured moons draw nothing (their motion mirrors the host's).
     fn draw_motion(&self, r: &mut Renderer, l: &Layout) {
-        let Some(sim) = &self.sim else {
+        let Some(sim) = self.system.sim() else {
             return;
         };
         let star_m = sim.mass[0];
@@ -399,10 +495,6 @@ impl CloudView {
             let len_au = len_px / l.px_per_au.max(1e-6);
 
             // Curvature from the star's gravity (the dominant well): the path bows around the star.
-            // Osculating circle — centre at `p + n̂·R_c`, with `n̂` the bend direction (the part of
-            // gravity ⟂ to velocity) and `R_c = v²/|a⊥|`. For a circular orbit this is the orbit
-            // ring itself; for an eccentric/perturbed body it bends correctly. The arc starts along
-            // the true velocity, so direction stays honest.
             let a = p * (-G_SIM * star_m / (r_au * r_au * r_au)); // accel toward the star
             let a_perp = a - dir * a.dot(dir);
             let a_perp_mag = a_perp.length();
@@ -451,11 +543,10 @@ impl CloudView {
     }
 
     /// Render the collapse: planets as discs sized by mass (boosted for legibility) and tinted by
-    /// emergent type. The **star** (body 0) draws as a small fixed dot — at true scale it's a
-    /// ~1:1,000,000 speck, and its accretion/gravity reach is unchanged, so it stays bossy without
-    /// swallowing the inner system on screen.
+    /// emergent type, with Roche rings and the pulsing playable-world highlight. The **star**
+    /// (body 0) draws as a small fixed gold dot.
     fn draw_collapse(&self, r: &mut Renderer, l: &Layout) {
-        let Some(sim) = &self.sim else {
+        let Some(sim) = self.system.sim() else {
             return;
         };
         for i in 0..sim.mass.len() {
@@ -480,225 +571,81 @@ impl CloudView {
                 draw::ring(r, sp, rad * 2.0, rad * 1.0, [0.82, 0.88, 0.95, a], segs);
             }
             draw::disc(r, sp, rad, [c[0], c[1], c[2], 0.92], 20);
-        }
-    }
-
-    /// The collapse status line: elapsed time, body count, the largest (the star), and a
-    /// running conservation check (live sum vs the starting tonnage).
-    fn draw_sim_status(&self, r: &mut Renderer) {
-        let Some(sim) = &self.sim else {
-            return;
-        };
-        r.draw_text(
-            &format!(
-                "COLLAPSE  ·  t {:.0} yr  ·  {} bodies  ·  star {:.3} M_sun  ·  sum {:.3} / {:.3} M_sun",
-                sim.time,
-                sim.live_count(),
-                sim.largest_mass(),
-                sim.total_mass(),
-                sim.init_total(),
-            ),
-            Vec2::new(16.0, 200.0),
-            14.0,
-            ACCENT,
-        );
-        // System makeup by emergent type, plus ringed bodies.
-        let (mut star, mut gg, mut ig, mut rock, mut small, mut ringed) = (0, 0, 0, 0, 0, 0);
-        for i in 0..sim.mass.len() {
-            if !sim.alive[i] {
-                continue;
+            // Playable world: a pulsing green ring. It appears the frame a body enters the gate
+            // and vanishes the frame it leaves (migration / growth / star change).
+            if sim.is_playable(i) {
+                let pulse = 0.5 + 0.5 * (self.anim * PLAYABLE_PULSE_HZ * TAU).sin();
+                let ring_r = rad + 7.0 + 5.0 * pulse;
+                let segs = ((ring_r / 2.0) as usize).clamp(24, 96);
+                let g = PLAYABLE_GREEN;
+                draw::ring(r, sp, ring_r, 2.0, [g[0], g[1], g[2], 0.30 + 0.45 * pulse], segs);
             }
-            if sim.ring_mass[i] > 0.0 {
-                ringed += 1;
-            }
-            match sim.classify(i) {
-                BodyType::Star => star += 1,
-                BodyType::GasGiant => gg += 1,
-                BodyType::IceGiant => ig += 1,
-                BodyType::RockyPlanet => rock += 1,
-                BodyType::IcyBody | BodyType::Asteroid => small += 1,
-            }
-        }
-        r.draw_text(
-            &format!("{star} star · {gg} gas giant · {ig} ice giant · {rock} rocky · {small} small bodies · {ringed} ringed"),
-            Vec2::new(16.0, 220.0),
-            13.0,
-            DIM,
-        );
-    }
-
-    /// Legend for the collapse view: what each body colour means.
-    fn draw_type_legend(&self, r: &mut Renderer) {
-        let size = r.size();
-        let x = size.x - 176.0;
-        let mut y = 74.0;
-        r.draw_text("body types", Vec2::new(x, y), 14.0, TITLE);
-        y += 22.0;
-        for t in [
-            BodyType::Star,
-            BodyType::GasGiant,
-            BodyType::IceGiant,
-            BodyType::RockyPlanet,
-            BodyType::IcyBody,
-            BodyType::Asteroid,
-        ] {
-            let c = t.color();
-            draw::rect(r, Vec2::new(x, y + 2.0), Vec2::new(11.0, 11.0), [c[0], c[1], c[2], 1.0]);
-            r.draw_text(t.label(), Vec2::new(x + 18.0, y), 13.0, DIM);
-            y += 17.0;
-        }
-    }
-
-    fn draw_legend(&self, r: &mut Renderer) {
-        let size = r.size();
-        let x = size.x - 236.0;
-        let mut y = 74.0;
-        r.draw_text("ejecta rings (outer → inner)", Vec2::new(x, y), 14.0, TITLE);
-        y += 24.0;
-        for (i, el) in self.ejecta.elements.iter().enumerate() {
-            let foc = self.focus == i;
-            draw::rect(r, Vec2::new(x, y + 2.0), Vec2::new(11.0, 11.0), [el.color[0], el.color[1], el.color[2], 1.0]);
-            let au = self.params.distance_au(el.atomic_mass);
-            let line = format!("{:<2} {:>6.1} AU  {}", el.symbol, au, el.name);
-            let col = if foc { [1.0, 1.0, 1.0, 1.0] } else { DIM };
-            r.draw_text(&line, Vec2::new(x + 18.0, y), 13.0, col);
-            y += 15.0;
         }
     }
 }
 
-impl Default for CloudView {
+impl Default for Sim {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Scene for CloudView {
+impl Scene for Sim {
     fn enter(&mut self, renderer: &mut Renderer) {
         renderer.clear_color = [0.006, 0.008, 0.014, 1.0];
+        self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+        match ScriptHost::from_file(HUD_SCRIPT) {
+            Ok(s) => {
+                load_ui_json(&s, UI_ELEMENTS);
+                load_widgets(&s);
+                self.script = Some(s);
+            }
+            Err(e) => tracing::warn!("sim HUD script load failed ({HUD_SCRIPT}): {e}"),
+        }
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        if input.key_down(Key::Escape) {
-            return Transition::Quit;
+        // Esc opens the pause overlay (the sim freezes beneath it).
+        let esc = input.key_down(Key::Escape);
+        let esc_edge = esc && !self.esc_prev;
+        self.esc_prev = esc;
+        if esc_edge {
+            return Transition::Push(Box::new(Pause::new()));
         }
+
         let dt = dt.as_secs_f32();
-        let axis = |neg: Key, pos: Key| -> f32 {
-            (input.key_down(pos) as i32 - input.key_down(neg) as i32) as f32
-        };
+        let size = renderer.size();
 
-        self.params.explosion =
-            (self.params.explosion + axis(Key::LeftBracket, Key::RightBracket) * 0.5 * dt).clamp(0.0, 1.0);
-        self.params.falloff =
-            (self.params.falloff + axis(Key::Down, Key::Up) * 0.6 * dt).clamp(FALLOFF_MIN, FALLOFF_MAX);
-        self.cloud.strength =
-            (self.cloud.strength + axis(Key::Semicolon, Key::Apostrophe) * 0.6 * dt).clamp(0.0, CLUMP_STRENGTH_MAX);
-        self.mass.total =
-            (self.mass.total + axis(Key::Digit9, Key::Digit0) * 1.0 * dt).clamp(0.1, 10.0);
-        self.mass.metallicity =
-            (self.mass.metallicity + axis(Key::Digit7, Key::Digit8) * 0.03 * dt).clamp(0.0, 0.10);
+        // Publish the model, run the HUD, and apply what it returns.
+        let mut results = ValueMap::new();
+        if let Some(script) = &self.script {
+            let _ = script.set_model(&self.hud_model());
+            match script.update(input, size.x, size.y) {
+                Ok(r) => results = r,
+                Err(e) => tracing::warn!("HUD update error: {e}"),
+            }
+        }
+        self.apply_ui(&results);
 
-        let zoom_keys = axis(Key::Minus, Key::Equal);
-        let factor = (-(zoom_keys * 1.6 * dt) - input.mouse_wheel_delta * 0.12).exp();
-        self.au_at_edge = (self.au_at_edge * factor).clamp(MIN_AU_AT_EDGE, MAX_AU_AT_EDGE);
+        // Wheel zoom + hover-to-focus — only when the cursor isn't over the control panel.
+        if !self.ui_capture {
+            let factor = (-input.mouse_wheel_delta * 0.12).exp();
+            self.au_at_edge = (self.au_at_edge * factor).clamp(MIN_AU_AT_EDGE, MAX_AU_AT_EDGE);
 
-        let r_down = input.key_down(Key::R);
-        if r_down && !self.prev_r {
-            self.params = CastParams::default();
-            self.mass = MassParams::default();
-            self.au_at_edge = DEFAULT_AU_AT_EDGE;
-            self.cloud.strength = CLUMP_STRENGTH_DEFAULT;
-            self.time = 0.0;
-            self.sim = None;
+            let l = Layout::new(size, self.au_at_edge);
+            let cursor_au = (input.mouse_position - l.center).length() / l.px_per_au.max(1e-6);
+            if let Some(i) = self.nearest_ring(cursor_au, l.px_per_au) {
+                self.focus = i;
+            }
         }
-        self.prev_r = r_down;
-
-        let n = self.ejecta.elements.len().max(1);
-        let left = input.key_down(Key::Left);
-        if left && !self.prev_left {
-            self.focus = (self.focus + n - 1) % n;
-        }
-        self.prev_left = left;
-        let right = input.key_down(Key::Right);
-        if right && !self.prev_right {
-            self.focus = (self.focus + 1) % n;
-        }
-        self.prev_right = right;
-
-        let space = input.key_down(Key::Space);
-        if space && !self.prev_space {
-            self.paused = !self.paused;
-        }
-        self.prev_space = space;
-        let nkey = input.key_down(Key::N);
-        if nkey && !self.prev_n {
-            let s = self.cloud.seed.wrapping_mul(0x9E37_79B1).wrapping_add(0x6D2B_79F5);
-            self.cloud.reseed(s);
-        }
-        self.prev_n = nkey;
-        let bkey = input.key_down(Key::B);
-        if bkey && !self.prev_b {
-            self.show_bodies = !self.show_bodies;
-        }
-        self.prev_b = bkey;
-        let gkey = input.key_down(Key::G);
-        if gkey && !self.prev_g {
-            self.show_well = !self.show_well;
-        }
-        self.prev_g = gkey;
-        let enter = input.key_down(Key::Enter);
-        if enter && !self.prev_enter {
-            // Ignite the collapse: sample the current conserved cloud into motes and let
-            // them fall. R clears it back to the distribution view.
-            self.sim = Some(Sim::from_cloud(
-                &self.ejecta,
-                &self.params,
-                &self.cloud,
-                &self.cloud_mass,
-                MOTES_PER_EL,
-            ));
-        }
-        self.prev_enter = enter;
-        let tab = input.key_down(Key::Tab);
-        if tab && !self.prev_tab {
-            // New system: roll a fresh cloud seed and ignite the collapse from it.
-            let s = self.cloud.seed.wrapping_mul(0x9E37_79B1).wrapping_add(0x6D2B_79F5);
-            self.cloud.reseed(s);
-            self.sim = Some(Sim::from_cloud(
-                &self.ejecta,
-                &self.params,
-                &self.cloud,
-                &self.cloud_mass,
-                MOTES_PER_EL,
-            ));
-        }
-        self.prev_tab = tab;
 
         if !self.paused {
             self.time += dt;
         }
-
-        let (mut rmin, mut rmax) = (f32::MAX, 0.0_f32);
-        for el in &self.ejecta.elements {
-            let d = self.params.distance_au(el.atomic_mass);
-            rmin = rmin.min(d);
-            rmax = rmax.max(d);
-        }
-        self.anchor_au = (rmin.max(0.01) * rmax.max(0.01)).sqrt();
-        self.cloud_mass = CloudMass::derive(&self.ejecta, &self.mass);
-
-        let paused = self.paused;
-        if let Some(sim) = self.sim.as_mut() {
-            if !paused {
-                sim.step(dt * SIM_YEARS_PER_SEC);
-            }
-        }
-
-        // Hover-to-focus.
-        let l = Layout::new(renderer.size(), self.au_at_edge);
-        let cursor_au = (input.mouse_position - l.center).length() / l.px_per_au.max(1e-6);
-        if let Some(i) = self.nearest_ring(cursor_au, l.px_per_au) {
-            self.focus = i;
+        self.anim += dt; // highlight pulse keeps breathing even while paused
+        self.anchor_au = self.system.anchor_au();
+        if !self.paused {
+            self.system.step(dt * self.speed);
         }
 
         Transition::None
@@ -707,7 +654,7 @@ impl Scene for CloudView {
     fn render(&mut self, renderer: &mut Renderer) {
         let l = Layout::new(renderer.size(), self.au_at_edge);
         self.draw_reference_rings(renderer, &l);
-        if let Some(sim) = &self.sim {
+        if let Some(sim) = self.system.sim() {
             if self.show_well {
                 let bodies: Vec<(Vec2, f32)> = (0..sim.mass.len())
                     .filter(|&i| sim.alive[i])
@@ -717,6 +664,7 @@ impl Scene for CloudView {
             }
             self.draw_motion(renderer, &l);
             self.draw_collapse(renderer, &l);
+            self.last_candidates = 0; // dots are a distribution-only readout
         } else {
             self.draw_focus_band(renderer, &l);
             self.draw_element_rings(renderer, &l);
@@ -729,13 +677,15 @@ impl Scene for CloudView {
             draw::disc(renderer, l.center, 5.0, [1.0, 0.98, 0.92, 1.0], 24);
         }
         self.draw_axes(renderer, &l);
-        self.draw_hud(renderer);
-        self.draw_mass_panel(renderer);
-        self.draw_sim_status(renderer);
-        if self.sim.is_some() {
-            self.draw_type_legend(renderer);
-        } else {
-            self.draw_legend(renderer);
+
+        // The Lua HUD (control panel + stats overlay) on top of the simulation.
+        if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
+            let _ = script.set_model(&self.hud_model());
+            let size = renderer.size();
+            match script.draw(size.x, size.y) {
+                Ok(cmds) => render_hud(renderer, &cmds, white, &[]),
+                Err(e) => tracing::warn!("HUD draw error: {e}"),
+            }
         }
     }
 }
@@ -762,4 +712,51 @@ fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     }
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sim HUD script loads against the real layout JSON + widgets and runs an update/draw
+    /// cycle — catches Lua/contract breakage headlessly (no window needed).
+    #[test]
+    fn sim_hud_loads_and_runs() {
+        let script = ScriptHost::from_file(HUD_SCRIPT).expect("sim_ui.lua loads");
+        load_ui_json(&script, UI_ELEMENTS);
+        load_widgets(&script);
+
+        let model = ValueMap::new()
+            .with("explosion", 0.5f32)
+            .with("falloff", 0.6f32)
+            .with("clump", 0.6f32)
+            .with("mass", 1.0f32)
+            .with("metallicity", 0.014f32)
+            .with("speed", 6.0f32)
+            .with("view_edge", 90.0f32)
+            .with("reach_au", 90.0f32)
+            .with("metals_pct", 1.4f32)
+            .with("cloud_sum", 1.0f32)
+            .with("focus_sym", "Fe")
+            .with("focus_name", "Iron")
+            .with("focus_au", 5.0f32)
+            .with("candidates", 12usize)
+            .with("mass_line", "H 1e3 · He 4e2  M_e")
+            .with("paused", false)
+            .with("dots", true)
+            .with("well", false)
+            .with("ignited", false)
+            .with("phase", 1u32);
+        script.set_model(&model).expect("publish model");
+
+        let input = InputState::new();
+        let results = script.update(&input, 1280.0, 720.0).expect("update runs");
+        // A dial slider round-trips its value through the widget.
+        assert!(results.number("explosion").is_some(), "explosion slider value returned");
+        // The panel reports a capture flag (the cursor at 0,0 is outside it → false, but present).
+        assert!(results.get("ui_capture").is_some(), "ui_capture reported");
+
+        let cmds = script.draw(1280.0, 720.0).expect("draw runs");
+        assert!(!cmds.is_empty(), "HUD should emit draw commands");
+    }
 }

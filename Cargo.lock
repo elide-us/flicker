@@ -788,7 +788,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
- "flicker-materials",
+ "flicker-system",
+ "image",
+ "tracing",
  "tracing-subscriber",
 ]
 
@@ -806,6 +808,14 @@ dependencies = [
  "glam",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "flicker-system"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "glam",
 ]
 
 [[package]]

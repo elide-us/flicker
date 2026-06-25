@@ -17,8 +17,11 @@ publish = false
 # Engine pillars: flicker-render (2D draw), flicker-scene (game-state stack),
 # flicker-app (winit loop + input). The umbrella re-exports all three.
 flicker = { path = "../../crates/flicker" }
-# The Prism vocabulary — the authoritative limited periodic table (27 elements with
-# real atomic masses). The umbrella doesn't re-export it, so depend directly.
-flicker-materials.workspace = true
+# The boxed-up star-system simulation (Phase 1 + Phase 2). This viewer is now a thin
+# shell over it: it feeds a `SystemConfig` and renders the `System`'s state.
+flicker-system.workspace = true
 anyhow.workspace = true
+tracing.workspace = true
 tracing-subscriber.workspace = true
+# Splash-logo PNGs for the intro scene (loaded via Renderer::load_texture).
+image.workspace = true

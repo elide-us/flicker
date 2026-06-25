@@ -95,6 +95,55 @@ clean inner edge ~0.9–1.5 AU**. Test: `the_star_absorbs_close_bodies_rather_th
 1.5 BY it is looking very much like our natural system."* The emergent systems land in the
 Sol-like band on their own — the model + the moon/ring/viz work is confirmed good.
 
+**Playable-world detection + highlight (final polish).** `Sim::is_playable(i)` (in `collapse.rs`):
+a narrow physical gate re-evaluated every frame — **rocky** + in the star's **habitable zone**
+(liquid-water temperature; HZ = `[0.95, 1.37]·√L` AU, `L ≈ M★^3.5`; ≈0.89–1.29 AU for the 0.966 M☉
+star) + in the **0.3–5 M⊕** mass band (holds ~1 atm; not a giant). *Temperature + pressure* — the
+user's stated criterion. Composition is deliberately NOT a gate (terrestrials form dry; H is in the
+star, water is delivered later — requiring H+O killed exactly the Earth-like candidates), but the
+flagged world's exact `comp[i]` is the handoff payload. Emergent across seeds (~2 of 5 produce one).
+Tunable dials: `PLAYABLE_MASS_MIN/MAX`, `HZ_INNER/OUTER_FRAC`. Render: a **pulsing green ring**
+(`draw_collapse`, driven by an always-advancing `anim` clock so it breathes while paused) that
+appears/vanishes as a body enters/leaves the gate; status line shows `N playable`. Test
+`playable_worlds_emerge_and_obey_the_gate`.
+
+## EPOCH 3 FINAL STATE — declared by the user (2026-06-24)
+
+The user designates this build the **Epoch-3 final state** of flicker-sol2. Validation criteria, all
+met by the current sim:
+1. **A system of bodies with definable material, mass, motion, composition** — bodies/rings/moons,
+   each with exact conserved per-element `comp`, `mass`, `vel`, ring tonnage, host. ✅
+2. **A readable material payload for the next phase** — the playable world's exact composition is
+   identified (`is_playable` + `comp[i]`), ready to seed evolving an individual planet in the
+   single-world sim. (The concrete export API to world-gen is the next phase, not yet built.)
+3. **Celestial events emerge from natural motion** — bodies on real orbits ⇒ alignment, eclipse,
+   transit fall out of the dynamics (a consequence of the sim, not painted). ✅
+
+**Forward vision (NOT this phase) — 1.5–3 BY evolution.** Further evolution of bodies within a
+now-stable system: this is where the *cinematic* work lives — real **collision animations**, and
+notably **moons forming OUT of collisions** (a giant-impact debris disc that re-accretes) rather
+than the current merge-on-contact. Also still open from before: denser moon systems (finer
+integration near planets) and the **3D camera-unlock** (Vec2→Vec3 + projection/tilt camera).
+
+**Known model trait — giant ordering is inverted vs the solar system (future refinement).** The
+user noticed icy worlds (ice giants) sit *inside* the gas giants; measured: ice giants median ~5 AU,
+gas giants median ~31 AU. Real solar system is the opposite (Jupiter/Saturn 5–10 AU inside
+Uranus/Neptune 19–30 AU). **Cause:** the locked cast-by-atomic-weight premise flings the lightest
+elements farthest — H/He land outermost (24–48 AU), C/N/O mid (12–14), metals inner — so outer
+bodies are H/He-dominated → gas giants outer, mid bodies C/N/O → ice giants inner. Internally
+consistent with the cast; inverted from reality, where H/He is the disk's bulk *everywhere* and the
+gas-vs-ice-giant split is an accretion-*timing* effect (inner cores grab gas before it disperses →
+gas giants; outer cores grow too slow → ice giants). **User's read:** this likely stems from how we
+"steal" the star's mass (`STAR_GAS_FRAC = 0.98` extraction leaves only a thin outer H/He shell for
+giants to build from); fundamental model adjustments are possible. **Disposition (user, 2026-06-24):
+"Consider adjustments to the model to refine ice body formation in outer reaches as part of future
+refinement passes."** Left as-is for now — the explanation suffices.
+
+**Open tuning note — playable mass cap.** The user observed HZ rocky bodies that aren't highlighted;
+diagnosed as excessive size (HZ rockies are frequently 70–590 M⊕, above `PLAYABLE_MASS_MAX = 5 M⊕`).
+`PLAYABLE_MASS_MAX` is the dial to revisit if the playable band reads too tight; the user is
+evaluating outcomes across systems before adjusting.
+
 **Still open (NOT done):** denser moon systems (finer integration near planets); rendering moons as
 discs near their planet (they draw via `draw_collapse`/`draw_motion` already, but no dedicated moon
 disc/orbit); the 3D question (user chose **2D now**); body-consolidation pass for the high

@@ -1,30 +1,22 @@
-//! flicker-sol2 — a viewer for a **supernova ejecta cloud** (the cast material distribution).
+//! flicker-sol2 — a viewer for **supernova ejecta → star-system formation**.
 //!
-//! A star forms from its local cloud. The supernova that seeded that cloud cast material
-//! outward; in this (deliberately simple) model each element settles at a characteristic
-//! *distance* governed only by its **atomic weight** — heavier elements are flung short,
-//! lighter ones reach far.
+//! A star forms from its local cloud. The supernova that seeded that cloud cast material outward;
+//! in this (deliberately simple) model each element settles at a characteristic *distance* set by
+//! its **atomic weight** — heavier elements fall short, lighter ones reach far.
 //!
-//! The scene draws that as a **2D top-down projection**: the star at the origin, xyz arrows,
-//! and one translucent colour ring per Prism element at its cast distance. The cloud is
-//! **clumpy and differentially sheared** (`src/cloud.rs`), and overdensity **dots** mark where
-//! matter concentrates (`src/detect.rs`, toggle `B`). Dials shape the distribution (explosion
-//! reach, atomic-weight falloff, gradient sharpness, clump strength).
+//! **Phase 1 (Distribution):** a 2D top-down projection of that cloud — the star at the origin,
+//! xyz arrows, one translucent colour ring per Prism element at its cast distance, clumpy and
+//! differentially sheared (`flicker-system`), with overdensity **dots** marking where matter
+//! concentrates. **Phase 2 (Collapse):** the cloud ignites into a planetary system that accretes
+//! into planets, moons and rings, with the habitable world highlighted.
 //!
-//! This is the material-distribution view ONLY. The formation simulation that grew bodies from
-//! it was removed (it kept getting built wrong); when rebuilt, it must **derive from these
-//! starting values** — nothing invented on the side.
-//!
-//! Controls: `[`/`]` explosion · ↑/↓ falloff · `,`/`.` gradient · `;`/`'` clump · ←/→ or hover
-//! focus an element · wheel or `-`/`=` zoom · Space pause · N reclump · B dots · R reset · Esc.
+//! The app is scene-driven (Logo splash → Menu → Sim, with Pause / Settings overlays). The sim's
+//! every control + readout lives in a Lua HUD (`scripts/sim_ui.lua` + `ui_elements.json`): a
+//! bottom-right control panel and a top-right stats overlay. Drag the dials; Esc opens Pause.
 
-mod cloud;
-mod collapse;
-mod detect;
 mod draw;
-mod mass;
-mod model;
 mod scene;
+mod shell;
 mod well;
 
 use anyhow::Result;
@@ -33,6 +25,7 @@ use flicker::scene::SceneManager;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    run(SceneManager::new(Box::new(scene::CloudView::new())))?;
+    // Logo splash → Menu; Start → the Stage-1 simulation; Esc in-sim → Pause overlay.
+    run(SceneManager::new(Box::new(shell::Logo::new())))?;
     Ok(())
 }
