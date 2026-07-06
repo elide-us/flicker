@@ -744,11 +744,11 @@ impl World {
                 let tint = [1.0, 1.0, 1.0, 1.0];
                 let y = -((EPOCHS - e) as f32) * EPOCH_GAP;
                 let model = Mat4::from_translation(Vec3::new(tile.place.x, y, tile.place.y));
-                renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint });
+                renderer.draw_mesh(mesh, model, MeshDrawOptions { wireframe: false, tint, ..Default::default() });
                 // Epoch 4+ floods the basins with a flat sea over the relief.
                 if e >= 3 {
                     if let Some(w) = tile.water {
-                        renderer.draw_mesh(w, model, MeshDrawOptions { wireframe: false, tint: [1.0, 1.0, 1.0, 1.0] });
+                        renderer.draw_mesh(w, model, MeshDrawOptions { wireframe: false, tint: [1.0, 1.0, 1.0, 1.0], ..Default::default() });
                     }
                 }
             }
@@ -758,7 +758,7 @@ impl World {
                 let model = Mat4::from_translation(Vec3::new(tile.place.x, 0.0, tile.place.y));
                 let shell_tint = [1.0, 1.0, 1.0, BAND_ALPHA];
                 for &shell in &self.band_shells {
-                    renderer.draw_mesh(shell, model, MeshDrawOptions { wireframe: false, tint: shell_tint });
+                    renderer.draw_mesh(shell, model, MeshDrawOptions { wireframe: false, tint: shell_tint, ..Default::default() });
                 }
             }
         }

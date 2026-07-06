@@ -22,6 +22,7 @@ mod pipeline_sky;
 mod pipeline_sprite;
 mod pipeline_text;
 mod pipeline_triangle;
+mod pipeline_volumetric;
 mod renderer;
 mod texture;
 
@@ -29,6 +30,7 @@ mod texture;
 mod layering_test;
 
 pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
+pub use pipeline_volumetric::{VolumetricDisk, MAX_VOLUMETRIC_BODIES};
 pub use renderer::Renderer;
 pub use texture::TextureHandle;
 

@@ -189,8 +189,9 @@ mod tests {
     #[test]
     fn loads_the_full_vocabulary() {
         let t = tables();
-        // 26 elements, 20 resolved materials (handoff §2).
-        assert_eq!(t.elements().len(), 26);
+        // 27 elements (Mg added for formation-sim relevance — design ceiling 30),
+        // 20 resolved materials (handoff §2).
+        assert_eq!(t.elements().len(), 27);
         assert_eq!(t.materials().len(), 20);
     }
 

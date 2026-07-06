@@ -190,7 +190,22 @@ impl<'a> FieldSampler<'a> {
         elevation: f32,
         orogeny: f32,
     ) -> CellSample {
-        let p = self.convect(Vec3::new(world.x, 0.0, world.y));
+        self.sample_blended_at(state, Vec3::new(world.x, 0.0, world.y), elevation, orogeny)
+    }
+
+    /// Like [`sample_blended`](Self::sample_blended) but samples at an explicit 3D
+    /// position (cluster units) rather than a flat `Vec2`. Used to sample over the
+    /// sphere — the planet viewer feeds `dir * scale`, and because the fields are a
+    /// function of the 3D point, neighbouring cells that share an edge position
+    /// agree, so the within-hex terrain joins seam-free.
+    pub fn sample_blended_at(
+        &self,
+        state: &HexState,
+        pos: Vec3,
+        elevation: f32,
+        orogeny: f32,
+    ) -> CellSample {
+        let p = self.convect(pos);
         let surf = state.surface();
         let cutoff = surf.total() * self.trace_cutoff;
 
@@ -352,6 +367,18 @@ mod tests {
             hi - lo
         };
         assert!(span(&belt) > span(&flat) * 1.3, "orogeny didn't amplify the relief");
+    }
+
+    #[test]
+    fn sample_at_matches_the_flat_path() {
+        let t = tables();
+        let s = FieldSampler::new(&t, 7);
+        let state = HexState::new(Composition::from_iter([(SI, 6000.0), (FE, 4000.0)]));
+        let a = s.sample(&state, Vec2::new(1234.0, -567.0));
+        let b = s.sample_blended_at(&state, Vec3::new(1234.0, 0.0, -567.0), state.elevation, state.orogeny);
+        assert_eq!(a.hardness.to_bits(), b.hardness.to_bits());
+        assert_eq!(a.elevation.to_bits(), b.elevation.to_bits());
+        assert_eq!(a.vein.to_bits(), b.vein.to_bits());
     }
 
     #[test]

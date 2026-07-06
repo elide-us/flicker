@@ -15,22 +15,68 @@
 //! - **Thermal creep** — slopes steeper than the talus angle relax toward it,
 //!   rounding off the sharpest plate-built scarps.
 //!
-//! Then each hex is classified into a **biome** from its temperature (Epoch 4),
-//! its elevation above the sea, and a moisture field diffused inland from the
-//! oceans. This is *macro* erosion at ~50-mi hex scale — deliberately coarse; the
-//! per-pass water cycle refines it into real river valleys and smoothed relief.
+//! Then each hex is classified into a **biome** from its temperature and
+//! **precipitation** (both Epoch 4) plus its elevation above the sea, and the
+//! **life thread** advances onto the land (fungus → flora), shedding the dead
+//! `organics` that time-gated preservation banks as coal/oil/chalk `deposits`.
+//! This is *macro* erosion at ~50-mi hex scale — deliberately coarse; the per-pass
+//! water cycle refines it into real river valleys and smoothed relief.
 
 use flicker_materials::PhysicalState;
 use flicker_worldstate::Composition;
 
 use crate::noise::fbm;
-use crate::pipeline::{EpochCtx, EpochTransform};
-use crate::state::{Biome, HexState};
+use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
+use crate::state::{Biome, HexState, LifeStage};
+
+/// Carbon — coal (on land) / oil (under sea) where organics escape decomposition.
+const CARBON: u8 = 6;
+/// Calcium — the carbonate (with carbon) that builds chalk / limestone.
+const CALCIUM: u8 = 20;
+/// Water depth (normalized) beyond which a submerged shelf is too deep for
+/// carbonate plankton to build chalk — only the sunlit shelves accumulate it.
+const CHALK_DEPTH: f32 = 0.6;
+
+/// A drainage basin — the spec's cross-hex `watersheds` record: the hexes that all
+/// drain (by steepest descent) to one terminal `outlet` sink. Reconstructed from
+/// the per-hex [`HexState::watershed`] field by [`watersheds`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Watershed {
+    /// Dense basin id (`0..count`).
+    pub id: u32,
+    /// The terminal sink hex everything in the basin drains to (a coastal/abyssal
+    /// or endorheic low point).
+    pub outlet: u32,
+    /// Hex indices belonging to this basin.
+    pub members: Vec<u32>,
+}
+
+/// Group a finished Epoch-6 layer into its drainage basins by the per-hex
+/// [`HexState::watershed`] sink id (the cross-hex `watersheds` structure).
+pub fn watersheds(layer: &[HexState]) -> Vec<Watershed> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (i, s) in layer.iter().enumerate() {
+        groups.entry(s.watershed).or_default().push(i as u32);
+    }
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(id, (outlet, members))| Watershed { id: id as u32, outlet, members })
+        .collect()
+}
+
+/// Erosion–deposition passes run at the [nominal duration][NOMINAL_DURATION]; the
+/// actual pass count scales with [`Epoch6::duration`] (so the default reproduces
+/// today's eight passes).
+const NOMINAL_EROSION_PASSES: f32 = 8.0;
 
 /// Epoch 6 parameters.
 pub struct Epoch6 {
-    /// Erosion–deposition passes over the hex graph.
-    pub iterations: u32,
+    /// Within-epoch **erosion time** on the shared clock — how long weathering
+    /// runs. Normalised to [`NOMINAL_DURATION`]; the nominal value yields the
+    /// baseline pass count, longer incises more and buries more organics.
+    pub duration: u32,
     /// Base rainfall delivered to every hex each pass (the flow-accumulation
     /// unit).
     pub rain: f32,
@@ -47,21 +93,44 @@ pub struct Epoch6 {
     /// Elevation **above sea level** beyond which a hex is alpine (bare rock /
     /// snow), regardless of its climate biome.
     pub alpine_height: f32,
-    /// Passes diffusing ocean moisture inland (coast wet → interior dry).
-    pub moisture_diffuse: u32,
+    /// Growth potential (warmth × moisture) above which land bears **flora**
+    /// (forest) — `LifeStage::Floral`. Lower → greener planet.
+    pub floral_threshold: f32,
+    /// Growth potential above which land bears **fungus / sparse vegetation** —
+    /// `LifeStage::Fungal` (below the flora threshold).
+    pub fungal_threshold: f32,
+    /// Dead-organic-matter (peat) shed per unit standing biomass per iteration —
+    /// the coal/oil precursor that accumulates over the epoch's cycles.
+    pub organics_rate: f32,
+    /// How late wood-decomposers ("termites") arrived, `0..1` — the **fraction of
+    /// dead organics preserved** as buried carbon (coal on land, oil under sea).
+    /// `1` = they never came (a coal-rich planet, the Carboniferous window wide
+    /// open); `0` = always present (organics all recycled, no coal).
+    pub decomposer_onset: f32,
+    /// How early carbonate-shelled plankton evolved, `0..1` — `1 - onset` is the
+    /// fraction of the era they spent raining CaCO₃ onto warm shallow shelves
+    /// (chalk). `0` = present the whole era (maximal chalk); `1` = never (none).
+    pub carbonate_onset: f32,
+    /// Scale of chalk accumulation in a perfect warm shallow carbonate sea.
+    pub carbonate_rate: f32,
 }
 
 impl Default for Epoch6 {
     fn default() -> Self {
         Self {
-            iterations: 8,
+            duration: NOMINAL_DURATION,
             rain: 1.0,
             erosion_rate: 0.018,
             flow_exp: 0.8,
             talus: 0.10,
             talus_rate: 0.4,
             alpine_height: 0.5,
-            moisture_diffuse: 3,
+            floral_threshold: 0.45,
+            fungal_threshold: 0.15,
+            organics_rate: 0.05,
+            decomposer_onset: 0.6,
+            carbonate_onset: 0.3,
+            carbonate_rate: 0.5,
         }
     }
 }
@@ -77,6 +146,9 @@ impl EpochTransform for Epoch6 {
             return Vec::new();
         }
         let sea = prev[0].sea_level;
+        // Erosion time → pass count: the nominal duration yields the baseline passes.
+        let passes =
+            ((self.duration as f32 / NOMINAL_DURATION as f32) * NOMINAL_EROSION_PASSES).round().max(1.0) as u32;
 
         let mut elev: Vec<f32> = prev.iter().map(|s| s.elevation).collect();
         let mut sediment = vec![0.0f32; n];
@@ -87,7 +159,7 @@ impl EpochTransform for Epoch6 {
             .collect();
 
         let mut flow = vec![self.rain; n];
-        for _ in 0..self.iterations.max(1) {
+        for _ in 0..passes {
             // Process hexes high → low so each is handled before its outflow.
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_by(|&a, &b| {
@@ -143,23 +215,38 @@ impl EpochTransform for Epoch6 {
             }
         }
 
-        // Moisture: oceans are wet (1), diffuse inland so coasts stay moist and
-        // interiors dry out.
-        let mut moist = vec![0.0f32; n];
-        for i in 0..n {
-            if elev[i] <= sea {
-                moist[i] = 1.0;
+        // Drainage basins: on the settled terrain, every hex drains by steepest
+        // descent to a terminal sink (a local minimum). Follow the chains with path
+        // compression so each hex records the sink it ends at — its watershed id.
+        let down: Vec<Option<usize>> = (0..n).map(|i| lowest_neighbor(i, &elev, ctx)).collect();
+        let mut sink = vec![u32::MAX; n];
+        for start in 0..n {
+            if sink[start] != u32::MAX {
+                continue;
             }
-        }
-        for _ in 0..self.moisture_diffuse {
-            let snap = moist.clone();
-            for i in 0..n {
-                let (mut sum, mut cnt) = (snap[i], 1.0f32);
-                for &nb in &ctx.neighbors[i] {
-                    sum += snap[nb as usize];
-                    cnt += 1.0;
+            let mut path = vec![start];
+            let mut cur = start;
+            loop {
+                match down[cur] {
+                    Some(d) if sink[d] != u32::MAX => {
+                        let s = sink[d];
+                        for &p in &path {
+                            sink[p] = s;
+                        }
+                        break;
+                    }
+                    Some(d) => {
+                        path.push(d);
+                        cur = d;
+                    }
+                    None => {
+                        let s = cur as u32;
+                        for &p in &path {
+                            sink[p] = s;
+                        }
+                        break;
+                    }
                 }
-                moist[i] = sum / cnt;
             }
         }
 
@@ -167,18 +254,65 @@ impl EpochTransform for Epoch6 {
             .map(|i| {
                 let mut s = prev[i].clone();
                 s.elevation = elev[i];
+                s.watershed = sink[i];
                 s.flow = flow[i];
                 s.sediment = sediment[i];
                 s.water_depth = (sea - elev[i]).max(0.0);
                 let above = (elev[i] - sea).max(0.0);
-                // Regional moisture wobble so biome belts aren't perfectly zonal.
+                // Moisture = Epoch 4's precipitation (the single rainfall truth),
+                // plus a regional wobble so biome belts aren't perfectly zonal.
                 let wobble = 0.15 * (fbm(ctx.dirs[i] * 3.0, 2, 0x0B10_E5A1, ctx.seed) as f32 - 0.5);
-                let m = (moist[i] + wobble).clamp(0.0, 1.0);
+                let m = (s.precipitation + wobble).clamp(0.0, 1.0);
                 s.biome = if s.water_depth > 0.0 {
                     Biome::Ocean
                 } else {
                     classify(s.temperature, above, m, self.alpine_height)
                 };
+
+                // Life thread: on temperate-wet land, fungus then flora establish,
+                // growing biomass and shedding dead `organics` (the coal precursor)
+                // over the epoch's cycles. Advance-only (`max`) so ocean keeps its
+                // Epoch-5 microbial life and stages never regress.
+                let warmth = ((s.temperature + 8.0) / 30.0).clamp(0.0, 1.0);
+                let growth = warmth * m;
+                let supported = if s.water_depth > 0.0 || above > self.alpine_height {
+                    LifeStage::Barren // ocean keeps microbial via max; alpine is bare
+                } else if growth >= self.floral_threshold {
+                    LifeStage::Floral
+                } else if growth >= self.fungal_threshold {
+                    LifeStage::Fungal
+                } else {
+                    LifeStage::Barren
+                };
+                let land_biomass = match supported {
+                    LifeStage::Floral => growth,
+                    LifeStage::Fungal => 0.4 * growth,
+                    _ => 0.0,
+                };
+                s.life_stage = s.life_stage.max(supported);
+                s.biomass = s.biomass.max(land_biomass);
+                s.organics = s.biomass * self.organics_rate * passes as f32;
+
+                // Preservation into the distinct `deposits` ledger. Coal/oil: the
+                // fraction of dead organics that escaped late decomposers buries as
+                // carbon (`decomposer_onset` = how late they came; land C reads as
+                // coal, submerged C as oil).
+                let mut deposits = Composition::new();
+                let coal = s.organics * self.decomposer_onset;
+                if coal > 0.0 {
+                    deposits.add(CARBON, coal as f64);
+                }
+                // Chalk: carbonate-shelled plankton (present for `1 - carbonate_onset`
+                // of the era) rain CaCO₃ onto warm shallow sea floors.
+                if s.water_depth > 0.0 && s.life_stage >= LifeStage::Microbial {
+                    let shallow = (1.0 - s.water_depth / CHALK_DEPTH).clamp(0.0, 1.0);
+                    let chalk = (1.0 - self.carbonate_onset) * shallow * warmth * self.carbonate_rate;
+                    if chalk > 0.0 {
+                        deposits.add(CALCIUM, chalk as f64);
+                        deposits.add(CARBON, chalk as f64 * 0.5); // carbonate C rides with the Ca
+                    }
+                }
+                s.deposits = deposits;
                 s
             })
             .collect()
@@ -354,5 +488,81 @@ mod tests {
         let a = Epoch6::default().apply(&ctx, &e5);
         let b = Epoch6::default().apply(&ctx, &e5);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn flora_and_organics_establish_on_temperate_wet_land() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e5) = through_epoch5(&t, &dirs, &neighbors);
+        let out = Epoch6::default().apply(&ctx, &e5);
+
+        // Land life took hold (fungus or flora) and shed dead organics.
+        assert!(
+            out.iter().any(|s| s.life_stage >= LifeStage::Fungal),
+            "no fungus/flora established on land"
+        );
+        assert!(out.iter().any(|s| s.organics > 0.0), "no dead organics accumulated");
+        // The thread only advances — ocean keeps its Epoch-5 microbial life.
+        for (before, after) in e5.iter().zip(&out) {
+            assert!(after.life_stage >= before.life_stage, "life stage regressed");
+            assert!(after.biomass.is_finite() && after.organics.is_finite());
+        }
+
+        // The Floral branch genuinely fires given lush thresholds.
+        let lush = Epoch6 { floral_threshold: 0.0, fungal_threshold: 0.0, ..Epoch6::default() }
+            .apply(&ctx, &e5);
+        assert!(
+            lush.iter().any(|s| s.life_stage == LifeStage::Floral && s.biomass > 0.0),
+            "the Floral path never produced forest"
+        );
+    }
+
+    #[test]
+    fn drainage_partitions_into_watersheds() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e5) = through_epoch5(&t, &dirs, &neighbors);
+        let out = Epoch6::default().apply(&ctx, &e5);
+
+        let basins = watersheds(&out);
+        // Every hex lands in exactly one basin, draining to that basin's outlet.
+        assert!(!basins.is_empty(), "no watersheds formed");
+        let total: usize = basins.iter().map(|b| b.members.len()).sum();
+        assert_eq!(total, out.len(), "watershed membership doesn't cover every hex once");
+        for b in &basins {
+            assert!(b.members.contains(&b.outlet), "a basin's outlet isn't one of its hexes");
+            // The outlet is a true sink: no neighbour is strictly lower.
+            let o = b.outlet as usize;
+            for &nb in &ctx.neighbors[o] {
+                assert!(out[nb as usize].elevation >= out[o].elevation, "outlet drains further downhill");
+            }
+        }
+    }
+
+    #[test]
+    fn time_gates_preserve_coal_and_chalk() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e5) = through_epoch5(&t, &dirs, &neighbors);
+        let carbon = |w: &[HexState]| w.iter().map(|s| s.deposits.amount(CARBON)).sum::<f64>();
+
+        // Late decomposers (onset 1) preserve far more buried carbon than
+        // ever-present ones (onset 0) — the Carboniferous coal window. Carbonate
+        // is held equal, so the difference is the organics-derived coal.
+        let coal_world = Epoch6 { decomposer_onset: 1.0, ..Epoch6::default() }.apply(&ctx, &e5);
+        let rot_world = Epoch6 { decomposer_onset: 0.0, ..Epoch6::default() }.apply(&ctx, &e5);
+        assert!(carbon(&coal_world) > carbon(&rot_world), "late decomposers should preserve more coal");
+
+        // Chalk (calcium carbonate) forms in warm shallow seas once carbonate life
+        // is present for the era.
+        let chalky = Epoch6 { carbonate_onset: 0.0, ..Epoch6::default() }.apply(&ctx, &e5);
+        assert!(
+            chalky.iter().any(|s| s.deposits.amount(CALCIUM) > 0.0),
+            "no chalk deposited in the warm shallow seas"
+        );
+        for s in &chalky {
+            assert!(s.deposits.total().is_finite());
+        }
     }
 }

@@ -29,6 +29,7 @@ use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
+use crate::pipeline_volumetric::{VolumetricDisk, VolumetricDiskUniform, VolumetricPipeline};
 use crate::texture::{LoadedTexture, TextureHandle};
 
 /// The renderer owns the GPU device, the surface, and every pipeline.
@@ -53,6 +54,7 @@ pub struct Renderer {
     lines: LinesPipeline,
     billboard: BillboardPipeline,
     sky: SkyPipeline,
+    volumetric: VolumetricPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -79,6 +81,9 @@ pub struct Renderer {
     /// uploaded in `end_frame`. Defaults to the pre-uniform hardcoded look, so
     /// a scene that never calls [`Renderer::set_scene`] renders unchanged.
     scene: SceneLighting,
+    /// This frame's volumetric-disk params (the cloud), or `None`. Reset each
+    /// [`Renderer::begin_frame`]; set by [`Renderer::set_volumetric_disk`].
+    volumetric_params: Option<VolumetricDisk>,
     /// Whether to draw the procedural sky behind the 3D scene this frame.
     /// Reset to `false` each [`Renderer::begin_frame`] and raised by
     /// [`Renderer::draw_sky`], so menus/loading (no 3D) keep their flat
@@ -155,6 +160,9 @@ impl Renderer {
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
+        let mut volumetric = VolumetricPipeline::new(&device, surface_format);
+        // Bind the scene depth so the volumetric can sample it (clamp rays at bodies).
+        volumetric.set_depth(&device, &depth_view);
 
         Ok(Self {
             window,
@@ -171,6 +179,8 @@ impl Renderer {
             lines,
             billboard,
             sky,
+            volumetric,
+            volumetric_params: None,
             depth_texture,
             depth_view,
             textures: Vec::new(),
@@ -256,6 +266,8 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
+        // Rebind the recreated depth view into the volumetric's bind group.
+        self.volumetric.set_depth(&self.device, &self.depth_view);
     }
 
     /// Current logical size of the rendering surface, in pixels.
@@ -351,6 +363,7 @@ impl Renderer {
         self.lines.clear();
         self.billboard.clear();
         self.draw_sky = false;
+        self.volumetric_params = None;
         self.current_layer = 0.0;
     }
 
@@ -447,13 +460,22 @@ impl Renderer {
         self.draw_sky = true;
     }
 
+    /// Draw a **volumetric dust disk** this frame: a raymarched protoplanetary-disk cloud
+    /// (dark dust + warm star-lit inner glow) whose density dissipates inside-out with
+    /// `params.formation` and carves gaps around `params.bodies`. Drawn just after the sky and
+    /// composited over it. Per-frame, like `draw_sky`; a no-op unless a camera is set (it needs
+    /// the view ray).
+    pub fn set_volumetric_disk(&mut self, params: VolumetricDisk) {
+        self.volumetric_params = Some(params);
+    }
+
     /// Queue a mesh for rendering this frame.
     ///
     /// `model` is the cluster-local-to-world transform; the camera (set
     /// via [`Renderer::set_camera`]) supplies the view and projection.
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
-        self.mesh.push(mesh, model, options.tint, options.wireframe);
+        self.mesh.push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
 
     /// Draw a wireframe axis-aligned bounding box this frame. Lives in
@@ -507,6 +529,24 @@ impl Renderer {
             .push(texture, world_position, world_size, uv_min, uv_max, color);
     }
 
+    /// Queue a camera-facing world-space billboard with **additive** blending — for soft
+    /// glows (star bloom, dust clouds, impact flashes). Same arguments as
+    /// [`Self::draw_billboard`], but the sampled texel is *added* to the target (scaled by
+    /// its alpha) and **no depth is written**, so overlapping glows stack into a halo
+    /// instead of clipping each other into hard cutouts. Drawn after all alpha billboards.
+    pub fn draw_billboard_additive(
+        &mut self,
+        texture: TextureHandle,
+        world_position: Vec3,
+        world_size: Vec2,
+        uv_min: Vec2,
+        uv_max: Vec2,
+        color: [f32; 4],
+    ) {
+        self.billboard
+            .push_additive(texture, world_position, world_size, uv_min, uv_max, color);
+    }
+
     /// Encode and submit the frame. Returns errors from the surface acquisition
     /// or text-pipeline preparation; recoverable surface losses are handled
     /// internally by reconfiguring.
@@ -526,10 +566,15 @@ impl Renderer {
             self.mesh.set_camera_matrix(&self.queue, view_projection);
             self.billboard
                 .set_camera(&self.queue, cam.view(), view_projection);
+            let inv_vp = view_projection.inverse();
             if sky_this_frame {
-                self.sky.set_uniform(
+                self.sky
+                    .set_uniform(&self.queue, scene_to_sky_uniform(&self.scene, inv_vp, camera_pos));
+            }
+            if let Some(params) = &self.volumetric_params {
+                self.volumetric.set_uniform(
                     &self.queue,
-                    scene_to_sky_uniform(&self.scene, view_projection.inverse(), camera_pos),
+                    VolumetricDiskUniform::from_params(params, inv_vp, camera_pos),
                 );
             }
         }
@@ -574,9 +619,11 @@ impl Renderer {
                 label: Some("flicker.frame_encoder"),
             });
 
+        // Pass 1 — opaque scene: sky background, then 3D meshes (writing depth), lines, and
+        // world-space billboards. The depth is **stored** so the volumetric pass can sample it.
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flicker.main_pass"),
+                label: Some("flicker.opaque_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -602,27 +649,48 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Procedural sky behind everything (fullscreen, no depth write),
-            // so the mesh paints over it wherever terrain exists.
+            // Procedural sky behind everything (fullscreen, no depth write), so the mesh paints
+            // over it wherever bodies exist. Then 3D meshes (write depth), lines (test, no write),
+            // and world-space depth-tested billboards.
             if sky_this_frame {
                 self.sky.render(&mut pass);
             }
-
-            // 3D mesh first; immediate-mode lines layer on top of the
-            // mesh (still in 3D space, depth-tested but not depth-
-            // writing); then 2D overlays on top.
             self.mesh.render(&mut pass, &self.meshes);
             self.lines.render(&mut pass);
-            // World-space, depth-tested billboards layer with the 3D scene
-            // (occluded by terrain in front); 2D overlays still draw on top.
             self.billboard.render(&mut pass, &self.textures);
+        }
 
-            // 2D in painter's order: walk the union of layers used by the three
-            // 2D pipelines, ascending, drawing triangle → sprite → text within
-            // each layer. A higher-layer overlay's sprites *and* text therefore
-            // cover a lower layer's text (which a single all-text-last pass
-            // could not). With everything at the default layer 0 this is exactly
-            // triangle → sprite → text, identical to the prior fixed order.
+        // Pass 2 — the **depth-aware** volumetric over the opaque scene, then 2D overlays. Depth is
+        // bound **read-only** here (no pass-2 pipeline writes depth), which lets the volumetric
+        // *sample* the same depth buffer (bound in its group) to clamp its rays at solid bodies —
+        // so the dust and star sit in correct depth with the bodies instead of always behind them.
+        // 2D overlays paint last, on top of everything.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("flicker.overlay_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: None, // read-only → the volumetric may sample this depth in-pass
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            if self.volumetric_params.is_some() && self.camera.is_some() {
+                self.volumetric.render(&mut pass);
+            }
+
+            // 2D in painter's order: walk the union of layers used by the three 2D pipelines,
+            // ascending, drawing triangle → sprite → text within each layer (unchanged).
             let mut layers: Vec<f32> = Vec::new();
             layers.extend(self.triangle.layers());
             layers.extend(self.sprite.layers());
@@ -662,6 +730,8 @@ fn scene_to_uniform(s: &SceneLighting, camera_pos: Vec3) -> SceneUniform {
         camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
         fog_color: [s.fog_color.x, s.fog_color.y, s.fog_color.z, s.fog_density],
         grade: [s.grade.x, s.grade.y, s.grade.z, s.grade_strength],
+        point_pos: [s.point_pos.x, s.point_pos.y, s.point_pos.z, 0.0],
+        point_color: [s.point_color.x, s.point_color.y, s.point_color.z, 0.0],
     }
 }
 

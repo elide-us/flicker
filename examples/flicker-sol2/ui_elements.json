@@ -1,0 +1,124 @@
+{
+  "_comment": "Declarative UI layout for flicker-sol2. Exposed to Lua as the `UI` global (flicker-ui load_ui_json); scripts/logo.lua + modal.lua + sim_ui.lua read it. Colours RGBA 0..1; positions/sizes in HUD pixels (origin top-left). The sim control panel and the stats readout are anchored to the screen corners by sim_ui.lua, so they track the window size. Widget values flow through the engine Model keyed by id. Edit and relaunch to restyle.",
+
+  "logo": {
+    "images": ["elideus", "clay"],
+    "fade": 0.55, "hold": 1.2,
+    "mode": "fill",
+    "backdrop": [0.02, 0.02, 0.03, 1.0]
+  },
+
+  "modal": {
+    "panel": { "w": 340, "h": 300, "bg": [0.05, 0.07, 0.11, 0.97], "border": [0.26, 0.34, 0.50, 1.0] },
+    "title": { "offset_y": 54, "size": 28, "color": [0.92, 0.94, 0.99, 1.0] },
+    "subtitle": { "offset_y": 92, "size": 14, "color": [0.66, 0.72, 0.84, 1.0] },
+    "buttons": {
+      "w": 248, "h": 44, "first_y": 120, "gap_y": 58, "label_size": 18,
+      "cell": [0.12, 0.15, 0.22, 0.97],
+      "hot": [0.24, 0.32, 0.46, 0.98],
+      "label": [0.88, 0.93, 1.0, 1.0]
+    }
+  },
+
+  "screens": {
+    "menu":     { "overlay": [0.02, 0.03, 0.05, 1.0], "title": "FLICKER · SOL2", "items": [ { "id": "start", "label": "Start" }, { "id": "settings", "label": "Settings" }, { "id": "quit", "label": "Quit" } ] },
+    "pause":    { "overlay": [0.01, 0.02, 0.04, 0.62], "title": "Paused", "items": [ { "id": "resume", "label": "Resume" }, { "id": "settings", "label": "Settings" }, { "id": "quit", "label": "Quit" } ] },
+    "settings": { "overlay": [0.01, 0.02, 0.04, 0.72], "title": "Settings", "subtitle": "No tunables yet — the dials live on the sim panel.", "items": [ { "id": "back", "label": "Back" } ] }
+  },
+
+  "readout": {
+    "_comment": "Top-right stats overlay — pure Lua text built from the engine Model. Anchored to the right edge by sim_ui.lua.",
+    "margin_x": 16,
+    "top_y": 16,
+    "width": 360,
+    "line_h": 18,
+    "gap": 8,
+    "bg": [0.03, 0.04, 0.07, 0.55],
+    "title_size": 22,
+    "title_color": [0.92, 0.94, 0.99, 1.0],
+    "head_size": 15,
+    "label_size": 13,
+    "label_color": [0.62, 0.68, 0.80, 1.0],
+    "accent_color": [0.96, 0.86, 0.60, 1.0],
+    "good_color": [0.74, 0.88, 0.70, 1.0],
+    "phase_color": [0.80, 0.84, 0.98, 1.0]
+  },
+
+  "sim": {
+    "_comment": "Bottom-right control panel. sim_ui.lua computes the panel rect as the bottom-right quarter of the window and lays these rows inside it.",
+    "margin": 16,
+    "pad": 14,
+    "panel_bg": [0.05, 0.06, 0.09, 0.94],
+    "panel_border": [0.26, 0.34, 0.50, 1.0],
+    "header": "SIMULATION",
+    "header_size": 17,
+    "header_color": [0.85, 0.85, 0.70, 1.0],
+    "row_h": 25,
+    "slider_h": 12,
+    "label_w": 96,
+    "value_w": 52,
+    "label_size": 14,
+    "label_color": [0.78, 0.81, 0.88, 1.0],
+    "value_size": 13,
+    "value_color": [0.62, 0.68, 0.80, 1.0],
+
+    "phase": {
+      "row_h": 30,
+      "gap": 6,
+      "label_size": 13,
+      "items": [
+        { "id": "phase1", "label": "1 · Distribution" },
+        { "id": "phase2", "label": "2 · Collapse" },
+        { "id": "phase3", "label": "3 · Planet" }
+      ],
+      "cell": [0.11, 0.14, 0.20, 0.97],
+      "hot": [0.18, 0.24, 0.34, 0.98],
+      "active": [0.20, 0.34, 0.30, 0.98],
+      "disabled": [0.08, 0.09, 0.12, 0.9],
+      "label": [0.82, 0.88, 0.98, 1.0],
+      "active_label": [0.70, 1.0, 0.78, 1.0],
+      "disabled_label": [0.42, 0.46, 0.56, 1.0]
+    },
+
+    "sliders": [
+      { "id": "explosion",   "label": "Explosion",   "min": 0.0,  "max": 1.0,   "fmt": "%.2f" },
+      { "id": "falloff",     "label": "Falloff",     "min": 0.15, "max": 1.20,  "fmt": "%.2f" },
+      { "id": "clump",       "label": "Clump",       "min": 0.0,  "max": 1.2,   "fmt": "%.2f" },
+      { "id": "mass",        "label": "Cloud mass",  "min": 0.1,  "max": 10.0,  "fmt": "%.2f" },
+      { "id": "metallicity", "label": "Metallicity", "min": 0.0,  "max": 0.10,  "fmt": "%.3f" },
+      { "id": "speed",       "label": "Speed yr/s",  "min": 0.0,  "max": 60.0,  "fmt": "%.0f" },
+      { "id": "view_edge",   "label": "View AU",     "min": 5.0,  "max": 400.0, "fmt": "%.0f" }
+    ],
+
+    "toggles": [
+      { "id": "pause", "label": "Pause" },
+      { "id": "dots",  "label": "Dots" },
+      { "id": "well",  "label": "Well" }
+    ],
+
+    "buttons": [
+      { "id": "reseed",     "label": "New seed" },
+      { "id": "new_system", "label": "New system" },
+      { "id": "reset",      "label": "Reset" }
+    ],
+
+    "slider_style": {
+      "track": [0.10, 0.11, 0.13, 0.97],
+      "fill": [0.34, 0.55, 0.86, 1.0],
+      "handle": [0.62, 0.80, 1.0, 0.95],
+      "handle_w": 8
+    },
+    "button_style": {
+      "cell": [0.12, 0.15, 0.22, 0.97],
+      "hot": [0.22, 0.30, 0.44, 0.98],
+      "label": [0.86, 0.92, 1.0, 1.0],
+      "label_size": 14
+    },
+    "checkbox_style": {
+      "box": [0.10, 0.11, 0.13, 0.97],
+      "check": [0.40, 0.78, 1.0, 1.0],
+      "border": [0.30, 0.40, 0.55, 1.0],
+      "pad": 4
+    }
+  }
+}

@@ -6,6 +6,10 @@ publish = false
 
 [dependencies]
 flicker = { path = "../../crates/flicker" }
+# The hex-world six-epoch world-gen stack, run over this map's ordering and
+# drawn as each tile's terrain (terrain.rs).
+flicker-materials.workspace = true
+flicker-worldgen.workspace = true
 anyhow.workspace = true
 glam.workspace = true
 tracing.workspace = true

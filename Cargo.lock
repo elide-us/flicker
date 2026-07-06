@@ -691,6 +691,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-celestial"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "flicker-worldstate",
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flicker-core"
 version = "0.1.0"
 dependencies = [
@@ -700,6 +711,22 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "flicker-csg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-voxel",
+ "flicker-worker",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -772,6 +799,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-sol2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-system",
+ "image",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "flicker-solarsystem"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-celestial",
+ "flicker-materials",
+ "flicker-worldgen",
+ "flicker-worldgrid",
+ "flicker-worldstate",
+ "glam",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "flicker-system"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "glam",
+]
+
+[[package]]
 name = "flicker-ui"
 version = "0.1.0"
 dependencies = [
@@ -798,14 +861,39 @@ name = "flicker-worker"
 version = "0.1.0"
 
 [[package]]
+name = "flicker-world"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-materials",
+ "flicker-worldgen",
+ "flicker-worldgrid",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-worldgen"
 version = "0.1.0"
 dependencies = [
  "flicker-materials",
+ "flicker-worldgrid",
  "flicker-worldstate",
  "glam",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flicker-worldgrid"
+version = "0.1.0"
+dependencies = [
+ "glam",
 ]
 
 [[package]]
@@ -1176,9 +1264,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-materials",
+ "flicker-worldgen",
  "glam",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "hex-sphere"
+version = "0.1.0"
+dependencies = [
+ "flicker-worldgrid",
+ "glam",
 ]
 
 [[package]]

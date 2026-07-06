@@ -1,6 +1,7 @@
 {
   "_meta": {
     "source": "Prism/BookIII.md — \"Simplified Periodic Table\" (the canonical design book).",
+    "additions": "Magnesium (#12) added 2026-06 for solar-system-formation relevance (major mantle/silicate element; energetic/catalytic in-game) — beyond the BookIII verbatim transcription. Table now 27 elements; design ceiling is 30.",
     "schema": "A database-style table: each row is one element. Loaded as a flat list now; a future TableSource may serve the same rows from flicker-net → web service → DB.",
     "book_fields": "name, number, symbol, category, valence_electrons, uses — transcribed verbatim from BookIII. valence_electrons are the book's gameplay-assigned common counts, NOT strict IUPAC.",
     "physical_fields": "atomic_mass, density_g_cm3, melting_point_c, state — real-world values (epoch 1 distributes by mass/abundance, epoch 2 differentiates by density). Approximate; verify. Gas densities at STP.",
@@ -10,6 +11,7 @@
   "elements": [
     { "name": "Hydrogen",   "number": 1,  "symbol": "H",  "category": "alkali_metal",       "valence_electrons": 1, "atomic_mass": 1.008,  "density_g_cm3": 0.00009, "melting_point_c": -259, "state": "gas",   "hardness": 0.0, "brittleness": 0.0, "water_capacity": 0.0,  "uses": "Water" },
     { "name": "Sodium",     "number": 11, "symbol": "Na", "category": "alkali_metal",       "valence_electrons": 1, "atomic_mass": 22.99,  "density_g_cm3": 0.97,    "melting_point_c": 98,   "state": "solid", "hardness": 0.5, "brittleness": 0.2, "water_capacity": 0.15, "uses": "Salt and Glass" },
+    { "name": "Magnesium",  "number": 12, "symbol": "Mg", "category": "alkali_metal",       "valence_electrons": 2, "atomic_mass": 24.31,  "density_g_cm3": 1.74,    "melting_point_c": 650,  "state": "solid", "hardness": 2.5, "brittleness": 0.3, "water_capacity": 0.1,  "uses": "Explosives, flares, lightweight alloys, and energy catalysis" },
     { "name": "Potassium",  "number": 19, "symbol": "K",  "category": "alkali_metal",       "valence_electrons": 1, "atomic_mass": 39.10,  "density_g_cm3": 0.86,    "melting_point_c": 64,   "state": "solid", "hardness": 0.4, "brittleness": 0.2, "water_capacity": 0.2,  "uses": "Fertilizer and plant growth" },
     { "name": "Calcium",    "number": 20, "symbol": "Ca", "category": "alkali_metal",       "valence_electrons": 2, "atomic_mass": 40.08,  "density_g_cm3": 1.55,    "melting_point_c": 842,  "state": "solid", "hardness": 1.75,"brittleness": 0.3, "water_capacity": 0.25, "uses": "Limestone, cement, mortar" },
 

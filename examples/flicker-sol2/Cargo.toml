@@ -1,0 +1,27 @@
+[package]
+name = "flicker-sol2"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# POC: supernova **ejecta cloud** viewer. A star forms from its local cloud; the
+# explosion casts each element to a characteristic *distance* set (simply) by its
+# atomic weight — heavier elements fall short, lighter ones reach far. The view is a
+# 2D top-down projection of that cloud: transparent colour rings, one per Prism
+# element, concentric on the star, labelled in AU, with xyz direction arrows. A
+# control dials the size of the initial explosion (and a falloff knob lets you hunt
+# for a "semi-natural" spread). Deliberately NOT the flicker-celestial condensation
+# model — this is the simpler ballistic-cast-by-mass picture (see
+# docs/flicker-sol2-handoff.md).
+[dependencies]
+# Engine pillars: flicker-render (2D draw), flicker-scene (game-state stack),
+# flicker-app (winit loop + input). The umbrella re-exports all three.
+flicker = { path = "../../crates/flicker" }
+# The boxed-up star-system simulation (Phase 1 + Phase 2). This viewer is now a thin
+# shell over it: it feeds a `SystemConfig` and renders the `System`'s state.
+flicker-system.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# Splash-logo PNGs for the intro scene (loaded via Renderer::load_texture).
+image.workspace = true

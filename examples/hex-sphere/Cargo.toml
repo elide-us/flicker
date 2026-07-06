@@ -1,0 +1,14 @@
+[package]
+name = "hex-sphere"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Headless test client for the icosahedral grid (docs/hex-sphere-handoff.md).
+# Generates the full sphere, prints a verification report (12 pentagons, shard
+# sizes, area spread, Euler), and writes a per-shard-coloured PLY mesh to open in
+# any 3-D viewer (Blender, MeshLab, …). No GPU — runs on the weak test box.
+#   cargo run -p hex-sphere -- [freq] [out.ply]
+[dependencies]
+flicker-worldgrid.workspace = true
+glam.workspace = true

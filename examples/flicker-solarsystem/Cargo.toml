@@ -1,0 +1,31 @@
+[package]
+name = "flicker-solarsystem"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# POC: solar-system formation. An accretion disk (seeded radial composition field of
+# material "blobs", banded by condensation/mass — refractory metals + rock inner,
+# ices past the snow line, volatile gas outer) around an igniting star, viewed in 3D
+# oblique with an orbit camera, with a time control. First slice = the cinematic
+# disk visualization; planetesimal aggregation → protoplanets (the feed into the
+# planet viewer's Epoch 1) is the next slice.
+[dependencies]
+flicker = { path = "../../crates/flicker" }
+# The Prism vocabulary — the authoritative limited periodic table the formation
+# chemistry stays within (loaded from data/materials, same as world-gen). The
+# `flicker` umbrella doesn't re-export it, so depend directly.
+flicker-materials.workspace = true
+# Reuse the real flicker-world *pattern* for composed planet globes: the ISEA hex topology
+# (worldgrid) + Epoch-1 composition distribution (worldgen) + the element-keyed ledger
+# (worldstate). We only run Epoch 1 (per-cell composition), not the full epoch chain.
+flicker-worldgrid.workspace = true
+flicker-worldgen.workspace = true
+flicker-worldstate.workspace = true
+# The celestial spec-§8 hex-budget invariant: a body's hex `freq` from its size
+# (Mercury≈48 / Earth≈100), with gas giants pinned at the Mercury count.
+flicker-celestial.workspace = true
+glam.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

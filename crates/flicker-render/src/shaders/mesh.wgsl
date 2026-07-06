@@ -48,6 +48,8 @@ struct Scene {
     camera_pos: vec4<f32>,  // xyz = world camera position (fog distance, later)
     fog_color: vec4<f32>,   // rgb = fog colour; w = fog density (later)
     grade: vec4<f32>,       // rgb = colour-grade tint; w = grade strength (later)
+    point_pos: vec4<f32>,   // xyz = point-light world position (e.g. a star); w unused
+    point_color: vec4<f32>, // rgb = point-light radiance; black = off
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -144,10 +146,19 @@ fn material_index_color(index: u32) -> vec3<f32> {
     }
 }
 
-// Resolve a packed material to a color. Primary in low 12 bits,
-// secondary in next 12, blend in top 8. Linear interpolation between
-// primary and secondary by blend / 255.
+// Resolve a packed material to a color. Two encodings:
+//   * Direct RGB (escape): primary == 0xFFF marks a packed RGB666 colour in the
+//     upper bits (R bits 12-17, G 18-23, B 24-29) — for continuous data maps the
+//     palette can't express. No real palette entry uses index 0xFFF.
+//   * Palette blend (default): primary in low 12 bits, secondary in next 12,
+//     blend in top 8 — linear interpolation between two palette colours.
 fn material_color(material: u32) -> vec3<f32> {
+    if ((material & 0xFFFu) == 0xFFFu) {
+        let r = f32((material >> 12u) & 0x3Fu) / 63.0;
+        let g = f32((material >> 18u) & 0x3Fu) / 63.0;
+        let b = f32((material >> 24u) & 0x3Fu) / 63.0;
+        return vec3<f32>(r, g, b);
+    }
     let primary = material & 0xFFFu;
     let secondary = (material >> 12u) & 0xFFFu;
     let blend = f32((material >> 24u) & 0xFFu) / 255.0;
@@ -171,7 +182,28 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // example-side day-arc math, so no explicit night branch is needed.
     let sun = scene.sun_color.rgb * max(dot(in.world_normal, scene.sun_dir.xyz), 0.0);
     let moon = scene.moon_color.rgb * max(dot(in.world_normal, scene.moon_dir.xyz), 0.0);
-    let shaded = base * (scene.ambient.rgb + sun + moon);
+    // Point light (e.g. a central star): lit from each fragment's own direction to the light,
+    // so bodies at different world positions get correct, individual day/night terminators.
+    let to_point = scene.point_pos.xyz - in.world_position;
+    let point_dir = to_point / max(length(to_point), 1e-4);
+    let point = scene.point_color.rgb * max(dot(in.world_normal, point_dir), 0.0);
+    // Liquid/icy **sheen** (per-draw gloss = `flags.y`). NOT a mirror specular — a tight hot-spot
+    // reads as a marble, wrong at planet scale. Instead the wet cue is a soft **limb sheen**:
+    // brightest where the view grazes the surface (Fresnel, the planet's lit edge), with only a
+    // faint, broad sunward lift — an ocean/atmosphere look, no bright reflection dot. Lit side
+    // only, scaled by gloss; matte surfaces (gloss 0) skip it and read exactly as before.
+    let gloss = per_draw.flags.y;
+    var sheen = vec3<f32>(0.0);
+    if (gloss > 0.001) {
+        let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
+        let ndl = max(dot(in.world_normal, point_dir), 0.0);
+        let ndv = max(dot(in.world_normal, view_dir), 0.0);
+        let fresnel = pow(1.0 - ndv, 3.0); // grazing-angle limb brightening
+        let half_vec = normalize(point_dir + view_dir);
+        let broad = pow(max(dot(in.world_normal, half_vec), 0.0), 3.0); // very broad, faint
+        sheen = scene.point_color.rgb * (0.35 * fresnel + 0.10 * broad) * ndl * gloss;
+    }
+    let shaded = base * (scene.ambient.rgb + sun + moon + point) + sheen;
     let lit = vec4<f32>(shaded, 1.0) * per_draw.tint;
 
     // Distance fog (forward): exponential by view distance, blending the lit

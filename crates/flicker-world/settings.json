@@ -1,0 +1,23 @@
+{
+  "values": {
+    "audio_master": 0.8,
+    "audio_music": 0.6,
+    "audio_sfx": 0.7,
+    "audio_voice": 0.9,
+    "camera_deadzone_shape": 0.0,
+    "camera_invert_x": 0.0,
+    "camera_invert_y": 0.0,
+    "camera_left_deadzone": 0.15,
+    "camera_mouse_sensitivity": 0.005,
+    "camera_right_deadzone": 0.15,
+    "camera_stick_sensitivity": 2.0,
+    "camera_trigger_threshold": 0.5,
+    "camera_vibration": 1.0,
+    "camera_vibration_intensity": 0.6,
+    "video_display_mode": 0.0,
+    "video_fps_limit": 1.0,
+    "video_quality": 2.0,
+    "video_resolution": 2.0,
+    "video_vsync": 1.0
+  }
+}
