@@ -30,8 +30,19 @@ use glam::Mat4;
 mod format;
 mod pose;
 mod skin;
+mod state;
 
 use format::Model;
+use state::{Inputs, StateMachine};
+
+/// Which subsystem drives clip selection + playback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    /// The animation state machine owns the pose (gameplay input → states/events).
+    Graph,
+    /// Manual clip browser (the original POC controls: cycle clip, step tick).
+    Manual,
+}
 
 /// A submesh's GPU upload for the current frame — textured (albedo) or flat (gray).
 enum SubGpu {
@@ -217,6 +228,15 @@ struct Viewer {
     /// Index of the `Weapon_R` socket bone in the character skeleton, if present.
     weapon_bone: Option<usize>,
     katana_equipped: bool,
+    // ── Animation state machine (combat spine, slice 1) ──
+    /// The state graph, if a `flicker.pack` loaded. Drives clip + tick in Graph mode.
+    sm: Option<StateMachine>,
+    /// Which subsystem drives playback (Graph if a pack loaded, else Manual).
+    mode: ViewMode,
+    /// Window events open at the state machine's current tick (HUD).
+    hud_active: Vec<String>,
+    /// Ring of the most recent fired timeline events (HUD).
+    hud_events: Vec<String>,
     // Edge-detection for one-shot controls (InputState exposes level state for keys).
     prev_space: bool,
     prev_up: bool,
@@ -228,6 +248,10 @@ struct Viewer {
     prev_b: bool,
     prev_t: bool,
     prev_k: bool,
+    prev_g: bool,
+    prev_f: bool,
+    prev_h: bool,
+    prev_x: bool,
     should_quit: bool,
 }
 
@@ -251,9 +275,56 @@ impl Viewer {
             Vec::new()
         };
         let sub_gpu = (0..sub.len()).map(|_| None).collect();
+
+        // Build the animation state machine from the content pack (if present). States
+        // reference clips by NAME; resolve them against the loaded model's clip list
+        // (mirroring how the rig loader resolves clip tracks to bones by name).
+        let sm = match state::load_pack(&assets.join("Katanami.pack.json")) {
+            Ok(def) => {
+                let refs: Vec<state::ClipRef> = model
+                    .clips
+                    .iter()
+                    .map(|c| state::ClipRef {
+                        name: &c.name,
+                        duration_ticks: c.duration_ticks,
+                    })
+                    .collect();
+                match StateMachine::build(&def, &refs) {
+                    Ok(sm) => {
+                        for w in sm.warnings() {
+                            tracing::warn!("state pack: {w}");
+                        }
+                        tracing::info!(
+                            "state machine ready — starting in '{}'",
+                            sm.current_state_name()
+                        );
+                        Some(sm)
+                    }
+                    Err(e) => {
+                        tracing::warn!("state pack failed to build ({e}); manual mode only");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::info!("no state pack ({e}); manual clip browser only");
+                None
+            }
+        };
+        // Default to graph-driven playback when a pack loaded; else the manual browser.
+        let mode = if sm.is_some() {
+            ViewMode::Graph
+        } else {
+            ViewMode::Manual
+        };
+
         Self {
             model,
             cam,
+            sm,
+            mode,
+            hud_active: Vec::new(),
+            hud_events: Vec::new(),
             clip_index: 0,
             play_head: 0.0,
             playing: true,
@@ -281,6 +352,10 @@ impl Viewer {
             prev_b: false,
             prev_t: false,
             prev_k: false,
+            prev_g: false,
+            prev_f: false,
+            prev_h: false,
+            prev_x: false,
             should_quit: false,
         }
     }
@@ -507,43 +582,48 @@ impl App for Viewer {
         }
         self.cam.update(input);
 
-        // One-shot controls (edge-detected).
+        // ── Edge-detect the one-shot keys once; some are reinterpreted per mode
+        // (Space = play/pause in Manual, jump in Graph; R = reset play-head vs. reset
+        // the state machine). ──
         let space = input.key_down(Key::Space);
-        if space && !self.prev_space {
-            self.playing = !self.playing;
-        }
+        let space_edge = space && !self.prev_space;
         self.prev_space = space;
-
         let up = input.key_down(Key::Up);
-        if up && !self.prev_up {
-            self.cycle_clip(-1);
-        }
+        let up_edge = up && !self.prev_up;
         self.prev_up = up;
-
         let down = input.key_down(Key::Down);
-        if down && !self.prev_down {
-            self.cycle_clip(1);
-        }
+        let down_edge = down && !self.prev_down;
         self.prev_down = down;
-
         let left = input.key_down(Key::Left);
-        if left && !self.prev_left {
-            self.step(-1);
-        }
+        let left_edge = left && !self.prev_left;
         self.prev_left = left;
-
         let right = input.key_down(Key::Right);
-        if right && !self.prev_right {
-            self.step(1);
-        }
+        let right_edge = right && !self.prev_right;
         self.prev_right = right;
-
         let r = input.key_down(Key::R);
-        if r && !self.prev_r {
-            self.play_head = 0.0;
-        }
+        let r_edge = r && !self.prev_r;
         self.prev_r = r;
+        let f = input.key_down(Key::F);
+        let f_edge = f && !self.prev_f;
+        self.prev_f = f;
+        let h = input.key_down(Key::H);
+        let h_edge = h && !self.prev_h;
+        self.prev_h = h;
+        let x = input.key_down(Key::X);
+        let x_edge = x && !self.prev_x;
+        self.prev_x = x;
 
+        // Mode toggle (only meaningful when a state pack loaded).
+        let g = input.key_down(Key::G);
+        if g && !self.prev_g && self.sm.is_some() {
+            self.mode = match self.mode {
+                ViewMode::Graph => ViewMode::Manual,
+                ViewMode::Manual => ViewMode::Graph,
+            };
+        }
+        self.prev_g = g;
+
+        // ── Shared view controls (both modes) ──
         // Vertical reframing (held, smooth). Nudges the model up/down relative to the
         // camera target (which sits at the origin). Speed scales with model size.
         let vstep = self.model.orbit_radius * dt.as_secs_f32();
@@ -553,8 +633,6 @@ impl App for Viewer {
         if input.key_down(Key::PageDown) {
             self.world_y -= vstep;
         }
-
-        // Toggle the skinned mesh / skeleton overlay.
         let m = input.key_down(Key::M);
         if m && !self.prev_m {
             self.show_mesh = !self.show_mesh;
@@ -584,12 +662,80 @@ impl App for Viewer {
             self.skin = 2;
         }
 
-        // Advance playback.
-        if self.playing {
-            if let Some(clip) = self.current_clip() {
-                let dur = clip.duration_ticks.max(1) as f32;
-                self.play_head += dt.as_secs_f32() * clip.tick_rate_hz as f32;
-                self.play_head = self.play_head.rem_euclid(dur);
+        // ── Mode-specific playback ──
+        match self.mode {
+            ViewMode::Graph => {
+                // Gameplay controls → state-machine inputs: movement modifiers are held;
+                // jump/attack/hit/die are edges. (H = simulate taking a hit, X = die —
+                // debug drivers for the any-state transitions.)
+                let inputs = Inputs {
+                    move_: input.key_down(Key::W),
+                    run: input.key_down(Key::LeftShift) || input.key_down(Key::RightShift),
+                    crouch: input.key_down(Key::C),
+                    jump: space_edge,
+                    attack: f_edge,
+                    hit: h_edge,
+                    die: x_edge,
+                };
+                // Advance the machine (owned report ends the &mut sm borrow before we
+                // touch the HUD buffers).
+                let report = self.sm.as_mut().map(|sm| {
+                    if r_edge {
+                        sm.reset();
+                    }
+                    sm.advance(dt.as_secs_f32(), &inputs)
+                });
+                if let Some(report) = report {
+                    self.hud_active = report
+                        .active
+                        .iter()
+                        .map(|w| {
+                            if w.label.is_empty() {
+                                w.kind.tag().to_string()
+                            } else {
+                                format!("{} {}", w.kind.tag(), w.label)
+                            }
+                        })
+                        .collect();
+                    for e in &report.fired {
+                        self.hud_events.push(if e.label.is_empty() {
+                            format!("{}@{}", e.kind.tag(), e.tick)
+                        } else {
+                            format!("{} {}@{}", e.kind.tag(), e.label, e.tick)
+                        });
+                    }
+                    let n = self.hud_events.len();
+                    if n > 6 {
+                        self.hud_events.drain(0..n - 6);
+                    }
+                }
+            }
+            ViewMode::Manual => {
+                if space_edge {
+                    self.playing = !self.playing;
+                }
+                if up_edge {
+                    self.cycle_clip(-1);
+                }
+                if down_edge {
+                    self.cycle_clip(1);
+                }
+                if left_edge {
+                    self.step(-1);
+                }
+                if right_edge {
+                    self.step(1);
+                }
+                if r_edge {
+                    self.play_head = 0.0;
+                }
+                if self.playing {
+                    if let Some(clip) = self.current_clip() {
+                        let dur = clip.duration_ticks.max(1) as f32;
+                        self.play_head += dt.as_secs_f32() * clip.tick_rate_hz as f32;
+                        self.play_head = self.play_head.rem_euclid(dur);
+                    }
+                }
             }
         }
     }
@@ -601,11 +747,19 @@ impl App for Viewer {
     fn render(&mut self, renderer: &mut Renderer) {
         renderer.set_camera(&self.cam.camera());
 
-        // Sample the pose (or fall back to the rest pose if there are no clips).
-        let tick = (self.play_head.floor() as u32).min(self.duration().saturating_sub(1));
-        let globals = match self.current_clip() {
+        // Choose the clip + tick to sample: the state machine in Graph mode, else the
+        // manual browser. A missing clip (unresolved state, or no clips) → rest pose.
+        let (clip_idx, tick) = match (self.mode, &self.sm) {
+            (ViewMode::Graph, Some(sm)) => (sm.current_clip(), sm.current_tick()),
+            _ => (
+                self.clip_index,
+                (self.play_head.floor() as u32).min(self.duration().saturating_sub(1)),
+            ),
+        };
+        let globals = match self.model.clips.get(clip_idx) {
             Some(clip) => {
-                let locals = pose::sample_local_poses(&self.model.bones, clip, tick);
+                let t = tick.min(clip.duration_ticks.saturating_sub(1));
+                let locals = pose::sample_local_poses(&self.model.bones, clip, t);
                 pose::global_transforms(&self.model.bones, &locals)
             }
             None => {
@@ -730,32 +884,53 @@ impl App for Viewer {
             renderer.draw_lines(&segments, [0.35, 0.9, 1.0, 1.0]);
         }
 
-        // HUD.
-        let state = if self.playing { "PLAY" } else { "PAUSE" };
-        let (name, dur) = self
-            .current_clip()
+        // ── HUD ──
+        let (clip_name, dur) = self
+            .model
+            .clips
+            .get(clip_idx)
             .map(|c| (c.name.as_str(), c.duration_ticks))
-            .unwrap_or(("<no clips — rest pose>", 0));
-        renderer.draw_text(
-            &format!(
-                "clip [{}/{}] {}   tick {}/{}   {}",
-                self.clip_index + 1,
-                self.model.clips.len(),
-                name,
-                tick,
-                dur,
-                state
-            ),
-            Vec2::new(16.0, 16.0),
-            20.0,
-            [1.0, 1.0, 1.0, 1.0],
-        );
-        renderer.draw_text(
-            "Space play/pause · <-/-> step · Up/Down clip · PgUp/PgDn raise/lower · M mesh · T textures · 1/2/3 skin · B bones · K weapon · R reset · drag/wheel camera · Esc quit",
-            Vec2::new(16.0, 42.0),
-            14.0,
-            [0.80, 0.86, 0.95, 1.0],
-        );
+            .unwrap_or(("<rest pose>", 0));
+        match self.mode {
+            ViewMode::Graph => {
+                let state_name = self
+                    .sm
+                    .as_ref()
+                    .map(|s| s.current_state_name())
+                    .unwrap_or("—");
+                renderer.draw_text(
+                    &format!("[GRAPH] {state_name}   clip {clip_name}   tick {tick}/{dur}"),
+                    Vec2::new(16.0, 16.0),
+                    20.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                renderer.draw_text(
+                    "W move · Shift run · C crouch · Space jump · F attack · H hit · X die · R reset · G manual · M/T/B/K/1-3 view · drag/wheel cam · Esc",
+                    Vec2::new(16.0, 42.0),
+                    14.0,
+                    [0.80, 0.86, 0.95, 1.0],
+                );
+            }
+            ViewMode::Manual => {
+                let play = if self.playing { "PLAY" } else { "PAUSE" };
+                renderer.draw_text(
+                    &format!(
+                        "[MANUAL] clip [{}/{}] {clip_name}   tick {tick}/{dur}   {play}",
+                        self.clip_index + 1,
+                        self.model.clips.len(),
+                    ),
+                    Vec2::new(16.0, 16.0),
+                    20.0,
+                    [1.0, 1.0, 1.0, 1.0],
+                );
+                renderer.draw_text(
+                    "Space play/pause · <-/-> step · Up/Down clip · G graph · PgUp/PgDn raise/lower · M/T/B/K/1-3 view · R reset · drag/wheel cam · Esc",
+                    Vec2::new(16.0, 42.0),
+                    14.0,
+                    [0.80, 0.86, 0.95, 1.0],
+                );
+            }
+        }
         renderer.draw_text(
             &format!(
                 "{} bones · {} verts · {} submeshes · mesh {} · tex {} · skin Color_{} · skeleton {} · weapon {}",
@@ -772,6 +947,21 @@ impl App for Viewer {
             14.0,
             [0.70, 0.78, 0.90, 1.0],
         );
+        // Graph-mode timeline readout: TAE windows open now + recently fired events.
+        if self.mode == ViewMode::Graph {
+            let windows = if self.hud_active.is_empty() {
+                "—".to_string()
+            } else {
+                self.hud_active.join("  ")
+            };
+            let events = self.hud_events.join("  ");
+            renderer.draw_text(
+                &format!("windows: {windows}     events: {events}"),
+                Vec2::new(16.0, 82.0),
+                14.0,
+                [0.95, 0.82, 0.55, 1.0],
+            );
+        }
     }
 }
 
