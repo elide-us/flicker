@@ -20,13 +20,16 @@ pub(crate) struct LoadedTexture {
     /// `Renderer::load_texture` so any texture can be used as a billboard
     /// atlas. `None` until set.
     pub billboard_bind_group: Option<wgpu::BindGroup>,
+    /// Bind group for the textured-mesh pipeline's texture layout (linear
+    /// sampler), built by `Renderer::load_texture`. `None` until set.
+    pub mesh_bind_group: Option<wgpu::BindGroup>,
     #[allow(dead_code)]
     pub size: (u32, u32),
 }
 
 impl LoadedTexture {
-    /// Upload an RGBA8 pixel buffer to the GPU and build a bind group tied to
-    /// the provided sprite-pipeline layout.
+    /// Upload an RGBA8 **sRGB** pixel buffer (colour data — albedo/sprites) to the GPU
+    /// and build a bind group tied to the provided sprite-pipeline layout.
     pub fn from_rgba8(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -35,6 +38,55 @@ impl LoadedTexture {
         pixels: &[u8],
         width: u32,
         height: u32,
+    ) -> Self {
+        Self::from_rgba8_format(
+            device,
+            queue,
+            sampler,
+            layout,
+            pixels,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        )
+    }
+
+    /// Upload an RGBA8 **linear** pixel buffer (non-colour data — normal / roughness /
+    /// metalness / AO maps) to the GPU. Same bind-group wiring as [`Self::from_rgba8`];
+    /// only the texture format differs (no sRGB decode), so the raw bytes are sampled
+    /// as-is — mandatory for tangent-space normals and scalar PBR maps.
+    pub fn from_rgba8_linear(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sampler: &wgpu::Sampler,
+        layout: &wgpu::BindGroupLayout,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Self {
+        Self::from_rgba8_format(
+            device,
+            queue,
+            sampler,
+            layout,
+            pixels,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8Unorm,
+        )
+    }
+
+    /// Shared upload path parameterised by texture format (sRGB colour vs linear data).
+    #[allow(clippy::too_many_arguments)]
+    fn from_rgba8_format(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        sampler: &wgpu::Sampler,
+        layout: &wgpu::BindGroupLayout,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
     ) -> Self {
         assert_eq!(
             pixels.len() as u32,
@@ -54,7 +106,7 @@ impl LoadedTexture {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -84,6 +136,7 @@ impl LoadedTexture {
             view,
             bind_group,
             billboard_bind_group: None,
+            mesh_bind_group: None,
             size: (width, height),
         }
     }
