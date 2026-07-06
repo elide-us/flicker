@@ -132,32 +132,46 @@ end
 local function readout(cmds, sw, sh)
   local r = UI.readout
   local x = sw - r.width - r.margin_x
-  local y = r.top_y
-  local function line(str, size, c)
-    text(cmds, x, y, str, size, c)
-    y = y + (size + 4)
+
+  -- Collect the lines first so a backing panel can be sized to them. `gap` is extra
+  -- space *above* a line (a small section break).
+  local lines = {}
+  local function add(str, size, c, gap)
+    lines[#lines + 1] = { str = str, size = size, c = c, gap = gap or 0 }
   end
 
-  line("flicker · sol2", r.title_size, r.title_color)
+  add("flicker · sol2", r.title_size, r.title_color)
   local phase = math.floor((Model.phase or 1) + 0.5)
-  local phase_txt = (phase >= 2) and "Phase 2 · Collapse" or "Phase 1 · Distribution"
-  line(phase_txt, r.head_size, r.phase_color)
-  y = y + r.gap
-
-  line(string.format("cloud mass %.2f M_sun  ·  metals %.1f%%", Model.mass or 0, Model.metals_pct or 0), r.label_size, r.accent_color)
-  line(string.format("conserved sum %.3f M_sun", Model.cloud_sum or 0), r.label_size, r.good_color)
-  line(string.format("focus %s (%s)  %.1f AU  ·  %d dots", Model.focus_sym or "?", Model.focus_name or "", Model.focus_au or 0, math.floor((Model.candidates or 0) + 0.5)), r.label_size, r.label_color)
+  add((phase >= 2) and "Phase 2 · Collapse" or "Phase 1 · Distribution", r.head_size, r.phase_color)
+  add(string.format("cloud mass %.2f M_sun  ·  metals %.1f%%", Model.mass or 0, Model.metals_pct or 0), r.label_size, r.accent_color, r.gap)
+  add(string.format("conserved sum %.3f M_sun", Model.cloud_sum or 0), r.label_size, r.good_color)
+  add(string.format("focus %s (%s)  %.1f AU  ·  %d dots", Model.focus_sym or "?", Model.focus_name or "", Model.focus_au or 0, math.floor((Model.candidates or 0) + 0.5)), r.label_size, r.label_color)
   if Model.mass_line and Model.mass_line ~= "" then
-    line(Model.mass_line, r.label_size, r.label_color)
+    add(Model.mass_line, r.label_size, r.label_color)
+  end
+  if Model.ignited == true then
+    add(string.format("COLLAPSE  ·  t %.0f yr  ·  %d bodies", Model.sim_time or 0, math.floor((Model.bodies or 0) + 0.5)), r.label_size, r.accent_color, r.gap)
+    add(string.format("star %.3f  ·  sum %.3f / %.3f M_sun", Model.star_mass or 0, Model.sum_mass or 0, Model.init_mass or 0), r.label_size, r.label_color)
+    if Model.type_line and Model.type_line ~= "" then
+      add(Model.type_line, r.label_size, r.label_color)
+    end
   end
 
-  if Model.ignited == true then
-    y = y + r.gap
-    line(string.format("COLLAPSE  ·  t %.0f yr  ·  %d bodies", Model.sim_time or 0, math.floor((Model.bodies or 0) + 0.5)), r.label_size, r.accent_color)
-    line(string.format("star %.3f  ·  sum %.3f / %.3f M_sun", Model.star_mass or 0, Model.sum_mass or 0, Model.init_mass or 0), r.label_size, r.label_color)
-    if Model.type_line and Model.type_line ~= "" then
-      line(Model.type_line, r.label_size, r.label_color)
-    end
+  -- A subtle backing panel keeps the text legible over the busy ring field.
+  local total = 0
+  for _, ln in ipairs(lines) do
+    total = total + ln.gap + ln.size + 4
+  end
+  if r.bg then
+    local pad = 8
+    Widgets.panel_draw(cmds, { x = x - pad, y = r.top_y - pad, w = r.width + pad * 2, h = total + pad * 2 }, { bg = r.bg })
+  end
+
+  local y = r.top_y
+  for _, ln in ipairs(lines) do
+    y = y + ln.gap
+    text(cmds, x, y, ln.str, ln.size, ln.c)
+    y = y + ln.size + 4
   end
 end
 
@@ -168,15 +182,18 @@ local function panel(cmds, sw, sh)
   Widgets.panel_draw(cmds, p, { bg = s.panel_bg, border = s.panel_border })
   text(cmds, p.x + s.pad, header_y, s.header, s.header_size, s.header_color)
 
-  -- Phase nav: the active phase is lit; Phase 3 is a disabled signpost.
+  -- Phase nav: the active phase is lit; a hovered phase warms; Phase 3 is a disabled signpost.
   local ph = s.phase
   local cur = math.floor((Model.phase or 1) + 0.5)
+  local hx, hy = Model.mx or -1, Model.my or -1
   for _, b in ipairs(phase) do
     local fill, lc
     if b.id == "phase3" then
       fill, lc = ph.disabled, ph.disabled_label
     elseif b.idx == cur then
       fill, lc = ph.active, ph.active_label
+    elseif point_in(hx, hy, b.r) then
+      fill, lc = ph.hot or ph.cell, ph.label
     else
       fill, lc = ph.cell, ph.label
     end
@@ -199,9 +216,9 @@ local function panel(cmds, sw, sh)
     text(cmds, t.label_x, t.label_y, t.label, s.label_size, s.label_color)
   end
 
-  -- Action buttons.
+  -- Action buttons (hover-highlighted).
   for _, b in ipairs(buttons) do
-    Widgets.button_draw(cmds, b.r, b.label, s.button_style)
+    Widgets.button_draw(cmds, b.r, b.label, s.button_style, point_in(hx, hy, b.r))
   end
 end
 

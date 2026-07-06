@@ -145,27 +145,27 @@ The project has pivoted several times. **Current authoritative direction:**
   with per-epoch knob panels. → `docs/flicker-world-handoff.md`.
 - **Epoch design of record** → `docs/clayengine_world_generation_spec_v2.md`
   (§"Epoch specifications", Phase-1-simple / Phase-2-sophisticated per epoch).
-- **Celestial / system formation = `examples/flicker-sol2`.** Currently **only the ejecta-cloud
-  *distribution* viewer** (the "Stage 1" view): one colour ring per Prism element at its
-  atomic-weight cast distance (heavier = nearer), differentially sheared + clumpy (`cloud.rs`),
-  with overdensity **dots** (`detect.rs`) and distribution sliders. The user confirmed this view
-  is right. **The formation simulation was REMOVED (2026-06-23) after four failed attempts**
-  (condensation disk → Hill-grid accretion → sub-disk moons → aggregate field); `disk.rs`,
-  `accrete.rs`, `subdisk.rs`, `aggregate.rs`, `field.rs` are deleted. The eventual rebuild must
-  **derive from the existing starting values** (Prism table, the cloud distribution, cast params,
-  seed) — NOT invent new tables or a parallel system. **EVERYTHING IS DERIVED FROM THE STARTING
-  VALUES.** **Locked direction (2026-06-23):** the per-element cloud *tonnage* is DERIVED from
-  two dials — supernova **Mass** (total origin mass = the existing explosion dial) + **Metallicity**
-  (the metals-vs-H/He fraction; Sun ≈ 1.4%) — split across elements by the **cosmic abundance
-  curve** (real SN-nucleosynthesis output: iron peak, post-iron cliff), distributed in angle by the
-  existing cloud field and radius by the existing cast (WHERE = f(atomic mass); HOW MUCH =
-  f(atomic number)). Formation is an **inward gravitational collapse run on the existing cast
-  cloud** (NOT a separate condensation disk): the dominant central lump becomes the star, a 2nd/3rd
-  is a valid emergent sun. (Collapse mechanics not yet designed.) Model of record + the failure
-  post-mortem: MCP memory (decisions "flicker-sol2 mass source LOCKED" + "flicker-sol2 formation sim
-  ROLLED BACK", spec "aggregation model"). → `docs/flicker-sol2-handoff.md`.
-  **The earlier `flicker-celestial` refactor is ABANDONED / superseded by this** — see
-  Abandoned below. Do NOT build on it or resurrect its model.
+- **Celestial / system formation = `examples/flicker-sol2`** (the viewer) **+ `crates/flicker-system`**
+  (the boxed GPU-free sim). A **scene-driven app** (Logo splash → Menu → Sim, with Pause/Settings
+  overlays, like flicker-world) that is a **thin Lua-UI shell** over the sim. Two phases over one
+  dataset: **Phase 1 — distribution:** one colour ring per Prism element at its atomic-weight cast
+  distance (heavier = nearer), differentially sheared + clumpy, with overdensity **dots** (the hot
+  spots). **Phase 2 — collapse:** an **inward gravitational collapse run on that cast cloud** (NOT
+  a separate condensation disk) — the dominant central lump becomes the star, bodies accrete into
+  planets/moons/rings, the habitable world is highlighted. (This rebuilt collapse REPLACED the four
+  failed 2026-06-23 attempts — condensation disk → Hill-grid accretion → sub-disk moons → aggregate
+  field; do NOT resurrect those.) **EVERYTHING IS DERIVED FROM THE STARTING VALUES** (Prism table,
+  cloud distribution, cast params, seed) — never a parallel system or invented tables. **Locked
+  (2026-06-23):** per-element cloud *tonnage* is DERIVED from two dials — supernova **Mass** + 
+  **Metallicity** (metals-vs-H/He; Sun ≈ 1.4%) — split across elements by the **cosmic-abundance
+  curve** (iron peak, post-iron cliff); WHERE = f(atomic mass), HOW MUCH = f(atomic number). The
+  boxed sim exposes `SystemConfig`/`Tuning` in → `System` facade → `SystemState`/`Epoch3Handoff`
+  out (Workstream A, Session A); the viewer routes those through the Lua HUD — a bottom-right
+  control panel + top-right stats overlay (Workstream B, Session B). Model of record: MCP memory
+  (decisions "flicker-sol2 mass source LOCKED" + "flicker-sol2 formation sim ROLLED BACK"). →
+  `docs/flicker-sol2-handoff.md`, `docs/flicker-sol2-epoch3-pipeline-roadmap.md` (the multi-session
+  task inventory + Session A/B outcomes). **`flicker-celestial` is ABANDONED / superseded by this**
+  — do NOT build on it or resurrect its model.
 
 ### Abandoned / superseded (left in tree, do NOT resurrect or reuse as a path)
 - The **flat two-map / bent-rings / σ-zipper** hex model in `examples/hex-map`
@@ -222,17 +222,19 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
   shell (Menu/Loading/World/Pause/Settings), Lua HUD, logo splash, rebind capture.
   `cargo run -p flicker-world`. Controls: drag=rotate, wheel=zoom, V=cycle field,
   ↑/↓=epoch, R=reseed (per-layer), `[`/`]`=grid freq.
-- `examples/flicker-sol2` — **supernova ejecta-cloud distribution viewer** (Stage-1 only; the
-  formation sim was removed 2026-06-23 — see §3). A 2D top-down cloud with one colour ring per
-  Prism element at its atomic-weight **cast distance** (heavier = nearer), differentially sheared
-  + clumpy + meandering (`src/cloud.rs`); a focus deck (hover/←→) shows one element's density
-  gradient; `src/detect.rs` (toggle **B**) marks overdensity **dots**. Distribution dials only;
-  pressing keys past the sliders does nothing now (no formation). The view is confirmed correct;
-  the eventual formation rebuild must **derive from these starting values** (the cloud, the
-  Prism table, cast params, seed) — not invent a new system. `cargo run -p flicker-sol2`;
-  `[`/`]` explosion · ↑/↓ falloff · `,`/`.` gradient · `;`/`'` clump · ←/→/hover focus · wheel
-  zoom · Space pause · N reclump · B dots · R reset. flicker-render(2D)+flicker-scene+flicker-app;
-  consumes only flicker-materials. → `docs/flicker-sol2-handoff.md`.
+- `examples/flicker-sol2` — **supernova ejecta → star-system formation viewer**, a scene-driven app
+  (Logo splash → Menu → Sim, with Pause/Settings overlays) that is a **thin Lua-UI shell over
+  `flicker-system`**. **Phase 1 (distribution):** a colour ring per Prism element at its
+  atomic-weight cast distance, sheared + clumpy, with overdensity **dots**; hover/click a ring to
+  focus. **Phase 2 (collapse):** ignite the cloud into a planetary system — bodies, moons, rings,
+  motion arcs, gravity-well overlay, highlighted habitable world. **Every control + readout is Lua**:
+  a **bottom-right control panel** (phase nav · dial sliders · pause/dots/well checkboxes ·
+  seed/new-system/reset buttons) + a **top-right stats overlay** (`scripts/sim_ui.lua` +
+  `ui_elements.json`; the splash/menu/pause use `logo.lua`/`modal.lua`). Drag dials · wheel zoom ·
+  Esc → Pause. The sim modules (cloud/cast/mass/detect/collapse) live in `flicker-system`, **not**
+  `src/` — the example owns only `scene.rs` (the `Sim` scene) / `shell.rs` (the app shell) /
+  `draw.rs` / `well.rs`. `cargo run -p flicker-sol2`. → `docs/flicker-sol2-handoff.md`,
+  `docs/flicker-sol2-epoch3-pipeline-roadmap.md`.
 - `examples/voxel-cluster` — primary voxel demo: 3×3 cluster field, contour+mesh,
   fly camera, dynamic LOD + async re-mesh, Lua debug HUD, pause/settings.
 - `examples/hex-sphere` — **headless** topology test: builds the icosphere, prints

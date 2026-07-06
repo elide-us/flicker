@@ -86,8 +86,10 @@ struct Layout {
 
 impl Layout {
     fn new(size: Vec2, au_at_edge: f32) -> Self {
-        let view_radius_px = size.x.min(size.y) * 0.44;
-        let center = Vec2::new((size.x * 0.40).max(view_radius_px + 24.0), size.y * 0.54);
+        let view_radius_px = size.x.min(size.y) * 0.40;
+        // Bias the view up-and-left so the bottom-right control panel and the top-right stats
+        // overlay sit over empty space rather than the dense centre of the system.
+        let center = Vec2::new((size.x * 0.33).max(view_radius_px + 24.0), size.y * 0.46);
         let px_per_au = view_radius_px / au_at_edge.max(0.001);
         Self { center, px_per_au, view_radius_px }
     }
@@ -113,6 +115,8 @@ pub struct Sim {
     show_bodies: bool,
     show_well: bool,
     last_candidates: usize,
+    /// Cursor position last frame — published to the HUD so the panel can hover-highlight buttons.
+    last_mouse: Vec2,
     script: Option<ScriptHost>,
     white: Option<TextureHandle>,
     /// `true` when the cursor is over the Lua control panel — suppresses world hover/zoom so a
@@ -137,6 +141,7 @@ impl Sim {
             show_bodies: true,
             show_well: false,
             last_candidates: 0,
+            last_mouse: Vec2::ZERO,
             script: None,
             white: None,
             ui_capture: false,
@@ -218,6 +223,8 @@ impl Sim {
             .with("dots", self.show_bodies)
             .with("well", self.show_well)
             .with("ignited", ignited)
+            .with("mx", self.last_mouse.x)
+            .with("my", self.last_mouse.y)
             .with("phase", if ignited { 2u32 } else { 1u32 });
 
         if let Some(sim) = self.system.sim() {
@@ -615,6 +622,7 @@ impl Scene for Sim {
 
         let dt = dt.as_secs_f32();
         let size = renderer.size();
+        self.last_mouse = input.mouse_position;
 
         // Publish the model, run the HUD, and apply what it returns.
         let mut results = ValueMap::new();

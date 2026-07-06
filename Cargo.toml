@@ -30,6 +30,7 @@ members = [
     "examples/hex-sphere",
     "examples/flicker-solarsystem",
     "examples/flicker-sol2",
+    "Alpha/flicker-csg",
 ]
 
 [workspace.package]

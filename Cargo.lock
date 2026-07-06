@@ -714,6 +714,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-csg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-voxel",
+ "flicker-worker",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-materials"
 version = "0.1.0"
 dependencies = [
