@@ -156,3 +156,75 @@ Thin, verify each; the user drives. Roughly:
   (granny-tier / TAE-timeline / CPU-pose canon), decision `50EA9C0F` (Alpha/ dir + this
   direction). A new `spec` entry for THIS design should be stored when the deep session
   confirms the decisions.
+
+---
+
+## 9. Implementation log — Slice 1 LANDED (2026-07-05)
+
+The state-machine core + TAE event timeline + tick loop is built and driving the viewer.
+Everything lives **inside `examples/flicker-animation`** (see the branch note below), fully
+additive to the existing POC.
+
+**Decisions locked at the top of this session (the §6 open questions):**
+1. **Locomotion** — in-place + capsule-driven default; root-motion is a per-state
+   `root_motion` flag in the schema (recorded, not yet acted on). ✅ as leaned.
+2. **Metadata home** — a **separate authored `flicker.pack` JSON**; `flicker.rig` stays
+   mechanical. ✅ as leaned. (`assets/Katanami.pack.json`.)
+3. **Crate extraction** — **DEFERRED, not as leaned.** `Alpha/flicker-csg` lives only on
+   the (un-pushed) `macbook` branch, which *adds* an `Alpha/` tree; this box is branch
+   `surface` with the renderer/animation work and **no `Alpha/`**. Extracting
+   `Alpha/flicker-skeletal` here now would collide head-on with the macbook branch at merge
+   time. So the state machine is built in the example with **cleanly separable modules**
+   (`state.rs` has zero deps on the viewer); extraction to `Alpha/flicker-skeletal` becomes
+   a move-after-merge, once the branches are reconciled on GitHub.
+4. **Blending** — **hard-cut** transitions first (reset play-head + swap clip). Crossfade
+   is the next slice. ✅ as leaned.
+
+**What's built.**
+- **`src/state.rs`** — the runtime. Authored wire types (`PackFile` / `StateMachineDef` /
+  `StateDef` / `TransitionDef` / `TickWindow` / `Trigger` / `EventDef` / `EventKind`) +
+  the resolved `StateMachine`. Clips referenced by **name**, resolved to indices at
+  `StateMachine::build` (mirroring the rig loader's bone-name resolution); unresolved
+  clip/state names become `warnings()`, not panics (a missing clip holds the rest pose).
+  Advances on a **fixed 60 Hz tick** (`tick()` = the atomic combat-clock step; `advance()`
+  accumulates a frame's `dt` into whole ticks, capped at 8/frame). Per tick: advance the
+  play-head → fire the current state's timeline events for the crossed tick → evaluate
+  transitions (**any-state edges first**, then per-state by priority, then `next`
+  auto-advance on `clip_done`) → hard-cut on a match. Reports fired one-shots + the windows
+  open at the settled tick.
+- **TAE event timeline** — `EventKind` covers the souls-like vocabulary (Footstep,
+  HitboxActive, Iframe, CancelWindow, Parry, Sfx, Equip, WeaponTrail). Point events fire
+  on their tick; window events (`end` set) are reported active while the head is inside.
+  **The runtime FIRES/REPORTS events only** — acting on them (hitbox capsules, i-frame
+  invulnerability) is the next slice, exactly as designed.
+- **`assets/Katanami.pack.json`** — the authored base graph: Idle ⇄ Walk ⇄ Run,
+  Crouch ⇄ Crouch_Move, Jump_Start → Jump_Loop → Jump_End → Idle, Attack_1 with a
+  **hitbox-active window [15,30]** on `Weapon_R`, a **cancel/combo window [40,55]** (press
+  attack inside it to re-enter Attack_1), footstep events on the locomotion clips, and
+  **any-state** Hit → Dame_01 / Die → Death_01. Clip names are the real stems
+  (`Idle_nonWeapon` / `Walk_nonWeapon` / `Run_nonWeapon` / …); window ticks are within each
+  clip's `duration_ticks`.
+- **Viewer integration (`main.rs`)** — a `ViewMode { Graph, Manual }`. **Graph** (default
+  when the pack loads) lets the state machine own clip + tick; gameplay input drives it:
+  `W` move · `Shift` run · `C` crouch · `Space` jump · `F` attack · `H` hit (debug) ·
+  `X` die (debug) · `R` reset. **Manual** is the original clip browser (Space play/pause,
+  ↑/↓ clip, ←/→ step). `G` toggles modes. The HUD shows the mode, current state, clip/tick,
+  the TAE windows open **now**, and a ring of recently-fired events.
+- **Tests** — 8 headless `state` tests (initial state, locomotion move/stop, `clip_done`
+  auto-advance, single-fire timeline event, hitbox window active, cancel-window gating,
+  any-state hit interrupt, missing-clip warning). `cargo build/clippy --all-targets/test`
+  all clean for `-p flicker-animation` (11 tests total with the pre-existing 3).
+
+**Branch / merge note (load-bearing for the next session).** This work is on branch
+`surface` (the renderer/animation branch). `Alpha/flicker-csg` exists only on the
+un-pushed `macbook` branch. The two diverge and must be merged on GitHub by the user; the
+state-machine work was deliberately kept **example-local and additive** (no new `Alpha/`
+tree, no workspace-member changes) to keep that merge small. **After the merge**, the
+`Alpha/flicker-skeletal` extraction (Slice 1 of §7's *original* plan) can proceed, pulling
+`format`/`pose`/`skin`/`state` out of the example as a real crate `flicker-csg` consumes.
+
+**Still not built (unchanged from §4/§7):** hitbox/hurtbox capsule binding + debug draw
+(acting on HitboxActive windows), crossfade blending, stamina/poise/i-frame *enforcement*,
+the weapon-pack loader + equip/pickup transition, and moving the machine into the client
+(`flicker-csg`) with capsule + gravity. The `Crouch_Move_L/R`, more attacks, and
+root-motion sets are additional clips + graph edges when the user extracts them.
