@@ -675,6 +675,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-animation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "glam",
+ "image",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-app"
 version = "0.1.0"
 dependencies = [

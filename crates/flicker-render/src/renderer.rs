@@ -25,6 +25,9 @@ use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, 
 use crate::pipeline_billboard::BillboardPipeline;
 use crate::pipeline_lines::LinesPipeline;
 use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline, SceneUniform};
+use crate::pipeline_mesh_textured::{
+    PbrMaps, TexturedMeshHandle, TexturedMeshPipeline, TexturedVertex,
+};
 use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
@@ -51,6 +54,7 @@ pub struct Renderer {
     sprite: SpritePipeline,
     text: TextPipeline,
     mesh: MeshPipeline,
+    mesh_textured: TexturedMeshPipeline,
     lines: LinesPipeline,
     billboard: BillboardPipeline,
     sky: SkyPipeline,
@@ -157,6 +161,8 @@ impl Renderer {
         let text = TextPipeline::new(&device, &queue, surface_format);
         let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
+        let mesh_textured =
+            TexturedMeshPipeline::new(&device, &queue, surface_format, min_uniform_offset_alignment);
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
@@ -176,6 +182,7 @@ impl Renderer {
             sprite,
             text,
             mesh,
+            mesh_textured,
             lines,
             billboard,
             sky,
@@ -275,10 +282,10 @@ impl Renderer {
         self.screen
     }
 
-    /// Upload an RGBA8 image and return a handle. The pixel buffer length
-    /// must equal `width * height * 4`.
+    /// Upload an RGBA8 **sRGB** colour image (albedo, sprites, UI) and return a handle.
+    /// The pixel buffer length must equal `width * height * 4`.
     pub fn load_texture(&mut self, pixels: &[u8], width: u32, height: u32) -> TextureHandle {
-        let mut tex = LoadedTexture::from_rgba8(
+        let tex = LoadedTexture::from_rgba8(
             &self.device,
             &self.queue,
             &self.sprite.sampler,
@@ -287,6 +294,31 @@ impl Renderer {
             width,
             height,
         );
+        self.register_texture(tex)
+    }
+
+    /// Upload an RGBA8 **linear** (non-colour) image — a normal / roughness / metalness
+    /// / AO map for the textured-mesh PBR path — and return a handle. Same as
+    /// [`Self::load_texture`] but the texture is `Rgba8Unorm` (no sRGB decode), so the
+    /// bytes are sampled verbatim. The resulting handle binds as any of the PBR map
+    /// slots on [`Self::draw_textured_mesh_pbr`].
+    pub fn load_texture_linear(&mut self, pixels: &[u8], width: u32, height: u32) -> TextureHandle {
+        let tex = LoadedTexture::from_rgba8_linear(
+            &self.device,
+            &self.queue,
+            &self.sprite.sampler,
+            &self.sprite.texture_bind_group_layout,
+            pixels,
+            width,
+            height,
+        );
+        self.register_texture(tex)
+    }
+
+    /// Build the auxiliary billboard + textured-mesh bind groups for a freshly uploaded
+    /// texture and push it into the store, returning its handle. Shared by the sRGB and
+    /// linear upload paths.
+    fn register_texture(&mut self, mut tex: LoadedTexture) -> TextureHandle {
         // Also build a bind group for the billboard pipeline so this
         // texture can be drawn as a world-space billboard atlas.
         tex.billboard_bind_group =
@@ -304,6 +336,22 @@ impl Renderer {
                     },
                 ],
             }));
+        // And a bind group for the textured-mesh pipeline (linear sampler), so this
+        // texture can be sampled as a mesh albedo or PBR map.
+        tex.mesh_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flicker.mesh_textured.texture.bind_group"),
+            layout: &self.mesh_textured.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&tex.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.mesh_textured.sampler),
+                },
+            ],
+        }));
         let id = self.textures.len() as u32;
         self.textures.push(tex);
         TextureHandle(id)
@@ -360,6 +408,7 @@ impl Renderer {
         self.sprite.clear();
         self.text.clear();
         self.mesh.clear();
+        self.mesh_textured.clear();
         self.lines.clear();
         self.billboard.clear();
         self.draw_sky = false;
@@ -478,6 +527,67 @@ impl Renderer {
         self.mesh.push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
 
+    /// Upload a textured 3D mesh (position + normal + UV) and return a handle. Persists
+    /// across frames; drawn via [`Renderer::draw_textured_mesh`] with an albedo texture.
+    /// Additive to [`Renderer::upload_mesh`] — separate storage and handle type, so the
+    /// flat and textured mesh paths never cross. Reusable for any UV-mapped mesh
+    /// (skinned characters now, voxel-cluster surfaces later).
+    pub fn upload_textured_mesh(
+        &mut self,
+        vertices: &[TexturedVertex],
+        indices: MeshIndices<'_>,
+    ) -> TexturedMeshHandle {
+        self.mesh_textured.upload(&self.device, vertices, indices)
+    }
+
+    /// Free a textured mesh, returning its slot to the reuse pool. Same semantics as
+    /// [`Renderer::free_mesh`].
+    pub fn free_textured_mesh(&mut self, handle: TexturedMeshHandle) {
+        self.mesh_textured.free(handle);
+    }
+
+    /// Queue a textured mesh this frame, sampling `texture` as its albedo (UV-mapped)
+    /// under the same lighting as [`Renderer::draw_mesh`]. `options.tint` multiplies the
+    /// lit colour and `options.gloss` adds sheen; `options.wireframe` is ignored (the
+    /// textured pipeline is fill-only). No PBR maps — the mesh reads as a matte dielectric
+    /// (flat normal, rough, non-metal, unoccluded). For surface relief + a metal/rough
+    /// specular response, use [`Renderer::draw_textured_mesh_pbr`].
+    pub fn draw_textured_mesh(
+        &mut self,
+        mesh: TexturedMeshHandle,
+        texture: TextureHandle,
+        model: Mat4,
+        options: MeshDrawOptions,
+    ) {
+        self.mesh_textured.push(
+            mesh,
+            texture,
+            PbrMaps::default(),
+            model,
+            options.tint,
+            options.gloss,
+        );
+    }
+
+    /// Queue a textured mesh this frame with a full PBR map set. Same as
+    /// [`Renderer::draw_textured_mesh`] but additionally samples the `maps`
+    /// (normal / roughness / metalness / AO) — any `None` slot uses the pipeline's
+    /// default (flat normal / rough=1 / metal=0 / ao=1). The normal map perturbs the
+    /// surface normal (via the vertex tangent), roughness+metalness drive a pragmatic
+    /// specular highlight (reflective steel on the katana blade), and AO attenuates the
+    /// ambient term. Load the map textures with [`Renderer::load_texture_linear`].
+    pub fn draw_textured_mesh_pbr(
+        &mut self,
+        mesh: TexturedMeshHandle,
+        texture: TextureHandle,
+        maps: PbrMaps,
+        model: Mat4,
+        options: MeshDrawOptions,
+    ) {
+        self.mesh_textured
+            .push(mesh, texture, maps, model, options.tint, options.gloss);
+    }
+
     /// Draw a wireframe axis-aligned bounding box this frame. Lives in
     /// 3D space at world coordinates `[min, max]`, drawn as the 12
     /// edges of the box at the given RGBA color. Uses the immediate-
@@ -564,6 +674,8 @@ impl Renderer {
             };
             let view_projection = cam.view_projection(aspect);
             self.mesh.set_camera_matrix(&self.queue, view_projection);
+            self.mesh_textured
+                .set_camera_matrix(&self.queue, view_projection);
             self.billboard
                 .set_camera(&self.queue, cam.view(), view_projection);
             let inv_vp = view_projection.inverse();
@@ -584,11 +696,15 @@ impl Renderer {
         // `set_scene` don't have to thread it through themselves.
         self.mesh
             .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
+        self.mesh_textured
+            .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
 
         // Upload buffered geometry/text.
         self.triangle.prepare(&self.device, &self.queue);
         self.sprite.prepare(&self.device, &self.queue);
         self.mesh.prepare(&self.device, &self.queue);
+        self.mesh_textured
+            .prepare(&self.device, &self.queue, &self.textures);
         self.lines.prepare(&self.device, &self.queue);
         self.billboard.prepare(&self.device, &self.queue);
         self.text
@@ -656,6 +772,7 @@ impl Renderer {
                 self.sky.render(&mut pass);
             }
             self.mesh.render(&mut pass, &self.meshes);
+            self.mesh_textured.render(&mut pass, &self.textures);
             self.lines.render(&mut pass);
             self.billboard.render(&mut pass, &self.textures);
         }
