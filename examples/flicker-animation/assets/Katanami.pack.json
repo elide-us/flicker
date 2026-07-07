@@ -5,9 +5,11 @@
   "state_machine": {
     "initial": "Idle",
 
+    "default_blend_ticks": 6,
+
     "any": [
-      { "to": "Dame_01", "on": "hit", "priority": 100 },
-      { "to": "Death_01", "on": "die", "priority": 200 }
+      { "to": "Dame_01", "on": "hit", "priority": 100, "blend_ticks": 2 },
+      { "to": "Death_01", "on": "die", "priority": 200, "blend_ticks": 2 }
     ],
 
     "states": [

@@ -27,10 +27,7 @@ use flicker::render::{
 };
 use glam::Mat4;
 
-mod format;
-mod pose;
-mod skin;
-mod state;
+use flicker_skeletal::{format, pose, skin, state};
 
 use format::Model;
 use state::{Inputs, StateMachine};
@@ -237,6 +234,10 @@ struct Viewer {
     hud_active: Vec<String>,
     /// Ring of the most recent fired timeline events (HUD).
     hud_events: Vec<String>,
+    /// Whether transition crossfades are applied in Graph mode (`L` toggles — an A/B
+    /// against the old hard-cut). The state machine tracks the blend regardless; this
+    /// only controls whether the viewer interpolates the outgoing pose.
+    blend_enabled: bool,
     // Edge-detection for one-shot controls (InputState exposes level state for keys).
     prev_space: bool,
     prev_up: bool,
@@ -252,6 +253,7 @@ struct Viewer {
     prev_f: bool,
     prev_h: bool,
     prev_x: bool,
+    prev_l: bool,
     should_quit: bool,
 }
 
@@ -325,6 +327,7 @@ impl Viewer {
             mode,
             hud_active: Vec::new(),
             hud_events: Vec::new(),
+            blend_enabled: true,
             clip_index: 0,
             play_head: 0.0,
             playing: true,
@@ -356,6 +359,7 @@ impl Viewer {
             prev_f: false,
             prev_h: false,
             prev_x: false,
+            prev_l: false,
             should_quit: false,
         }
     }
@@ -424,6 +428,18 @@ impl Viewer {
             .get(&name)
             .or_else(|| self.textures.get(base))
             .copied()
+    }
+
+    /// Sample a clip's LOCAL bone poses at `tick`, or the rest pose when the clip
+    /// index is missing (an unresolved state, or no clips at all).
+    fn sample_locals(&self, clip_idx: usize, tick: u32) -> Vec<Mat4> {
+        match self.model.clips.get(clip_idx) {
+            Some(clip) => {
+                let t = tick.min(clip.duration_ticks.saturating_sub(1));
+                pose::sample_local_poses(&self.model.bones, clip, t)
+            }
+            None => self.model.bones.iter().map(|b| b.local).collect(),
+        }
     }
 
     /// Parent→child bone segments in engine space (`world` maps source space to
@@ -653,6 +669,12 @@ impl App for Viewer {
             self.katana_equipped = !self.katana_equipped;
         }
         self.prev_k = k;
+        // Toggle transition crossfading (Graph mode) — an A/B against the old hard-cut.
+        let l = input.key_down(Key::L);
+        if l && !self.prev_l {
+            self.blend_enabled = !self.blend_enabled;
+        }
+        self.prev_l = l;
         // Skin variant (Color_1/2/3) — direct selection, no edge-detect needed.
         if input.key_down(Key::Digit1) {
             self.skin = 0;
@@ -756,17 +778,24 @@ impl App for Viewer {
                 (self.play_head.floor() as u32).min(self.duration().saturating_sub(1)),
             ),
         };
-        let globals = match self.model.clips.get(clip_idx) {
-            Some(clip) => {
-                let t = tick.min(clip.duration_ticks.saturating_sub(1));
-                let locals = pose::sample_local_poses(&self.model.bones, clip, t);
-                pose::global_transforms(&self.model.bones, &locals)
-            }
-            None => {
-                let rest: Vec<Mat4> = self.model.bones.iter().map(|b| b.local).collect();
-                pose::global_transforms(&self.model.bones, &rest)
-            }
+        // Sample the incoming pose. If a Graph transition is crossfading (and blending
+        // is enabled), sample the outgoing pose too and blend the LOCAL transforms
+        // before forward kinematics. `blend_weight` is kept for the HUD readout.
+        let incoming = self.sample_locals(clip_idx, tick);
+        let active_blend = if self.blend_enabled && self.mode == ViewMode::Graph {
+            self.sm.as_ref().and_then(|s| s.blend())
+        } else {
+            None
         };
+        let blend_weight = active_blend.map(|b| b.weight);
+        let locals = match active_blend {
+            Some(b) => {
+                let outgoing = self.sample_locals(b.from_clip, b.from_tick);
+                pose::blend_local_poses(&outgoing, &incoming, b.weight)
+            }
+            None => incoming,
+        };
+        let globals = pose::global_transforms(&self.model.bones, &locals);
 
         let world = Mat4::from_translation(Vec3::new(0.0, self.world_y, 0.0)) * self.model.world;
 
@@ -905,7 +934,7 @@ impl App for Viewer {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 renderer.draw_text(
-                    "W move · Shift run · C crouch · Space jump · F attack · H hit · X die · R reset · G manual · M/T/B/K/1-3 view · drag/wheel cam · Esc",
+                    "W move · Shift run · C crouch · Space jump · F attack · H hit · X die · R reset · G manual · L blend · M/T/B/K/1-3 view · drag/wheel cam · Esc",
                     Vec2::new(16.0, 42.0),
                     14.0,
                     [0.80, 0.86, 0.95, 1.0],
@@ -947,7 +976,8 @@ impl App for Viewer {
             14.0,
             [0.70, 0.78, 0.90, 1.0],
         );
-        // Graph-mode timeline readout: TAE windows open now + recently fired events.
+        // Graph-mode timeline readout: TAE windows open now + recently fired events +
+        // the crossfade state (off / on / on with the live weight%).
         if self.mode == ViewMode::Graph {
             let windows = if self.hud_active.is_empty() {
                 "—".to_string()
@@ -955,8 +985,13 @@ impl App for Viewer {
                 self.hud_active.join("  ")
             };
             let events = self.hud_events.join("  ");
+            let blend = match (self.blend_enabled, blend_weight) {
+                (false, _) => "off".to_string(),
+                (true, Some(w)) => format!("on {:.0}%", w * 100.0),
+                (true, None) => "on".to_string(),
+            };
             renderer.draw_text(
-                &format!("windows: {windows}     events: {events}"),
+                &format!("windows: {windows}     events: {events}     blend: {blend}"),
                 Vec2::new(16.0, 82.0),
                 14.0,
                 [0.95, 0.82, 0.55, 1.0],

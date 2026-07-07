@@ -1,0 +1,19 @@
+[package]
+name = "flicker-skeletal"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The CPU-authoritative skeletal-animation runtime: the `flicker.rig` format
+# contract + loader (`format`), pose sampling / forward kinematics (`pose`), CPU
+# linear-blend skinning (`skin`), and the animation/combat state machine + TAE
+# event timeline (`state`). GPU-free and viewer-agnostic — the renderer (the
+# `flicker-animation` example, later `flicker-csg`) consumes it as a crate.
+# Extracted from `examples/flicker-animation` once the state-machine slice proved
+# out. See docs/flicker-animation-handoff.md + docs/flicker-combat-animation-handoff.md.
+
+[dependencies]
+glam.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
