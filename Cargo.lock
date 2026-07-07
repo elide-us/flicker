@@ -680,10 +680,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-skeletal",
  "glam",
  "image",
- "serde",
- "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -810,6 +809,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "flicker-skeletal"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "glam",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

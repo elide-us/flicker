@@ -53,6 +53,11 @@ pub struct PackFile {
 pub struct StateMachineDef {
     /// Name of the state to start in.
     pub initial: String,
+    /// Crossfade duration (in ticks) applied to any transition that doesn't set its
+    /// own `blend_ticks`. `0` (the default) = hard-cut everywhere unless a transition
+    /// opts in — so an un-annotated pack keeps the original snap behaviour.
+    #[serde(default)]
+    pub default_blend_ticks: u32,
     /// Transitions evaluated from **every** state, before the per-state ones — the
     /// "from any state" edges (hit reaction, death). Highest-precedence.
     #[serde(default)]
@@ -102,6 +107,11 @@ pub struct TransitionDef {
     /// Higher priority is evaluated first (default 0). Ties keep authored order.
     #[serde(default)]
     pub priority: i32,
+    /// Crossfade duration (ticks) into the target state, overriding the machine's
+    /// `default_blend_ticks`. `Some(0)` forces a hard cut (e.g. a snappy hit react);
+    /// `None` (default) inherits the machine default.
+    #[serde(default)]
+    pub blend_ticks: Option<u32>,
 }
 
 /// An inclusive `[start, end]` tick interval.
@@ -195,6 +205,9 @@ struct Transition {
     on: Trigger,
     window: Option<TickWindow>,
     priority: i32,
+    /// Crossfade duration (ticks) into the target; `0` = hard cut. Resolved at build
+    /// from the transition's `blend_ticks` or the machine's `default_blend_ticks`.
+    blend_ticks: u32,
 }
 
 /// A timeline event (identical to [`EventDef`], kept separate so the wire type can
@@ -258,6 +271,32 @@ pub struct ActiveWindow {
     pub label: String,
 }
 
+/// A crossfade in progress: the outgoing pose is frozen at `(from_clip, from_tick)`
+/// while the current (incoming) state plays from tick 0, and `weight` ramps 0 → 1.
+/// The caller samples both clips and blends the LOCAL poses by `weight`
+/// (`pose::blend_local_poses`). Absent = no blend, sample the current state only.
+#[derive(Debug, Clone, Copy)]
+pub struct BlendView {
+    /// Clip index of the outgoing state ([`usize::MAX`] if it had no clip → rest pose).
+    pub from_clip: usize,
+    /// Play-head of the outgoing state, frozen at the moment of transition.
+    pub from_tick: u32,
+    /// Weight of the INCOMING (current) pose: `0.0` = fully outgoing (the pre-transition
+    /// pose), `1.0` = fully incoming. Eased (smoothstep).
+    pub weight: f32,
+}
+
+/// Internal crossfade state.
+struct Blend {
+    /// State index of the outgoing pose (its clip is looked up on demand).
+    from_state: usize,
+    from_tick: u32,
+    /// Ticks elapsed since the crossfade began.
+    elapsed: u32,
+    /// Total crossfade length in ticks (≥ 1; a `0`-tick transition never makes a Blend).
+    duration: u32,
+}
+
 /// The outcome of advancing the machine.
 #[derive(Debug, Default)]
 pub struct TickReport {
@@ -282,6 +321,13 @@ pub struct StateMachine {
     /// A non-looping clip has finished and is holding its last frame (so `clip_done`
     /// fires exactly once and the head stops advancing until a transition fires).
     completed: bool,
+    /// The active crossfade, if a blended transition is still ramping. A single blend
+    /// (not a stack): a new transition mid-blend snapshots the current incoming pose as
+    /// the next outgoing and drops the older one.
+    blend: Option<Blend>,
+    /// Crossfade length used by the `next` clip-done auto-advance (which has no
+    /// `TransitionDef` to carry its own). Named transitions resolve their own at build.
+    default_blend_ticks: u32,
     /// Fractional-tick accumulator, so a frame's `dt` advances whole ticks.
     accum: f32,
     tick_rate_hz: u32,
@@ -308,6 +354,7 @@ impl StateMachine {
 
         let mut warnings = Vec::new();
 
+        let default_blend = def.default_blend_ticks;
         let resolve_transitions =
             |defs: &[TransitionDef], from: &str, warnings: &mut Vec<String>| -> Vec<Transition> {
                 let mut out: Vec<Transition> = Vec::new();
@@ -318,6 +365,8 @@ impl StateMachine {
                             on: t.on,
                             window: t.window,
                             priority: t.priority,
+                            // Per-transition override, else the machine default.
+                            blend_ticks: t.blend_ticks.unwrap_or(default_blend),
                         }),
                         None => warnings.push(format!(
                             "transition from '{from}' targets unknown state '{}'",
@@ -389,6 +438,8 @@ impl StateMachine {
             current: initial,
             tick: 0,
             completed: false,
+            blend: None,
+            default_blend_ticks: def.default_blend_ticks,
             accum: 0.0,
             tick_rate_hz: 60,
             warnings,
@@ -419,11 +470,25 @@ impl StateMachine {
         &self.warnings
     }
 
+    /// The active crossfade, if a blended transition is still ramping. The caller
+    /// samples the outgoing clip (`from_clip` at `from_tick`) and the current clip
+    /// ([`Self::current_clip`] at [`Self::current_tick`]) and blends their LOCAL poses
+    /// by [`BlendView::weight`]. `None` = no blend, sample the current state only.
+    pub fn blend(&self) -> Option<BlendView> {
+        self.blend.as_ref().map(|b| BlendView {
+            from_clip: self.states[b.from_state].clip,
+            from_tick: b.from_tick,
+            // elapsed ∈ [0, duration] here (cleared past duration in `tick`).
+            weight: smoothstep(b.elapsed as f32 / b.duration as f32),
+        })
+    }
+
     /// Reset to the initial state (play-head at 0).
     pub fn reset(&mut self) {
         self.current = self.initial;
         self.tick = 0;
         self.completed = false;
+        self.blend = None;
         self.accum = 0.0;
     }
 
@@ -432,6 +497,16 @@ impl StateMachine {
     /// Advance one fixed tick (the atomic combat-clock step). Returns what fired.
     pub fn tick(&mut self, inputs: &Inputs) -> TickReport {
         let mut fired = Vec::new();
+
+        // 0. Elapse an in-flight crossfade (the incoming clip plays as the blend
+        //    ramps). Clear once past its duration — the settled weight hits 1.0 on the
+        //    duration-th tick, then the next tick drops to the plain incoming pose.
+        if let Some(b) = &mut self.blend {
+            b.elapsed += 1;
+            if b.elapsed > b.duration {
+                self.blend = None;
+            }
+        }
 
         // 1. Advance the play-head; note whether the clip completed this tick.
         let dur = self.states[self.current].duration;
@@ -455,8 +530,8 @@ impl StateMachine {
 
         // 3. Evaluate transitions (any-state first, then per-state, then `next`).
         let mut transitioned = false;
-        if let Some(target) = self.pick_transition(inputs, clip_done) {
-            self.enter(target, &mut fired);
+        if let Some((target, blend_ticks)) = self.pick_transition(inputs, clip_done) {
+            self.enter(target, blend_ticks, &mut fired);
             transitioned = true;
         }
 
@@ -519,30 +594,38 @@ impl StateMachine {
         out
     }
 
-    /// Choose the transition to take this tick, or `None`. Any-state edges win over
-    /// per-state ones; `next` is the lowest-precedence fallback on clip completion.
-    fn pick_transition(&self, inputs: &Inputs, clip_done: bool) -> Option<usize> {
+    /// Choose the transition to take this tick as `(target, blend_ticks)`, or `None`.
+    /// Any-state edges win over per-state ones; `next` is the lowest-precedence
+    /// fallback on clip completion (blended by the machine default).
+    fn pick_transition(&self, inputs: &Inputs, clip_done: bool) -> Option<(usize, u32)> {
         for t in &self.any {
             if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick)) {
-                return Some(t.to);
+                return Some((t.to, t.blend_ticks));
             }
         }
         for t in &self.states[self.current].transitions {
             if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick)) {
-                return Some(t.to);
+                return Some((t.to, t.blend_ticks));
             }
         }
         if clip_done {
             if let Some(n) = self.states[self.current].next {
-                return Some(n);
+                return Some((n, self.default_blend_ticks));
             }
         }
         None
     }
 
-    /// Hard-cut into a state: swap, reset the play-head, fire the entered state's
-    /// tick-0 events.
-    fn enter(&mut self, target: usize, fired: &mut Vec<FiredEvent>) {
+    /// Enter a state: swap, reset the play-head, fire the entered state's tick-0
+    /// events. When `blend_ticks > 0`, start a crossfade from the outgoing pose
+    /// (snapshotted at the state/tick we're leaving) instead of hard-cutting.
+    fn enter(&mut self, target: usize, blend_ticks: u32, fired: &mut Vec<FiredEvent>) {
+        self.blend = (blend_ticks > 0).then_some(Blend {
+            from_state: self.current,
+            from_tick: self.tick,
+            elapsed: 0,
+            duration: blend_ticks,
+        });
         self.current = target;
         self.tick = 0;
         self.completed = false;
@@ -564,6 +647,14 @@ fn satisfied(on: Trigger, inputs: &Inputs, clip_done: bool) -> bool {
         Trigger::Die => inputs.die,
         Trigger::ClipDone => clip_done,
     }
+}
+
+/// Smoothstep easing on a normalized `t` (clamped to `[0, 1]`) — an ease-in-out ramp
+/// (`3t² − 2t³`) that starts and ends with zero slope, so a crossfade eases into and
+/// out of the transition rather than blending linearly.
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Load a `flicker.pack` JSON and return its state-machine definition.
@@ -723,5 +814,80 @@ mod tests {
         let sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
         assert_eq!(sm.current_clip(), usize::MAX);
         assert!(!sm.warnings().is_empty());
+    }
+
+    // ── crossfade blending ──
+
+    /// A 4-tick machine default, with `Attack` opting out (`blend_ticks: 0`) and
+    /// falling through to `Idle` via `next` on completion (which uses the default).
+    const BLEND_GRAPH: &str = r#"{
+      "state_machine": {
+        "initial": "Idle",
+        "default_blend_ticks": 4,
+        "states": [
+          { "name": "Idle", "clip": "idle", "transitions": [
+              { "to": "Walk", "on": "move" },
+              { "to": "Attack", "on": "attack", "blend_ticks": 0, "priority": 5 } ] },
+          { "name": "Walk", "clip": "walk", "transitions": [ { "to": "Idle", "on": "move_stop" } ] },
+          { "name": "Attack", "clip": "attack", "looping": false, "next": "Idle" }
+        ]
+      }
+    }"#;
+
+    fn build_blended() -> StateMachine {
+        let def: PackFile = serde_json::from_str(BLEND_GRAPH).unwrap();
+        let sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
+        assert!(sm.warnings().is_empty(), "unexpected warnings: {:?}", sm.warnings());
+        sm
+    }
+
+    #[test]
+    fn blend_starts_ramps_and_clears() {
+        let mut sm = build_blended();
+        // Idle → Walk uses the machine default (4-tick) crossfade.
+        sm.tick(&Inputs { move_: true, ..Default::default() });
+        assert_eq!(sm.current_state_name(), "Walk");
+        let b0 = sm.blend().expect("blend active right after a blended transition");
+        assert_eq!(b0.from_clip, 0, "outgoing pose is Idle's clip (index 0)");
+        assert!(b0.weight.abs() < 1e-6, "weight starts at 0.0 = fully outgoing");
+
+        // Sample the weight after the transition tick and each following tick.
+        let mut samples = vec![sm.blend().map(|b| b.weight)];
+        for _ in 0..5 {
+            sm.tick(&Inputs { move_: true, ..Default::default() });
+            samples.push(sm.blend().map(|b| b.weight));
+        }
+        let weights: Vec<f32> = samples.iter().filter_map(|w| *w).collect();
+        assert!(weights[0].abs() < 1e-6);
+        assert!(
+            (weights.last().unwrap() - 1.0).abs() < 1e-6,
+            "weight reaches 1.0 at the end of the crossfade: {weights:?}"
+        );
+        for pair in weights.windows(2) {
+            assert!(pair[1] >= pair[0] - 1e-6, "weight is monotonic non-decreasing: {weights:?}");
+        }
+        assert!(samples.last().unwrap().is_none(), "blend clears once past its duration");
+    }
+
+    #[test]
+    fn zero_blend_ticks_is_a_hard_cut() {
+        let mut sm = build_blended();
+        // Attack overrides the 4-tick default with blend_ticks: 0.
+        sm.tick(&Inputs { attack: true, ..Default::default() });
+        assert_eq!(sm.current_state_name(), "Attack");
+        assert!(sm.blend().is_none(), "a 0-tick transition hard-cuts — no crossfade");
+    }
+
+    #[test]
+    fn next_autoadvance_blends_by_default() {
+        let mut sm = build_blended();
+        sm.tick(&Inputs { attack: true, ..Default::default() }); // → Attack (hard cut)
+        assert!(sm.blend().is_none());
+        // Attack is 10 ticks; run it to completion → `next` Idle with the 4-tick default.
+        run(&mut sm, 10, &Inputs::default());
+        assert_eq!(sm.current_state_name(), "Idle");
+        let b = sm.blend().expect("clip-done auto-advance crossfades by the machine default");
+        assert_eq!(b.from_clip, 3, "outgoing pose is Attack's clip (index 3)");
+        assert!(b.weight.abs() < 1e-6, "fresh blend starts at weight 0.0");
     }
 }

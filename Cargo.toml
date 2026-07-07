@@ -32,6 +32,7 @@ members = [
     "examples/flicker-sol2",
     "examples/flicker-animation",
     "Alpha/flicker-csg",
+    "Alpha/flicker-skeletal",
 ]
 
 [workspace.package]
@@ -108,6 +109,8 @@ flicker-scene = { version = "0.1.0", path = "crates/flicker-scene" }
 flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "crates/flicker-worker" }
 flicker-ui = { version = "0.1.0", path = "crates/flicker-ui" }
+# Alpha crates (promoted, non-POC).
+flicker-skeletal = { version = "0.1.0", path = "Alpha/flicker-skeletal" }
 
 [profile.dev]
 opt-level = 1

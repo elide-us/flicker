@@ -228,3 +228,98 @@ tree, no workspace-member changes) to keep that merge small. **After the merge**
 the weapon-pack loader + equip/pickup transition, and moving the machine into the client
 (`flicker-csg`) with capsule + gravity. The `Crouch_Move_L/R`, more attacks, and
 root-motion sets are additional clips + graph edges when the user extracts them.
+
+## 10. Crate extraction LANDED — `Alpha/flicker-skeletal` (macbook, 2026-07-05)
+
+The §9 branch/merge constraint is **resolved**: both branches are merged on `macbook`
+(`Alpha/flicker-csg` **and** the state-machine work coexist here — see the git log's
+`Merge pull request #18/#19 from elide-us/surface`). So the deferred extraction (Slice 1
+of §7's *original* plan) is done.
+
+**What moved.** `format.rs` / `pose.rs` / `skin.rs` / `state.rs` were lifted **verbatim**
+out of `examples/flicker-animation/src/` into a new GPU-free library crate
+**`Alpha/flicker-skeletal`** (`src/{lib.rs,format.rs,pose.rs,skin.rs,state.rs}`). The
+modules' cross-references (`format` → `crate::pose::global_transforms`; `pose`/`skin` →
+`crate::format::{Bone,Mesh,ResolvedClip}`; `state` standalone) all resolve unchanged
+inside the one crate — no internal edits, a pure move. `lib.rs` re-exports the four as
+`pub mod`s.
+
+**Crate seam.** `flicker-skeletal` deps = `glam`/`anyhow`/`serde`/`serde_json` only (no
+`flicker` umbrella, no wgpu — it stays the CPU-authoritative, viewer-agnostic runtime).
+Registered in the root workspace as a member **and** in `[workspace.dependencies]`
+(`flicker-skeletal = { version = "0.1.0", path = "Alpha/flicker-skeletal" }`) so
+`flicker-csg` can later consume it via `flicker-skeletal.workspace = true`.
+
+**Viewer rewire.** `examples/flicker-animation/src/main.rs` swapped its `mod format; mod
+pose; mod skin; mod state;` for `use flicker_skeletal::{format, pose, skin, state};` (the
+downstream `use format::Model;` / `use state::{Inputs, StateMachine};` and all
+module-qualified paths are unchanged). The example's `Cargo.toml` gained
+`flicker-skeletal.workspace = true` and dropped its now-unused `serde`/`serde_json` direct
+deps. The 3 fixture tests (rig-load, finite-pose, rest-skin-matches-bind) **stayed in the
+example** — they depend on `assets/` (the real Katanami rig via `CARGO_MANIFEST_DIR`) and
+now exercise the crate as an external consumer, which is a strictly better test. The 8
+`state` tests moved with `state.rs` into the crate.
+
+**Verified:** `cargo test -p flicker-skeletal` (8 pass), `cargo test -p flicker-animation`
+(3 fixture tests pass), `cargo clippy -p flicker-skeletal --all-targets -- -D warnings`
+(clean). No behavioural change — a structural lift only.
+
+**Next (unchanged):** `flicker-csg` is not yet wired to consume `flicker-skeletal` (that's
+part of §7 Slice 6, into the client). The remaining slices (hitbox capsules, blending,
+weapon-pack loader) now build against the crate rather than example code.
+
+## 11. Crossfade blending LANDED — authored, opt-in (macbook, 2026-07-05)
+
+The §6-decision-4 / §7-slice "hard-cut first, crossfade soon" is done. Transitions can now
+**crossfade** the outgoing pose into the incoming one over an authored tick window, instead
+of only hard-cutting. All in `Alpha/flicker-skeletal` + the viewer; additive.
+
+**Design — the state machine stays pose-free.** The SM (`state.rs`) still only decides
+*which clip + tick*; it does NOT hold pose matrices. On a blended transition it snapshots
+the **outgoing `(state, tick)`** and ramps an incoming `weight` 0→1; the caller samples both
+clips and interpolates. This keeps the CPU-authoritative pose in `pose.rs` and the SM a thin
+authority (the invariant from canon 386AC689).
+
+**Pose layer (`pose.rs`).** New `blend_local_poses(from, to, w)` — blends per-bone LOCAL
+transforms at the **TRS level** (decompose each `Mat4`, lerp translation+scale, **slerp**
+rotation shortest-arc), NOT by lerping matrix elements (which would shear a rotating bone).
+Only runs while a crossfade is live (a few frames), so the decompose/recompose is not a
+steady-state per-frame cost. 2 unit tests (endpoints/midpoint, weight-clamp).
+
+**State machine (`state.rs`).**
+- Authored schema: `state_machine.default_blend_ticks` (machine-wide crossfade length;
+  **default 0 = hard-cut everywhere unless opted in**, so an un-annotated pack is unchanged)
+  and per-transition `blend_ticks: Option<u32>` override (`Some(0)` forces a hard cut).
+- Runtime: a single active `Blend { from_state, from_tick, elapsed, duration }` (not a
+  stack — a new transition mid-blend snapshots the current incoming as the next outgoing and
+  drops the older, keeping the SM pose-free). `tick()` elapses the blend (cleared once past
+  `duration`); `enter()` starts one when `blend_ticks > 0`; the `next` clip-done auto-advance
+  uses the machine default. Exposed via **`blend() -> Option<BlendView { from_clip, from_tick,
+  weight }>`**; `weight` is **smoothstep-eased** (ease-in-out). `reset()` clears it.
+- 3 new tests (ramp-and-clear + monotonic weight to 1.0; `blend_ticks:0` hard-cut;
+  `next` auto-advance blends by default). Existing 8 state tests unchanged (default 0).
+
+**Viewer (`examples/flicker-animation/src/main.rs`).** In Graph mode, samples the incoming
+pose, and when `sm.blend()` is `Some` (and blending is enabled) samples the outgoing pose
+too and `pose::blend_local_poses`-es the LOCALs before forward kinematics (new
+`Viewer::sample_locals` helper covers the rest-pose fallback for missing clips). **`L`
+toggles** crossfading (A/B vs. the old hard-cut); the Graph HUD shows `blend: off / on /
+on NN%` (live weight). Manual mode is unblended (no transitions).
+
+**Authored pack (`assets/Katanami.pack.json`).** Opted in: `default_blend_ticks: 6` (100 ms
+at 60 Hz) for all transitions, with the any-state **hit/death reactions overridden to
+`blend_ticks: 2`** so they stay snappy/responsive. Everything else inherits the 6-tick default.
+
+**Verified:** `cargo test -p flicker-skeletal` (13 pass), `cargo test -p flicker-animation`
+(3 fixture pass), `cargo clippy -p flicker-skeletal --all-targets -- -D warnings` (clean),
+example clippy-clean. **User verifies the window** (agent can't): confirm transitions
+crossfade smoothly (drag Idle→Walk→Run, attack→idle), toggle `L` to compare against the
+hard-cut, and that hit/death still snap in. If a blend looks like it takes the *long way*
+around on some bone, that's a slerp-hemisphere issue — but `blend_local_poses` already
+flips to the shortest arc, so it shouldn't. Tune per-transition `blend_ticks` in the pack
+to taste.
+
+**Next (unchanged):** hitbox/hurtbox capsules (act on `HitboxActive` windows), stamina/
+poise/i-frame *enforcement*, weapon-pack loader + equip/pickup, then into `flicker-csg`.
+More clips (`Crouch_Move_L/R`, more attacks, root-motion) need the converter on the surface
+box — not available on this machine.

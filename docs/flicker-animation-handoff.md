@@ -359,9 +359,10 @@ design (below).
 - GPU skinning pipeline in `flicker-render` (vertex shader reads a bone-matrix palette
   storage buffer — the CPU-authoritative-pose / GPU-compute split).
 - Keyframe compression (dense one-key-per-tick today).
-- **Crate extraction**: promote `format`/`pose`/`skin` into a real crate — likely
-  `Alpha/flicker-skeletal` (an `Alpha/` crates dir was established this session,
-  memory 50EA9C0F). **Naming is the user's call.**
+- **Crate extraction — DONE (macbook, 2026-07-05).** `format`/`pose`/`skin`/`state` were
+  lifted verbatim into the GPU-free library crate `Alpha/flicker-skeletal`; the example now
+  consumes it via `flicker-skeletal.workspace = true`. See
+  `docs/flicker-combat-animation-handoff.md` §10.
 - **Mipmaps** on the textured pipeline (the 4K maps still use `mipmap_filter: Nearest`
   → distance shimmer). PBR (normal/roughness/metalness/AO) is now **built** (see "PBR
   maps (Slice 3b)"); a proper mip chain is the remaining follow-up. The textured

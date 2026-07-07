@@ -10,17 +10,17 @@ publish = false
 #     forward-kinematics, drawn via the existing lines pipeline). THE validation
 #     milestone for the CPU-authoritative pose layer.
 #   * Slice 2 (deferred) — CPU-skinned mesh via the existing lit-mesh pipeline.
-# The animation runtime (format/pose/skin) lives INSIDE the example for the POC;
-# crate extraction (e.g. Alpha/flicker-skeletal) is the alpha step after this proves
-# out. See docs/flicker-animation-handoff.md.
+# The animation runtime (format/pose/skin/state) now lives in the `flicker-skeletal`
+# crate (Alpha/flicker-skeletal); this example is the viewer that consumes it. See
+# docs/flicker-animation-handoff.md + docs/flicker-combat-animation-handoff.md.
 [dependencies]
 # Umbrella: re-exports flicker-app (App/run/InputState/Key) + flicker-render
 # (Renderer/Camera/lines+mesh pipelines + glam math types).
 flicker = { path = "../../crates/flicker" }
+# The GPU-free skeletal-animation runtime (format/pose/skin/state).
+flicker-skeletal.workspace = true
 glam.workspace = true
 anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 # Decodes the converted albedo PNGs (assets/*.png) at load time for Slice 2 texturing.
 image.workspace = true
 tracing.workspace = true
