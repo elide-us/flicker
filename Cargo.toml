@@ -31,6 +31,7 @@ members = [
     "examples/flicker-solarsystem",
     "examples/flicker-sol2",
     "examples/flicker-animation",
+    "examples/flicker-field-viewer",
     "Alpha/flicker-csg",
     "Alpha/flicker-skeletal",
 ]

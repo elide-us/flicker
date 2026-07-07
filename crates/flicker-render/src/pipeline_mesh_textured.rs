@@ -454,6 +454,7 @@ impl TexturedMeshPipeline {
     /// Queue a textured mesh for this frame, sampling `texture` as albedo with the
     /// given PBR `maps` (each `None` slot uses the pipeline default). `push` (albedo
     /// only) forwards here with empty maps.
+    #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
         handle: TexturedMeshHandle,
@@ -462,6 +463,7 @@ impl TexturedMeshPipeline {
         model: Mat4,
         tint: [f32; 4],
         gloss: f32,
+        soft: bool,
     ) {
         self.queued.push(Draw {
             handle,
@@ -470,7 +472,8 @@ impl TexturedMeshPipeline {
             per_draw: PerDraw {
                 model: model.to_cols_array_2d(),
                 tint,
-                flags: [0.0, gloss, 0.0, 0.0],
+                // flags.z = soft-alpha blend mode (clouds / ground decals; default cutout).
+                flags: [0.0, gloss, if soft { 1.0 } else { 0.0 }, 0.0],
             },
         });
     }

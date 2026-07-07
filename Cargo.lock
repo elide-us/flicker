@@ -743,6 +743,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-field-viewer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker",
+ "flicker-skeletal",
+ "glam",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "flicker-materials"
 version = "0.1.0"
 dependencies = [

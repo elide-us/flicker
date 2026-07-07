@@ -24,16 +24,37 @@ use glam::Vec3;
 use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
 use crate::pipeline_billboard::BillboardPipeline;
 use crate::pipeline_lines::LinesPipeline;
+use crate::pipeline_ground_fog::{GroundFog, GroundFogPipeline, GroundFogUniform};
 use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline, SceneUniform};
 use crate::pipeline_mesh_textured::{
     PbrMaps, TexturedMeshHandle, TexturedMeshPipeline, TexturedVertex,
 };
+use crate::pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
 use crate::pipeline_volumetric::{VolumetricDisk, VolumetricDiskUniform, VolumetricPipeline};
 use crate::texture::{LoadedTexture, TextureHandle};
+
+/// Opaque handle to an offscreen render target created by
+/// [`Renderer::create_render_target`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RenderTargetHandle(pub(crate) u32);
+
+/// An offscreen render target: a colour texture (also registered in the texture store as a
+/// sampleable [`TextureHandle`]) plus its own depth buffer. [`Renderer::render_to_texture`]
+/// draws a self-contained sub-scene into it; the resulting colour texture is then sampled
+/// through the normal sprite / billboard / mesh paths.
+struct RenderTarget {
+    /// The colour attachment, sampleable via the texture store.
+    color: TextureHandle,
+    depth_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    depth_texture: wgpu::Texture,
+    /// Pixel size (drives the sub-scene's aspect + text layout).
+    size: Vec2,
+}
 
 /// The renderer owns the GPU device, the surface, and every pipeline.
 ///
@@ -55,10 +76,15 @@ pub struct Renderer {
     text: TextPipeline,
     mesh: MeshPipeline,
     mesh_textured: TexturedMeshPipeline,
+    /// Instanced GPU-skinning pipeline: one static skinned mesh drawn as N
+    /// instances (each with its own bone palette + model transform) in a single
+    /// draw call. Additive to `mesh`/`mesh_textured`, renders in the opaque pass.
+    skinned: SkinnedMeshPipeline,
     lines: LinesPipeline,
     billboard: BillboardPipeline,
     sky: SkyPipeline,
     volumetric: VolumetricPipeline,
+    ground_fog: GroundFogPipeline,
 
     /// Depth attachment shared by every pipeline in the main pass. The
     /// 3D pipeline writes/tests it; the 2D pipelines neither write nor
@@ -88,6 +114,9 @@ pub struct Renderer {
     /// This frame's volumetric-disk params (the cloud), or `None`. Reset each
     /// [`Renderer::begin_frame`]; set by [`Renderer::set_volumetric_disk`].
     volumetric_params: Option<VolumetricDisk>,
+    /// This frame's ground-fog params, or `None`. Reset each [`Renderer::begin_frame`];
+    /// set by [`Renderer::set_ground_fog`].
+    ground_fog_params: Option<GroundFog>,
     /// Whether to draw the procedural sky behind the 3D scene this frame.
     /// Reset to `false` each [`Renderer::begin_frame`] and raised by
     /// [`Renderer::draw_sky`], so menus/loading (no 3D) keep their flat
@@ -99,6 +128,13 @@ pub struct Renderer {
     /// raises it per scene so overlays sort above the scene beneath. See
     /// [`Renderer::set_layer`].
     current_layer: f32,
+
+    /// Offscreen render targets, indexed by [`RenderTargetHandle`] (slot pool).
+    render_targets: Vec<Option<RenderTarget>>,
+    free_target_slots: Vec<u32>,
+    /// Whether the sky draws in the pass currently being encoded — set by `prepare_frame`,
+    /// read by `encode_passes`, so the offscreen and swapchain paths share one encode path.
+    sky_this_frame: bool,
 }
 
 impl Renderer {
@@ -163,12 +199,15 @@ impl Renderer {
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
         let mesh_textured =
             TexturedMeshPipeline::new(&device, &queue, surface_format, min_uniform_offset_alignment);
+        let skinned = SkinnedMeshPipeline::new(&device, &queue, surface_format);
         let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
         let mut volumetric = VolumetricPipeline::new(&device, surface_format);
         // Bind the scene depth so the volumetric can sample it (clamp rays at bodies).
         volumetric.set_depth(&device, &depth_view);
+        let mut ground_fog = GroundFogPipeline::new(&device, surface_format);
+        ground_fog.set_depth(&device, &depth_view);
 
         Ok(Self {
             window,
@@ -183,11 +222,14 @@ impl Renderer {
             text,
             mesh,
             mesh_textured,
+            skinned,
             lines,
             billboard,
             sky,
             volumetric,
+            ground_fog,
             volumetric_params: None,
+            ground_fog_params: None,
             depth_texture,
             depth_view,
             textures: Vec::new(),
@@ -197,6 +239,9 @@ impl Renderer {
             scene: SceneLighting::default(),
             draw_sky: false,
             current_layer: 0.0,
+            render_targets: Vec::new(),
+            free_target_slots: Vec::new(),
+            sky_this_frame: false,
         })
     }
 
@@ -273,8 +318,9 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
-        // Rebind the recreated depth view into the volumetric's bind group.
+        // Rebind the recreated depth view into the depth-sampling passes.
         self.volumetric.set_depth(&self.device, &self.depth_view);
+        self.ground_fog.set_depth(&self.device, &self.depth_view);
     }
 
     /// Current logical size of the rendering surface, in pixels.
@@ -409,10 +455,12 @@ impl Renderer {
         self.text.clear();
         self.mesh.clear();
         self.mesh_textured.clear();
+        self.skinned.clear();
         self.lines.clear();
         self.billboard.clear();
         self.draw_sky = false;
         self.volumetric_params = None;
+        self.ground_fog_params = None;
         self.current_layer = 0.0;
     }
 
@@ -518,6 +566,15 @@ impl Renderer {
         self.volumetric_params = Some(params);
     }
 
+    /// Draw a **volumetric ground fog** this frame: a raymarched horizontal fog slab of animated
+    /// drifting noise, depth-aware (occluded by geometry) and correctly self-compositing (no
+    /// billboard/quad layering artifacts). Composited over the scene in the overlay pass, just
+    /// after the volumetric disk. Per-frame, like [`Renderer::draw_sky`]; a no-op unless a camera
+    /// is set (it needs the view ray). See [`GroundFog`] for the band / colour / wind params.
+    pub fn set_ground_fog(&mut self, params: GroundFog) {
+        self.ground_fog_params = Some(params);
+    }
+
     /// Queue a mesh for rendering this frame.
     ///
     /// `model` is the cluster-local-to-world transform; the camera (set
@@ -566,6 +623,29 @@ impl Renderer {
             model,
             options.tint,
             options.gloss,
+            false,
+        );
+    }
+
+    /// Queue a textured mesh in **soft-alpha** mode: the albedo texture's alpha *blends*
+    /// (× `options.tint` alpha) instead of the default hard cutout — for clouds, ground
+    /// decals, fog cards, any soft translucent textured quad. Same lighting/transform as
+    /// [`Renderer::draw_textured_mesh`]; no PBR maps.
+    pub fn draw_textured_mesh_soft(
+        &mut self,
+        mesh: TexturedMeshHandle,
+        texture: TextureHandle,
+        model: Mat4,
+        options: MeshDrawOptions,
+    ) {
+        self.mesh_textured.push(
+            mesh,
+            texture,
+            PbrMaps::default(),
+            model,
+            options.tint,
+            options.gloss,
+            true,
         );
     }
 
@@ -585,7 +665,49 @@ impl Renderer {
         options: MeshDrawOptions,
     ) {
         self.mesh_textured
-            .push(mesh, texture, maps, model, options.tint, options.gloss);
+            .push(mesh, texture, maps, model, options.tint, options.gloss, false);
+    }
+
+    /// Upload a **bind-pose skinned mesh** (position/normal/uv + 4-influence
+    /// joints/weights) to the instanced GPU-skinning pipeline and return a handle. The
+    /// vertex buffer is uploaded once and never re-uploaded — the GPU deforms it from a
+    /// per-instance bone palette each frame (the correct crowd/field technique, vs. the
+    /// per-frame CPU-skin-and-reupload of one character). Persists across frames;
+    /// additive to [`Renderer::upload_mesh`] / [`Renderer::upload_textured_mesh`]
+    /// (separate storage + handle type). Draw it with [`Renderer::draw_skinned_instanced`].
+    pub fn upload_skinned_mesh(
+        &mut self,
+        vertices: &[SkinnedVertex],
+        indices: MeshIndices<'_>,
+    ) -> SkinnedMeshHandle {
+        self.skinned.upload(&self.device, vertices, indices)
+    }
+
+    /// Free a skinned mesh, returning its slot to the reuse pool. Same semantics as
+    /// [`Renderer::free_mesh`].
+    pub fn free_skinned_mesh(&mut self, handle: SkinnedMeshHandle) {
+        self.skinned.free(handle);
+    }
+
+    /// Draw `mesh` as **N GPU-skinned instances in one instanced draw call** this frame.
+    /// `models[i]` is instance `i`'s model→world transform; `palettes` is the flat
+    /// concatenation of every instance's bone palette (instance `i`'s bone `b` at
+    /// `i*bone_count + b`) — exactly what `flicker-skeletal`'s `skin::palette` produces
+    /// per instance, so `palettes.len()` must equal `models.len() * bone_count`. The
+    /// palettes + per-instance transforms upload to storage buffers now (grown as needed)
+    /// and draw in the opaque pass under the same camera + scene lighting as
+    /// [`Renderer::draw_mesh`]. **One skinned mesh per frame** — a second call this frame
+    /// replaces the queued draw (the field-viewer's one-character-many-instances shape).
+    /// A no-op with zero instances or a zero bone count.
+    pub fn draw_skinned_instanced(
+        &mut self,
+        mesh: SkinnedMeshHandle,
+        models: &[Mat4],
+        palettes: &[Mat4],
+        bone_count: u32,
+    ) {
+        self.skinned
+            .draw_instanced(&self.device, &self.queue, mesh, models, palettes, bone_count);
     }
 
     /// Draw a wireframe axis-aligned bounding box this frame. Lives in
@@ -657,29 +779,133 @@ impl Renderer {
             .push_additive(texture, world_position, world_size, uv_min, uv_max, color);
     }
 
-    /// Encode and submit the frame. Returns errors from the surface acquisition
-    /// or text-pipeline preparation; recoverable surface losses are handled
-    /// internally by reconfiguring.
-    pub fn end_frame(&mut self) -> Result<()> {
-        // Update camera-derived view-projection (if a camera is set). The sky
-        // needs the *inverse* view-projection to turn each pixel back into a
-        // world-space view ray; it's a no-op without a camera.
+    /// Create an offscreen render target of `width × height` and return its handle. Its
+    /// colour texture is registered in the texture store, so [`Self::target_texture`] hands
+    /// you a [`TextureHandle`] to draw it with (sprite / billboard / mesh). Draw a sub-scene
+    /// into it with [`Self::render_to_texture`]. Uses the swapchain colour format + a private
+    /// `Depth32Float`, so every 3D/2D pipeline renders into it unchanged.
+    pub fn create_render_target(&mut self, width: u32, height: u32) -> RenderTargetHandle {
+        let w = width.max(1);
+        let h = height.max(1);
+        let color_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("flicker.render_target.color"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let color_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let tex = LoadedTexture::from_view(
+            &self.device,
+            &self.sprite.sampler,
+            &self.sprite.texture_bind_group_layout,
+            color_tex,
+            color_view,
+            (w, h),
+        );
+        let color = self.register_texture(tex);
+        let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
+        let target = RenderTarget {
+            color,
+            depth_view,
+            depth_texture,
+            size: Vec2::new(w as f32, h as f32),
+        };
+        let id = if let Some(slot) = self.free_target_slots.pop() {
+            self.render_targets[slot as usize] = Some(target);
+            slot
+        } else {
+            let slot = self.render_targets.len() as u32;
+            self.render_targets.push(Some(target));
+            slot
+        };
+        RenderTargetHandle(id)
+    }
+
+    /// The sampleable colour [`TextureHandle`] of a render target — draw it as a sprite,
+    /// billboard, or mesh texture. `None` if the handle was freed.
+    pub fn target_texture(&self, target: RenderTargetHandle) -> Option<TextureHandle> {
+        self.render_targets
+            .get(target.0 as usize)
+            .and_then(|t| t.as_ref())
+            .map(|t| t.color)
+    }
+
+    /// Render a **self-contained sub-scene** into an offscreen `target`, clearing it to
+    /// `clear` (RGBA 0..1; `[0.0; 4]` = a transparent cut-out). Inside `f`, call the normal
+    /// `set_camera` / `set_scene` / `draw_*` methods — they queue the sub-scene, which is
+    /// drawn into the target's colour texture and submitted immediately; the result is then
+    /// sampleable via [`Self::target_texture`].
+    ///
+    /// **Call before queuing your main-frame draws:** this resets the per-frame draw queues
+    /// on entry and exit, so a `render_to_texture` after you've queued main-frame geometry
+    /// would drop it (offscreen passes conventionally run first anyway). A volumetric disk in
+    /// an offscreen sub-scene is not supported (it samples the main depth buffer).
+    pub fn render_to_texture(
+        &mut self,
+        target: RenderTargetHandle,
+        clear: [f64; 4],
+        f: impl FnOnce(&mut Renderer),
+    ) {
+        let Some(rt) = self
+            .render_targets
+            .get(target.0 as usize)
+            .and_then(|t| t.as_ref())
+        else {
+            return;
+        };
+        let (size, color) = (rt.size, rt.color);
+
+        self.begin_frame(); // fresh sub-frame queues
+        f(self); // the caller queues the sub-scene
+        if let Err(e) = self.prepare_frame(size) {
+            tracing::warn!("render_to_texture: prepare failed: {e:?}");
+            self.begin_frame();
+            return;
+        }
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flicker.render_target_encoder"),
+            });
+        {
+            let color_view = &self.textures[color.0 as usize].view;
+            let depth_view = &self.render_targets[target.0 as usize]
+                .as_ref()
+                .expect("render target present")
+                .depth_view;
+            if let Err(e) = self.encode_passes(&mut encoder, color_view, depth_view, clear) {
+                tracing::warn!("render_to_texture: encode failed: {e:?}");
+            }
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.begin_frame(); // leave the queues clean for the main frame
+    }
+
+    /// Upload all per-frame camera / scene uniforms + buffered geometry/text for a render of
+    /// pixel size `size` (drives aspect + text layout). Shared by the swapchain frame
+    /// ([`Self::end_frame`]) and offscreen targets ([`Self::render_to_texture`]).
+    fn prepare_frame(&mut self, size: Vec2) -> Result<()> {
         let camera_pos = self.camera.map(|c| c.position).unwrap_or(Vec3::ZERO);
-        let sky_this_frame = self.draw_sky && self.camera.is_some();
+        self.sky_this_frame = self.draw_sky && self.camera.is_some();
         if let Some(cam) = self.camera {
-            let aspect = if self.screen.y > 0.0 {
-                self.screen.x / self.screen.y
-            } else {
-                1.0
-            };
+            let aspect = if size.y > 0.0 { size.x / size.y } else { 1.0 };
             let view_projection = cam.view_projection(aspect);
             self.mesh.set_camera_matrix(&self.queue, view_projection);
             self.mesh_textured
                 .set_camera_matrix(&self.queue, view_projection);
+            self.skinned.set_camera_matrix(&self.queue, view_projection);
             self.billboard
                 .set_camera(&self.queue, cam.view(), view_projection);
             let inv_vp = view_projection.inverse();
-            if sky_this_frame {
+            if self.sky_this_frame {
                 self.sky
                     .set_uniform(&self.queue, scene_to_sky_uniform(&self.scene, inv_vp, camera_pos));
             }
@@ -689,17 +915,18 @@ impl Renderer {
                     VolumetricDiskUniform::from_params(params, inv_vp, camera_pos),
                 );
             }
+            if let Some(fog) = &self.ground_fog_params {
+                self.ground_fog
+                    .set_uniform(&self.queue, GroundFogUniform::from_params(fog, inv_vp, camera_pos));
+            }
         }
-
-        // Upload the frame-global lighting/atmosphere uniform. The camera
-        // position is injected here (for distance fog) so callers of
-        // `set_scene` don't have to thread it through themselves.
         self.mesh
             .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
         self.mesh_textured
             .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
+        self.skinned
+            .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
 
-        // Upload buffered geometry/text.
         self.triangle.prepare(&self.device, &self.queue);
         self.sprite.prepare(&self.device, &self.queue);
         self.mesh.prepare(&self.device, &self.queue);
@@ -711,10 +938,108 @@ impl Renderer {
             .prepare(
                 &self.device,
                 &self.queue,
-                self.config.width,
-                self.config.height,
+                size.x.max(1.0) as u32,
+                size.y.max(1.0) as u32,
             )
             .context("text prepare failed")?;
+        Ok(())
+    }
+
+    /// Encode the opaque + overlay passes into `encoder`, targeting `color_view` (+
+    /// `depth_view`), clearing colour to `clear`. Immutable — reads the prepared pipeline
+    /// state — so it serves both the swapchain view and an offscreen target view.
+    fn encode_passes(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        color_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        clear: [f64; 4],
+    ) -> Result<()> {
+        // Pass 1 — opaque scene: sky, 3D meshes (write depth), lines, world-space billboards.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("flicker.opaque_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: clear[0],
+                            g: clear[1],
+                            b: clear[2],
+                            a: clear[3],
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if self.sky_this_frame {
+                self.sky.render(&mut pass);
+            }
+            self.mesh.render(&mut pass, &self.meshes);
+            self.mesh_textured.render(&mut pass, &self.textures);
+            self.skinned.render(&mut pass);
+            self.lines.render(&mut pass);
+            self.billboard.render(&mut pass, &self.textures);
+        }
+
+        // Pass 2 — depth-aware volumetric (reads depth), then 2D overlays in painter's order.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("flicker.overlay_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: None, // read-only → the volumetric may sample this depth in-pass
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if self.volumetric_params.is_some() && self.camera.is_some() {
+                self.volumetric.render(&mut pass);
+            }
+            if self.ground_fog_params.is_some() && self.camera.is_some() {
+                self.ground_fog.render(&mut pass);
+            }
+            let mut layers: Vec<f32> = Vec::new();
+            layers.extend(self.triangle.layers());
+            layers.extend(self.sprite.layers());
+            layers.extend(self.text.layers());
+            layers.sort_by(f32::total_cmp);
+            layers.dedup();
+            for &layer in &layers {
+                self.triangle.render_layer(&mut pass, layer);
+                self.sprite.render_layer(&mut pass, layer, &self.textures);
+                self.text
+                    .render_layer(&mut pass, layer)
+                    .context("text render failed")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Encode and submit the swapchain frame. Recoverable surface losses reconfigure and
+    /// skip the frame.
+    pub fn end_frame(&mut self) -> Result<()> {
+        self.prepare_frame(self.screen)?;
 
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -735,93 +1060,7 @@ impl Renderer {
                 label: Some("flicker.frame_encoder"),
             });
 
-        // Pass 1 — opaque scene: sky background, then 3D meshes (writing depth), lines, and
-        // world-space billboards. The depth is **stored** so the volumetric pass can sample it.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flicker.opaque_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: self.clear_color[0],
-                            g: self.clear_color[1],
-                            b: self.clear_color[2],
-                            a: self.clear_color[3],
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            // Procedural sky behind everything (fullscreen, no depth write), so the mesh paints
-            // over it wherever bodies exist. Then 3D meshes (write depth), lines (test, no write),
-            // and world-space depth-tested billboards.
-            if sky_this_frame {
-                self.sky.render(&mut pass);
-            }
-            self.mesh.render(&mut pass, &self.meshes);
-            self.mesh_textured.render(&mut pass, &self.textures);
-            self.lines.render(&mut pass);
-            self.billboard.render(&mut pass, &self.textures);
-        }
-
-        // Pass 2 — the **depth-aware** volumetric over the opaque scene, then 2D overlays. Depth is
-        // bound **read-only** here (no pass-2 pipeline writes depth), which lets the volumetric
-        // *sample* the same depth buffer (bound in its group) to clamp its rays at solid bodies —
-        // so the dust and star sit in correct depth with the bodies instead of always behind them.
-        // 2D overlays paint last, on top of everything.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("flicker.overlay_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: None, // read-only → the volumetric may sample this depth in-pass
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            if self.volumetric_params.is_some() && self.camera.is_some() {
-                self.volumetric.render(&mut pass);
-            }
-
-            // 2D in painter's order: walk the union of layers used by the three 2D pipelines,
-            // ascending, drawing triangle → sprite → text within each layer (unchanged).
-            let mut layers: Vec<f32> = Vec::new();
-            layers.extend(self.triangle.layers());
-            layers.extend(self.sprite.layers());
-            layers.extend(self.text.layers());
-            layers.sort_by(f32::total_cmp);
-            layers.dedup();
-            for &layer in &layers {
-                self.triangle.render_layer(&mut pass, layer);
-                self.sprite.render_layer(&mut pass, layer, &self.textures);
-                self.text
-                    .render_layer(&mut pass, layer)
-                    .context("text render failed")?;
-            }
-        }
+        self.encode_passes(&mut encoder, &view, &self.depth_view, self.clear_color)?;
 
         self.queue.submit(std::iter::once(encoder.finish()));
         frame.present();

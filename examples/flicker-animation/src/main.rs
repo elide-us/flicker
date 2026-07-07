@@ -689,9 +689,17 @@ impl App for Viewer {
             ViewMode::Graph => {
                 // Gameplay controls → state-machine inputs: movement modifiers are held;
                 // jump/attack/hit/die are edges. (H = simulate taking a hit, X = die —
-                // debug drivers for the any-state transitions.)
+                // debug drivers for the any-state transitions.) WASD drives directional
+                // locomotion: W forward, A/S/D left/back/right (any of them = moving).
+                let w = input.key_down(Key::W);
+                let a = input.key_down(Key::A);
+                let s = input.key_down(Key::S);
+                let d = input.key_down(Key::D);
                 let inputs = Inputs {
-                    move_: input.key_down(Key::W),
+                    move_: w || a || s || d,
+                    left: a,
+                    right: d,
+                    back: s,
                     run: input.key_down(Key::LeftShift) || input.key_down(Key::RightShift),
                     crouch: input.key_down(Key::C),
                     jump: space_edge,
@@ -934,7 +942,7 @@ impl App for Viewer {
                     [1.0, 1.0, 1.0, 1.0],
                 );
                 renderer.draw_text(
-                    "W move · Shift run · C crouch · Space jump · F attack · H hit · X die · R reset · G manual · L blend · M/T/B/K/1-3 view · drag/wheel cam · Esc",
+                    "WASD move · Shift run · C crouch · Space jump · F attack · H hit · X die · R reset · G manual · L blend · M/T/B/K/1-3 view · drag/wheel cam · Esc",
                     Vec2::new(16.0, 42.0),
                     14.0,
                     [0.80, 0.86, 0.95, 1.0],
@@ -1097,6 +1105,63 @@ mod tests {
                 assert!(tr.bone < model.bones.len());
             }
         }
+    }
+
+    /// The recursive `clips/` adoption: the full structured library loads (not the
+    /// flat 13), In-Place clips keep bare stems, RootMotion clips are `RM/…`, and a
+    /// same-stem clip in both trees coexists disambiguated.
+    #[test]
+    fn full_clip_library_loads_with_rm_namespacing() {
+        let dir = assets_dir();
+        if !has_fixtures(&dir) {
+            return;
+        }
+        let model = format::load_dir(&dir).expect("load rig");
+        assert!(
+            model.clips.len() >= 80,
+            "expected the full structured library (~91), got {}",
+            model.clips.len()
+        );
+        let names: std::collections::HashSet<&str> =
+            model.clips.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains("Idle_nonWeapon"), "In-Place bare stem present");
+        assert!(names.contains("Attack_3"), "new combo clip present");
+        assert!(names.contains("Strafe_Front"), "strafe set present");
+        assert!(names.contains("RM/Slide"), "root-motion clip namespaced");
+        assert!(names.contains("RM/PickUp"), "root-motion clip namespaced");
+        assert!(
+            names.contains("Run_nonWeapon") && names.contains("RM/Run_nonWeapon"),
+            "the same-stem In-Place and RootMotion clips coexist"
+        );
+    }
+
+    /// The authored pack still resolves every clip it references against the newly
+    /// structured library (it references bare In-Place stems, which are preserved).
+    #[test]
+    fn pack_resolves_against_the_loaded_library() {
+        let dir = assets_dir();
+        if !has_fixtures(&dir) {
+            return;
+        }
+        let model = format::load_dir(&dir).expect("load rig");
+        let Ok(def) = state::load_pack(&dir.join("Katanami.pack.json")) else {
+            return;
+        };
+        let refs: Vec<state::ClipRef> = model
+            .clips
+            .iter()
+            .map(|c| state::ClipRef {
+                name: &c.name,
+                duration_ticks: c.duration_ticks,
+            })
+            .collect();
+        let sm = StateMachine::build(&def, &refs).expect("build state machine");
+        let unresolved: Vec<&String> = sm
+            .warnings()
+            .iter()
+            .filter(|w| w.contains("unknown clip"))
+            .collect();
+        assert!(unresolved.is_empty(), "pack references clips missing from the library: {unresolved:?}");
     }
 
     /// Sampling + forward kinematics never produces NaN/inf global transforms.

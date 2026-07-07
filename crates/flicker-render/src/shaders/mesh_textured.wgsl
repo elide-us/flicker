@@ -107,9 +107,11 @@ fn light_contrib(
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let texel = textureSample(albedo_tex, mat_sampler, in.uv);
-    // Cutout: drop fully-transparent texels (hair-card edges). Opaque albedo (a==1)
-    // is unaffected.
-    if (texel.a < 0.5) {
+    // `flags.z` selects SOFT-ALPHA blend mode (clouds / ground decals): blend by the
+    // texture's alpha. The default (0) is a cutout that drops fully-transparent texels
+    // (hair-card edges). Opaque albedo (a==1) is unaffected either way.
+    let soft = per_draw.flags.z > 0.5;
+    if (!soft && texel.a < 0.5) {
         discard;
     }
     let base = texel.rgb;
@@ -180,5 +182,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let dist = length(in.world_position - scene.camera_pos.xyz);
     let fog = 1.0 - exp(-scene.fog_color.w * dist);
     let rgb = mix(lit.rgb, scene.fog_color.rgb, fog);
-    return vec4<f32>(rgb, lit.a);
+    // Soft mode blends by texture alpha × tint alpha; cutout/opaque mode uses tint alpha.
+    let out_a = select(lit.a, texel.a * per_draw.tint.a, soft);
+    return vec4<f32>(rgb, out_a);
 }

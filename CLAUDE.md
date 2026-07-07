@@ -320,20 +320,18 @@ cargo run -p hex-sphere -- 16    # headless topology check + PLY
 - Profiles: dev `opt-level=1`, deps `opt-level=3`; release `lto=thin`,
   `codegen-units=1`, `strip`. Use `--release` for any voxel/perf work (debug
   contour+mesh is slow).
-- **Multiple dev/test machines — you may be on any of them at any time** (memory
-  `dev-box-profile`). Check which before assuming the local ceiling:
-  - **MacBook Neo** — A18 Pro, 6 cores, Metal GPU, unified memory, **RAM-limited
-    (~8 GB)**. The weakest box; the current default context.
-  - **MacBook Pro** — M5 Pro, unified memory, high-end CPU/GPU.
-  - **Surface Laptop Studio** — i7, ample memory, **discrete nVidia GPU**.
+- **Two active dev/test machines — you may be on either** (memory `dev-box-profile`):
+  - **MacBook Pro** — M5 Pro, Apple Silicon, unified memory, high-end CPU/GPU.
+  - **Windows desktop** — discrete **nVidia RTX 3060**, ample memory.
 
-  **Don't constrain a design to the weakest box** — build for what the feature
-  needs and let the user pick the test machine. GPU/wgpu viewers are always fine
-  (don't default to headless). The only real ceiling is RAM/CPU on the Mac Neo, and
-  only at the **heightmap/materialization** layer (8 MiB/hex × many cells);
-  topology + epochs are cheap everywhere. Two independent scaling axes — cell count
-  vs per-cell heightmap resolution — keep both bounded on the Mac Neo, never pay
-  both at once.
+  The old **MacBook Neo** (A18, ~8 GB RAM) is **out of the dev loop** — no longer a box
+  to design or budget around. Both active boxes are strong, but strong hardware is **not
+  licence to be wasteful**: use the correct standard technique, not brute force (e.g.
+  instanced GPU skinning to draw many characters, never per-model CPU skin + per-frame
+  re-upload). **Build for what the feature needs**; GPU/wgpu viewers are always fine
+  (don't default to headless). The remaining scaling ceiling is the
+  **heightmap/materialization** layer (8 MiB/hex × many cells) — two independent axes
+  (cell count vs per-cell heightmap resolution); keep both bounded, never pay both at once.
 
 ---
 

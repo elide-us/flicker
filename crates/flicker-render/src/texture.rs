@@ -28,6 +28,42 @@ pub(crate) struct LoadedTexture {
 }
 
 impl LoadedTexture {
+    /// Wrap an **already-created** texture + view (e.g. an offscreen render target's
+    /// colour attachment) as a sampleable texture: builds the sprite-pipeline bind group
+    /// so it can be drawn like any uploaded texture. The billboard / mesh bind groups are
+    /// added by [`crate::Renderer`] in `register_texture` (as for uploaded textures).
+    pub fn from_view(
+        device: &wgpu::Device,
+        sampler: &wgpu::Sampler,
+        layout: &wgpu::BindGroupLayout,
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+        size: (u32, u32),
+    ) -> Self {
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flicker.render_target.bind_group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+        Self {
+            texture,
+            view,
+            bind_group,
+            billboard_bind_group: None,
+            mesh_bind_group: None,
+            size,
+        }
+    }
+
     /// Upload an RGBA8 **sRGB** pixel buffer (colour data — albedo/sprites) to the GPU
     /// and build a bind group tied to the provided sprite-pipeline layout.
     pub fn from_rgba8(

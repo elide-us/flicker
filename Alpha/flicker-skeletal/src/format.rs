@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
@@ -225,27 +225,47 @@ fn mat4_from_contract(m: &[f32; 16]) -> Mat4 {
     Mat4::from_cols_array(m)
 }
 
-/// Load every `*.json` in `dir`, pick the rig (the file carrying the mesh), and
-/// resolve all clip tracks against its skeleton. Robust to whatever set of files
-/// the converter dropped in (one mesh rig + N clip files).
-pub fn load_dir(dir: &Path) -> Result<Model> {
-    let mut parsed: Vec<(String, RigFile)> = Vec::new();
+/// Recursively collect every `*.json` path under `dir`.
+fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading assets dir {}", dir.display()))?
     {
         let path = entry?.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
+        if path.is_dir() {
+            collect_json_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            out.push(path);
         }
+    }
+    Ok(())
+}
+
+/// Whether any component of `path` equals `name` (e.g. `clips`, `RootMotion`).
+fn path_has_component(path: &Path, name: &str) -> bool {
+    path.components().any(|c| c.as_os_str().to_str() == Some(name))
+}
+
+/// Recursively load every `*.json` under `dir`, pick the rig (the file carrying the
+/// mesh), and resolve all clip tracks against its skeleton.
+///
+/// Clips are taken from the structured library under `dir/clips/` (mirroring the
+/// converter's `In-Place/` + `RootMotion/` taxonomy). When that tree is present, flat
+/// top-level clip files are treated as legacy duplicates and skipped. **RootMotion
+/// clips are namespaced `RM/<stem>`** so they don't collide with the In-Place clip of
+/// the same stem (`Run_nonWeapon`/`Walk_nonWeapon`/`Run_Weapon` exist in both trees);
+/// In-Place clips keep their bare stem so a pack references the default (in-place)
+/// locomotion by plain name. Falls back to loading top-level clip files when no
+/// `clips/` subtree exists (a legacy flat layout).
+pub fn load_dir(dir: &Path) -> Result<Model> {
+    let mut files = Vec::new();
+    collect_json_files(dir, &mut files)?;
+    let mut parsed: Vec<(PathBuf, RigFile)> = Vec::new();
+    for path in files {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let file: RigFile = serde_json::from_str(&text)
             .with_context(|| format!("parsing {}", path.display()))?;
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        parsed.push((name, file));
+        parsed.push((path, file));
     }
     if parsed.is_empty() {
         anyhow::bail!(
@@ -286,11 +306,16 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
         .map(|(i, b)| (b.name.as_str(), i))
         .collect();
 
-    // Clips come from clip files (and, redundantly, the rig file). Resolve each
-    // track's bone NAME to a skeleton index against the rig.
+    // Clips come from the structured `clips/` library; resolve each track's bone NAME
+    // to a skeleton index against the rig. When that tree exists, skip the flat
+    // top-level files (legacy duplicates). RootMotion clips are namespaced `RM/…`.
+    let has_clip_tree = parsed.iter().any(|(p, _)| path_has_component(p, "clips"));
     let mut clips: Vec<ResolvedClip> = Vec::new();
-    let clip_sources = std::iter::once(&rig_file).chain(parsed.iter().map(|(_, f)| f));
-    for f in clip_sources {
+    for (path, f) in &parsed {
+        if has_clip_tree && !path_has_component(path, "clips") {
+            continue;
+        }
+        let root_motion = path_has_component(path, "RootMotion");
         for clip in &f.clips {
             let mut tracks = Vec::new();
             let mut unresolved = Vec::new();
@@ -303,8 +328,13 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
                     None => unresolved.push(tr.bone.clone()),
                 }
             }
+            let name = if root_motion {
+                format!("RM/{}", clip.name)
+            } else {
+                clip.name.clone()
+            };
             clips.push(ResolvedClip {
-                name: clip.name.clone(),
+                name,
                 tick_rate_hz: clip.tick_rate_hz,
                 duration_ticks: clip.duration_ticks,
                 tracks,

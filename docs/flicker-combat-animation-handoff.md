@@ -323,3 +323,79 @@ to taste.
 poise/i-frame *enforcement*, weapon-pack loader + equip/pickup, then into `flicker-csg`.
 More clips (`Crouch_Move_L/R`, more attacks, root-motion) need the converter on the surface
 box — not available on this machine.
+
+## 12. Full 91-clip library ADOPTED — recursive `clips/` loader (macbook, 2026-07-06)
+
+The Katanami animation set (91 clips) was extracted + converted on the surface box and
+committed under `examples/flicker-animation/assets/clips/{In-Place,RootMotion}/…` (MCP note
+`2B313623`). It was **staged but unconsumed** — `format::load_dir` was non-recursive, so the
+viewer still only saw the flat 13. **Now consumed.**
+
+**Loader (`Alpha/flicker-skeletal/src/format.rs`).** `load_dir` now **recurses** (new
+`collect_json_files` + `path_has_component` helpers). Clips are taken from the structured
+`clips/` tree; when that tree exists the flat top-level clip files are skipped as **legacy
+duplicates** (non-destructive — they're ignored, not deleted). Falls back to top-level clips
+for a legacy flat layout. The rig is still the max-vertex file (`Katana_Morph_Color1.json`).
+
+**Naming scheme (load-bearing for pack authoring).** **In-Place clips keep their bare stem;
+RootMotion clips are namespaced `RM/<stem>`.** This (a) resolves the 3 same-stem collisions
+between the trees (`Run_nonWeapon`/`Walk_nonWeapon`/`Run_Weapon` exist in both), (b) keeps the
+authored pack working with **zero changes** (it references bare In-Place names, which are the
+default in-place locomotion — matching the "in-place default, root-motion opt-in" model), and
+(c) makes a clip's name signal its motion type. So a future root-motion state references e.g.
+`RM/Climb_1m` / `RM/Slide` / `RM/PickUp`. Scheme is easily changed (loader-local) if we ever
+want full-path namespacing instead.
+
+**Result:** the Manual clip browser (`G` to Manual, ↑/↓) now cycles the **full 91**; Graph
+mode is unchanged (pack resolves against the bare In-Place names). Verified: `cargo test -p
+flicker-animation` (5 pass — 3 fixture + 2 new: full-library-loads-with-RM-namespacing,
+pack-resolves-against-the-library), `cargo clippy -p flicker-skeletal -- -D warnings` clean.
+
+**Still open (the user drives which is next):**
+- **Cleanup:** delete the flat top-level dupe clip JSONs (13 files) now that `clips/` is the
+  source of truth — currently just skipped, not removed.
+- **Wire new combat states into `Katanami.pack.json`:** the attack combo (`Attack_2`/`Attack_3`
+  via the cancel window), directional strafes (`Strafe_*`, `Run_Back/Left/Right`), a
+  backstep-dodge (fake from Jump) + `RM/Slide` dash with `Iframe` windows, `Crouch_Move_L/R`.
+- **Block/Guard + Parry** remain the true authoring gap (only `RunBlock` exists) → the Blender-MCP
+  authoring path (MCP note `2B313623`), not yet connected.
+
+## 13. Directional locomotion wired (macbook, 2026-07-06)
+
+Crouch move set + directional walk/run landed in the pack.
+
+**Input model extended (`state.rs`).** `Inputs` gained `left`/`right`/`back` (held direction
+modifiers; forward is implied when `move_` is held with none of them). `Trigger` gained
+`MoveForward`/`MoveLeft`/`MoveRight`/`MoveBack` (`move_forward` = moving with no direction held;
+the others = moving + that direction). Plain `Move`/`MoveStop` unchanged, so existing edges and
+tests are byte-behaviour-identical. One new test (`directional_move_routes_by_held_direction`);
+14 skeletal tests total.
+
+**Pack (`Katanami.pack.json`).** 8 new states: `Walk_L/R/B` (`Strafe_Left/Right/Back`),
+`Run_L/R/B` (`Run_Left/Right/Back`), `Crouch_Move_L/R` (`Crouch_Move_L/R`). Each locomotion
+cluster (walk / run / crouch) is a forward base + directional strafes; you switch direction
+freely within a cluster, return to forward on `move_forward`, exit on `move_stop`, and `run`/
+`run_stop` cross walk↔run at the matching direction. Attack/jump escape from all walk/run states;
+`any`-state hit/death unchanged. **This is a discrete-state stand-in for a 2D locomotion blend
+space** — it works and is visible, but the transition mesh is inherently combinatorial (that's
+*why* blend spaces exist); a real blend-space movement layer is the production answer, to be
+designed alongside the field-viewer/lock-on work. Directional variants carry no footstep events
+yet (kept on the forward bases).
+
+**Viewer (`main.rs`).** Graph mode now reads **WASD** — W forward, A/S/D left/back/right (any =
+moving), Shift run. HUD hint updated.
+
+**Verified:** pack JSON valid; `cargo test -p flicker-skeletal` (14) + `-p flicker-animation` (5,
+incl. the pack-resolves-against-the-library guard) pass; skeletal clippy `-D warnings` clean.
+
+**The state-machine Artifact is now GENERATED from the pack (2026-07-06).** Instead of
+hand-embedding data, `examples/flicker-animation/tools/gen_state_diagram.py` reads
+`Katanami.pack.json` + the clip durations under `assets/clips/`, computes a clustered
+auto-layout (states grouped by name → cluster grid; new states auto-place), and fills
+`tools/state_diagram_template.html` → a self-contained interactive HTML page. Re-run
+`python3 tools/gen_state_diagram.py <out.html>` after any pack edit and the diagram follows —
+the pack is the single source of truth (mirrors the engine's "data is truth, shape is derived"
+invariant). Currently reflects all 19 states / 88 transitions. Artifact URL `ae85675d`. The old
+hand-embedded "proposed" overlay (Attack_2/3 combo, Dodge, Guard) was dropped — the pack is the
+truth now; an aspirational overlay can be re-added later. **Eventually** this data lives in the
+DB and the editor is TheOracle's graph tool; this generator is the stop-gap renderer.

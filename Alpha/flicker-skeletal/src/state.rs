@@ -127,18 +127,31 @@ impl TickWindow {
     }
 }
 
-/// What can gate a transition. Movement modifiers (`move`/`run`/`crouch`) are **held**
-/// states; `jump`/`attack`/`hit`/`die` are **edges** (true only the tick pressed);
-/// `clip_done` fires the tick a clip completes.
+/// What can gate a transition. Movement modifiers (`move`/`run`/`crouch`) and the
+/// directional variants are **held** states; `jump`/`attack`/`hit`/`die` are **edges**
+/// (true only the tick pressed); `clip_done` fires the tick a clip completes.
+///
+/// `move` = moving in any direction. The directional forms combine movement with a held
+/// direction: `move_forward` = moving with no side/back held, `move_left`/`move_right`/
+/// `move_back` = moving with that direction held. Used to select strafe/directional
+/// locomotion clips (a discrete-state stand-in for a 2D locomotion blend space).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Trigger {
     Move,
     MoveStop,
+    MoveForward,
+    MoveLeft,
+    MoveRight,
+    MoveBack,
     Run,
     RunStop,
     Crouch,
     CrouchStop,
+    /// Crouch + run held together — a **combo/decision-matrix** trigger: while crouched,
+    /// the run modifier (Shift) is overloaded from sprint to *stillness* (a crouch-idle
+    /// "challenge mode"). Fires when both `crouch` and `run` are held.
+    CrouchStill,
     Jump,
     Attack,
     Hit,
@@ -234,11 +247,16 @@ struct State {
     events: Vec<Event>,
 }
 
-/// Per-tick control input. `move_`/`run`/`crouch` are held; `jump`/`attack`/`hit`/`die`
-/// are edges the caller sets true only on the frame the control was pressed.
+/// Per-tick control input. `move_`/`run`/`crouch` and the `left`/`right`/`back`
+/// direction modifiers are held; `jump`/`attack`/`hit`/`die` are edges the caller sets
+/// true only on the frame the control was pressed. Forward is the implied direction when
+/// `move_` is held with none of `left`/`right`/`back`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Inputs {
     pub move_: bool,
+    pub left: bool,
+    pub right: bool,
+    pub back: bool,
     pub run: bool,
     pub crouch: bool,
     pub jump: bool,
@@ -492,6 +510,20 @@ impl StateMachine {
         self.accum = 0.0;
     }
 
+    /// Force an immediate transition to the named state — a "game commands this reaction"
+    /// escape hatch, for when the *driver* (not the input graph) picks the target: e.g. a
+    /// randomly-selected hit reaction from a group of Dame clips. Crossfades with the
+    /// machine's default blend. Returns `false` if the name is unknown. Keeps the state
+    /// machine itself deterministic — the randomness lives in the caller.
+    pub fn force_state_by_name(&mut self, name: &str) -> bool {
+        let Some(target) = self.states.iter().position(|s| s.name == name) else {
+            return false;
+        };
+        let mut fired = Vec::new();
+        self.enter(target, self.default_blend_ticks, &mut fired);
+        true
+    }
+
     // ── stepping ──
 
     /// Advance one fixed tick (the atomic combat-clock step). Returns what fired.
@@ -634,13 +666,20 @@ impl StateMachine {
 }
 
 fn satisfied(on: Trigger, inputs: &Inputs, clip_done: bool) -> bool {
+    let dir_none = !inputs.left && !inputs.right && !inputs.back;
     match on {
         Trigger::Move => inputs.move_,
         Trigger::MoveStop => !inputs.move_,
+        Trigger::MoveForward => inputs.move_ && dir_none,
+        Trigger::MoveLeft => inputs.move_ && inputs.left,
+        Trigger::MoveRight => inputs.move_ && inputs.right,
+        Trigger::MoveBack => inputs.move_ && inputs.back,
         Trigger::Run => inputs.move_ && inputs.run,
         Trigger::RunStop => !inputs.run,
         Trigger::Crouch => inputs.crouch,
         Trigger::CrouchStop => !inputs.crouch,
+        // Overload the run modifier to "be still" while crouched (the decision matrix).
+        Trigger::CrouchStill => inputs.crouch && inputs.run,
         Trigger::Jump => inputs.jump,
         Trigger::Attack => inputs.attack,
         Trigger::Hit => inputs.hit,
@@ -731,6 +770,19 @@ mod tests {
     }
 
     #[test]
+    fn force_state_by_name_enters_target_and_ignores_unknown() {
+        let mut sm = build();
+        assert_eq!(sm.current_state_name(), "Idle");
+        // A driver commanding a reaction (e.g. a random hit) enters it immediately.
+        assert!(sm.force_state_by_name("Attack"));
+        assert_eq!(sm.current_state_name(), "Attack");
+        assert_eq!(sm.current_tick(), 0);
+        // An unknown name is a no-op.
+        assert!(!sm.force_state_by_name("Nope"));
+        assert_eq!(sm.current_state_name(), "Attack");
+    }
+
+    #[test]
     fn move_and_stop_locomotion() {
         let mut sm = build();
         let moving = Inputs { move_: true, ..Default::default() };
@@ -814,6 +866,36 @@ mod tests {
         let sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
         assert_eq!(sm.current_clip(), usize::MAX);
         assert!(!sm.warnings().is_empty());
+    }
+
+    #[test]
+    fn directional_move_routes_by_held_direction() {
+        let graph = r#"{ "state_machine": { "initial": "Idle", "states": [
+            { "name": "Idle", "clip": "idle", "transitions": [
+                { "to": "Walk_L", "on": "move_left", "priority": 2 },
+                { "to": "Walk_R", "on": "move_right", "priority": 2 },
+                { "to": "Walk", "on": "move", "priority": 1 } ] },
+            { "name": "Walk", "clip": "walk", "transitions": [
+                { "to": "Walk_L", "on": "move_left", "priority": 2 },
+                { "to": "Idle", "on": "move_stop", "priority": 1 } ] },
+            { "name": "Walk_L", "clip": "walk", "transitions": [
+                { "to": "Walk", "on": "move_forward", "priority": 2 },
+                { "to": "Idle", "on": "move_stop", "priority": 1 } ] },
+            { "name": "Walk_R", "clip": "walk" }
+        ] } }"#;
+        let def: PackFile = serde_json::from_str(graph).unwrap();
+        let mut sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
+        assert!(sm.warnings().is_empty(), "{:?}", sm.warnings());
+        // move + left → the left strafe (a held direction beats plain `move`).
+        sm.tick(&Inputs { move_: true, left: true, ..Default::default() });
+        assert_eq!(sm.current_state_name(), "Walk_L");
+        // release the direction while still moving → forward walk (`move_forward`).
+        sm.tick(&Inputs { move_: true, ..Default::default() });
+        assert_eq!(sm.current_state_name(), "Walk");
+        // plain forward move from Idle picks the forward walk, never a strafe.
+        let mut sm2 = StateMachine::build(&def.state_machine, &clips()).unwrap();
+        sm2.tick(&Inputs { move_: true, ..Default::default() });
+        assert_eq!(sm2.current_state_name(), "Walk");
     }
 
     // ── crossfade blending ──
