@@ -110,14 +110,22 @@ pub fn load_widgets(script: &ScriptHost) {
 pub fn load_ui_json(script: &ScriptHost, path: impl AsRef<Path>) {
     let path = path.as_ref();
     match std::fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(ui) => {
-                if let Err(e) = script.set_global_json("UI", &ui) {
-                    tracing::error!("UI elements exposure failed ({}): {e}", path.display());
-                }
-            }
-            Err(e) => tracing::error!("ui_elements.json parse failed ({}): {e}", path.display()),
-        },
+        Ok(text) => load_ui_json_str(script, &text),
         Err(e) => tracing::error!("ui_elements.json read failed ({}): {e}", path.display()),
+    }
+}
+
+/// Expose an **already-in-memory** `ui_elements.json` string to `script` as the
+/// `UI` global — the same contract as [`load_ui_json`], for layouts embedded in
+/// a crate (`include_str!`) rather than read from disk. Logs and continues on a
+/// parse error (scripts guard `if not UI`).
+pub fn load_ui_json_str(script: &ScriptHost, json: &str) {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(ui) => {
+            if let Err(e) = script.set_global_json("UI", &ui) {
+                tracing::error!("UI elements exposure failed: {e}");
+            }
+        }
+        Err(e) => tracing::error!("ui_elements.json parse failed: {e}"),
     }
 }

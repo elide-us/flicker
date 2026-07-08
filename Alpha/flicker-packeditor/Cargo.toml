@@ -1,0 +1,24 @@
+[package]
+name = "flicker-packeditor"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# flicker-packeditor — promoted from the old `examples/flicker-field-viewer` POC into
+# Alpha. Draws the whole animation library as a FIELD of characters (one instance per
+# clip) via GPU-instanced skinning (flicker-render's SkinnedMeshPipeline /
+# Renderer::draw_skinned_instanced), plus the pack's state graph laid out as nodes +
+# transition wires — the seed of a `.pack` state-graph editor. Reuses the Katanami
+# bundle from the shared content tree (Alpha/content/characters/katanami), the same
+# source flicker-paperdoll loads. See docs/flicker-field-viewer-handoff.md.
+[dependencies]
+# Umbrella: flicker-app (App/run/InputState/Key) + flicker-render (Renderer/Camera/the
+# instanced-skinning pipeline + glam math re-exports).
+flicker = { path = "../../crates/flicker" }
+# The GPU-free skeletal-animation runtime (format/pose/skin) — same source the
+# single-character viewer consumes.
+flicker-skeletal.workspace = true
+glam.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

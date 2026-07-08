@@ -107,9 +107,9 @@ pub const ABUNDANCE_DEFS: &[(&str, f64)] = &[
     ("N", 0.02),
 ];
 
-const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
+const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
 
-/// Load the material vocabulary tables from the repo `data/materials` dir.
+/// Load the material vocabulary tables from the repo `Alpha/content/data` dir.
 pub fn load_tables() -> anyhow::Result<Tables> {
     Ok(Tables::from_source(&JsonTableSource::new(MATERIALS_DIR))?)
 }

@@ -15,8 +15,8 @@ use flicker_worldgen::{
 use flicker_worldgrid::pentagon_patch;
 
 fn tables() -> Tables {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
-    Tables::from_source(&JsonTableSource::new(dir)).expect("repo data/materials loads")
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
+    Tables::from_source(&JsonTableSource::new(dir)).expect("repo Alpha/content/data loads")
 }
 
 /// Mean |Δ| of `vals` across adjacency edges (each undirected edge counted once).

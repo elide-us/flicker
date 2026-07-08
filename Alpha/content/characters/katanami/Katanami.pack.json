@@ -1,0 +1,274 @@
+{
+  "format": "flicker.pack",
+  "version": 1,
+  "_note": "Authored combat/movement state graph for the Katanami base character. Separate from flicker.rig (mechanical FBX-derived atom). Clip names are the rig's clip stems (In-Place bare; RootMotion would be RM/*). Directional locomotion (walk/run/crouch × forward/left/right/back) is modelled as discrete strafe states gated by the move_left/right/back/forward triggers — a stand-in for a 2D locomotion blend space. Window/event ticks are within each clip's duration_ticks.",
+  "state_machine": {
+    "initial": "Idle",
+
+    "default_blend_ticks": 6,
+
+    "any": [
+      { "to": "Dame_01", "on": "hit", "priority": 100, "blend_ticks": 2 },
+      { "to": "Death_01", "on": "die", "priority": 200, "blend_ticks": 2 }
+    ],
+
+    "states": [
+      {
+        "name": "Idle",
+        "clip": "Idle_nonWeapon",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Crouch", "on": "crouch", "priority": 4 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Walk", "on": "move", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Walk",
+        "clip": "Walk_nonWeapon",
+        "events": [
+          { "tick": 8, "kind": "footstep", "label": "L" },
+          { "tick": 40, "kind": "footstep", "label": "R" }
+        ],
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Crouch", "on": "crouch", "priority": 4 },
+          { "to": "Run", "on": "run", "priority": 3 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_L",
+        "clip": "Strafe_Left",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Run_L", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_R",
+        "clip": "Strafe_Right",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Run_R", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_B",
+        "clip": "Strafe_Back",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Run_B", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Run",
+        "clip": "Run_nonWeapon",
+        "events": [
+          { "tick": 6, "kind": "footstep", "label": "L" },
+          { "tick": 36, "kind": "footstep", "label": "R" }
+        ],
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk", "on": "run_stop", "priority": 3 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_L",
+        "clip": "Run_Left",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_L", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_R",
+        "clip": "Run_Right",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_R", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_B",
+        "clip": "Run_Back",
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "priority": 5 },
+          { "to": "Jump_Start", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_B", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 }
+        ]
+      },
+
+      {
+        "name": "Crouch",
+        "clip": "RM/CrouchLoop",
+        "transitions": [
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Crouch_Move_L", "on": "move_left", "priority": 2 },
+          { "to": "Crouch_Move_R", "on": "move_right", "priority": 2 },
+          { "to": "Crouch_Move", "on": "move", "priority": 1 },
+          { "to": "Idle", "on": "crouch_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Crouch_Move",
+        "clip": "Crouch_Move_F",
+        "events": [
+          { "tick": 12, "kind": "footstep", "label": "L" },
+          { "tick": 45, "kind": "footstep", "label": "R" }
+        ],
+        "transitions": [
+          { "to": "Crouch_Move_L", "on": "move_left", "priority": 2 },
+          { "to": "Crouch_Move_R", "on": "move_right", "priority": 2 },
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Walk", "on": "crouch_stop", "priority": 2 },
+          { "to": "Crouch", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Crouch_Move_L",
+        "clip": "Crouch_Move_L",
+        "transitions": [
+          { "to": "Crouch_Move_R", "on": "move_right", "priority": 2 },
+          { "to": "Crouch_Move", "on": "move_forward", "priority": 2 },
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Walk_L", "on": "crouch_stop", "priority": 2 },
+          { "to": "Crouch", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Crouch_Move_R",
+        "clip": "Crouch_Move_R",
+        "transitions": [
+          { "to": "Crouch_Move_L", "on": "move_left", "priority": 2 },
+          { "to": "Crouch_Move", "on": "move_forward", "priority": 2 },
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Walk_R", "on": "crouch_stop", "priority": 2 },
+          { "to": "Crouch", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "CrouchIdle",
+        "clip": "Crouch",
+        "transitions": [
+          { "to": "Idle", "on": "crouch_stop", "priority": 2 },
+          { "to": "Crouch", "on": "run_stop", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Jump_Start",
+        "clip": "Jump_Start",
+        "looping": false,
+        "next": "Jump_Loop",
+        "events": [
+          { "tick": 6, "kind": "sfx", "label": "liftoff" }
+        ]
+      },
+      {
+        "name": "Jump_Loop",
+        "clip": "Jump_Loop",
+        "transitions": [
+          { "to": "Jump_End", "on": "clip_done", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Jump_End",
+        "clip": "Jump_End",
+        "looping": false,
+        "next": "Idle",
+        "events": [
+          { "tick": 2, "kind": "footstep", "label": "land" }
+        ]
+      },
+
+      {
+        "name": "Attack_1",
+        "clip": "Attack_1",
+        "looping": false,
+        "events": [
+          { "tick": 12, "kind": "sfx", "label": "swing" },
+          { "tick": 15, "end": 30, "kind": "hitbox_active", "label": "Weapon_R" },
+          { "tick": 15, "end": 30, "kind": "weapon_trail", "label": "blade" },
+          { "tick": 40, "end": 55, "kind": "cancel_window", "label": "combo" }
+        ],
+        "transitions": [
+          { "to": "Attack_1", "on": "attack", "window": { "start": 40, "end": 55 }, "priority": 10 },
+          { "to": "Idle", "on": "clip_done", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Dame_01",
+        "clip": "Dame_01",
+        "looping": false,
+        "next": "Idle"
+      },
+      {
+        "name": "Dame_02",
+        "clip": "Dame_02",
+        "looping": false,
+        "next": "Idle"
+      },
+      {
+        "name": "Dame_1",
+        "clip": "Dame_1",
+        "looping": false,
+        "next": "Idle"
+      },
+      {
+        "name": "Dame_2",
+        "clip": "Dame_2",
+        "looping": false,
+        "next": "Idle"
+      },
+      {
+        "name": "Death_01",
+        "clip": "Death_01",
+        "looping": false
+      }
+    ]
+  }
+}

@@ -40,8 +40,9 @@ thin client-side `flicker-net` talks to *separate* server projects. Status:
 ### The POCs and what each one is for
 - **Client rendering** → `examples/voxel-cluster`. The in-game **client**:
   contour, mesh, LOD, fly camera, lighting/sky — what a player's machine runs.
-- **World generation** → `examples/hex-world`, `examples/hex-map` (superseded),
-  and the current `crates/flicker-world`. This is a **static, offline server
+- **World generation** → the current `crates/flicker-world` (the earlier
+  `hex-world` / `hex-map` POCs were deleted; the water-cycle nucleus was rescued
+  into `Alpha/flicker-pocepochs`). This is a **static, offline server
   process that sits beside the game**; it generates the planet's **starting
   point** for the live simulation. Not interactive, not the game client.
 
@@ -168,11 +169,12 @@ The project has pivoted several times. **Current authoritative direction:**
   — do NOT build on it or resurrect its model.
 
 ### Abandoned / superseded (left in tree, do NOT resurrect or reuse as a path)
-- The **flat two-map / bent-rings / σ-zipper** hex model in `examples/hex-map`
-  (`topology.rs`, `gadget.rs`, `snap_map*.rs`, spiral ordering, record-flip viz).
-  **Slated for deletion** in the `flicker-celestial` refactor (user-flagged cleanup —
-  it confuses "what is right" vs modern flicker-world). Its flat *within-hex* math
-  (`examples/hex-map/src/geom.rs`) may be referenced as a copy source first; nothing else.
+- The **flat two-map / bent-rings / σ-zipper** hex model (was `examples/hex-map`:
+  `topology.rs`, `gadget.rs`, `snap_map*.rs`, spiral ordering, record-flip viz) —
+  **deleted** 2026-07-07 along with `hex-world` / `hex-sphere`. The only keeper,
+  hex-world's conserved water-cycle `layers.rs`, was rescued into
+  `Alpha/flicker-pocepochs`; everything else (incl. the flat within-hex `geom.rs`)
+  is gone.
 - The **polar-cap defect-concentration** sketch (concentrating curvature at poles).
 - `flicker-worldsim` — a redundant world-sim crate that was an anti-pattern; the
   renderer + celestial sim already live in the voxel path. (Reflected in memory
@@ -237,14 +239,17 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
   `docs/flicker-sol2-epoch3-pipeline-roadmap.md`.
 - `examples/voxel-cluster` — primary voxel demo: 3×3 cluster field, contour+mesh,
   fly camera, dynamic LOD + async re-mesh, Lua debug HUD, pause/settings.
-- `examples/hex-sphere` — **headless** topology test: builds the icosphere, prints
-  a verification report, writes a per-shard-coloured PLY (pentagons red).
-  `cargo run -p hex-sphere -- [freq] [out.ply]`. CI-friendly, no GPU.
-- `examples/hex-world` — icosphere explorer + a working **vertical water-cycle
-  prototype** (`layers.rs`, conserved to <0.1% over 300 ticks) — stranded on the
-  old flat topology, awaiting re-homing.
-- `examples/hex-map` — **superseded** flat two-map demo (see §3).
-- `examples/hello-sprite`, `square-chase`, `mesh-smoke` — minimal 2D / mesh refs.
+- `Alpha/flicker-pocepochs` — single-hex **generation-stack** POC (shell client):
+  one hex drawn as its six epoch relief layers + the atmosphere / water-cycle band
+  stack, regenerable. Carries the rescued conserved water-cycle nucleus
+  (`layers.rs`) from the deleted hex-world. `cargo run -p flicker-pocepochs`.
+- `examples/hex-world`, `examples/hex-map`, `examples/hex-sphere` were **deleted**
+  (2026-07-07 — the abandoned flat two-map topology + a headless icosphere PLY
+  check). Their one keeper, hex-world's conserved water-cycle `layers.rs`, was
+  rescued into `Alpha/flicker-pocepochs`.
+- `hello-sprite`, `mesh-smoke`, and `square-chase` were **deleted** (throwaway
+  2D / mesh smoke-tests). `square-chase` was first promoted to the
+  `Alpha/flicker-clicktrainer` client, which supersedes it.
 
 ---
 
@@ -320,20 +325,18 @@ cargo run -p hex-sphere -- 16    # headless topology check + PLY
 - Profiles: dev `opt-level=1`, deps `opt-level=3`; release `lto=thin`,
   `codegen-units=1`, `strip`. Use `--release` for any voxel/perf work (debug
   contour+mesh is slow).
-- **Multiple dev/test machines — you may be on any of them at any time** (memory
-  `dev-box-profile`). Check which before assuming the local ceiling:
-  - **MacBook Neo** — A18 Pro, 6 cores, Metal GPU, unified memory, **RAM-limited
-    (~8 GB)**. The weakest box; the current default context.
-  - **MacBook Pro** — M5 Pro, unified memory, high-end CPU/GPU.
-  - **Surface Laptop Studio** — i7, ample memory, **discrete nVidia GPU**.
+- **Two active dev/test machines — you may be on either** (memory `dev-box-profile`):
+  - **MacBook Pro** — M5 Pro, Apple Silicon, unified memory, high-end CPU/GPU.
+  - **Windows desktop** — discrete **nVidia RTX 3060**, ample memory.
 
-  **Don't constrain a design to the weakest box** — build for what the feature
-  needs and let the user pick the test machine. GPU/wgpu viewers are always fine
-  (don't default to headless). The only real ceiling is RAM/CPU on the Mac Neo, and
-  only at the **heightmap/materialization** layer (8 MiB/hex × many cells);
-  topology + epochs are cheap everywhere. Two independent scaling axes — cell count
-  vs per-cell heightmap resolution — keep both bounded on the Mac Neo, never pay
-  both at once.
+  The old **MacBook Neo** (A18, ~8 GB RAM) is **out of the dev loop** — no longer a box
+  to design or budget around. Both active boxes are strong, but strong hardware is **not
+  licence to be wasteful**: use the correct standard technique, not brute force (e.g.
+  instanced GPU skinning to draw many characters, never per-model CPU skin + per-frame
+  re-upload). **Build for what the feature needs**; GPU/wgpu viewers are always fine
+  (don't default to headless). The remaining scaling ceiling is the
+  **heightmap/materialization** layer (8 MiB/hex × many cells) — two independent axes
+  (cell count vs per-cell heightmap resolution); keep both bounded, never pay both at once.
 
 ---
 

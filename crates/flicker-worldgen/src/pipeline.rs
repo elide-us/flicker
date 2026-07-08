@@ -103,8 +103,8 @@ mod tests {
     use crate::state::Boundary;
 
     fn tables() -> Tables {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
-        Tables::from_source(&JsonTableSource::new(dir)).expect("repo data/materials loads")
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
+        Tables::from_source(&JsonTableSource::new(dir)).expect("repo Alpha/content/data loads")
     }
 
     /// A ring of `n` hexes around the equator — a minimal connected world.

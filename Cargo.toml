@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/clayengine",
+    "Alpha/crates/core/clayengine",
     "crates/flicker-materials",
     "crates/flicker-worldstate",
     "crates/flicker-worldgen",
@@ -17,22 +17,21 @@ members = [
     "crates/flicker-net",
     "crates/flicker-app",
     "crates/flicker-scene",
+    "Alpha/crates/frontend/flicker-shell",
+    "Alpha/crates/animation/flicker-flight",
     "crates/flicker-voxel",
-    "crates/flicker-worker",
+    "Alpha/crates/core/flicker-worker",
     "crates/flicker-ui",
     "crates/flicker",
-    "examples/hello-sprite",
-    "examples/square-chase",
-    "examples/mesh-smoke",
     "examples/voxel-cluster",
-    "examples/hex-world",
-    "examples/hex-map",
-    "examples/hex-sphere",
-    "examples/flicker-solarsystem",
     "examples/flicker-sol2",
-    "examples/flicker-animation",
-    "Alpha/flicker-csg",
-    "Alpha/flicker-skeletal",
+    "Alpha/flicker-pocclusters",
+    "Alpha/flicker-clicktrainer",
+    "Alpha/flicker-pocepochs",
+    "Alpha/flicker-solarbirth",
+    "Alpha/flicker-paperdoll",
+    "Alpha/flicker-packeditor",
+    "Alpha/crates/animation/flicker-skeletal",
 ]
 
 [workspace.package]
@@ -91,7 +90,7 @@ glyphon = "0.6"
 fastrand = "2"
 
 # Internal cross-crate deps
-clayengine = { version = "0.1.0", path = "crates/clayengine" }
+clayengine = { version = "0.1.0", path = "Alpha/crates/core/clayengine" }
 flicker-materials = { version = "0.1.0", path = "crates/flicker-materials" }
 flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
 flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
@@ -106,11 +105,13 @@ flicker-script = { version = "0.1.0", path = "crates/flicker-script" }
 flicker-net = { version = "0.1.0", path = "crates/flicker-net" }
 flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
 flicker-scene = { version = "0.1.0", path = "crates/flicker-scene" }
+flicker-shell = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-shell" }
+flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
 flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
-flicker-worker = { version = "0.1.0", path = "crates/flicker-worker" }
+flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }
 flicker-ui = { version = "0.1.0", path = "crates/flicker-ui" }
 # Alpha crates (promoted, non-POC).
-flicker-skeletal = { version = "0.1.0", path = "Alpha/flicker-skeletal" }
+flicker-skeletal = { version = "0.1.0", path = "Alpha/crates/animation/flicker-skeletal" }
 
 [profile.dev]
 opt-level = 1

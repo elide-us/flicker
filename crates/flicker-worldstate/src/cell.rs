@@ -90,8 +90,8 @@ mod tests {
     const FE: ElementId = 26;
 
     fn tables() -> Tables {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
-        Tables::from_source(&JsonTableSource::new(dir)).expect("repo data/materials loads")
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
+        Tables::from_source(&JsonTableSource::new(dir)).expect("repo Alpha/content/data loads")
     }
 
     #[test]

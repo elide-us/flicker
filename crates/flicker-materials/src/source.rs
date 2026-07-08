@@ -1,7 +1,7 @@
 //! The loader **seam**: [`TableSource`] abstracts *where* the vocabulary rows
 //! come from. The simulation asks a source for elements and materials; it never
 //! hardcodes a path. [`JsonTableSource`] is the today implementation, reading
-//! `data/materials/*.json`. Later, a flicker-net → web service → DB source
+//! `Alpha/content/data/*.json`. Later, a flicker-net → web service → DB source
 //! implements the same trait and the callers don't change — the JSON-now /
 //! network-later seam from the handoff (§2, §8).
 
@@ -55,7 +55,7 @@ pub struct JsonTableSource {
 }
 
 impl JsonTableSource {
-    /// A source reading the two JSON tables from `dir` (e.g. `data/materials`).
+    /// A source reading the two JSON tables from `dir` (e.g. `Alpha/content/data`).
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }

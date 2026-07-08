@@ -16,9 +16,11 @@
 
 mod mesh;
 mod pipeline_billboard;
+mod pipeline_ground_fog;
 mod pipeline_lines;
 mod pipeline_mesh;
 mod pipeline_mesh_textured;
+mod pipeline_skinned;
 mod pipeline_sky;
 mod pipeline_sprite;
 mod pipeline_text;
@@ -31,9 +33,11 @@ mod texture;
 mod layering_test;
 
 pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
+pub use pipeline_ground_fog::GroundFog;
 pub use pipeline_mesh_textured::{PbrMaps, TexturedMeshHandle, TexturedVertex};
+pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 pub use pipeline_volumetric::{VolumetricDisk, MAX_VOLUMETRIC_BODIES};
-pub use renderer::Renderer;
+pub use renderer::{RenderTargetHandle, Renderer};
 pub use texture::TextureHandle;
 
 // Re-export the math types we expose in our public API so callers don't have
