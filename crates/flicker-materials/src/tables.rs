@@ -177,13 +177,13 @@ mod tests {
     use crate::element::PhysicalState;
     use crate::source::JsonTableSource;
 
-    /// Load the repo's real tables from `data/materials` (relative to this
+    /// Load the repo's real tables from `Alpha/content/data` (relative to this
     /// crate). The loader's whole job is to read those files, so the tests
     /// exercise it against them.
     fn tables() -> Tables {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
         let source = JsonTableSource::new(dir);
-        Tables::from_source(&source).expect("repo data/materials loads")
+        Tables::from_source(&source).expect("repo Alpha/content/data loads")
     }
 
     #[test]

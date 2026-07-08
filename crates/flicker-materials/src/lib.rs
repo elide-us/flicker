@@ -1,6 +1,6 @@
 //! flicker-materials — the world-material **vocabulary** (data-model tier ①).
 //!
-//! This crate is the typed, in-memory form of `data/materials/*.json`: the
+//! This crate is the typed, in-memory form of `Alpha/content/data/*.json`: the
 //! periodic table ([`Element`]) and the 256-entry material index
 //! ([`MaterialDef`]). It is the *reference* layer the whole material model
 //! classifies against — see `docs/material-model-handoff.md` §1–2.

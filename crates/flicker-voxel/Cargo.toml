@@ -14,7 +14,7 @@ license.workspace = true
 # the-same payload by 5–10× on disk. Storage and contouring proper stay
 # standard-library only.
 [dependencies]
-clayengine = { path = "../clayengine" }
+clayengine.workspace = true
 flicker-primitive = { path = "../flicker-primitive" }
 bytemuck.workspace = true
 serde.workspace = true

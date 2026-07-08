@@ -343,8 +343,8 @@ mod tests {
     use glam::Vec3;
 
     fn tables() -> Tables {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
-        Tables::from_source(&JsonTableSource::new(dir)).expect("repo data/materials loads")
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
+        Tables::from_source(&JsonTableSource::new(dir)).expect("repo Alpha/content/data loads")
     }
 
     /// A composition that can actually form water (hydrogen + a free-oxygen surplus

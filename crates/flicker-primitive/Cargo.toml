@@ -9,4 +9,4 @@ license.workspace = true
 # world. Depends only on the `clayengine` foundation — never on voxel
 # storage — so storage and primitives remain peers, neither owning the other.
 [dependencies]
-clayengine = { path = "../clayengine" }
+clayengine.workspace = true

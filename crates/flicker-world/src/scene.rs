@@ -71,7 +71,7 @@ impl Scene for Loading {
             self.shown = true; // let the splash render once before the (blocking) gen
             return Transition::None;
         }
-        let tables = load_tables().expect("material tables load from data/materials");
+        let tables = load_tables().expect("material tables load from Alpha/content/data");
         let params = WorldParams::default();
         let data = generate(&tables, &params, self.freq, self.seed);
         Transition::Replace(Box::new(World::new(tables, params, data)))

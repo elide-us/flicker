@@ -1,0 +1,2 @@
+# Runtime-written display/settings state (persisted by the shell).
+/settings.json

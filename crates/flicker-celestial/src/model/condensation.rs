@@ -308,7 +308,7 @@ mod tests {
     /// solarsystem `every_emitted_symbol_is_in_prism` guard, by number).
     #[test]
     fn every_makeup_element_is_in_prism() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
         let source = flicker_materials::JsonTableSource::new(dir);
         let tables = flicker_materials::Tables::from_source(&source).expect("tables load");
         for &class in &CondensationClass::ALL {

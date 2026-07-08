@@ -40,8 +40,9 @@ thin client-side `flicker-net` talks to *separate* server projects. Status:
 ### The POCs and what each one is for
 - **Client rendering** → `examples/voxel-cluster`. The in-game **client**:
   contour, mesh, LOD, fly camera, lighting/sky — what a player's machine runs.
-- **World generation** → `examples/hex-world`, `examples/hex-map` (superseded),
-  and the current `crates/flicker-world`. This is a **static, offline server
+- **World generation** → the current `crates/flicker-world` (the earlier
+  `hex-world` / `hex-map` POCs were deleted; the water-cycle nucleus was rescued
+  into `Alpha/flicker-pocepochs`). This is a **static, offline server
   process that sits beside the game**; it generates the planet's **starting
   point** for the live simulation. Not interactive, not the game client.
 
@@ -168,11 +169,12 @@ The project has pivoted several times. **Current authoritative direction:**
   — do NOT build on it or resurrect its model.
 
 ### Abandoned / superseded (left in tree, do NOT resurrect or reuse as a path)
-- The **flat two-map / bent-rings / σ-zipper** hex model in `examples/hex-map`
-  (`topology.rs`, `gadget.rs`, `snap_map*.rs`, spiral ordering, record-flip viz).
-  **Slated for deletion** in the `flicker-celestial` refactor (user-flagged cleanup —
-  it confuses "what is right" vs modern flicker-world). Its flat *within-hex* math
-  (`examples/hex-map/src/geom.rs`) may be referenced as a copy source first; nothing else.
+- The **flat two-map / bent-rings / σ-zipper** hex model (was `examples/hex-map`:
+  `topology.rs`, `gadget.rs`, `snap_map*.rs`, spiral ordering, record-flip viz) —
+  **deleted** 2026-07-07 along with `hex-world` / `hex-sphere`. The only keeper,
+  hex-world's conserved water-cycle `layers.rs`, was rescued into
+  `Alpha/flicker-pocepochs`; everything else (incl. the flat within-hex `geom.rs`)
+  is gone.
 - The **polar-cap defect-concentration** sketch (concentrating curvature at poles).
 - `flicker-worldsim` — a redundant world-sim crate that was an anti-pattern; the
   renderer + celestial sim already live in the voxel path. (Reflected in memory
@@ -237,14 +239,17 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
   `docs/flicker-sol2-epoch3-pipeline-roadmap.md`.
 - `examples/voxel-cluster` — primary voxel demo: 3×3 cluster field, contour+mesh,
   fly camera, dynamic LOD + async re-mesh, Lua debug HUD, pause/settings.
-- `examples/hex-sphere` — **headless** topology test: builds the icosphere, prints
-  a verification report, writes a per-shard-coloured PLY (pentagons red).
-  `cargo run -p hex-sphere -- [freq] [out.ply]`. CI-friendly, no GPU.
-- `examples/hex-world` — icosphere explorer + a working **vertical water-cycle
-  prototype** (`layers.rs`, conserved to <0.1% over 300 ticks) — stranded on the
-  old flat topology, awaiting re-homing.
-- `examples/hex-map` — **superseded** flat two-map demo (see §3).
-- `examples/hello-sprite`, `square-chase`, `mesh-smoke` — minimal 2D / mesh refs.
+- `Alpha/flicker-pocepochs` — single-hex **generation-stack** POC (shell client):
+  one hex drawn as its six epoch relief layers + the atmosphere / water-cycle band
+  stack, regenerable. Carries the rescued conserved water-cycle nucleus
+  (`layers.rs`) from the deleted hex-world. `cargo run -p flicker-pocepochs`.
+- `examples/hex-world`, `examples/hex-map`, `examples/hex-sphere` were **deleted**
+  (2026-07-07 — the abandoned flat two-map topology + a headless icosphere PLY
+  check). Their one keeper, hex-world's conserved water-cycle `layers.rs`, was
+  rescued into `Alpha/flicker-pocepochs`.
+- `hello-sprite`, `mesh-smoke`, and `square-chase` were **deleted** (throwaway
+  2D / mesh smoke-tests). `square-chase` was first promoted to the
+  `Alpha/flicker-clicktrainer` client, which supersedes it.
 
 ---
 

@@ -1,4 +1,4 @@
-//! One row of the periodic table (`data/materials/periodic_table.json`).
+//! One row of the periodic table (`Alpha/content/data/periodic_table.json`).
 //!
 //! Fields mirror the JSON, which mixes three provenances (see that file's
 //! `_meta`): *book* fields transcribed from Prism BookIII (the canonical design

@@ -20,11 +20,11 @@ use flicker_materials::{JsonTableSource, Tables};
 
 /// The repo material data directory (the canonical Prism source), relative to this
 /// example's manifest — the same files world-gen and the other POCs load.
-const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
+const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
 
-/// Load the Prism vocabulary (periodic table + materials) from `data/materials`.
+/// Load the Prism vocabulary (periodic table + materials) from `Alpha/content/data`.
 pub fn load_tables() -> Tables {
-    Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)).expect("repo data/materials loads")
+    Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)).expect("repo Alpha/content/data loads")
 }
 
 /// Reference mass that anchors the **outer** edge of the cloud: the lightest element

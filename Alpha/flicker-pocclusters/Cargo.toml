@@ -1,0 +1,21 @@
+[package]
+name = "flicker-pocclusters"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "flicker-pocclusters"
+path = "src/main.rs"
+
+[dependencies]
+flicker = { path = "../../crates/flicker" }
+# The reusable front-end shell (splash / menu / settings / pause). We hand it a
+# factory for our game scene and it owns the flow + run loop.
+flicker-shell.workspace = true
+flicker-voxel.workspace = true
+flicker-worker.workspace = true
+anyhow.workspace = true
+glam.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

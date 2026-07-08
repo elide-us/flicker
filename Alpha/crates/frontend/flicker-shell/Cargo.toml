@@ -1,0 +1,21 @@
+[package]
+name = "flicker-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The reusable game front-end shell service: splash → menu → settings → pause,
+# the gothic UI theme, display + settings persistence. A client supplies its
+# in-game scene via `SkeletonConfig` and calls `run`; the skeleton owns the
+# whole front-end flow and the run loop. Depends on the `flicker` umbrella (it
+# sits on top of the engine services — render/scene/script/ui/app — same layer
+# as a game client, not below them). Shell scripts / layout / logos are embedded
+# (`include_str!`/`include_bytes!`), so a new client inherits the front-end with
+# zero copied files.
+[dependencies]
+flicker = { path = "../../../../crates/flicker" }
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

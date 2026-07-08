@@ -1,4 +1,4 @@
-//! One row of the 256-material index (`data/materials/materials.json`).
+//! One row of the 256-material index (`Alpha/content/data/materials.json`).
 //!
 //! A material is **not** an element: it is what an aggregate element
 //! *composition* classifies to from a voxel's perspective (granite, sandstone,

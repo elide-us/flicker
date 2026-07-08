@@ -451,13 +451,24 @@ Reuses existing pipelines — no new renderer work:
   self-composites correctly and edges fade continuously — no spawn/wrap/pop. Mirrors the volumetric-disk
   pipeline (fullscreen, depth-bound, never writes depth; `set_depth` on resize; headless shader-compile
   test). API: `Renderer::set_ground_fog(GroundFog { color, bottom, top, density, noise_scale, coverage,
-  wind, time, height_power, bounds_min, bounds_max, edge_fade })` (exported `flicker::render::GroundFog`),
+  wind, time, height_power, bounds_min, bounds_max, edge_fade, fall_depth, flow })` (exported
+  `flicker::render::GroundFog`),
   rendered in the overlay pass right after the volumetric disk. **Localised (not infinite):** the shader
   fades density to 0 across an `edge_fade` feather at the `bounds_min..bounds_max` XZ rectangle edges, so
   the fog stays over the field floor instead of reaching the horizon. The field viewer sets bounds =
   `graph.floor_min/max`, `edge_fade = unit·6`, and a calm `density 0.5` / `coverage 0.72` / dim cool colour
   (the first pass' bright dense fog washed the models out; `coverage` amps the *amount* of fog without
-  touching the transparency, which is `density`). **Layering:** models + rings/boxes/arrows at `foot_y`; fog slab from
+  touching the transparency, which is `density`).
+- **Edge "waterfall" curtain (experimental, end-of-session slice — WINDOWED VERIFICATION PENDING):**
+  `fall_depth` + `flow` make the fog **spill off the field edges** — near the rim the density hangs
+  *below* the slab as a falling curtain (`ground_fog.wgsl` `fog_density` now sums the interior slab +
+  an edge curtain: a rim-band `spill` × a downward `vcurtain` falloff, with the noise scrolling down at
+  `flow`). The march extends to `bottom − fall_depth` and steps 28→36. The interior slab is unchanged
+  (the tuned-in look is preserved). Field viewer: `fall_depth = unit·3.5`, `flow = unit·1.5`. Compiles
+  (shader-validation test green) + builds; **not yet eyeballed** — user has it committed to git and will
+  roll back if it looks funky. Note: from directly above, curtain inside the rect is occluded by the
+  floor's depth; the dramatic read is from **low/side angles** (looking at the platform rim). Tunables:
+  `fall_depth` (how far it pours), `flow` (fall speed), `edge_fade` (rim band width). **Layering:** models + rings/boxes/arrows at `foot_y`; fog slab from
   `floor_y+0.05·unit` to `foot_y−0.05·unit`; glass floor at `foot_y−0.6·unit`. The field viewer drives it
   with a cool moonlit tint + gentle wind (drift = `time`). Removed the quad-cloud code
   (`CloudPuff`/`cloud_texture`/`cloud_quad_verts`/`hash01`). Reusable atmospheric-fog primitive. All

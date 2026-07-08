@@ -1,0 +1,16 @@
+[package]
+name = "flicker-flight"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# flicker-flight — the camera-cinematic ("flight path") service. A `.flight` is
+# authored data (in the spirit of a `.pack`, but its own file type): a sequence of
+# eased camera-pose keyframes plus an optional looping tail, replayed by a runtime
+# to drive a camera through a scripted sequence. Render-agnostic on purpose — it
+# emits poses (yaw/pitch/distance about a target), and the client feeds them to its
+# own camera (e.g. `Camera::orbit`). Animation cluster, parallel to flicker-skeletal.
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

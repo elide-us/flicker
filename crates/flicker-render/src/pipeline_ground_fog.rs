@@ -41,6 +41,11 @@ pub struct GroundFog {
     /// Feather distance (world units) over which the fog fades to 0 as it approaches the
     /// rectangle edge — a soft margin. `0` = a hard edge; large bounds = effectively global.
     pub edge_fade: f32,
+    /// Depth (world units) the fog **spills below the slab at the edges** — a falling
+    /// "curtain" that pours over the rim, like fog off a floating island. `0` = flat fog.
+    pub fall_depth: f32,
+    /// Downward flow speed of the falling curtain (animates the pour).
+    pub flow: f32,
 }
 
 impl Default for GroundFog {
@@ -58,6 +63,8 @@ impl Default for GroundFog {
             bounds_min: Vec2::splat(-1.0e6),
             bounds_max: Vec2::splat(1.0e6),
             edge_fade: 1.0,
+            fall_depth: 0.0,
+            flow: 0.0,
         }
     }
 }
@@ -77,6 +84,8 @@ pub struct GroundFogUniform {
     wind: [f32; 4],
     /// `(min_x, min_z, max_x, max_z)` — the XZ rectangle the fog is localized to.
     bounds: [f32; 4],
+    /// `(fall_depth, flow, _, _)` — the edge "curtain" that spills off the rim.
+    spill: [f32; 4],
 }
 
 const FOG_UNIFORM_SIZE: u64 = std::mem::size_of::<GroundFogUniform>() as u64;
@@ -97,6 +106,7 @@ impl GroundFogUniform {
             band: [p.bottom, p.top, p.noise_scale, p.coverage],
             wind: [p.wind.x, p.wind.y, p.time, p.height_power],
             bounds: [p.bounds_min.x, p.bounds_min.y, p.bounds_max.x, p.bounds_max.y],
+            spill: [p.fall_depth, p.flow, 0.0, 0.0],
         }
     }
 }

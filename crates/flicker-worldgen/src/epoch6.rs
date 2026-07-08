@@ -395,8 +395,8 @@ mod tests {
     use crate::epoch5::Epoch5;
 
     fn tables() -> Tables {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data/materials");
-        Tables::from_source(&JsonTableSource::new(dir)).expect("repo data/materials loads")
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data");
+        Tables::from_source(&JsonTableSource::new(dir)).expect("repo Alpha/content/data loads")
     }
 
     fn ring(n: usize) -> (Vec<Vec3>, Vec<Vec<u32>>) {
