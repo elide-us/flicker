@@ -1,0 +1,25 @@
+{
+  "_meta": {
+    "source": "Origin: the element-amount sliders that seeded the planet in the old solar-system project (now flicker-solarbirth). Each row = one element's starting RELATIVE abundance weight (renormalised per cell) — its competition strength in the Epoch-1 composition scatter.",
+    "levers_vs_representation": "These are the GENERATIVE LEVERS — the crust-forming elements whose amounts drive the crust/differentiation calculations (the tunable sliders). Every OTHER element in periodic_table.json is still represented in the world: Epoch 1 falls any unlisted element to Epoch1Params.abundance_floor (a trace), so the whole table is present everywhere. The gameplay guarantee that matters is separate — every element must form at least ONE harvestable NODE somewhere on the planet (enforced in generation, not by adding a slider per element).",
+    "note": "Weights mirror Earth's crustal mass-%. Loaded by flicker-worldengine via GeneratorParamsSource (JSON now, DB later). Abundance is a GENERATION parameter, deliberately NOT a periodic-table column.",
+    "format": "flicker.abundance",
+    "version": 1
+  },
+  "elements": [
+    { "symbol": "O",  "weight": 46.0 },
+    { "symbol": "Si", "weight": 28.0 },
+    { "symbol": "Al", "weight": 8.0 },
+    { "symbol": "Fe", "weight": 5.0 },
+    { "symbol": "Ca", "weight": 3.6 },
+    { "symbol": "Na", "weight": 2.8 },
+    { "symbol": "K",  "weight": 2.6 },
+    { "symbol": "Ti", "weight": 0.6 },
+    { "symbol": "C",  "weight": 0.2 },
+    { "symbol": "H",  "weight": 0.14 },
+    { "symbol": "P",  "weight": 0.1 },
+    { "symbol": "S",  "weight": 0.05 },
+    { "symbol": "Cl", "weight": 0.05 },
+    { "symbol": "N",  "weight": 0.02 }
+  ]
+}

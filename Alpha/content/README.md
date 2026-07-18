@@ -47,6 +47,52 @@ delete the local copy.
 separate files, namespaced by a `<client>/` subfolder only if their filenames would
 collide.)
 
+## Asset naming — the internal standard (2026-07-16)
+
+**Vendor names never enter the content tree.** Generators emit unstable, non-unique,
+unreadable stems — `Meshy_AI_Lonely_Muse_Top_Duste_0716234729_texture` is vendor-prefixed,
+truncated mid-word, and timestamped. Nothing downstream should ever see one. The asset
+**processing pipeline is where names, tags and labels are unified** — do it there, once.
+
+**Asset name.** `PascalCase-Hyphenated`, named for **what the object is**, unique across the
+tree, no vendor prefix / timestamp / `_texture` / `_Game_Mesh` noise:
+`Corset-Duster`, `Hem-Pants`, `Foot-Boots`, `Hand-Gloves`, `Neck-Pendant`, `Katana`,
+`Katana-Sheath`, `Dagger`, `Dagger-Sheath`. The file is `<AssetName>.json`.
+
+**Textures.** `<AssetName>_<Map>.png`, where `<Map>` is from the fixed internal vocabulary:
+`BaseColor` · `Normal` · `Roughness` · `Metallic` · `Emit` · `AO` · `ORM` (packed
+occlusion/roughness/metal).
+
+> **Named by ROLE, not by filename** (2026-07-17). `<Map>` comes from which **material
+> input** the texture feeds (Base Color → `BaseColor`, Normal → `Normal`, …) — see
+> `io_scene_flicker_rig.save_material_textures`, THE texture path for every FBX converter.
+> This is robust where a filename heuristic isn't: an FBX with **embedded** textures exposes
+> them as `Image_0`, `Image_3`, … (no vendor name at all), and role-driven naming still lands
+> them correctly, uniquely, and namespaced. (Caught 2026-07-17 on the hair, whose Meshy export
+> embedded its maps.) An image feeding several inputs (a packed map) is written once; a
+> multi-material mesh namespaces by slot (`<AssetName>_m<i>_<Map>`).
+
+> **The `<AssetName>_` prefix is load-bearing, not cosmetic.** Vendors name every item's
+> maps IDENTICALLY, so unprefixed they collide in one output dir and the first item
+> silently wins — every other piece renders with its texture, with no error anywhere.
+> (Caught 2026-07-16: all five Muse002 pieces resolved to the older Muse001 albedo.)
+
+**The mapping is RECORDED, not typed.** Each source bundle carries a
+`manifest.json` beside it (`Alpha/content/source/<Set>/manifest.json`) giving, per item, a
+`match` (a stable SUBSTRING of the vendor stem), the internal `name`, and its `slot`. It is
+versioned with the repo and is the only source→internal record; ad-hoc CLI renames are not
+acceptable because nothing remembers them. **An FBX with no manifest entry is SKIPPED, never
+auto-named** — an unnamed asset in the tree is worse than an absent one. Match order matters
+(`Katana_Saya` before `Katana`).
+
+Converter: `tools/blender/convert_meshy_prop.py --manifest <set>/manifest.json`.
+
+> **Vendor exports carry NO usable scale.** Meshy normalises every asset's longest axis to
+> ~1.899 units about the origin — a katana and a pendant come out the same size — and its
+> "resize to height" only re-defaults. Geometry is therefore stored RAW and a piece's real
+> scale/orientation/position is **authored fit data** recorded separately. Never bake a
+> guessed scale into an asset.
+
 ## Two asset classes, two destinations
 
 - **Structured definitions** — `data/`, `rigs/`, `packs/`, `clips/`, `flights/`,

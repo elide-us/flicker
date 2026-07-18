@@ -1,0 +1,29 @@
+{
+  "audio": {
+    "master": 0.8,
+    "music": 0.6,
+    "sfx": 0.7,
+    "voice": 0.9
+  },
+  "video": {
+    "display_mode": 1,
+    "resolution": 3,
+    "quality": 3,
+    "vsync": true,
+    "fps_limit": 2
+  },
+  "input": {
+    "mouse_sensitivity": 0.005,
+    "sprint_sensitivity": 0.005,
+    "invert_pitch": false,
+    "invert_yaw": false,
+    "raw_input": true,
+    "stick_sensitivity": 2.0,
+    "left_deadzone": 0.2,
+    "right_deadzone": 0.2,
+    "trigger_threshold": 0.5,
+    "invert_stick_pitch": false,
+    "invert_stick_yaw": false,
+    "deadzone_shape": 0
+  }
+}

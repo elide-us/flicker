@@ -79,9 +79,34 @@ pub fn set_current(setting: DisplaySetting) {
     save_to_disk(setting);
 }
 
-/// Path to the persisted settings file (next to the crate, like `bake/`).
+/// Where the per-user `settings.json` is read/written — the running app's project
+/// root, set once by the shell from `ShellConfig::settings_dir` so each shell app
+/// keeps its own (gitignored) settings in its own root. Falls back to the current
+/// working directory when unset. Shared by the display settings here and the full
+/// settings in `shell.rs`.
+static SETTINGS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Set the directory the shell persists `settings.json` into (the app's project
+/// root, usually its `CARGO_MANIFEST_DIR`). Call once at startup, before
+/// [`load_from_disk`].
+pub fn set_settings_dir(dir: Option<PathBuf>) {
+    *SETTINGS_DIR.lock().expect("settings dir lock") = dir;
+}
+
+/// The directory the per-user `settings.json` lives in — the app root if set, else
+/// the current working directory.
+pub fn settings_dir() -> PathBuf {
+    SETTINGS_DIR
+        .lock()
+        .expect("settings dir lock")
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Path to the persisted settings file, in the app's project root.
 fn settings_path() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/settings.json"))
+    settings_dir().join("settings.json")
 }
 
 /// Load the persisted display setting from `settings.json` into [`CURRENT`], if

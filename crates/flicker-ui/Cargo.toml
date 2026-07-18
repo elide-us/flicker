@@ -6,7 +6,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-flicker-render.workspace = true
-flicker-script.workspace = true
-serde_json.workspace = true
-tracing.workspace = true
+# The toolkit now lives in the Alpha frontend cluster; this crate just re-exports it.
+flicker-widgets.workspace = true

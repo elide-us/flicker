@@ -58,8 +58,10 @@
 ## Data caveats / model notes
 - Elemental densities in `data/materials/periodic_table.json` are **gas-phase at
   STP** (O = 0.00143 g/cm³), so they're useless for "crust mean density" — the
-  oxide-demand model uses `valence_electrons` (the book's gameplay valence), not
-  density. `Fe` is counted as an oxygen sink (valence 2) even though Epoch 2 sinks it
+  oxide-demand model uses the book's gameplay valence — since the R4a strip
+  (2026-07-13) these live as epoch4-LOCAL constants (`book_valence`), the
+  `valence_electrons` vocabulary column being gone — not density. `Fe` is counted
+  as an oxygen sink (valence 2) even though Epoch 2 sinks it
   to the core — an iron-rich world reads drier, which is a reasonable coupling.
 - The default mix sits a little oxygen-rich of the silica balance (free O ≈ 2× the
   hydrogen supply per hex), so **hydrogen is the punchier lever** and oxygen the

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <style>
+    .label {
+      font-family: serif;
+      font-size: 28px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+      font-weight: bold;
+    }
+    .white { fill: #dddddd; }
+    .yellow { fill: #ffc107; }
+    .red { fill: #f44336; }
+    .orange { fill: #ff9800; }
+    .black { fill: #212121; fill-opacity: 1; }
+    .green { fill: #4caf50; }
+    .blue { fill: #2196f3; }
+    .line { stroke: #444; stroke-width: 4; fill: none; }
+  </style>
+
+  <!-- Define Points -->
+  <!-- Recomputed using 360/7-degree spacing, radius 360 from center (500,500) -->
+  <circle cx="500" cy="140" r="6" class="white" /> <!-- White (0°) -->
+  <circle cx="790.2" cy="234.7" r="6" class="yellow" /> <!-- Yellow (51.43°) -->
+  <circle cx="856.0" cy="525.1" r="6" class="red" /> <!-- Red (102.86°) -->
+  <circle cx="660.3" cy="768.0" r="6" class="orange" /> <!-- Orange (154.29°) -->
+  <circle cx="339.7" cy="768.0" r="6" class="black" /> <!-- Black (205.71°) -->
+  <circle cx="144.0" cy="525.1" r="6" class="blue" /> <!-- Blue (257.14°) -->
+  <circle cx="209.8" cy="234.7" r="6" class="green" /> <!-- Green (308.57°) -->
+
+  <!-- Lines based on proper septagram angelic weave -->
+  <line x1="500" y1="140" x2="339.7" y2="768.0" class="line" /> <!-- White to Black -->
+  <line x1="500" y1="140" x2="660.3" y2="768.0" class="line" /> <!-- White to Orange -->
+  <line x1="339.7" y1="768.0" x2="209.8" y2="234.7" class="line" /> <!-- Black to Green -->
+  <line x1="660.3" y1="768.0" x2="790.2" y2="234.7" class="line" /> <!-- Orange to Yellow -->
+  <line x1="209.8" y1="234.7" x2="856.0" y2="525.1" class="line" /> <!-- Green to Red -->
+  <line x1="790.2" y1="234.7" x2="144.0" y2="525.1" class="line" /> <!-- Yellow to Blue -->
+
+  <!-- Labels -->
+  <text x="500" y="110" class="label white">White</text>
+  <text x="810" y="215" class="label yellow">Yellow</text>
+  <text x="876" y="525" class="label red">Red</text>
+  <text x="660" y="798" class="label orange">Orange</text>
+  <text x="339" y="798" class="label black">Black</text>
+  <text x="124" y="525" class="label blue">Blue</text>
+  <text x="189" y="215" class="label green">Green</text>
+</svg>

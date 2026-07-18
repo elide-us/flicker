@@ -1,0 +1,134 @@
+{
+  "_meta": {
+    "format": "flicker.accretion",
+    "version": 1,
+    "purpose": "BULK PLANET accretion seed - the undifferentiated ball at t=0. Core, mantle, crust, ocean and atmosphere are all PARTITIONS of this, produced by the sim. REPLACES abundance.json, which was a CRUSTAL assay (46% O / 5% Fe / no Mg lever) and therefore an OUTCOME used as an INPUT.",
+    "invariant": "weights are mass-% of TOTAL PLANET MASS and sum to 100.0. Every element is explicit - there is no abundance_floor mechanism. Planet mass is FIXED at Earth (5.972e24 kg); there is no size slider.",
+    "crust_is_an_output": "The old abundance.json numbers survive as an ACCEPTANCE TEST: the crust the sim GROWS should assay near 46 O / 28 Si / 8 Al / 5 Fe. Never a seed.",
+    "planet_mass_kg": 5.972e+24
+  },
+  "elements": [
+    {
+      "symbol": "Fe",
+      "weight": 32.21863853,
+      "note": "core + mantle. 5% in the old table made a core impossible."
+    },
+    {
+      "symbol": "O",
+      "weight": 30.21124672,
+      "note": "bound in silicates, not free"
+    },
+    {
+      "symbol": "Si",
+      "weight": 15.15580816
+    },
+    {
+      "symbol": "Mg",
+      "weight": 13.95137307,
+      "note": "THE MANTLE - olivine/pyroxene backbone. Was not even a lever in the old table."
+    },
+    {
+      "symbol": "S",
+      "weight": 2.91071812,
+      "note": "core light element + sulfide ores"
+    },
+    {
+      "symbol": "Ni",
+      "weight": 1.80665263,
+      "note": "core"
+    },
+    {
+      "symbol": "Ca",
+      "weight": 1.50554386
+    },
+    {
+      "symbol": "Al",
+      "weight": 1.40517427
+    },
+    {
+      "symbol": "Cr",
+      "weight": 0.26096094
+    },
+    {
+      "symbol": "Na",
+      "weight": 0.18066526
+    },
+    {
+      "symbol": "P",
+      "weight": 0.09033263
+    },
+    {
+      "symbol": "Co",
+      "weight": 0.09033263
+    },
+    {
+      "symbol": "Ti",
+      "weight": 0.08029567
+    },
+    {
+      "symbol": "C",
+      "weight": 0.07025871
+    },
+    {
+      "symbol": "H",
+      "weight": 0.02609609,
+      "note": "accreted only; MOST water arrives later by delivery"
+    },
+    {
+      "symbol": "K",
+      "weight": 0.02007392,
+      "note": "K-40 = primary radiogenic heat source"
+    },
+    {
+      "symbol": "Cu",
+      "weight": 0.00602218
+    },
+    {
+      "symbol": "Cl",
+      "weight": 0.00501848
+    },
+    {
+      "symbol": "Zn",
+      "weight": 0.00401478
+    },
+    {
+      "symbol": "Sn",
+      "weight": 0.00025092
+    },
+    {
+      "symbol": "Pb",
+      "weight": 0.00023085
+    },
+    {
+      "symbol": "Li",
+      "weight": 0.00017063,
+      "note": "Book III ruling F3450870 (2026-07-04). MISSING from periodic_table.json - must be synced."
+    },
+    {
+      "symbol": "U",
+      "weight": 2.007e-05,
+      "note": "radiogenic heat"
+    },
+    {
+      "symbol": "N",
+      "weight": 0.00010037
+    },
+    {
+      "symbol": "He",
+      "weight": 1e-07,
+      "note": "escapes almost immediately"
+    },
+    {
+      "symbol": "Pt",
+      "weight": 1.9e-07
+    },
+    {
+      "symbol": "Au",
+      "weight": 1.6e-07
+    },
+    {
+      "symbol": "Ag",
+      "weight": 5e-08
+    }
+  ]
+}

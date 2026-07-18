@@ -44,6 +44,7 @@ impl LinesPipeline {
         device: &wgpu::Device,
         surface_format: wgpu::TextureFormat,
         camera_buf: &wgpu::Buffer,
+        depth_compare: wgpu::CompareFunction,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.lines.shader"),
@@ -119,7 +120,7 @@ impl LinesPipeline {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_compare,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

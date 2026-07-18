@@ -1,0 +1,17 @@
+[package]
+name = "flicker-widgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# flicker-widgets — the reusable **UI widget toolkit** (promoted from crates/flicker-ui
+# into the Alpha frontend cluster). Owns the embedded immediate-mode Lua widget set
+# (widgets.lua) + the Lua HUD render bridge + the ui_elements.json loader — the shared
+# seam both flicker-shell and every client consume. `flicker-ui` re-exports it for
+# back-compat. See docs/ui-widget-catalog-handoff.md.
+[dependencies]
+flicker-render.workspace = true
+flicker-script.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

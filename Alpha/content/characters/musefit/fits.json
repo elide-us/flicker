@@ -1,0 +1,233 @@
+{
+  "_comment": "Recorded piece placements, keyed by ASSET name (the fit belongs to the piece, not the slot). Eyeballed in flicker-paperdoll and written by its Record button; read back at load to override the inferred default. `scale` multiplies the raw vendor mesh (every asset arrives normalised to a ~1.899 longest axis, carrying no real scale). `offset` is in WORLD axes at rest — x lateral, y depth, z up — NOT bone axes. The socket's upright correction is deliberately NOT stored: it is re-derived from the rig each load, so fixing the rig can never be shadowed by a stale record.",
+  "fits": {
+    "Corset-Duster.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "chest",
+      "uniform": 0.9981334209442139
+    },
+    "Dagger": {
+      "offset": [
+        4.599999904632568,
+        -13.0,
+        4.099999904632568
+      ],
+      "rotate": [
+        -3.6193180084228516,
+        -15.170455932617188,
+        104.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "lhand",
+      "uniform": 37.76172637939453
+    },
+    "Dagger-Sheath": {
+      "offset": [
+        7.943181991577148,
+        -16.168174743652344,
+        0.8267045617103577
+      ],
+      "rotate": [
+        0.0,
+        29.0,
+        -2.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "dagger_sheath",
+      "uniform": 15.678304672241211
+    },
+    "Foot-Boots-L.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "boot_l",
+      "uniform": 1.63013756275177
+    },
+    "Foot-Boots-R.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "boot_r",
+      "uniform": 1.787604570388794
+    },
+    "Hair-Ponytail": {
+      "offset": [
+        0.0,
+        7.599998950958252,
+        -7.399998664855957
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "hair",
+      "uniform": 33.19908905029297
+    },
+    "Hand-Gloves-L.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "glove_l",
+      "uniform": 2.4990174770355225
+    },
+    "Hand-Gloves-R.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "glove_r",
+      "uniform": 2.5002388954162598
+    },
+    "Hem-Pants.skinned": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "legs",
+      "uniform": 0.7457383275032043
+    },
+    "Katana": {
+      "offset": [
+        -7.271024703979492,
+        -25.157928466796875,
+        6.431250095367432
+      ],
+      "rotate": [
+        -6.041193008422852,
+        14.0,
+        -105.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "rhand",
+      "uniform": 54.57673263549805
+    },
+    "Katana-Sheath": {
+      "offset": [
+        20.2943172454834,
+        -12.34147834777832,
+        -19.748294830322266
+      ],
+      "rotate": [
+        -30.0,
+        56.0,
+        29.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "katana_sheath",
+      "uniform": 44.75679016113281
+    },
+    "Neck-Pendant": {
+      "offset": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "rotate": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "slot": "neck",
+      "uniform": 9.784103393554688
+    }
+  }
+}

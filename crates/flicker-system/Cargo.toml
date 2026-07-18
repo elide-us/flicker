@@ -15,5 +15,5 @@ publish = false
 # Math only — Vec2 for body positions/velocities. No GPU, no engine deps: this is a
 # headless simulation library the viewer (and later the planet sim) consume.
 glam.workspace = true
-# The Prism vocabulary — the authoritative 27-element periodic table with real atomic masses.
+# The Prism vocabulary — the authoritative 28-element periodic table with real atomic masses.
 flicker-materials.workspace = true

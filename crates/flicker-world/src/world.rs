@@ -206,6 +206,7 @@ fn build_epochs(params: &WorldParams) -> (Epoch2, Epoch3, Epoch4, Epoch5, Epoch6
         crust_density_max: params.get("e2_crust_density_max"),
         polar_thickening: params.get("e2_polar_thickening") as f32,
         duration: params.get("e2_duration").round().max(1.0) as u32,
+        settle_override: None,
     };
     let e3 = Epoch3 {
         plates: params.get("e3_plates").round().max(1.0) as usize,

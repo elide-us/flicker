@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::compound::CompoundDef;
 use crate::element::Element;
 use crate::material::MaterialDef;
 
@@ -16,6 +17,8 @@ use crate::material::MaterialDef;
 pub const PERIODIC_TABLE_FILE: &str = "periodic_table.json";
 /// Filename of the material index within a [`JsonTableSource`] directory.
 pub const MATERIALS_FILE: &str = "materials.json";
+/// Filename of the compound catalog within a [`JsonTableSource`] directory.
+pub const COMPOUNDS_FILE: &str = "compounds.json";
 
 /// An error loading the vocabulary. Both variants name the offending file so a
 /// missing or malformed table is diagnosable without guessing which one failed.
@@ -44,18 +47,23 @@ pub trait TableSource {
     fn load_elements(&self) -> Result<Vec<Element>, MaterialError>;
     /// The material-index rows.
     fn load_materials(&self) -> Result<Vec<MaterialDef>, MaterialError>;
+    /// The compound-catalog rows. Defaults to empty so a source that predates the
+    /// catalog (or a content dir without `compounds.json`) still loads.
+    fn load_compounds(&self) -> Result<Vec<CompoundDef>, MaterialError> {
+        Ok(Vec::new())
+    }
 }
 
 /// A [`TableSource`] backed by a directory of JSON files — the today seam.
-/// Holds only the directory; the filenames are [`PERIODIC_TABLE_FILE`] and
-/// [`MATERIALS_FILE`].
+/// Holds only the directory; the filenames are [`PERIODIC_TABLE_FILE`],
+/// [`MATERIALS_FILE`], and [`COMPOUNDS_FILE`].
 #[derive(Clone, Debug)]
 pub struct JsonTableSource {
     dir: PathBuf,
 }
 
 impl JsonTableSource {
-    /// A source reading the two JSON tables from `dir` (e.g. `Alpha/content/data`).
+    /// A source reading the JSON tables from `dir` (e.g. `Alpha/content/data`).
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }
@@ -87,6 +95,13 @@ struct MaterialsFile {
     materials: Vec<MaterialDef>,
 }
 
+/// Top-level shape of `compounds.json` — `_meta` is ignored; only `compounds`
+/// is read.
+#[derive(Deserialize)]
+struct CompoundsFile {
+    compounds: Vec<CompoundDef>,
+}
+
 impl TableSource for JsonTableSource {
     fn load_elements(&self) -> Result<Vec<Element>, MaterialError> {
         let file: PeriodicTableFile = read_json(&self.dir.join(PERIODIC_TABLE_FILE))?;
@@ -96,5 +111,15 @@ impl TableSource for JsonTableSource {
     fn load_materials(&self) -> Result<Vec<MaterialDef>, MaterialError> {
         let file: MaterialsFile = read_json(&self.dir.join(MATERIALS_FILE))?;
         Ok(file.materials)
+    }
+
+    fn load_compounds(&self) -> Result<Vec<CompoundDef>, MaterialError> {
+        // Tolerant of a content dir that has no compound catalog yet.
+        let path = self.dir.join(COMPOUNDS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let file: CompoundsFile = read_json(&path)?;
+        Ok(file.compounds)
     }
 }

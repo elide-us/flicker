@@ -54,9 +54,10 @@ the simulation only ever touches ②.
 
 ## 2. The vocabulary (built — `data/materials/`)
 
-- **`periodic_table.json`** — 26 elements from Prism BookIII. *Book fields*
-  (name, number, symbol, category, valence_electrons, uses — verbatim; valence
-  is the book's gameplay value, not IUPAC). *Physical fields* (atomic_mass,
+- **`periodic_table.json`** — **28 elements** from Prism BookIII (26 at first
+  transcription; Mg added 2026-06, Li synced 2026-07-11; ceiling 30). *Book fields*
+  (name, number, symbol, category, uses — verbatim; the book's gameplay
+  valence column was stripped per Unification Ruling R4a, 2026-07-13). *Physical fields* (atomic_mass,
   density_g_cm3, melting_point_c, state — real-world; epoch 1 distributes by
   mass/abundance, epoch 2 differentiates by **density**). *Trait fields*
   (hardness, brittleness, water_capacity — proposed starting values).

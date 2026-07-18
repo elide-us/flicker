@@ -1,0 +1,53 @@
+{
+  "_meta": {
+    "format": "flicker.epoch_defaults",
+    "version": 1,
+    "note": "Per-epoch generation levers for flicker-worldengine — one row per tunable knob: its owning epoch (1..=9), stable id (shared by the config, the Lua HUD, and ui_elements.json slider layout), Earth-like default, and the [min,max] band a slider spans / a reseed wanders within. Lifted out of the old hardcoded PARAM_DEFS table in flicker-world/src/world.rs. Loaded behind GeneratorParamsSource (JSON now, DB later); the element mix lives in abundance.json. Epochs 7-9 (heightmap strata) carry a duration knob for the shared 9-epoch clock; their physics is stubbed this iteration."
+  },
+  "levers": [
+    { "epoch": 1, "id": "e1_equator_bias",       "default": 1.5,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 1, "id": "e1_pole_bias",          "default": 1.5,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 1, "id": "e1_contrast",           "default": 4.0,   "min": 1.0,   "max": 6.0 },
+    { "epoch": 1, "id": "e1_frequency",          "default": 2.2,   "min": 0.5,   "max": 6.0 },
+
+    { "epoch": 2, "id": "e2_crust_density_max",  "default": 3.5,   "min": 2.5,   "max": 5.0 },
+    { "epoch": 2, "id": "e2_polar_thickening",   "default": 0.3,   "min": 0.0,   "max": 1.0 },
+    { "epoch": 2, "id": "e2_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+
+    { "epoch": 3, "id": "e3_plates",             "default": 8.0,   "min": 2.0,   "max": 24.0 },
+    { "epoch": 3, "id": "e3_continental_fraction","default": 0.4,  "min": 0.0,   "max": 1.0 },
+    { "epoch": 3, "id": "e3_mountain_uplift",    "default": 0.6,   "min": 0.0,   "max": 1.5 },
+    { "epoch": 3, "id": "e3_rift_drop",          "default": 0.25,  "min": 0.0,   "max": 1.0 },
+    { "epoch": 3, "id": "e3_hotspots",           "default": 6.0,   "min": 0.0,   "max": 20.0 },
+    { "epoch": 3, "id": "e3_hotspot_uplift",     "default": 0.6,   "min": 0.0,   "max": 1.5 },
+    { "epoch": 3, "id": "e3_hotspot_trail",      "default": 0.4,   "min": 0.05,  "max": 1.5 },
+    { "epoch": 3, "id": "e3_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+
+    { "epoch": 4, "id": "e4_hydration",          "default": 1.0,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 4, "id": "e4_equator_temp",       "default": 28.0,  "min": 0.0,   "max": 50.0 },
+    { "epoch": 4, "id": "e4_pole_temp",          "default": -25.0, "min": -60.0, "max": 10.0 },
+    { "epoch": 4, "id": "e4_axial_tilt",         "default": 23.5,  "min": 0.0,   "max": 90.0 },
+    { "epoch": 4, "id": "e4_vapor_scale",        "default": 1.0,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 4, "id": "e4_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+    { "epoch": 4, "id": "e4_prebiotic_rate",     "default": 0.3,   "min": 0.0,   "max": 1.0 },
+    { "epoch": 4, "id": "e4_water_delivery",     "default": 1200.0,"min": 0.0,   "max": 5000.0 },
+
+    { "epoch": 5, "id": "e5_max_veins",          "default": 64.0,  "min": 0.0,   "max": 256.0 },
+    { "epoch": 5, "id": "e5_vein_threshold",     "default": 0.35,  "min": 0.0,   "max": 1.0 },
+    { "epoch": 5, "id": "e5_microbial",          "default": 0.12,  "min": 0.02,  "max": 0.5 },
+    { "epoch": 5, "id": "e5_vent_life",          "default": 1.0,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 5, "id": "e5_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+
+    { "epoch": 6, "id": "e6_rain",               "default": 1.0,   "min": 0.0,   "max": 3.0 },
+    { "epoch": 6, "id": "e6_erosion_rate",       "default": 0.018, "min": 0.0,   "max": 0.1 },
+    { "epoch": 6, "id": "e6_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+    { "epoch": 6, "id": "e6_flora",              "default": 0.45,  "min": 0.0,   "max": 1.0 },
+    { "epoch": 6, "id": "e6_organics",           "default": 0.05,  "min": 0.0,   "max": 0.2 },
+    { "epoch": 6, "id": "e6_decomposer",         "default": 0.6,   "min": 0.0,   "max": 1.0 },
+    { "epoch": 6, "id": "e6_carbonate",          "default": 0.3,   "min": 0.0,   "max": 1.0 },
+
+    { "epoch": 7, "id": "e7_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+    { "epoch": 8, "id": "e8_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 },
+    { "epoch": 9, "id": "e9_duration",           "default": 5.0,   "min": 1.0,   "max": 10.0 }
+  ]
+}

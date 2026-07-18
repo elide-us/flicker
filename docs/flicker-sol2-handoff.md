@@ -2,7 +2,7 @@
 
 `examples/flicker-sol2` (`cargo run -p flicker-sol2`). **Currently: the ejecta-cloud
 *distribution* viewer only.** Built on flicker-render (2D) + flicker-scene + flicker-app;
-consumes flicker-materials (the 27-element Prism table).
+consumes flicker-materials (the 28-element Prism table).
 
 ## What it is now
 

@@ -21,11 +21,13 @@
 //! that maps a composition to one of the 256 material ids. This crate supplies
 //! the vocabulary that classifier will read; it does not guess the rules.
 
+pub mod compound;
 pub mod element;
 pub mod material;
 pub mod source;
 pub mod tables;
 
+pub use compound::{CompoundDef, CompoundElement};
 pub use element::{Element, ElementId, PhysicalState};
 pub use material::{MaterialDef, MaterialId};
 pub use source::{JsonTableSource, MaterialError, TableSource};

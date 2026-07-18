@@ -81,6 +81,7 @@ pub struct Renderer {
     /// draw call. Additive to `mesh`/`mesh_textured`, renders in the opaque pass.
     skinned: SkinnedMeshPipeline,
     lines: LinesPipeline,
+    lines_overlay: LinesPipeline,
     billboard: BillboardPipeline,
     sky: SkyPipeline,
     volumetric: VolumetricPipeline,
@@ -200,7 +201,20 @@ impl Renderer {
         let mesh_textured =
             TexturedMeshPipeline::new(&device, &queue, surface_format, min_uniform_offset_alignment);
         let skinned = SkinnedMeshPipeline::new(&device, &queue, surface_format);
-        let lines = LinesPipeline::new(&device, surface_format, mesh.camera_buffer());
+        let lines = LinesPipeline::new(
+            &device,
+            surface_format,
+            mesh.camera_buffer(),
+            wgpu::CompareFunction::LessEqual,
+        );
+        // Overlay lines ignore depth (Always) — for drawing a skeleton (or other debug
+        // gizmos) ON TOP of the mesh so it shows through instead of being occluded.
+        let lines_overlay = LinesPipeline::new(
+            &device,
+            surface_format,
+            mesh.camera_buffer(),
+            wgpu::CompareFunction::Always,
+        );
         let billboard = BillboardPipeline::new(&device, surface_format);
         let sky = SkyPipeline::new(&device, surface_format);
         let mut volumetric = VolumetricPipeline::new(&device, surface_format);
@@ -224,6 +238,7 @@ impl Renderer {
             mesh_textured,
             skinned,
             lines,
+            lines_overlay,
             billboard,
             sky,
             volumetric,
@@ -457,6 +472,7 @@ impl Renderer {
         self.mesh_textured.clear();
         self.skinned.clear();
         self.lines.clear();
+        self.lines_overlay.clear();
         self.billboard.clear();
         self.draw_sky = false;
         self.volumetric_params = None;
@@ -740,6 +756,15 @@ impl Renderer {
         }
     }
 
+    /// Like [`Self::draw_lines`] but drawn ON TOP of the 3D scene (depth test disabled),
+    /// so the segments show through opaque geometry — for a skeleton overlay laid over the
+    /// mesh, or other debug gizmos you want visible regardless of occlusion.
+    pub fn draw_lines_overlay(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
+        for &(a, b) in segments {
+            self.lines_overlay.push_segment(a, b, color);
+        }
+    }
+
     /// Queue a camera-facing world-space billboard this frame.
     ///
     /// `world_position` is the quad centre in world coordinates; `world_size`
@@ -933,6 +958,7 @@ impl Renderer {
         self.mesh_textured
             .prepare(&self.device, &self.queue, &self.textures);
         self.lines.prepare(&self.device, &self.queue);
+        self.lines_overlay.prepare(&self.device, &self.queue);
         self.billboard.prepare(&self.device, &self.queue);
         self.text
             .prepare(
@@ -990,6 +1016,9 @@ impl Renderer {
             self.mesh_textured.render(&mut pass, &self.textures);
             self.skinned.render(&mut pass);
             self.lines.render(&mut pass);
+            // Overlay lines last in the opaque pass — depth-Always, so they sit on top of
+            // the mesh (skeleton-over-mesh debug view).
+            self.lines_overlay.render(&mut pass);
             self.billboard.render(&mut pass, &self.textures);
         }
 

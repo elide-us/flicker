@@ -1,0 +1,22 @@
+[package]
+name = "flicker-worldengine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The forward-regenerative world-generation ENGINE — the GPU-free facade over the
+# flicker-worldgen physics kernels (the flicker-system analogue for planet gen).
+# Owns the per-world levers, the immutable per-epoch snapshot cache, the
+# forward-regenerative replay, and the `.epoch` capture format. A viewer (or a
+# caller growing the "seven Home worlds") drives it; it knows nothing about GPUs
+# or windows. See docs/flicker-world-epoch-redesign.md.
+[dependencies]
+flicker-materials.workspace = true
+flicker-worldstate.workspace = true
+flicker-worldgen.workspace = true
+flicker-worldgrid.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+flate2.workspace = true

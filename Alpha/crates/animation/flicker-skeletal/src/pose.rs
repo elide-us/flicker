@@ -14,7 +14,12 @@ use crate::format::{Bone, ResolvedClip};
 ///
 /// Keys are dense (one per tick), so we index directly, clamping to the last key
 /// past the end (defensive — the caller wraps `tick` within the clip duration).
-pub fn sample_local_poses(bones: &[Bone], clip: &ResolvedClip, tick: u32) -> Vec<Mat4> {
+pub fn sample_local_poses(
+    bones: &[Bone],
+    clip: &ResolvedClip,
+    tick: u32,
+    retarget: bool,
+) -> Vec<Mat4> {
     let mut locals: Vec<Mat4> = bones.iter().map(|b| b.local).collect();
     for track in &clip.tracks {
         if track.keys.is_empty() {
@@ -22,10 +27,23 @@ pub fn sample_local_poses(bones: &[Bone], clip: &ResolvedClip, tick: u32) -> Vec
         }
         let idx = (tick as usize).min(track.keys.len() - 1);
         let k = &track.keys[idx];
-        let t = Vec3::from(k.translation);
-        let mut r = Quat::from_xyzw(k.rotation[0], k.rotation[1], k.rotation[2], k.rotation[3]);
+        // Translation retargeting: rebase each non-root bone's translation off the SOURCE's
+        // rest onto THIS rig's rest — `target_rest + (clip_T - source_rest)`. For a constant-
+        // offset bone (limbs) `clip_T == source_rest`, so this collapses to the rig's own rest
+        // offset — its proportions are preserved and a clip from a differently-proportioned
+        // skeleton doesn't drag it. For a bone that actually TRANSLATES — the pelvis's hip
+        // sway/bob — it keeps that animated delta, rebased onto this rig's hip height, instead
+        // of freezing the hips to rest (which killed the walk's hip motion). The root keeps the
+        // clip translation (root motion). No-op for the authoring rig (source_rest == its rest).
+        let t = if retarget && bones[track.bone].parent >= 0 {
+            bones[track.bone].local.w_axis.truncate() + Vec3::from(k.translation)
+                - Vec3::from(track.source_rest)
+        } else {
+            Vec3::from(k.translation)
+        };
+        let r = Quat::from_xyzw(k.rotation[0], k.rotation[1], k.rotation[2], k.rotation[3]);
         // Baked quats should be unit; guard against a zero/denormal quat producing NaNs.
-        r = if r.length_squared() > 1e-8 {
+        let r = if r.length_squared() > 1e-8 {
             r.normalize()
         } else {
             Quat::IDENTITY
@@ -89,7 +107,82 @@ pub fn blend_local_poses(from: &[Mat4], to: &[Mat4], w: f32) -> Vec<Mat4> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::{Bone, Keyframe, ResolvedClip, ResolvedTrack};
     use glam::Quat;
+
+    /// Rotation retargeting keeps a non-root bone's OWN rest translation and ignores the
+    /// clip's baked source offset (`retarget = true`); the authoring path (`false`) uses
+    /// the clip translation. The root always uses the clip translation (root motion).
+    #[test]
+    fn retarget_keeps_rest_translation_for_nonroot() {
+        let bones = vec![
+            Bone {
+                name: "root".into(),
+                parent: -1,
+                local: Mat4::IDENTITY,
+                inverse_bind: Mat4::IDENTITY,
+            },
+            Bone {
+                name: "child".into(),
+                parent: 0,
+                local: Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+                inverse_bind: Mat4::IDENTITY,
+            },
+        ];
+        // Clip drives BOTH bones' local translation to x=99 (the source skeleton's offset).
+        let key = |x: f32| Keyframe {
+            t: 0,
+            translation: [x, 0.0, 0.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+        };
+        let clip = ResolvedClip {
+            name: "t".into(),
+            tick_rate_hz: 60,
+            duration_ticks: 1,
+            // The clip's offset EQUALS the source rest (a constant-offset bone) → delta 0.
+            tracks: vec![
+                ResolvedTrack { bone: 0, keys: vec![key(99.0)], source_rest: [99.0, 0.0, 0.0] },
+                ResolvedTrack { bone: 1, keys: vec![key(99.0)], source_rest: [99.0, 0.0, 0.0] },
+            ],
+            unresolved: vec![],
+        };
+        // Authoring rig: full clip translation on both bones.
+        let off = sample_local_poses(&bones, &clip, 0, false);
+        assert!((off[1].w_axis.x - 99.0).abs() < 1e-4, "retarget off → clip translation");
+        // Retargeted rig: child keeps its rest offset (10, delta 0), root keeps clip motion (99).
+        let on = sample_local_poses(&bones, &clip, 0, true);
+        assert!((on[1].w_axis.x - 10.0).abs() < 1e-4, "retarget on → child rest translation");
+        assert!((on[0].w_axis.x - 99.0).abs() < 1e-4, "retarget on → root keeps clip motion");
+    }
+
+    /// A bone that actually TRANSLATES (the pelvis's hip motion) keeps its animated delta,
+    /// rebased onto THIS rig's rest — not frozen to rest, and not dragged to the source's hip
+    /// height. `target_rest + (clip_T - source_rest)`.
+    #[test]
+    fn retarget_applies_translation_delta_for_moving_bone() {
+        let bones = vec![
+            Bone { name: "root".into(), parent: -1, local: Mat4::IDENTITY, inverse_bind: Mat4::IDENTITY },
+            Bone {
+                name: "pelvis".into(),
+                parent: 0,
+                local: Mat4::from_translation(Vec3::new(0.0, 0.0, 95.0)), // this rig's hip height
+                inverse_bind: Mat4::IDENTITY,
+            },
+        ];
+        let key = |z: f32| Keyframe {
+            t: 0, translation: [0.0, 0.0, z], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0, 1.0, 1.0],
+        };
+        // Source rest hip z=106; the clip drops it to 103 mid-stride (a -3 delta).
+        let clip = ResolvedClip {
+            name: "walk".into(), tick_rate_hz: 60, duration_ticks: 1,
+            tracks: vec![ResolvedTrack { bone: 1, keys: vec![key(103.0)], source_rest: [0.0, 0.0, 106.0] }],
+            unresolved: vec![],
+        };
+        let on = sample_local_poses(&bones, &clip, 0, true);
+        // her hip = 95 + (103 - 106) = 92 → the stride drop preserved, at HER height (not 103).
+        assert!((on[1].w_axis.z - 92.0).abs() < 1e-4, "pelvis keeps animated delta at rig's height");
+    }
 
     #[test]
     fn blend_hits_endpoints_and_midpoint() {

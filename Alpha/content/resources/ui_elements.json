@@ -238,6 +238,106 @@
     }
   },
 
+  "paperdoll": {
+    "_comment": "flicker-paperdoll's in-scene HUD (behaviour: Alpha/flicker-paperdoll/scripts/hud.lua). Replaces the POC keypress toggles + draw_text overlay. `inventory` = the equip-slot bar; a slot's piece is drawn only while its cell is lit. Slot keys are the contract with the engine: it publishes `slot_<key>_loaded`/`slot_<key>_on` on the Model and reads `slot_<key>` back. Sheaths have no cell by design — they are always worn (no sheath/unsheath animations yet).",
+    "inventory": {
+      "header": "INVENTORY",
+      "header_size": 13,
+      "header_color": [0.83, 0.67, 0.39, 1.0],
+      "slot": 54,
+      "gap": 6,
+      "pad": 12,
+      "margin_b": 18,
+      "panel_bg": [0.05, 0.06, 0.09, 0.94],
+      "panel_border": [0.26, 0.34, 0.5, 1.0],
+      "label_size": 12,
+      "cell": { "cell": [0.11, 0.14, 0.2, 0.97], "hot": [0.22, 0.42, 0.3, 1.0], "label": [0.82, 0.86, 0.92, 1.0], "label_size": 12 },
+      "empty": { "cell": [0.07, 0.08, 0.11, 0.85], "hot": [0.07, 0.08, 0.11, 0.85], "label": [0.32, 0.35, 0.41, 1.0], "label_size": 12 },
+      "slots": [
+        { "key": "hair", "label": "Hair" },
+        { "key": "neck", "label": "Neck" },
+        { "key": "chest", "label": "Chest" },
+        { "key": "legs", "label": "Legs" },
+        { "key": "glove_l", "label": "Glove L" },
+        { "key": "glove_r", "label": "Glove R" },
+        { "key": "boot_l", "label": "Boot L" },
+        { "key": "boot_r", "label": "Boot R" },
+        { "key": "rhand", "label": "R Hand" },
+        { "key": "lhand", "label": "L Hand" }
+      ]
+    },
+    "view": {
+      "margin": 16,
+      "top": 92,
+      "row_h": 20,
+      "box": 14,
+      "label_x": 22,
+      "label_size": 13,
+      "label_color": [0.78, 0.81, 0.88, 1.0],
+      "checkbox": { "box": [0.13, 0.16, 0.22, 1.0], "check": [0.55, 0.75, 0.95, 1.0], "border": [0.3, 0.36, 0.46, 1.0], "pad": 3 },
+      "attack": { "w": 120, "h": 24, "gap_y": 10, "label": "ATTACK", "style": { "cell": [0.32, 0.18, 0.16, 1.0], "hot": [0.55, 0.28, 0.24, 1.0], "label": [0.95, 0.85, 0.8, 1.0], "label_size": 13 } },
+      "_items_note": "`animate` = the Animation/Pose toggle: on drives the pose from the pack's state machine (real runtime animation, blended), off is A-pose/bind (the fitting reference — Idle is an authored stance, already off bind). ↑/↓ cycle animation states, Space pauses. `blend` A/Bs the transition crossfade.",
+      "items": [
+        { "key": "animate", "label": "Animate" },
+        { "key": "blend", "label": "Blend xfade" },
+        { "key": "show_mesh", "label": "Mesh" },
+        { "key": "show_textures", "label": "Textures" },
+        { "key": "show_skeleton", "label": "Skeleton" }
+      ]
+    },
+    "fit": {
+      "_comment": "The fit gadget — shown only while a piece is selected (Model.fit_active). Click a piece in the scene to select it; click empty space to deselect. `offset` sliders are in WORLD axes at rest (x lateral, y depth, z up), NOT bone axes — the torso bones are tilted 90°, so bone-space nudging would be unusable by eye. Record writes every loaded piece's fit to musefit/fits.json.",
+      "margin": 16,
+      "w": 250,
+      "pad": 12,
+      "row_h": 26,
+      "slider_h": 12,
+      "label_w": 54,
+      "value_w": 62,
+      "header": "FIT",
+      "header_size": 14,
+      "header_color": [0.83, 0.67, 0.39, 1.0],
+      "panel_bg": [0.05, 0.06, 0.09, 0.96],
+      "panel_border": [0.4, 0.34, 0.24, 1.0],
+      "label_size": 13,
+      "label_color": [0.78, 0.81, 0.88, 1.0],
+      "value_size": 12,
+      "value_color": [0.62, 0.68, 0.8, 1.0],
+      "slider": { "track": [0.12, 0.15, 0.21, 1.0], "fill": [0.3, 0.45, 0.62, 1.0], "handle": [0.72, 0.8, 0.92, 1.0], "handle_w": 9 },
+      "_focus_note": "Click a slider to FOCUS it; ←/→ then nudge it by `nudge` (hold Shift for `nudge_coarse`). A trackpad drag over a ~120px track spans the whole range, which is far too coarse to fit a piece by eye — the arrows are the fine control. The focused row is drawn with `focus_*`. SCALE IS PER-AXIS (sx/sy/sz): a garment generated separately from the body is rarely the same build, so a uniform scale can line it up but never make it fit. Scale and offset are both in WORLD axes at rest (x lateral, y depth, z up), NOT bone axes — the fit cancels the socket rest rotation, so x thickens sideways whichever bone the piece hangs off.",
+      "focus_track": [0.16, 0.21, 0.3, 1.0],
+      "focus_fill": [0.4, 0.6, 0.82, 1.0],
+      "focus_label": [0.96, 0.8, 0.42, 1.0],
+      "uniform": { "min": 0.1, "max": 200.0, "nudge": 0.1, "nudge_coarse": 1.0 },
+      "scale": { "min": 0.25, "max": 4.0, "nudge": 0.01, "nudge_coarse": 0.1 },
+      "offset": { "min": -120.0, "max": 120.0, "nudge": 0.1, "nudge_coarse": 1.0 },
+      "rotate": { "min": -180.0, "max": 180.0, "nudge": 1.0, "nudge_coarse": 15.0 },
+      "_rows_note": "The gadget's rows, in panel order. SHARED CONTRACT: hud.lua lays them out and the engine cycles focus (↑/↓) and nudges (←/→) from this same list, so the order and keys cannot drift apart. `group` selects the row's min/max/nudge block above.",
+      "rows": [
+        { "key": "fit_u", "label": "Size", "group": "uniform" },
+        { "key": "fit_sx", "label": "Wide", "group": "scale" },
+        { "key": "fit_sy", "label": "Thick", "group": "scale" },
+        { "key": "fit_sz", "label": "Tall", "group": "scale" },
+        { "key": "fit_rx", "label": "Pitch", "group": "rotate" },
+        { "key": "fit_ry", "label": "Yaw", "group": "rotate" },
+        { "key": "fit_rz", "label": "Roll", "group": "rotate" },
+        { "key": "fit_x", "label": "X (lat)", "group": "offset" },
+        { "key": "fit_y", "label": "Y (depth)", "group": "offset" },
+        { "key": "fit_z", "label": "Z (up)", "group": "offset" }
+      ],
+      "record": { "h": 26, "label": "RECORD ALL TO CONTENT" },
+      "status": { "size": 12, "gap_y": 5, "ok": [0.55, 0.85, 0.6, 1.0], "err": [0.95, 0.45, 0.4, 1.0] },
+      "button": { "cell": [0.18, 0.3, 0.2, 1.0], "hot": [0.3, 0.5, 0.32, 1.0], "label": [0.88, 0.94, 0.88, 1.0], "label_size": 13 }
+    },
+
+    "stats": {
+      "margin": 16,
+      "top": 62,
+      "size": 13,
+      "color": [0.7, 0.78, 0.9, 1.0]
+    }
+  },
+
   "hud": {
     "stats": {
       "x": 16,

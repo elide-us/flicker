@@ -21,26 +21,52 @@
 //!
 //! [`Composition`]: flicker_worldstate::Composition
 
+pub mod classify;
+pub mod cooling;
 pub mod epoch1;
 pub mod epoch2;
 pub mod epoch3;
 pub mod epoch4;
+pub mod chemistry;
 pub mod epoch5;
 pub mod epoch6;
+pub mod erosion;
 pub mod field;
+pub mod hydrothermal;
+pub mod layer;
+pub mod molten;
 pub mod noise;
 pub mod pipeline;
+pub mod process;
 pub mod state;
+pub mod tectonics;
+pub mod water;
 
 pub use epoch1::{Epoch1, Epoch1Params};
 pub use epoch2::Epoch2;
-pub use epoch3::{Epoch3, Partition, Plate};
+pub use epoch3::{
+    advance_conveyor, buoyancy_ranks, convection_flow, smooth_crust_thickness, Epoch3, Partition,
+    Plate, MY_PER_TECTONIC_STEP,
+};
 pub use epoch4::Epoch4;
 pub use epoch5::Epoch5;
 pub use epoch6::{watersheds, Epoch6, Watershed};
+pub use erosion::run_protoatmospheric_erosion;
 pub use field::{CellSample, FieldSampler};
 pub use pipeline::{epoch_stack, six_epoch_stack, EpochCtx, EpochTransform, PassThrough, EPOCHS};
+pub use chemistry::{
+    formable_mass, locked_element_mass, water_element_split, ChemistryParams, FormerPlan,
+};
+pub use classify::{classify, LayerClass, Phase};
+pub use hydrothermal::{run_hydrothermal_veins, HydrothermalParams};
+pub use layer::{Layer, LayerKind, LayerLedger};
+pub use process::{processes, run_tick, Ctx, Effect, Process};
+pub use molten::{
+    convection_step, run_molten_convection, run_molten_convection_cooling, seed_convection_heat,
+};
+pub use tectonics::{run_orogeny, run_tectonic_hotspots};
 pub use state::{Biome, Boundary, HexState, LifeStage};
+pub use water::{run_water_cycle, total_water};
 
 use std::collections::BTreeMap;
 

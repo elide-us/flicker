@@ -1,0 +1,2175 @@
+{
+  "_meta": {
+    "source": "Prism/BookIII.md \u2014 the compound catalog (Common, Alloy, Biological, Mineral, Useful, Gemstone Compounds). Transcribed faithfully; the engine's compound catalog was previously deferred (BookIII: 'the exact mapping from these tables to classified materials is unassigned \u2014 the world simulation works element->material directly'). This file lands it.",
+    "schema": "Each row: id, name, formula (ASCII, verbatim from the book \u2014 may reference elements outside the Prism 28-element table (ceiling 30; count per periodic_table.json _meta.additions)), category (common|mineral|useful|gemstone|biological|alloy), elements[{symbol,count}] (PARSED constituents, restricted to Prism periodic_table.json elements \u2014 non-Prism symbols like F in Apatite's formula are dropped from this list but kept in `formula`), natural (true = forms in-world during world-gen; false = a crafted alloy/recipe), hardness_mohs / density_g_cm3 / brittleness (0..1) \u2014 ONE TABLE (Aaron, 2026-07-13): populated on EVERY row, no split populations. Real-world reference values; for the 78 Book III rows they are proposed-starting-values pending ratification (the R6b twelve were ruled with theirs); 0.0 hardness/brittleness = not applicable (non-solid), the element-table gas convention. Quench/cooling-rate is deliberately NOT a column here: per R4b it is per-layer formation provenance, combined with these constants by the R7 conditions registry. extracted_element (ore target, omitted if none), harvestable (true = curated mineable ore/gem that must reach a concentrated vein; curated gameplay canon \u2014 NOT extended by the R6b merge; spodumene/dolomite ore notes await a separate ruling), sim_required (true = row added beyond the Book III transcription \u2014 the R6b mineral merge, ids 79-90 continuing the id space), uses (Book rows) / note (R6b rows) \u2014 sparse text fields.",
+    "use": "Loaded by flicker-materials Tables via TableSource (JsonTableSource reads this as a sibling of periodic_table.json/materials.json). The composition->compound classifier + the mineral extraction wiring to the node/vein layer are the next step.",
+    "counts": {
+      "common": 14,
+      "mineral": 34,
+      "useful": 10,
+      "gemstone": 10,
+      "biological": 9,
+      "alloy": 17
+    },
+    "format": "flicker.compounds",
+    "version": 2,
+    "retired_ids": {
+      "42": "Feldspar \u2014 the Books' combined two-formula row (KAlSi3O8, NaAlSi3O8), superseded by the R6b split rows Albite (82) and Orthoclase (83); ruled retired by Aaron 2026-07-13. Ids are stable \u2014 NEVER reuse a retired id."
+    }
+  },
+  "compounds": [
+    {
+      "id": 1,
+      "name": "Water",
+      "formula": "H2O",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "H",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 1.0,
+      "brittleness": 0.0,
+      "uses": "Essential for plant growth and biological functions, drives erosion and sediment transport, and is used in crafting and alchemical recipes."
+    },
+    {
+      "id": 2,
+      "name": "Carbon Dioxide",
+      "formula": "CO2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.002,
+      "brittleness": 0.0,
+      "uses": "Vital for plant photosynthesis, influences environmental and atmospheric dynamics, and features in crafting and chemical reactions."
+    },
+    {
+      "id": 3,
+      "name": "Silicon Dioxide",
+      "formula": "SiO2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 2.65,
+      "brittleness": 0.8,
+      "uses": "A fundamental material for crafting glass and ceramics, used in building structures and advanced items, and integral to making molds and casting components."
+    },
+    {
+      "id": 4,
+      "name": "Calcium Carbonate",
+      "formula": "CaCO3",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.0,
+      "density_g_cm3": 2.71,
+      "brittleness": 0.6,
+      "uses": "Essential for construction materials like cement and mortar, used in decorative items and sculptures, and influences soil pH affecting plant growth."
+    },
+    {
+      "id": 5,
+      "name": "Iron Oxide",
+      "formula": "Fe2O3",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.26,
+      "brittleness": 0.7,
+      "extracted_element": "Fe",
+      "uses": "Used for coloring materials and crafting pigments, important for tools, weapons and building materials, and can indicate iron deposits for mining."
+    },
+    {
+      "id": 6,
+      "name": "Sodium Chloride",
+      "formula": "NaCl",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "Na",
+          "count": 1
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 2.17,
+      "brittleness": 0.6,
+      "uses": "Used in food preservation and seasoning, essential in chemical processes and crafting recipes, and employed in curing hides and preserving materials."
+    },
+    {
+      "id": 7,
+      "name": "Potassium Nitrate",
+      "formula": "KNO3",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "N",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 2.11,
+      "brittleness": 0.5,
+      "uses": "A key fertilizer ingredient for plant growth, used in crafting gunpowder for explosives, and involved in food preservation techniques."
+    },
+    {
+      "id": 8,
+      "name": "Copper Sulfate",
+      "formula": "CuSO4",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 3.6,
+      "brittleness": 0.5,
+      "uses": "Employed in crafting fungicides and pesticides, used in chemical processes and as a mordant in dyeing, and part of advanced crafting and alchemy recipes."
+    },
+    {
+      "id": 9,
+      "name": "Phosphoric Acid",
+      "formula": "H3PO4",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "H",
+          "count": 3
+        },
+        {
+          "symbol": "P",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 1.88,
+      "brittleness": 0.0,
+      "uses": "Essential in producing fertilizers, used in various industrial and crafting processes, and involved in rust removal and metal treatment."
+    },
+    {
+      "id": 10,
+      "name": "Halite",
+      "formula": "NaCl",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Na",
+          "count": 1
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 2.17,
+      "brittleness": 0.6,
+      "extracted_element": "Na",
+      "harvestable": true,
+      "uses": "Common salt used for food preservation, seasoning, glass and hide tanning, and as a chlorine source for disinfectants."
+    },
+    {
+      "id": 11,
+      "name": "Sylvite",
+      "formula": "KCl",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 1.99,
+      "brittleness": 0.6,
+      "extracted_element": "K",
+      "harvestable": true,
+      "uses": "Key fertilizer ingredient for plant growth and a component in chemical and alchemical recipes."
+    },
+    {
+      "id": 12,
+      "name": "Calcite",
+      "formula": "CaCO3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.0,
+      "density_g_cm3": 2.71,
+      "brittleness": 0.6,
+      "extracted_element": "Ca",
+      "harvestable": true,
+      "uses": "Primary construction material (cement, mortar, concrete) also used to adjust soil pH and for building with limestone and marble."
+    },
+    {
+      "id": 13,
+      "name": "Ilmenite",
+      "formula": "FeTiO3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "Ti",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 4.7,
+      "brittleness": 0.6,
+      "extracted_element": "Ti",
+      "harvestable": true,
+      "uses": "Source of titanium for advanced tools, armor, high-strength alloys, and specialized machinery."
+    },
+    {
+      "id": 14,
+      "name": "Chromite",
+      "formula": "FeCr2O4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "Cr",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 4.8,
+      "brittleness": 0.6,
+      "extracted_element": "Cr",
+      "harvestable": true,
+      "uses": "Used to craft stainless steel and corrosion-resistant materials, boosting tool durability and metal finishes."
+    },
+    {
+      "id": 15,
+      "name": "Hematite",
+      "formula": "Fe2O3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.26,
+      "brittleness": 0.7,
+      "extracted_element": "Fe",
+      "harvestable": true,
+      "uses": "Abundant early-game iron source for tools, weapons, building materials, and steel when combined with carbon."
+    },
+    {
+      "id": 16,
+      "name": "Linnaeite",
+      "formula": "Co3S4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Co",
+          "count": 3
+        },
+        {
+          "symbol": "S",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.0,
+      "density_g_cm3": 4.85,
+      "brittleness": 0.7,
+      "extracted_element": "Co",
+      "harvestable": true,
+      "uses": "Cobalt source for magnets, advanced alloys, and high-tech equipment that adds strength and durability."
+    },
+    {
+      "id": 17,
+      "name": "Millerite",
+      "formula": "NiS",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ni",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 5.5,
+      "brittleness": 0.6,
+      "extracted_element": "Ni",
+      "harvestable": true,
+      "uses": "Nickel source for stainless steel, coinage, specialty alloys, and corrosion resistance."
+    },
+    {
+      "id": 18,
+      "name": "Chalcopyrite",
+      "formula": "CuFeS2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 4.2,
+      "brittleness": 0.7,
+      "extracted_element": "Cu",
+      "harvestable": true,
+      "uses": "Copper source for electrical components, wiring, tools, construction, and bronze when alloyed with tin."
+    },
+    {
+      "id": 19,
+      "name": "Sphalerite",
+      "formula": "ZnS",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Zn",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 4.1,
+      "brittleness": 0.7,
+      "extracted_element": "Zn",
+      "harvestable": true,
+      "uses": "Zinc source for galvanization against rust, brass with copper, and other alloys and metal treatments."
+    },
+    {
+      "id": 20,
+      "name": "Argentite",
+      "formula": "Ag2S",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ag",
+          "count": 2
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 7.3,
+      "brittleness": 0.2,
+      "extracted_element": "Ag",
+      "harvestable": true,
+      "uses": "Silver source valued for currency, jewelry, ceremonial objects, and highly conductive electrical components."
+    },
+    {
+      "id": 21,
+      "name": "Native Platinum",
+      "formula": "Pt",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Pt",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 4.0,
+      "density_g_cm3": 21.45,
+      "brittleness": 0.1,
+      "extracted_element": "Pt",
+      "harvestable": true,
+      "uses": "Extremely rare and valuable platinum for advanced technology, high-end crafting, and catalytic processes."
+    },
+    {
+      "id": 22,
+      "name": "Native Gold",
+      "formula": "Au",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Au",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 19.3,
+      "brittleness": 0.1,
+      "extracted_element": "Au",
+      "harvestable": true,
+      "uses": "Gold for currency, jewelry, prestigious items, trade, wealth, and high-end electronics."
+    },
+    {
+      "id": 23,
+      "name": "Uraninite",
+      "formula": "UO2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "U",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 10.9,
+      "brittleness": 0.7,
+      "extracted_element": "U",
+      "harvestable": true,
+      "uses": "Rare uranium source for advanced technology, energy, high-level quests, and powerful unique artifacts."
+    },
+    {
+      "id": 24,
+      "name": "Bauxite",
+      "formula": "Al(OH)3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        },
+        {
+          "symbol": "H",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 2.42,
+      "brittleness": 0.5,
+      "extracted_element": "Al",
+      "harvestable": true,
+      "uses": "Lightweight aluminum for crafting, construction, utensils, alloys, transportation devices, and structures."
+    },
+    {
+      "id": 25,
+      "name": "Coal",
+      "formula": "C",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 1.35,
+      "brittleness": 0.8,
+      "extracted_element": "C",
+      "harvestable": true,
+      "uses": "Fuel source for smelting and heating, processable into graphite, and essential to steel production with iron."
+    },
+    {
+      "id": 26,
+      "name": "Quartz",
+      "formula": "SiO2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 2.65,
+      "brittleness": 0.8,
+      "extracted_element": "Si",
+      "harvestable": true,
+      "uses": "Silicon source for glass, ceramics, silicon components, molds, and high-temperature materials."
+    },
+    {
+      "id": 27,
+      "name": "Cassiterite",
+      "formula": "SnO2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Sn",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.5,
+      "density_g_cm3": 7.0,
+      "brittleness": 0.6,
+      "extracted_element": "Sn",
+      "harvestable": true,
+      "uses": "Tin source for bronze with copper, pewter, solder, and coating or plating processes."
+    },
+    {
+      "id": 28,
+      "name": "Galena",
+      "formula": "PbS",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Pb",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 7.6,
+      "brittleness": 0.7,
+      "extracted_element": "Pb",
+      "harvestable": true,
+      "uses": "Lead source for batteries, pipes, radiation shielding, weights, ammunition, and protective equipment."
+    },
+    {
+      "id": 29,
+      "name": "Saltpeter",
+      "formula": "KNO3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "N",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 2.11,
+      "brittleness": 0.5,
+      "extracted_element": "N",
+      "harvestable": true,
+      "uses": "Nitrogen source essential for fertilizers, gunpowder, and food preservation."
+    },
+    {
+      "id": 30,
+      "name": "Apatite",
+      "formula": "Ca5(PO4)3(F,Cl,OH)",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 5
+        },
+        {
+          "symbol": "P",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 13
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.0,
+      "density_g_cm3": 3.2,
+      "brittleness": 0.6,
+      "extracted_element": "P",
+      "harvestable": true,
+      "uses": "Phosphorus source vital for fertilizers, soil fertility, and certain alloys and chemical compounds."
+    },
+    {
+      "id": 31,
+      "name": "Native Sulfur",
+      "formula": "S8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "S",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 2.07,
+      "brittleness": 0.9,
+      "extracted_element": "S",
+      "harvestable": true,
+      "uses": "Elemental sulfur for gunpowder, matches, insecticides, vulcanizing rubber, alchemy, and chemical processes."
+    },
+    {
+      "id": 32,
+      "name": "Flint",
+      "formula": "SiO2",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 2.6,
+      "brittleness": 0.9,
+      "uses": "Microcrystalline quartz used to make sharp tools, weapons, and fire-starting sparks for survival and hunting."
+    },
+    {
+      "id": 33,
+      "name": "Gypsum",
+      "formula": "CaSO4\u00b72H2O",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 6
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 2.32,
+      "brittleness": 0.5,
+      "uses": "Calcium sulfate dihydrate used in construction plaster, soil conditioning for agriculture, and crafting molds and casts."
+    },
+    {
+      "id": 34,
+      "name": "Slate",
+      "formula": "",
+      "category": "useful",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.8,
+      "brittleness": 0.7,
+      "uses": "Fine-grained metamorphic rock used as a building material for roofing and flooring and for writing tablets and blackboards."
+    },
+    {
+      "id": 35,
+      "name": "Limestone",
+      "formula": "CaCO3",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.0,
+      "density_g_cm3": 2.71,
+      "brittleness": 0.6,
+      "uses": "Calcium carbonate used in building construction, road-making, producing lime for mortar and cement, and decorative sculpting."
+    },
+    {
+      "id": 36,
+      "name": "Sandstone",
+      "formula": "",
+      "category": "useful",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 6.5,
+      "density_g_cm3": 2.35,
+      "brittleness": 0.6,
+      "uses": "Sand-particle rock used in construction for buildings and paving and carved into statues and architectural details."
+    },
+    {
+      "id": 37,
+      "name": "Obsidian",
+      "formula": "",
+      "category": "useful",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 2.4,
+      "brittleness": 0.95,
+      "uses": "Silica-rich volcanic glass used to craft sharp blades and arrowheads and valued for decorative cutting tools."
+    },
+    {
+      "id": 38,
+      "name": "Granite",
+      "formula": "",
+      "category": "useful",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 6.5,
+      "density_g_cm3": 2.7,
+      "brittleness": 0.7,
+      "uses": "Durable coarse-grained igneous rock used extensively in construction, monuments, sculptures, and large-scale building projects."
+    },
+    {
+      "id": 39,
+      "name": "Clay",
+      "formula": "Al2Si2O5(OH)4",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "Al",
+          "count": 2
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 9
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 2.6,
+      "brittleness": 0.3,
+      "uses": "Hydrated aluminum silicate essential for pottery, bricks, ceramics, tiles, and early settlement development."
+    },
+    {
+      "id": 40,
+      "name": "Charcoal",
+      "formula": "C",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 1.5,
+      "density_g_cm3": 0.5,
+      "brittleness": 0.9,
+      "uses": "Carbon-rich material used as fuel and in smelting metals, blacksmithing, and gunpowder production."
+    },
+    {
+      "id": 41,
+      "name": "Graphite",
+      "formula": "C",
+      "category": "useful",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 1.5,
+      "density_g_cm3": 2.26,
+      "brittleness": 0.4,
+      "uses": "Pure carbon used in pencils, lubricants, refractory materials, electrodes, and battery components, and can be processed into diamonds."
+    },
+    {
+      "id": 43,
+      "name": "Diamond",
+      "formula": "C",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 10.0,
+      "density_g_cm3": 3.51,
+      "brittleness": 0.8,
+      "harvestable": true,
+      "uses": "Crafts high-durability tools and weapons and serves as a rare, high-value jewelry and trade item that encourages deep mining."
+    },
+    {
+      "id": 44,
+      "name": "Emerald",
+      "formula": "SiO2",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.5,
+      "density_g_cm3": 2.76,
+      "brittleness": 0.7,
+      "harvestable": true,
+      "uses": "Crafted into jewelry and ornamental items, valued for its vibrant green color, and usable in quests or magical artifacts."
+    },
+    {
+      "id": 45,
+      "name": "Ruby",
+      "formula": "Al2O3",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Al",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 9.0,
+      "density_g_cm3": 4.0,
+      "brittleness": 0.6,
+      "harvestable": true,
+      "uses": "Valued for its deep red color in jewelry and used to craft decorative and ceremonial items with possible magical properties."
+    },
+    {
+      "id": 46,
+      "name": "Sapphire",
+      "formula": "Al2O3",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Al",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 9.0,
+      "density_g_cm3": 4.0,
+      "brittleness": 0.6,
+      "harvestable": true,
+      "uses": "Used in jewelry and high-end crafting, available in various colors depending on impurities, and may link to quests or special abilities."
+    },
+    {
+      "id": 47,
+      "name": "Amethyst",
+      "formula": "SiO2",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 2.65,
+      "brittleness": 0.8,
+      "harvestable": true,
+      "uses": "Used in decorative items and jewelry, found in geodes or special rock formations, and valued for its aesthetic appeal."
+    },
+    {
+      "id": 48,
+      "name": "Topaz",
+      "formula": "SiO2",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 8.0,
+      "density_g_cm3": 3.55,
+      "brittleness": 0.7,
+      "harvestable": true,
+      "uses": "Used in crafting and as a trade commodity, valued for its range of colors and clarity."
+    },
+    {
+      "id": 49,
+      "name": "Opal",
+      "formula": "SiO2\u00b7nH2O",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        },
+        {
+          "symbol": "H",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 2.1,
+      "brittleness": 0.9,
+      "harvestable": true,
+      "uses": "Known for its iridescent play-of-color, used in unique jewelry pieces, and may grant luck or special in-game effects."
+    },
+    {
+      "id": 50,
+      "name": "Garnet",
+      "formula": "",
+      "category": "gemstone",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 3.9,
+      "brittleness": 0.7,
+      "uses": "Used in crafting and as an abrasive material, valued for its deep red color in jewelry."
+    },
+    {
+      "id": 51,
+      "name": "Pearl",
+      "formula": "CaCO3",
+      "category": "gemstone",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.7,
+      "brittleness": 0.6,
+      "harvestable": true,
+      "uses": "Crafted into jewelry and decorative items, harvested from oysters or found in treasure chests, symbolizing wealth and rarity."
+    },
+    {
+      "id": 52,
+      "name": "Turquoise",
+      "formula": "",
+      "category": "gemstone",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 2.7,
+      "brittleness": 0.6,
+      "uses": "Valued for its blue-green color in jewelry, used to craft talismans or amulets, and associated with protection and healing."
+    },
+    {
+      "id": 53,
+      "name": "Lignin",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.5,
+      "density_g_cm3": 1.35,
+      "brittleness": 0.3,
+      "uses": "Provides rigidity and decay resistance in plants and can be processed into crafting/construction materials affecting wooden-structure durability."
+    },
+    {
+      "id": 54,
+      "name": "Cellulose",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.5,
+      "density_g_cm3": 1.5,
+      "brittleness": 0.2,
+      "uses": "Gives plants structural support and can be made into paper, textiles, ropes, and fabrics."
+    },
+    {
+      "id": 55,
+      "name": "Chlorophyll",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 1
+        },
+        {
+          "symbol": "N",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 1.08,
+      "brittleness": 0.0,
+      "uses": "Essential for photosynthesis and usable in crafting dyes, pigments, and alchemical effects."
+    },
+    {
+      "id": 56,
+      "name": "Resin",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 1.5,
+      "density_g_cm3": 1.07,
+      "brittleness": 0.6,
+      "uses": "Used to craft adhesives, varnishes, sealants, torches, and flammable or medicinal/alchemical materials."
+    },
+    {
+      "id": 57,
+      "name": "Nectar",
+      "formula": "H2O",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "H",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 1.32,
+      "brittleness": 0.0,
+      "uses": "Attracts pollinators and can be collected to make sweeteners, fermented beverages, or alchemical potions."
+    },
+    {
+      "id": 58,
+      "name": "Pollen",
+      "formula": "",
+      "category": "biological",
+      "elements": [],
+      "natural": true,
+      "hardness_mohs": 0.5,
+      "density_g_cm3": 1.2,
+      "brittleness": 0.1,
+      "uses": "Affects character allergies, drives plant breeding and agriculture, and serves as a crafting or alchemy reagent."
+    },
+    {
+      "id": 59,
+      "name": "Humus",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "N",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.5,
+      "density_g_cm3": 1.3,
+      "brittleness": 0.1,
+      "uses": "Enhances soil fertility and plant growth, boosting crop yields and player farming."
+    },
+    {
+      "id": 60,
+      "name": "Wax",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.5,
+      "density_g_cm3": 0.96,
+      "brittleness": 0.2,
+      "uses": "Used to craft candles, polishes, waterproofing, and metal-casting molds, plus healing salves and protective coatings."
+    },
+    {
+      "id": 61,
+      "name": "Oils",
+      "formula": "",
+      "category": "biological",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.92,
+      "brittleness": 0.0,
+      "uses": "Used for cooking, crafting, and lamp fuel, and in soaps, lotions, medicines, and alchemy recipes."
+    },
+    {
+      "id": 62,
+      "name": "Brass",
+      "formula": "CuZn",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Zn",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 8.5,
+      "brittleness": 0.2,
+      "uses": "Crafted into musical instruments, decorative fittings, and jewelry, valued for acoustics, corrosion resistance, and easy machinability."
+    },
+    {
+      "id": 63,
+      "name": "Pewter",
+      "formula": "SnPb",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Sn",
+          "count": 1
+        },
+        {
+          "symbol": "Pb",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 2.0,
+      "density_g_cm3": 7.3,
+      "brittleness": 0.2,
+      "uses": "Cast into tableware, tankards, figurines, and ornaments as an affordable silver-like alternative with a low melting point."
+    },
+    {
+      "id": 64,
+      "name": "Cast Iron",
+      "formula": "FeC",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.5,
+      "density_g_cm3": 7.2,
+      "brittleness": 0.8,
+      "uses": "Used for cookware, pipes, machinery parts, and heavy infrastructure requiring good heat retention and compressive strength."
+    },
+    {
+      "id": 65,
+      "name": "Solder",
+      "formula": "SnPb",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Sn",
+          "count": 1
+        },
+        {
+          "symbol": "Pb",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 1.5,
+      "density_g_cm3": 8.4,
+      "brittleness": 0.1,
+      "uses": "Joins and repairs metal parts in tinwork, plumbing, jewelry, and electrical circuitry via its low melting point."
+    },
+    {
+      "id": 66,
+      "name": "Sterling Silver",
+      "formula": "AgCu",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Ag",
+          "count": 1
+        },
+        {
+          "symbol": "Cu",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 3.0,
+      "density_g_cm3": 10.4,
+      "brittleness": 0.1,
+      "uses": "Crafted into durable jewelry, utensils, coinage, and antimicrobial medical instruments, with copper strengthening the soft silver."
+    },
+    {
+      "id": 67,
+      "name": "Electrum",
+      "formula": "AuAg",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Au",
+          "count": 1
+        },
+        {
+          "symbol": "Ag",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 14.9,
+      "brittleness": 0.1,
+      "uses": "Used for historical coinage, jewelry, and ceremonial objects as a symbol of wealth and status."
+    },
+    {
+      "id": 68,
+      "name": "Gunmetal",
+      "formula": "CuSnZn",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Sn",
+          "count": 1
+        },
+        {
+          "symbol": "Zn",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.0,
+      "density_g_cm3": 8.7,
+      "brittleness": 0.3,
+      "uses": "Cast into cannons, guns, machinery, and marine fittings for strength and saltwater corrosion resistance."
+    },
+    {
+      "id": 69,
+      "name": "Nickel Silver",
+      "formula": "CuNiZn",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Ni",
+          "count": 1
+        },
+        {
+          "symbol": "Zn",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.0,
+      "density_g_cm3": 8.65,
+      "brittleness": 0.2,
+      "uses": "Made into cutlery, instruments, jewelry, and outdoor fixtures with a silvery, corrosion-resistant finish despite containing no silver."
+    },
+    {
+      "id": 70,
+      "name": "Wrought Iron",
+      "formula": "Fe",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.0,
+      "density_g_cm3": 7.7,
+      "brittleness": 0.1,
+      "uses": "Forged into gates, railings, decorative ironwork, tools, and historical structures for its ductility and toughness."
+    },
+    {
+      "id": 71,
+      "name": "White Gold",
+      "formula": "AuNi",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Au",
+          "count": 1
+        },
+        {
+          "symbol": "Ni",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 15.5,
+      "brittleness": 0.2,
+      "uses": "Used for jewelry, ornamental pieces, and gemstone settings, whitened and hardened by nickel."
+    },
+    {
+      "id": 72,
+      "name": "Phosphor Bronze",
+      "formula": "CuSnP",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Sn",
+          "count": 1
+        },
+        {
+          "symbol": "P",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.0,
+      "density_g_cm3": 8.8,
+      "brittleness": 0.2,
+      "uses": "Used for springs, bolts, bearings, and musical instrument strings for its wear resistance and stiffness."
+    },
+    {
+      "id": 73,
+      "name": "Aluminum Bronze",
+      "formula": "CuAl",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.5,
+      "density_g_cm3": 7.7,
+      "brittleness": 0.3,
+      "uses": "Used for marine hardware, pumps, coins, and medals for its seawater corrosion resistance and golden appearance."
+    },
+    {
+      "id": 74,
+      "name": "Carbon Steel",
+      "formula": "FeC",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 5.0,
+      "density_g_cm3": 7.85,
+      "brittleness": 0.3,
+      "uses": "Used for construction materials, tools, and blades where higher carbon content increases hardness and strength."
+    },
+    {
+      "id": 75,
+      "name": "Stainless Steel",
+      "formula": "FeCrNi",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "Cr",
+          "count": 1
+        },
+        {
+          "symbol": "Ni",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 7.9,
+      "brittleness": 0.2,
+      "uses": "Used for corrosion-resistant tools, cookware, and hygienic medical instruments thanks to its protective chromium oxide layer."
+    },
+    {
+      "id": 76,
+      "name": "Bell Metal",
+      "formula": "CuSn",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Sn",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 4.5,
+      "density_g_cm3": 8.6,
+      "brittleness": 0.6,
+      "uses": "Cast into resonant bells, gongs, sculptures, and occasional coinage, using a higher tin content than bronze."
+    },
+    {
+      "id": 77,
+      "name": "Billon",
+      "formula": "AgCu",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Ag",
+          "count": 1
+        },
+        {
+          "symbol": "Cu",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 3.0,
+      "density_g_cm3": 9.2,
+      "brittleness": 0.2,
+      "uses": "Used to mint lower-value coins and make economical jewelry with a high copper proportion."
+    },
+    {
+      "id": 78,
+      "name": "Cupro-Nickel",
+      "formula": "CuNi",
+      "category": "alloy",
+      "elements": [
+        {
+          "symbol": "Cu",
+          "count": 1
+        },
+        {
+          "symbol": "Ni",
+          "count": 1
+        }
+      ],
+      "natural": false,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 8.9,
+      "brittleness": 0.2,
+      "uses": "Used for modern coinage, medals, and seawater-exposed marine engineering for its wear and corrosion resistance."
+    },
+    {
+      "id": 79,
+      "name": "Olivine",
+      "formula": "Mg2SiO4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 2
+        },
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 3.27,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "THE MANTLE. Forsterite end-member. Also the Mg ore."
+    },
+    {
+      "id": 80,
+      "name": "Pyroxene",
+      "formula": "MgSiO3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 3.2,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "Mantle + basalt. Enstatite end-member."
+    },
+    {
+      "id": 81,
+      "name": "Anorthite",
+      "formula": "CaAl2Si2O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 2
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.73,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "Ca-plagioclase. The other half of basalt."
+    },
+    {
+      "id": 82,
+      "name": "Albite",
+      "formula": "NaAlSi3O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Na",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.62,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "Na-plagioclase. Split out of the old two-formula Feldspar."
+    },
+    {
+      "id": 83,
+      "name": "Orthoclase",
+      "formula": "KAlSi3O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.56,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "K-feldspar. Granite. Split out of the old Feldspar."
+    },
+    {
+      "id": 84,
+      "name": "Biotite",
+      "formula": "KMg3AlSi3O10(OH)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Mg",
+          "count": 3
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 12
+        },
+        {
+          "symbol": "H",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 3.0,
+      "brittleness": 0.9,
+      "sim_required": true,
+      "note": "Mica. Granite + the foliation that makes slate cleave."
+    },
+    {
+      "id": 85,
+      "name": "Muscovite",
+      "formula": "KAl3Si3O10(OH)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 3
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 12
+        },
+        {
+          "symbol": "H",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 2.82,
+      "brittleness": 0.9,
+      "sim_required": true,
+      "note": "Mica. Metamorphic - the mineral slate is MADE of."
+    },
+    {
+      "id": 86,
+      "name": "Magnetite",
+      "formula": "Fe3O4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.15,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "BIF + the magnetic signature of ocean crust."
+    },
+    {
+      "id": 87,
+      "name": "Pyrite",
+      "formula": "FeS2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.01,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "The sulfur cycle. Its OXIDATION is a primary O2 SINK pre-GOE."
+    },
+    {
+      "id": 88,
+      "name": "Dolomite",
+      "formula": "CaMg(CO3)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "Mg",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 6
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.85,
+      "brittleness": 0.5,
+      "sim_required": true,
+      "note": "Mg carbonate. Second Mg ore; a carbon sink."
+    },
+    {
+      "id": 89,
+      "name": "Spodumene",
+      "formula": "LiAlSi2O6",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Li",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 6
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 6.5,
+      "density_g_cm3": 3.15,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "The Li ore. Book has Li (F3450870) but no source mineral."
+    },
+    {
+      "id": 90,
+      "name": "Serpentine",
+      "formula": "Mg3Si2O5(OH)4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 3
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 9
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.55,
+      "brittleness": 0.8,
+      "sim_required": true,
+      "note": "Hydrated olivine. HOW WATER RIDES A SLAB INTO THE MANTLE."
+    },
+    {
+      "id": 91,
+      "name": "Nitrogen",
+      "formula": "N2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "N",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00125,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Inert atmospheric gas. Outgasses slowly across the whole cooling run and becomes the residual air once reactive volatiles condense or draw down — the temperate atmosphere."
+    },
+    {
+      "id": 92,
+      "name": "Sulfur Dioxide",
+      "formula": "SO2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "S",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00293,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Volcanic outgassing product, released in the hottest early degassing. Marks the acidic/volcanic atmosphere and feeds ocean acidity (the future pH axis)."
+    },
+    {
+      "id": 93,
+      "name": "Hydrogen Chloride",
+      "formula": "HCl",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00164,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Acidic volcanic gas; scrubbed into the ocean as it condenses, another acid source for the pH axis."
+    },
+    {
+      "id": 94,
+      "name": "Methane",
+      "formula": "CH4",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.000717,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Reducing-atmosphere carbon gas; forms when free oxygen is scarce (an O-starved, reducing world) instead of CO2."
+    },
+    {
+      "id": 95,
+      "name": "Ammonia",
+      "formula": "NH3",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "N",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.000769,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Reducing-atmosphere nitrogen gas; the reduced counterpart to N2 in an O-starved world."
+    }
+  ]
+}

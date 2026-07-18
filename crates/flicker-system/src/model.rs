@@ -13,7 +13,7 @@
 //! distribution. The explosion-size dial scales the whole reach.
 //!
 //! Element identity (symbol, atomic mass, colour) comes from the **Prism** periodic
-//! table via [`flicker_materials::Tables`] — the same 27-element vocabulary the rest
+//! table via [`flicker_materials::Tables`] — the same 28-element vocabulary the rest
 //! of the project stays within.
 
 use flicker_materials::{JsonTableSource, Tables};
@@ -152,9 +152,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_all_27_elements() {
+    fn loads_all_28_elements() {
         let ej = Ejecta::from_tables(&load_tables());
-        assert_eq!(ej.elements.len(), 27);
+        // 28 after Li was synced into periodic_table.json (2026-07-11, Book III
+        // ruling F3450870) — see flicker-materials.
+        assert_eq!(ej.elements.len(), 28);
         // Sorted ascending by mass: hydrogen first, uranium last.
         assert_eq!(ej.elements.first().unwrap().symbol, "H");
         assert_eq!(ej.elements.last().unwrap().symbol, "U");

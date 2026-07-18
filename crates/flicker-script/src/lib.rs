@@ -95,6 +95,10 @@ pub enum TextAlign {
     /// string and offsets it left by half its width. Used for centring
     /// titles/labels without the script needing font metrics.
     Center,
+    /// `x` is the text's *right* edge; the consumer measures the string and
+    /// offsets it left by its full width. Used for right-aligned panel values
+    /// (status columns, readouts) without the script needing font metrics.
+    Right,
 }
 
 /// A draw command emitted by a HUD script for the engine to render.
@@ -462,11 +466,12 @@ fn read_layer(cmd: &Table) -> mlua::Result<f32> {
     Ok(cmd.get::<Option<f32>>("layer")?.unwrap_or(0.0))
 }
 
-/// Read a text command's `align` (`"center"` → [`TextAlign::Center`]; anything
-/// else, including omitted, → [`TextAlign::Left`]).
+/// Read a text command's `align` (`"center"` → [`TextAlign::Center`], `"right"` →
+/// [`TextAlign::Right`]; anything else, including omitted, → [`TextAlign::Left`]).
 fn read_align(cmd: &Table) -> mlua::Result<TextAlign> {
     Ok(match cmd.get::<Option<String>>("align")?.as_deref() {
         Some("center") => TextAlign::Center,
+        Some("right") => TextAlign::Right,
         _ => TextAlign::Left,
     })
 }

@@ -260,7 +260,24 @@ fn oxide_oxygen_per_atom(e: &Element) -> f64 {
     if e.number == OXYGEN || e.state == PhysicalState::Gas {
         0.0
     } else {
-        e.valence_electrons as f64 / 2.0
+        book_valence(e.number) as f64 / 2.0
+    }
+}
+
+/// The Books' former gameplay valence, by atomic number — LOCAL constants of
+/// this oxide model only. The column was ruled out of the element vocabulary
+/// and stripped from `periodic_table.json` (Unification Ruling R4a,
+/// 2026-07-13); this epoch model keeps the values it was built against.
+fn book_valence(number: u8) -> u8 {
+    match number {
+        1 | 3 | 11 | 19 | 29 | 47 | 78 | 79 => 1, // H Li Na K Cu Ag Pt Au
+        2 | 12 | 20 | 26 | 27 | 28 | 30 => 2,     // He Mg Ca Fe Co Ni Zn
+        13 => 3,                                  // Al
+        6 | 14 | 22 | 50 | 82 => 4,               // C Si Ti Sn Pb
+        7 | 15 => 5,                              // N P
+        8 | 16 | 24 | 92 => 6,                    // O S Cr U
+        17 => 7,                                  // Cl
+        _ => 0,
     }
 }
 

@@ -29,12 +29,19 @@ pub type GameSceneFactory = Box<dyn Fn() -> Box<dyn Scene>>;
 pub struct ShellConfig {
     /// Builds the in-game scene START launches.
     pub game_scene: GameSceneFactory,
+    /// The app's project root, where the per-user `settings.json` (display mode/
+    /// resolution, keybindings, audio) is read/written — usually
+    /// `env!("CARGO_MANIFEST_DIR").into()` so each shell app keeps its own
+    /// (gitignored) settings in its own root. `None` falls back to the current
+    /// working directory.
+    pub settings_dir: Option<std::path::PathBuf>,
 }
 
 /// Restore the persisted display setting, then run the whole front-end flow —
 /// intro splash → menu → *the client's scene* → pause/settings — on the winit
 /// loop. Blocks until the window closes. The one entry point a client calls.
 pub fn run(config: ShellConfig) -> anyhow::Result<()> {
+    display::set_settings_dir(config.settings_dir.clone());
     display::load_from_disk();
     run_app(SceneManager::new(Box::new(LogoScene::new(config.game_scene))))
 }
@@ -121,7 +128,7 @@ impl Default for InputSettings {
 
 impl GameSettings {
     fn settings_path() -> std::path::PathBuf {
-        std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/settings.json"))
+        crate::display::settings_dir().join("settings.json")
     }
 
     fn save(&self) {
