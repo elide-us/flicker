@@ -1,0 +1,1 @@
+Before creating any new file, class, module, or crate: (1) grep the repo for an existing implementation of this concept, (2) query memory_coderules and memory_search for anything relevant, (3) if either surfaces a match, stop and extend that instead of writing new code. This applies even when the task doesn't look like a rewrite.

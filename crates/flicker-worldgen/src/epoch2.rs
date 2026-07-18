@@ -35,7 +35,18 @@ pub struct Epoch2 {
     /// crust) while a long one drains them fully. At the default it is fully settled
     /// — today's output unchanged. The first epoch added to the shared timeline
     /// (Epoch 1 is the snapshot the clock starts from, so it has no duration).
+    ///
+    /// Superseded by [`settle_override`](Self::settle_override) when the cooling
+    /// engine supplies a temperature-derived settle; kept as the fallback for the
+    /// one-shot pipeline (which has no thermal clock).
     pub duration: u32,
+    /// **Cooling-derived differentiation completeness**, when set: the continuous-sim
+    /// engine computes how fully the melt sorted from the *thermal clock* (a planet
+    /// that stayed molten longer differentiates more; a fast quench strands heavies)
+    /// and passes it here, retiring the `duration`-fraction. `None` = fall back to the
+    /// `duration`-based settle (the one-shot pipeline / tests), so their output is
+    /// unchanged. See [`crate::cooling::differentiation_settle`].
+    pub settle_override: Option<f64>,
 }
 
 impl Default for Epoch2 {
@@ -44,6 +55,7 @@ impl Default for Epoch2 {
             crust_density_max: 3.5,
             polar_thickening: 0.3,
             duration: FULL_DIFFERENTIATION,
+            settle_override: None,
         }
     }
 }
@@ -59,11 +71,13 @@ impl EpochTransform for Epoch2 {
             .map(|(i, prev)| {
                 let mut s = prev.clone();
                 // Split the bulk composition by element density: light → crust. The
-                // sort is progressive in time — only a `settle` fraction of each
-                // heavy element has drained out by the end of the molten era, so a
-                // short era leaves heavies stranded in the crust.
-                let settle =
-                    (self.duration as f32 / FULL_DIFFERENTIATION as f32).min(1.0) as f64;
+                // sort is progressive — only a `settle` fraction of each heavy element
+                // has drained out by the end of the molten era, so an incomplete sort
+                // leaves heavies stranded in the crust. The cooling engine supplies the
+                // fraction from the thermal clock; otherwise it derives from `duration`.
+                let settle = self.settle_override.unwrap_or_else(|| {
+                    (self.duration as f32 / FULL_DIFFERENTIATION as f32).min(1.0) as f64
+                });
                 let mut crust = Composition::new();
                 for (el, amount) in s.composition.iter() {
                     let density = ctx

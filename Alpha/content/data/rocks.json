@@ -1,0 +1,186 @@
+{
+  "_meta": {
+    "format": "flicker.rocks",
+    "version": 2,
+    "purpose": "THE ROCK TIER. Element -> Compound (mineral) -> ROCK. A rock is a MODAL MIXTURE of minerals, NOT a stoichiometric compound - which is exactly why Book III defines Granite as 'Coarse-grained Igneous Rock' with no formula. It has none. It never did.",
+    "minerals": "MOVED (Unification Ruling R6b, 2026-07-13, docs/prism-book-updates-worldgen.md A7): minerals ARE compounds - ONE registry. The 12 sim-required minerals (olivine..serpentine) now live in compounds.json as first-class compound entries, category 'mineral', ids 79-90. This file defines no minerals.",
+    "modal_scheme": "Each rock's `modal` map is keyed by the EXACT compound `name` from compounds.json (e.g. 'Olivine', 'Quartz', 'Clay'), resolved through the flicker-materials Tables compound-by-name index at load; values are modal fractions summing to 1. Names, not numeric ids, so the recipes stay hand-readable; a key that fails to resolve is a content error.",
+    "derived_not_stored": "A Layer stores MINERALS (conserved). rock_kind(layer) is a PURE CLASSIFIER over the modal assay, recomputed, never stored - the same rule as crust_kind. No third conserved ledger.",
+    "hardness": "hardness(layer) = modal-weighted erosional_resistance. THIS IS WHAT THE OUTCROP MODEL QUERIES. Without it, differential erosion cannot happen and every mountain comes out smooth.",
+    "resistance_scale": "0 = strips instantly (evaporite) .. 1 = stands as a ridge forever (quartzite). NOT Mohs - Mohs is scratch hardness; this is resistance to weathering + fluvial incision. Limestone is Mohs 3 but DISSOLVES; quartzite is Mohs 7 and endures.",
+    "book_status": "GRANTED. Book III carried no igneous or mantle minerals and no Mg or Li ore; Unification Ruling R6/R6b (2026-07-13) adopted the mineral/rock tier as committed canon. sim_required marks what the sim added beyond the Book III crafting tables. Harvestable flags were NOT extended (spodumene/dolomite ore notes await a separate ruling)."
+  },
+  "rocks": [
+    {
+      "id": "peridotite",
+      "name": "Peridotite",
+      "class": "igneous_ultramafic",
+      "modal": { "Olivine": 0.7, "Pyroxene": 0.3 },
+      "erosional_resistance": 0.55,
+      "sim_required": true,
+      "note": "THE MANTLE."
+    },
+    {
+      "id": "basalt",
+      "name": "Basalt",
+      "class": "igneous_extrusive",
+      "modal": { "Anorthite": 0.45, "Pyroxene": 0.45, "Olivine": 0.1 },
+      "erosional_resistance": 0.75,
+      "sim_required": true,
+      "note": "OCEANIC CRUST. Absent from the registry entirely."
+    },
+    {
+      "id": "gabbro",
+      "name": "Gabbro",
+      "class": "igneous_intrusive",
+      "modal": { "Anorthite": 0.45, "Pyroxene": 0.45, "Olivine": 0.1 },
+      "erosional_resistance": 0.8,
+      "sim_required": true,
+      "note": "Basalt, cooled slow. Lower ocean crust."
+    },
+    {
+      "id": "granite",
+      "name": "Granite",
+      "class": "igneous_intrusive",
+      "modal": { "Quartz": 0.3, "Orthoclase": 0.4, "Albite": 0.2, "Biotite": 0.1 },
+      "erosional_resistance": 0.8,
+      "sim_required": true,
+      "note": "CONTINENTAL CRUST. Book gave it no formula because it HAS none."
+    },
+    {
+      "id": "andesite",
+      "name": "Andesite",
+      "class": "igneous_extrusive",
+      "modal": { "Anorthite": 0.4, "Albite": 0.2, "Pyroxene": 0.3, "Quartz": 0.1 },
+      "erosional_resistance": 0.7,
+      "sim_required": true,
+      "note": "Arc volcanism - the rock of subduction."
+    },
+    {
+      "id": "obsidian",
+      "name": "Obsidian",
+      "class": "igneous_glass",
+      "modal": { "Quartz": 0.72, "Orthoclase": 0.18, "Albite": 0.1 },
+      "erosional_resistance": 0.7,
+      "sim_required": true,
+      "note": "Granite melt, quenched. No crystals."
+    },
+    {
+      "id": "sandstone",
+      "name": "Sandstone",
+      "class": "sedimentary_clastic",
+      "modal": { "Quartz": 0.85, "Orthoclase": 0.1, "Clay": 0.05 },
+      "erosional_resistance": 0.5,
+      "sim_required": true,
+      "note": "MEDIUM band."
+    },
+    {
+      "id": "shale",
+      "name": "Shale",
+      "class": "sedimentary_clastic",
+      "modal": { "Clay": 0.65, "Quartz": 0.3, "Calcite": 0.05 },
+      "erosional_resistance": 0.15,
+      "sim_required": true,
+      "note": "THE SOFT BAND. What water strips out to leave ridges."
+    },
+    {
+      "id": "limestone",
+      "name": "Limestone",
+      "class": "sedimentary_chemical",
+      "modal": { "Calcite": 0.95, "Clay": 0.05 },
+      "erosional_resistance": 0.25,
+      "sim_required": true,
+      "note": "Dissolves. Soft band + the carbon sink."
+    },
+    {
+      "id": "dolostone",
+      "name": "Dolostone",
+      "class": "sedimentary_chemical",
+      "modal": { "Dolomite": 0.95, "Calcite": 0.05 },
+      "erosional_resistance": 0.35,
+      "sim_required": true,
+      "note": null
+    },
+    {
+      "id": "chert",
+      "name": "Chert",
+      "class": "sedimentary_chemical",
+      "modal": { "Quartz": 1.0 },
+      "erosional_resistance": 0.9,
+      "sim_required": true,
+      "note": "HARD band. Silica."
+    },
+    {
+      "id": "bif",
+      "name": "Banded Iron Formation",
+      "class": "sedimentary_chemical",
+      "modal": { "Hematite": 0.3, "Magnetite": 0.15, "Quartz": 0.55 },
+      "erosional_resistance": 0.85,
+      "sim_required": true,
+      "note": "ONLY forms in the oxygenation window. The Iron Age depends on it."
+    },
+    {
+      "id": "evaporite",
+      "name": "Evaporite",
+      "class": "sedimentary_chemical",
+      "modal": { "Halite": 0.6, "Gypsum": 0.4 },
+      "erosional_resistance": 0.1,
+      "sim_required": true,
+      "note": "Softest. Basin floor."
+    },
+    {
+      "id": "coal_seam",
+      "name": "Coal Seam",
+      "class": "sedimentary_organic",
+      "modal": { "Coal": 0.95, "Clay": 0.05 },
+      "erosional_resistance": 0.2,
+      "sim_required": true,
+      "note": "BURIED CARBON. The reason Earth is not Venus."
+    },
+    {
+      "id": "quartzite",
+      "name": "Quartzite",
+      "class": "metamorphic",
+      "modal": { "Quartz": 0.95, "Orthoclase": 0.05 },
+      "erosional_resistance": 0.95,
+      "sim_required": true,
+      "note": "HARDEST BAND. Metamorphosed sandstone. The RIDGE-MAKER."
+    },
+    {
+      "id": "slate",
+      "name": "Slate",
+      "class": "metamorphic",
+      "modal": { "Muscovite": 0.5, "Quartz": 0.4, "Clay": 0.1 },
+      "erosional_resistance": 0.6,
+      "sim_required": true,
+      "note": "Metamorphosed shale. Cleaves - the mica did it."
+    },
+    {
+      "id": "marble",
+      "name": "Marble",
+      "class": "metamorphic",
+      "modal": { "Calcite": 0.98, "Quartz": 0.02 },
+      "erosional_resistance": 0.3,
+      "sim_required": true,
+      "note": "Metamorphosed limestone. Still soft."
+    },
+    {
+      "id": "schist",
+      "name": "Schist",
+      "class": "metamorphic",
+      "modal": { "Muscovite": 0.4, "Quartz": 0.35, "Biotite": 0.25 },
+      "erosional_resistance": 0.55,
+      "sim_required": true,
+      "note": "Mid-grade."
+    },
+    {
+      "id": "gneiss",
+      "name": "Gneiss",
+      "class": "metamorphic",
+      "modal": { "Quartz": 0.35, "Orthoclase": 0.35, "Biotite": 0.2, "Albite": 0.1 },
+      "erosional_resistance": 0.85,
+      "sim_required": true,
+      "note": "High-grade. Deep continental basement."
+    }
+  ]
+}

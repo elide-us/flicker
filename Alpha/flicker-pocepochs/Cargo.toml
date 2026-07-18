@@ -8,19 +8,15 @@ publish = false
 name = "flicker-pocepochs"
 path = "src/main.rs"
 
-# A POC shell-client: one hex tile drawn as its full generation stack — the six
-# world-gen epoch layers plus the atmosphere / water-cycle band stack — with a
-# reseed button, all wired into flicker-shell. Recovered from the hex-world POC
-# (which drew a whole map with the atmosphere/water-cycle bands toggled off); here
-# it is a single hex with everything shown. Still POC.
+# The application for the forward-regenerative epoch simulation: a flicker-shell
+# client whose scene drives a `flicker_worldengine::WorldEngine`, scrubbing the nine
+# epochs and (next) rendering the icosphere globe with the consolidated timeline UI.
+# Replaced the old single-hex retained layer-map POC (its water-cycle nucleus is
+# re-homed in flicker-worldgen::water). See docs/flicker-world-epoch-redesign*.md.
 [dependencies]
 flicker = { path = "../../crates/flicker" }
 flicker-shell.workspace = true
-flicker-primitive.workspace = true
-flicker-materials.workspace = true
-flicker-worldstate.workspace = true
-flicker-worldgen.workspace = true
-glam.workspace = true
+flicker-worldengine.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

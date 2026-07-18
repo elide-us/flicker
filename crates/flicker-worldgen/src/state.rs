@@ -8,12 +8,15 @@
 //! the `crust` / `composition` it erodes.
 
 use flicker_materials::ElementId;
-use flicker_worldstate::Composition;
+use flicker_worldstate::{Composition, CompoundLedger};
+use serde::{Deserialize, Serialize};
+
+use crate::layer::LayerLedger;
 
 /// Dominant biome of a hex's surface (Epoch 6), from temperature + moisture +
 /// elevation. A Whittaker-style classification; the runtime reads it to dress
 /// the surface.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub enum Biome {
     /// Submerged — below sea level.
     #[default]
@@ -39,7 +42,7 @@ pub enum Biome {
 }
 
 /// A hex's boundary relationship to its neighbours' plates (Epoch 3).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Boundary {
     /// Plate interior — all neighbours share this hex's plate.
     #[default]
@@ -56,7 +59,7 @@ pub enum Boundary {
 /// never regressed. Precursor chemistry (Epoch 4) → microbial mats at the vents
 /// (Epoch 5) → fungus and flora on land (Epoch 6). Ordered so gates can ask
 /// `stage >= Floral`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub enum LifeStage {
     /// No appreciable chemistry.
     #[default]
@@ -73,15 +76,34 @@ pub enum LifeStage {
 
 /// Per-hex state accumulated across the epoch chain. Cheap to clone (the
 /// pass-through epochs and the per-layer stack snapshots both clone it).
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Serializable so an epoch snapshot can be baked to a `.epoch` file and
+/// reloaded. `#[serde(default)]` on the container means **any field missing from an
+/// older `.epoch` is filled from [`HexState::default`]** — so the state can grow new
+/// fields (the redesign expects the data model to expand) without breaking old bakes.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HexState {
     /// Bulk composition — the conserved element mass (Epoch 1).
     pub composition: Composition,
+    /// **The vertical column** — this cell's growable stack of
+    /// [`Layer`](crate::layer::Layer)s (core → mantle → crust → …), the physical truth the
+    /// flat fields below are migrating onto. Seeded as one primordial mantle at t=0;
+    /// processes grow and `transfer` between layers, conserved. This is the durable state
+    /// the `.epoch` output serializes.
+    pub column: LayerLedger,
     /// Light fraction differentiated to the surface — the crust (Epoch 2). Empty
     /// until Epoch 2 runs.
     pub crust: Composition,
     /// Crust mass as a fraction of the bulk (Epoch 2), `0..1`.
     pub crust_fraction: f64,
+    /// Mantle **convection heat** `0..1` (Epoch 2): the self-organized thermal field of
+    /// the molten era — hot **upwelling** cells (light material rising) vs cold
+    /// **downwelling** cells (dense material sinking). It emerges from the composition's
+    /// buoyancy relaxed into coherent cells, and is the driver Epoch 3's plate seams form
+    /// over: downwelling → convergent/subduction seams, upwelling → divergent ridges.
+    /// `0` before Epoch 2.
+    pub heat: f32,
     /// Volcanic activity `0..1` (Epoch 2: thin crust; raised at Epoch 3
     /// convergent boundaries).
     pub volcanic: f32,
@@ -116,8 +138,22 @@ pub struct HexState {
     /// Baseline precipitation / effective moisture `0..1` (Epoch 4):
     /// ocean-proximity modulated by warmth (floored so cold-wet coasts stay
     /// moist) — the single moisture truth Epoch 6 reads for biomes and flora.
-    /// `0` before Epoch 4.
+    /// After the Epoch-4 **water cycle** runs it is the *emergent* rain field
+    /// (rain shadows behind mountains, wet windward coasts), not the static
+    /// estimate. `0` before Epoch 4.
     pub precipitation: f32,
+    /// Liquid water standing on the surface (water-cycle state, Epoch 4) — oceans
+    /// and lakes. One of the three conserved water phases
+    /// (`surface_water + humidity + ice`); the cycle moves mass between them and
+    /// across neighbours without creating or destroying any. `0` before Epoch 4.
+    pub surface_water: f32,
+    /// Atmospheric water vapour over the cell (water-cycle state, Epoch 4) — the
+    /// **gaseous** phase the wind advects between cells before it rains out. `0`
+    /// before Epoch 4.
+    pub humidity: f32,
+    /// Frozen water — ice caps / glaciers (water-cycle state, Epoch 4): surface
+    /// water freezes below 0°C and melts above it. `0` before Epoch 4.
+    pub ice: f32,
     /// Prebiotic chemistry `0..1` — accumulated life-**precursor compounds** (first
     /// written Epoch 4, then carried forward). Life/chemistry is a cross-cutting
     /// thread, not a single epoch: precursors brew where liquid water, organic
@@ -165,41 +201,22 @@ pub struct HexState {
     pub watershed: u32,
     /// Dominant biome (Epoch 6).
     pub biome: Biome,
+    /// **The compound ledger** (material pipeline stage 2) — how much of each real
+    /// compound (`compounds.json` ids: H₂O, SiO₂, CaCO₃, ores, …) the epoch chain
+    /// has formed here, from this cell's elements (by stoichiometry) plus additive
+    /// delivery (most water arrives from the outer system). The element mass locked
+    /// in these compounds never exceeds `composition`; gameplay harvests compounds.
+    /// Empty before any chemistry runs.
+    pub compounds: CompoundLedger,
 }
 
 impl HexState {
     /// Initial state from Epoch 1's bulk composition: undifferentiated, no plate,
-    /// at sea level.
+    /// at sea level. Every other field takes its [`Default`] (all zero / `Barren` /
+    /// `Ocean`), so growing the data model with new fields needs no change here.
     pub fn new(composition: Composition) -> Self {
-        Self {
-            composition,
-            crust: Composition::new(),
-            crust_fraction: 0.0,
-            volcanic: 0.0,
-            plate: 0,
-            continental: false,
-            plate_age: 0.0,
-            boundary: Boundary::Interior,
-            elevation: 0.0,
-            orogeny: 0.0,
-            sea_level: 0.0,
-            water_depth: 0.0,
-            temperature: 0.0,
-            atmosphere: Composition::new(),
-            precipitation: 0.0,
-            prebiotic: 0.0,
-            life_stage: LifeStage::Barren,
-            biomass: 0.0,
-            organics: 0.0,
-            deposits: Composition::new(),
-            hydrothermal: 0.0,
-            vein_element: None,
-            vein_strength: 0.0,
-            flow: 0.0,
-            sediment: 0.0,
-            watershed: 0,
-            biome: Biome::Ocean,
-        }
+        let column = LayerLedger::from_primordial(composition.clone(), 1.0);
+        Self { composition, column, ..Default::default() }
     }
 
     /// The composition visible at the surface: the crust once differentiated,

@@ -32,7 +32,9 @@ mod texture;
 #[cfg(test)]
 mod layering_test;
 
-pub use mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
+pub use mesh::{
+    ray_triangle, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting,
+};
 pub use pipeline_ground_fog::GroundFog;
 pub use pipeline_mesh_textured::{PbrMaps, TexturedMeshHandle, TexturedVertex};
 pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};

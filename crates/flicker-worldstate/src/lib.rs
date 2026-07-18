@@ -35,8 +35,10 @@
 
 pub mod cell;
 pub mod composition;
+pub mod compound_ledger;
 pub mod ledger;
 
 pub use cell::{Cell, Effects};
 pub use composition::Composition;
+pub use compound_ledger::{CompoundId, CompoundLedger};
 pub use ledger::{CellCoord, Ledger};

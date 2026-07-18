@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 # The world-material vocabulary — data-model **tier ①** (see
-# docs/material-model-handoff.md §1–2). Owns the periodic table (26 elements)
+# docs/material-model-handoff.md §1–2). Owns the periodic table (28 elements, ceiling 30)
 # and the 256-material index, loaded from `Alpha/content/data/*.json` today and
 # from flicker-net → web service → DB later, all behind the `TableSource`
 # seam: the simulation asks the source, never a hardcoded path. Standalone —

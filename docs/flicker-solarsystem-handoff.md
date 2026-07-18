@@ -159,8 +159,9 @@ grouping, not mineralogy) — **no `materials[256]` classification** (that's Epo
 is an element-abundance vector, the currency Epoch 1 reads.
 
 **Magnesium was added to the canonical table this session** (user-directed): `Mg` #12, taking
-Prism to **27 elements** (design ceiling 30). One ripple fixed: the count assertion at
-`crates/flicker-materials/src/tables.rs:193` (26 → 27). Mg is now a major silicate component.
+Prism to 27 elements at the time — **28 since the 2026-07-11 Li sync** (design ceiling 30). One
+ripple fixed: the count assertion in `crates/flicker-materials/src/tables.rs` (26 → 27 then; it
+asserts 28 today). Mg is now a major silicate component.
 
 ## 1. The model (what gets simulated) — units AU · yr · M☉, `G = 4π²`
 

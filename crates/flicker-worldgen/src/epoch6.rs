@@ -24,6 +24,7 @@
 
 use flicker_materials::PhysicalState;
 use flicker_worldstate::Composition;
+use serde::{Deserialize, Serialize};
 
 use crate::noise::fbm;
 use crate::pipeline::{EpochCtx, EpochTransform, NOMINAL_DURATION};
@@ -40,7 +41,7 @@ const CHALK_DEPTH: f32 = 0.6;
 /// A drainage basin — the spec's cross-hex `watersheds` record: the hexes that all
 /// drain (by steepest descent) to one terminal `outlet` sink. Reconstructed from
 /// the per-hex [`HexState::watershed`] field by [`watersheds`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Watershed {
     /// Dense basin id (`0..count`).
     pub id: u32,
@@ -70,6 +71,15 @@ pub fn watersheds(layer: &[HexState]) -> Vec<Watershed> {
 /// actual pass count scales with [`Epoch6::duration`] (so the default reproduces
 /// today's eight passes).
 const NOMINAL_EROSION_PASSES: f32 = 8.0;
+
+/// Floor on precipitation-weighted rainfall: even a rain-shadow desert gets this
+/// fraction of the base rain, so drainage still forms (it just carves far less).
+const RAIN_FLOOR: f32 = 0.2;
+/// Crust-sediment shed downstream per unit of elevation eroded — ties the conserved
+/// material conveyor to the hydraulic incision.
+const SEDIMENT_PER_EROSION: f32 = 6.0;
+/// Cap on the crust fraction a hex sheds to its downstream neighbour in one pass.
+const MAX_SED_FRAC: f32 = 0.5;
 
 /// Epoch 6 parameters.
 pub struct Epoch6 {
@@ -158,7 +168,24 @@ impl EpochTransform for Epoch6 {
             .map(|s| (1.0 - solid_hardness(ctx, s.surface()) / 10.0).clamp(0.2, 1.0))
             .collect();
 
-        let mut flow = vec![self.rain; n];
+        // Rainfall follows Epoch 4's emergent (rain-shadowed) precipitation, not a
+        // uniform sky: wet windward slopes gather more flow and carve harder than dry
+        // leeward shadows. Normalised to the wettest hex, with a floor so drainage
+        // still forms in the dry belts.
+        let pmax = prev.iter().map(|s| s.precipitation).fold(0.0f32, f32::max).max(1e-6);
+        let rain_at: Vec<f32> = prev
+            .iter()
+            .map(|s| {
+                self.rain * (RAIN_FLOOR + (1.0 - RAIN_FLOOR) * (s.precipitation / pmax).clamp(0.0, 1.0))
+            })
+            .collect();
+        // The surface crust as a **conserved sediment conveyor**: erosion lifts the
+        // soft, easily-sedimented fraction and carries it downstream to deposit — real
+        // material redistribution (Σ crust invariant), the hex-scale precursor to the
+        // heightmap-granularity Rivulet erosion of the strata tiers.
+        let mut crust: Vec<Composition> = prev.iter().map(|s| s.crust.clone()).collect();
+
+        let mut flow = rain_at.clone();
         for _ in 0..passes {
             // Process hexes high → low so each is handled before its outflow.
             let mut order: Vec<usize> = (0..n).collect();
@@ -168,8 +195,8 @@ impl EpochTransform for Epoch6 {
             let down: Vec<Option<usize>> =
                 (0..n).map(|i| lowest_neighbor(i, &elev, ctx)).collect();
 
-            // Drainage: accumulate rainfall down the flow graph.
-            flow = vec![self.rain; n];
+            // Drainage: accumulate the (precipitation-weighted) rainfall downstream.
+            flow = rain_at.clone();
             for &h in &order {
                 if let Some(d) = down[h] {
                     flow[d] += flow[h];
@@ -190,6 +217,31 @@ impl EpochTransform for Epoch6 {
                     elev[d] += e;
                     sediment[h] = (sediment[h] - e).max(0.0);
                     sediment[d] += e;
+
+                    // Carry real surface material downstream, conserved: shed the
+                    // soft (low-hardness) fraction of h's crust onto d, so eroded
+                    // silicates pile into the basins/deltas as their own material.
+                    let f = (e * SEDIMENT_PER_EROSION).clamp(0.0, MAX_SED_FRAC) as f64;
+                    if f > 0.0 && !crust[h].is_empty() {
+                        let moves: Vec<(u8, f64)> = crust[h]
+                            .iter()
+                            .map(|(el, amt)| {
+                                let hard = ctx
+                                    .tables
+                                    .element_by_number(el)
+                                    .map(|x| x.hardness)
+                                    .unwrap_or(5.0);
+                                let softness = (1.0 - hard / 10.0).clamp(0.2, 1.0) as f64;
+                                (el, amt * f * softness)
+                            })
+                            .collect();
+                        for (el, m) in moves {
+                            if m > 0.0 {
+                                let taken = crust[h].remove(el, m);
+                                crust[d].add(el, taken);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -257,6 +309,7 @@ impl EpochTransform for Epoch6 {
                 s.watershed = sink[i];
                 s.flow = flow[i];
                 s.sediment = sediment[i];
+                s.crust = crust[i].clone(); // the conserved sediment conveyor's result
                 s.water_depth = (sea - elev[i]).max(0.0);
                 let above = (elev[i] - sea).max(0.0);
                 // Moisture = Epoch 4's precipitation (the single rainfall truth),
@@ -320,8 +373,9 @@ impl EpochTransform for Epoch6 {
 }
 
 /// Composition-weighted hardness over the **solid** formers only (gases are
-/// binders, not hardness-bearers) — the same basis the field sampler uses.
-fn solid_hardness(ctx: &EpochCtx, comp: &Composition) -> f32 {
+/// binders, not hardness-bearers) — the same basis the field sampler uses. Shared
+/// with the pre-hydraulic weathering pass ([`crate::run_protoatmospheric_erosion`]).
+pub(crate) fn solid_hardness(ctx: &EpochCtx, comp: &Composition) -> f32 {
     let (mut h, mut w) = (0.0f64, 0.0f64);
     for (el, amount) in comp.iter() {
         if let Some(e) = ctx.tables.element_by_number(el) {
@@ -449,6 +503,44 @@ mod tests {
         let sum = |v: &[HexState]| v.iter().map(|s| s.elevation as f64).sum::<f64>();
         assert!((sum(&out) - sum(&e5)).abs() < 0.5, "erosion didn't conserve mass");
         assert!(out.iter().all(|s| (-1.0..=1.0).contains(&s.elevation)));
+    }
+
+    #[test]
+    fn erosion_conserves_crust_material_globally() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e5) = through_epoch5(&t, &dirs, &neighbors);
+        let before: f64 = e5.iter().map(|s| s.crust.total()).sum();
+        let out = Epoch6::default().apply(&ctx, &e5);
+        let after: f64 = out.iter().map(|s| s.crust.total()).sum();
+        // The sediment conveyor MOVES surface material between hexes — never creates
+        // or destroys it (Σ crust invariant to the gram).
+        assert!(
+            (after - before).abs() < 1e-6,
+            "crust sediment conveyor must conserve material globally: {after} vs {before}"
+        );
+        // And it actually transported some (per-hex crust totals shifted).
+        let moved: f64 =
+            out.iter().zip(&e5).map(|(o, p)| (o.crust.total() - p.crust.total()).abs()).sum();
+        assert!(moved > 0.0, "no crust material was transported by erosion");
+    }
+
+    #[test]
+    fn precipitation_shapes_where_erosion_carves() {
+        let t = tables();
+        let (dirs, neighbors) = ring(40);
+        let (ctx, e5) = through_epoch5(&t, &dirs, &neighbors);
+        // The real, rain-shadowed precipitation field vs a rainless control.
+        let real = Epoch6::default().apply(&ctx, &e5);
+        let mut rainless = e5.clone();
+        for c in &mut rainless {
+            c.precipitation = 0.0;
+        }
+        let flat = Epoch6::default().apply(&ctx, &rainless);
+        // Precipitation actually drives the erosion — zeroing it changes the terrain.
+        let diff: f64 =
+            real.iter().zip(&flat).map(|(a, b)| (a.elevation - b.elevation).abs() as f64).sum();
+        assert!(diff > 1e-4, "precipitation had no effect on where erosion carved");
     }
 
     #[test]

@@ -20,7 +20,9 @@
 //! out). See docs/flicker-animation-handoff.md and
 //! docs/flicker-combat-animation-handoff.md.
 
+pub mod cloth;
 pub mod format;
+pub mod jiggle;
 pub mod pose;
 pub mod skin;
 pub mod state;

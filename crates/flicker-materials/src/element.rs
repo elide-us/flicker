@@ -2,11 +2,12 @@
 //!
 //! Fields mirror the JSON, which mixes three provenances (see that file's
 //! `_meta`): *book* fields transcribed from Prism BookIII (the canonical design
-//! book — `valence_electrons` is the book's gameplay value, not strict IUPAC),
-//! *physical* fields with real-world values (epoch 1 distributes by
-//! mass/abundance, epoch 2 differentiates by `density_g_cm3`), and *trait*
-//! fields — the base [`hardness`/`brittleness`/`water_capacity`] an element
-//! contributes to a blend (see [`crate::Tables::blend_traits`]).
+//! book; its gameplay `valence_electrons` column was ruled out of the
+//! vocabulary and stripped — Unification Ruling R4a, 2026-07-13), *physical*
+//! fields with real-world values (epoch 1 distributes by mass/abundance,
+//! epoch 2 differentiates by `density_g_cm3`), and *trait* fields — the base
+//! [`hardness`/`brittleness`/`water_capacity`] an element contributes to a
+//! blend (see [`crate::Tables::blend_traits`]).
 //!
 //! [`hardness`]: Element::hardness
 //! [`brittleness`]: Element::brittleness
@@ -42,8 +43,6 @@ pub struct Element {
     pub symbol: String,
     /// Book category, e.g. `"transition_metal"` (free-form; grows with design).
     pub category: String,
-    /// Book-assigned common valence electron count (gameplay value, not IUPAC).
-    pub valence_electrons: u8,
     /// Real-world atomic mass (epoch 1 distributes by mass/abundance).
     pub atomic_mass: f32,
     /// Real-world density, g/cm³ (epoch 2 differentiates by density).

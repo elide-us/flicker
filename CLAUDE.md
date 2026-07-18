@@ -46,19 +46,30 @@ thin client-side `flicker-net` talks to *separate* server projects. Status:
   process that sits beside the game**; it generates the planet's **starting
   point** for the live simulation. Not interactive, not the game client.
 
-### The runtime model: static gen → slow live sim → GC
-1. **World generation (static / offline)** bakes the initial planet — the epoch
-   pipeline (§5) — and hands off a starting state. The runtime never re-runs it.
-2. **The live simulation** then evolves that state **very slowly, batch-like**: it
-   moves sediment, repopulates resource nodes, runs the water cycle. It is part of
-   a larger **garbage-collection-style system that reclaims areas players have
-   abandoned**.
-3. **Player edits aggregate back on an erosion batch pass.** Detail is materialized
-   near players; their changes are written into the macro data when the live sim
-   sweeps. E.g. a player removes 100 iron from a cluster and leaves → the next
-   erosion pass aggregates the cluster back **with that 100 iron gone** → a later
-   re-render of the area produces a fresh cluster that no longer contains it.
-   Conserved; never per-frame.
+### The runtime model: offline bake → two batch servers → forever-evolving world
+0. **Offline epoch bake** (the `flicker-worldgen`/`flicker-worldengine` pipeline,
+   §5) produces the initial planet **aggregate** — the per-hex macro data. Runs once.
+1. **World-generation server (batch).** Its job is to **materialize a voxel cluster
+   procedurally from the hex aggregate** whenever a player appears near a place —
+   bounded by the aggregate's material classifications (hardness, brittleness,
+   saturation) + its actual materials. Regenerated fresh on every appearance;
+   materialization is disposable (shape is disposable; the aggregate is truth).
+2. **World-simulation server (batch).** Batch-passes hexes, operating on the
+   **aggregate** (never the materialized detail): the slow, long-term erosion +
+   evolution — moves sediment (the water cycle / Rivulets — §2), repopulates nodes,
+   migrates lakes/rivers. Part of a GC-style system that reclaims abandoned areas.
+3. **The materialize → dematerialize → reintegrate cycle.** Player leaves → the
+   cluster's materialized state is recorded to a **temporary ledger**; the sim's
+   next batch pass **reintegrates it back into the aggregate** (player edits fold
+   in, **conserved**) and discards the detail; a returning player **regenerates
+   from the updated aggregate**. E.g. dig 100 iron from a cluster and leave → the
+   aggregate comes back with that 100 iron gone (plus the Si/O that rode along).
+   **Only ever happens in dematerialized areas — never while a player is looking.**
+4. **Never a fixed map.** Once live, worlds evolve **forever**. Water shapes the
+   terrain (surface water consumes real volumes; where lakes/rivers sit is part of
+   the slow evolution and feeds moisture/energy + water tables → procedural plants).
+   This is why the erosion tiers move hex → **heightmap** granularity (Group III,
+   §5): the terrain-shaping erosion iterates the whole globe — huge, hence batched.
 
 ---
 
@@ -137,6 +148,19 @@ The whole world is **hexagons tiling a sphere**. The scale chain:
 
 The project has pivoted several times. **Current authoritative direction:**
 
+- **World generation = the chemistry-first rewrite** in `crates/flicker-poc-chemistry`
+  (locked 2026-07-12). *Simulate the chemistry; everything else is derived.* The
+  planet starts as a **bulk accretion budget** (an undifferentiated hot ball,
+  `accretion.json`) and core/mantle/crust/ocean/ore are all **outputs**, never
+  seeds; Earth-likeness is an outcome, never a target. A conserved mass ledger +
+  emergent chemistry-gated stages. This **supersedes** the epoch-redesign
+  manifesto and will **delete** `flicker-worldgen`/`flicker-worldengine` once it
+  stands in (see the §5 banner). **M0** (ledger + conservation harness + shell app)
+  and **M1** (the interior: per-cell mantle, radiogenic heat, core differentiation
+  — the planet differentiates a ~31% iron core — semi-Lagrangian convection,
+  emergent plates) landed. → `docs/flicker-poc-chemistry-m0-handoff.md`,
+  `docs/flicker-poc-chemistry-m1-handoff.md`. (Build spec: the
+  *flicker-poc-chemistry — Build Specification*.)
 - **Topology = ISEA icosahedral hex-sphere** in `flicker-worldgrid`
   (12 pentagons on the icosa vertices, 20 triangular shards).
   → `docs/hex-sphere-handoff.md` (decisions locked; Slices 1–3 built).
@@ -146,6 +170,15 @@ The project has pivoted several times. **Current authoritative direction:**
   with per-epoch knob panels. → `docs/flicker-world-handoff.md`.
 - **Epoch design of record** → `docs/clayengine_world_generation_spec_v2.md`
   (§"Epoch specifications", Phase-1-simple / Phase-2-sophisticated per epoch).
+- **⛔ SUPERSEDED 2026-07-12 — Unification Ruling 1** (memory `worldgen-unification-rulings`;
+  book-side carrier `docs/prism-book-updates-worldgen.md`): **system formation is REMOVED from the
+  world-gen pipeline.** The planet budget is the canonical `accretion.json` (all 28 elements,
+  identical every world — the seven shards differ only by seed; Aaron hand-selects each); veins
+  emerge from tectonic-cycle distillation (subduction = sorting boundary, no placement);
+  `Delivered`/`Escaped` is the only external-matter mechanism. `flicker-system`,
+  `examples/flicker-sol2`, and `flicker-celestial` are slated for **clean-sweep deletion**
+  (keepers: `flicker-solarbirth`, `flicker-flight`, voxel-cluster's sky). The historical
+  description below stands until the sweep executes; do NOT build on it.
 - **Celestial / system formation = `examples/flicker-sol2`** (the viewer) **+ `crates/flicker-system`**
   (the boxed GPU-free sim). A **scene-driven app** (Logo splash → Menu → Sim, with Pause/Settings
   overlays, like flicker-world) that is a **thin Lua-UI shell** over the sim. Two phases over one
@@ -203,7 +236,7 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 | `flicker-script` | Luau VM host (`ScriptHost`); strict data-only boundary; HUD command list out. | done — the engine↔UI seam |
 | `flicker-voxel` | Cluster sparse storage, `contour()`, `mesh()` (dual-contour/QEF), `derive_lod()` (render-time stride), neighbour reads, nav. No GPU deps. | core + seams done; streaming/edge-neighbours deferred |
 | `flicker-worker` | Generic closure-based worker pool. Task-agnostic. | done |
-| `flicker-materials` | Tier-① vocabulary: `Tables` loading `periodic_table.json` + `materials.json` via swappable `TableSource` (JSON now, DB later). 26 elements, 256-material index (~20 resolved). | active |
+| `flicker-materials` | Tier-① vocabulary: `Tables` loading `periodic_table.json` + `materials.json` + `compounds.json` via swappable `TableSource` (JSON now, DB later). 28 elements (hard ceiling 30, Book rulings only), 256-material index (~20 resolved), 89-compound catalog = the ONE mineral registry (R6b; physicals on every row; retired ids never reused — 42 Feldspar). | active |
 | `flicker-net` | Client-side transport / state-sync / auth stubs. Servers are separate repos. | skeleton |
 | `flicker-app` | winit event loop, frame orchestration, `App` trait + `run()`. | done |
 | `flicker-scene` | Stack-based scene manager (`Transition`: Replace/Push/Pop/Quit; overlays). | done |
@@ -213,6 +246,7 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 ### World-generation stack
 | Crate | Concern | State |
 |---|---|---|
+| `flicker-poc-chemistry` | **The chemistry-first world-gen rewrite** (§3): bulk-accretion `Budget`, two conserved ledgers, reservoirs/columns, `PlanetState`, steppable `Scheduler` + worker-pool cell sweep + `CellProgress`, the conservation harness, a per-cell `MantleField`, the M1 interior stages (radiogenic heat, core differentiation, semi-Lagrangian convection, emergent plates), and a flicker-shell viewer app. Derived props (elevation/crust_kind/thickness) are functions, never fields. → `docs/flicker-poc-chemistry-{m0,m1}-handoff.md`. | **M0 + M1 landed** (2026-07-12) — the planet differentiates a core; M2 crust next |
 | `flicker-worldgrid` | **Topology only** for the ISEA hex-sphere: `pentagon_patch(rings)`, `icosphere(freq)` → `{dirs, neighbors, area, is_pentagon, shard, id}`. Feeds `EpochCtx`. | Slices 1–3 done; ISEA projection (3b) + ledger `CellId↔CellCoord` (4) pending |
 | `flicker-worldstate` | The conserved ledger substrate: `Composition` (sparse element→mass, conservation-safe add/remove/merge), `Cell`, `Ledger`. | defined; Epoch-output→Ledger hookup deferred |
 | `flicker-worldgen` | The epoch pipeline (`epoch1..6.rs`), `HexState`, `EpochCtx`, `FieldSampler` (per-cell hardness/relief/vein fields). | Epochs 1–6 built; see §5 |
@@ -254,6 +288,15 @@ Bottom-up; the umbrella `flicker` re-exports all of them.
 ---
 
 ## 5. The epoch pipeline (world-gen heart)
+
+> **⚠️ Being superseded by the chemistry-first rewrite (§3, `flicker-poc-chemistry`).**
+> This pipeline seeds Earth's *crustal* assay (`abundance.json`: 46% O, 5% Fe, Mg a
+> floor) — the answer fed in as the input, which is precisely why the rewrite deletes
+> it and starts from bulk accretion instead. `flicker-worldgen`/`flicker-worldengine`
+> still exist (the `flicker-world` app + `Alpha/flicker-pocepochs` depend on
+> `flicker-worldgen`) and are slated for deletion once the new crate stands in. The
+> **real physics notes below remain a useful salvage reference**, but this is no
+> longer the forward direction.
 
 Six **formation epochs** — deterministic one-shot transforms accumulating per-hex
 `HexState`. Spec reserves 9 total; epochs 7–9 are runtime layers (GM/underground/
@@ -426,7 +469,8 @@ seam`, `ui lua`, etc.). Search before storing to avoid duplicates; update in pla
 `docs/` holds the design specs and per-thread handoffs — the real long-form record.
 Start with the §3 authoritative trio, then by subsystem:
 
-- **World-gen / epochs:** `clayengine_world_generation_spec_v2.md`,
+- **World-gen (current — chemistry-first):** `flicker-poc-chemistry-m0-handoff.md`.
+- **World-gen / epochs (superseded, §5):** `clayengine_world_generation_spec_v2.md`,
   `flicker-world-system-spec.md`, `material-model-handoff.md`,
   `material-model-impl-handoff.md`, `epoch-pipeline-review.md`,
   `epoch-data-audit-handoff.md`, `epoch3-isostasy-handoff.md`,

@@ -5,7 +5,7 @@
 //! the data types that cross the renderer's public boundary.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec2, Vec3};
 
 /// One vertex of a 3D mesh.
 ///
@@ -103,6 +103,74 @@ impl Camera {
     pub fn view_projection(&self, aspect: f32) -> Mat4 {
         self.projection(aspect) * self.view()
     }
+
+    /// World-space pick ray `(origin, unit dir)` through a cursor pixel, or `None` for a
+    /// degenerate viewport. Unprojects through the INVERSE view-projection rather than
+    /// rebuilding a basis from the camera's forward vector, so it is convention-proof:
+    /// it cannot drift out of step with `view_projection`, and it works for any camera
+    /// (orbit or fly) without knowing which. `cursor` is in pixels, y-down from the
+    /// top-left — the usual window convention.
+    ///
+    /// Promoted from the copies in `flicker-pocclusters` / `examples/voxel-cluster`
+    /// (`build_pick_ray`) and `flicker-packeditor` (`pick_node`) — 2026-07-16. Those
+    /// predate this and can migrate onto it; nothing new should hand-roll a fourth.
+    pub fn pick_ray(&self, cursor: Vec2, viewport: Vec2) -> Option<(Vec3, Vec3)> {
+        if viewport.x <= 0.0 || viewport.y <= 0.0 {
+            return None;
+        }
+        let inv = self.view_projection(viewport.x / viewport.y).inverse();
+        // +0.5 puts the ray through the pixel's CENTRE, not its top-left corner.
+        let ndc = Vec2::new(
+            2.0 * (cursor.x + 0.5) / viewport.x - 1.0,
+            1.0 - 2.0 * (cursor.y + 0.5) / viewport.y,
+        );
+        // wgpu NDC z ∈ [0,1]: 0 = near plane, 1 = far.
+        let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.0));
+        let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+        let dir = (far - near).normalize_or_zero();
+        if dir == Vec3::ZERO {
+            return None;
+        }
+        Some((near, dir))
+    }
+}
+
+/// Ray–triangle intersection (Möller–Trumbore). Returns the parametric `t` along
+/// `(origin, dir)` for the FRONT-face hit, or `None` if the ray misses, hits the back face
+/// within numerical tolerance, or lands behind the origin. Front-face-only matches what the
+/// renderer actually shows, so a pick can't select a surface the viewer can't see.
+///
+/// Promoted 2026-07-16 from byte-identical copies in `flicker-pocclusters` and
+/// `examples/voxel-cluster`; both can migrate onto this.
+pub fn ray_triangle(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let edge1 = b - a;
+    let edge2 = c - a;
+    let h = dir.cross(edge2);
+    let det = edge1.dot(h);
+    // Back-face / parallel-ray rejection. Positive det = front face (CCW from `origin`).
+    if det <= 1e-7 {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let s = origin - a;
+    let bu = inv_det * s.dot(h);
+    if !(0.0..=1.0).contains(&bu) {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let bv = inv_det * dir.dot(q);
+    if bv < 0.0 || bu + bv > 1.0 {
+        return None;
+    }
+    let t = inv_det * edge2.dot(q);
+    if t > 1e-4 {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+impl Camera {
 
     /// Camera positioned to orbit `target` at `distance`, looking
     /// inward. `yaw` rotates around the world Y axis; `pitch` is
@@ -210,5 +278,69 @@ impl Default for SceneLighting {
             point_color: Vec3::ZERO, // off by default — scenes opt in
             star_rotation: Mat4::IDENTITY,
         }
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    fn cam() -> Camera {
+        Camera::orbit(Vec3::ZERO, 300.0, 0.0, 0.0)
+    }
+
+    /// The centre pixel's ray must run from the camera straight at its target — the one
+    /// case we can assert independently of any convention.
+    #[test]
+    fn centre_pixel_ray_points_at_the_target() {
+        let c = cam();
+        let vp = Vec2::new(1920.0, 1080.0);
+        let (o, d) = c.pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp).unwrap();
+        let want = (c.target - c.position).normalize();
+        assert!(d.dot(want) > 0.9999, "centre ray must aim at the target: {d:?} vs {want:?}");
+        assert!((o - c.position).length() < c.far, "ray starts near the camera, not behind it");
+    }
+
+    /// A pick ray must actually hit geometry under the cursor, and the ray/triangle pair
+    /// must agree — this is what a scene pick relies on end to end.
+    #[test]
+    fn centre_ray_hits_a_triangle_at_the_target() {
+        let c = cam();
+        let vp = Vec2::new(800.0, 600.0);
+        let (o, d) = c.pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp).unwrap();
+        // A big quad-ish triangle spanning the origin, facing the camera (+Z).
+        let (a, b, cc) = (
+            Vec3::new(-50.0, -50.0, 0.0),
+            Vec3::new(50.0, -50.0, 0.0),
+            Vec3::new(0.0, 50.0, 0.0),
+        );
+        let t = ray_triangle(o, d, a, b, cc).expect("centre ray must hit a triangle at the origin");
+        let hit = o + d * t;
+        assert!(hit.length() < 1.0, "hit should land at the target, got {hit:?}");
+    }
+
+    /// Back faces are rejected — a pick must not select a surface facing away.
+    #[test]
+    fn back_faces_are_rejected() {
+        let (o, d) = (Vec3::new(0.0, 0.0, 100.0), -Vec3::Z);
+        // Reversed winding = back face from this ray.
+        let (a, b, c) = (
+            Vec3::new(-50.0, -50.0, 0.0),
+            Vec3::new(0.0, 50.0, 0.0),
+            Vec3::new(50.0, -50.0, 0.0),
+        );
+        assert!(ray_triangle(o, d, a, b, c).is_none(), "back face must not be picked");
+    }
+
+    /// Geometry behind the cursor must never be picked.
+    #[test]
+    fn geometry_behind_the_ray_is_rejected() {
+        let (o, d) = (Vec3::new(0.0, 0.0, 100.0), Vec3::Z); // pointing AWAY from the origin
+        let (a, b, c) = (
+            Vec3::new(-50.0, -50.0, 0.0),
+            Vec3::new(50.0, -50.0, 0.0),
+            Vec3::new(0.0, 50.0, 0.0),
+        );
+        assert!(ray_triangle(o, d, a, b, c).is_none(), "geometry behind the ray must miss");
     }
 }

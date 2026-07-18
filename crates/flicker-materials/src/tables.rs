@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use crate::compound::CompoundDef;
 use crate::element::{Element, ElementId};
 use crate::material::MaterialDef;
 use crate::source::{MaterialError, TableSource};
@@ -58,10 +59,13 @@ fn blend_elements<'a>(items: impl IntoIterator<Item = (&'a Element, f64)>) -> El
 pub struct Tables {
     elements: Vec<Element>,
     materials: Vec<MaterialDef>,
+    compounds: Vec<CompoundDef>,
     by_symbol: HashMap<String, usize>,
     by_number: HashMap<u8, usize>,
     material_by_id: HashMap<u8, usize>,
     material_by_name: HashMap<String, usize>,
+    compound_by_name: HashMap<String, usize>,
+    compound_by_id: HashMap<u16, usize>,
 }
 
 impl Tables {
@@ -71,12 +75,31 @@ impl Tables {
     pub fn from_source(source: &impl TableSource) -> Result<Self, MaterialError> {
         let elements = source.load_elements()?;
         let materials = source.load_materials()?;
-        Ok(Self::from_rows(elements, materials))
+        let compounds = source.load_compounds()?;
+        Ok(Self::build(elements, materials, compounds))
     }
 
-    /// Index already-loaded rows. Exposed for callers that obtained the rows by
-    /// other means (and for tests); most code uses [`Self::from_source`].
+    /// Index already-loaded element + material rows (no compounds). Exposed for
+    /// callers that obtained the rows by other means (and for tests); most code
+    /// uses [`Self::from_source`].
     pub fn from_rows(elements: Vec<Element>, materials: Vec<MaterialDef>) -> Self {
+        Self::build(elements, materials, Vec::new())
+    }
+
+    /// Index already-loaded element + material + compound rows.
+    pub fn from_rows_full(
+        elements: Vec<Element>,
+        materials: Vec<MaterialDef>,
+        compounds: Vec<CompoundDef>,
+    ) -> Self {
+        Self::build(elements, materials, compounds)
+    }
+
+    fn build(
+        elements: Vec<Element>,
+        materials: Vec<MaterialDef>,
+        compounds: Vec<CompoundDef>,
+    ) -> Self {
         let by_symbol = elements
             .iter()
             .enumerate()
@@ -97,13 +120,26 @@ impl Tables {
             .enumerate()
             .map(|(i, m)| (m.name.clone(), i))
             .collect();
+        let compound_by_name = compounds
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.name.clone(), i))
+            .collect();
+        let compound_by_id = compounds
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
         Self {
             elements,
             materials,
+            compounds,
             by_symbol,
             by_number,
             material_by_id,
             material_by_name,
+            compound_by_name,
+            compound_by_id,
         }
     }
 
@@ -135,6 +171,61 @@ impl Tables {
     /// The material with the given display name (e.g. `"Granite"`).
     pub fn material_by_name(&self, name: &str) -> Option<&MaterialDef> {
         self.material_by_name.get(name).map(|&i| &self.materials[i])
+    }
+
+    /// All compound rows, in load order (empty if the catalog isn't present).
+    pub fn compounds(&self) -> &[CompoundDef] {
+        &self.compounds
+    }
+
+    /// The curated **mineable ores/gems** (`harvestable = true`) — the materials
+    /// that must reach a concentrated vein somewhere (drives `ensure_ore_veins`).
+    /// Everything else is refined diffusely from bulk voxels, no vein needed.
+    pub fn harvestable_compounds(&self) -> impl Iterator<Item = &CompoundDef> {
+        self.compounds.iter().filter(|c| c.harvestable)
+    }
+
+    /// The compound with the given name (e.g. `"Hematite"`).
+    pub fn compound(&self, name: &str) -> Option<&CompoundDef> {
+        self.compound_by_name.get(name).map(|&i| &self.compounds[i])
+    }
+
+    /// The compound with the given catalog id.
+    pub fn compound_by_id(&self, id: u16) -> Option<&CompoundDef> {
+        self.compound_by_id.get(&id).map(|&i| &self.compounds[i])
+    }
+
+    /// Per-element **mass fractions** of a compound (Σ = 1), from its formula
+    /// element counts × their atomic masses — the stoichiometry the compound former
+    /// uses to move element mass into compound mass. Keyed by atomic number.
+    /// Elements not in the periodic table are skipped (so the remaining fractions
+    /// renormalise over the known elements); an empty/all-unknown compound yields
+    /// an empty vec.
+    pub fn compound_mass_fractions(&self, compound: &CompoundDef) -> Vec<(ElementId, f64)> {
+        let mut weights: Vec<(ElementId, f64)> = Vec::with_capacity(compound.elements.len());
+        let mut total = 0.0;
+        for e in &compound.elements {
+            if let Some(el) = self.element(&e.symbol) {
+                let w = e.count as f64 * el.atomic_mass as f64;
+                if w > 0.0 {
+                    weights.push((el.number, w));
+                    total += w;
+                }
+            }
+        }
+        if total <= 0.0 {
+            return Vec::new();
+        }
+        for (_, w) in &mut weights {
+            *w /= total;
+        }
+        weights
+    }
+
+    /// The ore compounds whose extracted element is `symbol` — the minerals a
+    /// player mines to obtain that element (e.g. `"Fe"` → Hematite).
+    pub fn ores_of<'a>(&'a self, symbol: &'a str) -> impl Iterator<Item = &'a CompoundDef> + 'a {
+        self.compounds.iter().filter(move |c| c.extracted() == Some(symbol))
     }
 
     /// Composition-weighted blend of element base traits — `Σ fractionᵢ·traitᵢ`
@@ -173,6 +264,8 @@ impl Tables {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::element::PhysicalState;
     use crate::source::JsonTableSource;
@@ -189,10 +282,23 @@ mod tests {
     #[test]
     fn loads_the_full_vocabulary() {
         let t = tables();
-        // 27 elements (Mg added for formation-sim relevance — design ceiling 30),
-        // 20 resolved materials (handoff §2).
-        assert_eq!(t.elements().len(), 27);
+        // 28 elements (Mg added for formation-sim relevance; Li synced 2026-07-11
+        // per Book III ruling F3450870 — design ceiling 30), 20 resolved materials
+        // (handoff §2).
+        assert_eq!(t.elements().len(), 28);
         assert_eq!(t.materials().len(), 20);
+        // 28 UNIQUE symbols and atomic numbers — a duplicate row would hide
+        // inside the bare len() check (the by-symbol/by-number indexes silently
+        // collapse duplicates).
+        let symbols: HashSet<&str> = t.elements().iter().map(|e| e.symbol.as_str()).collect();
+        let numbers: HashSet<u8> = t.elements().iter().map(|e| e.number).collect();
+        assert_eq!(symbols.len(), 28);
+        assert_eq!(numbers.len(), 28);
+        // The two post-transcription additions are present — guards against a
+        // stale-base regression re-dropping them (e.g. a branch forked before
+        // the 2026-07-11 Li sync still carries a 27-element table).
+        assert!(symbols.contains("Mg"), "Mg (added 2026-06) missing");
+        assert!(symbols.contains("Li"), "Li (Book ruling F3450870) missing");
     }
 
     #[test]
@@ -225,6 +331,121 @@ mod tests {
         assert!(t.material(10).unwrap().extracted_element.is_none());
         assert_eq!(t.material_by_name("Granite").unwrap().id, 10);
         assert!(t.material(200).is_none());
+    }
+
+    #[test]
+    fn compounds_load_from_the_catalog() {
+        let t = tables();
+        // The Prism BookIII catalog (Common/Alloy/Biological/Mineral/Useful/Gemstone;
+        // 77 rows after Feldspar id 42 retired 2026-07-13, superseded by the split
+        // feldspars — retired ids are never reused) + the 12 sim-required minerals
+        // merged in from the rock tier (Unification Ruling R6b — ONE mineral registry) = 89,
+        // + the 5 sim-required atmospheric gas species (ids 91-95: N₂, SO₂, HCl, CH₄, NH₃)
+        // added for the outgassing/atmosphere sim (2026-07-14) = 94.
+        assert_eq!(t.compounds().len(), 94);
+        assert!(t.compound("Feldspar").is_none(), "Feldspar (42) is retired");
+        assert!(t.compound_by_id(42).is_none(), "id 42 must stay retired");
+        // A known mineral resolves with its formula, elements, and extraction target.
+        let hem = t.compound("Hematite").expect("Hematite present");
+        assert_eq!(hem.formula, "Fe2O3");
+        assert_eq!(hem.category, "mineral");
+        assert!(hem.natural);
+        assert_eq!(hem.extracted(), Some("Fe"));
+        assert!(hem.contains("Fe") && hem.contains("O"));
+        // Iron ore is discoverable via the extraction index.
+        assert!(t.ores_of("Fe").any(|c| c.name == "Hematite"));
+        // An alloy is crafted (not natural) and has no single extraction target.
+        let brass = t.compound("Brass").expect("Brass present");
+        assert!(!brass.natural);
+        assert_eq!(brass.extracted(), None);
+        // Every parsed constituent element exists in the periodic table (non-Prism
+        // symbols like Apatite's F were dropped from the parsed element list).
+        for c in t.compounds() {
+            for e in &c.elements {
+                assert!(t.element(&e.symbol).is_some(), "{}: unknown element {}", c.name, e.symbol);
+            }
+        }
+    }
+
+    #[test]
+    fn merged_minerals_are_first_class_compounds() {
+        let t = tables();
+        // The 12 rock-forming minerals moved out of rocks.json (R6b) continue the
+        // catalog id space and carry their physical fields.
+        let oli = t.compound("Olivine").expect("Olivine present");
+        assert_eq!(oli.id, 79);
+        assert_eq!(oli.category, "mineral");
+        assert!(oli.natural);
+        assert_eq!(oli.hardness_mohs, Some(7.0));
+        assert_eq!(oli.density_g_cm3, Some(3.27));
+        assert_eq!(oli.brittleness, Some(0.7));
+        assert!(oli.note.as_deref().unwrap_or("").contains("MANTLE"));
+        assert!(oli.contains("Mg") && oli.contains("Si") && oli.contains("O"));
+        assert_eq!(t.compound_by_id(90).unwrap().name, "Serpentine");
+        // Book III rows carry physicals too (one-table directive) but stay
+        // non-sim_required with no provenance note.
+        let hem = t.compound("Hematite").unwrap();
+        assert_eq!(hem.hardness_mohs, Some(6.0));
+        assert!(hem.note.is_none() && !hem.sim_required);
+        // The merge added NO harvestable flags — the curated ore/gem set is
+        // untouched (spodumene/dolomite ore status awaits its own ruling).
+        let minerals = [
+            "Olivine", "Pyroxene", "Anorthite", "Albite", "Orthoclase", "Biotite",
+            "Muscovite", "Magnetite", "Pyrite", "Dolomite", "Spodumene", "Serpentine",
+        ];
+        for name in minerals {
+            let c = t.compound(name).unwrap_or_else(|| panic!("{name} missing"));
+            assert!((79..=90).contains(&c.id), "{name}: id {} outside 79..=90", c.id);
+            assert!(c.sim_required, "{name} must be flagged sim_required");
+            assert!(!c.harvestable, "{name} must stay unharvestable");
+        }
+    }
+
+    /// ONE TABLE (Aaron, 2026-07-13): the physical fields are populated on every
+    /// row of the registry — a new compound cannot ship without them, and `0.0`
+    /// hardness/brittleness (non-solid convention) is the only sanctioned "n/a".
+    #[test]
+    fn physical_fields_cover_the_whole_registry() {
+        let t = tables();
+        for c in t.compounds() {
+            let (h, d, b) = (c.hardness_mohs, c.density_g_cm3, c.brittleness);
+            let h = h.unwrap_or_else(|| panic!("{}: hardness_mohs missing", c.name));
+            let d = d.unwrap_or_else(|| panic!("{}: density_g_cm3 missing", c.name));
+            let b = b.unwrap_or_else(|| panic!("{}: brittleness missing", c.name));
+            assert!((0.0..=10.0).contains(&h), "{}: Mohs {h} out of range", c.name);
+            assert!(d > 0.0, "{}: density {d} not positive", c.name);
+            assert!((0.0..=1.0).contains(&b), "{}: brittleness {b} out of range", c.name);
+        }
+    }
+
+    /// `rocks.json` (the modal rock recipes) keys each rock's `modal` map by exact
+    /// compound *name* — nothing consumes it yet (poc-chemistry M6), so until a
+    /// rocks loader exists this guards the reference scheme against typos and
+    /// renames on either side.
+    #[test]
+    fn rock_modal_references_resolve_via_the_compound_catalog() {
+        let t = tables();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/data/rocks.json"
+        );
+        let bytes = std::fs::read(path).expect("rocks.json readable");
+        let file: serde_json::Value = serde_json::from_slice(&bytes).expect("rocks.json parses");
+        // R6b: ONE mineral registry — rocks.json defines no minerals of its own.
+        assert!(file.get("minerals").is_none(), "rocks.json must not define minerals (R6b)");
+        let rocks = file["rocks"].as_array().expect("rocks array");
+        assert!(!rocks.is_empty());
+        for rock in rocks {
+            let id = rock["id"].as_str().unwrap_or("?");
+            let modal = rock["modal"].as_object().expect("modal map");
+            assert!(!modal.is_empty(), "rock {id}: empty modal");
+            for name in modal.keys() {
+                assert!(
+                    t.compound(name).is_some(),
+                    "rock {id}: modal key {name:?} is not a compound name"
+                );
+            }
+        }
     }
 
     #[test]

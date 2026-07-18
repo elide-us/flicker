@@ -535,7 +535,7 @@ impl Field {
             match self.model.clips.get(clip_idx) {
                 Some(c) => {
                     let t = tick.min(c.duration_ticks.saturating_sub(1));
-                    pose::sample_local_poses(&self.model.bones, c, t)
+                    pose::sample_local_poses(&self.model.bones, c, t, self.model.retarget)
                 }
                 None => self.model.bones.iter().map(|b| b.local).collect(),
             }
@@ -584,7 +584,7 @@ impl Field {
                     } else {
                         0
                     };
-                    let locals = pose::sample_local_poses(&self.model.bones, clip, tick);
+                    let locals = pose::sample_local_poses(&self.model.bones, clip, tick, self.model.retarget);
                     pose::global_transforms(&self.model.bones, &locals)
                 }
                 None => {

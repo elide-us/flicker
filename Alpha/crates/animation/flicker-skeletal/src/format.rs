@@ -35,6 +35,13 @@ pub struct RigFile {
     pub mesh: Mesh,
     #[serde(default)]
     pub clips: Vec<Clip>,
+    /// Play clips as ROTATION-ONLY on this rig: keep each bone's own rest translation
+    /// (its bone offset/length) instead of the clip's baked source-skeleton offsets.
+    /// Set for rigs RETARGETED from a differently-proportioned authoring skeleton (e.g.
+    /// a Meshy body driven by the Katanami clip library). Default false = play the
+    /// clip's full local TRS, i.e. the authoring character itself.
+    #[serde(default)]
+    pub retarget: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -74,7 +81,7 @@ fn identity16() -> [f32; 16] {
     ]
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct Mesh {
     #[serde(default)]
     pub vertices: Vec<Vertex>,
@@ -86,6 +93,10 @@ pub struct Mesh {
     pub submeshes: Vec<Submesh>,
     #[serde(default)]
     pub materials: Vec<Material>,
+    /// Secondary-motion cloth: which verts swing on which jiggle chains
+    /// (`tools/skin_outfit.py --build-cloth`). Empty/absent → the mesh is fully rigid.
+    #[serde(default)]
+    pub cloth: Cloth,
 }
 
 /// A contiguous run of `indices` sharing one material. Because the converter emits
@@ -125,7 +136,66 @@ pub struct Material {
     pub color: Vec<f32>,
 }
 
-#[derive(Debug, Deserialize)]
+/// Secondary-motion cloth data for a garment: which vertices swing on which jiggle
+/// chains. Emitted by `tools/skin_outfit.py --build-cloth`, consumed by [`crate::cloth`].
+/// All positions are in BIND (source/rig) space, the same space as the mesh vertices.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct Cloth {
+    #[serde(default)]
+    pub regions: Vec<ClothRegion>,
+}
+
+/// One dangly region (a bell sleeve, a skirt hem …) — a fan of chains hung from one bone,
+/// plus the region's vertices bound along those chains.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClothRegion {
+    pub name: String,
+    /// Body bone the chains hang from (drives their anchor point + home direction).
+    pub anchor_bone: String,
+    #[serde(default)]
+    pub params: ClothParams,
+    pub chains: Vec<ClothChain>,
+    pub binds: Vec<ClothBind>,
+}
+
+/// A single jiggle chain: a straight hang from `anchor` along `dir`, `segments` links of
+/// `seg_len` each. Same construction args as [`crate::jiggle::JiggleChain::new`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClothChain {
+    pub anchor: [f32; 3],
+    pub dir: [f32; 3],
+    pub seg_len: f32,
+    pub segments: u32,
+}
+
+/// A vertex's attachment: which region chain (`c`) it follows and where along it —
+/// segment `k`, fraction `f` in `0..1` along that segment.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClothBind {
+    pub v: u32,
+    pub c: u32,
+    pub k: u32,
+    pub f: f32,
+}
+
+/// Per-region jiggle dials (mirrors [`crate::jiggle::JiggleParams`], as plain arrays for
+/// the wire). Defaults suit a light garment in cm / z-up.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClothParams {
+    pub gravity: [f32; 3],
+    pub stiffness: f32,
+    pub damping: f32,
+    pub iterations: u32,
+    pub max_dt: f32,
+}
+
+impl Default for ClothParams {
+    fn default() -> Self {
+        Self { gravity: [0.0, 0.0, -600.0], stiffness: 0.06, damping: 0.9, iterations: 8, max_dt: 1.0 / 30.0 }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Vertex {
     pub p: [f32; 3],
     pub n: [f32; 3],
@@ -184,6 +254,14 @@ pub struct Bone {
 pub struct ResolvedTrack {
     pub bone: usize,
     pub keys: Vec<Keyframe>,
+    /// The SOURCE skeleton's rest translation for this bone (from the clip file's own
+    /// skeleton — the space the clip was authored in). Retarget playback keeps
+    /// `target_rest + (clip_T - source_rest)`: zero for constant-offset bones (limbs, where
+    /// `clip_T == source_rest`, so the rig's own proportions are preserved), but the real
+    /// animated delta for a bone that translates — the pelvis's hip sway/bob — rebased onto
+    /// this rig's own hip height. Falls back to the target bone's rest translation (delta 0)
+    /// when the source skeleton lacks the bone.
+    pub source_rest: [f32; 3],
 }
 
 /// An animation clip with its tracks resolved against the rig skeleton.
@@ -208,6 +286,8 @@ pub struct Model {
     pub world: Mat4,
     /// Bounding radius of the rest pose in engine space — camera framing.
     pub orbit_radius: f32,
+    /// Rotation-only clip playback for a retargeted rig (see [`RigFile::retarget`]).
+    pub retarget: bool,
 }
 
 /// Decode a contract matrix (16 floats) into a glam `Mat4`.
@@ -257,8 +337,19 @@ fn path_has_component(path: &Path, name: &str) -> bool {
 /// locomotion by plain name. Falls back to loading top-level clip files when no
 /// `clips/` subtree exists (a legacy flat layout).
 pub fn load_dir(dir: &Path) -> Result<Model> {
+    load_dirs(&[dir])
+}
+
+/// Like [`load_dir`] but gathers rig/clip JSON from SEVERAL directories — for a base
+/// body that borrows another character's clip library (e.g. `base_human_female` playing
+/// the Katanami animation set, which resolves by shared bone names). The rig authority is
+/// still the single file with the most mesh vertices across all the dirs, so the base
+/// body (dense mesh) wins over the clip files (skeleton-only).
+pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
     let mut files = Vec::new();
-    collect_json_files(dir, &mut files)?;
+    for dir in dirs {
+        collect_json_files(dir, &mut files)?;
+    }
     let mut parsed: Vec<(PathBuf, RigFile)> = Vec::new();
     for path in files {
         let text = std::fs::read_to_string(&path)
@@ -269,9 +360,8 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
     }
     if parsed.is_empty() {
         anyhow::bail!(
-            "no .json rig/clip assets found in {} — run the fbximport converter and \
-             copy its output here",
-            dir.display()
+            "no .json rig/clip assets found in {:?} — run the exporter and copy its output here",
+            dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>()
         );
     }
 
@@ -316,15 +406,33 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
             continue;
         }
         let root_motion = path_has_component(path, "RootMotion");
+        // Rest translations from THIS clip file's OWN skeleton — the space the clip's
+        // translations were authored in. Retarget rebases each bone's animated translation off
+        // this onto the target rig's rest (see `ResolvedTrack::source_rest`).
+        let src_rest: HashMap<&str, [f32; 3]> = f
+            .skeleton
+            .bones
+            .iter()
+            .map(|b| (b.name.as_str(), [b.local[12], b.local[13], b.local[14]]))
+            .collect();
         for clip in &f.clips {
             let mut tracks = Vec::new();
             let mut unresolved = Vec::new();
             for tr in &clip.tracks {
                 match name_to_index.get(tr.bone.as_str()) {
-                    Some(&bi) => tracks.push(ResolvedTrack {
-                        bone: bi,
-                        keys: tr.keys.clone(),
-                    }),
+                    Some(&bi) => {
+                        // Fall back to the target bone's own rest translation → delta 0.
+                        let w = bones[bi].local.w_axis;
+                        let source_rest = src_rest
+                            .get(tr.bone.as_str())
+                            .copied()
+                            .unwrap_or([w.x, w.y, w.z]);
+                        tracks.push(ResolvedTrack {
+                            bone: bi,
+                            keys: tr.keys.clone(),
+                            source_rest,
+                        });
+                    }
                     None => unresolved.push(tr.bone.clone()),
                 }
             }
@@ -379,6 +487,7 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
         source: rig_file.source,
         world,
         orbit_radius: radius,
+        retarget: rig_file.retarget,
     })
 }
 
@@ -391,4 +500,107 @@ pub fn load_mesh(path: &Path) -> Result<Mesh> {
     let file: RigFile = serde_json::from_str(&text)
         .with_context(|| format!("parsing prop {}", path.display()))?;
     Ok(file.mesh)
+}
+
+/// Remap a mesh's joint indices from an outfit's OWN (reduced) bone list into a base
+/// skeleton's index space, matching by bone NAME. This is what lets a partial-bone
+/// outfit — exported with only the bones it weights + their ancestor chain — be skinned
+/// directly with the base skeleton's pose palette. Every joint index (including the
+/// 0-padded, zero-weight slots) is rewritten; an influence whose bone name is absent
+/// from the base collapses to the root (index 0) with a warning.
+fn remap_outfit_joints(mesh: &mut Mesh, outfit_names: &[String], base: &[Bone]) {
+    let base_index: HashMap<&str, usize> = base
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.as_str(), i))
+        .collect();
+    let remap: Vec<u32> = outfit_names
+        .iter()
+        .map(|n| match base_index.get(n.as_str()) {
+            Some(&i) => i as u32,
+            None => {
+                eprintln!("flicker-skeletal: outfit bone '{n}' not in base skeleton; influence pinned to root");
+                0
+            }
+        })
+        .collect();
+    let nb = remap.len() as u32;
+    for v in &mut mesh.vertices {
+        for k in 0..4 {
+            let j = v.joints[k];
+            v.joints[k] = if j < nb { remap[j as usize] } else { 0 };
+        }
+    }
+}
+
+/// Load an OUTFIT rig file: a partial skinned mesh that shares another (base) skeleton
+/// and is drawn over a base body. Its `skeleton.bones` is a REDUCED list and its vertex
+/// `joints` index into THAT list; this remaps them into `base`'s index space by bone
+/// NAME so the returned mesh skins directly with the base pose palette. A file with no
+/// skeleton block is returned unchanged (legacy: joints already index the base — e.g.
+/// an outfit exported against the full skeleton, where the remap is the identity anyway).
+pub fn load_outfit(path: &Path, base: &[Bone]) -> Result<Mesh> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading outfit {}", path.display()))?;
+    let file: RigFile = serde_json::from_str(&text)
+        .with_context(|| format!("parsing outfit {}", path.display()))?;
+    let outfit_names: Vec<String> = file.skeleton.bones.iter().map(|b| b.name.clone()).collect();
+    let mut mesh = file.mesh;
+    if !outfit_names.is_empty() {
+        remap_outfit_joints(&mut mesh, &outfit_names, base);
+    }
+    Ok(mesh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bone(name: &str, parent: i32) -> Bone {
+        Bone {
+            name: name.to_string(),
+            parent,
+            local: Mat4::IDENTITY,
+            inverse_bind: Mat4::IDENTITY,
+        }
+    }
+
+    /// The outfit's reduced bone list is in a DIFFERENT order/subset than the base;
+    /// `remap_outfit_joints` must rewrite every joint index by NAME into base space.
+    #[test]
+    fn outfit_joints_remap_by_name() {
+        let base = vec![bone("root", -1), bone("spine", 0), bone("arm", 1)];
+        // Reduced outfit skeleton: only two bones, listed arm-first.
+        let outfit_names = vec!["arm".to_string(), "spine".to_string()];
+        let mut mesh = Mesh::default();
+        mesh.vertices.push(Vertex {
+            p: [0.0, 0.0, 0.0],
+            n: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+            // outfit-local: joint 0 = arm, joint 1 = spine, then 0-padding.
+            joints: [0, 1, 0, 0],
+            weights: [0.5, 0.5, 0.0, 0.0],
+        });
+        remap_outfit_joints(&mut mesh, &outfit_names, &base);
+        // arm→2, spine→1; the padded slots (outfit joint 0 = arm) also map to 2.
+        assert_eq!(mesh.vertices[0].joints, [2, 1, 2, 2]);
+    }
+
+    /// A bone name the base doesn't have collapses to root (0), not out of bounds.
+    #[test]
+    fn outfit_unknown_bone_pins_to_root() {
+        let base = vec![bone("root", -1), bone("spine", 0)];
+        let outfit_names = vec!["spine".to_string(), "ghost".to_string()];
+        let mut mesh = Mesh::default();
+        mesh.vertices.push(Vertex {
+            p: [0.0, 0.0, 0.0],
+            n: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+            joints: [1, 0, 0, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        });
+        remap_outfit_joints(&mut mesh, &outfit_names, &base);
+        // outfit joint 1 = "ghost" (absent) → 0; joint 0 = "spine" → 1.
+        assert_eq!(mesh.vertices[0].joints, [0, 1, 1, 1]);
+    }
 }
