@@ -1,19 +1,24 @@
-//! flicker-clicktrainer: an aim / click-training game — the `square-chase` POC
-//! promoted to a proper engine client.
+//! flicker-clicktrainer: an aim / click-training game — the reference **2D**
+//! client, and the demonstration of blending the engine's two UI modes on one
+//! screen: **2D sprite gameplay** (the target box + lifetime bar, drawn with
+//! `draw_sprite`) UNDER a **vector Lua HUD** (a carved-stone stats panel + a
+//! RESET button, `scripts/hud.lua` + `UI.clicktrainer`), with **clicks routed
+//! correctly** between them.
 //!
-//! `square-chase` was a bare `flicker::app::App` (init/update/render) that
-//! auto-fire-scored while the button was held inside one box. This is the same
-//! idea grown up into an engine client:
+//! The HUD reports `hud_hit` when the cursor is over its panel; the scene only
+//! scores a click as a game hit/miss when it did NOT land on the HUD — so the
+//! RESET button (and the panel it sits on) never costs you accuracy. The menu's
+//! game-launch button is labelled "CLICK TRAINER" via [`ShellConfig::game_label`].
+//!
 //! - a `flicker::scene::Scene` wired into the **`flicker-shell`** front-end
-//!   (intro splash → menu → *this* → pause/settings), instead of owning the
-//!   window itself;
+//!   (intro splash → menu → *this* → pause/settings);
 //! - **discrete** clicks (press edge, not hold) scored as hits vs. misses, with
-//!   live accuracy and reaction-time readouts;
+//!   live accuracy and reaction-time readouts in the HUD;
 //! - a difficulty ramp — the target shrinks as you land hits — and a per-target
 //!   lifetime that counts as a miss if it times out.
 //!
 //! Controls: left-click a target to hit it; a misclick or a timed-out target
-//! costs accuracy. Esc opens the pause menu (Resume / Settings / Quit).
+//! costs accuracy. RESET zeroes the stats. Esc opens the pause menu.
 
 use anyhow::Result;
 use std::time::Duration;
@@ -21,6 +26,8 @@ use std::time::Duration;
 use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState};
 use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, Transition};
+use flicker::script::{ScriptHost, ValueMap};
+use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_shell::{PauseScene, Theme};
 
 // ── Tuning ───────────────────────────────────────────────────────────
@@ -37,12 +44,25 @@ const TARGET_LIFETIME: f32 = 1.15;
 const CALM: [f32; 3] = [0.30, 0.80, 0.85];
 const URGENT: [f32; 3] = [0.95, 0.30, 0.25];
 
+/// The vector HUD panel (`scripts/hud.lua`) + the shared UI-element layout.
+const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
+const HUD_UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../content/resources/ui_elements.json");
+/// Top-left region (px) reserved for the HUD panel, so every target stays
+/// clickable (the HUD absorbs clicks in its own area). A touch larger than the
+/// panel; targets that would land inside it are re-rolled.
+const HUD_RESERVE_W: f32 = 320.0;
+const HUD_RESERVE_H: f32 = 340.0;
+
 /// The click-trainer game scene. Everything a frame needs lives here; the shell
 /// drives it through the [`Scene`] trait.
 struct ClickTrainer {
     /// 1×1 white pixel — the sprite shader tints it, so one texture draws the
     /// target box and its lifetime bar in any colour.
     white: Option<TextureHandle>,
+    /// The vector HUD script (`scripts/hud.lua` + `UI.clicktrainer`). `None` if
+    /// it failed to load — the game still runs, just without the panel.
+    script: Option<ScriptHost>,
 
     // ── current target ──
     target_pos: Vec2,
@@ -68,7 +88,7 @@ struct ClickTrainer {
     /// `AbstractControls`/`GamepadConfig` — the pause scene takes defaults.
     bindings: InputMap,
     menu_prev: bool,
-    /// Gothic theme for the pause overlay we push (built once in `enter`).
+    /// Theme for the pause overlay we push (built once in `enter`).
     ui_theme: Option<Theme>,
 }
 
@@ -76,6 +96,7 @@ impl ClickTrainer {
     fn new() -> Self {
         Self {
             white: None,
+            script: None,
             target_pos: Vec2::ZERO,
             target_size: TARGET_START_SIZE,
             time_remaining: 0.0,
@@ -97,15 +118,23 @@ impl ClickTrainer {
         (TARGET_START_SIZE - self.hits as f32 * TARGET_SHRINK_PER_HIT).max(TARGET_MIN_SIZE)
     }
 
-    /// Place a fresh target at a random fully-on-screen position, reset its clock.
+    /// Place a fresh target at a random position clear of the HUD panel, reset
+    /// its clock.
     fn spawn(&mut self, screen: Vec2) {
         self.target_size = self.size_for_difficulty();
         let max_x = ((screen.x - self.target_size) as u32).max(1);
         let max_y = ((screen.y - self.target_size) as u32).max(1);
-        self.target_pos = Vec2::new(
-            fastrand::u32(0..max_x) as f32,
-            fastrand::u32(0..max_y) as f32,
-        );
+        let roll =
+            || Vec2::new(fastrand::u32(0..max_x) as f32, fastrand::u32(0..max_y) as f32);
+        let mut pos = roll();
+        // Re-roll off the top-left HUD region (bounded, so it always terminates).
+        for _ in 0..12 {
+            if pos.x >= HUD_RESERVE_W || pos.y >= HUD_RESERVE_H {
+                break;
+            }
+            pos = roll();
+        }
+        self.target_pos = pos;
         self.time_remaining = TARGET_LIFETIME;
         self.spawn_age = 0.0;
         self.spawned = true;
@@ -126,6 +155,41 @@ impl ClickTrainer {
             self.hits as f32 / total as f32 * 100.0
         }
     }
+
+    /// Reset all stats + the difficulty ramp (the HUD's RESET button).
+    fn reset(&mut self) {
+        self.hits = 0;
+        self.misses = 0;
+        self.last_reaction = f32::INFINITY;
+        self.best_reaction = f32::INFINITY;
+        self.total_reaction = 0.0;
+        self.target_size = TARGET_START_SIZE;
+        self.spawned = false; // a fresh target is placed next frame
+    }
+
+    /// The per-frame HUD model — every stat pre-formatted to the string the Lua
+    /// panel displays verbatim (`"—"` until there's data).
+    fn hud_model(&self) -> ValueMap {
+        let react = |t: f32| {
+            if t.is_finite() {
+                format!("{:.0} ms", t * 1000.0)
+            } else {
+                "—".to_string()
+            }
+        };
+        let avg = if self.hits > 0 {
+            self.total_reaction / self.hits as f32
+        } else {
+            f32::INFINITY
+        };
+        ValueMap::new()
+            .with("hits", self.hits.to_string())
+            .with("misses", self.misses.to_string())
+            .with("accuracy", format!("{:.0}%", self.accuracy()))
+            .with("react_last", react(self.last_reaction))
+            .with("react_best", react(self.best_reaction))
+            .with("react_avg", react(avg))
+    }
 }
 
 impl Scene for ClickTrainer {
@@ -133,6 +197,16 @@ impl Scene for ClickTrainer {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         // Theme for the pause overlay we push on Esc (built once, reused).
         self.ui_theme = Some(Theme::build(renderer));
+        // The vector HUD: a Lua stats panel over the 2D game. Degrades to no HUD
+        // (the game still plays) if the script can't load.
+        match ScriptHost::from_file(HUD_SCRIPT) {
+            Ok(script) => {
+                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.clicktrainer`)
+                load_widgets(&script); // the shared immediate-mode toolkit
+                self.script = Some(script);
+            }
+            Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
+        }
         self.spawn(renderer.size());
         renderer.window().set_title("Flicker Click Trainer");
     }
@@ -142,7 +216,6 @@ impl Scene for ClickTrainer {
         let screen = renderer.size();
 
         // Pick up any input-settings change made in the pause→settings overlay.
-        // Only the bindings matter here (no camera controls to carry).
         if let Some((map, _, _)) = flicker_shell::take_pending_input() {
             self.bindings = map;
         }
@@ -166,10 +239,27 @@ impl Scene for ClickTrainer {
             self.spawn(screen);
         }
 
-        // Discrete click (press edge, not hold): inside the target → a hit that
-        // scores + respawns; anywhere else → a misclick (accuracy penalty, the
-        // target stays).
-        if input.mouse_left_pressed {
+        // Run the vector HUD. It reports whether the cursor is over the panel (a
+        // UI click, not a game click) and whether RESET fired — this is the
+        // click-routing that lets the two modes share the screen.
+        let mut over_hud = false;
+        if let Some(script) = self.script.as_ref() {
+            let _ = script.set_model(&self.hud_model());
+            match script.update(input, screen.x, screen.y) {
+                Ok(res) => {
+                    over_hud = res.is_on("hud_hit");
+                    if res.is_on("reset") {
+                        self.reset();
+                    }
+                }
+                Err(e) => tracing::warn!("HUD update failed: {e}"),
+            }
+        }
+
+        // Discrete click (press edge, not hold), scored only when it did NOT land
+        // on the HUD: inside the target → a hit that scores + respawns; elsewhere
+        // on the play-field → a misclick (accuracy penalty, the target stays).
+        if input.mouse_left_pressed && !over_hud {
             if self.target_contains(input.mouse_position) {
                 self.hits += 1;
                 self.last_reaction = self.spawn_age;
@@ -197,6 +287,7 @@ impl Scene for ClickTrainer {
             return;
         };
 
+        // ── 2D game elements (sprite engine), drawn at the scene base layer ──
         // Target box, tinted calm → urgent as its lifetime drains.
         let urgency = 1.0 - (self.time_remaining / TARGET_LIFETIME).clamp(0.0, 1.0);
         let mix = |a: f32, b: f32| a + (b - a) * urgency;
@@ -217,51 +308,15 @@ impl Scene for ClickTrainer {
             [0.85, 0.85, 0.90, 0.9],
         );
 
-        // HUD: title, hit/miss/accuracy, reaction times, hint.
-        let text = [0.90, 0.93, 0.97, 1.0];
-        let gold = [0.85, 0.66, 0.32, 1.0];
-        let dim = [0.60, 0.64, 0.70, 1.0];
-        let react = |t: f32| {
-            if t.is_finite() {
-                format!("{:.0} ms", t * 1000.0)
-            } else {
-                "—".to_string()
+        // ── Vector UI (Lua panel), drawn above the game via its own layer ──
+        if let Some(script) = self.script.as_ref() {
+            let _ = script.set_model(&self.hud_model());
+            let size = renderer.size();
+            match script.draw(size.x, size.y) {
+                Ok(cmds) => render_hud(renderer, &cmds, white, &[]),
+                Err(e) => tracing::warn!("HUD draw failed: {e}"),
             }
-        };
-        let avg = if self.hits > 0 {
-            self.total_reaction / self.hits as f32
-        } else {
-            f32::INFINITY
-        };
-        renderer.draw_text(
-            "CLICK TRAINER — click the targets",
-            Vec2::new(16.0, 16.0),
-            24.0,
-            gold,
-        );
-        renderer.draw_text(
-            &format!(
-                "hits {}   misses {}   accuracy {:.0}%",
-                self.hits,
-                self.misses,
-                self.accuracy()
-            ),
-            Vec2::new(16.0, 48.0),
-            18.0,
-            text,
-        );
-        renderer.draw_text(
-            &format!(
-                "reaction   last {}   best {}   avg {}",
-                react(self.last_reaction),
-                react(self.best_reaction),
-                react(avg)
-            ),
-            Vec2::new(16.0, 70.0),
-            18.0,
-            text,
-        );
-        renderer.draw_text("Esc: menu", Vec2::new(16.0, 92.0), 16.0, dim);
+        }
     }
 }
 
@@ -275,10 +330,64 @@ fn main() -> Result<()> {
         .init();
 
     // The shell owns the whole front-end (splash → menu → settings/pause) and the
-    // winit run loop; we hand it a factory for our click-trainer scene, which
-    // START launches.
+    // winit run loop; we hand it a factory for our click-trainer scene (which the
+    // menu's "CLICK TRAINER" button launches) + that button's label.
     flicker_shell::run(flicker_shell::ShellConfig {
         game_scene: Box::new(|| Box::new(ClickTrainer::new())),
         settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
+        game_label: Some("CLICK TRAINER".to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Load the real `scripts/hud.lua` + the shared `ui_elements.json` and run a
+    //! frame, so a Lua syntax/runtime error — or a broken click-routing contract —
+    //! fails the build instead of only surfacing in the running app.
+    use super::*;
+
+    fn host() -> ScriptHost {
+        let h = ScriptHost::from_file(HUD_SCRIPT).expect("load hud.lua");
+        load_ui_json(&h, HUD_UI_ELEMENTS);
+        load_widgets(&h);
+        h
+    }
+
+    fn model() -> ValueMap {
+        ValueMap::new()
+            .with("hits", "5")
+            .with("misses", "1")
+            .with("accuracy", "83%")
+            .with("react_last", "210 ms")
+            .with("react_best", "180 ms")
+            .with("react_avg", "205 ms")
+    }
+
+    fn click_at(x: f32, y: f32) -> InputState {
+        let mut i = InputState::new();
+        i.mouse_position = Vec2::new(x, y);
+        i.mouse_left_pressed = true;
+        i
+    }
+
+    #[test]
+    fn hud_routes_clicks_and_draws() {
+        let h = host();
+
+        // A click over the top-left panel is CONSUMED by the HUD (hud_hit), so the
+        // scene must not score it as a game click.
+        h.set_model(&model()).unwrap();
+        let res = h.update(&click_at(30.0, 30.0), 1280.0, 720.0).expect("update");
+        assert!(res.is_on("hud_hit"), "a click on the panel must set hud_hit");
+
+        // A click out on the play-field is the GAME's, not the HUD's.
+        h.set_model(&model()).unwrap();
+        let res = h.update(&click_at(900.0, 500.0), 1280.0, 720.0).expect("update");
+        assert!(!res.is_on("hud_hit"), "a play-field click is not hud_hit");
+
+        // Draw emits the panel + stats (proves the whole draw path runs).
+        h.set_model(&model()).unwrap();
+        let cmds = h.draw(1280.0, 720.0).expect("draw");
+        assert!(!cmds.is_empty(), "the HUD draws the panel + stats");
+    }
 }

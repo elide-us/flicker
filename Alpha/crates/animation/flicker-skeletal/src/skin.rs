@@ -33,12 +33,24 @@ pub struct SkinnedVertex {
 
 /// 4-influence linear-blend skinning of every mesh vertex, parallel to
 /// `mesh.vertices`. The caller slices this per submesh and builds textured or flat
-/// GPU vertices from it.
+/// GPU vertices from it. No morphs — see `skin_morphed` for the create-a-face path.
 pub fn skin(mesh: &Mesh, palette: &[Mat4]) -> Vec<SkinnedVertex> {
+    skin_morphed(mesh, palette, &[])
+}
+
+/// As `skin`, but first blends the mesh's facial morph targets by `morph_weights` (parallel to
+/// `mesh.morphs`; short/empty → treated as 0) into the bind positions — the create-a-face path.
+/// Morphs reshape the bind face, then skinning poses it. `&[]` weights are byte-identical to
+/// `skin`; the blend is sparse, so only verts a nonzero morph touches cost anything.
+pub fn skin_morphed(mesh: &Mesh, palette: &[Mat4], morph_weights: &[f32]) -> Vec<SkinnedVertex> {
+    let active = mesh.morphs.iter().zip(morph_weights).any(|(_, &w)| w != 0.0);
+    let morphed = active.then(|| apply_morphs(mesh, morph_weights));
     mesh.vertices
         .iter()
-        .map(|v| {
-            let p = Vec4::new(v.p[0], v.p[1], v.p[2], 1.0);
+        .enumerate()
+        .map(|(i, v)| {
+            let base = morphed.as_ref().map_or(v.p, |p| p[i]);
+            let p = Vec4::new(base[0], base[1], base[2], 1.0);
             let n = Vec3::from(v.n);
             let mut pos = Vec3::ZERO;
             let mut nrm = Vec3::ZERO;
@@ -65,4 +77,54 @@ pub fn skin(mesh: &Mesh, palette: &[Mat4]) -> Vec<SkinnedVertex> {
             }
         })
         .collect()
+}
+
+/// Blend the mesh's morph targets into a fresh copy of the bind vertex positions, weighted by
+/// `morph_weights` (parallel to `mesh.morphs`). Sparse — only listed verts move. Returned
+/// positions are parallel to `mesh.vertices`. Public so the create-a-face UI can preview a
+/// reshaped face without skinning it.
+pub fn apply_morphs(mesh: &Mesh, morph_weights: &[f32]) -> Vec<[f32; 3]> {
+    let mut pos: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| v.p).collect();
+    for (m, &w) in mesh.morphs.iter().zip(morph_weights) {
+        if w == 0.0 {
+            continue;
+        }
+        for md in &m.deltas {
+            if let Some(p) = pos.get_mut(md.v as usize) {
+                p[0] += w * md.d[0];
+                p[1] += w * md.d[1];
+                p[2] += w * md.d[2];
+            }
+        }
+    }
+    pos
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_morphs, skin, skin_morphed};
+    use crate::format::{Mesh, Morph, MorphDelta, Vertex};
+    use glam::Mat4;
+
+    fn vert(p: [f32; 3]) -> Vertex {
+        Vertex { p, n: [0.0, 1.0, 0.0], uv: [0.0, 0.0], joints: [0, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0] }
+    }
+
+    #[test]
+    fn morph_blend_displaces_only_targeted_verts_scaled_by_weight() {
+        let mesh = Mesh {
+            vertices: vec![vert([0.0, 0.0, 0.0]), vert([1.0, 0.0, 0.0])],
+            morphs: vec![Morph { name: "wider".into(), deltas: vec![MorphDelta { v: 1, d: [10.0, 0.0, 0.0] }] }],
+            ..Default::default()
+        };
+        // weight 0 → nothing moves; and empty weights are byte-identical to `skin`.
+        assert_eq!(apply_morphs(&mesh, &[0.0])[1], [1.0, 0.0, 0.0]);
+        assert_eq!(skin(&mesh, &[Mat4::IDENTITY])[1].position, [1.0, 0.0, 0.0]);
+        // weight 0.5 → half the delta, on the targeted vert only.
+        let p = apply_morphs(&mesh, &[0.5]);
+        assert_eq!(p[0], [0.0, 0.0, 0.0], "an untargeted vert is untouched");
+        assert_eq!(p[1], [6.0, 0.0, 0.0], "1.0 + 0.5*10");
+        // full weight, skinned through identity == the morphed position.
+        assert_eq!(skin_morphed(&mesh, &[Mat4::IDENTITY], &[1.0])[1].position, [11.0, 0.0, 0.0]);
+    }
 }

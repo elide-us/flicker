@@ -6,14 +6,12 @@ publish = false
 
 [dependencies]
 flicker = { path = "../../crates/flicker" }
+# Shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The app
+# routes through `flicker_shell::run`; no per-app shell/UI copy.
+flicker-shell.workspace = true
 flicker-voxel.workspace = true
 flicker-worker.workspace = true
 anyhow.workspace = true
 glam.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-# Decodes the intro-splash logo PNGs at runtime (assets/*.png); also used by the
-# `ui_preview` test to encode the procedural UI textures.
-image.workspace = true

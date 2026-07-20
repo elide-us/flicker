@@ -1,218 +1,316 @@
 {
-  "_comment": "SHARED UI-element library for flicker clients: a flat map of named UI-element definitions, loaded into a ScriptHost and exposed to Lua as the `UI` global; each client's scripts read the elements they need by name (unused keys are ignored). Front-end shell (inherited by every client): `modal` (shared component style) + `screens.*` (its instances, selected by Model.screen) + `settings` + `logo` + `loading`. Per-client in-game HUDs are added here too, keyed by element name: `hud` = flicker-csg. Colors are RGBA 0..1; positions/sizes are HUD pixels; `texture` names resolve through the `Textures` global. As more clients migrate, add their HUD element(s) here — namespace the key if it would collide (e.g. two clients both wanting `hud`).",
+  "_comment": "SHARED UI-element library for flicker clients: a flat map of named UI-element definitions, loaded into a ScriptHost and exposed to Lua as the `UI` global; each client's scripts read the elements they need by name (unused keys are ignored). Front-end shell (inherited by every client): `modal` (shared component style) + `screens.*` (its instances, selected by Model.screen) + `settings` + `logo` + `loading`. Per-client in-game HUDs are added here too, keyed by element name: `hud` = flicker-csg. Colors are RGBA 0..1; positions/sizes are HUD pixels; `texture` names resolve through the `Textures` global. COLOURS ARE THE PRISM DESIGN LANGUAGE: every colour is a `$token` reference into `theme.tokens` (the single palette source), expanded by the load_ui_json resolver before the tree reaches Lua — never hardcode an rgba here, add/point a token. As more clients migrate, add their HUD element(s) here — namespace the key if it would collide (e.g. two clients both wanting `hud`).",
 
+  "theme": {
+    "_comment": "The Prism palette — the ONE source of UI colour (imported from the 'Prism UI Design Language': cold carved stone lit by sapphire rune-light, aged bronze the only structural metal, the 7-colour Septisigil for stats). Every colour elsewhere in this file is a `$name` reference resolved against this map. Stone ramp = surfaces (dark→light); edge = borders; ink/dim/faint = text; bronze = structural metal; sap_* = the interactive/live accent (base/hover/pressed + border + glow); rune_glow = lit text/focus; hp/mana/stam = resource ramps; sig_* = the seven stat colours. Derived translucent tokens (sheen/scrim/wash/panel_bg/hairline/cell_hot) are alpha variants of the same palette.",
+    "tokens": {
+      "stone0": [0.031, 0.035, 0.047, 1.0],
+      "stone1": [0.055, 0.063, 0.086, 1.0],
+      "stone2": [0.078, 0.090, 0.122, 1.0],
+      "stone3": [0.110, 0.125, 0.161, 1.0],
+      "stone4": [0.149, 0.169, 0.208, 1.0],
+      "stone5": [0.200, 0.227, 0.278, 1.0],
+      "edge0": [0.125, 0.145, 0.188, 1.0],
+      "edge1": [0.149, 0.169, 0.208, 1.0],
+      "edge2": [0.169, 0.188, 0.235, 1.0],
+      "edge3": [0.200, 0.227, 0.278, 1.0],
+      "edge4": [0.227, 0.255, 0.314, 1.0],
+      "ink": [0.871, 0.847, 0.788, 1.0],
+      "ink_bright": [0.906, 0.882, 0.824, 1.0],
+      "dim": [0.561, 0.541, 0.490, 1.0],
+      "faint": [0.361, 0.341, 0.286, 1.0],
+      "bronze": [0.722, 0.592, 0.353, 1.0],
+      "bronze_dim": [0.431, 0.353, 0.204, 1.0],
+      "bronze_deep": [0.541, 0.435, 0.259, 1.0],
+      "sap_base": [0.141, 0.247, 0.471, 1.0],
+      "sap_base_lo": [0.082, 0.153, 0.267, 1.0],
+      "sap_border": [0.227, 0.353, 0.627, 1.0],
+      "sap_hover": [0.173, 0.298, 0.557, 1.0],
+      "sap_hover_lo": [0.102, 0.188, 0.341, 1.0],
+      "sap_hover_border": [0.286, 0.416, 0.722, 1.0],
+      "sap_press": [0.090, 0.173, 0.329, 1.0],
+      "sap_press_lo": [0.063, 0.122, 0.235, 1.0],
+      "sap_press_border": [0.165, 0.267, 0.471, 1.0],
+      "sap_glow": [0.094, 0.188, 0.384, 0.45],
+      "rune_glow": [0.435, 0.592, 1.0, 1.0],
+      "rune_glow_hi": [0.616, 0.722, 1.0, 1.0],
+      "hp_hi": [0.847, 0.318, 0.369, 1.0],
+      "hp_lo": [0.478, 0.110, 0.149, 1.0],
+      "mana_hi": [0.353, 0.525, 0.949, 1.0],
+      "mana_lo": [0.122, 0.247, 0.612, 1.0],
+      "stam_hi": [0.941, 0.804, 0.416, 1.0],
+      "stam_lo": [0.541, 0.416, 0.141, 1.0],
+      "sig_white": [0.914, 0.906, 0.871, 1.0],
+      "sig_yellow": [0.878, 0.698, 0.227, 1.0],
+      "sig_red": [0.753, 0.165, 0.220, 1.0],
+      "sig_orange": [0.851, 0.478, 0.169, 1.0],
+      "sig_black": [0.353, 0.353, 0.400, 1.0],
+      "sig_black_gem": [0.149, 0.149, 0.173, 1.0],
+      "sig_blue": [0.176, 0.373, 0.690, 1.0],
+      "sig_green": [0.184, 0.616, 0.357, 1.0],
+      "ink_sapphire": [0.933, 0.949, 1.0, 1.0],
+      "ink_label": [0.765, 0.741, 0.686, 1.0],
+      "ink_button": [0.839, 0.816, 0.761, 1.0],
+      "dim_soft": [0.490, 0.467, 0.408, 1.0],
+      "muted": [0.604, 0.580, 0.518, 1.0],
+      "studio": [0.290, 0.275, 0.231, 1.0],
+      "well": [0.039, 0.047, 0.063, 1.0],
+      "surface_top": [0.098, 0.114, 0.149, 1.0],
+      "surface_bot": [0.063, 0.075, 0.098, 1.0],
+      "seam": [0.137, 0.153, 0.184, 1.0],
+      "stone_btn": [0.125, 0.141, 0.180, 1.0],
+      "stone_btn_hi": [0.157, 0.176, 0.220, 1.0],
+      "danger_text": [0.906, 0.780, 0.792, 1.0],
+      "danger_text_hi": [0.949, 0.827, 0.839, 1.0],
+      "danger_border": [0.353, 0.165, 0.188, 1.0],
+      "danger_hi": [0.784, 0.439, 0.478, 1.0],
+      "danger_bg": [0.165, 0.078, 0.094, 1.0],
+      "danger_bg_lo": [0.102, 0.055, 0.063, 1.0],
+      "shadow": [0.0, 0.0, 0.0, 0.55],
+      "sheen": [0.900, 0.940, 1.0, 0.16],
+      "scrim": [0.031, 0.035, 0.047, 0.64],
+      "scrim_dim": [0.0, 0.0, 0.0, 0.25],
+      "accent_wash": [0.141, 0.247, 0.471, 0.10],
+      "accent_wash_2": [0.141, 0.247, 0.471, 0.22],
+      "panel_bg": [0.055, 0.063, 0.086, 0.94],
+      "hairline": [0.431, 0.353, 0.204, 0.35],
+      "cell_hot": [0.125, 0.165, 0.255, 1.0]
+    }
+  },
+
+  "_modal_comment": "Prism carved-stone modal, drawn (not baked): the shared style for the main menu / pause 'Sanctum' / display-confirm, all rendered by modal.lua from `screens.<Model.screen>`. Chrome = `panel` HudCommands (rounded-rect + 2-stop gradient + border + soft drop-shadow); buttons pick a `variant` (primary sapphire / secondary stone / danger rust). The panel auto-sizes to its content, so a screen just lists its title/subtitle/items. Sizes are px; every colour a `$token`.",
   "modal": {
-    "panel": { "texture": "panel", "w": 520, "h": 420 },
-    "title": { "size": 34, "offset_y": 60, "color": [0.83, 0.67, 0.39, 1.0] },
-    "subtitle": { "size": 18, "offset_y": 100, "color": [0.78, 0.81, 0.86, 1.0] },
+    "panel": {
+      "w": 404,
+      "pad_x": 38,
+      "pad_top": 34,
+      "pad_bottom": 30,
+      "radius": 5,
+      "border_w": 1,
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "shadow": "$shadow",
+      "shadow_dy": 20,
+      "shadow_feather": 44,
+      "shadow_grow": 4
+    },
+    "title": { "size": 52, "color": "$ink_bright", "glow": "$sap_glow" },
+    "subtitle": { "size": 11, "color": "$bronze_dim", "gap_top": 12 },
+    "countdown": { "size": 15, "color": "$dim", "gap_top": 10 },
+    "divider": { "color": "$bronze", "gap": 22 },
+    "footer": { "size": 10, "color": "$faint", "gap_top": 14 },
+    "studio": { "size": 9, "color": "$studio", "margin_x": 0, "margin_b": 34 },
+    "spectrum": { "w": 4, "alpha": 0.55, "palette": [
+      "$sig_white", "$sig_yellow", "$sig_red", "$sig_orange", "$sig_black_gem", "$sig_blue", "$sig_green"
+    ] },
     "buttons": {
-      "texture": "button",
-      "w": 264,
-      "h": 54,
-      "first_y": 146,
-      "gap_y": 76,
-      "label_size": 22,
-      "label_color": [0.78, 0.81, 0.86, 1.0],
-      "hover_color": [0.96, 0.80, 0.42, 1.0],
-      "sheen_color": [0.85, 0.66, 0.34, 0.15],
-      "gold_color": [0.85, 0.66, 0.32, 0.95]
+      "h": 48,
+      "gap": 12,
+      "gap_top": 22,
+      "radius": 3,
+      "border_w": 1,
+      "label_size": 15,
+      "variants": {
+        "primary": {
+          "fill_top": "$sap_base", "fill_bot": "$sap_base_lo", "border": "$sap_border", "label": "$ink_sapphire",
+          "glow": "$sap_glow",
+          "hover_top": "$sap_hover", "hover_bot": "$sap_hover_lo", "hover_border": "$sap_hover_border", "hover_label": "$ink_sapphire"
+        },
+        "secondary": {
+          "fill_top": "$stone_btn", "fill_bot": "$stone2", "border": "$edge4", "label": "$ink_button",
+          "hover_top": "$stone_btn_hi", "hover_bot": "$surface_top", "hover_border": "$bronze_dim", "hover_label": "$ink_bright"
+        },
+        "danger": {
+          "fill_top": "$stone_btn", "fill_bot": "$stone2", "border": "$danger_border", "label": "$danger_text",
+          "hover_top": "$danger_bg", "hover_bot": "$danger_bg_lo", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi"
+        }
+      }
     }
   },
 
   "screens": {
     "menu": {
-      "overlay": [0.035, 0.04, 0.05, 1.0],
-      "title": "FLICKER",
+      "layout": "left",
+      "bg_top": "$stone3",
+      "bg_bot": "$stone0",
+      "scrim": "$stone0",
+      "muse": true,
+      "spectrum": true,
+      "studio": "ELIDEUS PRODUCTIONS · CLAY ENGINE",
+      "title": "Prism",
+      "title_size": 58,
+      "subtitle": "THE SEVEN SHARDS",
       "items": [
-        { "id": "start", "label": "START" },
-        { "id": "settings", "label": "SETTINGS" },
-        { "id": "quit", "label": "QUIT" }
+        { "id": "start", "label": "ENTER WORLD", "variant": "primary" },
+        { "id": "character", "label": "CHARACTER SELECT", "variant": "secondary" },
+        { "id": "settings", "label": "SETTINGS", "variant": "secondary" },
+        { "id": "quit", "label": "QUIT", "variant": "danger" }
       ]
     },
     "pause": {
-      "overlay": [0.02, 0.02, 0.03, 0.64],
-      "title": "PAUSED",
+      "layout": "center",
+      "overlay": "$scrim",
+      "title": "Sanctum",
+      "title_size": 46,
+      "subtitle": "GATHER YOURSELF · THE WORLD RUNS ON",
+      "footer": "ESC TO RETURN",
       "items": [
-        { "id": "resume", "label": "RESUME" },
-        { "id": "settings", "label": "SETTINGS" },
-        { "id": "quit", "label": "QUIT" }
+        { "id": "resume", "label": "RETURN TO WORLD", "variant": "primary" },
+        { "id": "settings", "label": "SETTINGS", "variant": "secondary" },
+        { "id": "quit", "label": "QUIT", "variant": "danger" }
       ]
     },
     "confirm": {
-      "overlay": [0.0, 0.0, 0.0, 0.25],
-      "title": "KEEP DISPLAY?",
+      "layout": "center",
+      "overlay": "$scrim_dim",
+      "title": "Keep Display?",
+      "title_size": 38,
       "items": [
-        { "id": "keep", "label": "KEEP" },
-        { "id": "revert", "label": "REVERT" }
+        { "id": "keep", "label": "KEEP", "variant": "primary" },
+        { "id": "revert", "label": "REVERT", "variant": "danger" }
       ]
     }
   },
 
+  "_settings_comment": "Prism Settings 'workbench' (settings.lua): a resizable window (capped to the viewport) = title bar + left category rail (Video/Audio/Input, each keyed to a Septisigil gem) + right scrolling content + footer (Restore / Back / Apply). Chrome + controls are VECTOR `panel` commands. Controls carry `wired`: true = bound to the shell settings/input backend, false = an inert layout preview (FOV, brightness, edge-pan, all of Audio, the controller device — no engine behind them yet). Every colour is a $token.",
   "settings": {
-    "panel": { "texture": "settings_panel", "w": 800, "h": 500 },
-    "title": { "text": "SETTINGS", "size": 34, "offset_y": 28, "color": [0.83, 0.67, 0.39, 1.0] },
-    "tabs": {
-      "y": 72,
-      "h": 36,
-      "gap": 4,
-      "label_size": 16,
-      "active_color": [0.83, 0.67, 0.39, 1.0],
-      "inactive_color": [0.55, 0.58, 0.63, 1.0],
-      "hover_color": [0.96, 0.80, 0.42, 1.0],
-      "active_bg": [0.14, 0.15, 0.18, 0.6],
-      "hover_bg": [0.83, 0.67, 0.39, 0.1],
-      "bar_color": [0.45, 0.36, 0.18, 0.3]
+    "window": {
+      "w": 1180, "h": 726, "min_margin": 32, "radius": 4,
+      "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2",
+      "shadow": "$shadow", "shadow_dy": 18, "shadow_feather": 46, "shadow_grow": 4
+    },
+    "runes": { "size": 5, "inset": 12, "top": "$rune_glow", "bot": "$bronze_dim" },
+    "titlebar": {
+      "h": 52, "pad_x": 30, "wash": "$accent_wash", "seam": "$seam",
+      "mark": "$bronze", "title": "Settings", "title_size": 24, "title_color": "$ink_bright",
+      "hint": "ESC TO CLOSE", "hint_size": 9, "hint_color": "$faint",
+      "close": { "size": 26, "radius": 3, "bg": "$danger_bg", "border": "$danger_border", "label": "$danger_text", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi" }
+    },
+    "nav": {
+      "w": 236, "pad": 16, "seam": "$seam",
+      "header": "CATEGORIES", "header_size": 9, "header_color": "$faint",
+      "row_h": 42, "gap": 5, "gem": 9, "label_size": 13,
+      "active_top": "$accent_wash_2", "active_bot": "$accent_wash", "active_border": "$rune_glow", "active_label": "$ink_bright",
+      "inactive_label": "$dim",
+      "footer_title": "PRISM · CLAY ENGINE", "footer_title_color": "$bronze_dim",
+      "footer_sub": "Adventurer & RTS shared kit", "footer_sub_color": "$faint"
     },
     "content": {
-      "y": 116,
-      "pad_x": 28,
-      "pad_y": 12
+      "pad_x": 34, "pad_top": 22, "kicker_size": 10, "title_size": 32, "title_color": "$ink_bright", "seam": "$seam", "scrollbar": "$bronze_dim"
     },
-    "back_button": {
-      "texture": "button",
-      "w": 160,
-      "h": 44,
-      "label": "BACK",
-      "label_size": 20
+    "footer": {
+      "h": 58, "pad_x": 34, "seam": "$seam",
+      "restore": "RESTORE DEFAULTS", "restore_color": "$muted", "restore_hover": "$danger_hi",
+      "applied": "SETTINGS APPLIED", "applied_color": "$rune_glow_hi",
+      "back": "BACK", "apply": "APPLY"
     },
-    "audio": {
-      "sliders": [
-        { "id": "master", "label": "Master Volume", "min": 0.0, "max": 1.0, "default": 0.8 },
-        { "id": "music", "label": "Music Volume", "min": 0.0, "max": 1.0, "default": 0.6 },
-        { "id": "sfx", "label": "SFX Volume", "min": 0.0, "max": 1.0, "default": 0.7 },
-        { "id": "voice", "label": "Voice Volume", "min": 0.0, "max": 1.0, "default": 0.9 }
+    "row": {
+      "h": 50, "group_gap": 22, "seam": "$row_line",
+      "name_size": 17, "name_color": "$ink_label",
+      "desc_size": 13, "desc_color": "$dim_soft",
+      "group_size": 10, "group_color": "$bronze",
+      "ctrl_w": 340, "value_size": 13, "value_color": "$rune_glow_hi"
+    },
+    "controls": {
+      "field": { "top": "$surface_top", "bot": "$surface_bot", "border": "$edge4", "hover_border": "$bronze_dim", "radius": 3, "h": 40, "label": "$ink_button", "label_size": 15, "caret": "$rune_glow" },
+      "menu": { "top": "$stone3", "bot": "$stone0", "border": "$edge2", "radius": 3, "row_h": 30, "label": "$ink_button", "label_size": 15, "sel_bg": "$accent_wash_2", "sel_label": "$ink_bright", "hover_bg": "$accent_wash" },
+      "segment": { "bg": "$well", "border": "$edge2", "radius": 4, "pad": 3, "h": 36, "active_top": "$sap_base", "active_bot": "$sap_base_lo", "active_label": "$ink_sapphire", "label": "$dim", "label_size": 11 },
+      "toggle": { "w": 50, "h": 25, "on_top": "$sap_base", "on_bot": "$sap_base_lo", "on_border": "$sap_border", "off_bg": "$stone2", "off_border": "$edge3", "knob_on": "$ink_sapphire", "knob_off": "$dim" },
+      "cycler": { "w": 200, "h": 40, "btn_top": "$surface_top", "btn_bot": "$surface_bot", "btn_hover": "$stone_btn_hi", "btn_border": "$edge4", "arrow": "$bronze", "mid": "$well", "label": "$ink_bright", "label_size": 13 },
+      "slider": { "track": "$well", "border": "$edge2", "fill_lo": "$sap_base_lo", "fill_hi": "$sap_border", "knob_top": "$stone4", "knob_bot": "$stone2", "knob_border": "$sap_border", "knob_dot": "$rune_glow", "h": 8, "knob": 20 },
+      "keycap": {
+        "w": 156, "h": 34, "radius": 3, "label_size": 12,
+        "top": "$stone_btn", "bot": "$stone2", "border": "$edge4", "label": "$ink_bright",
+        "rebind_top": "$sap_hover", "rebind_bot": "$sap_hover_lo", "rebind_border": "$rune_glow", "rebind_label": "$ink_sapphire",
+        "unbound_bg": "$surface_bot", "unbound_border": "$seam", "unbound_label": "$faint"
+      },
+      "pill": { "bg": "$well", "border": "$edge2", "radius": 15, "pad": 3, "h": 30, "active_top": "$sap_base", "active_bot": "$sap_base_lo", "active_label": "$ink_sapphire", "label": "$dim", "label_size": 11 }
+    },
+    "rebind_banner": {
+      "top": "$accent_wash_2", "bot": "$accent_wash", "border": "$sap_border",
+      "text": "Press any key to bind", "text2": "Esc to cancel · Backspace to unbind",
+      "text_color": "$ink_label", "accent": "$rune_glow_hi", "hint_color": "$dim_soft"
+    },
+    "nav_items": [
+      { "id": "video", "label": "VIDEO", "gem": "$sig_blue", "kicker": "DISPLAY & RENDERING", "kicker_color": "$sig_blue", "title": "Video" },
+      { "id": "audio", "label": "AUDIO", "gem": "$sig_yellow", "kicker": "MIXING & OUTPUT", "kicker_color": "$sig_yellow", "title": "Audio" },
+      { "id": "input", "label": "INPUT", "gem": "$sig_red", "kicker": "BINDINGS & DEVICES", "kicker_color": "$sig_red", "title": "Input" }
+    ],
+    "video": {
+      "groups": [
+        { "name": "DISPLAY", "rows": [
+          { "id": "display_mode", "kind": "dropdown", "name": "Display Mode", "desc": "How the game fills your screen", "options": ["Windowed", "Borderless Window", "Fullscreen"], "wired": true },
+          { "id": "resolution", "kind": "dropdown", "name": "Resolution", "desc": "Rendering resolution of the viewport", "options": ["1280 × 720", "1600 × 900", "1920 × 1080", "2560 × 1440", "3440 × 1440", "3840 × 2160"], "wired": true },
+          { "id": "quality", "kind": "segment", "name": "Graphics Quality", "desc": "Master preset for all render features", "options": ["Low", "Medium", "High", "Ultra"], "wired": true }
+        ] },
+        { "name": "PERFORMANCE", "rows": [
+          { "id": "vsync", "kind": "toggle", "name": "Vertical Sync", "desc": "Sync frames to the display to prevent tearing", "wired": true },
+          { "id": "fps_limit", "kind": "cycler", "name": "Frame Rate Limit", "desc": "Cap the maximum frames per second", "options": ["30", "60", "120", "144", "Unlimited"], "wired": true }
+        ] },
+        { "name": "IMAGE", "rows": [
+          { "id": "fov", "kind": "slider", "name": "Field of View", "desc": "Adventurer camera angle · 60–120°", "min": 60, "max": 120, "default": 90, "suffix": "°", "wired": false },
+          { "id": "gamma", "kind": "slider", "name": "Brightness", "desc": "Gamma of the rendered scene", "min": 0, "max": 100, "default": 50, "wired": false }
+        ] }
       ]
     },
-    "video": {
-      "display_modes": ["Windowed", "Borderless Fullscreen", "Exclusive Fullscreen"],
-      "resolutions": ["960×540", "1280×720", "1920×1080", "2560×1440", "Native"],
-      "fps_limits": ["30", "60", "120", "144", "240", "Unlimited"],
-      "quality_levels": ["Low", "Medium", "High", "Ultra"]
+    "audio": {
+      "dim": 0.5,
+      "stub": { "title": "NOT YET IMPLEMENTED", "title_color": "$bronze", "body": "No audio modules exist in the Clay Engine yet. These controls are a layout preview and are inactive.", "body_color": "$dim_soft", "border": "$bronze_dim", "top": "$accent_wash" },
+      "groups": [
+        { "name": "VOLUME", "rows": [
+          { "id": "a_master", "kind": "slider", "name": "Master Volume", "min": 0, "max": 100, "default": 80, "wired": false },
+          { "id": "a_music", "kind": "slider", "name": "Music", "min": 0, "max": 100, "default": 70, "wired": false },
+          { "id": "a_fx", "kind": "slider", "name": "Effects", "min": 0, "max": 100, "default": 85, "wired": false },
+          { "id": "a_amb", "kind": "slider", "name": "Ambient", "min": 0, "max": 100, "default": 55, "wired": false },
+          { "id": "a_voice", "kind": "slider", "name": "Voice", "min": 0, "max": 100, "default": 100, "wired": false }
+        ] },
+        { "name": "OUTPUT", "rows": [
+          { "id": "a_device", "kind": "static", "name": "Output Device", "value": "System Default", "wired": false },
+          { "id": "a_subs", "kind": "toggle", "name": "Subtitles", "wired": false }
+        ] }
+      ]
     },
     "input": {
-      "sections": [
-        {
-          "id": "keyboard",
-          "label": "KEYBOARD",
-          "actions": [
-            { "id": "MoveForward", "label": "Move Forward" },
-            { "id": "MoveBackward", "label": "Move Backward" },
-            { "id": "StrafeLeft", "label": "Strafe Left" },
-            { "id": "StrafeRight", "label": "Strafe Right" },
-            { "id": "MoveUp", "label": "Move Up" },
-            { "id": "MoveDown", "label": "Move Down" },
-            { "id": "Jump", "label": "Jump" },
-            { "id": "Sprint", "label": "Sprint" },
-            { "id": "Crouch", "label": "Crouch" },
-            { "id": "Interact", "label": "Interact" },
-            { "id": "Reload", "label": "Reload" },
-            { "id": "PrimaryAction", "label": "Primary Action" },
-            { "id": "SecondaryAction", "label": "Secondary Action" },
-            { "id": "Confirm", "label": "Confirm" },
-            { "id": "Cancel", "label": "Cancel" },
-            { "id": "Menu", "label": "Menu" },
-            { "id": "Inventory", "label": "Inventory" },
-            { "id": "Map", "label": "Map" },
+      "tabs": [ { "id": "keyboard", "label": "KEYBOARD" }, { "id": "mouse", "label": "MOUSE" }, { "id": "controller", "label": "CONTROLLER" } ],
+      "keyboard": {
+        "groups": [
+          { "name": "MOVEMENT", "actions": [
+            { "id": "MoveForward", "label": "Move Forward" }, { "id": "MoveBackward", "label": "Move Backward" },
+            { "id": "StrafeLeft", "label": "Strafe Left" }, { "id": "StrafeRight", "label": "Strafe Right" },
+            { "id": "MoveUp", "label": "Move Up" }, { "id": "MoveDown", "label": "Move Down" },
+            { "id": "Jump", "label": "Jump" }, { "id": "Sprint", "label": "Sprint" }, { "id": "Crouch", "label": "Crouch" }
+          ] },
+          { "name": "INTERFACE", "actions": [
+            { "id": "Interact", "label": "Interact" }, { "id": "Inventory", "label": "Inventory" },
+            { "id": "Map", "label": "World Map" }, { "id": "Menu", "label": "Menu" }
+          ] },
+          { "name": "ACTIONS", "actions": [
+            { "id": "PrimaryAction", "label": "Primary Action" }, { "id": "SecondaryAction", "label": "Secondary Action" },
+            { "id": "Reload", "label": "Reload" }, { "id": "Confirm", "label": "Confirm" }, { "id": "Cancel", "label": "Cancel" },
             { "id": "Quit", "label": "Quit" }
-          ]
-        },
-        {
-          "id": "mouse",
-          "label": "MOUSE",
-          "sliders": [
-            { "id": "sensitivity", "label": "Sensitivity", "min": 0.001, "max": 0.02, "default": 0.005 },
-            { "id": "sprint_sensitivity", "label": "Sprint Sensitivity", "min": 0.001, "max": 0.02, "default": 0.005 }
-          ],
-          "checkboxes": [
-            { "id": "invert_pitch", "label": "Invert Pitch", "default": false },
-            { "id": "invert_yaw", "label": "Invert Yaw", "default": false },
-            { "id": "raw_input", "label": "Raw Input", "default": true }
-          ]
-        },
-        {
-          "id": "controller",
-          "label": "CONTROLLER",
-          "sliders": [
-            { "id": "stick_sensitivity", "label": "Stick Sensitivity", "min": 0.5, "max": 8.0, "default": 2.0 },
-            { "id": "left_deadzone", "label": "Left Stick Deadzone", "min": 0.0, "max": 0.5, "default": 0.2 },
-            { "id": "right_deadzone", "label": "Right Stick Deadzone", "min": 0.0, "max": 0.5, "default": 0.2 },
-            { "id": "trigger_threshold", "label": "Trigger Threshold", "min": 0.1, "max": 0.9, "default": 0.5 }
-          ],
-          "checkboxes": [
-            { "id": "invert_stick_pitch", "label": "Invert Stick Pitch", "default": false },
-            { "id": "invert_stick_yaw", "label": "Invert Stick Yaw", "default": false }
-          ],
-          "dropdowns": [
-            { "id": "deadzone_shape", "label": "Deadzone Shape", "options": ["Circular", "Per-Axis"], "default": 0 }
-          ],
-          "actions": [
-            { "id": "MoveForward", "label": "Move Forward" },
-            { "id": "MoveBackward", "label": "Move Backward" },
-            { "id": "StrafeLeft", "label": "Strafe Left" },
-            { "id": "StrafeRight", "label": "Strafe Right" },
-            { "id": "LookUp", "label": "Look Up" },
-            { "id": "LookDown", "label": "Look Down" },
-            { "id": "LookLeft", "label": "Look Left" },
-            { "id": "LookRight", "label": "Look Right" },
-            { "id": "Jump", "label": "Jump" },
-            { "id": "Sprint", "label": "Sprint" },
-            { "id": "Crouch", "label": "Crouch" },
-            { "id": "Interact", "label": "Interact" },
-            { "id": "Reload", "label": "Reload" },
-            { "id": "PrimaryAction", "label": "Primary Action" },
-            { "id": "SecondaryAction", "label": "Secondary Action" },
-            { "id": "Confirm", "label": "Confirm" },
-            { "id": "Cancel", "label": "Cancel" },
-            { "id": "Menu", "label": "Menu" },
-            { "id": "Inventory", "label": "Inventory" },
-            { "id": "Map", "label": "Map" },
-            { "id": "Quit", "label": "Quit" }
-          ]
-        }
-      ],
-      "rebind_overlay": {
-        "w": 400,
-        "h": 120,
-        "bg": [0.06, 0.07, 0.08, 0.94],
-        "title_size": 18,
-        "title_color": [0.83, 0.67, 0.39, 1.0],
-        "hint_size": 13,
-        "hint_color": [0.45, 0.48, 0.53, 1.0]
+          ] }
+        ]
+      },
+      "mouse": {
+        "groups": [
+          { "name": "POINTER", "rows": [
+            { "id": "m_look", "kind": "slider", "name": "Look Sensitivity", "desc": "Adventurer camera turn speed", "min": 0, "max": 100, "backend_min": 0.001, "backend_max": 0.02, "wired": true },
+            { "id": "m_aim", "kind": "slider", "name": "Aim Sensitivity", "desc": "Multiplier while channelling / aiming", "min": 0, "max": 100, "default": 65, "wired": false },
+            { "id": "m_invert", "kind": "toggle", "name": "Invert Vertical Look", "desc": "Flip the up/down axis", "wired": true }
+          ] },
+          { "name": "COMMANDER · RTS", "rows": [
+            { "id": "m_edge", "kind": "toggle", "name": "Edge Pan", "desc": "Scroll the map when the cursor nears the edge", "default_on": true, "wired": false },
+            { "id": "m_edge_speed", "kind": "slider", "name": "Edge Pan Speed", "desc": "Commander camera scroll rate", "min": 0, "max": 100, "default": 55, "wired": false }
+          ] }
+        ]
+      },
+      "controller": {
+        "ring": "$edge4", "ring_bg": "$stone0",
+        "title": "No controller detected", "title_size": 24, "title_color": "$ink_label",
+        "body": "Connect a gamepad and it will appear here. Bindings are shared with the Adventurer action bar.", "body_color": "$dim_soft",
+        "detect": "DETECT CONTROLLER", "enable": "Enable support"
       }
-    },
-    "style": {
-      "slider": {
-        "track": [0.22, 0.24, 0.28, 1.0],
-        "fill": [0.63, 0.50, 0.26, 0.8],
-        "handle": [0.83, 0.67, 0.39, 1.0],
-        "handle_w": 14
-      },
-      "checkbox": {
-        "box": [0.22, 0.24, 0.28, 1.0],
-        "check": [0.83, 0.67, 0.39, 1.0],
-        "border": [0.45, 0.36, 0.18, 0.3],
-        "size": 20
-      },
-      "dropdown": {
-        "cell": [0.10, 0.11, 0.13, 0.97],
-        "hot": [0.17, 0.19, 0.22, 0.98],
-        "label": [0.78, 0.81, 0.86, 1.0],
-        "label_size": 14,
-        "row_h": 26
-      },
-      "row_height": 32,
-      "label_size": 15,
-      "label_color": [0.78, 0.81, 0.86, 1.0],
-      "label_dim": [0.45, 0.48, 0.53, 1.0],
-      "header_size": 16,
-      "header_color": [0.83, 0.67, 0.39, 1.0],
-      "divider": [0.45, 0.36, 0.18, 0.3],
-      "rebind_bg": [0.30, 0.18, 0.10, 0.85],
-      "gold": [0.63, 0.50, 0.26, 1.0],
-      "gold_line": [0.45, 0.36, 0.18, 0.6],
-      "section_bg": [0.11, 0.12, 0.15, 1.0],
-      "section_header_size": 14,
-      "section_header_color": [0.63, 0.50, 0.26, 1.0]
     }
   },
 
@@ -225,16 +323,16 @@
   },
 
   "loading": {
-    "overlay": [0.035, 0.04, 0.05, 1.0],
+    "overlay": "$stone0",
     "panel": { "texture": "panel", "w": 520, "h": 420 },
-    "title": { "text": "LOADING", "size": 34, "offset_y": 60, "color": [0.83, 0.67, 0.39, 1.0] },
+    "title": { "text": "LOADING", "size": 34, "offset_y": 60, "color": "$ink_bright" },
     "bar": {
       "inset_x": 60,
       "y_frac": 0.52,
       "h": 22,
-      "track_color": [0.05, 0.06, 0.07, 1.0],
-      "fill_color": [0.63, 0.49, 0.26, 1.0],
-      "gold_color": [0.85, 0.66, 0.32, 0.95]
+      "track_color": "$stone1",
+      "fill_color": "$sap_base",
+      "gold_color": "$bronze"
     }
   },
 
@@ -243,16 +341,16 @@
     "inventory": {
       "header": "INVENTORY",
       "header_size": 13,
-      "header_color": [0.83, 0.67, 0.39, 1.0],
+      "header_color": "$bronze",
       "slot": 54,
       "gap": 6,
       "pad": 12,
       "margin_b": 18,
-      "panel_bg": [0.05, 0.06, 0.09, 0.94],
-      "panel_border": [0.26, 0.34, 0.5, 1.0],
+      "panel_bg": "$panel_bg",
+      "panel_border": "$sap_border",
       "label_size": 12,
-      "cell": { "cell": [0.11, 0.14, 0.2, 0.97], "hot": [0.22, 0.42, 0.3, 1.0], "label": [0.82, 0.86, 0.92, 1.0], "label_size": 12 },
-      "empty": { "cell": [0.07, 0.08, 0.11, 0.85], "hot": [0.07, 0.08, 0.11, 0.85], "label": [0.32, 0.35, 0.41, 1.0], "label_size": 12 },
+      "cell": { "cell": "$stone3", "hot": "$sig_green", "label": "$ink", "label_size": 12 },
+      "empty": { "cell": "$stone1", "hot": "$stone1", "label": "$faint", "label_size": 12 },
       "slots": [
         { "key": "hair", "label": "Hair" },
         { "key": "neck", "label": "Neck" },
@@ -273,9 +371,9 @@
       "box": 14,
       "label_x": 22,
       "label_size": 13,
-      "label_color": [0.78, 0.81, 0.88, 1.0],
-      "checkbox": { "box": [0.13, 0.16, 0.22, 1.0], "check": [0.55, 0.75, 0.95, 1.0], "border": [0.3, 0.36, 0.46, 1.0], "pad": 3 },
-      "attack": { "w": 120, "h": 24, "gap_y": 10, "label": "ATTACK", "style": { "cell": [0.32, 0.18, 0.16, 1.0], "hot": [0.55, 0.28, 0.24, 1.0], "label": [0.95, 0.85, 0.8, 1.0], "label_size": 13 } },
+      "label_color": "$ink",
+      "checkbox": { "box": "$stone2", "check": "$rune_glow_hi", "border": "$edge4", "pad": 3 },
+      "attack": { "w": 120, "h": 24, "gap_y": 10, "label": "ATTACK", "style": { "cell": "$hp_lo", "hot": "$hp_hi", "label": "$ink_bright", "label_size": 13, "hi": "$sheen", "shadow": "$stone0", "border": "$sig_red" } },
       "_items_note": "`animate` = the Animation/Pose toggle: on drives the pose from the pack's state machine (real runtime animation, blended), off is A-pose/bind (the fitting reference — Idle is an authored stance, already off bind). ↑/↓ cycle animation states, Space pauses. `blend` A/Bs the transition crossfade.",
       "items": [
         { "key": "animate", "label": "Animate" },
@@ -296,18 +394,18 @@
       "value_w": 62,
       "header": "FIT",
       "header_size": 14,
-      "header_color": [0.83, 0.67, 0.39, 1.0],
-      "panel_bg": [0.05, 0.06, 0.09, 0.96],
-      "panel_border": [0.4, 0.34, 0.24, 1.0],
+      "header_color": "$bronze",
+      "panel_bg": "$panel_bg",
+      "panel_border": "$bronze_dim",
       "label_size": 13,
-      "label_color": [0.78, 0.81, 0.88, 1.0],
+      "label_color": "$ink",
       "value_size": 12,
-      "value_color": [0.62, 0.68, 0.8, 1.0],
-      "slider": { "track": [0.12, 0.15, 0.21, 1.0], "fill": [0.3, 0.45, 0.62, 1.0], "handle": [0.72, 0.8, 0.92, 1.0], "handle_w": 9 },
+      "value_color": "$dim",
+      "slider": { "track": "$stone1", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 9 },
       "_focus_note": "Click a slider to FOCUS it; ←/→ then nudge it by `nudge` (hold Shift for `nudge_coarse`). A trackpad drag over a ~120px track spans the whole range, which is far too coarse to fit a piece by eye — the arrows are the fine control. The focused row is drawn with `focus_*`. SCALE IS PER-AXIS (sx/sy/sz): a garment generated separately from the body is rarely the same build, so a uniform scale can line it up but never make it fit. Scale and offset are both in WORLD axes at rest (x lateral, y depth, z up), NOT bone axes — the fit cancels the socket rest rotation, so x thickens sideways whichever bone the piece hangs off.",
-      "focus_track": [0.16, 0.21, 0.3, 1.0],
-      "focus_fill": [0.4, 0.6, 0.82, 1.0],
-      "focus_label": [0.96, 0.8, 0.42, 1.0],
+      "focus_track": "$stone3",
+      "focus_fill": "$rune_glow",
+      "focus_label": "$rune_glow_hi",
       "uniform": { "min": 0.1, "max": 200.0, "nudge": 0.1, "nudge_coarse": 1.0 },
       "scale": { "min": 0.25, "max": 4.0, "nudge": 0.01, "nudge_coarse": 0.1 },
       "offset": { "min": -120.0, "max": 120.0, "nudge": 0.1, "nudge_coarse": 1.0 },
@@ -326,29 +424,29 @@
         { "key": "fit_z", "label": "Z (up)", "group": "offset" }
       ],
       "record": { "h": 26, "label": "RECORD ALL TO CONTENT" },
-      "status": { "size": 12, "gap_y": 5, "ok": [0.55, 0.85, 0.6, 1.0], "err": [0.95, 0.45, 0.4, 1.0] },
-      "button": { "cell": [0.18, 0.3, 0.2, 1.0], "hot": [0.3, 0.5, 0.32, 1.0], "label": [0.88, 0.94, 0.88, 1.0], "label_size": 13 }
+      "status": { "size": 12, "gap_y": 5, "ok": "$sig_green", "err": "$hp_hi" },
+      "button": { "cell": "$sap_base", "hot": "$sap_hover", "label": "$ink_bright", "label_size": 13, "glow": "$sap_glow", "hi": "$sheen", "border": "$sap_border" }
     },
 
     "stats": {
       "margin": 16,
       "top": 62,
       "size": 13,
-      "color": [0.7, 0.78, 0.9, 1.0]
+      "color": "$ink"
     }
   },
 
   "hud": {
     "stats": {
       "x": 16,
-      "title": { "y": 16, "size": 22, "color": [1.0, 1.0, 1.0, 1.0] },
-      "pos": { "y": 44, "size": 16, "color": [0.75, 0.85, 0.95, 1.0] },
-      "clusters": { "y": 64, "size": 16, "color": [0.75, 0.85, 0.95, 1.0] },
-      "config": { "y": 84, "size": 16, "color": [0.75, 0.85, 0.95, 1.0] },
-      "diag": { "y": 104, "size": 16, "color": [0.75, 0.85, 0.95, 1.0] },
-      "escape": { "y": 124, "size": 16, "color": [0.75, 0.85, 0.95, 1.0] },
-      "pick": { "y": 144, "size": 16, "color": [0.95, 0.85, 0.60, 1.0] },
-      "walk": { "y": 164, "size": 16, "color": [0.6, 0.95, 0.7, 1.0] }
+      "title": { "y": 16, "size": 22, "color": "$ink_bright" },
+      "pos": { "y": 44, "size": 16, "color": "$ink" },
+      "clusters": { "y": 64, "size": 16, "color": "$ink" },
+      "config": { "y": 84, "size": 16, "color": "$ink" },
+      "diag": { "y": 104, "size": 16, "color": "$ink" },
+      "escape": { "y": 124, "size": 16, "color": "$ink" },
+      "pick": { "y": 144, "size": 16, "color": "$stam_hi" },
+      "walk": { "y": 164, "size": 16, "color": "$sig_green" }
     },
     "checkboxes": {
       "origin": [16, 180],
@@ -357,13 +455,13 @@
       "header": {
         "text": "HUD (scripted) - click to toggle",
         "size": 16,
-        "color": [0.85, 0.85, 0.7, 1.0]
+        "color": "$bronze"
       },
-      "border_color": [1.0, 1.0, 1.0, 1.0],
-      "fill_on": [0.2, 0.9, 0.4, 1.0],
-      "fill_off": [0.15, 0.15, 0.18, 1.0],
+      "border_color": "$edge4",
+      "fill_on": "$sig_green",
+      "fill_off": "$stone2",
       "label_size": 16,
-      "label_color": [0.9, 0.9, 0.9, 1.0],
+      "label_color": "$ink",
       "items": [
         { "key": "wireframe", "label": "Wireframe overlay" },
         { "key": "corner_arrows", "label": "Corner-vector arrows" },
@@ -378,7 +476,7 @@
       "margin_b": 70,
       "row_h": 26,
       "label_size": 14,
-      "label_color": [0.78, 0.81, 0.86, 1.0],
+      "label_color": "$ink",
       "speed": { "y": 340, "label": "Move speed", "min": 20, "max": 200, "w": 150, "h": 12 },
       "sens": {
         "y": 366,
@@ -398,23 +496,449 @@
         "h": 20
       },
       "slider_style": {
-        "track": [0.1, 0.11, 0.13, 0.97],
-        "fill": [0.63, 0.49, 0.26, 1.0],
-        "handle": [0.85, 0.66, 0.32, 0.95],
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_hi": "$sheen",
         "handle_w": 8
       },
       "stepper_style": {
-        "box": [0.1, 0.11, 0.13, 0.97],
-        "btn": [0.17, 0.19, 0.22, 0.98],
-        "label": [0.9, 0.9, 0.9, 1.0],
+        "box": "$stone1",
+        "btn": "$stone3",
+        "label": "$ink",
         "label_size": 13
       },
       "dropdown_style": {
-        "cell": [0.1, 0.11, 0.13, 0.97],
-        "hot": [0.17, 0.19, 0.22, 0.98],
-        "label": [0.9, 0.9, 0.9, 1.0],
+        "cell": "$stone2",
+        "hot": "$cell_hot",
+        "label": "$ink",
         "label_size": 13
       }
     }
+  },
+
+  "readout": {
+    "_comment": "flicker-sol2 top-right stats overlay (scripts/sim_ui.lua) — pure Lua text from the Model.",
+    "margin_x": 16,
+    "top_y": 16,
+    "width": 360,
+    "line_h": 18,
+    "gap": 8,
+    "bg": "$scrim",
+    "title_size": 22,
+    "title_color": "$ink_bright",
+    "head_size": 15,
+    "label_size": 13,
+    "label_color": "$dim",
+    "accent_color": "$stam_hi",
+    "good_color": "$sig_green",
+    "phase_color": "$rune_glow_hi"
+  },
+
+  "sim": {
+    "_comment": "flicker-sol2 bottom-right control panel (scripts/sim_ui.lua).",
+    "margin": 16,
+    "pad": 14,
+    "panel_bg": "$panel_bg",
+    "panel_border": "$sap_border",
+    "header": "SIMULATION",
+    "header_size": 17,
+    "header_color": "$bronze",
+    "row_h": 25,
+    "slider_h": 12,
+    "label_w": 96,
+    "value_w": 52,
+    "label_size": 14,
+    "label_color": "$ink",
+    "value_size": 13,
+    "value_color": "$dim",
+    "phase": {
+      "row_h": 30,
+      "gap": 6,
+      "label_size": 13,
+      "items": [
+        { "id": "phase1", "label": "1 · Distribution" },
+        { "id": "phase2", "label": "2 · Collapse" },
+        { "id": "phase3", "label": "3 · Planet" }
+      ],
+      "cell": "$stone3",
+      "hot": "$cell_hot",
+      "active": "$sap_base",
+      "disabled": "$stone1",
+      "label": "$ink",
+      "active_label": "$ink_bright",
+      "disabled_label": "$faint"
+    },
+    "sliders": [
+      { "id": "explosion",   "label": "Explosion",   "min": 0.0,  "max": 1.0,   "fmt": "%.2f" },
+      { "id": "falloff",     "label": "Falloff",     "min": 0.15, "max": 1.20,  "fmt": "%.2f" },
+      { "id": "clump",       "label": "Clump",       "min": 0.0,  "max": 1.2,   "fmt": "%.2f" },
+      { "id": "mass",        "label": "Cloud mass",  "min": 0.1,  "max": 10.0,  "fmt": "%.2f" },
+      { "id": "metallicity", "label": "Metallicity", "min": 0.0,  "max": 0.10,  "fmt": "%.3f" },
+      { "id": "speed",       "label": "Speed yr/s",  "min": 0.0,  "max": 60.0,  "fmt": "%.0f" },
+      { "id": "view_edge",   "label": "View AU",     "min": 5.0,  "max": 400.0, "fmt": "%.0f" }
+    ],
+    "toggles": [
+      { "id": "pause", "label": "Pause" },
+      { "id": "dots",  "label": "Dots" },
+      { "id": "well",  "label": "Well" }
+    ],
+    "buttons": [
+      { "id": "reseed",     "label": "New seed" },
+      { "id": "new_system", "label": "New system" },
+      { "id": "reset",      "label": "Reset" }
+    ],
+    "slider_style": {
+      "track": "$stone1",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_hi": "$sheen",
+      "handle_w": 8
+    },
+    "button_style": {
+      "cell": "$stone3",
+      "hot": "$sap_hover",
+      "label": "$ink",
+      "label_size": 14
+    },
+    "checkbox_style": {
+      "box": "$stone2",
+      "check": "$rune_glow_hi",
+      "border": "$sap_border",
+      "pad": 4
+    }
+  },
+
+  "world": {
+    "_comment": "flicker-world in-scene HUD (scripts/world_ui.lua). Was the app's local `hud` key; moved here under `world` to avoid colliding with pocclusters' `hud`.",
+    "capture": { "x": 0, "y": 0, "w": 320, "h": 640 },
+
+    "timeline": {
+      "_comment": "Bottom evolution scrubber; playhead = Model.timeline 0..1.",
+      "height": 92,
+      "margin_x": 24,
+      "margin_bottom": 16,
+      "title": "EVOLUTION  ·  drag to scrub",
+      "title_size": 15,
+      "title_color": "$dim",
+      "bg": "$panel_bg",
+      "border": "$sap_border",
+      "divider": "$edge4",
+      "seg_even": [0.078, 0.090, 0.122, 0.55],
+      "seg_odd": [0.110, 0.125, 0.161, 0.55],
+      "seg_active": [0.141, 0.247, 0.471, 0.80],
+      "num_color": "$dim",
+      "num_size": 14,
+      "label_size": 20,
+      "label_color": "$ink",
+      "active_label_color": "$rune_glow_hi",
+      "playhead": "$rune_glow_hi",
+      "playhead_w": 3
+    },
+
+    "celestial": {
+      "title": "SKY",
+      "margin_x": 16,
+      "width": 210,
+      "top_y": 16,
+      "rows_y": 44,
+      "row_h": 30,
+      "slider_x_off": 72,
+      "slider_w": 86,
+      "value_x_off": 168,
+      "header_size": 18,
+      "header_color": "$bronze",
+      "label_size": 16,
+      "label_color": "$ink",
+      "value_size": 15,
+      "value_color": "$dim",
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_hi": "$sheen",
+        "handle_w": 8
+      },
+      "rows": [
+        { "id": "time_of_day", "label": "Time", "min": 0.0, "max": 24.0, "fmt": "%.1fh" },
+        { "id": "play_speed", "label": "Speed", "min": 0.0, "max": 10.0, "fmt": "%.1fx" },
+        { "id": "year_month", "label": "Season", "min": 0.0, "max": 12.0, "fmt": "%.1f" },
+        { "id": "axial_tilt_deg", "label": "Tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f°" }
+      ]
+    },
+
+    "stats": {
+      "x": 16,
+      "title": { "y": 14, "size": 27, "color": "$ink_bright" },
+      "cells": { "y": 50, "size": 18, "color": "$ink" },
+      "seed":  { "y": 76, "size": 18, "color": "$stam_hi" },
+      "view":  { "y": 100, "size": 18, "color": "$ink" }
+    },
+
+    "controls": {
+      "label_x": 16,
+      "widget_x": 128,
+      "label_size": 17,
+      "label_color": "$ink",
+
+      "view":   { "label": "Field", "y": 128, "options": ["Elevation", "Biome", "Plates", "Temperature", "Precipitation", "Prebiotic", "Life", "Deposits", "Flow", "Sediment", "Watersheds", "Composition", "Crust", "Terrain"], "w": 160, "h": 28 },
+      "freq":   { "label": "Grid", "y": 164, "min": 6, "max": 48, "step": 4, "w": 160, "h": 30 },
+      "epoch":  { "label": "Epoch", "y": 200, "min": 1, "max": 6, "step": 1, "w": 160, "h": 30 },
+      "reseed": { "label": "New seed", "y": 236, "w": 160, "h": 30 },
+
+      "stepper_style": {
+        "box": "$stone1",
+        "btn": "$sap_hover",
+        "label": "$ink",
+        "label_size": 18
+      },
+      "button_style": {
+        "cell": "$stone3",
+        "hot": "$sap_hover",
+        "label": "$ink",
+        "label_size": 17
+      },
+      "dropdown_style": {
+        "cell": "$stone2",
+        "hot": "$cell_hot",
+        "label": "$ink",
+        "label_size": 16
+      }
+    },
+
+    "params": {
+      "label_x": 16,
+      "widget_x": 128,
+      "header_y": 282,
+      "header_size": 17,
+      "header_color": "$bronze",
+      "origin_y": 306,
+      "row_h": 27,
+      "label_size": 16,
+      "label_color": "$ink",
+      "value_size": 15,
+      "value_color": "$dim",
+      "slider_w": 104,
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_w": 8
+      }
+    },
+
+    "elements": {
+      "header": "ELEMENT MIX (relative · Epoch 1)",
+      "header_y": 436,
+      "header_size": 16,
+      "header_color": "$bronze",
+      "origin_y": 460,
+      "row_h": 25,
+      "cols": 2,
+      "col_x": [16, 168],
+      "label_w": 30,
+      "slider_w": 78,
+      "label_size": 15,
+      "label_color": "$ink",
+      "max": 60.0,
+      "items": [
+        { "sym": "O" }, { "sym": "Si" }, { "sym": "Al" }, { "sym": "Fe" },
+        { "sym": "Ca" }, { "sym": "Na" }, { "sym": "K" }, { "sym": "Ti" },
+        { "sym": "C" }, { "sym": "H" }, { "sym": "P" }, { "sym": "S" },
+        { "sym": "Cl" }, { "sym": "N" }
+      ]
+    },
+
+    "epochs": [
+      { "label": "Composition", "views": ["Composition"], "params": [
+        { "id": "e1_equator_bias", "label": "Equator heavy", "min": 0.0, "max": 3.0 },
+        { "id": "e1_pole_bias", "label": "Pole volatile", "min": 0.0, "max": 3.0 },
+        { "id": "e1_contrast", "label": "Province contrast", "min": 1.0, "max": 6.0 },
+        { "id": "e1_frequency", "label": "Province scale", "min": 0.5, "max": 6.0 }
+      ]},
+      { "label": "Differentiation", "views": ["Crust", "Composition"], "params": [
+        { "id": "e2_duration", "label": "Molten era", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
+        { "id": "e2_crust_density_max", "label": "Crust density cap", "min": 2.5, "max": 5.0 },
+        { "id": "e2_polar_thickening", "label": "Polar thickening", "min": 0.0, "max": 1.0 }
+      ]},
+      { "label": "Tectonics", "views": ["Elevation", "Plates", "Terrain", "Crust", "Composition"], "params": [
+        { "id": "e3_plates", "label": "Plates", "min": 2.0, "max": 24.0, "fmt": "%.0f" },
+        { "id": "e3_continental_fraction", "label": "Continental frac", "min": 0.0, "max": 1.0 },
+        { "id": "e3_mountain_uplift", "label": "Mountain uplift", "min": 0.0, "max": 1.5 },
+        { "id": "e3_rift_drop", "label": "Rift drop", "min": 0.0, "max": 1.0 },
+        { "id": "e3_hotspots", "label": "Hotspots", "min": 0.0, "max": 20.0, "fmt": "%.0f" },
+        { "id": "e3_hotspot_uplift", "label": "Hotspot uplift", "min": 0.0, "max": 1.5 },
+        { "id": "e3_hotspot_trail", "label": "Hotspot trail", "min": 0.05, "max": 1.5 },
+        { "id": "e3_duration", "label": "Drift time", "min": 1.0, "max": 10.0, "fmt": "%.0f" }
+      ]},
+      { "label": "Hydrosphere", "views": ["Elevation", "Temperature", "Precipitation", "Prebiotic", "Terrain"], "params": [
+        { "id": "e4_hydration", "label": "Hydration", "min": 0.0, "max": 3.0 },
+        { "id": "e4_equator_temp", "label": "Equator C", "min": 0.0, "max": 50.0, "fmt": "%.0f" },
+        { "id": "e4_pole_temp", "label": "Pole C", "min": -60.0, "max": 10.0, "fmt": "%.0f" },
+        { "id": "e4_axial_tilt", "label": "Axial tilt", "min": 0.0, "max": 90.0, "fmt": "%.0f" },
+        { "id": "e4_vapor_scale", "label": "Rain / humidity", "min": 0.0, "max": 3.0 },
+        { "id": "e4_duration", "label": "Chem time", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
+        { "id": "e4_prebiotic_rate", "label": "Precursor rate", "min": 0.0, "max": 1.0 }
+      ]},
+      { "label": "Mineralization", "views": ["Life", "Terrain", "Elevation", "Temperature", "Prebiotic"], "params": [
+        { "id": "e5_max_veins", "label": "Max veins", "min": 0.0, "max": 256.0, "fmt": "%.0f" },
+        { "id": "e5_vein_threshold", "label": "Vein threshold", "min": 0.0, "max": 1.0 },
+        { "id": "e5_microbial", "label": "Life threshold", "min": 0.02, "max": 0.5 },
+        { "id": "e5_vent_life", "label": "Vent boost", "min": 0.0, "max": 3.0 },
+        { "id": "e5_duration", "label": "Vein time", "min": 1.0, "max": 10.0, "fmt": "%.0f" }
+      ]},
+      { "label": "Erosion", "views": ["Biome", "Elevation", "Flow", "Sediment", "Watersheds", "Deposits", "Terrain", "Life", "Temperature", "Precipitation"], "params": [
+        { "id": "e6_rain", "label": "Rain", "min": 0.0, "max": 3.0 },
+        { "id": "e6_erosion_rate", "label": "Erosion rate", "min": 0.0, "max": 0.1, "fmt": "%.3f" },
+        { "id": "e6_duration", "label": "Erosion time", "min": 1.0, "max": 10.0, "fmt": "%.0f" },
+        { "id": "e6_flora", "label": "Flora threshold", "min": 0.0, "max": 1.0 },
+        { "id": "e6_organics", "label": "Peat rate", "min": 0.0, "max": 0.2, "fmt": "%.3f" },
+        { "id": "e6_decomposer", "label": "Decomposer onset", "min": 0.0, "max": 1.0 },
+        { "id": "e6_carbonate", "label": "Carbonate onset", "min": 0.0, "max": 1.0 }
+      ]}
+    ]
+  },
+
+  "voxel": {
+    "_comment": "voxel-cluster in-scene HUD (examples/voxel-cluster/scripts/hud.lua). Was the app's local `hud` key; moved here under `voxel` to avoid colliding with pocclusters' `hud`.",
+    "stats": {
+      "x": 16,
+      "title": { "y": 16, "size": 22, "color": "$ink_bright" },
+      "pos": { "y": 44, "size": 16, "color": "$ink" },
+      "clusters": { "y": 64, "size": 16, "color": "$ink" },
+      "config": { "y": 84, "size": 16, "color": "$ink" },
+      "diag": { "y": 104, "size": 16, "color": "$ink" },
+      "escape": { "y": 124, "size": 16, "color": "$ink" },
+      "pick": { "y": 144, "size": 16, "color": "$stam_hi" },
+      "walk": { "y": 164, "size": 16, "color": "$sig_green" }
+    },
+    "checkboxes": {
+      "origin": [16, 180],
+      "row_h": 26,
+      "box": 18,
+      "header": {
+        "text": "HUD (scripted) - click to toggle",
+        "size": 16,
+        "color": "$bronze"
+      },
+      "border_color": "$edge4",
+      "fill_on": "$sig_green",
+      "fill_off": "$stone2",
+      "label_size": 16,
+      "label_color": "$ink",
+      "items": [
+        { "key": "wireframe", "label": "Wireframe overlay" },
+        { "key": "corner_arrows", "label": "Corner-vector arrows" },
+        { "key": "navmesh", "label": "Navmesh wireframe" },
+        { "key": "camera_lod", "label": "Camera-driven LOD" },
+        { "key": "lod_billboards", "label": "LOD billboards" },
+        { "key": "celestial_paths", "label": "Celestial paths (Advent)" },
+        { "key": "constellations", "label": "Constellations / star map" },
+        { "key": "planets", "label": "Planets / ecliptic" }
+      ]
+    },
+    "controls": {
+      "label_x": 16,
+      "widget_x": 120,
+      "margin_b": 70,
+      "row_h": 26,
+      "label_size": 14,
+      "label_color": "$ink",
+      "speed": { "y": 340, "label": "Move speed", "min": 20, "max": 200, "w": 150, "h": 12 },
+      "sens": {
+        "y": 366,
+        "label": "Sensitivity",
+        "min": 0.0005,
+        "max": 0.012,
+        "step": 0.0005,
+        "fmt": "%.4f",
+        "w": 96,
+        "h": 18
+      },
+      "locomotion": {
+        "y": 392,
+        "label": "Locomotion",
+        "options": ["Fly", "Walk"],
+        "w": 110,
+        "h": 20
+      },
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_hi": "$sheen",
+        "handle_w": 8
+      },
+      "stepper_style": {
+        "box": "$stone1",
+        "btn": "$stone3",
+        "label": "$ink",
+        "label_size": 13
+      },
+      "dropdown_style": {
+        "cell": "$stone2",
+        "hot": "$cell_hot",
+        "label": "$ink",
+        "label_size": 13
+      }
+    },
+
+    "lighting": {
+      "_comment": "Day/night cycle sliders, lower-right. Values flow both ways through the Model (time_of_day 0-24h, moon_phase 0-4wk, year_month 0-12mo).",
+      "margin_x": 24,
+      "margin_y": 22,
+      "unit": 192,
+      "gap": 18,
+      "row_gap": 14,
+      "track_h": 28,
+      "pad": 20,
+      "header_h": 30,
+      "backdrop": [0.031, 0.035, 0.047, 0.74],
+      "header": { "text": "CELESTIAL CYCLE", "size": 20, "color": "$bronze" },
+      "label_size": 16,
+      "label_color": "$ink",
+      "value_color": "$bronze",
+      "sun": { "label": "Sun", "min": 0.0, "max": 24.0, "ticks": 12 },
+      "moon": { "label": "Moon", "min": 0.0, "max": 4.0, "ticks": 4 },
+      "year": { "label": "Year", "min": 0.0, "max": 12.0, "ticks": 12 },
+      "speed": { "label": "Speed (sim min/s · 0 = paused)", "min": 0.0, "max": 120.0, "ticks": 12 },
+      "fog": { "label": "Fog", "min": 0.0, "max": 1.0, "ticks": 10 },
+      "latitude": { "label": "Latitude", "min": 0.0, "max": 90.0, "ticks": 9 },
+      "epoch": { "label": "Epoch (planet orbits, yr)", "min": 0.0, "max": 100.0, "ticks": 10 },
+      "style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "handle": "$sap_border",
+        "handle_w": 24,
+        "tick": [0.431, 0.353, 0.204, 0.85]
+      }
+    }
+  },
+
+  "clicktrainer": {
+    "_comment": "flicker-clicktrainer in-game HUD (scripts/hud.lua): a vector stats panel over the 2D sprite target — the reference blend of VECTOR UI + a 2D SPRITE GAME + CLICK ROUTING. The panel reports `hud_hit` so a click on it is a UI click (RESET), never scored as a game miss. Stat values flow from the scene via Model as pre-formatted text.",
+    "margin": 16,
+    "panel": { "w": 288, "pad": 16, "radius": 5, "border_w": 1, "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "shadow": "$shadow", "shadow_dy": 14, "shadow_feather": 40, "shadow_grow": 3 },
+    "title": { "text": "CLICK TRAINER", "size": 22, "color": "$ink_bright" },
+    "subtitle": { "text": "click the targets", "size": 13, "color": "$dim_soft" },
+    "divider": "$bronze",
+    "row_h": 24,
+    "label_size": 14, "label_color": "$dim",
+    "value_size": 14, "value_color": "$ink_bright", "accent": "$rune_glow_hi",
+    "rows": [
+      { "id": "hits", "label": "Hits" },
+      { "id": "misses", "label": "Misses" },
+      { "id": "accuracy", "label": "Accuracy" },
+      { "id": "react_last", "label": "Reaction" },
+      { "id": "react_best", "label": "Best" },
+      { "id": "react_avg", "label": "Average" }
+    ],
+    "reset": { "label": "RESET", "h": 36, "gap_top": 14 },
+    "hint": { "text": "Esc  ·  menu", "size": 12, "color": "$faint", "gap_top": 10 }
   }
 }

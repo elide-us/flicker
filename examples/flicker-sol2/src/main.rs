@@ -16,16 +16,17 @@
 
 mod draw;
 mod scene;
-mod shell;
 mod well;
 
 use anyhow::Result;
-use flicker::app::run;
-use flicker::scene::SceneManager;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    // Logo splash → Menu; Start → the Stage-1 simulation; Esc in-sim → Pause overlay.
-    run(SceneManager::new(Box::new(shell::Logo::new())))?;
-    Ok(())
+    // Shared flicker-shell owns the front end: Logo splash → Menu → Sim (Start),
+    // with Pause / Settings overlays. Esc in-sim → Pause.
+    flicker_shell::run(flicker_shell::ShellConfig {
+        game_scene: Box::new(|| Box::new(scene::Sim::new())),
+        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
+        game_label: None,
+    })
 }

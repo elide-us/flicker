@@ -36,7 +36,8 @@ pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
 /// texture tinted by its colour; [`HudCommand::Sprite`] looks its texture up in
 /// `textures` by the id the script got from the `Textures` global;
 /// [`HudCommand::Text`] with [`TextAlign::Center`] is measured and offset so `x`
-/// is its centre. Each command's `layer` is applied **relative** to the
+/// is its centre; [`HudCommand::Panel`] draws a rounded-rect + 2-stop gradient +
+/// border in one SDF call via `draw_ui_panel`. Each command's `layer` is applied **relative** to the
 /// renderer's current base layer, so a script can stack its own sub-layers
 /// (e.g. a dropdown over a panel) without knowing its scene depth.
 pub fn render_hud(
@@ -81,18 +82,59 @@ pub fn render_hud(
                 color,
                 layer,
                 align,
+                font,
             } => {
                 renderer.set_layer(base + layer);
+                let role = font_role(*font);
                 let left = match align {
-                    TextAlign::Center => x - renderer.measure_text(text, *size).x * 0.5,
-                    TextAlign::Right => x - renderer.measure_text(text, *size).x,
+                    TextAlign::Center => x - renderer.measure_text_role(text, *size, role).x * 0.5,
+                    TextAlign::Right => x - renderer.measure_text_role(text, *size, role).x,
                     TextAlign::Left => *x,
                 };
-                renderer.draw_text(text, Vec2::new(left, *y), *size, *color);
+                renderer.draw_text_role(text, Vec2::new(left, *y), *size, *color, role);
+            }
+            HudCommand::Panel {
+                x,
+                y,
+                w,
+                h,
+                color,
+                color2,
+                grad,
+                radius,
+                border,
+                border_color,
+                feather,
+                layer,
+            } => {
+                renderer.set_layer(base + layer);
+                renderer.draw_ui_panel(
+                    Vec2::new(*x, *y),
+                    Vec2::new(*w, *h),
+                    *color,
+                    *color2,
+                    *grad,
+                    *radius,
+                    *border,
+                    *border_color,
+                    *feather,
+                );
             }
         }
     }
     renderer.set_layer(base);
+}
+
+/// Bridge the script-side [`flicker_script::FontRole`] onto the renderer's
+/// [`flicker_render::FontRole`]. This crate is the one seam that depends on both
+/// (the boundary keeps `flicker-script` free of any renderer type), so the two
+/// mirror-image enums are mapped here — exactly like the `HudCommand` draw.
+fn font_role(role: flicker_script::FontRole) -> flicker_render::FontRole {
+    match role {
+        flicker_script::FontRole::Display => flicker_render::FontRole::Display,
+        flicker_script::FontRole::Label => flicker_render::FontRole::Label,
+        flicker_script::FontRole::Body => flicker_render::FontRole::Body,
+    }
 }
 
 /// Expose the embedded [`WIDGETS_LUA`] toolkit to `script` as the `Widgets`
@@ -122,7 +164,8 @@ pub fn load_ui_json(script: &ScriptHost, path: impl AsRef<Path>) {
 /// parse error (scripts guard `if not UI`).
 pub fn load_ui_json_str(script: &ScriptHost, json: &str) {
     match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(ui) => {
+        Ok(mut ui) => {
+            resolve_tokens(&mut ui);
             if let Err(e) = script.set_global_json("UI", &ui) {
                 tracing::error!("UI elements exposure failed: {e}");
             }
@@ -131,10 +174,62 @@ pub fn load_ui_json_str(script: &ScriptHost, json: &str) {
     }
 }
 
+/// Expand `"$name"` design-token references against the `theme.tokens` map, in
+/// place, before the tree reaches Lua. A token (e.g. `"$sap_base"`) is replaced
+/// by its literal value — an rgba array or a scalar — so every screen reads one
+/// palette source (the Prism design language) and the per-file colour copies are
+/// retired. This is the whole of the theme layer: colours live once in
+/// `theme.tokens`; sections reference them by name.
+///
+/// Rules that keep it robust: tokens are **literal only** (no `$`-alias chains),
+/// so one recursive pass is order-independent; an unknown `$name` is left as the
+/// string and warned (the script-smoke frame then surfaces the missing colour
+/// when Lua indexes `color[1]`); no non-token string in the tree begins with `$`.
+fn resolve_tokens(root: &mut serde_json::Value) {
+    let tokens = root
+        .get("theme")
+        .and_then(|theme| theme.get("tokens"))
+        .and_then(|tokens| tokens.as_object())
+        .cloned()
+        .unwrap_or_default();
+    if tokens.is_empty() {
+        return;
+    }
+    fn walk(value: &mut serde_json::Value, tokens: &serde_json::Map<String, serde_json::Value>) {
+        match value {
+            serde_json::Value::String(s) if s.starts_with('$') => match tokens.get(&s[1..]) {
+                Some(replacement) => *value = replacement.clone(),
+                None => tracing::warn!("ui_elements.json: unknown token {s}"),
+            },
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| walk(v, tokens)),
+            serde_json::Value::Object(map) => map.values_mut().for_each(|v| walk(v, tokens)),
+            _ => {}
+        }
+    }
+    walk(root, &tokens);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use flicker_script::ScriptHost;
+
+    #[test]
+    fn resolve_tokens_expands_refs_and_leaves_unknowns() {
+        let mut ui = serde_json::json!({
+            "theme": { "tokens": { "sap_base": [0.1, 0.2, 0.3, 1.0], "ink": [0.9, 0.9, 0.8, 1.0] } },
+            "modal": { "title": { "color": "$ink" }, "buttons": { "fill": "$sap_base" } },
+            "screens": { "menu": { "title": "START", "overlay": "$sap_base" } },
+            "oops": "$missing"
+        });
+        resolve_tokens(&mut ui);
+        assert_eq!(ui["modal"]["title"]["color"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
+        assert_eq!(ui["modal"]["buttons"]["fill"], serde_json::json!([0.1, 0.2, 0.3, 1.0]));
+        assert_eq!(ui["screens"]["menu"]["overlay"], serde_json::json!([0.1, 0.2, 0.3, 1.0]));
+        // literal strings (labels) are untouched; an unknown token is left as-is.
+        assert_eq!(ui["screens"]["menu"]["title"], serde_json::json!("START"));
+        assert_eq!(ui["oops"], serde_json::json!("$missing"));
+    }
 
     #[test]
     fn widgets_lua_parses_and_evaluates() {

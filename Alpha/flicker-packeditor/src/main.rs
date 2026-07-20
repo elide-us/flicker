@@ -23,9 +23,10 @@
 //! an orphan playing one (e.g. `RM/Slide`) walks out of its cell. In-place display (strip
 //! the root translation) is the fix — deferred until it matters.
 //!
-//! Reuses the Katanami character bundle from the shared content tree
-//! (`Alpha/content/characters/katanami`: the rig + 91-clip library + the
-//! `Katanami.pack.json` state graph), the same source flicker-paperdoll loads.
+//! Loads our custom base body (`PrismHumanBaseA`) + the Katanami ANIMATION set
+//! (`Alpha/content/characters/katanami`: the clip library + the `Katanami.pack.json`
+//! state graph), resolved by shared bone name — the same base/anim split flicker-paperdoll
+//! uses. The Katanami character model/rig is retired; the pack + clips are unchanged.
 //!
 //! **Tab** toggles input mode: **Character** (WASD move · Shift run · C crouch · Space jump ·
 //! F attack · H hit · X die drive the PiP character's state machine; camera orbits — drag
@@ -975,14 +976,21 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Reuse the Katanami character bundle from the shared content tree (rig +
-    // 91-clip library + state pack) — the same source flicker-paperdoll loads.
-    let assets = PathBuf::from(concat!(
+    // Base BODY = our custom PrismHumanBaseA (the Katanami model/rig is retired). The ANIMATIONS
+    // — the Katanami clip library + `Katanami.pack.json` state graph — are still loaded from the
+    // katanami bundle and resolve onto the base body by shared bone name (the same base/anim
+    // split flicker-paperdoll uses). The pack itself is untouched: we use our custom body with
+    // the existing Katanami animation set.
+    let base = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../content/characters/PrismHumanBaseA"
+    ));
+    let anim = PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../content/characters/katanami"
     ));
-    let model = format::load_dir(&assets)?;
-    let pack = state::load_pack(&assets.join("Katanami.pack.json")).ok();
+    let model = format::load_dirs(&[base.as_path(), anim.as_path()])?;
+    let pack = state::load_pack(&anim.join("Katanami.pack.json")).ok();
     tracing::info!(
         "loaded rig: {} bones, {} clips, mesh {} verts · state pack {}",
         model.bones.len(),
@@ -1005,8 +1013,17 @@ mod tests {
         ))
     }
 
+    fn base_dir() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../content/characters/PrismHumanBaseA"
+        ))
+    }
+
     fn load() -> Option<(Model, Option<StateMachineDef>)> {
-        let model = format::load_dir(&assets_dir()).ok()?;
+        // Mirror `main`: custom base body (PrismHumanBaseA) + the Katanami animation set,
+        // resolved by shared bone name. The pack is unchanged.
+        let model = format::load_dirs(&[base_dir().as_path(), assets_dir().as_path()]).ok()?;
         if model.mesh.vertices.is_empty() {
             return None;
         }

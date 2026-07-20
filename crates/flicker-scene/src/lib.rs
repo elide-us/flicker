@@ -130,6 +130,14 @@ impl SceneManager {
     }
 }
 
+/// The depth band each stacked scene occupies: its stack position × this stride
+/// becomes the scene's base 2D layer. Must exceed the largest *relative* layer any
+/// single scene uses internally — a redesigned modal spans ~2 sub-layers
+/// (background/Muse vs. popup + button labels), an open dropdown adds one more, and
+/// an in-scene HUD reaches ~10 — so scenes never interleave and an overlay's
+/// vector panels *and* text cleanly cover the scene beneath it.
+const SCENE_LAYER_STRIDE: f32 = 100.0;
+
 /// Index of the lowest scene that must be drawn this frame: the topmost opaque
 /// (non-overlay) scene, since overlays draw over whatever is beneath them.
 /// Pure helper, split out for unit testing.
@@ -164,12 +172,14 @@ impl App for SceneManager {
         self.apply_pending(renderer);
         let start = self.visible_start();
         for (offset, scene) in self.stack[start..].iter_mut().enumerate() {
-            // Each scene draws at a 2D layer = its absolute stack position, so an
-            // overlay's sprites *and* text sort above the scene beneath it (a
-            // pushed pause/confirm modal cleanly covers the frozen scene's text,
-            // not just its panels). A scene can offset from `renderer.layer()`
-            // for sub-ordering within itself.
-            renderer.set_layer((start + offset) as f32);
+            // Each scene occupies a wide DEPTH BAND (its stack position ×
+            // SCENE_LAYER_STRIDE), not a single layer — so a scene's internal
+            // sub-layers (a modal's background/Muse vs. its popup + labels, an open
+            // dropdown over its rows) never collide with the next scene's, and an
+            // overlay's panels *and* text cleanly cover the scene beneath it. A
+            // scene offsets small relative layers from `renderer.layer()` within
+            // its band (see render_hud's `base + layer`).
+            renderer.set_layer((start + offset) as f32 * SCENE_LAYER_STRIDE);
             scene.render(renderer);
         }
     }

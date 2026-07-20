@@ -18,23 +18,25 @@ local MARGIN_BOTTOM = 26
 local HEIGHT = 30 -- the draggable track height
 local CURVE_H = 26 -- the heat-loss curve strip, above the track
 
-local TRACK = { 0.16, 0.17, 0.20, 0.95 }
-local FILL = { 0.42, 0.36, 0.24, 0.95 }
-local PLAYHEAD = { 0.98, 0.90, 0.66, 1.0 }
-local ONSET = { 0.96, 0.78, 0.40, 1.0 }
-local CURVE_COLOR = { 0.42, 0.30, 0.22, 0.9 }
-local CURVE_NOW = { 0.98, 0.62, 0.32, 1.0 }
-local LABEL = { 0.86, 0.88, 0.93, 1.0 }
-local DIM = { 0.62, 0.65, 0.70, 1.0 }
-local WARN = { 0.93, 0.72, 0.36, 1.0 }
-local PANEL_BG = { 0.05, 0.06, 0.08, 0.82 }
+-- Prism palette (this HUD is dormant/unwired; inline literals mirror the shared
+-- theme.tokens so it stays on-canon if revived — deletion candidate otherwise).
+local TRACK = { 0.078, 0.090, 0.122, 0.95 }       -- stone track
+local FILL = { 0.141, 0.247, 0.471, 0.95 }        -- sapphire fill
+local PLAYHEAD = { 0.616, 0.722, 1.0, 1.0 }       -- rune-glow marker
+local ONSET = { 0.941, 0.804, 0.416, 1.0 }        -- stamina amber
+local CURVE_COLOR = { 0.227, 0.353, 0.627, 0.65 } -- muted sapphire
+local CURVE_NOW = { 0.851, 0.478, 0.169, 1.0 }    -- Septisigil orange
+local LABEL = { 0.871, 0.847, 0.788, 1.0 }        -- ink
+local DIM = { 0.561, 0.541, 0.490, 1.0 }
+local WARN = { 0.941, 0.804, 0.416, 1.0 }         -- amber caution
+local PANEL_BG = { 0.055, 0.063, 0.086, 0.82 }    -- sunk stone
 
 -- Planet-size slider (planet size = grid frequency; the scene maps it to a sim rebuild).
 local PSIZE = { x = 28, y = 150, w = 250, h = 15, label_size = 14, warn_size = 11 }
 local SLIDER_STYLE = {
   track = TRACK,
   fill = FILL,
-  handle = { 0.96, 0.86, 0.62, 1.0 },
+  handle = { 0.227, 0.353, 0.627, 1.0 },
   handle_w = 8,
 }
 

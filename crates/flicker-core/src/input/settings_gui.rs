@@ -61,23 +61,26 @@ pub trait GuiRenderer {
 // Gothic theme colors
 // ───────────────────────────────────────────────────────────────────
 
-const COL_BG: [f32; 4]         = [0.06, 0.07, 0.08, 0.94];
-const COL_PANEL: [f32; 4]      = [0.14, 0.15, 0.18, 1.0];
-const COL_PANEL_ALT: [f32; 4]  = [0.11, 0.12, 0.15, 1.0];
-const COL_TITLE: [f32; 4]      = [0.83, 0.67, 0.39, 1.0];
-const COL_LABEL: [f32; 4]      = [0.78, 0.81, 0.86, 1.0];
-const COL_LABEL_DIM: [f32; 4]  = [0.45, 0.48, 0.53, 1.0];
-const COL_GOLD: [f32; 4]       = [0.63, 0.50, 0.26, 1.0];
-const COL_GOLD_LINE: [f32; 4]  = [0.45, 0.36, 0.18, 0.6];
-const COL_HOVER: [f32; 4]      = [0.83, 0.67, 0.39, 0.15];
-const COL_ACTIVE: [f32; 4]     = [0.83, 0.67, 0.39, 0.3];
-const COL_SLIDER_TRACK: [f32; 4]  = [0.22, 0.24, 0.28, 1.0];
-const COL_SLIDER_FILL: [f32; 4]   = [0.63, 0.50, 0.26, 0.8];
-const COL_SLIDER_HANDLE: [f32; 4] = [0.83, 0.67, 0.39, 1.0];
-const COL_CHECKBOX: [f32; 4]      = [0.22, 0.24, 0.28, 1.0];
-const COL_CHECKBOX_CHECK: [f32; 4]= [0.83, 0.67, 0.39, 1.0];
-const COL_REBIND: [f32; 4]    = [0.30, 0.18, 0.10, 0.85];
-const COL_DIVIDER: [f32; 4]   = [0.45, 0.36, 0.18, 0.3];
+// Prism palette. This Rust settings GUI is superseded by the shell's Lua
+// settings scene, but kept on-canon so no gold survives. `COL_GOLD*` names now
+// hold Prism bronze; interactive tints are sapphire.
+const COL_BG: [f32; 4]         = [0.055, 0.063, 0.086, 0.94];
+const COL_PANEL: [f32; 4]      = [0.149, 0.169, 0.208, 1.0];
+const COL_PANEL_ALT: [f32; 4]  = [0.110, 0.125, 0.161, 1.0];
+const COL_TITLE: [f32; 4]      = [0.906, 0.882, 0.824, 1.0];
+const COL_LABEL: [f32; 4]      = [0.871, 0.847, 0.788, 1.0];
+const COL_LABEL_DIM: [f32; 4]  = [0.561, 0.541, 0.490, 1.0];
+const COL_GOLD: [f32; 4]       = [0.722, 0.592, 0.353, 1.0];
+const COL_GOLD_LINE: [f32; 4]  = [0.431, 0.353, 0.204, 0.6];
+const COL_HOVER: [f32; 4]      = [0.141, 0.247, 0.471, 0.15];
+const COL_ACTIVE: [f32; 4]     = [0.141, 0.247, 0.471, 0.3];
+const COL_SLIDER_TRACK: [f32; 4]  = [0.055, 0.063, 0.086, 1.0];
+const COL_SLIDER_FILL: [f32; 4]   = [0.141, 0.247, 0.471, 0.8];
+const COL_SLIDER_HANDLE: [f32; 4] = [0.227, 0.353, 0.627, 1.0];
+const COL_CHECKBOX: [f32; 4]      = [0.078, 0.090, 0.122, 1.0];
+const COL_CHECKBOX_CHECK: [f32; 4]= [0.227, 0.353, 0.627, 1.0];
+const COL_REBIND: [f32; 4]    = [0.141, 0.247, 0.471, 0.30];
+const COL_DIVIDER: [f32; 4]   = [0.431, 0.353, 0.204, 0.35];
 
 // ───────────────────────────────────────────────────────────────────
 // Layout constants

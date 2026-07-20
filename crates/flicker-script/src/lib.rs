@@ -58,7 +58,7 @@
 //! -- frame), or widget values. `sw`/`sh` are the screen size.
 //! function M.update(mouse_x, mouse_y, clicked, sw, sh) ... return { ... } end
 //! -- Called once per frame. Return a sequence of draw-command tables; see
-//! -- HudCommand for the recognised shapes ("rect"/"sprite"/"text"). Globals:
+//! -- HudCommand for the recognised shapes ("rect"/"sprite"/"panel"/"text"). Globals:
 //! -- `Model` (engine data this frame) and `Textures` (name → sprite id).
 //! function M.draw(sw, sh) return { ... } end
 //! return M
@@ -101,6 +101,23 @@ pub enum TextAlign {
     Right,
 }
 
+/// The type role for a [`HudCommand::Text`] — a semantic face selector the
+/// consumer maps to a concrete font family (the Prism design language: Display =
+/// Cormorant Garamond, Label = Cinzel caps, Body = EB Garamond). Plain data on
+/// the boundary — `flicker-script` has no renderer/font dependency, so (exactly
+/// like [`TextAlign`]) the role is carried as data and the family mapping lives
+/// in the render bridge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FontRole {
+    /// Display / headings & names.
+    Display,
+    /// Labels, caps, small meta.
+    Label,
+    /// Body / prose (the default).
+    #[default]
+    Body,
+}
+
 /// A draw command emitted by a HUD script for the engine to render.
 ///
 /// Coordinates are in HUD pixel space (origin top-left), matching the
@@ -133,7 +150,7 @@ pub enum HudCommand {
         color: [f32; 4],
         layer: f32,
     },
-    /// A line of text positioned at `(x, y)` per `align`.
+    /// A line of text positioned at `(x, y)` per `align`, in the face `font`.
     Text {
         x: f32,
         y: f32,
@@ -142,6 +159,29 @@ pub enum HudCommand {
         color: [f32; 4],
         layer: f32,
         align: TextAlign,
+        font: FontRole,
+    },
+    /// A **vector UI panel**: a rounded rectangle filled with a solid or 2-stop
+    /// linear gradient (`color`→`color2` along `grad`: `0.0` solid, `1.0`
+    /// vertical, `2.0` horizontal) and ringed with an optional `border`
+    /// (`border_color`; thickness in px, `0.0` = none). `radius` is the corner
+    /// radius (px); `feather` softens the outer edge (px, for soft drop shadows).
+    /// Rendered as a signed-distance field in one draw by the consumer's
+    /// `draw_ui_panel` — the flat Prism chrome (panels / buttons / wells),
+    /// replacing the CPU-baked panel and button textures.
+    Panel {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+        color2: [f32; 4],
+        grad: f32,
+        radius: f32,
+        border: f32,
+        border_color: [f32; 4],
+        feather: f32,
+        layer: f32,
     },
 }
 
@@ -441,7 +481,27 @@ impl ScriptHost {
                     color: read_color(&cmd)?,
                     layer: read_layer(&cmd)?,
                     align: read_align(&cmd)?,
+                    font: read_font(&cmd)?,
                 }),
+                "panel" => {
+                    // `color` is stop 0; `color2` (r2..a2) defaults to it (solid);
+                    // `border_color` (br..ba) defaults to transparent (no border).
+                    let color = read_color(&cmd)?;
+                    commands.push(HudCommand::Panel {
+                        x: cmd.get("x")?,
+                        y: cmd.get("y")?,
+                        w: cmd.get("w")?,
+                        h: cmd.get("h")?,
+                        color,
+                        color2: read_color_keys(&cmd, ("r2", "g2", "b2", "a2"), color)?,
+                        grad: cmd.get::<Option<f32>>("grad")?.unwrap_or(0.0),
+                        radius: cmd.get::<Option<f32>>("radius")?.unwrap_or(0.0),
+                        border: cmd.get::<Option<f32>>("border")?.unwrap_or(0.0),
+                        border_color: read_color_keys(&cmd, ("br", "bg", "bb", "ba"), [0.0; 4])?,
+                        feather: cmd.get::<Option<f32>>("feather")?.unwrap_or(0.0),
+                        layer: read_layer(&cmd)?,
+                    });
+                }
                 other => tracing::warn!("hud script emitted unknown command kind '{other}'"),
             }
         }
@@ -461,6 +521,24 @@ fn read_color(cmd: &Table) -> mlua::Result<[f32; 4]> {
     ])
 }
 
+/// Read an RGBA colour from four named channel keys, each channel defaulting to
+/// the matching channel of `default` when omitted. Used for a
+/// [`HudCommand::Panel`]'s second gradient stop (`r2..a2`, defaulting to the
+/// first stop → a solid fill) and its border colour (`br..ba`, defaulting to
+/// transparent → no border).
+fn read_color_keys(
+    cmd: &Table,
+    keys: (&str, &str, &str, &str),
+    default: [f32; 4],
+) -> mlua::Result<[f32; 4]> {
+    Ok([
+        cmd.get::<Option<f32>>(keys.0)?.unwrap_or(default[0]),
+        cmd.get::<Option<f32>>(keys.1)?.unwrap_or(default[1]),
+        cmd.get::<Option<f32>>(keys.2)?.unwrap_or(default[2]),
+        cmd.get::<Option<f32>>(keys.3)?.unwrap_or(default[3]),
+    ])
+}
+
 /// Read a command's `layer` (painter's-order key), defaulting to `0.0`.
 fn read_layer(cmd: &Table) -> mlua::Result<f32> {
     Ok(cmd.get::<Option<f32>>("layer")?.unwrap_or(0.0))
@@ -473,6 +551,17 @@ fn read_align(cmd: &Table) -> mlua::Result<TextAlign> {
         Some("center") => TextAlign::Center,
         Some("right") => TextAlign::Right,
         _ => TextAlign::Left,
+    })
+}
+
+/// Read a text command's `font` role (`"display"` → [`FontRole::Display`],
+/// `"label"` → [`FontRole::Label`]; anything else, including omitted, →
+/// [`FontRole::Body`], so scripts that never set a face get body prose).
+fn read_font(cmd: &Table) -> mlua::Result<FontRole> {
+    Ok(match cmd.get::<Option<String>>("font")?.as_deref() {
+        Some("display") => FontRole::Display,
+        Some("label") => FontRole::Label,
+        _ => FontRole::Body,
     })
 }
 
@@ -602,6 +691,7 @@ mod tests {
                     color: [1.0, 1.0, 1.0, 1.0],
                     layer: 0.0,
                     align: TextAlign::Left,
+                    font: FontRole::Body,
                 },
             ]
         );
@@ -647,6 +737,62 @@ mod tests {
                     color: [1.0, 1.0, 1.0, 1.0],
                     layer: 3.0,
                     align: TextAlign::Center,
+                    font: FontRole::Body,
+                },
+            ]
+        );
+    }
+
+    const PANEL_SCRIPT: &str = r#"
+        local M = {}
+        function M.update(mx, my, clicked, sw, sh) return {} end
+        function M.draw(sw, sh)
+            return {
+                { kind = "panel", x = 10, y = 20, w = 100, h = 40,
+                  r = 0.1, g = 0.2, b = 0.3, a = 1.0,
+                  r2 = 0.4, g2 = 0.5, b2 = 0.6,
+                  grad = 1, radius = 5, border = 1,
+                  br = 0.7, bg = 0.7, bb = 0.8, ba = 1.0, layer = 2 },
+                { kind = "panel", x = 0, y = 0, w = 8, h = 8, r = 1, g = 1, b = 1 },
+            }
+        end
+        return M
+    "#;
+
+    #[test]
+    fn panel_command_parses() {
+        let host = ScriptHost::new(PANEL_SCRIPT, "panel").unwrap();
+        let cmds = host.draw(800.0, 600.0).unwrap();
+        assert_eq!(
+            cmds,
+            vec![
+                HudCommand::Panel {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 100.0,
+                    h: 40.0,
+                    color: [0.1, 0.2, 0.3, 1.0],
+                    color2: [0.4, 0.5, 0.6, 1.0], // a2 omitted → falls back to color.a
+                    grad: 1.0,
+                    radius: 5.0,
+                    border: 1.0,
+                    border_color: [0.7, 0.7, 0.8, 1.0],
+                    feather: 0.0,
+                    layer: 2.0,
+                },
+                HudCommand::Panel {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 8.0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    color2: [1.0, 1.0, 1.0, 1.0], // no r2 → solid (== color)
+                    grad: 0.0,
+                    radius: 0.0,
+                    border: 0.0,
+                    border_color: [0.0, 0.0, 0.0, 0.0], // no br → transparent (no border)
+                    feather: 0.0,
+                    layer: 0.0,
                 },
             ]
         );

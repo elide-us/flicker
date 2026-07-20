@@ -8,13 +8,13 @@ Our game's magic system offers a dynamic, flexible spellcasting experience built
 
 Every interactive object in the game world is assigned a magical name (**noun**) that defines its nature and how it can be manipulated. For example, a fire elemental responds to **"Flam"** (Fire), while a stone wall reacts to **"Terra"** (Earth).
 
-Spells are crafted by combining nouns with verbs and modifiers. For instance, **"Vas Flam Rectus"** translates to **"Greater Fire in a Straight Line"**, manifesting as a firewall. The server interprets these inputs along with player actions to determine spell effects.
+Spells are crafted by combining nouns with verbs and modifiers. For instance, **"Vas Flam Vectus"** translates to **"Greater Fire in a Straight Line"**, manifesting as a firewall. The server interprets these inputs along with player actions to determine spell effects.
 
 ### **Spell Research and Creation**
 
-Players cannot cast spells by simply inputting words in real time; they must first **research and create** spells. This involves discovering valid combinations of magical words to form functional spells, which are then **memorized** for later use. This process encourages exploration and careful crafting of spells. For example, to cast **"Vas Flam Rectus"**, a player must first research and validate this combination within the game mechanics.
+Players cannot cast spells by simply inputting words in real time; they must first **research and create** spells. This involves discovering valid combinations of magical words to form functional spells, which are then **memorized** for later use. This process encourages exploration and careful crafting of spells. For example, to cast **"Vas Flam Vectus"**, a player must first research and validate this combination within the game mechanics.
 
-**Clarification (2026-07-05): the word-grammar is the language, not an invitation to invent from nothing.** The fourteen schools have stood for roughly **one hundred thousand years** (Book VI), and each has an established canon of actual spells that already exist within the fiction — a **Grimoire** (Book VIII, scoped below), not a blank combinatorial space. "Research and create" describes the player's *discovery* of an existing spell — the same word-grammar the game exposes for flavor and for how a discovery is presented to the player — not literal invention of a spell nobody in the world has ever cast. A mage researching "Vas Flam Rectus" is recovering a working already known to that school's tradition, not authoring a new one. This does not change any mechanic above — the noun/verb/modifier/shape grammar is still exactly how a spell is expressed and processed — it changes what "research" means in-fiction: excavation of the school's grimoire, not free invention. **[OPEN QUESTION]** Elideus flagged that unlocking a spell could carry gameplay requirements beyond simply reaching the school that holds it — what those requirements are is undesigned; see Book VIII.
+**Clarification (2026-07-05): the word-grammar is the language, not an invitation to invent from nothing.** The fourteen schools have stood for roughly **one hundred thousand years** (Book VI), and each has an established canon of actual spells that already exist within the fiction — a **Grimoire** (Book VIII, scoped below), not a blank combinatorial space. "Research and create" describes the player's *discovery* of an existing spell — the same word-grammar the game exposes for flavor and for how a discovery is presented to the player — not literal invention of a spell nobody in the world has ever cast. A mage researching "Vas Flam Vectus" is recovering a working already known to that school's tradition, not authoring a new one. This does not change any mechanic above — the noun/verb/modifier/shape grammar is still exactly how a spell is expressed and processed — it changes what "research" means in-fiction: excavation of the school's grimoire, not free invention. **[OPEN QUESTION]** Elideus flagged that unlocking a spell could carry gameplay requirements beyond simply reaching the school that holds it — what those requirements are is undesigned; see Book VIII.
 
 ### **Multiple Paths to the Same Effect**
 
@@ -32,7 +32,7 @@ Each spell follows an order of operations:
 
 1. **Core Effect:** Determined by nouns and verbs.
 2. **Modifiers:** Adjectives and adverbs adjust characteristics like intensity and duration.
-3. **Shape Definition:** Shapes like **"Rectus"** (Straight Line) or **"Spiralis"** (Spiral) define spatial interaction.
+3. **Shape Definition:** Shapes like **"Vectus"** (Straight Line) or **"Spiralis"** (Spiral) define spatial interaction.
 
 This system ensures consistent processing and limitless possibilities, while requiring players to research and validate spells for balance.
 
@@ -294,8 +294,8 @@ So a mage holding all three rings has climbed 1-2-3, then 4-5-6, then 7 — the 
 |---|---|---|
 | 1st | Bare core only — one noun + one verb, no modifiers. | **Ex Flam** (Banish Fire) |
 | 2nd–3rd | One modifier slot opens — a single adjective *or* adverb. | **Vas Flam** (Greater Fire) |
-| 4th | Second modifier slot — adjective *and* adverb together — plus first synergy-school access (below). | **Vas Flam Rectus** (Greater Fire in a Straight Line) |
-| 5th–6th | Modifier stacking — multiple adjectives and adverbs chained for finer intensity, duration, and area control. | **Vas Fortis Flam Cito Rectus** (Greater, Strong Fire, Quickly, in a Straight Line) |
+| 4th | Second modifier slot — adjective *and* adverb together — plus first synergy-school access (below). | **Vas Flam Vectus** (Greater Fire in a Straight Line) |
+| 5th–6th | Modifier stacking — multiple adjectives and adverbs chained for finer intensity, duration, and area control. | **Vas Fortis Flam Cito Vectus** (Greater, Strong Fire, Quickly, in a Straight Line) |
 | 7th | Secondary synergy-school access, and the school's practical grammar ceiling for a single-core spell. | — |
 | Beyond 7th | **Expansion / "forbidden fruit" territory** (Elideus, 2026-07-05) — not ordinary progression. Reserved for extremely rare, extremely costly workings: compound spells (multiple noun+verb cores in one casting), and at the far extreme **world-shifting magic** — spells that reach the geology simulation itself (Book III), gated as Long-Term Objectives (Book I) rather than sold as power. Ring count itself is open. | *(idea-grade: a spell that raises a permanent, account-tagged volcano as the terminal step of a lifelong quest — Book I, LTO layer)* |
 
@@ -329,7 +329,7 @@ The seven classic figures below are the **traditional school associations** — 
 - **Serratus** – Sawtooth Wave - The Shape of Yellow  
   A zigzag pattern resembling a lightning bolt.
 
-- **Rectus** – Straight Line - The Shape of Red  
+- **Vectus** – Straight Line - The Shape of Red  
   A direct and forceful line, often used in spells focused on precision.
 
 - **Chevronis** – Chevron - The Shape of Orange  

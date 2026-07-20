@@ -35,6 +35,10 @@ pub struct ShellConfig {
     /// (gitignored) settings in its own root. `None` falls back to the current
     /// working directory.
     pub settings_dir: Option<std::path::PathBuf>,
+    /// Label for the menu's game-launch button (the `start` item). `None` uses the
+    /// default from `ui_elements.json` ("ENTER WORLD"); a client sets it to name its
+    /// mode — e.g. the click trainer → "CLICK TRAINER".
+    pub game_label: Option<String>,
 }
 
 /// Restore the persisted display setting, then run the whole front-end flow —
@@ -43,7 +47,10 @@ pub struct ShellConfig {
 pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     display::set_settings_dir(config.settings_dir.clone());
     display::load_from_disk();
-    run_app(SceneManager::new(Box::new(LogoScene::new(config.game_scene))))
+    run_app(SceneManager::new(Box::new(LogoScene::new(
+        config.game_scene,
+        config.game_label,
+    ))))
 }
 
 /// Take any pending input-settings change made in the pause→settings overlay,
@@ -209,16 +216,19 @@ struct LogoScene {
     /// The client's game-scene factory, carried through to the [`MenuScene`] so
     /// START can launch it. `Some` until this scene transitions.
     game_scene: Option<GameSceneFactory>,
+    /// The menu's game-launch button label, carried to the [`MenuScene`].
+    game_label: Option<String>,
 }
 
 impl LogoScene {
-    fn new(game_scene: GameSceneFactory) -> Self {
+    fn new(game_scene: GameSceneFactory, game_label: Option<String>) -> Self {
         Self {
             script: None,
             textures: Vec::new(),
             sizes: Vec::new(),
             elapsed: Duration::ZERO,
             game_scene: Some(game_scene),
+            game_label,
         }
     }
 
@@ -292,6 +302,7 @@ impl Scene for LogoScene {
                 self.game_scene
                     .take()
                     .expect("game factory present until the splash advances"),
+                self.game_label.take(),
             )));
         }
         Transition::None
@@ -356,7 +367,7 @@ struct ConfirmDisplayScene {
 impl ConfirmDisplayScene {
     fn new(theme: Theme, previous: display::DisplaySetting) -> Self {
         Self {
-            modal: ModalUi::new(&theme),
+            modal: ModalUi::new(&theme, None),
             previous,
             remaining: CONFIRM_SECS,
         }
@@ -467,20 +478,32 @@ fn load_ui_script(
 struct ModalUi {
     script: Option<ScriptHost>,
     textures: Vec<TextureHandle>,
+    /// Optional override for the menu's game-launch button label (the `start`
+    /// item); `None` on pause/confirm. The modal script reads `Model.game_label`.
+    game_label: Option<String>,
 }
 
 impl ModalUi {
-    /// Load `modal.lua` + expose the theme textures and UI layout.
-    fn new(theme: &Theme) -> Self {
+    /// Load `modal.lua` + expose the theme textures and UI layout. `game_label`
+    /// overrides the menu's launch-button label (the `start` item); `None` else.
+    fn new(theme: &Theme, game_label: Option<String>) -> Self {
         let (script, textures) = load_ui_script(MODAL_SCRIPT, "modal.lua", theme);
-        Self { script, textures }
+        Self {
+            script,
+            textures,
+            game_label,
+        }
     }
 
-    /// The per-frame model selecting the screen + its optional dynamic subtitle.
-    fn model(screen: &str, subtitle: Option<&str>) -> ValueMap {
+    /// The per-frame model selecting the screen + its optional dynamic subtitle +
+    /// the optional game-launch label override.
+    fn model(&self, screen: &str, subtitle: Option<&str>) -> ValueMap {
         let mut model = ValueMap::new().with("screen", screen);
         if let Some(text) = subtitle {
             model.set("subtitle", text);
+        }
+        if let Some(label) = &self.game_label {
+            model.set("game_label", label.as_str());
         }
         model
     }
@@ -497,7 +520,7 @@ impl ModalUi {
         let Some(script) = self.script.as_ref() else {
             return ValueMap::new();
         };
-        let _ = script.set_model(&Self::model(screen, subtitle));
+        let _ = script.set_model(&self.model(screen, subtitle));
         let size = renderer.size();
         script.update(input, size.x, size.y).unwrap_or_else(|e| {
             tracing::error!("modal update failed: {e}");
@@ -510,7 +533,7 @@ impl ModalUi {
         let Some(script) = self.script.as_ref() else {
             return;
         };
-        let _ = script.set_model(&Self::model(screen, subtitle));
+        let _ = script.set_model(&self.model(screen, subtitle));
         let size = renderer.size();
         match script.draw(size.x, size.y) {
             Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
@@ -542,6 +565,8 @@ struct UnifiedSettingsScene {
     last_down: bool,
     /// Last scroll wheel delta for render-time model.
     last_scroll: f32,
+    /// Previous-frame Escape state, for edge-detecting Esc-to-close / cancel-rebind.
+    esc_prev: bool,
 }
 
 impl UnifiedSettingsScene {
@@ -558,6 +583,7 @@ impl UnifiedSettingsScene {
             last_cursor: Vec2::ZERO,
             last_down: false,
             last_scroll: 0.0,
+            esc_prev: false,
         }
     }
 
@@ -601,6 +627,18 @@ impl UnifiedSettingsScene {
         m.set("input_ctrl_invert_stick_yaw", self.settings.input.invert_stick_yaw);
         m.set("input_ctrl_deadzone_shape", self.settings.input.deadzone_shape as f64);
 
+        // Current keyboard bindings → the settings key caps show real keys
+        // (`bind_<ActionId>`), instead of always "unbound". First binding wins.
+        for (id, action) in KEYBOARD_ACTIONS {
+            let label = self
+                .input_map
+                .bindings_for(*action)
+                .first()
+                .map(|b| b.to_string())
+                .unwrap_or_default();
+            m.set(format!("bind_{id}"), label);
+        }
+
         // Rebind state
         if self.rebind.is_active() {
             if let Some(action) = self.rebind.current_action() {
@@ -627,6 +665,8 @@ impl Scene for UnifiedSettingsScene {
         self.last_cursor = input.mouse_position;
         self.last_down = input.mouse_left;
         self.last_scroll = input.mouse_wheel_delta;
+        let esc_edge = input.key_down(Key::Escape) && !self.esc_prev;
+        self.esc_prev = input.key_down(Key::Escape);
 
         // Run Lua update
         let _ = script.set_model(&self.model(size.x, size.y));
@@ -635,9 +675,9 @@ impl Scene for UnifiedSettingsScene {
             ValueMap::new()
         });
 
-        // ── Handle rebind ──
+        // ── Handle rebind (Esc or a click cancels; else capture the next input) ──
         if self.rebind.is_active() {
-            if results.is_on("settings_rebind_cancel") {
+            if esc_edge || results.is_on("settings_rebind_cancel") {
                 self.rebind.cancel();
             } else if let Some((action, binding)) = self.rebind.poll(input, &mut self.input_map) {
                 tracing::info!("rebound {action} to {binding}");
@@ -645,9 +685,21 @@ impl Scene for UnifiedSettingsScene {
             return Transition::None;
         }
 
-        // ── Handle back button ──
-        if results.is_on("settings_back") {
-            // Persist and pop
+        // ── Restore defaults (reset the local buffer; persisted on Apply/Back) ──
+        if results.is_on("settings_restore") {
+            self.settings = GameSettings::default();
+            self.input_map = InputMap::wasd_and_mouse();
+        }
+
+        // ── Apply: persist without closing (the script shows the flash) ──
+        if results.is_on("settings_apply") {
+            let mut gs = GAME_SETTINGS.lock().expect("settings lock");
+            *gs = self.settings.clone();
+            gs.save();
+        }
+
+        // ── Back / close (Back button, × chip, or Esc): persist and pop ──
+        if esc_edge || results.is_on("settings_back") {
             {
                 let mut gs = GAME_SETTINGS.lock().expect("settings lock");
                 *gs = self.settings.clone();
@@ -769,6 +821,31 @@ impl Scene for UnifiedSettingsScene {
     }
 }
 
+/// The keyboard actions the settings screen lists, in display order — the id
+/// strings match `ui_elements.json`'s `settings.input.keyboard` groups (and
+/// [`parse_action`]). Used to publish each action's current binding to the script.
+const KEYBOARD_ACTIONS: &[(&str, Action)] = &[
+    ("MoveForward", Action::MoveForward),
+    ("MoveBackward", Action::MoveBackward),
+    ("StrafeLeft", Action::StrafeLeft),
+    ("StrafeRight", Action::StrafeRight),
+    ("MoveUp", Action::MoveUp),
+    ("MoveDown", Action::MoveDown),
+    ("Jump", Action::Jump),
+    ("Sprint", Action::Sprint),
+    ("Crouch", Action::Crouch),
+    ("Interact", Action::Interact),
+    ("Inventory", Action::Inventory),
+    ("Map", Action::Map),
+    ("Menu", Action::Menu),
+    ("PrimaryAction", Action::PrimaryAction),
+    ("SecondaryAction", Action::SecondaryAction),
+    ("Reload", Action::Reload),
+    ("Confirm", Action::Confirm),
+    ("Cancel", Action::Cancel),
+    ("Quit", Action::Quit),
+];
+
 /// Parse an action string back into the `Action` enum.
 fn parse_action(s: &str) -> Option<Action> {
     match s {
@@ -809,15 +886,18 @@ struct MenuScene {
     pending_input: Option<InputMap>,
     /// The client's game-scene factory; consumed when START launches the game.
     game_scene: Option<GameSceneFactory>,
+    /// Optional label for the game-launch button (see [`ShellConfig::game_label`]).
+    game_label: Option<String>,
 }
 
 impl MenuScene {
-    fn new(game_scene: GameSceneFactory) -> Self {
+    fn new(game_scene: GameSceneFactory, game_label: Option<String>) -> Self {
         Self {
             theme: None,
             modal: None,
             pending_input: None,
             game_scene: Some(game_scene),
+            game_label,
         }
     }
 }
@@ -825,7 +905,7 @@ impl MenuScene {
 impl Scene for MenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         let theme = Theme::build(renderer);
-        self.modal = Some(ModalUi::new(&theme));
+        self.modal = Some(ModalUi::new(&theme, self.game_label.clone()));
         self.theme = Some(theme);
     }
 
@@ -840,7 +920,12 @@ impl Scene for MenuScene {
             }
             if actions.is_on("settings") {
                 let theme = self.theme.expect("theme built in enter");
-                let input_map = self.pending_input.take().unwrap_or_default();
+                // Default to WASD so the settings key caps show real keys from the
+                // menu (before any game bindings exist).
+                let input_map = self
+                    .pending_input
+                    .take()
+                    .unwrap_or_else(InputMap::wasd_and_mouse);
                 return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map)));
             }
             if actions.is_on("quit") {
@@ -883,7 +968,7 @@ impl PauseScene {
         _gamepad_config: &GamepadConfig,
     ) -> Self {
         Self {
-            modal: ModalUi::new(&theme),
+            modal: ModalUi::new(&theme, None),
             theme,
             bindings: input_map.clone(),
             menu_prev: true,
@@ -939,8 +1024,14 @@ mod script_smoke {
     #[test]
     fn modal_script_runs_every_screen() {
         let host = ScriptHost::new(MODAL_SCRIPT, "modal.lua").expect("load modal.lua");
-        host.set_texture_ids(&[("white", 0), ("panel", 1), ("button", 2)])
-            .expect("register textures");
+        host.set_texture_ids(&[
+            ("white", 0),
+            ("panel", 1),
+            ("settings_panel", 2),
+            ("button", 3),
+            ("muse", 4),
+        ])
+        .expect("register textures");
         expose_ui_elements(&host); // the embedded shell ui_elements.json
         let input = InputState::new();
         for screen in ["menu", "pause", "confirm"] {
@@ -986,20 +1077,61 @@ mod script_smoke {
     }
 
     #[test]
-    fn settings_script_loads() {
-        // The settings screen reads a large audio/video/input model built by the
-        // live scene; here we just prove the embedded script + layout parse and
-        // load without a Lua error (the common regression), and that exposing the
-        // shell layout doesn't blow up.
+    fn settings_script_runs_all_sections() {
+        use flicker::render::Vec2;
+        use flicker::script::HudCommand;
+
         let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
         host.set_texture_ids(&[
             ("white", 0),
             ("panel", 1),
             ("settings_panel", 2),
             ("button", 3),
+            ("muse", 4),
         ])
         .expect("register textures");
         expose_ui_elements(&host);
-        load_widgets(&host);
+        load_widgets(&host); // the workbench uses Widgets.* for hit-testing
+
+        let (sw, sh) = (1920.0_f32, 1080.0_f32);
+        let model = || {
+            ValueMap::new()
+                .with("scroll", 0.0)
+                .with("video_display_mode", 0.0)
+                .with("video_resolution", 2.0)
+                .with("video_quality", 2.0)
+                .with("video_vsync", true)
+                .with("video_fps_limit", 1.0)
+                .with("input_mouse_sensitivity", 0.005)
+                .with("input_mouse_invert_pitch", false)
+                .with("bind_MoveForward", "W")
+        };
+        let click = |x: f32, y: f32| {
+            let mut i = InputState::new();
+            i.mouse_position = Vec2::new(x, y);
+            i.mouse_left_pressed = true;
+            i
+        };
+        let has_text = |cmds: &[HudCommand], s: &str| {
+            cmds.iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+        };
+        // Run a frame's update+draw and assert a marker string rendered.
+        let frame = |input: &InputState, marker: &str| {
+            host.set_model(&model()).expect("model");
+            host.update(input, sw, sh).expect("settings update");
+            let cmds = host.draw(sw, sh).expect("settings draw");
+            assert!(
+                has_text(&cmds, marker),
+                "settings screen did not render '{marker}'"
+            );
+        };
+
+        // Nav rail + sub-tab pixel positions for a 1920×1080 window (see layout()).
+        frame(&InputState::new(), "Video"); // default section
+        frame(&click(488.0, 335.0), "NOT YET IMPLEMENTED"); // Audio nav → stub
+        frame(&click(488.0, 382.0), "MOVEMENT"); // Input nav → keyboard bindings
+        frame(&click(1459.0, 274.0), "No controller detected"); // Controller pill
+        frame(&click(1351.0, 274.0), "Look Sensitivity"); // Mouse pill
     }
 }

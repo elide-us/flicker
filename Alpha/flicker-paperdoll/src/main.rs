@@ -11,8 +11,8 @@
 //!    gray where no texture maps. Per-frame CPU skin + re-upload.
 //!
 //! Controls: drag = rotate · wheel = zoom · Space = play/pause · ←/→ = step tick ·
-//! ↑/↓ = cycle clip · PgUp/PgDn = raise/lower · M = mesh · T = textures ·
-//! B = skeleton (cyan joints + orange bone-frame axes) · R = reset · Esc = quit.
+//! ↑/↓ = cycle clip · P = clip previewer (loops a raw clip; ↑/↓ select) · PgUp/PgDn = raise/lower ·
+//! M = mesh · T = textures · B = skeleton (cyan joints + orange bone-frame axes) · R = reset · Esc = quit.
 //!
 //! The user runs the window (`cargo run -p flicker-paperdoll`) and verifies; this
 //! crate never launches it.
@@ -209,13 +209,14 @@ struct PieceFit {
     /// model is thicker than this outfit, if I can thicken it, that would be perfect").
     scale: Vec3,
     offset: Vec3,
-    /// USER rotation, Euler XYZ in DEGREES, about the piece's own origin — and, because
-    /// `rot` has already cancelled the socket's rest tilt, about WORLD axes at rest. This is
-    /// what aims a weapon down the hand: the vendor's blade runs along its own +X with no
+    /// USER rotation as a QUATERNION, accumulated from ±X/±Y/±Z nudges — about WORLD axes at
+    /// rest, because `rot` has already cancelled the socket's rest tilt. A quaternion, not Euler
+    /// angles, so nudging past 90° never gimbal-folds and a reset is an exact IDENTITY (D.6).
+    /// This is what aims a weapon down the hand: the vendor's blade runs along its own +X with no
     /// relation to the grip (user, 2026-07-16: "the sword and dagger are both pointed
     /// straight into the hands"). Separate from `rot` so a rig fix can still re-derive the
     /// upright correction without discarding an authored aim.
-    user_rot: Vec3,
+    user_rot: glam::Quat,
     /// Rotation applied INSIDE the socket's frame. Defaults to the inverse of the bone's
     /// REST rotation, which is what keeps a piece upright: pieces are authored world-upright
     /// (z-up), but a canonical bone's frame is not — UE bones run X-down-bone — so parenting
@@ -265,7 +266,7 @@ impl PieceFit {
         let rot = socket
             .map(|b| glam::Quat::from_mat4(&b.inverse_bind).normalize())
             .unwrap_or(glam::Quat::IDENTITY);
-        Self { uniform, scale, offset: Vec3::ZERO, user_rot: Vec3::ZERO, rot }
+        Self { uniform, scale, offset: Vec3::ZERO, user_rot: glam::Quat::IDENTITY, rot }
     }
 
     /// This fit REFLECTED across the body's midline (x = 0) — the fit its mirrored partner
@@ -281,7 +282,9 @@ impl PieceFit {
             uniform: self.uniform,
             scale: self.scale,
             offset: Vec3::new(-self.offset.x, self.offset.y, self.offset.z),
-            user_rot: Vec3::new(self.user_rot.x, -self.user_rot.y, -self.user_rot.z),
+            // Reflect the quaternion across x = 0: keep PITCH (x) and w, negate YAW (y) and
+            // ROLL (z). Derived from axis-angle: the mirror sends axis a→(ax,−ay,−az), angle→−θ.
+            user_rot: glam::Quat::from_xyzw(self.user_rot.x, -self.user_rot.y, -self.user_rot.z, self.user_rot.w),
             rot: self.rot,
         }
     }
@@ -294,16 +297,7 @@ impl PieceFit {
     /// piece to the body's left regardless of which bone it hangs off.
     fn matrix(&self) -> Mat4 {
         Mat4::from_quat(self.rot)
-            * Mat4::from_scale_rotation_translation(
-                self.scale * self.uniform,
-                glam::Quat::from_euler(
-                    glam::EulerRot::XYZ,
-                    self.user_rot.x.to_radians(),
-                    self.user_rot.y.to_radians(),
-                    self.user_rot.z.to_radians(),
-                ),
-                self.offset,
-            )
+            * Mat4::from_scale_rotation_translation(self.scale * self.uniform, self.user_rot, self.offset)
     }
 }
 
@@ -342,7 +336,7 @@ struct RecordedFit {
     uniform: f32,
     scale: [f32; 3],
     offset: [f32; 3],
-    rotate: [f32; 3],
+    rotate: glam::Quat,
 }
 
 fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
@@ -369,6 +363,24 @@ fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
                     _ => [dflt; 3],
                 }
             };
+            // Rotation: 4 floats = the quaternion we write now (D.6); 3 floats = a LEGACY
+            // Euler-XYZ-degrees record (pre-D.6) → convert once so old fits keep their aim;
+            // absent/garbled → IDENTITY.
+            let rot = |v: Option<&serde_json::Value>| -> glam::Quat {
+                match v.and_then(|x| x.as_array()) {
+                    Some(a) if a.len() >= 4 => {
+                        let g = |i: usize| a.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+                        glam::Quat::from_xyzw(g(0), g(1), g(2), g(3)).normalize()
+                    }
+                    Some(a) if a.len() == 3 => {
+                        let g = |i: usize| {
+                            (a.get(i).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32).to_radians()
+                        };
+                        glam::Quat::from_euler(glam::EulerRot::XYZ, g(0), g(1), g(2))
+                    }
+                    _ => glam::Quat::IDENTITY,
+                }
+            };
             // `uniform` absent = 1.0: an older record stored the overall size in `scale`,
             // and `uniform * scale` reproduces it exactly.
             let uniform = f.get("uniform").and_then(|x| x.as_f64()).unwrap_or(1.0) as f32;
@@ -378,7 +390,7 @@ fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
                     uniform,
                     scale: arr(f.get("scale"), 1.0),
                     offset: arr(f.get("offset"), 0.0),
-                    rotate: arr(f.get("rotate"), 0.0),
+                    rotate: rot(f.get("rotate")),
                 },
             );
         }
@@ -467,7 +479,7 @@ impl Slot {
                 uniform: 1.0,
                 scale: Vec3::ONE,
                 offset: Vec3::ZERO,
-                user_rot: Vec3::ZERO,
+                user_rot: glam::Quat::IDENTITY,
                 rot: glam::Quat::IDENTITY,
             },
         };
@@ -480,7 +492,7 @@ impl Slot {
             fit.uniform = r.uniform;
             fit.scale = Vec3::from(r.scale);
             fit.offset = Vec3::from(r.offset);
-            fit.user_rot = Vec3::from(r.rotate);
+            fit.user_rot = r.rotate;
             tracing::info!(
                 "slot '{}': recorded fit — size {:.2}, stretch {:?}, offset {:?}, rot {:?}",
                 def.key, r.uniform, r.scale, r.offset, r.rotate
@@ -669,7 +681,7 @@ impl OutfitLayer {
     fn new(mesh: format::Mesh, bones: &[format::Bone]) -> Self {
         let sub = submeshes_of(&mesh);
         let sub_gpu = (0..sub.len()).map(|_| None).collect();
-        let cloth = cloth::ClothSim::build(&mesh.cloth, bones);
+        let cloth = cloth::ClothSim::build(&mesh.cloth, &mesh.vertices, bones);
         Self { mesh, sub, sub_gpu, cloth }
     }
 }
@@ -770,6 +782,20 @@ struct Viewer {
     prev_left: bool,
     prev_right: bool,
     prev_r: bool,
+    /// DEBUG (D.4 test toggle): the inactive base body — base B (male) when A is shown — loaded
+    /// alongside base A so `X` hot-swaps the whole rig+mesh+clips to confirm the male body skins
+    /// + animates. `None` if `PrismHumanBaseB` is absent; `body_b` tracks which is live.
+    alt_model: Option<Model>,
+    body_b: bool,
+    prev_x: bool,
+    /// Debug clip previewer (`P`): when on, play `model.clips[preview_clip]` ON LOOP, bypassing
+    /// the state machine, so a raw retargeted clip (e.g. `walk_forward`) can be watched to
+    /// validate the retarget. ↑/↓ select the clip; `preview_time` accumulates real seconds,
+    /// wrapped to the clip's tick range at its `tick_rate_hz`. Off = normal Animate/Pose.
+    preview: bool,
+    preview_clip: usize,
+    preview_time: f32,
+    prev_p: bool,
     /// Shell pause plumbing: bindings (Menu = Esc), a press-edge latch, and the
     /// gothic theme built once for the pause overlay we push.
     bindings: InputMap,
@@ -780,6 +806,7 @@ struct Viewer {
 impl Viewer {
     fn new(
         model: Model,
+        alt_model: Option<Model>,
         assets: PathBuf,
         chars: &Path,
         sm: Option<StateMachine>,
@@ -879,6 +906,13 @@ impl Viewer {
             prev_left: false,
             prev_right: false,
             prev_r: false,
+            alt_model,
+            body_b: false,
+            prev_x: false,
+            preview: false,
+            preview_clip: 0,
+            preview_time: 0.0,
+            prev_p: false,
             bindings: InputMap::wasd_and_mouse(),
             menu_prev: false,
             ui_theme: None,
@@ -926,9 +960,11 @@ impl Viewer {
             .with("fit_sx", self.editing.and_then(|i| self.slot_at(i)).map_or(1.0, |s| s.fit.scale.x))
             .with("fit_sy", self.editing.and_then(|i| self.slot_at(i)).map_or(1.0, |s| s.fit.scale.y))
             .with("fit_sz", self.editing.and_then(|i| self.slot_at(i)).map_or(1.0, |s| s.fit.scale.z))
-            .with("fit_rx", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.x))
-            .with("fit_ry", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.y))
-            .with("fit_rz", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.z))
+            // Rotation rows READ OUT the quaternion's Euler decomposition (degrees) for the
+            // slider display only; authoring is nudge-only (D.6), so these are informational.
+            .with("fit_rx", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.to_euler(glam::EulerRot::XYZ).0.to_degrees()))
+            .with("fit_ry", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.to_euler(glam::EulerRot::XYZ).1.to_degrees()))
+            .with("fit_rz", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.user_rot.to_euler(glam::EulerRot::XYZ).2.to_degrees()))
             .with("fit_x", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.offset.x))
             .with("fit_y", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.offset.y))
             .with("fit_z", self.editing.and_then(|i| self.slot_at(i)).map_or(0.0, |s| s.fit.offset.z))
@@ -936,7 +972,17 @@ impl Viewer {
                 "stats",
                 format!(
                     "{} · {} bones · worn {}/{}",
-                    if self.animate {
+                    if self.preview {
+                        match self.model.clips.get(self.preview_clip) {
+                            Some(c) => format!(
+                                "PREVIEW {}/{}: {} (P off \u{00B7} \u{2191}\u{2193} clip)",
+                                self.preview_clip + 1,
+                                self.model.clips.len(),
+                                c.name,
+                            ),
+                            None => "PREVIEW (no clips)".to_string(),
+                        }
+                    } else if self.animate {
                         match self.sm.as_ref() {
                             Some(sm) => format!(
                                 "{} (WASD \u{00B7} Shift run \u{00B7} C crouch \u{00B7} Space jump \u{00B7} \u{2191}\u{2193} state)",
@@ -998,9 +1044,11 @@ impl Viewer {
             "fit_sx" => s.fit.scale.x = (s.fit.scale.x + step).clamp(lo, hi),
             "fit_sy" => s.fit.scale.y = (s.fit.scale.y + step).clamp(lo, hi),
             "fit_sz" => s.fit.scale.z = (s.fit.scale.z + step).clamp(lo, hi),
-            "fit_rx" => s.fit.user_rot.x = (s.fit.user_rot.x + step).clamp(lo, hi),
-            "fit_ry" => s.fit.user_rot.y = (s.fit.user_rot.y + step).clamp(lo, hi),
-            "fit_rz" => s.fit.user_rot.z = (s.fit.user_rot.z + step).clamp(lo, hi),
+            // Rotation nudges COMPOSE a world-axis quaternion (D.6): no gimbal fold, no clamp —
+            // a prop can spin through a full turn on any axis. `step` is in degrees.
+            "fit_rx" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::X, step.to_radians()) * s.fit.user_rot).normalize(),
+            "fit_ry" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Y, step.to_radians()) * s.fit.user_rot).normalize(),
+            "fit_rz" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Z, step.to_radians()) * s.fit.user_rot).normalize(),
             "fit_x" => s.fit.offset.x = (s.fit.offset.x + step).clamp(lo, hi),
             "fit_y" => s.fit.offset.y = (s.fit.offset.y + step).clamp(lo, hi),
             "fit_z" => s.fit.offset.z = (s.fit.offset.z + step).clamp(lo, hi),
@@ -1008,6 +1056,38 @@ impl Viewer {
         }
         self.mirror_fit(i);
         true
+    }
+
+    /// DEBUG (D.4 test): hot-swap the base body A ↔ B. Both bodies loaded the SAME anim+retarget
+    /// clip dirs, so their clip lists match by name/order and the whole `Model` (rig+mesh+clips)
+    /// swaps in one move — only `sub`/`sub_gpu` need rebuilding. Outfits/fit stay sized for base A
+    /// (this is a body-verify toggle, not a re-fit), and base B borrows base A's `texture_0.png`
+    /// (same basename) — geometry + animation are what this checks. Toggling leaks the previous
+    /// frame's `sub_gpu` handles once; negligible for a debug tool.
+    fn toggle_body(&mut self) {
+        if self.alt_model.is_none() {
+            tracing::info!("body toggle: no base B loaded (PrismHumanBaseB absent)");
+            return;
+        }
+        let mut alt = self.alt_model.take().unwrap();
+        std::mem::swap(&mut self.model, &mut alt);
+        self.alt_model = Some(alt);
+        self.body_b = !self.body_b;
+        self.sub = submeshes_of(&self.model.mesh);
+        self.sub_gpu = (0..self.sub.len()).map(|_| None).collect();
+        // Keep the previewer pointed at the walk on the new body, if a preview is active.
+        if self.preview && !self.model.clips.is_empty() {
+            if let Some(i) = self.model.clips.iter().position(|c| c.name == "walk_forward") {
+                self.preview_clip = i;
+            }
+            self.preview_clip = self.preview_clip.min(self.model.clips.len() - 1);
+        }
+        tracing::info!(
+            "body → {} ({} verts, {} bones)",
+            if self.body_b { "PrismHumanBaseB (male)" } else { "PrismHumanBaseA (female)" },
+            self.model.mesh.vertices.len(),
+            self.model.bones.len(),
+        );
     }
 
     /// Move focus to the next/previous gadget row (↑/↓), so a fit can be dialled in without
@@ -1099,15 +1179,9 @@ impl Viewer {
                 if let Some(v) = res.number("fit_sz") {
                     s.fit.scale.z = (v as f32).max(0.01);
                 }
-                if let Some(v) = res.number("fit_rx") {
-                    s.fit.user_rot.x = v as f32;
-                }
-                if let Some(v) = res.number("fit_ry") {
-                    s.fit.user_rot.y = v as f32;
-                }
-                if let Some(v) = res.number("fit_rz") {
-                    s.fit.user_rot.z = v as f32;
-                }
+                // Rotation is authored by nudges ONLY (D.6) — never absolute-set from the HUD's
+                // Euler read-out, which would re-introduce the gimbal fold. Scale/offset below
+                // stay absolute.
                 if let Some(v) = res.number("fit_x") {
                     s.fit.offset.x = v as f32;
                 }
@@ -1222,7 +1296,7 @@ impl Viewer {
                     "uniform": s.fit.uniform,
                     "scale": [s.fit.scale.x, s.fit.scale.y, s.fit.scale.z],
                     "offset": [s.fit.offset.x, s.fit.offset.y, s.fit.offset.z],
-                    "rotate": [s.fit.user_rot.x, s.fit.user_rot.y, s.fit.user_rot.z],
+                    "rotate": [s.fit.user_rot.x, s.fit.user_rot.y, s.fit.user_rot.z, s.fit.user_rot.w],
                 }),
             );
         }
@@ -1282,6 +1356,18 @@ rig can never be shadowed by a stale record.",
         let name = self.sm_states[self.state_idx].clone();
         if let Some(sm) = self.sm.as_mut() {
             sm.force_state_by_name(&name);
+        }
+    }
+
+    /// Looped play-head tick for the clip previewer: real time × the clip's tick rate, wrapped
+    /// to its length, so a raw clip repeats indefinitely for inspection.
+    fn preview_tick(&self) -> u32 {
+        match self.model.clips.get(self.preview_clip) {
+            Some(c) if c.duration_ticks > 0 => {
+                let rate = c.tick_rate_hz.max(1) as f32;
+                ((self.preview_time * rate) as u32) % c.duration_ticks
+            }
+            _ => 0,
         }
     }
 
@@ -1561,6 +1647,15 @@ impl Scene for Viewer {
         let r = input.key_down(Key::R);
         let r_edge = r && !self.prev_r;
         self.prev_r = r;
+        let p = input.key_down(Key::P);
+        let p_edge = p && !self.prev_p;
+        self.prev_p = p;
+        // DEBUG (D.4 test): X hot-swaps the base A ↔ base B body.
+        let x = input.key_down(Key::X);
+        if x && !self.prev_x {
+            self.toggle_body();
+        }
+        self.prev_x = x;
 
 
         // ── Shared view controls (both modes) ──
@@ -1637,14 +1732,67 @@ impl Scene for Viewer {
             down_edge = false;
         }
 
+        // ── Debug clip previewer (P) ──
+        // Loop a RAW clip straight from `model.clips`, bypassing the state machine, so a
+        // retargeted clip (e.g. `walk_forward`) can be watched on repeat to check foot plant /
+        // drift. ↑/↓ select the clip (consumed here so they don't also cycle states); toggling
+        // off returns to normal Animate/Pose. A debug tool, deliberately additive.
+        if p_edge {
+            self.preview = !self.preview;
+            self.preview_time = 0.0;
+            if self.preview && !self.model.clips.is_empty() {
+                // Jump straight to the in-place walk on entry, if present, so the retargeted
+                // clip we care about is right there; otherwise keep the current index.
+                if let Some(i) = self.model.clips.iter().position(|c| c.name == "walk_forward") {
+                    self.preview_clip = i;
+                }
+                self.preview_clip = self.preview_clip.min(self.model.clips.len() - 1);
+            }
+            match self.model.clips.get(self.preview_clip) {
+                Some(c) => tracing::info!(
+                    "clip previewer {}: '{}'",
+                    if self.preview { "ON" } else { "OFF" },
+                    c.name,
+                ),
+                None => tracing::info!(
+                    "clip previewer {}",
+                    if self.preview { "ON" } else { "OFF" }
+                ),
+            }
+        }
+        // ↑/↓ pick a RAW clip from `model.clips` and play it ON REPEAT (auto-entering the
+        // preview cycle) — every clip, including the retargeted ones the Katanami state machine
+        // can't reach, is watchable looping. A gameplay key (below) hands control back to the
+        // state machine; `P` jumps straight to walk_forward. The arrows only fall through to the
+        // state-cycle below when there are NO clips to preview.
+        if !self.model.clips.is_empty() {
+            let n = self.model.clips.len();
+            if up_edge {
+                self.preview = true;
+                self.preview_clip = (self.preview_clip + n - 1) % n;
+                self.preview_time = 0.0;
+                up_edge = false;
+                tracing::info!("preview clip '{}'", self.model.clips[self.preview_clip].name);
+            }
+            if down_edge {
+                self.preview = true;
+                self.preview_clip = (self.preview_clip + 1) % n;
+                self.preview_time = 0.0;
+                down_edge = false;
+                tracing::info!("preview clip '{}'", self.model.clips[self.preview_clip].name);
+            }
+        }
+        if self.preview {
+            self.preview_time += dt.as_secs_f32();
+        }
+
         // ── Animation playback (the pack's state machine) ──
-        // Space pauses; ↑/↓ cycle authored states (a viewer previews EVERY animation, no
-        // game inputs needed); R resets to the initial state. Left/Right stay free for the
-        // fit gadget above. Inert while in Pose mode. The manual clip browser this replaced
-        // was POC — the real runtime state machine now IS the playback (user, 2026-07-16).
+        // WASD/Shift/C/Space drive the runtime state machine (gameplay preview); using any of
+        // them drops out of the ↑/↓ clip-preview cycle. R resets the state machine. ←/→ stay
+        // free for the fit gadget above. Inert while in Pose mode.
         if self.animate {
-            // ↑/↓ still force-cycle authored states for preview (of anything WASD can't
-            // reach); they yield to the fit gadget first when a piece is selected.
+            // ↑/↓ normally loop a raw clip (handled above); they only reach this state-cycle
+            // when there are no clips at all to preview.
             if up_edge {
                 self.cycle_state(-1);
             }
@@ -1660,6 +1808,10 @@ impl Scene for Viewer {
                 input.key_down(Key::S),
                 input.key_down(Key::D),
             );
+            // Any gameplay input returns from the ↑/↓ clip-preview cycle to the state machine.
+            if w || a || s || d || space_edge || input.key_down(Key::C) || self.attack_pending {
+                self.preview = false;
+            }
             let inputs = Inputs {
                 move_: w || a || s || d,
                 left: a,
@@ -1691,18 +1843,24 @@ impl Scene for Viewer {
         // the outgoing pose while a transition ramps (unless Blend is off). Pose, or a
         // pack-less body, → A-pose (bind): each bone's own rest local, the honest fitting
         // reference (Idle is an authored stance, already moved away from bind).
-        let locals = match (self.animate, self.sm.as_ref()) {
-            (true, Some(sm)) => {
-                let incoming = self.sample_locals(sm.current_clip(), sm.current_tick());
-                match (self.blend_enabled, sm.blend()) {
-                    (true, Some(b)) => {
-                        let outgoing = self.sample_locals(b.from_clip, b.from_tick);
-                        pose::blend_local_poses(&outgoing, &incoming, b.weight)
+        let locals = if self.preview {
+            // Debug previewer takes precedence: loop the selected raw clip (see update()).
+            let tick = self.preview_tick();
+            self.sample_locals(self.preview_clip, tick)
+        } else {
+            match (self.animate, self.sm.as_ref()) {
+                (true, Some(sm)) => {
+                    let incoming = self.sample_locals(sm.current_clip(), sm.current_tick());
+                    match (self.blend_enabled, sm.blend()) {
+                        (true, Some(b)) => {
+                            let outgoing = self.sample_locals(b.from_clip, b.from_tick);
+                            pose::blend_local_poses(&outgoing, &incoming, b.weight)
+                        }
+                        _ => incoming,
                     }
-                    _ => incoming,
                 }
+                _ => self.model.bones.iter().map(|b| b.local).collect(),
             }
-            _ => self.model.bones.iter().map(|b| b.local).collect(),
         };
         let globals = pose::global_transforms(&self.model.bones, &locals);
         // Cache the pose being drawn so a click next frame picks against what the user SAW
@@ -1997,7 +2155,18 @@ impl Scene for Viewer {
 /// message if the base assets can't be read — the point of this viewer is to play the
 /// *real* exported data.
 fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
-    let model = format::load_dirs(&[base_dir, anim_dir]).expect("load flicker.rig assets");
+    // ALSO load the retargeted Motifect clip library (Alpha/content/retarget/clips)
+    // ALONGSIDE the Katanami set, so the new In-Place / RootMotion clips (e.g.
+    // `walk_forward`) are cyclable with the up/down clip control for testing. Katanami
+    // stays the pack/state-machine + texture source below. Revert: drop `retarget_dir`
+    // from the load_dirs list.
+    let retarget_dir = base_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|content| content.join("retarget/clips"))
+        .unwrap_or_else(|| base_dir.join("retarget/clips"));
+    let model = format::load_dirs(&[base_dir, anim_dir, retarget_dir.as_path()])
+        .expect("load flicker.rig assets");
     tracing::info!(
         "loaded rig: {} bones, {} clips, mesh {} verts (base {}, source {}/{})",
         model.bones.len(),
@@ -2054,7 +2223,18 @@ fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
     // `Slot::load`), so a piece appears in its cell the moment its file lands — no code
     // change. `base_dir` is <chars>/PrismHumanBaseA, so its parent is the tree root.
     let chars = base_dir.parent().unwrap_or(base_dir).to_path_buf();
-    Viewer::new(model, base_dir.to_path_buf(), &chars, sm, sm_states)
+    // DEBUG (D.4 test): load base B (male) alongside base A so `X` hot-swaps the body. Both use
+    // the SAME anim+retarget clip dirs → identical clip lists (by name/order), so the whole
+    // Model swaps cleanly and the retargeted clips drive base B's own bind (the D.3 fix).
+    let alt_model = base_dir
+        .parent()
+        .map(|c| c.join("PrismHumanBaseB"))
+        .filter(|d| d.exists())
+        .and_then(|d| format::load_dirs(&[d.as_path(), anim_dir, retarget_dir.as_path()]).ok());
+    if alt_model.is_some() {
+        tracing::info!("base B (male) loaded alongside base A — press X to toggle the body");
+    }
+    Viewer::new(model, alt_model, base_dir.to_path_buf(), &chars, sm, sm_states)
 }
 
 fn main() -> Result<()> {
@@ -2081,6 +2261,7 @@ fn main() -> Result<()> {
     flicker_shell::run(flicker_shell::ShellConfig {
         game_scene: Box::new(move || Box::new(build_viewer(&base_dir, &anim_dir))),
         settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
+        game_label: None,
     })
 }
 
@@ -2576,7 +2757,7 @@ mod tests {
             uniform: 12.0,
             scale: Vec3::new(1.3, 0.8, 1.1),
             offset: Vec3::new(7.0, -3.0, 11.0),
-            user_rot: Vec3::new(20.0, 35.0, -50.0),
+            user_rot: glam::Quat::from_euler(glam::EulerRot::XYZ, 20f32.to_radians(), 35f32.to_radians(), (-50f32).to_radians()),
             rot: glam::Quat::IDENTITY,
         };
         let m = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)); // reflect across x = 0
@@ -2600,12 +2781,12 @@ mod tests {
             uniform: 3.5,
             scale: Vec3::new(1.0, 2.0, 0.5),
             offset: Vec3::new(-4.0, 5.0, 6.0),
-            user_rot: Vec3::new(10.0, -20.0, 30.0),
+            user_rot: glam::Quat::from_euler(glam::EulerRot::XYZ, 10f32.to_radians(), (-20f32).to_radians(), 30f32.to_radians()),
             rot: glam::Quat::IDENTITY,
         };
         let b = f.mirrored().mirrored();
         assert!((b.offset - f.offset).length() < 1e-6, "offset must round-trip");
-        assert!((b.user_rot - f.user_rot).length() < 1e-6, "rotation must round-trip");
+        assert!(b.user_rot.abs_diff_eq(f.user_rot, 1e-6), "rotation must round-trip");
         assert!((b.scale - f.scale).length() < 1e-6, "scale must round-trip");
         assert!((b.uniform - f.uniform).abs() < 1e-6, "size must round-trip");
     }
@@ -2617,7 +2798,7 @@ mod tests {
             uniform: 44.79,
             scale: Vec3::new(1.4, 0.7, 2.0),
             offset: Vec3::ZERO,
-            user_rot: Vec3::ZERO,
+            user_rot: glam::Quat::IDENTITY,
             rot: glam::Quat::IDENTITY,
         };
         let m = f.mirrored();

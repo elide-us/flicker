@@ -18,6 +18,33 @@ use glyphon::{
 
 use crate::pipeline_mesh::DEPTH_FORMAT;
 
+/// The concrete UI type face selected for a line of text, by semantic role
+/// (the Prism design language). Faces are registered by the app via
+/// [`Renderer::register_ui_font`](crate::Renderer::register_ui_font); text whose
+/// role has no registered face falls back to a system font, so this never fails.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FontRole {
+    /// Display / headings & names.
+    Display,
+    /// Labels, caps, small meta.
+    Label,
+    /// Body / prose (the default).
+    #[default]
+    Body,
+}
+
+impl FontRole {
+    /// The font-family name this role selects — the internal family name the
+    /// matching `Alpha/content/fonts` face is registered under.
+    fn family(self) -> &'static str {
+        match self {
+            FontRole::Display => "Prism Display",
+            FontRole::Label => "Prism Label",
+            FontRole::Body => "Prism Body",
+        }
+    }
+}
+
 struct QueuedText {
     buffer: Buffer,
     left: f32,
@@ -71,8 +98,18 @@ impl TextPipeline {
         self.bands.clear();
     }
 
+    /// Load a UI font from TTF/OTF bytes into the font database. The face's own
+    /// internal family name (e.g. `"Prism Display"`) is what a [`FontRole`]
+    /// selects at draw time; keep [`FontSystem::new`]'s system fonts as the
+    /// fallback for glyphs a UI face lacks.
+    pub fn register_font(&mut self, bytes: &[u8]) {
+        self.font_system.db_mut().load_font_data(bytes.to_vec());
+    }
+
     /// Queue a string for rendering at `layer`. `position` is the top-left of the
     /// text in pixels. `size` is the font size in pixels. `color` is RGBA in 0..1.
+    /// `role` selects the face.
+    #[allow(clippy::too_many_arguments)] // low-level text submit; each param is distinct
     pub fn push(
         &mut self,
         text: &str,
@@ -81,6 +118,7 @@ impl TextPipeline {
         size: f32,
         color: [f32; 4],
         layer: f32,
+        role: FontRole,
     ) {
         let metrics = Metrics::new(size, size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
@@ -88,7 +126,7 @@ impl TextPipeline {
         buffer.set_text(
             &mut self.font_system,
             text,
-            Attrs::new().family(Family::SansSerif),
+            Attrs::new().family(Family::Name(role.family())),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -119,14 +157,14 @@ impl TextPipeline {
     /// pixels. Shapes a throwaway buffer (no upload), so it can be called for
     /// layout before drawing. Mirrors the shaping in [`Self::push`] so the
     /// measurement matches what gets drawn.
-    pub fn measure(&mut self, text: &str, size: f32) -> (f32, f32) {
+    pub fn measure(&mut self, text: &str, size: f32, role: FontRole) -> (f32, f32) {
         let metrics = Metrics::new(size, size * 1.2);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         buffer.set_size(&mut self.font_system, None, None);
         buffer.set_text(
             &mut self.font_system,
             text,
-            Attrs::new().family(Family::SansSerif),
+            Attrs::new().family(Family::Name(role.family())),
             Shaping::Advanced,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);

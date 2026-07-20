@@ -116,7 +116,7 @@ Chosen as the calibration sample because Book IV's dictionaries are furthest alo
 ---
 
 ### 4. Wall of Flame
-*Vas Flam Rectus — "Greater Fire, in a Straight Line"*
+*Vas Flam Vectus — "Greater Fire, in a Straight Line"*
 
 | | |
 |---|---|
@@ -140,7 +140,7 @@ Chosen as the calibration sample because Book IV's dictionaries are furthest alo
 
 ### 5. Blazing Lance *(compressed sketch — awaiting the expanded format)*
 **School/Domain:** Fire (Red). **Ring:** 5th–6th.
-**Grammar:** *Vas Fortis Flam Cito Rectus* — Greater + Strong + Fire, Quickly, shaped Rectus. Two adjectives stacked with an adverb — the ring-table's own worked example (Book IV).
+**Grammar:** *Vas Fortis Flam Cito Vectus* — Greater + Strong + Fire, Quickly, shaped Vectus. Two adjectives stacked with an adverb — the ring-table's own worked example (Book IV).
 **Effect:** A fast, narrow, superheated line — a lance rather than a wall, traded area for velocity and penetration.
 **Lore:** None recorded.
 
@@ -155,7 +155,7 @@ Chosen as the calibration sample because Book IV's dictionaries are furthest alo
 - **The build-out is blocked** (ruled 2026-07-05, ledger 19843543): the other thirteen schools are not to be written until the combat-tier mechanics integrate — casting costs, reagent economics, and the anti-color balance land together in the combined combat/items/stats session (ledger 1E5C0E3C), and entries without them are not source material. The Fire sample calibrates grammar and voice only, and is itself below the ruled bestiary-grade format.
 - **Scale is ruled in direction** (ledger 19843543): **hundreds of spells**, with much overlap among schools — every school nearly self-sufficient. Per-school roster size and the overlap conventions (does each school carry its own themed version of shared effects, per the old "every effect in ≥3 schools" principle?) are unspecified.
 - **The anti-color structure** — which colors are each school's weakness colors (the excavated counter web is the candidate), and how weakness expresses mechanically (cost multipliers, ring penalties, ban-with-workaround) — is the counter-web session's subject.
-- **Shapes — RESOLVED in structure, words pending** (Elideus, 2026-07-05). Shapes stay spoken words, but **there is no ring unlock for shapes** — that gating "was always going to be problematic in gameplay," and with the Grimoire established there is no need for a gated shape grammar: a spell is excavated whole, its shape baked in (Book IV, Shapes, updated). The shape **vocabulary expands broadly** — abstract geometry (spiral, crescent, chevron) *and* concrete forms (wall, arrow, ballistic, slice, and on), each coined Latin-esque when first needed. Still pending: the actual new words — including the wall-word for entry 4 (*Vas Flam Rectus* stands in until it is coined; candidate *Murus*, unruled — and per Elideus, definitively not *Fencius*).
+- **Shapes — RESOLVED in structure, words pending** (Elideus, 2026-07-05). Shapes stay spoken words, but **there is no ring unlock for shapes** — that gating "was always going to be problematic in gameplay," and with the Grimoire established there is no need for a gated shape grammar: a spell is excavated whole, its shape baked in (Book IV, Shapes, updated). The shape **vocabulary expands broadly** — abstract geometry (spiral, crescent, chevron) *and* concrete forms (wall, arrow, ballistic, slice, and on), each coined Latin-esque when first needed. Still pending: the actual new words — including the wall-word for entry 4 (*Vas Flam Vectus* stands in until it is coined; candidate *Murus*, unruled — and per Elideus, definitively not *Fencius*).
 - **Unlock requirements beyond physical presence** — Elideus: interesting gameplay requirements beyond simply reaching the school that holds a spell are wanted, but undesigned. Candidate directions (not proposed, just named as a space): a quest, a reagent sacrifice, a demonstrated prerequisite spell, a celestial timing window (consistent with celestial primacy, ledger 3312B2AB). None of these are ruled.
 - **Ring count beyond the 7th** stays open per Book IV (ledger B92EE74A); this book cannot resolve it either. Note that rings beyond the 7th are now framed as **expansion / "forbidden fruit" territory** (Book IV) — the domain of world-shifting, Long-Term-Objective magic (Book I, LTO layer), not ordinary Grimoire entries. The sample above tops out at the 7th ring for exactly that reason; anything past it is a different kind of content.
 - **Ordinary travel between the seven worlds is solved (canon, 2026-07-05).** A character reaches Sanguia (or any Domain world) to study its Grimoire by **trivial travel magic** — the present civilization figured it out long ago — never routed through the guarded, quest-gated Advent gates (Book V, cosmology section). Its concrete form is still [STUB], but its triviality is ruled, so this book can assume any school is reachable.

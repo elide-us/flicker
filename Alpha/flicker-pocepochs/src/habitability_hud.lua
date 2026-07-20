@@ -11,22 +11,26 @@
 
 local M = {}
 
-local GOLD = { 0.83, 0.67, 0.39, 1.0 }
-local TEXT = { 0.85, 0.87, 0.92, 1.0 }
-local DIM = { 0.58, 0.61, 0.66, 1.0 }
-local GREEN = { 0.45, 0.92, 0.55, 1.0 }
-local AMBER = { 0.96, 0.72, 0.34, 1.0 }
-local PANEL_BG = { 0.05, 0.06, 0.08, 0.88 }
-local BORDER = { 0.30, 0.33, 0.38, 0.9 }
+-- Prism palette (this POC HUD reads no ui_elements.json, so inline literals that
+-- mirror the shared theme.tokens: bronze structure, ink/dim text, Septisigil
+-- green = Life/in-band, stamina amber = caution/out-of-band, sunk stone, sapphire rim).
+local GOLD = { 0.722, 0.592, 0.353, 1.0 } -- bronze (headers / structural)
+local TEXT = { 0.871, 0.847, 0.788, 1.0 } -- ink
+local DIM = { 0.561, 0.541, 0.490, 1.0 }
+local GREEN = { 0.184, 0.616, 0.357, 1.0 } -- Septisigil green (Life) — in-band
+local AMBER = { 0.941, 0.804, 0.416, 1.0 } -- stamina amber — out-of-band caution
+local PANEL_BG = { 0.055, 0.063, 0.086, 0.90 } -- sunk stone
+local BORDER = { 0.227, 0.353, 0.627, 0.80 } -- sapphire rim
 
--- Gauge style: dark track, green habitable band, amber marker out-of-band / green in-band,
--- and a grey wash over axes with no live signal yet.
+-- Gauge style: dark stone track, green habitable band, amber marker out-of-band /
+-- green in-band, a lit rim sheen, and a grey wash over axes with no live signal yet.
 local GAUGE = {
-  track = { 0.15, 0.16, 0.19, 0.95 },
-  band = { 0.20, 0.52, 0.30, 0.85 },
+  track = { 0.078, 0.090, 0.122, 0.95 },
+  band = { 0.184, 0.616, 0.357, 0.55 },
   marker = AMBER,
   marker_in = GREEN,
-  no_signal = { 0.09, 0.10, 0.12, 0.72 },
+  no_signal = { 0.055, 0.063, 0.086, 0.72 },
+  sheen = { 0.90, 0.94, 1.0, 0.10 },
   marker_w = 5,
 }
 

@@ -34,6 +34,7 @@ use crate::pipeline_sky::{SkyPipeline, SkyUniform};
 use crate::pipeline_sprite::SpritePipeline;
 use crate::pipeline_text::TextPipeline;
 use crate::pipeline_triangle::TrianglePipeline;
+use crate::pipeline_ui::UiPipeline;
 use crate::pipeline_volumetric::{VolumetricDisk, VolumetricDiskUniform, VolumetricPipeline};
 use crate::texture::{LoadedTexture, TextureHandle};
 
@@ -72,6 +73,10 @@ pub struct Renderer {
     pub clear_color: [f64; 4],
 
     triangle: TrianglePipeline,
+    /// Vector UI-panel pipeline (rounded-rect + gradient + border SDF) — the
+    /// flat Prism chrome. A 2D overlay drawn first per layer (behind the
+    /// triangle/sprite/text of the same layer), like the other 2D pipelines.
+    ui: UiPipeline,
     sprite: SpritePipeline,
     text: TextPipeline,
     mesh: MeshPipeline,
@@ -194,6 +199,7 @@ impl Renderer {
         let (depth_texture, depth_view) = create_depth_view(&device, width, height);
 
         let triangle = TrianglePipeline::new(&device, surface_format);
+        let ui = UiPipeline::new(&device, surface_format);
         let sprite = SpritePipeline::new(&device, surface_format);
         let text = TextPipeline::new(&device, &queue, surface_format);
         let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
@@ -232,6 +238,7 @@ impl Renderer {
             screen: Vec2::new(width as f32, height as f32),
             clear_color: [0.05, 0.06, 0.08, 1.0],
             triangle,
+            ui,
             sprite,
             text,
             mesh,
@@ -466,6 +473,7 @@ impl Renderer {
     /// is retained; only the per-frame mesh **draw queue** clears.
     pub fn begin_frame(&mut self) {
         self.triangle.clear();
+        self.ui.clear();
         self.sprite.clear();
         self.text.clear();
         self.mesh.clear();
@@ -524,9 +532,68 @@ impl Renderer {
         );
     }
 
-    /// Submit a string of text. `position` is the top-left baseline in pixels; `size`
-    /// is the font size in pixels; `color` is RGBA in 0..1.
+    /// Submit a **vector UI panel**: a rounded-rectangle filled with a solid or
+    /// 2-stop linear gradient and ringed with an optional border, evaluated as a
+    /// signed-distance field in one draw (the flat Prism chrome — panels,
+    /// buttons, field wells). `position` is the top-left in pixels; `size` is in
+    /// pixels. `color`/`color2` are the gradient stops (pass equal for a solid
+    /// fill); `grad` selects the axis (`0.0` solid, `1.0` vertical, `2.0`
+    /// horizontal); `radius` is the corner radius and `border` the border
+    /// thickness (both in pixels, `0.0` to disable); `border_color` rings the
+    /// edge; `feather` softens the outer edge in pixels (a soft drop shadow —
+    /// `0.0` for a crisp panel). Sorts at the current [`Renderer::layer`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_ui_panel(
+        &mut self,
+        position: Vec2,
+        size: Vec2,
+        color: [f32; 4],
+        color2: [f32; 4],
+        grad: f32,
+        radius: f32,
+        border: f32,
+        border_color: [f32; 4],
+        feather: f32,
+    ) {
+        self.ui.push(
+            self.screen,
+            position,
+            size,
+            color,
+            color2,
+            grad,
+            radius,
+            border,
+            border_color,
+            feather,
+            self.current_layer,
+        );
+    }
+
+    /// Register a UI font (TTF/OTF bytes) so a [`FontRole`](crate::FontRole) can
+    /// select it. Call once at startup with the Prism faces (the app owns the
+    /// bytes); a role with no registered face falls back to a system font.
+    pub fn register_ui_font(&mut self, bytes: &[u8]) {
+        self.text.register_font(bytes);
+    }
+
+    /// Submit a string of text in the default body face. `position` is the
+    /// top-left baseline in pixels; `size` is the font size in pixels; `color`
+    /// is RGBA in 0..1.
     pub fn draw_text(&mut self, text: &str, position: Vec2, size: f32, color: [f32; 4]) {
+        self.draw_text_role(text, position, size, color, crate::FontRole::Body);
+    }
+
+    /// Submit a string of text in the face selected by `role`
+    /// ([`FontRole`](crate::FontRole)).
+    pub fn draw_text_role(
+        &mut self,
+        text: &str,
+        position: Vec2,
+        size: f32,
+        color: [f32; 4],
+        role: crate::FontRole,
+    ) {
         self.text.push(
             text,
             position.x,
@@ -534,14 +601,21 @@ impl Renderer {
             size,
             color,
             self.current_layer,
+            role,
         );
     }
 
-    /// Measure `text` at font `size`, returning its rendered size (max line
-    /// width, total height) in pixels. For laying out UI before drawing —
-    /// shapes a throwaway buffer, no upload.
+    /// Measure `text` at font `size` in the default body face, returning its
+    /// rendered size (max line width, total height) in pixels. For laying out UI
+    /// before drawing — shapes a throwaway buffer, no upload.
     pub fn measure_text(&mut self, text: &str, size: f32) -> Vec2 {
-        let (w, h) = self.text.measure(text, size);
+        self.measure_text_role(text, size, crate::FontRole::Body)
+    }
+
+    /// Measure `text` at font `size` in the face selected by `role`. Mirror of
+    /// [`Self::measure_text`] for non-body faces (titles/labels).
+    pub fn measure_text_role(&mut self, text: &str, size: f32, role: crate::FontRole) -> Vec2 {
+        let (w, h) = self.text.measure(text, size, role);
         Vec2::new(w, h)
     }
 
@@ -953,6 +1027,7 @@ impl Renderer {
             .set_scene_uniform(&self.queue, scene_to_uniform(&self.scene, camera_pos));
 
         self.triangle.prepare(&self.device, &self.queue);
+        self.ui.prepare(&self.device, &self.queue);
         self.sprite.prepare(&self.device, &self.queue);
         self.mesh.prepare(&self.device, &self.queue);
         self.mesh_textured
@@ -1049,12 +1124,16 @@ impl Renderer {
                 self.ground_fog.render(&mut pass);
             }
             let mut layers: Vec<f32> = Vec::new();
+            layers.extend(self.ui.layers());
             layers.extend(self.triangle.layers());
             layers.extend(self.sprite.layers());
             layers.extend(self.text.layers());
             layers.sort_by(f32::total_cmp);
             layers.dedup();
             for &layer in &layers {
+                // UI panels first (backgrounds), then triangles, sprites (rects),
+                // and text on top — all within the same layer.
+                self.ui.render_layer(&mut pass, layer);
                 self.triangle.render_layer(&mut pass, layer);
                 self.sprite.render_layer(&mut pass, layer, &self.textures);
                 self.text

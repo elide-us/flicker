@@ -16,7 +16,16 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
+// sRGB tokens on an sRGB target: decode the vertex colour to linear so the store
+// re-encodes it to the intended value (else it brightens toward white). Pure
+// primaries (0.0 / 1.0) are fixed points, so solid black/white are unchanged.
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(lo, hi, c > vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    return in.color;
+    return vec4<f32>(srgb_to_linear(in.color.rgb), in.color.a);
 }

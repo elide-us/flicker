@@ -51,14 +51,12 @@ PIECE_SOCKET = {
 
 # ── Region classification (the cloth-physics parts) ────────────────────────────
 # The dangly regions of a welded garment (bell sleeves, skirt hem, ribbon) can't be
-# loose-part-split, but they fall out of the SAME signals this script already computes:
-# each outfit vert's nearest-body distance (`far`) and the body bone it weighted to.
-# `--debug-regions` recolours them into their own submeshes so the paperdoll viewer
-# shows the classification before the jiggle layer binds each region to a bone chain.
-#   sleeve = forearm/hand-weighted AND flared >SLEEVE_FAR cm off the arm (the bell cuff;
-#            the hugging upper sleeve stays rigid and skins to the arm as usual).
-#   hem    = leg-weighted skirt panels (the coat bottom draping past the pelvis).
-SLEEVE_FAR = 6.0                       # cm off the arm a cuff vert must sit to count as flared
+# loose-part-split, but they fall out of the body bone each vert weighted to. The WHOLE
+# dangly garment is cloth (not just the flared tips) so it flows instead of reading as
+# baked; the rigid remainder is the body-hugging core (corset, coat torso, collar).
+# `--debug-regions` recolours the regions into submeshes so the viewer shows the split.
+#   sleeve = ALL forearm/hand-weighted verts (the whole sleeve hangs from the elbow ring).
+#   hem    = leg-weighted coat tails + waist-weighted coat panels hanging below the hip line.
 LEG_KEYS = ("thigh", "calf", "foot", "shin", "knee")
 # region id -> (name, debug rgb 0..1, or None to keep the piece's textured material)
 REGIONS = [
@@ -79,23 +77,28 @@ CLOTH_SEGMENTS = 5
 # instead of standing out. gravity is the secondary lever (more negative = heavier hang).
 CLOTH_REGIONS = {
     "sleeve_l": {"bone": "lowerarm_l", "k": 2,
-                 "params": {"gravity": [0.0, 0.0, -600.0], "stiffness": 0.06, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
+                 "params": {"gravity": [0.0, 0.0, -600.0], "stiffness": 0.015, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
     "sleeve_r": {"bone": "lowerarm_r", "k": 2,
-                 "params": {"gravity": [0.0, 0.0, -600.0], "stiffness": 0.06, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
+                 "params": {"gravity": [0.0, 0.0, -600.0], "stiffness": 0.015, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
     "hem": {"bone": "pelvis", "k": 4,
-            "params": {"gravity": [0.0, 0.0, -800.0], "stiffness": 0.04, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
+            "params": {"gravity": [0.0, 0.0, -800.0], "stiffness": 0.01, "damping": 0.9, "iterations": 8, "max_dt": 1.0 / 30.0}},
 }
 
 
-def classify_regions(dom_names, far):
-    """Per-vertex region id (0 rigid · 1 sleeve_l · 2 sleeve_r · 3 hem) from the dominant
-    body bone name + nearest-body distance. Generic: a piece with no flared/leg verts stays
-    all-rigid, so this is a no-op for gloves/boots/pants."""
-    reg = np.zeros(len(far), dtype=np.int64)
-    reg[np.array([any(k in n for k in LEG_KEYS) for n in dom_names])] = 3
-    far_enough = far > SLEEVE_FAR
-    reg[np.array([n in ("lowerarm_l", "hand_l") for n in dom_names]) & far_enough] = 1
-    reg[np.array([n in ("lowerarm_r", "hand_r") for n in dom_names]) & far_enough] = 2
+def classify_regions(dom_names, z, hip_z):
+    """Per-vertex region id (0 rigid · 1 sleeve_l · 2 sleeve_r · 3 hem). The WHOLE dangly
+    garment is cloth: sleeves = all forearm/hand-weighted verts; hem = leg-weighted tails +
+    waist-weighted (pelvis/spine_01) coat panels hanging below the hip line (z < hip_z). The
+    rigid remainder is the body-hugging core. A piece with none of these stays all-rigid, so
+    it is a no-op for gloves/boots."""
+    dn = np.asarray(dom_names)
+    z = np.asarray(z)
+    reg = np.zeros(len(dn), dtype=np.int64)
+    leg = np.array([any(k in n for k in LEG_KEYS) for n in dn])
+    low_coat = np.isin(dn, ["pelvis", "spine_01"]) & (z < hip_z)
+    reg[leg | low_coat] = 3
+    reg[np.isin(dn, ["lowerarm_l", "hand_l"])] = 1
+    reg[np.isin(dn, ["lowerarm_r", "hand_r"])] = 2
     return reg
 
 
@@ -239,7 +242,8 @@ def skin_piece(name, body, body_pts, fits, bones, idx, body_dom):
     # fit needed), so it stays out of this bake path.
     bname = {i: b["name"] for i, b in enumerate(bones)}
     dom_names = [bname.get(int(body_dom[nn[i]]), "") for i in range(len(V))]
-    reg = classify_regions(dom_names, far)
+    hip_z = RG[idx["pelvis"]][2, 3] if "pelvis" in idx else -1e9
+    reg = classify_regions(dom_names, baked[:, 2], hip_z)
     rc = {REGIONS[k][0]: int((reg == k).sum()) for k in range(len(REGIONS))}
     log(f"  regions: sleeve_l={rc['sleeve_l']} sleeve_r={rc['sleeve_r']} "
         f"hem={rc['hem']} rigid={rc['rigid']}")
@@ -260,7 +264,7 @@ def skin_piece(name, body, body_pts, fits, bones, idx, body_dom):
     return out_path
 
 
-def debug_split_existing(name, body_pts, bones):
+def debug_split_existing(name, bones):
     """Recolour an already-skinned garment's cloth regions for the viewer, straight from
     <Piece>.skinned.json — the raw-prop fit only mattered to BAKE the skin, which already
     happened, so this needs no fit. Backs the textured file up once (<Piece>.skinned.bak.json)
@@ -275,11 +279,12 @@ def debug_split_existing(name, body_pts, bones):
         log(f"SKIP {name}: {len(sv)} verts is not a triangle list")
         return None
     baked = np.array([v["p"] for v in sv], dtype=np.float64)
-    nn = nearest_indices(baked, body_pts)
-    far = np.sqrt(((baked - body_pts[nn]) ** 2).sum(1))
     bname = {i: b["name"] for i, b in enumerate(bones)}
     dom_names = [bname.get(int(v["joints"][int(np.argmax(v["weights"]))]), "") for v in sv]
-    reg = classify_regions(dom_names, far)
+    idx = {b["name"]: i for i, b in enumerate(bones)}
+    RG = rest_globals(bones)
+    hip_z = RG[idx["pelvis"]][2, 3] if "pelvis" in idx else -1e9
+    reg = classify_regions(dom_names, baked[:, 2], hip_z)
     rc = {REGIONS[k][0]: int((reg == k).sum()) for k in range(len(REGIONS))}
     log(f"{name}: regions sleeve_l={rc['sleeve_l']} sleeve_r={rc['sleeve_r']} "
         f"hem={rc['hem']} rigid={rc['rigid']}")
@@ -342,7 +347,7 @@ def _region_chains(a, P, k):
     return chains
 
 
-def build_cloth(name, body_pts, bones, idx):
+def build_cloth(name, bones, idx):
     """Add dynamic-cloth metadata (mesh.cloth) to <Piece>.skinned.json: classify the cloth
     regions, lay out a jiggle-chain fan per region, and bind each region vert along the
     nearest chain. No raw-prop fit needed (works on the finished skin); geometry untouched."""
@@ -353,12 +358,11 @@ def build_cloth(name, body_pts, bones, idx):
     skn = json.load(open(path))
     sv = skn["mesh"]["vertices"]
     sp = np.array([v["p"] for v in sv], dtype=np.float64)
-    nn = nearest_indices(sp, body_pts)
-    far = np.sqrt(((sp - body_pts[nn]) ** 2).sum(1))
     bname = {i: b["name"] for i, b in enumerate(bones)}
     dom_names = [bname.get(int(v["joints"][int(np.argmax(v["weights"]))]), "") for v in sv]
-    reg = classify_regions(dom_names, far)
     RG = rest_globals(bones)
+    hip_z = RG[idx["pelvis"]][2, 3] if "pelvis" in idx else -1e9
+    reg = classify_regions(dom_names, sp[:, 2], hip_z)
 
     regions_out = []
     for rid, (rname, _rgb) in enumerate(REGIONS):
@@ -432,9 +436,9 @@ def main():
         if args.restore_regions:
             restore_regions(name)
         elif args.debug_regions:
-            debug_split_existing(name, body_pts, bones)
+            debug_split_existing(name, bones)
         elif args.build_cloth:
-            build_cloth(name, body_pts, bones, idx)
+            build_cloth(name, bones, idx)
         else:
             skin_piece(name, body, body_pts, fits, bones, idx, body_dom)
 

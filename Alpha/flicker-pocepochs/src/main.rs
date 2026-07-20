@@ -27,5 +27,6 @@ fn main() -> Result<()> {
     flicker_shell::run(flicker_shell::ShellConfig {
         game_scene: Box::new(|| Box::new(WorldScene::new())),
         settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
+        game_label: None,
     })
 }

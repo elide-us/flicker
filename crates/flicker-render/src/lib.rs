@@ -9,10 +9,10 @@
 //! 3D meshes render first in the main pass with a `Depth32Float`
 //! attachment; 2D primitives render after with depth disabled. Within 2D,
 //! draws carry an ambient `layer` ([`Renderer::set_layer`]) and are drawn in
-//! ascending-layer painter's order — triangle → sprite → text per layer —
-//! across all three 2D pipelines, so a higher-layer overlay's sprites *and*
-//! text cover a lower layer's text. The depth buffer is never used for 2D
-//! (mirrors DirectXTK's `DepthNone` `SpriteBatch` default).
+//! ascending-layer painter's order — ui-panel → triangle → sprite → text per
+//! layer — across all four 2D pipelines, so a higher-layer overlay's panels,
+//! sprites *and* text cover a lower layer's text. The depth buffer is never
+//! used for 2D (mirrors DirectXTK's `DepthNone` `SpriteBatch` default).
 
 mod mesh;
 mod pipeline_billboard;
@@ -25,6 +25,7 @@ mod pipeline_sky;
 mod pipeline_sprite;
 mod pipeline_text;
 mod pipeline_triangle;
+mod pipeline_ui;
 mod pipeline_volumetric;
 mod renderer;
 mod texture;
@@ -39,6 +40,7 @@ pub use pipeline_ground_fog::GroundFog;
 pub use pipeline_mesh_textured::{PbrMaps, TexturedMeshHandle, TexturedVertex};
 pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 pub use pipeline_volumetric::{VolumetricDisk, MAX_VOLUMETRIC_BODIES};
+pub use pipeline_text::FontRole;
 pub use renderer::{RenderTargetHandle, Renderer};
 pub use texture::TextureHandle;
 

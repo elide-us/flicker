@@ -903,8 +903,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-shell",
  "flicker-system",
- "image",
  "tracing",
  "tracing-subscriber",
 ]
@@ -970,12 +970,10 @@ dependencies = [
  "anyhow",
  "flicker",
  "flicker-materials",
+ "flicker-shell",
  "flicker-worldgen",
  "flicker-worldgrid",
  "glam",
- "image",
- "serde",
- "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3718,12 +3716,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-shell",
  "flicker-voxel",
  "flicker-worker",
  "glam",
- "image",
- "serde",
- "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
