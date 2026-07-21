@@ -21,10 +21,11 @@
 //!   * Right-drag: free-look yaw + pitch.
 //!   * Escape: open the pause menu (Resume / Quit).
 //!
-//! Debug toggles are driven by a scripted HUD (`scripts/hud.lua`,
-//! loaded at startup via `flicker-script`) — six clickable
-//! checkboxes the Lua side owns, replacing the old `1`/`2`/`\` key
-//! handling:
+//! Debug toggles are driven by a DECLARATIVE component-tree HUD
+//! (`Alpha/content/scripts/hud_pocclusters.lua`): the Lua declares the panel via
+//! `M.tree()` (checkboxes + the move-speed / sensitivity sliders) and the
+//! flicker-widgets Rust walker (`run_ui`) owns layout, hit-test, and draw. Six
+//! clickable checkboxes replace the old `1`/`2`/`\` key handling:
 //!   * Wireframe overlay on top of the solid mesh.
 //!   * Corner-vector arrows — for every stored voxel whose
 //!     `CornerVector` differs from the default, draw a line from the
@@ -41,20 +42,24 @@
 //!     re-meshing on a swap.
 //!   * LOD billboards — a digit per cluster, on the navmesh surface at
 //!     the cluster centre, showing that cluster's current LOD.
+//!
+//! A CSG-cluster POC PACKAGE (library only): the scene runs inside the unified
+//! `prism-alpha` launcher (`cargo run -p prism-alpha`), which lists it in the
+//! scene picker. This crate exposes a `scene()` factory and no longer builds a
+//! standalone binary.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use anyhow::Result;
 use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
     TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
-use flicker::script::{ScriptHost, ValueMap};
-use flicker::ui::{load_widgets, render_hud};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{load_styles, load_ui_json, render_hud, run_ui, UiInput, UiState};
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -130,10 +135,19 @@ struct GameScene {
     controls: AbstractControls,
     gamepad_config: GamepadConfig,
 
-    /// The scripted HUD. Owns the three debug-toggle checkboxes; the
-    /// fields below are refreshed from it each frame. `None` only if
-    /// the script failed to load (the example still runs without it).
-    script: Option<ScriptHost>,
+    /// The in-scene HUD as a DECLARATIVE component tree, parsed ONCE from
+    /// `hud_pocclusters.lua`'s `tree()` at construction (the walker redraws this
+    /// cached tree every frame with fresh Model bindings). `None` if the script
+    /// failed to load — the scene still runs without a HUD.
+    ui_tree: Option<UiNode>,
+    /// Retained walker interaction state (slider drag capture) across frames.
+    ui_state: UiState,
+    /// The Prism-token-resolved `ui_elements.json` the walker resolves node
+    /// `style` paths against (colours/sizes; the palette stays single-sourced).
+    ui_styles: serde_json::Value,
+    /// This frame's HUD draw commands — the walker builds them in `update`,
+    /// `render` blits them (one walk per frame; no per-frame Lua).
+    hud_commands: Vec<HudCommand>,
 
     /// Wireframe-overlay second pass on top of the solid mesh. Mirrors
     /// the script's `"wireframe"` checkbox, refreshed each `update`.
@@ -238,7 +252,10 @@ impl Default for GameScene {
             bindings: InputMap::wasd_and_mouse(),
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
-            script: None,
+            ui_tree: None,
+            ui_state: UiState::new(),
+            ui_styles: serde_json::Value::Null,
+            hud_commands: Vec::new(),
             wireframe_on: false,
             corner_arrows_on: false,
             navmesh_on: false,
@@ -262,35 +279,47 @@ impl Default for GameScene {
     }
 }
 
-/// Path to the HUD script, resolved against this crate's source dir so the
-/// example finds it regardless of the working directory `cargo run` uses.
-const HUD_SCRIPT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/hud.lua");
+/// Path to the HUD component-tree script (behaviour), resolved against this crate's
+/// source dir so the scene finds it regardless of the working directory. Lives in
+/// the shared content tree alongside the other clients' HUD scripts.
+const HUD_SCRIPT_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/scripts/hud_pocclusters.lua"
+);
 
-/// Path to the **shared** UI-element library (csg reads `UI.hud` from it). csg's
-/// HUD elements now live in the shared `content/resources/ui_elements.json`
-/// alongside the shell front-end elements, not a client-local copy.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../content/resources/ui_elements.json");
+/// Path to the **shared** UI-element library (this scene reads `UI.pocclusters`
+/// from it — its layout + styles live alongside the shell front-end elements, not
+/// a client-local copy).
+const HUD_UI_ELEMENTS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/resources/ui_elements.json"
+);
 
 impl GameScene {
-    /// Build the game scene, loading the HUD script best-effort (it still runs
-    /// without it). Other state takes its placeholder values from [`Default`];
-    /// the world + camera come up in [`Scene::enter`].
+    /// Build the game scene, parsing the HUD component tree best-effort (the scene
+    /// still runs without a HUD). The tree is parsed ONCE here — the walker redraws
+    /// it every frame — and the resolved styles are loaded alongside. Other state
+    /// takes its placeholder values from [`Default`]; the world + camera come up in
+    /// [`Scene::enter`].
     fn new() -> Self {
-        let script = match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let mut ui_tree = None;
+        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
+                load_ui_json(&s, HUD_UI_ELEMENTS); // HUD layout constants (`UI.pocclusters`)
+                match s.ui_tree() {
+                    Ok(Some(tree)) => ui_tree = Some(tree),
+                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
+                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
+                }
                 tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
-                flicker::ui::load_ui_json(&s, HUD_UI_ELEMENTS); // HUD layout (`UI.hud`)
-                load_widgets(&s); // slider / stepper / dropdown toolkit
-                Some(s)
+                // The parsed `UiNode` is fully owned, so the script host is dropped here.
             }
-            Err(e) => {
-                tracing::error!("HUD script load failed (continuing without it): {e}");
-                None
-            }
-        };
+            Err(e) => tracing::error!("HUD script load failed (continuing without it): {e}"),
+        }
         Self {
-            script,
+            ui_tree,
+            ui_styles,
             ..Self::default()
         }
     }
@@ -322,38 +351,14 @@ impl GameScene {
 /// picking ray uses the exact same vertical FOV as the projection.
 const PICK_FOV_Y_RADIANS: f32 = 60.0_f32 * std::f32::consts::PI / 180.0;
 
-/// Bounding rect of the scripted HUD's checkbox panel, in HUD pixels
-/// (origin top-left). Mirrors `scripts/hud.lua`'s `ORIGIN_X`/`ORIGIN_Y`
-/// /`ROW_H`/`BOX` plus the row of label text on the right. Generous on
-/// purpose: a click anywhere inside this rect is treated as the HUD's,
-/// not a world pick. Keep in sync with the Lua side if the layout
-/// moves.
-const HUD_PANEL_X0: f32 = 12.0;
-const HUD_PANEL_Y0: f32 = 152.0;
-const HUD_PANEL_X1: f32 = 280.0;
-// Six checkbox rows: the Lua panel's last box bottom is
-// `ORIGIN_Y + 5*ROW_H + BOX = 180 + 130 + 18 = 328`; pad to ~10px.
-const HUD_PANEL_Y1: f32 = 338.0;
-
 impl GameScene {
-    /// `true` when the cursor sits on the scripted HUD's checkbox panel
-    /// — the script already consumes the click there (toggling a
-    /// checkbox), so we must not also fire a world pick on the same
-    /// press edge.
-    fn cursor_on_hud(cursor: Vec2) -> bool {
-        cursor.x >= HUD_PANEL_X0
-            && cursor.x <= HUD_PANEL_X1
-            && cursor.y >= HUD_PANEL_Y0
-            && cursor.y <= HUD_PANEL_Y1
-    }
-
     /// Origin + direction of the picking ray for screen-space cursor
     /// `cursor` on a viewport of pixel size `viewport`.
     ///
     /// Camera basis built to **match** the renderer's view matrix
     /// (`glam::Mat4::look_at_rh` in [`flicker_render::Camera::view`]):
     ///   * `r = f.cross(Y)` — same as `look_at_rh`'s internal right
-    ///     vector (`forward × up`). For the example's yaw-0/face-+Z
+    ///     vector (`forward × up`). For the scene's yaw-0/face-+Z
     ///     pose this resolves to `(-1, 0, 0)`, which means world `+X`
     ///     lands on the **left** half of the screen — counter-intuitive
     ///     until you note that the camera looks *into* `+Z`. Build
@@ -1250,58 +1255,99 @@ impl GameScene {
         }
     }
 
-    /// The engine data model published to the scripted HUD each frame
-    /// (`scripts/hud.lua` renders the left-column stats from these named
-    /// values via the `Model` global). Plain scalars only — the boundary
-    /// contract. The deep virtual-voxel inspector is *not* here; it stays Rust.
+    /// The engine values published to the HUD each frame (the walker reads them by
+    /// name via `bind` / `text_bind`). Three kinds: the six toggle BOOLS (two-way
+    /// with the checkboxes), the two slider NUMBERS (move speed / sensitivity), and
+    /// the stat lines PRE-FORMATTED to the exact strings the text nodes display — the
+    /// component walker has no printf, so the formatting lives here. The deep
+    /// virtual-voxel inspector is *not* here; it stays Rust (`render`).
     fn hud_model(&self) -> ValueMap {
-        let mut m = ValueMap::new()
+        let controls_line = if self.locomotion_walk {
+            "walk \u{2014} WASD on surface, gravity, right-drag look"
+        } else {
+            "fly \u{2014} WASD move, R/F up/down, right-drag look"
+        };
+        let pick = match self.selection {
+            Some((id, p)) => format!(
+                "pick: ({}, {}, {}, lod {}) p = ({}, {}, {})",
+                id.x(), id.y(), id.z(), id.lod(), p[0], p[1], p[2],
+            ),
+            None => "pick: (none \u{2014} left-click a face)".to_string(),
+        };
+        // Walk readout (surface-walk mode only; its text node is gated on `walk`).
+        let walk_line = if self.locomotion_walk {
+            let ground = match self.ground_height_at(self.position.x, self.position.z) {
+                Some(g) => format!("{g:.0}"),
+                None => "\u{2014}".to_string(),
+            };
+            let grounded = if self.grounded { "grounded" } else { "airborne" };
+            format!("walk: {grounded}   ground y: {ground}   vy: {:+.1}", self.vy)
+        } else {
+            String::new()
+        };
+        ValueMap::new()
+            // Feature toggles (BOOL, two-way). `arrows` is deliberately distinct from
+            // the corner-arrow COUNT folded into `stat_diag`, so the keys don't collide.
+            .with("wireframe", self.wireframe_on)
+            .with("arrows", self.corner_arrows_on)
+            .with("navmesh", self.navmesh_on)
+            .with("camera_lod", self.camera_lod_on)
+            .with("lod_billboards", self.lod_billboards_on)
             .with("walk", self.locomotion_walk)
-            .with("field_dim", u32::from(FIELD_DIM))
-            .with("cluster_dim", CLUSTER_DIM)
-            .with("cluster_count", self.meshes.len())
-            .with("pos_x", self.position.x)
-            .with("pos_y", self.position.y)
-            .with("pos_z", self.position.z)
-            .with("yaw", self.yaw)
-            .with("pitch", self.pitch)
+            // Sliders (NUMBER, two-way).
             .with("move_speed", self.controls.move_speed)
             .with("look_sens", self.controls.mouse_sensitivity)
-            .with("invert_y", self.controls.invert_mouse_pitch)
-            .with("invert_x", self.controls.invert_mouse_yaw)
-            .with("corner_arrows", self.corner_arrows.len())
-            .with("nav_count", self.navs.len());
-
-        // Pick selection (None until a face is clicked): a flag + components so
-        // the script formats the line itself.
-        match self.selection {
-            Some((id, p)) => {
-                m.set("has_pick", true);
-                m.set("pick_cx", i64::from(id.x()));
-                m.set("pick_cy", i64::from(id.y()));
-                m.set("pick_cz", i64::from(id.z()));
-                m.set("pick_lod", i64::from(id.lod()));
-                m.set("pick_px", i64::from(p[0]));
-                m.set("pick_py", i64::from(p[1]));
-                m.set("pick_pz", i64::from(p[2]));
-            }
-            None => m.set("has_pick", false),
-        }
-
-        // Walk readout (surface-walk mode only).
-        if self.locomotion_walk {
-            m.set("grounded", self.grounded);
-            m.set("vy", self.vy);
-            match self.ground_height_at(self.position.x, self.position.z) {
-                Some(g) => {
-                    m.set("has_ground", true);
-                    m.set("ground_y", g);
-                }
-                None => m.set("has_ground", false),
-            }
-        }
-        m
+            // Stat lines (pre-formatted strings bound by `text_bind`).
+            .with(
+                "stat_title",
+                format!(
+                    "flicker-pocclusters \u{2014} {0}\u{00D7}{0} field \u{2014} {controls_line}",
+                    FIELD_DIM,
+                ),
+            )
+            .with(
+                "stat_pos",
+                format!(
+                    "pos: ({:.0}, {:.0}, {:.0})  yaw: {:.2}  pitch: {:.2}",
+                    self.position.x, self.position.y, self.position.z, self.yaw, self.pitch,
+                ),
+            )
+            .with(
+                "stat_clusters",
+                format!(
+                    "clusters: {}   extent: {}\u{00B3} voxels each",
+                    self.meshes.len(),
+                    CLUSTER_DIM,
+                ),
+            )
+            .with(
+                "stat_config",
+                format!(
+                    "config \u{2014} speed: {:.0}  sens: {:.4}  invert-Y: {}  invert-X: {}",
+                    self.controls.move_speed,
+                    self.controls.mouse_sensitivity,
+                    self.controls.invert_mouse_pitch,
+                    self.controls.invert_mouse_yaw,
+                ),
+            )
+            .with(
+                "stat_diag",
+                format!(
+                    "corner arrows stored: {}   nav clusters (rings 0\u{2013}2): {}",
+                    self.corner_arrows.len(),
+                    self.navs.len(),
+                ),
+            )
+            .with("stat_pick", pick)
+            .with("stat_walk", walk_line)
     }
+}
+
+/// Build the CSG-cluster editor as a boxed [`Scene`] for the `prism-alpha` launcher
+/// (and any other shell host). The one public entry point — the scene owns its world
+/// generation, HUD, and pause plumbing internally, exactly as the shell expects.
+pub fn scene() -> Box<dyn Scene> {
+    Box::new(GameScene::new())
 }
 
 impl Scene for GameScene {
@@ -1386,87 +1432,88 @@ impl Scene for GameScene {
             )));
         }
 
-        // Debug toggles now live in the HUD script: feed it the mouse +
-        // click edge + screen size, and mirror the checkbox states it reports
-        // back. (`as_ref().map(..)` releases the `self.script` borrow before we
-        // write the other fields below.)
+        // The in-scene HUD is a DECLARATIVE component tree walked by the Rust
+        // component walker (`run_ui`): build the Model, walk the cached tree → this
+        // frame's draw commands (stashed for `render`) + interaction results. The
+        // toggle states + slider values come back two-way, so the engine stays the
+        // single source of truth. `hud_hit` = cursor over any UI region (or a slider
+        // drag), which gates the world pick below so a checkbox/slider click doesn't
+        // also fire a face pick behind the panel.
         let screen = renderer.size();
-        if let Some(result) = self
-            .script
-            .as_ref()
-            .map(|s| s.update(input, screen.x, screen.y))
-        {
-            match result {
-                Ok(toggles) => {
-                    self.wireframe_on = toggles.is_on("wireframe");
-                    self.corner_arrows_on = toggles.is_on("corner_arrows");
-                    self.navmesh_on = toggles.is_on("navmesh");
-                    self.camera_lod_on = toggles.is_on("camera_lod");
-                    self.lod_billboards_on = toggles.is_on("lod_billboards");
+        let mut hud_hit = false;
+        if self.ui_tree.is_some() {
+            let model = self.hud_model();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen,
+            };
+            let frame = {
+                // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state` mutated.
+                let tree = self.ui_tree.as_ref().unwrap();
+                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
+            };
+            let results = frame.results;
+            self.hud_commands = frame.commands;
+            hud_hit = results.is_on("hud_hit");
 
-                    // Interactive HUD controls report their values back: the
-                    // move-speed slider and the sensitivity stepper feed the
-                    // control config live (the slider returns the current value
-                    // unchanged when not dragging, so this is idempotent).
-                    if let Some(v) = toggles.number("move_speed") {
-                        self.controls.move_speed = v as f32;
-                    }
-                    if let Some(v) = toggles.number("look_sens") {
-                        self.controls.mouse_sensitivity = v as f32;
-                    }
+            self.wireframe_on = results.is_on("wireframe");
+            self.corner_arrows_on = results.is_on("arrows");
+            self.navmesh_on = results.is_on("navmesh");
+            self.camera_lod_on = results.is_on("camera_lod");
+            self.lod_billboards_on = results.is_on("lod_billboards");
 
-                    // Locomotion mode: now the `locomotion` dropdown (1 = Fly,
-                    // 2 = Walk). Surface-walk generates the nav surface; fly mode
-                    // generates none. A change re-meshes the field so nav
-                    // appears/disappears with it.
-                    let walk = toggles
-                        .number("locomotion")
-                        .map_or(self.locomotion_walk, |sel| sel >= 1.5);
-                    if walk != self.locomotion_walk {
-                        self.locomotion_walk = walk;
-                        // Entering walk: re-mesh to generate nav, then snap the
-                        // camera onto the surface once that nav arrives.
-                        if walk {
-                            self.walk_needs_snap = true;
-                            self.vy = 0.0;
-                        }
-                        self.submit_field_jobs();
-                    }
+            // The move-speed + sensitivity sliders report their values back (the
+            // walker returns the current value unchanged when not dragging, so this
+            // is idempotent).
+            if let Some(v) = results.number("move_speed") {
+                self.controls.move_speed = v as f32;
+            }
+            if let Some(v) = results.number("look_sens") {
+                self.controls.mouse_sensitivity = v as f32;
+            }
 
-                    // Desired per-cluster LOD field: the camera-driven
-                    // distance policy (smoothed to the mesher's ±1 adjacency
-                    // invariant) when enabled, else all clusters at LOD 0. A
-                    // change triggers a re-derive + re-mesh of the changed
-                    // clusters in `render` — cheap (render-time stride, no
-                    // re-contour); the worker pool will move it off-thread.
-                    let mut desired = [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize];
-                    if self.camera_lod_on {
-                        for x in 0..FIELD_DIM {
-                            for z in 0..FIELD_DIM {
-                                desired[x as usize][z as usize] = target_lod_for_cluster(
-                                    self.position,
-                                    ClusterId::new(0, x, 0, z),
-                                );
-                            }
-                        }
-                        smooth_lod_field(&mut desired);
-                    }
-                    if desired != self.lod_field {
-                        self.lod_field = desired;
-                        self.submit_field_jobs();
+            // Locomotion mode is now a `walk` checkbox (was the old dropdown).
+            // Surface-walk generates the nav surface; fly mode generates none. A
+            // change re-meshes the field so nav appears/disappears with it.
+            let walk = results.is_on("walk");
+            if walk != self.locomotion_walk {
+                self.locomotion_walk = walk;
+                // Entering walk: re-mesh to generate nav, then snap the camera onto
+                // the surface once that nav arrives.
+                if walk {
+                    self.walk_needs_snap = true;
+                    self.vy = 0.0;
+                }
+                self.submit_field_jobs();
+            }
+
+            // Desired per-cluster LOD field: the camera-driven distance policy
+            // (smoothed to the mesher's ±1 adjacency invariant) when enabled, else
+            // all clusters at LOD 0. A change triggers a re-derive + re-mesh of the
+            // changed clusters in `render` — cheap (render-time stride, no re-contour).
+            let mut desired = [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize];
+            if self.camera_lod_on {
+                for x in 0..FIELD_DIM {
+                    for z in 0..FIELD_DIM {
+                        desired[x as usize][z as usize] =
+                            target_lod_for_cluster(self.position, ClusterId::new(0, x, 0, z));
                     }
                 }
-                Err(e) => tracing::error!("HUD script update failed: {e}"),
+                smooth_lod_field(&mut desired);
+            }
+            if desired != self.lod_field {
+                self.lod_field = desired;
+                self.submit_field_jobs();
             }
         }
 
-        // Left-click → world pick (inspector). The HUD script consumes
-        // the press edge for its own checkbox toggling above, but it
-        // does so without telling us — so we re-check the press edge
-        // here and gate it on "cursor outside the HUD panel" to avoid
-        // double-firing on a checkbox click. Right-drag is for look;
-        // left-click is for pick.
-        if input.mouse_left_pressed && !Self::cursor_on_hud(input.mouse_position) {
+        // Left-click → world pick (inspector), but only when the click did NOT land
+        // on the HUD (`hud_hit`, reported by the walker above) — so toggling a
+        // checkbox or grabbing a slider doesn't also fire a face pick behind the
+        // panel. Right-drag is for look; left-click is for pick.
+        if input.mouse_left_pressed && !hud_hit {
             if let Some((id, hit_world)) = self.try_pick(input.mouse_position, renderer.size()) {
                 let p = Self::hit_to_local_p(id, hit_world);
                 tracing::info!(
@@ -1632,15 +1679,6 @@ impl Scene for GameScene {
             }
         }
 
-        // Left-column HUD stats: published as the engine data model and
-        // rendered by `scripts/hud.lua` (see `hud_model`). The script also owns
-        // the feature checkboxes; both come back through `render_hud` below.
-        if let Some(script) = self.script.as_ref() {
-            if let Err(e) = script.set_model(&self.hud_model()) {
-                tracing::error!("HUD model publish failed: {e}");
-            }
-        }
-
         // Virtual-voxel inspector: 12-edge wireframe of the dual cell
         // at the selected lattice point, plus a per-corner readout of
         // both translation frames (owner-relative `V` as the owner
@@ -1703,15 +1741,11 @@ impl Scene for GameScene {
             }
         }
 
-        // The scripted HUD: the Lua side returns plain draw commands, which the
-        // shared `render_hud` helper turns into renderer calls. This HUD uses
-        // only rects/text (no engine textures), so it registers none.
-        if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
-            let screen = renderer.size();
-            match script.draw(screen.x, screen.y) {
-                Ok(commands) => render_hud(renderer, &commands, white, &[]),
-                Err(e) => tracing::error!("HUD script draw failed: {e}"),
-            }
+        // The component-walker HUD: blit this frame's draw commands (built in
+        // `update` by `run_ui`). Rects + text only (no engine textures), so `white`
+        // — the 1×1 fill pixel — is the entire texture table.
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
         }
     }
 }
@@ -1743,13 +1777,14 @@ fn world_lighting() -> SceneLighting {
 }
 
 
-/// Directory the example reads bake files from on startup and writes
-/// bake files to in `--bake` mode. Resolved against this crate's
-/// source dir so `cargo run` finds it from any working directory.
+/// Directory the scene reads baked clusters from on startup (contour-from-primitive
+/// is the fallback when a bake is absent). Resolved against this crate's source dir
+/// so it works from any working directory; the bakes live in the shared content tree.
 fn bake_dir_path() -> std::path::PathBuf {
-    // The baked clusters now live in the shared content tree (Alpha/content/bakes),
-    // not inside the crate; `--bake` mode reads/writes them there.
-    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../content/bakes"))
+    std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../Alpha/content/bakes"
+    ))
 }
 
 /// Filename for a freshly-written cluster bake. The on-disk file
@@ -1815,146 +1850,65 @@ fn try_load_bake_field(
     Some(out)
 }
 
-/// Bake every cluster in the 3×3 field to disk at LOD 0, then exit.
-/// Triggered by `--bake` on the command line; the demo's renderer
-/// never spins up in this mode. Files are written
-/// `bake/cluster_{x}_{y}_{z}.json.gz` (compact JSON, gzip-
-/// compressed). To inspect a file, `gunzip -c cluster_*.json.gz |
-/// jq .` — round-trips through `BakedCluster::from_bytes` either
-/// way.
-fn run_bake_mode() -> Result<()> {
-    let dir = bake_dir_path();
-    std::fs::create_dir_all(&dir)?;
-    // Index 10 = STONE matte neutral (see `mesh.wgsl`); matches `ensure_source`.
-    let material = Material::new(10, 10, 0).expect("stone material is in-range");
-    let mut written = 0_usize;
-    let mut total_bytes = 0_u64;
-    for x in 0..FIELD_DIM {
-        for z in 0..FIELD_DIM {
-            let id = ClusterId::new(0, x, 0, z);
-            let scene = WorldScene::world_at(id.world_offset());
-            let cluster = contour(&scene, material, id);
-            let baked = BakedCluster::from_cluster(id, cluster);
-            // Compact JSON, gzipped — the dense state field's 4 MB of
-            // packed bytes and the long runs of identical material
-            // bytes both compress 5–10× under default gzip. A
-            // typical 3×3 demo cluster lands around 10 MB on disk.
-            let bytes = baked
-                .to_disk_bytes()
-                .map_err(|e| anyhow::anyhow!("serialize cluster ({x}, 0, {z}): {e}"))?;
-            let path = dir.join(bake_filename(id.x(), id.y(), id.z()));
-            std::fs::write(&path, &bytes)?;
-            tracing::info!("wrote {} ({} bytes)", path.display(), bytes.len());
-            written += 1;
-            total_bytes += bytes.len() as u64;
-        }
-    }
-    tracing::info!(
-        "baked {written} clusters ({} MB total) to {}",
-        total_bytes / (1024 * 1024),
-        dir.display()
-    );
-    Ok(())
-}
-
-fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "flicker_pocclusters=info,flicker_app=info,flicker_render=warn".into()
-            }),
-        )
-        .init();
-
-    // Hand-parse argv — at most one flag, no need for a CLI crate.
-    if let Some(arg) = std::env::args().nth(1) {
-        match arg.as_str() {
-            "--bake" => return run_bake_mode(),
-            "--help" | "-h" => {
-                println!("flicker-pocclusters — flicker CSG editing / cluster manipulation demo");
-                println!("Usage:");
-                println!("  flicker-pocclusters           run the demo (loads bake/ if present, else contours)");
-                println!("  flicker-pocclusters --bake    contour the 3×3 field and write bake/cluster_*.json, then exit");
-                return Ok(());
-            }
-            other => anyhow::bail!("unknown argument: {other}"),
-        }
-    }
-
-    // The shell owns the whole front-end (display restore → splash → menu →
-    // settings/pause) and the winit run loop; we hand it a factory for our
-    // in-game scene, which START launches.
-    flicker_shell::run(flicker_shell::ShellConfig {
-        game_scene: Box::new(|| Box::new(GameScene::new())),
-        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-        game_label: None,
-    })
-}
-
 #[cfg(test)]
 mod script_smoke {
-    //! Load the *real* HUD/menu scripts and run a frame against a representative
-    //! data model, so a Lua syntax/runtime error (or a model key the script
-    //! reads but the host forgot to publish) fails the build rather than only
-    //! showing up in the running app. This is the build-time validation that
-    //! keeps the engine↔Lua contract honest without an external bindings step.
+    //! Load the *real* HUD component-tree script + the shared `ui_elements.json`
+    //! and walk it for one frame, so a Lua syntax/runtime error — or a `tree()`
+    //! that reads a `UI.pocclusters` key the layout lacks — fails the build instead
+    //! of only surfacing in the running app. The build-time check that keeps the
+    //! Rust↔Lua HUD contract honest.
     use super::*;
 
-    /// A model exercising every branch `hud.lua` reads (walk on, a pick, a
-    /// known ground height).
-    fn full_model() -> ValueMap {
+    /// Every key `hud_pocclusters.lua`'s `tree()` binds: the six toggle bools, the
+    /// two slider numbers, and the pre-formatted stat lines.
+    fn model() -> ValueMap {
         ValueMap::new()
+            .with("wireframe", true)
+            .with("arrows", false)
+            .with("navmesh", false)
+            .with("camera_lod", true)
+            .with("lod_billboards", false)
             .with("walk", true)
-            .with("field_dim", 3u32)
-            .with("cluster_dim", 256u32)
-            .with("cluster_count", 9u32)
-            .with("pos_x", 1.0_f32)
-            .with("pos_y", 2.0_f32)
-            .with("pos_z", 3.0_f32)
-            .with("yaw", 0.5_f32)
-            .with("pitch", -0.25_f32)
             .with("move_speed", 60.0_f32)
             .with("look_sens", 0.0025_f32)
-            .with("invert_y", false)
-            .with("invert_x", true)
-            .with("corner_arrows", 12u32)
-            .with("nav_count", 5u32)
-            .with("has_pick", true)
-            .with("pick_cx", 1_i64)
-            .with("pick_cy", 0_i64)
-            .with("pick_cz", -2_i64)
-            .with("pick_lod", 0_i64)
-            .with("pick_px", 10_i64)
-            .with("pick_py", 20_i64)
-            .with("pick_pz", 30_i64)
-            .with("grounded", true)
-            .with("vy", -1.5_f32)
-            .with("has_ground", true)
-            .with("ground_y", 128.0_f32)
+            .with("stat_title", "flicker-pocclusters \u{2014} 3\u{00D7}3 field \u{2014} walk")
+            .with("stat_pos", "pos: (1, 2, 3)  yaw: 0.50  pitch: -0.25")
+            .with("stat_clusters", "clusters: 9   extent: 256\u{00B3} voxels each")
+            .with("stat_config", "config \u{2014} speed: 60  sens: 0.0025")
+            .with("stat_diag", "corner arrows stored: 12   nav clusters (rings 0\u{2013}2): 5")
+            .with("stat_pick", "pick: (none \u{2014} left-click a face)")
+            .with("stat_walk", "walk: grounded   ground y: 128   vy: -1.5")
     }
 
     #[test]
-    fn hud_script_runs_with_model() {
-        let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud.lua");
-        flicker::ui::load_ui_json(&host, HUD_UI_ELEMENTS); // HUD layout (`UI.hud`)
-        load_widgets(&host); // slider / stepper / dropdown
-        host.set_model(&full_model()).expect("publish model");
-        let input = InputState::new();
-        host.update(&input, 1920.0, 1080.0).expect("hud update");
-        let cmds = host.draw(1920.0, 1080.0).expect("hud draw");
-        assert!(!cmds.is_empty(), "hud emits stat + checkbox commands");
+    fn hud_tree_walks_with_model() {
+        let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud_pocclusters.lua");
+        load_ui_json(&host, HUD_UI_ELEMENTS); // HUD layout (`UI.pocclusters`)
+        let tree = host
+            .ui_tree()
+            .expect("tree parses")
+            .expect("hud_pocclusters.lua exposes tree()");
+        let styles = load_styles(HUD_UI_ELEMENTS);
 
-        // Exercise the widgets' interaction paths: a held drag near the slider
-        // and an open-then-select on the dropdown must run without error and the
-        // slider must report a numeric `move_speed` back.
-        let mut drag = InputState::new();
-        drag.mouse_position = Vec2::new(150.0, 346.0);
-        drag.mouse_left = true;
-        drag.mouse_left_pressed = true;
-        let out = host.update(&drag, 1920.0, 1080.0).expect("hud drag update");
-        assert!(out.number("move_speed").is_some(), "slider reports a value");
-        host.draw(1920.0, 1080.0)
-            .expect("hud draw after interaction");
+        // A static frame (no hover): the panel draws its stats + checkboxes + sliders.
+        let snap = UiInput {
+            mouse: Vec2::new(-1.0, -1.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(1920.0, 1080.0),
+        };
+        let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
+        assert!(!frame.commands.is_empty(), "the HUD draws its panel + controls");
+        let has_text = |needle: &str| {
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
+        };
+        assert!(has_text("flicker-pocclusters"), "the title stat line renders");
+        assert!(
+            has_text("Wireframe overlay"),
+            "the data-driven checkbox list renders its labels"
+        );
     }
-
 }

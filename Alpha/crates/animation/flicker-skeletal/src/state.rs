@@ -58,6 +58,12 @@ pub struct StateMachineDef {
     /// opts in — so an un-annotated pack keeps the original snap behaviour.
     #[serde(default)]
     pub default_blend_ticks: u32,
+    /// Tick rate (Hz) of the clip library this pack drives — the clock its clips'
+    /// `duration_ticks` are baked to. Defaults to 60 (the legacy Katanami export rate).
+    /// The Motifect retarget bakes at 30, so the Prism pack sets `tick_rate_hz: 30`;
+    /// otherwise the machine advances a 30 fps clip at 60 Hz and plays it double-speed.
+    #[serde(default = "default_tick_rate_hz")]
+    pub tick_rate_hz: u32,
     /// Transitions evaluated from **every** state, before the per-state ones — the
     /// "from any state" edges (hit reaction, death). Highest-precedence.
     #[serde(default)]
@@ -92,6 +98,10 @@ pub struct StateDef {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_tick_rate_hz() -> u32 {
+    60
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -459,7 +469,7 @@ impl StateMachine {
             blend: None,
             default_blend_ticks: def.default_blend_ticks,
             accum: 0.0,
-            tick_rate_hz: 60,
+            tick_rate_hz: def.tick_rate_hz.max(1),
             warnings,
         })
     }

@@ -23,9 +23,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     // Shared flicker-shell owns the front end (logo → menu → settings → pause +
     // the Prism UI theme, with display persistence). Start → Loading → World.
-    flicker_shell::run(flicker_shell::ShellConfig {
-        game_scene: Box::new(|| Box::new(scene::Loading::new(world::DEFAULT_FREQ, world::DEFAULT_SEED))),
-        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-        game_label: None,
-    })
+    flicker_shell::run(flicker_shell::ShellConfig::single(
+        Some(env!("CARGO_MANIFEST_DIR").into()),
+        None,
+        || Box::new(scene::Loading::new(world::DEFAULT_FREQ, world::DEFAULT_SEED)),
+    ))
 }

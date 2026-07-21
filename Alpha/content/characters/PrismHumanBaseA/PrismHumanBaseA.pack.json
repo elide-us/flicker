@@ -1,0 +1,170 @@
+{
+  "format": "flicker.pack",
+  "version": 1,
+  "_note": "Locomotion state graph for PrismHumanBaseA, driving the retargeted Motifect clip library (Alpha/content/retarget/clips — In-Place bare stems, so it plays on a treadmill). tick_rate_hz is 30 to match the Motifect bake; the state machine otherwise advances these 30 fps clips at its 60 Hz default = double speed. Directional walk/run/crouch are discrete strafe/back states gated by move_left/right/back/forward — a stand-in for a 2D locomotion blend space, mirroring Katanami.pack.json. Combat (Attack/Dame/Death) + TAE footstep/hitbox events are deferred: those clips live in the Motifect combat pack, not yet retargeted.",
+  "state_machine": {
+    "initial": "Idle",
+    "tick_rate_hz": 30,
+    "default_blend_ticks": 6,
+
+    "states": [
+      {
+        "name": "Idle",
+        "clip": "idle_neutral",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Crouch", "on": "crouch", "priority": 4 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Walk", "on": "move", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Walk",
+        "clip": "walk_forward",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Crouch", "on": "crouch", "priority": 4 },
+          { "to": "Run", "on": "run", "priority": 3 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_L",
+        "clip": "walk_strafe_left",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Run_L", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_R",
+        "clip": "walk_strafe_right",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Run_R", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_B", "on": "move_back", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Walk_B",
+        "clip": "walk_backward",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Run_B", "on": "run", "priority": 3 },
+          { "to": "Walk", "on": "move_forward", "priority": 2 },
+          { "to": "Walk_L", "on": "move_left", "priority": 2 },
+          { "to": "Walk_R", "on": "move_right", "priority": 2 },
+          { "to": "Idle", "on": "move_stop", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Run",
+        "clip": "run_jog",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk", "on": "run_stop", "priority": 3 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_L",
+        "clip": "run_strafe_left",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_L", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_R",
+        "clip": "run_strafe_right",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_R", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_B", "on": "move_back", "priority": 2 }
+        ]
+      },
+      {
+        "name": "Run_B",
+        "clip": "run_backward",
+        "transitions": [
+          { "to": "Jump", "on": "jump", "priority": 5 },
+          { "to": "Idle", "on": "move_stop", "priority": 4 },
+          { "to": "Walk_B", "on": "run_stop", "priority": 3 },
+          { "to": "Run", "on": "move_forward", "priority": 2 },
+          { "to": "Run_L", "on": "move_left", "priority": 2 },
+          { "to": "Run_R", "on": "move_right", "priority": 2 }
+        ]
+      },
+
+      {
+        "name": "Crouch",
+        "clip": "crouch_idle",
+        "transitions": [
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Idle", "on": "crouch_stop", "priority": 3 },
+          { "to": "Crouch_Move_B", "on": "move_back", "priority": 2 },
+          { "to": "Crouch_Move", "on": "move", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Crouch_Move",
+        "clip": "crouch_walk_forward",
+        "transitions": [
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Walk", "on": "crouch_stop", "priority": 3 },
+          { "to": "Crouch_Move_B", "on": "move_back", "priority": 2 },
+          { "to": "Crouch", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "Crouch_Move_B",
+        "clip": "crouch_walk_backward",
+        "transitions": [
+          { "to": "CrouchIdle", "on": "crouch_still", "priority": 5 },
+          { "to": "Walk_B", "on": "crouch_stop", "priority": 3 },
+          { "to": "Crouch_Move", "on": "move_forward", "priority": 2 },
+          { "to": "Crouch", "on": "move_stop", "priority": 1 }
+        ]
+      },
+      {
+        "name": "CrouchIdle",
+        "clip": "crouch_idle",
+        "transitions": [
+          { "to": "Idle", "on": "crouch_stop", "priority": 2 },
+          { "to": "Crouch", "on": "run_stop", "priority": 1 }
+        ]
+      },
+
+      {
+        "name": "Jump",
+        "clip": "jump_standing",
+        "looping": false,
+        "next": "Idle"
+      }
+    ]
+  }
+}

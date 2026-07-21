@@ -8,7 +8,7 @@ color: blue
 
 You implement the **retarget pipeline** — the load-bearing part of the rebuild. Get the math
 in section C.2 exactly right; everything downstream (all 45 clips, both bodies, all scales)
-rides on it. Read `docs/animation-system-rebuild-spec.md` in full before touching anything,
+rides on it. Read `MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)` in full before touching anything,
 plus the memory entries it names (`animation-system-rebuild`, `multibody-rig-retarget`,
 `flicker-skeletal-animation`) and the three handoff docs.
 

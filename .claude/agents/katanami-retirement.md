@@ -10,7 +10,7 @@ You implement **D.8 — retire Katanami**, the final step. Its whole preconditio
 replacement is already proven: **do not start until D.3-D.7 hold** (clean retarget confirmed
 in-app with the import hacks removed, morphs + face bones in, frame cleanups done). If those
 aren't verified, stop and report that the precondition isn't met. Read
-`docs/animation-system-rebuild-spec.md` sections D.8 and B, plus memory
+`MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)` sections D.8 and B, plus memory
 `animation-system-rebuild`.
 
 ## Project rules you obey first (.claude/preamble.md)

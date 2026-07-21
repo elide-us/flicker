@@ -27,6 +27,14 @@ use std::path::Path;
 use flicker_render::{Renderer, TextureHandle, Vec2};
 use flicker_script::{HudCommand, ScriptHost, TextAlign};
 
+/// The Rust **component walker** — the target UI path (Lua declares a [`UiNode`]
+/// tree; Rust owns draw / layout / hit-test). Runs alongside the legacy
+/// immediate [`render_hud`] path during the migration.
+///
+/// [`UiNode`]: flicker_script::UiNode
+pub mod component;
+pub use component::{run_ui, UiFrame, UiInput, UiState};
+
 /// The embedded reusable Lua widget toolkit (slider / stepper / dropdown /
 /// button). Exposed to a script as the `Widgets` global by [`load_widgets`].
 pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
@@ -172,6 +180,47 @@ pub fn load_ui_json_str(script: &ScriptHost, json: &str) {
         }
         Err(e) => tracing::error!("ui_elements.json parse failed: {e}"),
     }
+}
+
+/// Load `ui_elements.json` at `path`, expand its `$token` design-token
+/// references, and return the resolved tree — the **styles** input for the Rust
+/// component walker ([`run_ui`]), which resolves a node's dotted `style` path
+/// against it (so colours stay single-sourced in `theme.tokens`, exactly like the
+/// `UI` global [`load_ui_json`] hands Lua). Returns an empty object when the file
+/// can't be read or parsed (the walker then falls back to its neutral defaults).
+pub fn load_styles(path: impl AsRef<Path>) -> serde_json::Value {
+    let path = path.as_ref();
+    let mut ui = match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(ui) => ui,
+            Err(e) => {
+                tracing::error!("ui_elements.json parse failed (styles): {e}");
+                serde_json::Value::Object(Default::default())
+            }
+        },
+        Err(e) => {
+            tracing::error!("ui_elements.json read failed (styles) ({}): {e}", path.display());
+            serde_json::Value::Object(Default::default())
+        }
+    };
+    resolve_tokens(&mut ui);
+    ui
+}
+
+/// Like [`load_styles`] but from an already-in-memory `ui_elements.json` string
+/// (`include_str!`) — for a crate that embeds its layout rather than reading it
+/// from disk (the front-end shell). Returns the token-resolved tree the component
+/// walker resolves node `style` paths against. Empty object on a parse error.
+pub fn load_styles_str(json: &str) -> serde_json::Value {
+    let mut ui = match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(ui) => ui,
+        Err(e) => {
+            tracing::error!("ui_elements.json parse failed (styles str): {e}");
+            serde_json::Value::Object(Default::default())
+        }
+    };
+    resolve_tokens(&mut ui);
+    ui
 }
 
 /// Expand `"$name"` design-token references against the `theme.tokens` map, in

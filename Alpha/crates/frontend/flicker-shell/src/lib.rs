@@ -8,11 +8,13 @@
 //!
 //! ```ignore
 //! fn main() -> anyhow::Result<()> {
-//!     flicker_shell::run(flicker_shell::ShellConfig {
-//!         game_scene: Box::new(|| Box::new(MyGameScene::new())),
-//!         settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-//!         game_label: None, // or Some("…") to name the menu's launch button
-//!     })
+//!     // Single-scene client: one launch button. A multi-scene host fills
+//!     // `ShellConfig.scenes` with several `SceneEntry`s instead.
+//!     flicker_shell::run(flicker_shell::ShellConfig::single(
+//!         Some(env!("CARGO_MANIFEST_DIR").into()),
+//!         None, // or Some("…") to name the menu's launch button
+//!         || Box::new(MyGameScene::new()),
+//!     ))
 //! }
 //! ```
 //!
@@ -29,5 +31,7 @@ mod display;
 mod shell;
 mod theme;
 
-pub use shell::{run, take_pending_input, GameSceneFactory, PauseScene, ShellConfig};
+pub use shell::{
+    run, take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo, ShellConfig,
+};
 pub use theme::Theme;

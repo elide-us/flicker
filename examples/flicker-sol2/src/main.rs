@@ -24,9 +24,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     // Shared flicker-shell owns the front end: Logo splash → Menu → Sim (Start),
     // with Pause / Settings overlays. Esc in-sim → Pause.
-    flicker_shell::run(flicker_shell::ShellConfig {
-        game_scene: Box::new(|| Box::new(scene::Sim::new())),
-        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-        game_label: None,
-    })
+    flicker_shell::run(flicker_shell::ShellConfig::single(
+        Some(env!("CARGO_MANIFEST_DIR").into()),
+        None,
+        || Box::new(scene::Sim::new()),
+    ))
 }

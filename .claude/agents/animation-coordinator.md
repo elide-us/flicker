@@ -1,6 +1,6 @@
 ---
 name: animation-coordinator
-description: Run-book and sequencer for the animation-system-rebuild plan (docs/animation-system-rebuild-spec.md). Invoke at the START of the rebuild, whenever you finish a step and need to know what's next, or when you're unsure whether a gate has passed. It reports the current state of the plan, which agent to run next, and which gate must go green before proceeding. Use PROACTIVELY to drive D.1 through D.8 in the correct order.
+description: Run-book and sequencer for the animation-system-rebuild plan (MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)). Invoke at the START of the rebuild, whenever you finish a step and need to know what's next, or when you're unsure whether a gate has passed. It reports the current state of the plan, which agent to run next, and which gate must go green before proceeding. Use PROACTIVELY to drive D.1 through D.8 in the correct order.
 tools: Read, Grep, Glob, Bash
 model: opus
 color: purple
@@ -12,7 +12,7 @@ slice is next, name the exact specialist agent to run, and state the gate that m
 before the plan advances.
 
 ## First actions, every time you are invoked
-1. Read the spec end-to-end: `docs/animation-system-rebuild-spec.md`. It is the single
+1. Read the spec end-to-end: `MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)`. It is the single
    source of truth. Re-read it each session; do not rely on memory of it.
 2. Read the handoff context the spec names: memory entries `animation-system-rebuild`,
    `multibody-rig-retarget`, `flicker-skeletal-animation`; docs

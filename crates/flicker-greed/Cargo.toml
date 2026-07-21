@@ -1,0 +1,14 @@
+[package]
+name = "flicker-greed"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# flicker-greed — "Glitter Greed" game logic. A small turn-based gem/dice game
+# ported from a C++ prototype: pure rules + data structures, no I/O. The library
+# exposes deterministic, testable turn actions (roll / play); a driver or Lua HUD
+# renders and feeds player decisions in. POC/pre-alpha, so it lives under
+# `crates/` — it graduates to the `mechanics` cluster once hardened.
+[dependencies]
+fastrand.workspace = true
+thiserror.workspace = true

@@ -21,9 +21,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     // The shell owns the front-end + run loop; START launches the chemistry scene.
     // `settings_dir` keeps this app's per-user settings.json in its own root.
-    flicker_shell::run(flicker_shell::ShellConfig {
-        game_scene: Box::new(|| Box::new(ChemScene::new())),
-        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-        game_label: None,
-    })
+    flicker_shell::run(flicker_shell::ShellConfig::single(
+        Some(env!("CARGO_MANIFEST_DIR").into()),
+        None,
+        || Box::new(ChemScene::new()),
+    ))
 }

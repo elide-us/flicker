@@ -24,9 +24,9 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     // The shell owns the front-end + the run loop; START launches the world scene.
     // `settings_dir` puts this app's per-user settings.json in its own project root.
-    flicker_shell::run(flicker_shell::ShellConfig {
-        game_scene: Box::new(|| Box::new(WorldScene::new())),
-        settings_dir: Some(env!("CARGO_MANIFEST_DIR").into()),
-        game_label: None,
-    })
+    flicker_shell::run(flicker_shell::ShellConfig::single(
+        Some(env!("CARGO_MANIFEST_DIR").into()),
+        None,
+        || Box::new(WorldScene::new()),
+    ))
 }

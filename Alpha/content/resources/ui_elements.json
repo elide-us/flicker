@@ -140,13 +140,7 @@
       "studio": "ELIDEUS PRODUCTIONS · CLAY ENGINE",
       "title": "Prism",
       "title_size": 58,
-      "subtitle": "THE SEVEN SHARDS",
-      "items": [
-        { "id": "start", "label": "ENTER WORLD", "variant": "primary" },
-        { "id": "character", "label": "CHARACTER SELECT", "variant": "secondary" },
-        { "id": "settings", "label": "SETTINGS", "variant": "secondary" },
-        { "id": "quit", "label": "QUIT", "variant": "danger" }
-      ]
+      "subtitle": "THE SEVEN SHARDS"
     },
     "pause": {
       "layout": "center",
@@ -154,23 +148,35 @@
       "title": "Sanctum",
       "title_size": 46,
       "subtitle": "GATHER YOURSELF · THE WORLD RUNS ON",
-      "footer": "ESC TO RETURN",
-      "items": [
-        { "id": "resume", "label": "RETURN TO WORLD", "variant": "primary" },
-        { "id": "settings", "label": "SETTINGS", "variant": "secondary" },
-        { "id": "quit", "label": "QUIT", "variant": "danger" }
-      ]
+      "footer": "ESC TO RETURN"
     },
     "confirm": {
       "layout": "center",
       "overlay": "$scrim_dim",
       "title": "Keep Display?",
-      "title_size": 38,
-      "items": [
-        { "id": "keep", "label": "KEEP", "variant": "primary" },
-        { "id": "revert", "label": "REVERT", "variant": "danger" }
-      ]
+      "title_size": 38
     }
+  },
+
+  "_menu_comment": "Scene-selection LAUNCHER styling (menu.lua, when MENU.scene_select): the right scene panel + its data-driven rows (bronze preview frame, mode/name/desc/meta text) and the backdrop scrim fade + prism thread. Reuses modal.* for the popup + buttons. Colours are $tokens or literal rgba.",
+  "menu": {
+    "scrim_l": { "fill_top": [0.031,0.035,0.047,0.82], "fill_bot": [0.031,0.035,0.047,0.0], "grad": 2 },
+    "scrim_r": { "fill_top": [0.031,0.035,0.047,0.0], "fill_bot": [0.031,0.035,0.047,0.66], "grad": 2 },
+    "thread": { "fill_top": "$sig_red", "fill_bot": "$sig_blue", "grad": 1 },
+    "muse_alpha": 0.34,
+    "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "radius": 5 },
+    "caption": "$bronze_dim",
+    "title": "$ink_bright",
+    "note": "$bronze",
+    "desc": "$dim",
+    "divider": "$bronze",
+    "row": { "fill_top": [0.086,0.098,0.133,1.0], "fill_bot": [0.059,0.075,0.098,1.0], "border": [0.72,0.59,0.35,0.20], "radius": 4 },
+    "preview_frame": { "fill_top": "$bronze", "fill_bot": [0.43,0.35,0.20,1.0], "radius": 3 },
+    "preview_inner": { "fill_top": [0.039,0.047,0.063,1.0], "fill_bot": [0.039,0.047,0.063,1.0], "border": [0.063,0.024,0.031,1.0], "radius": 2 },
+    "name": "$ink_bright",
+    "mode": [0.561,0.690,1.0,1.0],
+    "row_desc": "$faint",
+    "meta": "$studio"
   },
 
   "_settings_comment": "Prism Settings 'workbench' (settings.lua): a resizable window (capped to the viewport) = title bar + left category rail (Video/Audio/Input, each keyed to a Septisigil gem) + right scrolling content + footer (Restore / Back / Apply). Chrome + controls are VECTOR `panel` commands. Controls carry `wired`: true = bound to the shell settings/input backend, false = an inert layout preview (FOV, brightness, edge-pan, all of Audio, the controller device — no engine behind them yet). Every colour is a $token.",
@@ -337,7 +343,7 @@
   },
 
   "paperdoll": {
-    "_comment": "flicker-paperdoll's in-scene HUD (behaviour: Alpha/flicker-paperdoll/scripts/hud.lua). Replaces the POC keypress toggles + draw_text overlay. `inventory` = the equip-slot bar; a slot's piece is drawn only while its cell is lit. Slot keys are the contract with the engine: it publishes `slot_<key>_loaded`/`slot_<key>_on` on the Model and reads `slot_<key>` back. Sheaths have no cell by design — they are always worn (no sheath/unsheath animations yet).",
+    "_comment": "flicker-paperdoll's in-scene HUD (behaviour: Alpha/content/scripts/hud_paperdoll.lua). Replaces the POC keypress toggles + draw_text overlay. `inventory` = the equip-slot bar; a slot's piece is drawn only while its cell is lit. Slot keys are the contract with the engine: it publishes `slot_<key>_loaded`/`slot_<key>_on` on the Model and reads `slot_<key>` back. Sheaths have no cell by design — they are always worn (no sheath/unsheath animations yet).",
     "inventory": {
       "header": "INVENTORY",
       "header_size": 13,
@@ -401,7 +407,7 @@
       "label_color": "$ink",
       "value_size": 12,
       "value_color": "$dim",
-      "slider": { "track": "$stone1", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 9 },
+      "slider": { "track": "$stone1", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 9, "focus_track": "$stone3", "focus_fill": "$rune_glow", "focus_label": "$rune_glow_hi", "value_color": "$dim", "value_size": 12, "label_size": 13 },
       "_focus_note": "Click a slider to FOCUS it; ←/→ then nudge it by `nudge` (hold Shift for `nudge_coarse`). A trackpad drag over a ~120px track spans the whole range, which is far too coarse to fit a piece by eye — the arrows are the fine control. The focused row is drawn with `focus_*`. SCALE IS PER-AXIS (sx/sy/sz): a garment generated separately from the body is rarely the same build, so a uniform scale can line it up but never make it fit. Scale and offset are both in WORLD axes at rest (x lateral, y depth, z up), NOT bone axes — the fit cancels the socket rest rotation, so x thickens sideways whichever bone the piece hangs off.",
       "focus_track": "$stone3",
       "focus_fill": "$rune_glow",
@@ -433,6 +439,56 @@
       "top": 62,
       "size": 13,
       "color": "$ink"
+    }
+  },
+
+  "pocclusters": {
+    "_comment": "flicker-pocclusters' in-scene HUD (behaviour: Alpha/content/scripts/hud_pocclusters.lua) — a DECLARATIVE component tree walked by flicker-widgets `run_ui`. Debug-toggle checkboxes + the move-speed / look-sensitivity sliders (the old stepper/dropdown collapse into a slider + the `walk` checkbox — the two control kinds the walker offers). Stat lines are pre-formatted in Rust (hud_model) and bound by name via `text_bind`. Colours are $tokens (single palette source in theme.tokens). The separate `hud` section still serves the voxel-cluster example on the legacy widgets path — keep them distinct.",
+    "stats": {
+      "margin": 16,
+      "top": 16,
+      "row_h": 20,
+      "size": 15,
+      "color": "$ink",
+      "pick_color": "$stam_hi",
+      "walk_color": "$sig_green"
+    },
+    "toggles": {
+      "margin": 16,
+      "top": 188,
+      "row_h": 24,
+      "box": 18,
+      "label_x": 26,
+      "label_size": 14,
+      "header": "DEBUG TOGGLES",
+      "header_size": 15,
+      "header_color": "$bronze",
+      "checkbox": { "box": "$stone2", "check": "$sig_green", "border": "$edge4", "pad": 3 },
+      "items": [
+        { "key": "wireframe", "label": "Wireframe overlay" },
+        { "key": "arrows", "label": "Corner-vector arrows" },
+        { "key": "navmesh", "label": "Navmesh wireframe" },
+        { "key": "camera_lod", "label": "Camera-driven LOD" },
+        { "key": "lod_billboards", "label": "LOD billboards" },
+        { "key": "walk", "label": "Surface walk" }
+      ]
+    },
+    "controls": {
+      "margin": 16,
+      "margin_b": 24,
+      "row_h": 22,
+      "slider_h": 12,
+      "label_w": 100,
+      "value_w": 66,
+      "w": 320,
+      "header": "CONTROLS",
+      "header_size": 14,
+      "header_color": "$bronze",
+      "slider": { "track": "$stone1", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 9, "focus_track": "$stone3", "focus_fill": "$rune_glow", "focus_label": "$rune_glow_hi", "value_color": "$dim", "value_size": 12, "label_size": 13 },
+      "rows": [
+        { "key": "move_speed", "label": "Move speed", "min": 20, "max": 200, "decimals": 0, "suffix": "" },
+        { "key": "look_sens", "label": "Sensitivity", "min": 0.0005, "max": 0.012, "decimals": 4, "suffix": "" }
+      ]
     }
   },
 

@@ -9,7 +9,7 @@ color: green
 You implement **facial morphs + face bones** (spec step D.5). This support does not exist
 today and must be added to both the format and the runtime, in a way that is DNA-forward
 (a future Epic DNA import maps its identity morphs onto ours by name). Read
-`docs/animation-system-rebuild-spec.md` sections A.3 and B in full first, plus memory
+`MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)` sections A.3 and B in full first, plus memory
 `animation-system-rebuild` and `flicker-skeletal-animation`.
 
 ## Project rules you obey first (.claude/preamble.md)

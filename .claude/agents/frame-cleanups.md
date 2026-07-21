@@ -9,7 +9,7 @@ color: orange
 You own the two **frame-correctness cleanups**, D.6 and D.7. They are independent of the
 retarget critical path and of each other, and both come down to one principle from the spec:
 **rotations are authored as quaternions/axis-angle, and physics "down" lives in world space —
-never in a bone frame.** Read `docs/animation-system-rebuild-spec.md` sections A.2, D.6, D.7
+never in a bone frame.** Read `MCP memory 811EF1BB-328A-4390-B7C5-4D536FB645CA (animation-system rebuild spec; memory_get)` sections A.2, D.6, D.7
 first, plus memory `flicker-skeletal-animation` and `cloth-region-split`.
 
 ## Project rules you obey first (.claude/preamble.md)

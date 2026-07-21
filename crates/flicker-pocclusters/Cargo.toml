@@ -4,18 +4,20 @@ version = "0.1.0"
 edition.workspace = true
 publish = false
 
-[[bin]]
-name = "flicker-pocclusters"
-path = "src/main.rs"
+# A CSG-cluster POC PACKAGE (library only) — the cluster-editor `Scene`, hosted by
+# the unified `prism-alpha` launcher; no standalone binary. Exposes `scene()`.
+[lib]
+name = "flicker_pocclusters"
+path = "src/lib.rs"
 
 [dependencies]
-flicker = { path = "../../crates/flicker" }
-# The reusable front-end shell (splash / menu / settings / pause). We hand it a
-# factory for our game scene and it owns the flow + run loop.
+flicker = { path = "../flicker" }
+# The reusable front-end shell (splash / menu / settings / pause) this scene runs
+# inside; it also provides the pause overlay + theme.
 flicker-shell.workspace = true
 flicker-voxel.workspace = true
 flicker-worker.workspace = true
-anyhow.workspace = true
 glam.workspace = true
+# Resolves the walker's node `style` paths against `ui_elements.json` (styles Value).
+serde_json.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
