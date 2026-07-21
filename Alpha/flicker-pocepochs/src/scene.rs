@@ -422,7 +422,7 @@ impl Scene for WorldScene {
 
         // Stats + controls.
         renderer.set_layer(10.0);
-        let gold = [0.83, 0.67, 0.39, 1.0];
+        let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
         let text = [0.85, 0.87, 0.92, 1.0];
         let dim = [0.6, 0.63, 0.68, 1.0];
         renderer.draw_text("FLICKER · PLANET SIMULATION", Vec2::new(24.0, 24.0), 26.0, gold);

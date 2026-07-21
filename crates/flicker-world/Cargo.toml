@@ -11,6 +11,9 @@ license.workspace = true
 # brought in next (still rough); this slice is the runnable viewer. Name not final.
 [dependencies]
 flicker = { path = "../flicker" }
+# Shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The app
+# routes through `flicker_shell::run`; no per-app shell/UI copy.
+flicker-shell.workspace = true
 flicker-worldgrid.workspace = true
 flicker-worldgen.workspace = true
 flicker-materials.workspace = true
@@ -18,6 +21,3 @@ glam.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-image.workspace = true

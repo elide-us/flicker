@@ -38,10 +38,12 @@ local function rect(cmds, x, y, w, h, c, layer)
   cmds[#cmds + 1] = { kind = "rect", x = x, y = y, w = w, h = h, r = r, g = g, b = b, a = a, layer = layer }
 end
 
-local function label(cmds, x, y, str, size, c, align, layer)
+-- `font` (optional) = the Prism face role: "display" (Cormorant, titles/names),
+-- "label" (Cinzel, caps), or nil/"body" (EB Garamond, the default prose face).
+local function label(cmds, x, y, str, size, c, align, layer, font)
   local r, g, b, a = rgba(c)
   cmds[#cmds + 1] =
-    { kind = "text", x = x, y = y, text = str, size = size, align = align, r = r, g = g, b = b, a = a, layer = layer }
+    { kind = "text", x = x, y = y, text = str, size = size, align = align, font = font, r = r, g = g, b = b, a = a, layer = layer }
 end
 
 -- SLIDER -------------------------------------------------------------------
@@ -63,10 +65,17 @@ end
 -- `ticks` (optional): draw an N-division ruler behind the handle — N+1 marks
 -- across the track, the two ends slightly taller. Older callers omit it and
 -- get a plain slider. Tick colour is `s.tick` (falls back to the handle).
+-- Prism material (all optional, gated on the style field so older callers are
+-- unaffected): `s.fill_hi` = a 1px lit sheen along the top of the fill (the
+-- carved sapphire/resource glow); `s.handle_hi` = a lit top edge on the handle.
 function W.slider_draw(cmds, r, value, min, max, s, ticks)
   local t = clamp((value - min) / (max - min), 0, 1)
   rect(cmds, r.x, r.y, r.w, r.h, s.track)
-  rect(cmds, r.x, r.y, r.w * t, r.h, s.fill)
+  local fw = r.w * t
+  rect(cmds, r.x, r.y, fw, r.h, s.fill)
+  if s.fill_hi and fw > 0 then
+    rect(cmds, r.x, r.y, fw, 1, s.fill_hi)
+  end
   if ticks and ticks > 0 then
     local tc = s.tick or s.handle
     for i = 0, ticks do
@@ -76,7 +85,11 @@ function W.slider_draw(cmds, r, value, min, max, s, ticks)
     end
   end
   local hw = s.handle_w
-  rect(cmds, r.x + r.w * t - hw * 0.5, r.y - 4, hw, r.h + 8, s.handle)
+  local hx = r.x + r.w * t - hw * 0.5
+  rect(cmds, hx, r.y - 4, hw, r.h + 8, s.handle)
+  if s.handle_hi then
+    rect(cmds, hx, r.y - 4, hw, 1, s.handle_hi)
+  end
 end
 
 -- STEPPER (numeric value box) ---------------------------------------------
@@ -146,10 +159,28 @@ function W.button_update(r, mx, my, clicked)
   return clicked and point_in(mx, my, r.x, r.y, r.w, r.h)
 end
 
+-- Prism material (all optional, gated): `s.glow` = a soft sapphire halo drawn
+-- behind (primary emphasis); `s.shadow` = a drop shadow under the slab;
+-- `s.border` = a 1px frame; `s.hi` = a lit top edge just inside the frame.
 function W.button_draw(cmds, r, text, s, hot)
+  if s.glow then
+    rect(cmds, r.x - 3, r.y - 3, r.w + 6, r.h + 6, s.glow)
+  end
+  if s.shadow then
+    rect(cmds, r.x, r.y + 2, r.w, r.h, s.shadow)
+  end
   local fill = hot and s.hot or s.cell
   rect(cmds, r.x, r.y, r.w, r.h, fill)
-  label(cmds, r.x + r.w * 0.5, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "center")
+  if s.border then
+    rect(cmds, r.x, r.y, r.w, 1, s.border)
+    rect(cmds, r.x, r.y + r.h - 1, r.w, 1, s.border)
+    rect(cmds, r.x, r.y, 1, r.h, s.border)
+    rect(cmds, r.x + r.w - 1, r.y, 1, r.h, s.border)
+  end
+  if s.hi then
+    rect(cmds, r.x + 1, r.y + 1, r.w - 2, 1, s.hi)
+  end
+  label(cmds, r.x + r.w * 0.5, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "center", nil, "label")
 end
 
 -- SECTION HEADER -----------------------------------------------------------
@@ -157,7 +188,7 @@ end
 -- "CONTROLLER"). Stateless — just draws a tinted rect + centered text.
 function W.section_header_draw(cmds, r, text, s)
   rect(cmds, r.x, r.y, r.w, r.h, s.bg)
-  label(cmds, r.x + 8, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "left")
+  label(cmds, r.x + 8, r.y + (r.h - s.label_size) * 0.5, text, s.label_size, s.label, "left", nil, "label")
 end
 
 -- CHECKBOX -----------------------------------------------------------------
@@ -249,7 +280,7 @@ function W.radio_draw(cmds, r, options, selected, s, disabled)
     local fill = off and (s.disabled or s.cell) or (i == selected and s.active or s.cell)
     rect(cmds, x, r.y, cw - 1, r.h, fill)
     local lc = off and (s.disabled_label or s.label) or (i == selected and (s.active_label or s.label) or s.label)
-    label(cmds, x + cw * 0.5, r.y + (r.h - s.label_size) * 0.5, options[i], s.label_size, lc, "center")
+    label(cmds, x + cw * 0.5, r.y + (r.h - s.label_size) * 0.5, options[i], s.label_size, lc, "center", nil, "label")
   end
 end
 
@@ -273,11 +304,15 @@ end
 -- marker is coloured `marker_in` when inside the band, else `marker`. A `nil`/negative
 -- `value` means "no signal yet" — the bar is greyed with `no_signal` and no marker drawn.
 -- Pure drawing; the value + bounds live in the engine Model (the habitability observer).
--- `s` = { track, band, marker, marker_in?, no_signal?, marker_w? }.
+-- `s` = { track, band, marker, marker_in?, no_signal?, marker_w?, sheen? }.
+-- `s.sheen` (optional) = a 1px lit line along the top of the track (carved-stone rim).
 function W.gauge_draw(cmds, r, value, lo, hi, s)
   rect(cmds, r.x, r.y, r.w, r.h, s.track)
   -- the habitable band (green zone in the middle of the bar)
   rect(cmds, r.x + r.w * lo, r.y, r.w * (hi - lo), r.h, s.band)
+  if s.sheen then
+    rect(cmds, r.x, r.y, r.w, 1, s.sheen)
+  end
   if value == nil or value < 0 then
     if s.no_signal then
       rect(cmds, r.x, r.y, r.w, r.h, s.no_signal)

@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use flicker::app::{InputState, Key};
+use flicker::app::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2,
 };
@@ -18,6 +18,7 @@ use flicker::scene::{Scene, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_materials::Tables;
+use flicker_shell::{PauseScene, Theme};
 
 use crate::camera::OrbitCam;
 use crate::celestial::CelestialState;
@@ -46,7 +47,8 @@ const TEXT: [f32; 4] = [0.92, 0.94, 0.98, 1.0];
 const DIM: [f32; 4] = [0.70, 0.75, 0.85, 1.0];
 
 const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/world_ui.lua");
-const UI_ELEMENTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
+const UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/resources/ui_elements.json");
 
 /// Splash + first generation. Renders one frame, then builds the world.
 pub struct Loading {
@@ -128,6 +130,8 @@ pub struct World {
     white: Option<TextureHandle>,
     ui_capture: bool,
     esc_prev: bool,
+    /// The shared Prism UI theme (baked once in `enter`), handed to each pushed pause overlay.
+    theme: Option<Theme>,
 }
 
 impl World {
@@ -155,6 +159,7 @@ impl World {
             white: None,
             ui_capture: false,
             esc_prev: false,
+            theme: None,
         }
     }
 
@@ -433,6 +438,7 @@ fn natural_view(epoch: usize) -> ViewMode {
 impl Scene for World {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+        self.theme = Some(Theme::build(renderer));
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, UI_ELEMENTS);
@@ -456,7 +462,14 @@ impl Scene for World {
         let esc_edge = esc && !self.esc_prev;
         self.esc_prev = esc;
         if esc_edge {
-            return Transition::Push(Box::new(crate::shell::Pause::new()));
+            if let Some(theme) = self.theme {
+                return Transition::Push(Box::new(PauseScene::new(
+                    theme,
+                    &InputMap::default(),
+                    &AbstractControls::default(),
+                    &GamepadConfig::default(),
+                )));
+            }
         }
 
         let size = renderer.size();

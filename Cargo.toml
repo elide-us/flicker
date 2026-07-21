@@ -13,12 +13,13 @@ members = [
     "crates/flicker-world",
     "crates/flicker-primitive",
     "crates/flicker-core",
-    "crates/flicker-render",
+    "Alpha/crates/render/flicker-render",
     "crates/flicker-2d",
-    "crates/flicker-script",
+    "Alpha/crates/scripting/flicker-script",
     "crates/flicker-net",
     "crates/flicker-app",
-    "crates/flicker-scene",
+    "Alpha/crates/frontend/flicker-scene",
+    "crates/flicker-greed",
     "Alpha/crates/frontend/flicker-shell",
     "Alpha/crates/frontend/flicker-widgets",
     "Alpha/crates/animation/flicker-flight",
@@ -28,13 +29,16 @@ members = [
     "crates/flicker",
     "examples/voxel-cluster",
     "examples/flicker-sol2",
-    "Alpha/flicker-pocclusters",
-    "Alpha/flicker-clicktrainer",
     "Alpha/flicker-pocepochs",
-    "Alpha/flicker-solarbirth",
-    "Alpha/flicker-paperdoll",
     "Alpha/flicker-packeditor",
     "Alpha/crates/animation/flicker-skeletal",
+    # Game-package libraries (reusable client scenes) — root crates/.
+    "crates/flicker-clicktrainer",
+    "crates/flicker-solarbirth",
+    "crates/flicker-paperdoll",
+    "crates/flicker-pocclusters",
+    # The Prism-Alpha client (the app that hosts them) stays in Alpha/ (promoted client).
+    "Alpha/prism-alpha",
 ]
 
 [workspace.package]
@@ -105,12 +109,13 @@ flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "crates/flicker-primitive" }
 flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
-flicker-render = { version = "0.1.0", path = "crates/flicker-render" }
+flicker-render = { version = "0.1.0", path = "Alpha/crates/render/flicker-render" }
 flicker-2d = { version = "0.1.0", path = "crates/flicker-2d" }
-flicker-script = { version = "0.1.0", path = "crates/flicker-script" }
+flicker-script = { version = "0.1.0", path = "Alpha/crates/scripting/flicker-script" }
 flicker-net = { version = "0.1.0", path = "crates/flicker-net" }
 flicker-app = { version = "0.1.0", path = "crates/flicker-app" }
-flicker-scene = { version = "0.1.0", path = "crates/flicker-scene" }
+flicker-scene = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-scene" }
+flicker-greed = { version = "0.1.0", path = "crates/flicker-greed" }
 flicker-shell = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-shell" }
 flicker-widgets = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-widgets" }
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }

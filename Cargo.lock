@@ -705,12 +705,10 @@ dependencies = [
 name = "flicker-clicktrainer"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "fastrand",
  "flicker",
  "flicker-shell",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -732,6 +730,14 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flicker-greed"
+version = "0.1.0"
+dependencies = [
+ "fastrand",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -782,7 +788,6 @@ dependencies = [
  "image",
  "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -808,14 +813,13 @@ dependencies = [
 name = "flicker-pocclusters"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "flicker",
  "flicker-shell",
  "flicker-voxel",
  "flicker-worker",
  "glam",
+ "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -903,8 +907,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-shell",
  "flicker-system",
- "image",
  "tracing",
  "tracing-subscriber",
 ]
@@ -913,13 +917,11 @@ dependencies = [
 name = "flicker-solarbirth"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "flicker",
  "flicker-flight",
  "flicker-shell",
  "glam",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -970,12 +972,10 @@ dependencies = [
  "anyhow",
  "flicker",
  "flicker-materials",
+ "flicker-shell",
  "flicker-worldgen",
  "flicker-worldgrid",
  "glam",
- "image",
- "serde",
- "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2479,6 +2479,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
+name = "prism-alpha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flicker-clicktrainer",
+ "flicker-paperdoll",
+ "flicker-pocclusters",
+ "flicker-shell",
+ "flicker-solarbirth",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3718,12 +3732,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-shell",
  "flicker-voxel",
  "flicker-worker",
  "glam",
- "image",
- "serde",
- "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

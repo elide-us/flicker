@@ -1,4 +1,4 @@
--- In-game HUD, driven by Lua + `ui_elements.json` (the `UI.hud` section) and the
+-- In-game HUD, driven by Lua + `ui_elements.json` (the `UI.voxel` section) and the
 -- engine `Model` (live values published each frame). Layout / colours / labels
 -- live in the JSON; this script owns only behaviour: formatting the stat strings
 -- from the Model, and the checkbox click-state the engine queries. Edit
@@ -14,10 +14,10 @@ local checked = {}
 -- stable widget id — see widgets.lua. Values themselves live in the Model.
 local widget_state = {}
 
--- The interactive controls' widget rects, from UI.hud.controls (label on the
+-- The interactive controls' widget rects, from UI.voxel.controls (label on the
 -- left, widget at `widget_x`).
 local function control_rects(sh)
-  local c = UI.hud.controls
+  local c = UI.voxel.controls
   local rh = c.row_h
   -- Bottom-left, stacked upward, so the (now larger) checkbox table above never
   -- covers it. `margin_b` leaves room below the locomotion row for its dropdown
@@ -33,7 +33,7 @@ local function control_rects(sh)
 end
 
 local function checkbox_items()
-  return UI.hud.checkboxes.items
+  return UI.voxel.checkboxes.items
 end
 
 -- Day/night cycle panel (lower-right). Lays out a 3-unit-wide grid, two rows:
@@ -43,7 +43,7 @@ end
 -- Returns the config plus the four slider rects, the backdrop panel rect, and
 -- the label anchor points.
 local function lighting_rects(sw, sh)
-  local L = UI.hud.lighting
+  local L = UI.voxel.lighting
   local unit, gap, pad, th = L.unit, L.gap, L.pad, L.track_h
   local total_w = unit * 3 + gap
   local panel_w = total_w + pad * 2
@@ -132,7 +132,7 @@ end
 
 -- The i-th checkbox's clickable square, from the JSON geometry.
 local function box_rect(i)
-  local cb = UI.hud.checkboxes
+  local cb = UI.voxel.checkboxes
   return { x = cb.origin[1], y = cb.origin[2] + (i - 1) * cb.row_h, w = cb.box, h = cb.box }
 end
 
@@ -190,7 +190,7 @@ function M.update(mx, my, clicked, sw, sh, down)
     -- Day/night cycle sliders (lower-right): sun (time of day), moon (phase),
     -- year (season). Wide tracks + absolute drag, so a click/touch sets the
     -- handle where the cursor is — fine control, no big jumps.
-    if UI.hud.lighting then
+    if UI.voxel.lighting then
       local L, sun, moon, year, speed, fog, lat, epoch, panel = lighting_rects(sw, sh)
       states.time_of_day =
         Widgets.slider_update(widget_state, "sun", sun, mx, my, clicked, down, Model.time_of_day or 12, L.sun.min, L.sun.max)
@@ -248,12 +248,12 @@ function M.update(mx, my, clicked, sw, sh, down)
 end
 
 -- Stat readouts: each named line's style (y / size / colour) comes from
--- UI.hud.stats.<id>; the text is formatted here from the engine Model.
+-- UI.voxel.stats.<id>; the text is formatted here from the engine Model.
 local function stats(cmds)
   if not Model then
     return
   end
-  local s = UI.hud.stats
+  local s = UI.voxel.stats
   local function line(spec, text)
     local c = spec.color
     cmds[#cmds + 1] =
@@ -322,9 +322,9 @@ local function stats(cmds)
   end
 end
 
--- The feature-toggle checkbox panel, from UI.hud.checkboxes.
+-- The feature-toggle checkbox panel, from UI.voxel.checkboxes.
 local function checkboxes(cmds)
-  local cb = UI.hud.checkboxes
+  local cb = UI.voxel.checkboxes
   local h = cb.header
   cmds[#cmds + 1] = {
     kind = "text",
@@ -405,7 +405,7 @@ end
 -- Moon / Year) with a live value readout, anchored to the lower-right corner.
 -- Values come from the Model; the host applies the returned values next frame.
 local function lighting(cmds, sw, sh)
-  if not (Model and Widgets and UI.hud.lighting) then
+  if not (Model and Widgets and UI.voxel.lighting) then
     return
   end
   local L, sun, moon, year, speed, fog, lat, epoch, panel, labels = lighting_rects(sw, sh)

@@ -17,11 +17,12 @@ publish = false
 # Engine pillars: flicker-render (2D draw), flicker-scene (game-state stack),
 # flicker-app (winit loop + input). The umbrella re-exports all three.
 flicker = { path = "../../crates/flicker" }
+# The shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The
+# app now routes through `flicker_shell::run`; no per-app shell/UI copy.
+flicker-shell.workspace = true
 # The boxed-up star-system simulation (Phase 1 + Phase 2). This viewer is now a thin
 # shell over it: it feeds a `SystemConfig` and renders the `System`'s state.
 flicker-system.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# Splash-logo PNGs for the intro scene (loaded via Renderer::load_texture).
-image.workspace = true

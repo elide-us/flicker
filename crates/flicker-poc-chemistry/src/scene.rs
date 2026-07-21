@@ -313,7 +313,7 @@ impl Scene for ChemScene {
 impl ChemScene {
     fn draw_loading(&self, renderer: &mut Renderer) {
         renderer.set_layer(10.0);
-        let gold = [0.83, 0.67, 0.39, 1.0];
+        let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
         let dim = [0.6, 0.63, 0.68, 1.0];
         renderer.draw_text("GENERATING PLANET…", Vec2::new(40.0, 60.0), 30.0, gold);
         renderer.draw_text(
@@ -331,7 +331,7 @@ impl ChemScene {
         let s = &snap.state;
 
         renderer.set_layer(10.0);
-        let gold = [0.83, 0.67, 0.39, 1.0];
+        let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
         let text = [0.85, 0.87, 0.92, 1.0];
         let dim = [0.6, 0.63, 0.68, 1.0];
         let green = [0.55, 0.85, 0.55, 1.0];

@@ -1,850 +1,618 @@
--- Unified settings screen: Audio / Video / Input tabs.
+-- Prism Settings "workbench" — a windowed settings screen: title bar + left
+-- category rail (Video / Audio / Input, each keyed to a Septisigil gem) + right
+-- scrolling content + footer (Restore / Back / Apply). Driven by `UI.settings`
+-- (ui_elements.json); current values flow in via `Model`, changes flow out as
+-- results the shell persists.
 --
--- Driven by `UI.settings` (from ui_elements.json). Current values flow in via
--- `Model` (set by the host each frame); changes flow out as momentary actions
--- or value updates in the return table. The host persists to `settings.json`.
---
--- Model keys are flat (e.g. `Model.audio_master`) since ValueMap only supports
--- scalars. The script reads them with `Model["key"]` syntax.
+-- Chrome + controls are VECTOR `panel` commands (rounded-rect + gradient +
+-- border). Interaction reuses the shared `Widgets` toolkit (slider / dropdown /
+-- radio / checkbox hit-tests); this script owns the layout + the flat drawing.
+-- A row's `wired` flag marks whether it is bound to a real backend — inert rows
+-- (FOV, brightness, edge-pan, all of Audio, the controller device) are a layout
+-- preview and keep their value locally.
 
 local M = {}
 
 -- ── state ──────────────────────────────────────────────────────────
-local active_tab   = 1           -- 1=Audio, 2=Video, 3=Input
-local input_subtab = 1           -- 1=Keyboard, 2=Mouse, 3=Controller (within Input tab)
-local hover        = nil         -- hovered item index
-local widget_state = {}          -- transient widget state (slider drags, dropdown open flags)
-local rebind_action = nil        -- action id currently being rebound (string) or nil
-local rebind_for_gamepad = false -- true when rebinding a gamepad action
-local scroll_offset = 0.0        -- scroll offset for keyboard/controller binding lists
-local scroll_vel = 0.0           -- smooth scroll velocity
+local section = "video"        -- active category: video / audio / input
+local input_tab = "keyboard"   -- active input sub-tab
+local scroll = 0.0             -- content scroll offset (px)
+local ws = {}                  -- transient widget state (drag / open flags)
+local lv = {}                  -- local values for inert (unwired) controls
+local applied = 0.0            -- "settings applied" flash countdown (s)
 
-local TAB_NAMES = { "AUDIO", "VIDEO", "INPUT" }
-local SCROLL_SPEED = 48.0  -- pixels per scroll tick
+local SCROLL_SPEED = 46.0
 
--- ── helpers ────────────────────────────────────────────────────────
-local function clamp(v, lo, hi)
-  if v < lo then return lo elseif v > hi then return hi else return v end
+-- ── small helpers ──────────────────────────────────────────────────
+local function clamp(v, lo, hi) if v < lo then return lo elseif v > hi then return hi else return v end end
+local function point_in(px, py, x, y, w, h) return px >= x and px <= x + w and py >= y and py <= y + h end
+local function mnum(k, d) local v = Model[k]; if v == nil then return d end; return v end
+local function mbool(k, d) local v = Model[k]; if v == nil then return d end; return v end
+local function lval(id, d) if lv[id] == nil then lv[id] = d end; return lv[id] end
+local function with_alpha(c, a) return { c[1], c[2], c[3], a } end
+
+-- ── draw emitters ──────────────────────────────────────────────────
+local function panel(cmds, x, y, w, h, c0, c1, grad, radius, border, bcolor, feather, layer)
+  local cmd = { kind = "panel", x = x, y = y, w = w, h = h,
+    r = c0[1], g = c0[2], b = c0[3], a = c0[4],
+    grad = grad or 0, radius = radius or 0, border = border or 0, feather = feather or 0, layer = layer or 0 }
+  if c1 then cmd.r2 = c1[1]; cmd.g2 = c1[2]; cmd.b2 = c1[3]; cmd.a2 = c1[4] end
+  if bcolor then cmd.br = bcolor[1]; cmd.bg = bcolor[2]; cmd.bb = bcolor[3]; cmd.ba = bcolor[4] end
+  cmds[#cmds + 1] = cmd
 end
-
-local function point_in(px, py, x, y, w, h)
-  return px >= x and px <= x + w and py >= y and py <= y + h
+local function rect(cmds, x, y, w, h, c, layer) panel(cmds, x, y, w, h, c, nil, 0, 0, 0, nil, 0, layer) end
+local function text(cmds, x, y, str, size, c, align, font, layer)
+  cmds[#cmds + 1] = { kind = "text", x = x, y = y, text = str, size = size, align = align or "left",
+    font = font, r = c[1], g = c[2], b = c[3], a = c[4] * (Model._alpha or 1.0), layer = layer or 0 }
 end
-
-local function rgba(c)
-  return c[1], c[2], c[3], c[4]
-end
-
-local function rect(cmds, x, y, w, h, c, layer)
-  local r, g, b, a = rgba(c)
-  cmds[#cmds + 1] = { kind = "rect", x = x, y = y, w = w, h = h, r = r, g = g, b = b, a = a, layer = layer }
-end
-
-local function outline(cmds, rr, t, c)
-  rect(cmds, rr.x, rr.y, rr.w, t, c)
-  rect(cmds, rr.x, rr.y + rr.h - t, rr.w, t, c)
-  rect(cmds, rr.x, rr.y, t, rr.h, c)
-  rect(cmds, rr.x + rr.w - t, rr.y, t, rr.h, c)
-end
-
-local function text(cmds, x, y, str, size, c, align, layer)
-  local r, g, b, a = rgba(c)
-  cmds[#cmds + 1] = { kind = "text", x = x, y = y, text = str, size = size,
-    align = align or "left", r = r, g = g, b = b, a = a, layer = layer }
-end
-
-local function centered(cmds, x, y, str, size, c, layer)
-  text(cmds, x, y, str, size, c, "center", layer)
-end
-
-local function sprite(cmds, tex, x, y, w, h, c, layer)
-  local r, g, b, a = rgba(c)
-  cmds[#cmds + 1] = { kind = "sprite", tex = tex, x = x, y = y, w = w, h = h,
-    r = r, g = g, b = b, a = a, layer = layer }
-end
-
--- ── scrollbar ──────────────────────────────────────────────────────
--- Draws a thin gold scrollbar on the right edge of the content area.
-local function draw_scrollbar(cmds, l, total_h, scroll, style)
-  local visible_h = l.content_h
-  if total_h <= visible_h then return end
-  local bar_x = l.content_x + l.content_w - 6
-  local bar_w = 4
-  local thumb_h = math.max(24, visible_h * (visible_h / total_h))
-  local max_scroll = total_h - visible_h
-  local thumb_y = l.content_y + (scroll / max_scroll) * (visible_h - thumb_h)
-  rect(cmds, bar_x, l.content_y, bar_w, visible_h, { 0.08, 0.09, 0.11, 0.6 })
-  rect(cmds, bar_x, thumb_y, bar_w, thumb_h, style.gold)
-end
-
--- Returns whether a row at world-y `row_y` with height `rh` is fully inside
--- the clip region (after applying scroll offset). clip_top defaults to
--- l.content_y. If yes, returns the screen-y to draw at; otherwise returns nil.
-local function scroll_clip(l, row_y, rh, scroll, clip_top)
-  local top = clip_top or l.content_y
-  local sy = row_y - scroll
-  if sy + rh <= top or sy >= l.content_y + l.content_h then
-    return nil
+-- A small downward caret from stacked rows (avoids a glyph-font dependency).
+local function caret(cmds, cx, cy, s, c, layer)
+  for i = 0, 3 do
+    local w = s * (1 - i / 4)
+    rect(cmds, cx - w * 0.5, cy - 1 + i, w, 1, c, layer)
   end
-  return sy
 end
 
--- ── read Model helpers ─────────────────────────────────────────────
-local function model_number(key, default)
-  local v = Model[key]
-  if v == nil then return default end
-  return v
-end
-
-local function model_bool(key, default)
-  local v = Model[key]
-  if v == nil then return default end
-  return v
-end
-
--- ── layout ─────────────────────────────────────────────────────────
+-- ── window layout ──────────────────────────────────────────────────
 local function layout(sw, sh)
-  local s = UI.settings
-  local pw, ph = s.panel.w, s.panel.h
-  local px = math.floor((sw - pw) * 0.5 + 0.5)
-  local py = math.floor((sh - ph) * 0.5 + 0.5)
-  local t = s.tabs
-  local content_y = py + s.content.y
+  local S = UI.settings
+  local win = S.window
+  local m = win.min_margin
+  local w = math.min(win.w, sw - m * 2)
+  local h = math.min(win.h, sh - m * 2)
+  local x = math.floor((sw - w) * 0.5 + 0.5)
+  local y = math.floor((sh - h) * 0.5 + 0.5)
+  local tb = S.titlebar.h
+  local fb = S.footer.h
+  local nav_w = S.nav.w
+  local body_y = y + tb
+  local body_h = h - tb - fb
   return {
-    px = px, py = py, pw = pw, ph = ph,
-    tab_y = py + t.y,
-    tab_h = t.h,
-    tab_gap = t.gap,
-    content_x = px + s.content.pad_x,
-    content_y = content_y,
-    content_w = pw - s.content.pad_x * 2,
-    content_h = ph - (content_y - py) - 60,
-    back_x = px + (pw - s.back_button.w) * 0.5,
-    back_y = py + ph - s.back_button.h - 14,
-    back_w = s.back_button.w,
-    back_h = s.back_button.h,
+    x = x, y = y, w = w, h = h, r = x + w, b = y + h,
+    tb = tb, fb = fb,
+    body_y = body_y, body_h = body_h, footer_y = y + h - fb,
+    nav_w = nav_w,
+    cx = x + nav_w,               -- content left
+    cw = w - nav_w,               -- content width
   }
 end
 
-local function tab_rect(l, i)
-  local s = UI.settings
-  local t = s.tabs
-  local pad = s.content.pad_x
-  local tab_w = l.pw - pad * 2
-  local tw = (tab_w - (3 - 1) * t.gap) / 3
-  local x = l.px + pad + (i - 1) * (tw + t.gap)
-  return { x = x, y = l.tab_y, w = tw, h = t.h }
-end
-
--- ── slider widget ──────────────────────────────────────────────────
-local function slider_r(l, x, y, w)
-  return { x = x, y = y, w = w, h = 8 }
-end
-
-local function slider_update(id, r, mx, my, clicked, down, value, min, max)
-  if clicked and point_in(mx, my, r.x, r.y - 6, r.w, r.h + 12) then
-    widget_state["sl_" .. id] = true
+-- ── nav rail ───────────────────────────────────────────────────────
+local function nav_rects(l)
+  local S = UI.settings
+  local nav = S.nav
+  local out = {}
+  local yy = l.body_y + nav.pad + 22
+  for i, it in ipairs(S.nav_items) do
+    out[i] = { id = it.id, y = yy, x = l.x + nav.pad, w = l.nav_w - nav.pad * 2, h = nav.row_h, item = it }
+    yy = yy + nav.row_h + nav.gap
   end
-  if not down then
-    widget_state["sl_" .. id] = nil
-  end
-  if widget_state["sl_" .. id] then
-    value = min + clamp((mx - r.x) / r.w, 0, 1) * (max - min)
-  end
-  return value
+  return out
 end
 
-local function slider_draw(cmds, r, value, min, max, style)
-  local t = clamp((value - min) / (max - min), 0, 1)
-  rect(cmds, r.x, r.y, r.w, r.h, style.track)
-  rect(cmds, r.x, r.y, r.w * t, r.h, style.fill)
-  local hw = style.handle_w
-  rect(cmds, r.x + r.w * t - hw * 0.5, r.y - 4, hw, r.h + 8, style.handle)
+-- ── content header (fixed) + scroll region ─────────────────────────
+local function content_regions(l)
+  local S = UI.settings
+  local head_h = (section == "input") and 78 or 68
+  local pad = S.content.pad_x
+  return {
+    hx = l.cx + pad, hy = l.body_y + S.content.pad_top, hw = l.cw - pad * 2,
+    head_bottom = l.body_y + head_h,
+    sx = l.cx + pad, sy = l.body_y + head_h + 10,
+    sw = l.cw - pad * 2, sh = l.footer_y - (l.body_y + head_h + 10) - 6,
+  }
 end
 
--- ── checkbox widget ────────────────────────────────────────────────
-local function checkbox_r(l, x, y, size)
-  return { x = x, y = y + 3, w = size, h = size }
-end
-
-local function checkbox_draw(cmds, r, checked, style)
-  rect(cmds, r.x, r.y, r.w, r.h, style.box)
-  if checked then
-    local inset = 4
-    rect(cmds, r.x + inset, r.y + inset, r.w - inset * 2, r.h - inset * 2, style.check)
-  end
-end
-
--- ── dropdown widget ────────────────────────────────────────────────
-local function dropdown_update(id, r, mx, my, clicked, count)
-  if clicked then
-    if widget_state["dd_" .. id] then
-      local row_h = UI.settings.style.dropdown.row_h
-      for i = 1, count do
-        local ry = r.y + r.h * i
-        if point_in(mx, my, r.x, ry, r.w, row_h) then
-          widget_state["dd_val_" .. id] = i
-        end
+-- Build the ordered, scrollable content items for the active section. Each item:
+-- { kind, h, ... }. Heights drive scroll; kinds drive draw + hit-test.
+local function build_items()
+  local S = UI.settings
+  local items = {}
+  local row_h, group_gap = S.row.h, S.row.group_gap
+  local function add_groups(groups)
+    for _, g in ipairs(groups) do
+      items[#items + 1] = { kind = "group", name = g.name, h = 30 }
+      for _, r in ipairs(g.rows or {}) do
+        items[#items + 1] = { kind = "row", row = r, h = row_h }
       end
-      widget_state["dd_" .. id] = nil
-    elseif point_in(mx, my, r.x, r.y, r.w, r.h) then
-      widget_state["dd_" .. id] = true
+      items[#items + 1] = { kind = "gap", h = group_gap - 12 }
     end
   end
-end
-
-local function dropdown_draw(cmds, r, options, selected, style, id)
-  rect(cmds, r.x, r.y, r.w, r.h, style.cell)
-  text(cmds, r.x + 8, r.y + 3, options[selected] or "?", style.label_size, style.label, "left")
-  local cx = r.x + r.w - 14
-  local cy = r.y + r.h * 0.5
-  local s = 4
-  local open = widget_state["dd_" .. id]
-  if open then
-    rect(cmds, cx - s, cy - s * 0.3, s * 2, s * 0.6, style.label)
-  else
-    rect(cmds, cx - s, cy + s * 0.3, s * 2, s * 0.6, style.label)
-  end
-  if open then
-    local row_h = style.row_h
-    for i = 1, #options do
-      local ry = r.y + r.h * i
-      local fill = (i == selected) and style.hot or style.cell
-      rect(cmds, r.x, ry, r.w, row_h, fill, 1)
-      text(cmds, r.x + 8, ry + 3, options[i], style.label_size, style.label, "left", 1)
-    end
-  end
-end
-
--- ── draw: AUDIO tab ────────────────────────────────────────────────
-local function draw_audio(cmds, l, style)
-  local s = UI.settings.audio
-  local y = l.content_y
-  local lx = l.content_x + 8
-  local sx = l.content_x + 192
-  local sw = l.content_w - 264
-
-  for i, sl in ipairs(s.sliders) do
-    local val = model_number("audio_" .. sl.id, sl.default)
-    text(cmds, lx, y + 2, sl.label, style.label_size, style.label_color)
-    local r = slider_r(l, sx, y + style.row_height - 12, sw)
-    slider_draw(cmds, r, val, sl.min, sl.max, style.slider)
-    local val_str = string.format("%.2f", val)
-    text(cmds, sx + sw + 12, y + 2, val_str, style.label_size, style.label_dim)
-    y = y + style.row_height + 8
-  end
-end
-
--- ── draw: VIDEO tab ────────────────────────────────────────────────
-local function draw_video(cmds, l, style)
-  local s = UI.settings.video
-  local y = l.content_y
-  local lx = l.content_x + 8
-  local wx = l.content_x + 192
-  local ww = l.content_w - 200
-  local dd_style = style.dropdown
-
-  -- Display Mode
-  text(cmds, lx, y + 2, "Display Mode", style.label_size, style.label_color)
-  local mode_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-  local mode_sel = model_number("video_display_mode", 1)
-  dropdown_update("display_mode", mode_r, Model.mx, Model.my, Model.clicked, #s.display_modes)
-  local new_mode = widget_state["dd_val_display_mode"]
-  if new_mode then mode_sel = new_mode; widget_state["dd_val_display_mode"] = nil end
-  dropdown_draw(cmds, mode_r, s.display_modes, mode_sel, dd_style, "display_mode")
-  y = y + style.row_height + 12
-
-  -- Resolution
-  text(cmds, lx, y + 2, "Resolution", style.label_size, style.label_color)
-  local res_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-  local res_sel = model_number("video_resolution", 3)
-  dropdown_update("resolution", res_r, Model.mx, Model.my, Model.clicked, #s.resolutions)
-  local new_res = widget_state["dd_val_resolution"]
-  if new_res then res_sel = new_res; widget_state["dd_val_resolution"] = nil end
-  dropdown_draw(cmds, res_r, s.resolutions, res_sel, dd_style, "resolution")
-  y = y + style.row_height + 12
-
-  -- Quality
-  text(cmds, lx, y + 2, "Graphics Quality", style.label_size, style.label_color)
-  local qual_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-  local qual_sel = model_number("video_quality", 3)
-  dropdown_update("quality", qual_r, Model.mx, Model.my, Model.clicked, #s.quality_levels)
-  local new_qual = widget_state["dd_val_quality"]
-  if new_qual then qual_sel = new_qual; widget_state["dd_val_quality"] = nil end
-  dropdown_draw(cmds, qual_r, s.quality_levels, qual_sel, dd_style, "quality")
-  y = y + style.row_height + 12
-
-  -- VSync
-  local vsync = model_bool("video_vsync", true)
-  text(cmds, lx + style.checkbox.size + 8, y + 2, "VSync", style.label_size, style.label_color)
-  local cb_r = checkbox_r(l, lx, y, style.checkbox.size)
-  if Model.clicked and point_in(Model.mx, Model.my, cb_r.x - 4, cb_r.y - 6, cb_r.w + 8, cb_r.h + 12) then
-    vsync = not vsync
-  end
-  checkbox_draw(cmds, cb_r, vsync, style.checkbox)
-  y = y + style.row_height + 8
-
-  -- FPS Limit
-  text(cmds, lx, y + 2, "FPS Limit", style.label_size, style.label_color)
-  local fps_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-  local fps_sel = model_number("video_fps_limit", 2)
-  dropdown_update("fps_limit", fps_r, Model.mx, Model.my, Model.clicked, #s.fps_limits)
-  local new_fps = widget_state["dd_val_fps_limit"]
-  if new_fps then fps_sel = new_fps; widget_state["dd_val_fps_limit"] = nil end
-  dropdown_draw(cmds, fps_r, s.fps_limits, fps_sel, dd_style, "fps_limit")
-  y = y + style.row_height + 12
-end
-
--- ── draw: INPUT tab ────────────────────────────────────────────────
-local function draw_input_section_header(cmds, x, y, w, label, style)
-  rect(cmds, x, y, w, style.row_height, style.section_bg)
-  text(cmds, x + 8, y + 8, label, style.section_header_size, style.section_header_color)
-  return y + style.row_height + 4
-end
-
-local function draw_keyboard(cmds, l, style)
-  local s = UI.settings.input.sections[1]
-  local lx = l.content_x + 8
-  local bx = l.content_x + l.content_w * 0.48
-  local bw = l.content_w * 0.48
-  local rh = style.row_height
-
-  -- Section header (fixed, not scrolled)
-  local header_y = l.content_y
-  rect(cmds, l.content_x, header_y, l.content_w, style.row_height, style.section_bg)
-  text(cmds, l.content_x + 8, header_y + 8, s.label, style.section_header_size, style.section_header_color)
-  header_y = header_y + style.row_height + 4
-
-  -- Column headers (fixed, not scrolled)
-  text(cmds, lx, header_y, "Action", style.header_size, style.header_color)
-  text(cmds, bx, header_y, "Key Binding", style.header_size, style.header_color)
-  rect(cmds, l.content_x, header_y + style.header_size + 4, l.content_w, 1, style.divider)
-  local rows_y_start = header_y + style.header_size + 12
-
-  -- Compute total rows height and clamp scroll
-  local total_rows_h = #s.actions * rh
-  local header_used = (rows_y_start - l.content_y)
-  local visible_rows_h = l.content_h - header_used
-  local max_scroll = math.max(0, total_rows_h - visible_rows_h)
-  scroll_offset = clamp(scroll_offset, 0, max_scroll)
-
-  -- Draw scrollbar
-  draw_scrollbar(cmds, l, total_rows_h, scroll_offset, style)
-
-  -- Draw rows (scrolled, clipped below header divider)
-  for i, action in ipairs(s.actions) do
-    local row_y = rows_y_start + (i - 1) * rh
-    local sy = scroll_clip(l, row_y, rh, scroll_offset, rows_y_start)
-    if sy then
-      local row_bg = (i % 2 == 1) and style.section_bg or { 0.14, 0.15, 0.18, 1.0 }
-      rect(cmds, l.content_x, sy, l.content_w, rh, row_bg)
-      text(cmds, lx, sy + 6, action.label, style.label_size, style.label_color)
-
-      if rebind_action == action.id and not rebind_for_gamepad then
-        rect(cmds, bx, sy + 2, bw - 8, rh - 4, style.rebind_bg)
-        text(cmds, bx + 8, sy + 6, "Press any key...", style.label_size, style.header_color)
-      else
-        local binding_str = "< unbound >"
-        local col = style.label_dim
-        text(cmds, bx + 8, sy + 6, binding_str, style.label_size, col)
-        if point_in(Model.mx, Model.my, bx, sy, bw, rh) then
-          rect(cmds, bx, sy, bw, rh, { 0.83, 0.67, 0.39, 0.1 })
+  if section == "video" then
+    add_groups(S.video.groups)
+  elseif section == "audio" then
+    items[#items + 1] = { kind = "banner", h = 70 }
+    add_groups(S.audio.groups)
+  elseif section == "input" then
+    if input_tab == "keyboard" then
+      if Model.rebind_action then items[#items + 1] = { kind = "rebind", h = 52 } end
+      for _, g in ipairs(S.input.keyboard.groups) do
+        items[#items + 1] = { kind = "group", name = g.name, h = 30 }
+        for _, a in ipairs(g.actions) do
+          items[#items + 1] = { kind = "key", action = a, h = 42 }
         end
+        items[#items + 1] = { kind = "gap", h = group_gap - 12 }
       end
-    end
-  end
-
-  -- Redraw the fixed header area on top to cover any row bleed
-  rect(cmds, l.content_x, l.content_y, l.content_w, rows_y_start - l.content_y, { 0.06, 0.07, 0.09, 1.0 })
-  rect(cmds, l.content_x, l.content_y, l.content_w, style.row_height, style.section_bg)
-  text(cmds, l.content_x + 8, l.content_y + 8, s.label, style.section_header_size, style.section_header_color)
-  text(cmds, lx, header_y, "Action", style.header_size, style.header_color)
-  text(cmds, bx, header_y, "Key Binding", style.header_size, style.header_color)
-  rect(cmds, l.content_x, header_y + style.header_size + 4, l.content_w, 1, style.divider)
-end
-
-local function draw_mouse(cmds, l, style)
-  local s = UI.settings.input.sections[2]
-  local y = l.content_y
-  local lx = l.content_x + 8
-  local sx = l.content_x + 192
-  local sw = l.content_w - 264
-  local rh = style.row_height
-
-  y = draw_input_section_header(cmds, l.content_x, y, l.content_w, s.label, style)
-
-  for _, sl in ipairs(s.sliders) do
-    local val = model_number("input_mouse_" .. sl.id, sl.default)
-    text(cmds, lx, y + 2, sl.label, style.label_size, style.label_color)
-    local r = slider_r(l, sx, y + rh - 12, sw)
-    slider_draw(cmds, r, val, sl.min, sl.max, style.slider)
-    local val_str = string.format("%.4f", val)
-    text(cmds, sx + sw + 12, y + 2, val_str, style.label_size, style.label_dim)
-    y = y + rh + 8
-  end
-
-  y = y + 4
-  for _, cb in ipairs(s.checkboxes) do
-    local checked = model_bool("input_mouse_" .. cb.id, cb.default)
-    text(cmds, lx + style.checkbox.size + 8, y + 2, cb.label, style.label_size, style.label_color)
-    local cb_r = checkbox_r(l, lx, y, style.checkbox.size)
-    checkbox_draw(cmds, cb_r, checked, style.checkbox)
-    y = y + rh + 4
-  end
-end
-
-local function draw_controller_bindings(cmds, l, style, s, y_start, scroll)
-  local lx = l.content_x + 8
-  local bx = l.content_x + l.content_w * 0.48
-  local bw = l.content_w * 0.48
-  local rh = style.row_height
-
-  local sy = scroll_clip(l, y_start, style.header_size + 12, scroll)
-  if sy then
-    text(cmds, lx, sy, "Action", style.header_size, style.header_color)
-    text(cmds, bx, sy, "Gamepad Binding", style.header_size, style.header_color)
-    rect(cmds, l.content_x, sy + style.header_size + 4, l.content_w, 1, style.divider)
-  end
-  local y = y_start + style.header_size + 12
-
-  for i, action in ipairs(s.actions) do
-    local row_y = y + (i - 1) * rh
-    local sy2 = scroll_clip(l, row_y, rh, scroll)
-    if sy2 then
-      local row_bg = (i % 2 == 1) and style.section_bg or { 0.14, 0.15, 0.18, 1.0 }
-      rect(cmds, l.content_x, sy2, l.content_w, rh, row_bg)
-      text(cmds, lx, sy2 + 6, action.label, style.label_size, style.label_color)
-
-      if rebind_action == action.id and rebind_for_gamepad then
-        rect(cmds, bx, sy2 + 2, bw - 8, rh - 4, style.rebind_bg)
-        text(cmds, bx + 8, sy2 + 6, "Press a button...", style.label_size, style.header_color)
-      else
-        local binding_str = "< unbound >"
-        local col = style.label_dim
-        text(cmds, bx + 8, sy2 + 6, binding_str, style.label_size, col)
-        if point_in(Model.mx, Model.my, bx, sy2, bw, rh) then
-          rect(cmds, bx, sy2, bw, rh, { 0.83, 0.67, 0.39, 0.1 })
-        end
-      end
-    end
-  end
-end
-
-local function draw_controller(cmds, l, style)
-  local s = UI.settings.input.sections[3]
-  local lx = l.content_x + 8
-  local sx = l.content_x + 192
-  local sw = l.content_w - 264
-  local rh = style.row_height
-  local dd_style = style.dropdown
-
-  -- Compute total content height for scroll clamping
-  local fixed_h = style.row_height + 4  -- section header
-  fixed_h = fixed_h + #s.sliders * (rh + 8)
-  fixed_h = fixed_h + 4 + #s.checkboxes * (rh + 4)
-  fixed_h = fixed_h + 4 + #s.dropdowns * (rh + 8)
-  fixed_h = fixed_h + 8  -- gap before bindings
-  local bindings_header_h = style.header_size + 12
-  local bindings_rows_h = #s.actions * rh
-  local total_h = fixed_h + bindings_header_h + bindings_rows_h
-  local max_scroll = math.max(0, total_h - l.content_h)
-  scroll_offset = clamp(scroll_offset, 0, max_scroll)
-
-  -- Draw scrollbar
-  draw_scrollbar(cmds, l, total_h, scroll_offset, style)
-
-  -- Section header (fixed, not scrolled)
-  local y = l.content_y
-  rect(cmds, l.content_x, y, l.content_w, style.row_height, style.section_bg)
-  text(cmds, l.content_x + 8, y + 8, s.label, style.section_header_size, style.section_header_color)
-  y = y + style.row_height + 4
-
-  -- Settings (scrolled)
-  for _, sl in ipairs(s.sliders) do
-    local val = model_number("input_ctrl_" .. sl.id, sl.default)
-    local sy = scroll_clip(l, y, rh, scroll_offset)
-    if sy then
-      text(cmds, lx, sy + 2, sl.label, style.label_size, style.label_color)
-      local r = slider_r(l, sx, sy + rh - 12, sw)
-      slider_draw(cmds, r, val, sl.min, sl.max, style.slider)
-      local val_str = string.format("%.2f", val)
-      text(cmds, sx + sw + 12, sy + 2, val_str, style.label_size, style.label_dim)
-    end
-    y = y + rh + 8
-  end
-
-  y = y + 4
-  for _, cb in ipairs(s.checkboxes) do
-    local checked = model_bool("input_ctrl_" .. cb.id, cb.default)
-    local sy = scroll_clip(l, y, rh, scroll_offset)
-    if sy then
-      text(cmds, lx + style.checkbox.size + 8, sy + 2, cb.label, style.label_size, style.label_color)
-      local cb_r = checkbox_r(l, lx, sy, style.checkbox.size)
-      checkbox_draw(cmds, cb_r, checked, style.checkbox)
-    end
-    y = y + rh + 4
-  end
-
-  y = y + 4
-  for _, dd in ipairs(s.dropdowns) do
-    local sel = model_number("input_ctrl_" .. dd.id, dd.default)
-    local sy = scroll_clip(l, y, rh, scroll_offset)
-    if sy then
-      text(cmds, lx, sy + 2, dd.label, style.label_size, style.label_color)
-      local dr = { x = sx, y = sy, w = sw, h = dd_style.row_h }
-      dropdown_update(dd.id, dr, Model.mx, Model.my, Model.clicked, #dd.options)
-      local new_sel = widget_state["dd_val_" .. dd.id]
-      if new_sel then sel = new_sel - 1; widget_state["dd_val_" .. dd.id] = nil end
-      dropdown_draw(cmds, dr, dd.options, sel + 1, dd_style, dd.id)
+    elseif input_tab == "mouse" then
+      add_groups(S.input.mouse.groups)
     else
-      -- Still update dropdown state even when clipped
-      local dr = { x = sx, y = y, w = sw, h = dd_style.row_h }
-      dropdown_update(dd.id, dr, Model.mx, Model.my, Model.clicked, #dd.options)
-      local new_sel = widget_state["dd_val_" .. dd.id]
-      if new_sel then sel = new_sel - 1; widget_state["dd_val_" .. dd.id] = nil end
+      items[#items + 1] = { kind = "empty", h = 320 }
     end
-    y = y + rh + 8
   end
-
-  y = y + 8
-  -- Bindings header and rows (scrolled)
-  draw_controller_bindings(cmds, l, style, s, y, scroll_offset)
+  return items
 end
 
-local function draw_input(cmds, l, style)
-  local sub_names = { "KEYBOARD", "MOUSE", "CONTROLLER" }
-  local sub_w = l.content_w / 3
-  for i, name in ipairs(sub_names) do
-    local sx = l.content_x + (i - 1) * sub_w
-    local is_active = (i == input_subtab)
-    if is_active then
-      rect(cmds, sx, l.content_y, sub_w, style.row_height, { 0.14, 0.15, 0.18, 0.6 })
-    end
-    local col = is_active and style.header_color or style.label_dim
-    centered(cmds, sx + sub_w * 0.5, l.content_y + 8, name, style.section_header_size, col)
-    if is_active then
-      rect(cmds, sx, l.content_y + style.row_height - 2, sub_w, 2, style.gold)
-    end
-    if point_in(Model.mx, Model.my, sx, l.content_y, sub_w, style.row_height) then
-      rect(cmds, sx, l.content_y, sub_w, style.row_height, { 0.83, 0.67, 0.39, 0.1 })
-    end
-  end
+local function items_total_h(items)
+  local t = 0
+  for _, it in ipairs(items) do t = t + it.h end
+  return t
+end
 
-  local inner_y = l.content_y + style.row_height + 8
-  local inner_h = l.content_h - (inner_y - l.content_y)
-  local inner_l = { content_x = l.content_x, content_y = inner_y, content_w = l.content_w, content_h = inner_h }
-
-  if input_subtab == 1 then
-    draw_keyboard(cmds, inner_l, style)
-  elseif input_subtab == 2 then
-    draw_mouse(cmds, inner_l, style)
-  else
-    draw_controller(cmds, inner_l, style)
+-- ── control value access ───────────────────────────────────────────
+-- Slider display value (in the row's min..max), reading Model when wired.
+local function slider_value(r)
+  if r.wired and r.id == "m_look" then
+    local b = mnum("input_mouse_sensitivity", (r.backend_min + r.backend_max) * 0.5)
+    return clamp((b - r.backend_min) / (r.backend_max - r.backend_min) * 100.0, r.min, r.max)
   end
+  return lval(r.id, r.default or r.min)
+end
+
+local function index_value(r)  -- 0-based selected index for dropdown/segment/cycler
+  if r.wired then
+    if r.id == "display_mode" then return math.floor(mnum("video_display_mode", 0)) end
+    if r.id == "resolution" then return math.floor(mnum("video_resolution", 0)) end
+    if r.id == "quality" then return math.floor(mnum("video_quality", 0)) end
+    if r.id == "fps_limit" then return math.floor(mnum("video_fps_limit", 0)) end
+  end
+  return lval(r.id, r.default or 0)
+end
+
+local function bool_value(r)
+  if r.wired then
+    if r.id == "vsync" then return mbool("video_vsync", true) end
+    if r.id == "m_invert" then return mbool("input_mouse_invert_pitch", false) end
+  end
+  return lval(r.id .. "_b", r.default_on or false)
 end
 
 -- ── update ─────────────────────────────────────────────────────────
 function M.update(mx, my, clicked, sw, sh, down)
+  local S = UI.settings
   local l = layout(sw, sh)
-  local style = UI.settings.style
   local results = {}
+  down = down or false
 
-  hover = nil
-
-  -- ── tab clicks ──
-  for i = 1, 3 do
-    local tr = tab_rect(l, i)
-    if clicked and point_in(mx, my, tr.x, tr.y, tr.w, tr.h) then
-      if active_tab ~= i then
-        scroll_offset = 0
-      end
-      active_tab = i
+  -- nav
+  for _, n in ipairs(nav_rects(l)) do
+    if clicked and point_in(mx, my, n.x, n.y, n.w, n.h) and section ~= n.id then
+      section = n.id; scroll = 0
     end
   end
 
-  -- ── input sub-tab clicks ──
-  if active_tab == 3 then
-    local sub_w = l.content_w / 3
-    for i = 1, 3 do
-      local sx = l.content_x + (i - 1) * sub_w
-      if clicked and point_in(mx, my, sx, l.content_y, sub_w, style.row_height) then
-        if input_subtab ~= i then
-          scroll_offset = 0
-        end
-        input_subtab = i
-      end
-    end
-  end
-
-  -- ── scroll wheel ──
-  local scroll_delta = model_number("scroll", 0) * SCROLL_SPEED
-  if active_tab == 3 and (input_subtab == 1 or input_subtab == 3) then
-    scroll_offset = scroll_offset - scroll_delta
-  end
-
-  -- ── tab-specific update logic ──
-  if active_tab == 1 then
-    local s = UI.settings.audio
-    local slider_w = l.content_w - 200
-    local sx = l.content_x + 192
-    local y = l.content_y
-    for _, sl in ipairs(s.sliders) do
-      local val = model_number("audio_" .. sl.id, sl.default)
-      local r = slider_r(l, sx, y + style.row_height - 12, slider_w)
-      val = slider_update(sl.id, r, mx, my, clicked, down or false, val, sl.min, sl.max)
-      results["audio_" .. sl.id] = val
-      y = y + style.row_height + 8
-    end
-
-  elseif active_tab == 2 then
-    local s = UI.settings.video
-    local lx = l.content_x + 8
-    local wx = l.content_x + 192
-    local ww = l.content_w - 200
-    local dd_style = style.dropdown
-    local y = l.content_y
-
-    local mode_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-    dropdown_update("display_mode", mode_r, mx, my, clicked, #s.display_modes)
-    local new_mode = widget_state["dd_val_display_mode"]
-    if new_mode then results.video_display_mode = new_mode; widget_state["dd_val_display_mode"] = nil end
-    y = y + style.row_height + 12
-
-    local res_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-    dropdown_update("resolution", res_r, mx, my, clicked, #s.resolutions)
-    local new_res = widget_state["dd_val_resolution"]
-    if new_res then results.video_resolution = new_res; widget_state["dd_val_resolution"] = nil end
-    y = y + style.row_height + 12
-
-    local qual_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-    dropdown_update("quality", qual_r, mx, my, clicked, #s.quality_levels)
-    local new_qual = widget_state["dd_val_quality"]
-    if new_qual then results.video_quality = new_qual; widget_state["dd_val_quality"] = nil end
-    y = y + style.row_height + 12
-
-    local vsync = model_bool("video_vsync", true)
-    local cb_r = checkbox_r(l, lx, y, style.checkbox.size)
-    if clicked and point_in(mx, my, cb_r.x - 4, cb_r.y - 6, cb_r.w + 8, cb_r.h + 12) then
-      vsync = not vsync
-      results.video_vsync = vsync
-    end
-    y = y + style.row_height + 8
-
-    local fps_r = { x = wx, y = y, w = ww, h = dd_style.row_h }
-    dropdown_update("fps_limit", fps_r, mx, my, clicked, #s.fps_limits)
-    local new_fps = widget_state["dd_val_fps_limit"]
-    if new_fps then results.video_fps_limit = new_fps; widget_state["dd_val_fps_limit"] = nil end
-
-  elseif active_tab == 3 then
-    if input_subtab == 1 then
-      local s = UI.settings.input.sections[1]
-      local bx = l.content_x + l.content_w * 0.48
-      local bw = l.content_w * 0.48
-      local rh = style.row_height
-      local rows_y_start = l.content_y + style.row_height + 4 + style.header_size + 12
-      for i, action in ipairs(s.actions) do
-        local row_y = rows_y_start + (i - 1) * rh
-        local sy = scroll_clip(l, row_y, rh, scroll_offset)
-        if sy and clicked and point_in(mx, my, bx, sy, bw, rh) then
-          if rebind_action == action.id and not rebind_for_gamepad then
-            rebind_action = nil
-          else
-            rebind_action = action.id
-            rebind_for_gamepad = false
-          end
-        end
-      end
-
-    elseif input_subtab == 2 then
-      local s = UI.settings.input.sections[2]
-      local lx = l.content_x + 8
-      local sx = l.content_x + 192
-      local sw_local = l.content_w - 200
-      local rh = style.row_height
-      local y = l.content_y + style.row_height + 8 + style.header_size + 12
-
-      for _, sl in ipairs(s.sliders) do
-        local val = model_number("input_mouse_" .. sl.id, sl.default)
-        local r = slider_r(l, sx, y + rh - 12, sw_local)
-        val = slider_update(sl.id, r, mx, my, clicked, down or false, val, sl.min, sl.max)
-        results["input_mouse_" .. sl.id] = val
-        y = y + rh + 8
-      end
-
-      y = y + 4
-      for _, cb in ipairs(s.checkboxes) do
-        local checked = model_bool("input_mouse_" .. cb.id, cb.default)
-        local cb_r = checkbox_r(l, lx, y, style.checkbox.size)
-        if clicked and point_in(mx, my, cb_r.x - 4, cb_r.y - 6, cb_r.w + 8, cb_r.h + 12) then
-          results["input_mouse_" .. cb.id] = not checked
-        end
-        y = y + rh + 4
-      end
-
-    elseif input_subtab == 3 then
-      local s = UI.settings.input.sections[3]
-      local lx = l.content_x + 8
-      local sx = l.content_x + 192
-      local sw_local = l.content_w - 264
-      local rh = style.row_height
-      local dd_style = style.dropdown
-
-      -- Compute fixed content heights to get to bindings
-      local y = l.content_y + style.row_height + 4
-      for _, sl in ipairs(s.sliders) do
-        local val = model_number("input_ctrl_" .. sl.id, sl.default)
-        local sy = scroll_clip(l, y, rh, scroll_offset)
-        if sy then
-          local r = slider_r(l, sx, sy + rh - 12, sw_local)
-          val = slider_update(sl.id, r, mx, my, clicked, down or false, val, sl.min, sl.max)
-        end
-        results["input_ctrl_" .. sl.id] = val
-        y = y + rh + 8
-      end
-
-      y = y + 4
-      for _, cb in ipairs(s.checkboxes) do
-        local checked = model_bool("input_ctrl_" .. cb.id, cb.default)
-        local sy = scroll_clip(l, y, rh, scroll_offset)
-        if sy then
-          local cb_r = checkbox_r(l, lx, sy, style.checkbox.size)
-          if clicked and point_in(mx, my, cb_r.x - 4, cb_r.y - 6, cb_r.w + 8, cb_r.h + 12) then
-            results["input_ctrl_" .. cb.id] = not checked
-          end
-        end
-        y = y + rh + 4
-      end
-
-      y = y + 4
-      for _, dd in ipairs(s.dropdowns) do
-        local sel = model_number("input_ctrl_" .. dd.id, dd.default)
-        local sy = scroll_clip(l, y, rh, scroll_offset)
-        local dr = { x = sx, y = sy or y, w = sw_local, h = dd_style.row_h }
-        dropdown_update(dd.id, dr, mx, my, clicked, #dd.options)
-        local new_sel = widget_state["dd_val_" .. dd.id]
-        if new_sel then results["input_ctrl_" .. dd.id] = new_sel - 1; widget_state["dd_val_" .. dd.id] = nil end
-        y = y + rh + 8
-      end
-
-      y = y + 8
-      -- Bindings header and rows (scrolled)
-      local bx = l.content_x + l.content_w * 0.48
-      local bw = l.content_w * 0.48
-      local bindings_header_h = style.header_size + 12
-      local rows_y_start = y + bindings_header_h
-      for i, action in ipairs(s.actions) do
-        local row_y = rows_y_start + (i - 1) * rh
-        local sy = scroll_clip(l, row_y, rh, scroll_offset)
-        if sy and clicked and point_in(mx, my, bx, sy, bw, rh) then
-          if rebind_action == action.id and rebind_for_gamepad then
-            rebind_action = nil
-          else
-            rebind_action = action.id
-            rebind_for_gamepad = true
-          end
-        end
-      end
-    end
-  end
-
-  -- ── back button ──
-  if clicked and point_in(mx, my, l.back_x, l.back_y, l.back_w, l.back_h) then
+  -- title-bar close (×)
+  local tbc = S.titlebar.close
+  local cx0 = l.r - S.titlebar.pad_x - tbc.size
+  if clicked and point_in(mx, my, cx0, l.y + (l.tb - tbc.size) * 0.5, tbc.size, tbc.size) then
     results.settings_back = true
   end
 
-  -- ── rebind overlay ──
-  if rebind_action then
-    results.settings_rebind_active = true
-    results.settings_rebind_action = rebind_action
-    results.settings_rebind_gamepad = rebind_for_gamepad
-    if clicked then
-      results.settings_rebind_cancel = true
-      rebind_action = nil
+  -- input sub-tab pills
+  if section == "input" then
+    local reg = content_regions(l)
+    local tabs = S.input.tabs
+    local pw, ph = 108, S.controls.pill.h
+    local tx = l.r - S.content.pad_x - pw * #tabs - S.controls.pill.pad
+    for i, t in ipairs(tabs) do
+      local rx = tx + (i - 1) * pw
+      if clicked and point_in(mx, my, rx, reg.hy + 8, pw, ph) and input_tab ~= t.id then
+        input_tab = t.id; scroll = 0
+      end
     end
   end
 
-  results.settings_input_subtab = input_subtab
+  -- scroll wheel over content
+  local reg = content_regions(l)
+  local items = build_items()
+  local total = items_total_h(items)
+  local maxscroll = math.max(0, total - reg.sh)
+  if point_in(mx, my, l.cx, reg.sy, l.cw, reg.sh) then
+    scroll = scroll - mnum("scroll", 0) * SCROLL_SPEED
+  end
+  scroll = clamp(scroll, 0, maxscroll)
 
+  -- walk scrollable items, hit-test the visible controls
+  local yy = reg.sy - scroll
+  for _, it in ipairs(items) do
+    local sy = yy
+    yy = yy + it.h
+    if sy + it.h > reg.sy and sy < reg.sy + reg.sh then
+      if it.kind == "row" then
+        local r = it.row
+        local ctrl_w = S.row.ctrl_w
+        local rx = reg.sx + reg.sw - ctrl_w
+        local cyc = sy + (S.row.h - 40) * 0.5
+        if r.kind == "slider" then
+          local vw, sw2 = 46, ctrl_w - 46 - 12
+          local rr = { x = rx, y = cyc + 16, w = sw2, h = 8 }
+          local val = slider_value(r)
+          local nv = Widgets.slider_update(ws, "sl_" .. r.id, rr, mx, my, clicked, down, val, r.min, r.max)
+          if nv ~= val then
+            if r.wired and r.id == "m_look" then
+              results.input_mouse_sensitivity = r.backend_min + (nv / 100.0) * (r.backend_max - r.backend_min)
+            elseif not r.wired then
+              lv[r.id] = nv
+            end
+          end
+        elseif r.kind == "toggle" then
+          local tr = { x = rx + ctrl_w - S.controls.toggle.w, y = cyc + 8, w = S.controls.toggle.w, h = S.controls.toggle.h }
+          local cur = bool_value(r)
+          local nv = Widgets.checkbox_update(tr, mx, my, clicked, cur)
+          if nv ~= cur then
+            if r.wired and r.id == "vsync" then results.video_vsync = nv
+            elseif r.wired and r.id == "m_invert" then results.input_mouse_invert_pitch = nv
+            else lv[r.id .. "_b"] = nv end
+          end
+        elseif r.kind == "segment" then
+          local sg = S.controls.segment
+          local sr = { x = rx + sg.pad, y = cyc + sg.pad, w = ctrl_w - sg.pad * 2, h = sg.h - sg.pad * 2 }
+          local sel = index_value(r)
+          local nv = Widgets.radio_update(sr, mx, my, clicked, #r.options, sel + 1) - 1
+          if nv ~= sel then
+            if r.wired then results["video_" .. r.id] = nv else lv[r.id] = nv end
+          end
+        elseif r.kind == "cycler" then
+          local bw = 38
+          local n = #r.options
+          local sel = index_value(r)
+          if clicked and point_in(mx, my, rx, cyc, bw, 40) then sel = (sel - 1 + n) % n
+          elseif clicked and point_in(mx, my, rx + ctrl_w - bw, cyc, bw, 40) then sel = (sel + 1) % n end
+          local cur = index_value(r)
+          if sel ~= cur then
+            if r.wired then results["video_" .. r.id] = sel else lv[r.id] = sel end
+          end
+        elseif r.kind == "dropdown" then
+          -- Hand-rolled to match draw_dropdown's menu geometry (a 6px gap, then
+          -- menu.row_h rows) — the shared Widgets.dropdown_update assumes a
+          -- different layout.
+          local fh = S.controls.field.h
+          local mrow = S.controls.menu.row_h
+          local ddk = "dd_" .. r.id
+          if clicked then
+            if ws[ddk] then
+              local my0 = cyc + fh + 6
+              for i = 1, #r.options do
+                if point_in(mx, my, rx, my0 + (i - 1) * mrow, ctrl_w, mrow) then
+                  local nv = i - 1
+                  if r.wired then results["video_" .. r.id] = nv else lv[r.id] = nv end
+                end
+              end
+              ws[ddk] = nil
+            elseif point_in(mx, my, rx, cyc, ctrl_w, fh) then
+              ws[ddk] = true
+            end
+          end
+        end
+      elseif it.kind == "key" then
+        local a = it.action
+        local ctrl_w = S.controls.keycap.w
+        local kr = { x = reg.sx + reg.sw - ctrl_w, y = sy + (it.h - S.controls.keycap.h) * 0.5, w = ctrl_w, h = S.controls.keycap.h }
+        if clicked and point_in(mx, my, kr.x, kr.y, kr.w, kr.h) then
+          results.settings_rebind_active = true
+          results.settings_rebind_action = a.id
+          results.settings_rebind_gamepad = false
+        end
+      end
+    end
+  end
+
+  -- footer
+  local fy = l.footer_y
+  local pad = S.footer.pad_x
+  -- restore (left text button)
+  if clicked and point_in(mx, my, l.x + pad, fy + (l.fb - 22) * 0.5, 150, 22) then
+    results.settings_restore = true
+  end
+  -- back + apply (right)
+  local bw, aw, bh = 96, 104, 34
+  local ax = l.r - pad - aw
+  local bx = ax - 12 - bw
+  local by = fy + (l.fb - bh) * 0.5
+  if clicked and point_in(mx, my, bx, by, bw, bh) then results.settings_back = true end
+  if clicked and point_in(mx, my, ax, by, aw, bh) then results.settings_apply = true; applied = 2.0 end
+
+  -- rebind: any click cancels
+  if Model.rebind_action and clicked then results.settings_rebind_cancel = true end
+
+  results.settings_input_subtab = input_tab
   return results
+end
+
+-- ── control drawing ────────────────────────────────────────────────
+local L = 1  -- content layer; open dropdown menus draw at L+1
+
+local function draw_slider(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.slider
+  local val = slider_value(r)
+  local vw, sw2 = 46, ctrl_w - 46 - 12
+  local tx, ty = rx, cyc + 16
+  local t = clamp((val - r.min) / (r.max - r.min), 0, 1)
+  panel(cmds, tx, ty, sw2, S.h, S.track, nil, 0, 4, 1, S.border, 0, L)
+  if t > 0 then panel(cmds, tx, ty, sw2 * t, S.h, S.fill_lo, S.fill_hi, 2, 4, 0, nil, 0, L) end
+  local kx = tx + sw2 * t
+  panel(cmds, kx - S.knob * 0.5, ty + S.h * 0.5 - S.knob * 0.5, S.knob, S.knob, S.knob_top, S.knob_bot, 1, S.knob * 0.5, 1, S.knob_border, 0, L)
+  panel(cmds, kx - 2, ty + S.h * 0.5 - 2, 4, 4, S.knob_dot, nil, 0, 2, 0, nil, 0, L)
+  local suffix = r.suffix or ""
+  text(cmds, rx + ctrl_w, cyc + 12, string.format("%d", math.floor(val + 0.5)) .. suffix, UI.settings.row.value_size, UI.settings.row.value_color, "right", "label", L)
+end
+
+local function draw_toggle(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.toggle
+  local on = bool_value(r)
+  local tx = rx + ctrl_w - S.w
+  local ty = cyc + 8
+  if on then
+    panel(cmds, tx, ty, S.w, S.h, S.on_top, S.on_bot, 1, S.h * 0.5, 1, S.on_border, 0, L)
+    panel(cmds, tx + S.w - S.h + 3, ty + 3, S.h - 6, S.h - 6, S.knob_on, nil, 0, (S.h - 6) * 0.5, 0, nil, 0, L)
+  else
+    panel(cmds, tx, ty, S.w, S.h, S.off_bg, nil, 0, S.h * 0.5, 1, S.off_border, 0, L)
+    panel(cmds, tx + 3, ty + 3, S.h - 6, S.h - 6, S.knob_off, nil, 0, (S.h - 6) * 0.5, 0, nil, 0, L)
+  end
+end
+
+local function draw_segment(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.segment
+  local sel = index_value(r)
+  panel(cmds, rx, cyc, ctrl_w, S.h, S.bg, nil, 0, S.radius, 1, S.border, 0, L)
+  local n = #r.options
+  local cw = (ctrl_w - S.pad * 2) / n
+  for i = 1, n do
+    local x = rx + S.pad + (i - 1) * cw
+    local active = (i - 1) == sel
+    if active then
+      panel(cmds, x + 1, cyc + S.pad, cw - 2, S.h - S.pad * 2, S.active_top, S.active_bot, 1, S.radius - 1, 0, nil, 0, L)
+    end
+    text(cmds, x + cw * 0.5, cyc + (S.h - S.label_size) * 0.5, r.options[i], S.label_size, active and S.active_label or S.label, "center", "label", L)
+  end
+end
+
+local function draw_cycler(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.cycler
+  local sel = index_value(r)
+  local bw = 38
+  panel(cmds, rx, cyc, bw, 40, S.btn_top, S.btn_bot, 1, 3, 1, S.btn_border, 0, L)
+  panel(cmds, rx + ctrl_w - bw, cyc, bw, 40, S.btn_top, S.btn_bot, 1, 3, 1, S.btn_border, 0, L)
+  text(cmds, rx + bw * 0.5, cyc + 10, "‹", 18, S.arrow, "center", "label", L)
+  text(cmds, rx + ctrl_w - bw * 0.5, cyc + 10, "›", 18, S.arrow, "center", "label", L)
+  panel(cmds, rx + bw, cyc, ctrl_w - bw * 2, 40, S.mid, nil, 0, 0, 0, nil, 0, L)
+  text(cmds, rx + ctrl_w * 0.5, cyc + (40 - S.label_size) * 0.5, r.options[sel + 1] or "?", S.label_size, S.label, "center", "label", L)
+end
+
+local function draw_dropdown(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.field
+  local sel = index_value(r)
+  panel(cmds, rx, cyc, ctrl_w, S.h, S.top, S.bot, 1, S.radius, 1, S.border, 0, L)
+  text(cmds, rx + 14, cyc + (S.h - S.label_size) * 0.5, r.options[sel + 1] or "?", S.label_size, S.label, "left", nil, L)
+  caret(cmds, rx + ctrl_w - 16, cyc + S.h * 0.5, 9, S.caret, L)
+  if ws["dd_" .. r.id] then
+    local M2 = UI.settings.controls.menu
+    local mh = M2.row_h * #r.options
+    local my0 = cyc + S.h + 6
+    panel(cmds, rx, my0, ctrl_w, mh, M2.top, M2.bot, 1, M2.radius, 1, M2.border, 0, L + 1)
+    for i = 1, #r.options do
+      local ry = my0 + (i - 1) * M2.row_h
+      local isel = (i - 1) == sel
+      if isel then rect(cmds, rx + 4, ry, ctrl_w - 8, M2.row_h, M2.sel_bg, L + 1) end
+      text(cmds, rx + 14, ry + (M2.row_h - M2.label_size) * 0.5, r.options[i], M2.label_size, isel and M2.sel_label or M2.label, "left", nil, L + 1)
+    end
+  end
+end
+
+local function draw_static(cmds, r, rx, cyc, ctrl_w)
+  local S = UI.settings.controls.field
+  panel(cmds, rx, cyc, ctrl_w, S.h, S.top, S.bot, 1, S.radius, 1, S.border, 0, L)
+  text(cmds, rx + 14, cyc + (S.h - S.label_size) * 0.5, r.value or "", S.label_size, S.label, "left", nil, L)
+  caret(cmds, rx + ctrl_w - 16, cyc + S.h * 0.5, 9, S.caret, L)
+end
+
+local function draw_row(cmds, reg, it, sy)
+  local S = UI.settings
+  local r = it.row
+  local rx0 = reg.sx
+  text(cmds, rx0, sy + 8, r.name, S.row.name_size, S.row.name_color, "left", nil, L)
+  if r.desc then text(cmds, rx0, sy + 8 + S.row.name_size + 2, r.desc, S.row.desc_size, S.row.desc_color, "left", "body", L) end
+  local ctrl_w = S.row.ctrl_w
+  local rx = rx0 + reg.sw - ctrl_w
+  local cyc = sy + (S.row.h - 40) * 0.5
+  if r.kind == "slider" then draw_slider(cmds, r, rx, cyc, ctrl_w)
+  elseif r.kind == "toggle" then draw_toggle(cmds, r, rx, cyc, ctrl_w)
+  elseif r.kind == "segment" then draw_segment(cmds, r, rx, cyc, ctrl_w)
+  elseif r.kind == "cycler" then draw_cycler(cmds, r, rx, cyc, ctrl_w)
+  elseif r.kind == "dropdown" then draw_dropdown(cmds, r, rx, cyc, ctrl_w)
+  elseif r.kind == "static" then draw_static(cmds, r, rx, cyc, ctrl_w) end
+  rect(cmds, rx0, sy + S.row.h - 1, reg.sw, 1, S.row.seam, L)
+end
+
+local function draw_keycap(cmds, reg, it, sy)
+  local S = UI.settings
+  local a = it.action
+  text(cmds, reg.sx, sy + (it.h - 16) * 0.5, a.label, 16, S.row.name_color, "left", nil, L)
+  local kc = S.controls.keycap
+  local kx = reg.sx + reg.sw - kc.w
+  local ky = sy + (it.h - kc.h) * 0.5
+  local rebinding = Model.rebind_action == a.id
+  local key = Model["bind_" .. a.id]
+  if rebinding then
+    panel(cmds, kx, ky, kc.w, kc.h, kc.rebind_top, kc.rebind_bot, 1, kc.radius, 1, kc.rebind_border, 0, L)
+    text(cmds, kx + kc.w * 0.5, ky + (kc.h - kc.label_size) * 0.5, "Press a key…", kc.label_size, kc.rebind_label, "center", "label", L)
+  elseif key == nil or key == "" then
+    panel(cmds, kx, ky, kc.w, kc.h, kc.unbound_bg, nil, 0, kc.radius, 1, kc.unbound_border, 0, L)
+    text(cmds, kx + kc.w * 0.5, ky + (kc.h - kc.label_size) * 0.5, "‹ unbound ›", kc.label_size, kc.unbound_label, "center", "label", L)
+  else
+    panel(cmds, kx, ky, kc.w, kc.h, kc.top, kc.bot, 1, kc.radius, 1, kc.border, 0, L)
+    text(cmds, kx + kc.w * 0.5, ky + (kc.h - kc.label_size) * 0.5, tostring(key), kc.label_size, kc.label, "center", "label", L)
+  end
 end
 
 -- ── draw ───────────────────────────────────────────────────────────
 function M.draw(sw, sh)
+  local S = UI.settings
   local l = layout(sw, sh)
-  local s = UI.settings
-  local style = s.style
   local cmds = {}
 
-  -- overlay
-  rect(cmds, 0, 0, sw, sh, { 0.02, 0.02, 0.03, 0.64 })
+  -- scrim + window (shadow, panel), at layer 0
+  rect(cmds, 0, 0, sw, sh, UI.theme.tokens.scrim, 0)
+  local win = S.window
+  local g = win.shadow_grow
+  panel(cmds, l.x - g, l.y - g + win.shadow_dy, l.w + 2 * g, l.h + 2 * g, win.shadow, nil, 0, win.radius + g, 0, nil, win.shadow_feather, 0)
+  panel(cmds, l.x, l.y, l.w, l.h, win.fill_top, win.fill_bot, 1, win.radius, 1, win.border, 0, 0)
 
-  -- panel sprite
-  sprite(cmds, Textures[s.panel.texture], l.px, l.py, l.pw, l.ph, { 1, 1, 1, 1 })
+  -- rune-inlay corner dots
+  local ru = S.runes
+  local ins = ru.inset
+  panel(cmds, l.x + ins, l.y + ins, ru.size, ru.size, ru.top, nil, 0, ru.size, 0, nil, 0, L)
+  panel(cmds, l.r - ins - ru.size, l.y + ins, ru.size, ru.size, ru.top, nil, 0, ru.size, 0, nil, 0, L)
+  panel(cmds, l.x + ins, l.b - ins - ru.size, ru.size, ru.size, ru.bot, nil, 0, ru.size, 0, nil, 0, L)
+  panel(cmds, l.r - ins - ru.size, l.b - ins - ru.size, ru.size, ru.size, ru.bot, nil, 0, ru.size, 0, nil, 0, L)
 
-  -- title
-  centered(cmds, l.px + l.pw * 0.5, l.py + s.title.offset_y, s.title.text, s.title.size, s.title.color)
+  -- ── title bar ──
+  local tbar = S.titlebar
+  panel(cmds, l.x, l.y, l.w, l.tb, with_alpha(tbar.wash, tbar.wash[4]), with_alpha(tbar.wash, 0), 1, win.radius, 0, nil, 0, L)
+  rect(cmds, l.x, l.y + l.tb - 1, l.w, 1, tbar.seam, L)
+  panel(cmds, l.x + tbar.pad_x, l.y + l.tb * 0.5 - 4, 8, 8, tbar.mark, nil, 0, 2, 0, nil, 0, L)
+  text(cmds, l.x + tbar.pad_x + 18, l.y + (l.tb - tbar.title_size) * 0.5, tbar.title, tbar.title_size, tbar.title_color, "left", "display", L)
+  local tbc = tbar.close
+  local cx0 = l.r - tbar.pad_x - tbc.size
+  local cy0 = l.y + (l.tb - tbc.size) * 0.5
+  text(cmds, cx0 - 16, l.y + (l.tb - tbar.hint_size) * 0.5, tbar.hint, tbar.hint_size, tbar.hint_color, "right", "label", L)
+  panel(cmds, cx0, cy0, tbc.size, tbc.size, tbc.bg, nil, 0, tbc.radius, 1, tbc.border, 0, L)
+  text(cmds, cx0 + tbc.size * 0.5, cy0 + tbc.size * 0.5 - 8, "×", 16, tbc.label, "center", nil, L)
 
-  -- gold divider under title
-  rect(cmds, l.px + 28, l.py + s.title.offset_y + s.title.size + 8, l.pw - 56, 1, style.gold_line)
-
-  -- tab bar
-  for i = 1, 3 do
-    local tr = tab_rect(l, i)
-    local is_active = (i == active_tab)
-    local is_hovered = point_in(Model.mx or 0, Model.my or 0, tr.x, tr.y, tr.w, tr.h)
-
-    if is_active then
-      rect(cmds, tr.x, tr.y, tr.w, tr.h, style.active_bg or { 0.14, 0.15, 0.18, 0.6 })
-    elseif is_hovered then
-      rect(cmds, tr.x, tr.y, tr.w, tr.h, { 0.83, 0.67, 0.39, 0.1 })
+  -- ── nav rail ──
+  local nav = S.nav
+  rect(cmds, l.x + l.nav_w - 1, l.body_y, 1, l.body_h, nav.seam, L)
+  text(cmds, l.x + nav.pad + 8, l.body_y + nav.pad, nav.header, nav.header_size, nav.header_color, "left", "label", L)
+  for _, n in ipairs(nav_rects(l)) do
+    local active = section == n.id
+    local it = n.item
+    if active then
+      panel(cmds, n.x, n.y, n.w, n.h, nav.active_top, nav.active_bot, 2, 3, 0, nil, 0, L)
+      rect(cmds, n.x, n.y, 2, n.h, nav.active_border, L)
     end
+    local gem = with_alpha(it.gem, active and 1.0 or 0.5)
+    panel(cmds, n.x + 13, n.y + n.h * 0.5 - nav.gem * 0.5, nav.gem, nav.gem, gem, nil, 0, nav.gem * 0.5, 0, nil, 0, L)
+    text(cmds, n.x + 13 + nav.gem + 12, n.y + (n.h - nav.label_size) * 0.5, it.label, nav.label_size, active and nav.active_label or nav.inactive_label, "left", "label", L)
+  end
+  -- nav footer block
+  local nfy = l.footer_y - 52
+  rect(cmds, l.x + nav.pad + 8, nfy, l.nav_w - nav.pad * 2 - 16, 1, UI.theme.tokens.hairline, L)
+  text(cmds, l.x + nav.pad + 8, nfy + 12, nav.footer_title, nav.header_size, nav.footer_title_color, "left", "label", L)
+  text(cmds, l.x + nav.pad + 8, nfy + 26, nav.footer_sub, 12, nav.footer_sub_color, "left", "body", L)
 
-    local col = is_active and style.header_color or style.label_dim
-    centered(cmds, tr.x + tr.w * 0.5, tr.y + 10, TAB_NAMES[i], style.label_size, col)
+  -- ── content header ──
+  local reg = content_regions(l)
+  local navit
+  for _, ni in ipairs(S.nav_items) do if ni.id == section then navit = ni end end
+  text(cmds, reg.hx, reg.hy, navit.kicker, S.content.kicker_size, navit.kicker_color, "left", "label", L)
+  text(cmds, reg.hx, reg.hy + 16, navit.title, S.content.title_size, S.content.title_color, "left", "display", L)
+  rect(cmds, l.cx, reg.head_bottom, l.cw, 1, S.content.seam, L)
 
-    if is_active then
-      rect(cmds, tr.x, tr.y + tr.h - 2, tr.w, 2, style.gold)
+  -- input sub-tab pills (in the header, right)
+  if section == "input" then
+    local P = S.controls.pill
+    local tabs = S.input.tabs
+    local pw = 108
+    local tx = l.r - S.content.pad_x - pw * #tabs - P.pad
+    panel(cmds, tx - P.pad, reg.hy + 8 - P.pad, pw * #tabs + P.pad * 2, P.h + P.pad * 2, P.bg, nil, 0, P.radius, 1, P.border, 0, L)
+    for i, t in ipairs(tabs) do
+      local rx = tx + (i - 1) * pw
+      local active = input_tab == t.id
+      if active then panel(cmds, rx, reg.hy + 8, pw, P.h, P.active_top, P.active_bot, 1, P.radius, 0, nil, 0, L) end
+      text(cmds, rx + pw * 0.5, reg.hy + 8 + (P.h - P.label_size) * 0.5, t.label, P.label_size, active and P.active_label or P.label, "center", "label", L)
     end
   end
 
-  -- content area border
-  rect(cmds, l.content_x - 4, l.content_y - 4, l.content_w + 8, l.content_h + 8, style.divider)
-
-  -- tab content
-  if active_tab == 1 then
-    draw_audio(cmds, l, style)
-  elseif active_tab == 2 then
-    draw_video(cmds, l, style)
-  else
-    draw_input(cmds, l, style)
+  -- ── scrollable content ──
+  local items = build_items()
+  local total = items_total_h(items)
+  local maxscroll = math.max(0, total - reg.sh)
+  scroll = clamp(scroll, 0, maxscroll)
+  local yy = reg.sy - scroll
+  for _, it in ipairs(items) do
+    local sy = yy
+    yy = yy + it.h
+    if sy + it.h > reg.sy and sy < reg.sy + reg.sh then
+      if it.kind == "group" then
+        text(cmds, reg.sx, sy + 10, it.name, S.row.group_size, S.row.group_color, "left", "label", L)
+        rect(cmds, reg.sx + 120, sy + 10 + S.row.group_size * 0.5, reg.sw - 120, 1, UI.theme.tokens.hairline, L)
+      elseif it.kind == "row" then
+        draw_row(cmds, reg, it, sy)
+      elseif it.kind == "key" then
+        draw_keycap(cmds, reg, it, sy)
+      elseif it.kind == "banner" then
+        local st = S.audio.stub
+        panel(cmds, reg.sx, sy, reg.sw, 58, with_alpha(st.top, st.top[4]), with_alpha(st.top, 0), 1, 3, 1, st.border, 0, L)
+        text(cmds, reg.sx + 18, sy + 12, st.title, 10, st.title_color, "left", "label", L)
+        text(cmds, reg.sx + 18, sy + 28, st.body, 14, st.body_color, "left", "body", L)
+      elseif it.kind == "rebind" then
+        local rb = S.rebind_banner
+        panel(cmds, reg.sx, sy, reg.sw, 40, rb.top, rb.bot, 1, 3, 1, rb.border, 0, L)
+        text(cmds, reg.sx + 16, sy + 12, rb.text .. "  ·  " .. rb.text2, 15, rb.text_color, "left", "body", L)
+      elseif it.kind == "empty" then
+        local c = S.input.controller
+        local cxm = l.cx + l.cw * 0.5
+        panel(cmds, cxm - 32, sy + 30, 64, 64, c.ring_bg, nil, 0, 32, 2, c.ring, 0, L)
+        text(cmds, cxm, sy + 112, c.title, c.title_size, c.title_color, "center", "display", L)
+        text(cmds, cxm, sy + 148, c.body, 15, c.body_color, "center", "body", L)
+        -- detect button + enable toggle
+        local dw, dh = 200, 40
+        panel(cmds, cxm - dw * 0.5, sy + 190, dw, dh, S.controls.field.top, S.controls.field.bot, 1, 3, 1, S.controls.field.border, 0, L)
+        text(cmds, cxm, sy + 190 + (dh - 12) * 0.5, c.detect, 12, S.row.name_color, "center", "label", L)
+      end
+    end
   end
 
-  -- back button
-  sprite(cmds, Textures[s.back_button.texture], l.back_x, l.back_y, l.back_w, l.back_h, { 1, 1, 1, 1 })
-  local back_hover = point_in(Model.mx or 0, Model.my or 0, l.back_x, l.back_y, l.back_w, l.back_h)
-  if back_hover then
-    rect(cmds, l.back_x, l.back_y, l.back_w, l.back_h, { 0.85, 0.66, 0.34, 0.15 })
-    outline(cmds, { x = l.back_x, y = l.back_y, w = l.back_w, h = l.back_h }, 2, { 0.85, 0.66, 0.32, 0.95 })
+  -- scrollbar
+  if maxscroll > 0 then
+    local vh = reg.sh
+    local th = math.max(28, vh * (vh / total))
+    local ty = reg.sy + (scroll / maxscroll) * (vh - th)
+    rect(cmds, reg.sx + reg.sw + 12, reg.sy, 4, vh, UI.theme.tokens.well, L)
+    panel(cmds, reg.sx + reg.sw + 12, ty, 4, th, S.content.scrollbar, nil, 0, 2, 0, nil, 0, L)
   end
-  centered(cmds, l.back_x + l.back_w * 0.5, l.back_y + (l.back_h - s.back_button.label_size) * 0.5,
-    s.back_button.label, s.back_button.label_size, style.label_color)
 
-  -- rebind overlay
-  if rebind_action then
-    local ro = s.input.rebind_overlay
-    rect(cmds, 0, 0, sw, sh, { 0, 0, 0, 0.6 })
-    local bx = (sw - ro.w) * 0.5
-    local by = (sh - ro.h) * 0.5
-    rect(cmds, bx, by, ro.w, ro.h, ro.bg)
-    outline(cmds, { x = bx, y = by, w = ro.w, h = ro.h }, 2, style.gold_line)
-
-    local title = rebind_for_gamepad and "Press a gamepad button..." or "Press a key or mouse button..."
-    centered(cmds, bx + ro.w * 0.5, by + 24, title, ro.title_size, ro.title_color)
-    centered(cmds, bx + ro.w * 0.5, by + 56, rebind_action, style.label_size, style.label_color)
-    centered(cmds, bx + ro.w * 0.5, by + ro.h - 28, "Click to cancel", ro.hint_size, ro.hint_color)
+  -- audio dim overlay (the whole content, minus the notice)
+  if section == "audio" then
+    -- (kept subtle: the notice already says it's a preview)
   end
+
+  -- ── footer ──
+  local fy = l.footer_y
+  local F = S.footer
+  rect(cmds, l.x, fy, l.w, 1, F.seam, L)
+  text(cmds, l.x + F.pad_x, fy + (l.fb - 11) * 0.5, F.restore, 11, F.restore_color, "left", "label", L)
+  if applied > 0 then
+    text(cmds, l.x + F.pad_x + 170, fy + (l.fb - 11) * 0.5, F.applied, 11, F.applied_color, "left", "label", L)
+  end
+  local bw, aw, bh = 96, 104, 34
+  local ax = l.r - F.pad_x - aw
+  local bx = ax - 12 - bw
+  local by = fy + (l.fb - bh) * 0.5
+  local V = UI.modal.buttons.variants
+  local vb = V.secondary
+  panel(cmds, bx, by, bw, bh, vb.fill_top, vb.fill_bot, 1, 3, 1, vb.border, 0, L)
+  text(cmds, bx + bw * 0.5, by + (bh - 14) * 0.5, F.back, 14, vb.label, "center", "label", L)
+  local vp = V.primary
+  panel(cmds, ax, by, aw, bh, vp.fill_top, vp.fill_bot, 1, 3, 1, vp.border, 0, L)
+  text(cmds, ax + aw * 0.5, by + (bh - 14) * 0.5, F.apply, 14, vp.label, "center", "label", L)
 
   return cmds
 end
+
+-- The flash timer decays via the shell's dt through Model (best-effort: decay a
+-- little each draw; the shell also clears it). Kept simple.
+local function tick() if applied > 0 then applied = applied - 0.016 end end
+local _draw = M.draw
+M.draw = function(sw, sh) tick(); return _draw(sw, sh) end
 
 return M

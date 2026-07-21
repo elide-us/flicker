@@ -1,44 +1,66 @@
-//! The flicker-shell gothic UI theme — a small, self-contained "gothic horror"
-//! toolkit (Dark Souls-ish palette: tarnished gold and rust-red lines on
-//! silver/black/grey surfaces). The raster art is generated procedurally (no
-//! binary assets, deterministic, tunable). Its main job is to **bake the gothic
-//! textures** (panel / button / white) that the shell's Lua-driven screens draw
-//! with (`Theme::lua_textures` hands them over by name); it also renders the
-//! Rust loading widget the client shows while its world cooks. The menu / pause
-//! / confirm / logo screens are Lua + the embedded `ui_elements.json`.
-
-use std::f32::consts::{PI, TAU};
+//! The flicker-shell UI theme — the shared Prism chrome the front-end screens
+//! draw with. It (1) registers the three Prism serif faces, (2) uploads the
+//! shared 1×1 white pixel + the **Muse** main-menu character (with a baked
+//! left-edge alpha fade), and (3) still bakes the procedural carved-stone panel /
+//! button / settings-panel sprite textures — kept as a 2D-sprite facility even
+//! though the menu / pause / settings now draw their chrome with *vector* `panel`
+//! commands (rounded-rect + gradient + border). `Theme::lua_textures` hands the
+//! textures to a Lua screen by name; `draw_loading` renders the Rust loading
+//! widget (reskinned to the same flat vector chrome). The menu / pause / confirm
+//! / logo screens are Lua + the embedded `ui_elements.json`.
 
 use flicker::render::{Renderer, TextureHandle, Vec2};
 
-// ===== palette =====
+// ===== palette — the Prism design language =====
+// Cold carved stone lit by sapphire rune-light; aged bronze is the only
+// structural metal. Baked once into the panel/button chrome; mirrors the
+// `theme.tokens` in Alpha/content/resources/ui_elements.json (the Lua-side
+// single source of the same palette).
 
 type Rgb = (u8, u8, u8);
 
-const SURFACE_TOP: Rgb = (36, 39, 46);
-const SURFACE_BOT: Rgb = (15, 17, 21);
-const PLATE_TOP: Rgb = (48, 52, 60);
-const PLATE_BOT: Rgb = (27, 30, 37);
-const SILVER: Rgb = (150, 156, 166);
-const GOLD: Rgb = (160, 126, 66);
-/// Patina shadow for the tarnished-gold filigree (flat 2-tone with `GOLD`).
-const GOLD_DK: Rgb = (96, 78, 44);
-/// Carved slate for the stone frame: deep base + cool highlight; a faint
-/// tone for the hairline weathering.
-const SLATE_DK: Rgb = (32, 35, 40);
-const SLATE_HI: Rgb = (104, 111, 121);
-const SLATE_CRACK: Rgb = (22, 24, 28);
-const INK: Rgb = (8, 9, 11);
+/// Recessed content-well gradient (sunk dark stone, top → bottom).
+const SURFACE_TOP: Rgb = (20, 23, 31);
+const SURFACE_BOT: Rgb = (11, 13, 18);
+/// Button plate gradient — the sapphire slab (base → deep).
+const PLATE_TOP: Rgb = (36, 63, 120);
+const PLATE_BOT: Rgb = (21, 39, 68);
+/// Cool stone bevel highlight.
+const SILVER: Rgb = (120, 135, 162);
+/// Aged bronze — the only structural metal (engraved channel + frame).
+const GOLD: Rgb = (184, 151, 90);
+/// Deep bronze patina shadow (flat 2-tone with `GOLD`).
+const GOLD_DK: Rgb = (110, 90, 52);
+/// Sapphire rune-light — the interactive accent (button edge, corner inlays).
+const SAPPHIRE: Rgb = (58, 90, 160);
+/// Lit rune-glow — the inlay's bright core.
+const RUNE: Rgb = (111, 151, 255);
+/// Carved slate for the stone frame: cool base + highlight.
+const SLATE_DK: Rgb = (22, 26, 34);
+const SLATE_HI: Rgb = (45, 52, 66);
+const INK: Rgb = (8, 9, 12);
 
-/// Tarnished-gold title text.
-pub const COL_TITLE: [f32; 4] = [0.83, 0.67, 0.39, 1.0];
-/// Hovered button outline (gold).
-const COL_GOLD_LINE: [f32; 4] = [0.85, 0.66, 0.32, 0.95];
+/// Ink title text.
+pub const COL_TITLE: [f32; 4] = [0.906, 0.882, 0.824, 1.0];
+/// Loading-bar rim (bronze).
+const COL_GOLD_LINE: [f32; 4] = [0.722, 0.592, 0.353, 0.95];
 /// Opaque dark backdrop for a full-screen menu (nothing behind it).
-const COL_BACKDROP: [f32; 4] = [0.035, 0.04, 0.05, 1.0];
-/// Loading-bar track (recessed dark) and tarnished-gold fill.
-const COL_BAR_TRACK: [f32; 4] = [0.05, 0.06, 0.07, 1.0];
-const COL_BAR_FILL: [f32; 4] = [0.63, 0.49, 0.26, 1.0];
+const COL_BACKDROP: [f32; 4] = [0.031, 0.035, 0.047, 1.0];
+/// Loading-bar track (recessed dark) and sapphire fill.
+const COL_BAR_TRACK: [f32; 4] = [0.055, 0.063, 0.086, 1.0];
+const COL_BAR_FILL: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
+
+// Flat vector-panel colours for the (reskinned) loading screen — the Prism
+// carved-stone look drawn with `draw_ui_panel` (rounded-rect + gradient + border
+// + soft shadow) instead of the baked panel sprite. Mirror the `theme.tokens`
+// (stone3→stone1 fill, edge2 border).
+const LOAD_PANEL_TOP: [f32; 4] = [0.110, 0.125, 0.161, 1.0];
+const LOAD_PANEL_BOT: [f32; 4] = [0.055, 0.063, 0.086, 1.0];
+const LOAD_BORDER: [f32; 4] = [0.169, 0.188, 0.235, 1.0];
+const LOAD_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+
+/// The Muse — the main-menu character, embedded so every shell app inherits her.
+const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/assets/muse.png");
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
@@ -56,9 +78,6 @@ const SETTINGS_PANEL_H: u32 = 500;
 const FRAME: u32 = 38;
 const BUTTON_W: u32 = 264;
 const BUTTON_H: u32 = 54;
-
-/// Stroke width (px) for the gold filigree curves.
-const FIL_STROKE: f32 = 2.0;
 
 // ===== pixel canvas =====
 
@@ -180,20 +199,7 @@ impl Canvas {
         }
     }
 
-    /// A faint jagged hairline crack walking from `start` along `dir`.
-    fn crack(&mut self, seed: u32, start: (i32, i32), dir: f32, len: i32) {
-        let (mut x, mut y) = (start.0 as f32, start.1 as f32);
-        let mut a = dir;
-        for i in 0..len {
-            let (px, py) = (x.round() as i32, y.round() as i32);
-            self.put(px, py, SLATE_CRACK, 255);
-            a += (hash01(seed as i32 * 31 + i, px ^ py) - 0.5) * 0.9;
-            x += a.cos();
-            y += a.sin();
-        }
-    }
-
-    /// Stamp a filled disc of diameter ~`t` — the brush for curved strokes.
+    /// Stamp a filled disc of diameter ~`t` — the brush for the rune inlay.
     fn dot(&mut self, x: f32, y: f32, t: f32, col: Rgb) {
         let rad = t * 0.5;
         let r = rad.ceil() as i32;
@@ -207,48 +213,7 @@ impl Canvas {
         }
     }
 
-    /// Stroke a circular arc (`a0`→`a1` radians, radius `radius`) about `c`.
-    fn arc(&mut self, c: (f32, f32), radius: f32, a0: f32, a1: f32, t: f32, col: Rgb) {
-        let steps = ((a1 - a0).abs() * radius).max(12.0) as i32;
-        for i in 0..=steps {
-            let a = a0 + (a1 - a0) * i as f32 / steps as f32;
-            self.dot(c.0 + radius * a.cos(), c.1 + radius * a.sin(), t, col);
-        }
-    }
-
-    /// Stroke an Archimedean spiral about `c` (radius `radii.0`→`radii.1`
-    /// over `sweep`).
-    fn spiral(&mut self, c: (f32, f32), radii: (f32, f32), a0: f32, sweep: f32, t: f32, col: Rgb) {
-        let (r0, r1) = radii;
-        let steps = (sweep.abs() * r0.max(r1)).max(16.0) as i32;
-        for i in 0..=steps {
-            let f = i as f32 / steps as f32;
-            let a = a0 + sweep * f;
-            let r = r0 + (r1 - r0) * f;
-            self.dot(c.0 + r * a.cos(), c.1 + r * a.sin(), t, col);
-        }
-    }
-
-    /// Flat two-tone gold arc: a `GOLD_DK` shadow offset under a `GOLD` stroke.
-    fn g_arc(&mut self, c: (f32, f32), radius: f32, a0: f32, a1: f32) {
-        self.arc((c.0 + 1.0, c.1 + 1.5), radius, a0, a1, FIL_STROKE, GOLD_DK);
-        self.arc(c, radius, a0, a1, FIL_STROKE, GOLD);
-    }
-
-    /// Flat two-tone gold spiral (shadow under stroke).
-    fn g_spiral(&mut self, c: (f32, f32), r0: f32, r1: f32, a0: f32, sweep: f32) {
-        self.spiral(
-            (c.0 + 1.0, c.1 + 1.5),
-            (r0, r1),
-            a0,
-            sweep,
-            FIL_STROKE,
-            GOLD_DK,
-        );
-        self.spiral(c, (r0, r1), a0, sweep, FIL_STROKE, GOLD);
-    }
-
-    /// A flat gold frame line at `origin`/`size` over a thin inner shadow.
+    /// An engraved bronze channel at `origin`/`size` over a thin inner shadow.
     fn g_frame(&mut self, origin: (usize, usize), size: (usize, usize)) {
         self.rect_outline(origin, size, GOLD, 255, 1);
         self.rect_outline(
@@ -260,38 +225,12 @@ impl Canvas {
         );
     }
 
-    /// A corner scroll/curl rooted at panel-corner `(x, y)`; `(sx, sy)` point
-    /// inward (toward the centre) and mirror the handedness across corners.
-    fn corner_scroll(&mut self, x: f32, y: f32, sx: f32, sy: f32) {
-        let cen = (x + sx * 15.0, y + sy * 15.0);
-        let base = (-sy).atan2(-sx); // spiral centre → the corner
-        self.g_spiral(cen, 13.0, 2.5, base, -(sx * sy) * 1.55 * TAU);
-        self.g_arc(
-            (x + sx * 46.0, y + sy * 22.0),
-            28.0,
-            base,
-            base + sx * sy * 0.6,
-        );
-        self.g_arc(
-            (x + sx * 22.0, y + sy * 46.0),
-            28.0,
-            base,
-            base - sx * sy * 0.6,
-        );
-    }
-
-    /// A symmetric twin-curl crest at an edge midpoint `(x, y)`. `horiz` = the
-    /// edge runs horizontally (top/bottom rail), else vertical (left/right).
-    fn center_flourish(&mut self, x: f32, y: f32, horiz: bool) {
-        if horiz {
-            self.g_spiral((x - 12.0, y), 7.0, 1.5, 0.0, 1.45 * TAU);
-            self.g_spiral((x + 12.0, y), 7.0, 1.5, PI, -1.45 * TAU);
-            self.g_arc((x, y + 13.0), 14.0, 1.18 * PI, 1.82 * PI);
-        } else {
-            self.g_spiral((x, y - 12.0), 7.0, 1.5, 0.5 * PI, 1.45 * TAU);
-            self.g_spiral((x, y + 12.0), 7.0, 1.5, -0.5 * PI, -1.45 * TAU);
-            self.g_arc((x + 13.0, y), 14.0, 0.68 * PI, 1.32 * PI);
-        }
+    /// A small sapphire "rune inlay" gem at a frame corner: a lit rune-glow
+    /// core set in sapphire on a dark seat — the Prism carved-stone signature.
+    fn rune_mark(&mut self, x: f32, y: f32) {
+        self.dot(x, y, 8.0, shade(SAPPHIRE, -46));
+        self.dot(x, y, 6.0, SAPPHIRE);
+        self.dot(x, y, 3.0, RUNE);
     }
 
     fn into_pixels(self) -> Vec<u8> {
@@ -372,10 +311,8 @@ fn build_panel() -> Vec<u8> {
     let f = FRAME as usize;
     let mut c = Canvas::new(w, h);
 
-    // 1. Flat slate frame with a gentle drift + a couple of faint cracks.
+    // 1. Flat carved-stone frame with a gentle value drift.
     c.stone_fill();
-    c.crack(7, (118, 0), 1.85, 120);
-    c.crack(41, (w as i32 - 36, h as i32), -1.9, 120);
 
     // 2. Raised 3D bevel on the outer edge (lit top/left, shadowed bottom/
     //    right) with an irregular chiselled falloff for depth.
@@ -393,20 +330,15 @@ fn build_panel() -> Vec<u8> {
     }
     c.rect_outline((f - 2, f - 2), (cw + 4, ch + 4), INK, 150, 2); // recess shadow lip
 
-    // 4. Tarnished-gold filigree: a thin frame line, corner scrolls, and a
-    //    twin-curl crest centred on each edge.
+    // 4. A thin engraved bronze channel around the well + a sapphire rune
+    //    inlay set at each corner (the Prism carved-stone signature).
     c.g_frame((f - 7, f - 7), (cw + 14, ch + 14));
     let (x0, y0) = ((f - 7) as f32, (f - 7) as f32);
     let (x1, y1) = ((w - f + 6) as f32, (h - f + 6) as f32);
-    c.corner_scroll(x0, y0, 1.0, 1.0);
-    c.corner_scroll(x1, y0, -1.0, 1.0);
-    c.corner_scroll(x0, y1, 1.0, -1.0);
-    c.corner_scroll(x1, y1, -1.0, -1.0);
-    let (mx, my) = (w as f32 * 0.5, h as f32 * 0.5);
-    c.center_flourish(mx, (f / 2) as f32, true);
-    c.center_flourish(mx, (h - f / 2) as f32, true);
-    c.center_flourish((f / 2) as f32, my, false);
-    c.center_flourish((w - f / 2) as f32, my, false);
+    c.rune_mark(x0, y0);
+    c.rune_mark(x1, y0);
+    c.rune_mark(x0, y1);
+    c.rune_mark(x1, y1);
 
     // 5. Title cartouche inside the well, framed by flat gold rules — the
     //    runtime draws "PAUSED" here (`pause_layout::title_y` lands inside it).
@@ -430,11 +362,8 @@ fn build_settings_panel() -> Vec<u8> {
     let f = FRAME as usize;
     let mut c = Canvas::new(w, h);
 
-    // 1. Flat slate frame with gentle drift + faint cracks.
+    // 1. Flat carved-stone frame with a gentle value drift.
     c.stone_fill();
-    c.crack(7, (200, 0), 1.85, 160);
-    c.crack(41, (w as i32 - 50, h as i32), -1.9, 160);
-    c.crack(13, (w as i32 / 2, h as i32 - 10), 0.7, 100);
 
     // 2. Raised 3D bevel on the outer edge.
     c.outer_bevel(8, 16.0);
@@ -451,19 +380,15 @@ fn build_settings_panel() -> Vec<u8> {
     }
     c.rect_outline((f - 2, f - 2), (cw + 4, ch + 4), INK, 150, 2);
 
-    // 4. Tarnished-gold filigree: frame line, corner scrolls, flourishes.
+    // 4. A thin engraved bronze channel around the well + a sapphire rune
+    //    inlay set at each corner (the Prism carved-stone signature).
     c.g_frame((f - 7, f - 7), (cw + 14, ch + 14));
     let (x0, y0) = ((f - 7) as f32, (f - 7) as f32);
     let (x1, y1) = ((w - f + 6) as f32, (h - f + 6) as f32);
-    c.corner_scroll(x0, y0, 1.0, 1.0);
-    c.corner_scroll(x1, y0, -1.0, 1.0);
-    c.corner_scroll(x0, y1, 1.0, -1.0);
-    c.corner_scroll(x1, y1, -1.0, -1.0);
-    let (mx, my) = (w as f32 * 0.5, h as f32 * 0.5);
-    c.center_flourish(mx, (f / 2) as f32, true);
-    c.center_flourish(mx, (h - f / 2) as f32, true);
-    c.center_flourish((f / 2) as f32, my, false);
-    c.center_flourish((w - f / 2) as f32, my, false);
+    c.rune_mark(x0, y0);
+    c.rune_mark(x1, y0);
+    c.rune_mark(x0, y1);
+    c.rune_mark(x1, y1);
 
     // 5. Title band at the top of the content well.
     let (band_x, band_w) = (f + 6, cw - 12);
@@ -504,10 +429,35 @@ fn build_button() -> Vec<u8> {
     c.vline(0, h, 0, SILVER, 120);
     c.hline(0, w, h - 1, INK, 175);
     c.vline(0, h, w - 1, INK, 175);
-    // Tarnished-gold border over a thin inner shadow for depth.
-    c.rect_outline((2, 2), (w - 4, h - 4), GOLD, 240, 1);
+    // Sapphire rune-edge over a thin inner shadow for depth.
+    c.rect_outline((2, 2), (w - 4, h - 4), SAPPHIRE, 240, 1);
     c.rect_outline((3, 3), (w - 6, h - 6), shade(INK, 18), 80, 1);
     c.into_pixels()
+}
+
+/// Decode the embedded Muse PNG and bake a left→right alpha ramp into her
+/// (otherwise opaque) pixels — transparent at the left edge, opaque by 42% of the
+/// width — so the sprite dissolves toward screen-centre when the menu draws her at
+/// the right margin. Falls back to a 1×1 white pixel if decoding fails (the menu
+/// guards on the texture, so a failure just drops the character).
+fn load_muse(renderer: &mut Renderer) -> TextureHandle {
+    match image::load_from_memory(MUSE_IMAGE) {
+        Ok(img) => {
+            let mut rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            let fade_end = (w as f32 * 0.42).max(1.0);
+            for (x, _y, px) in rgba.enumerate_pixels_mut() {
+                let t = (x as f32 / fade_end).clamp(0.0, 1.0);
+                let s = t * t * (3.0 - 2.0 * t); // smoothstep — a soft, curved fade
+                px[3] = (px[3] as f32 * s).round() as u8;
+            }
+            renderer.load_texture(&rgba, w, h)
+        }
+        Err(e) => {
+            tracing::error!("failed to decode muse.png: {e}");
+            renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1)
+        }
+    }
 }
 
 // ===== layout + widgets =====
@@ -553,21 +503,38 @@ pub struct Theme {
     settings_panel: TextureHandle,
     button: TextureHandle,
     white: TextureHandle,
+    /// The main-menu character (left-edge alpha fade baked in). Exposed to Lua as
+    /// `Textures.muse`; only the menu screen draws it.
+    muse: TextureHandle,
 }
 
 impl Theme {
-    /// Generate + upload the gothic raster art, including the shared 1×1 white
-    /// pixel (reused for scrim, backdrop, hover sheen, and outlines).
+    /// Register the Prism UI faces + generate + upload the carved-stone raster
+    /// art, including the shared 1×1 white pixel (reused for scrim, backdrop,
+    /// hover sheen, and outlines).
     pub fn build(renderer: &mut Renderer) -> Self {
+        // The three Prism faces (Alpha/content/fonts, instanced single weights)
+        // registered under their role family names so `FontRole` selects them;
+        // any glyph a face lacks falls back to a system font.
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/fonts/CormorantGaramond-SemiBold.ttf"
+        ));
+        renderer.register_ui_font(include_bytes!("../../../../content/fonts/Cinzel-Medium.ttf"));
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/fonts/EBGaramond-Regular.ttf"
+        ));
+
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
         let panel = renderer.load_texture(&build_panel(), PANEL_W, PANEL_H);
         let settings_panel = renderer.load_texture(&build_settings_panel(), SETTINGS_PANEL_W, SETTINGS_PANEL_H);
         let button = renderer.load_texture(&build_button(), BUTTON_W, BUTTON_H);
+        let muse = load_muse(renderer);
         Self {
             panel,
             settings_panel,
             button,
             white,
+            muse,
         }
     }
 
@@ -577,12 +544,13 @@ impl Theme {
     /// consumer's `render_hud`). `white` is id 0 so it doubles as the rect fill.
     ///
     /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
-    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 4] {
+    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 5] {
         [
             ("white", self.white),
             ("panel", self.panel),
             ("settings_panel", self.settings_panel),
             ("button", self.button),
+            ("muse", self.muse),
         ]
     }
 
@@ -596,12 +564,30 @@ impl Theme {
     /// (0..=1) in the panel's content well.
     pub fn draw_loading(&self, r: &mut Renderer, screen: Vec2, progress: f32) {
         let layout = modal_layout(screen);
-        self.backdrop(r, screen);
-        r.draw_sprite(
-            self.panel,
+        // Flat Prism chrome (vector): backdrop, soft drop shadow, then the panel —
+        // drawn as ui-panels so they sort behind the sprite bar + text that follow.
+        r.draw_ui_panel(Vec2::ZERO, screen, COL_BACKDROP, COL_BACKDROP, 0.0, 0.0, 0.0, [0.0; 4], 0.0);
+        r.draw_ui_panel(
+            Vec2::new(layout.panel.x - 4.0, layout.panel.y + 16.0),
+            Vec2::new(layout.panel.w + 8.0, layout.panel.h + 8.0),
+            LOAD_SHADOW,
+            LOAD_SHADOW,
+            0.0,
+            17.0,
+            0.0,
+            [0.0; 4],
+            44.0,
+        );
+        r.draw_ui_panel(
             Vec2::new(layout.panel.x, layout.panel.y),
             Vec2::new(layout.panel.w, layout.panel.h),
-            [1.0, 1.0, 1.0, 1.0],
+            LOAD_PANEL_TOP,
+            LOAD_PANEL_BOT,
+            1.0,
+            5.0,
+            1.0,
+            LOAD_BORDER,
+            0.0,
         );
         centered_text(r, "LOADING", layout.panel, layout.title_y, 34.0, COL_TITLE);
 
@@ -613,22 +599,33 @@ impl Theme {
             w: p.w - 2.0 * (frame + 22.0),
             h: 22.0,
         };
-        r.draw_sprite(
-            self.white,
+        // Recessed track with a bronze rim + sapphire fill, drawn as vector
+        // panels so they stay colour-correct (sRGB) like the panel above.
+        r.draw_ui_panel(
             Vec2::new(bar.x, bar.y),
             Vec2::new(bar.w, bar.h),
             COL_BAR_TRACK,
+            COL_BAR_TRACK,
+            0.0,
+            4.0,
+            1.0,
+            COL_GOLD_LINE,
+            0.0,
         );
         let fill = (bar.w * progress.clamp(0.0, 1.0)).round();
         if fill > 0.0 {
-            r.draw_sprite(
-                self.white,
+            r.draw_ui_panel(
                 Vec2::new(bar.x, bar.y),
                 Vec2::new(fill, bar.h),
                 COL_BAR_FILL,
+                COL_BAR_FILL,
+                0.0,
+                4.0,
+                0.0,
+                [0.0; 4],
+                0.0,
             );
         }
-        outline(r, self.white, &bar, 2.0, COL_GOLD_LINE);
     }
 }
 
@@ -642,37 +639,10 @@ fn centered_text(
     size: f32,
     color: [f32; 4],
 ) {
-    let w = r.measure_text(text, size).x;
+    let role = flicker::render::FontRole::Display;
+    let w = r.measure_text_role(text, size, role).x;
     let x = (container.x + (container.w - w) * 0.5).max(container.x);
-    r.draw_text(text, Vec2::new(x, y), size, color);
-}
-
-/// Draw a `t`-thick rectangle outline with the white texture (screen space).
-fn outline(r: &mut Renderer, white: TextureHandle, rect: &Rect, t: f32, color: [f32; 4]) {
-    r.draw_sprite(
-        white,
-        Vec2::new(rect.x, rect.y),
-        Vec2::new(rect.w, t),
-        color,
-    );
-    r.draw_sprite(
-        white,
-        Vec2::new(rect.x, rect.y + rect.h - t),
-        Vec2::new(rect.w, t),
-        color,
-    );
-    r.draw_sprite(
-        white,
-        Vec2::new(rect.x, rect.y),
-        Vec2::new(t, rect.h),
-        color,
-    );
-    r.draw_sprite(
-        white,
-        Vec2::new(rect.x + rect.w - t, rect.y),
-        Vec2::new(t, rect.h),
-        color,
-    );
+    r.draw_text_role(text, Vec2::new(x, y), size, color, role);
 }
 
 #[cfg(test)]
@@ -685,7 +655,7 @@ mod tests {
         // Workspace `target/` (already git-ignored) so the preview never lands
         // in the tracked tree.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
+            .join("../../../../target")
             .join(name);
         img.save(&path).expect("write png");
         eprintln!("wrote {}", path.display());

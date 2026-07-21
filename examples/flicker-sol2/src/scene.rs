@@ -23,11 +23,13 @@ use flicker::ui::{load_ui_json, load_widgets, render_hud};
 use flicker_system::{BodyType, CastParams, MassParams, System, SystemConfig, EARTH_PER_SUN};
 
 use crate::draw;
-use crate::shell::Pause;
+use flicker::app::{AbstractControls, GamepadConfig, InputMap};
+use flicker_shell::{PauseScene, Theme};
 use crate::well;
 
 const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/sim_ui.lua");
-const UI_ELEMENTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/ui_elements.json");
+const UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/resources/ui_elements.json");
 
 // ── tuning ──────────────────────────────────────────────────────────────────────
 const DEFAULT_AU_AT_EDGE: f32 = 90.0;
@@ -123,6 +125,8 @@ pub struct Sim {
     /// slider drag doesn't also re-focus a ring or zoom the view.
     ui_capture: bool,
     esc_prev: bool,
+    /// The shared Prism UI theme (baked once in `enter`), handed to each pushed pause overlay.
+    theme: Option<Theme>,
 }
 
 impl Sim {
@@ -146,6 +150,7 @@ impl Sim {
             white: None,
             ui_capture: false,
             esc_prev: false,
+            theme: None,
         }
     }
 
@@ -601,6 +606,7 @@ impl Scene for Sim {
     fn enter(&mut self, renderer: &mut Renderer) {
         renderer.clear_color = [0.006, 0.008, 0.014, 1.0];
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+        self.theme = Some(Theme::build(renderer));
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(s) => {
                 load_ui_json(&s, UI_ELEMENTS);
@@ -617,7 +623,14 @@ impl Scene for Sim {
         let esc_edge = esc && !self.esc_prev;
         self.esc_prev = esc;
         if esc_edge {
-            return Transition::Push(Box::new(Pause::new()));
+            if let Some(theme) = self.theme {
+                return Transition::Push(Box::new(PauseScene::new(
+                    theme,
+                    &InputMap::default(),
+                    &AbstractControls::default(),
+                    &GamepadConfig::default(),
+                )));
+            }
         }
 
         let dt = dt.as_secs_f32();

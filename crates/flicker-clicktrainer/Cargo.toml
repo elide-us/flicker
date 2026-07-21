@@ -1,0 +1,18 @@
+[package]
+name = "flicker-clicktrainer"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# A minigame PACKAGE (library only) — the click-trainer `Scene`, driven by the
+# unified `prism-alpha` launcher. No standalone binary; depends only on engine
+# services (the `flicker` umbrella + the front-end shell for PauseScene/Theme).
+[lib]
+name = "flicker_clicktrainer"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { path = "../flicker" }
+flicker-shell.workspace = true
+fastrand.workspace = true
+tracing.workspace = true

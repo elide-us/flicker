@@ -1,5 +1,5 @@
 -- flicker-world HUD: planet stats, view/grid/epoch controls, and a per-epoch
--- knob panel — driven by Lua + `ui_elements.json` (the `UI.hud` section) and the
+-- knob panel — driven by Lua + `ui_elements.json` (the `UI.world` section) and the
 -- engine `Model` (live values published each frame). Layout/colours/labels live
 -- in the JSON; this script owns behaviour. The reusable `Widgets` toolkit
 -- (stepper / button / dropdown / slider) is from flicker-ui; widget values live
@@ -16,7 +16,7 @@ local function point_in(px, py, r)
 end
 
 local function ctrl_rect(w)
-  return { x = UI.hud.controls.widget_x, y = w.y, w = w.w, h = w.h }
+  return { x = UI.world.controls.widget_x, y = w.y, w = w.w, h = w.h }
 end
 
 local function current_epoch()
@@ -24,20 +24,20 @@ local function current_epoch()
 end
 
 -- The view dropdown is filtered per epoch: each epoch lists only the views that
--- mean something for it (UI.hud.epochs[ep].views, by name). The engine
--- Model.view_mode stays a *global* 1-based index into UI.hud.controls.view.options
+-- mean something for it (UI.world.epochs[ep].views, by name). The engine
+-- Model.view_mode stays a *global* 1-based index into UI.world.controls.view.options
 -- (the Rust ViewMode order); these helpers translate between that index and the
 -- per-epoch list shown in the dropdown.
 local function epoch_views()
-  local ep = UI.hud.epochs[current_epoch()]
+  local ep = UI.world.epochs[current_epoch()]
   if ep and ep.views and #ep.views > 0 then
     return ep.views
   end
-  return UI.hud.controls.view.options
+  return UI.world.controls.view.options
 end
 
 local function view_global_index(name)
-  for i, opt in ipairs(UI.hud.controls.view.options) do
+  for i, opt in ipairs(UI.world.controls.view.options) do
     if opt == name then return i end
   end
   return 1
@@ -47,7 +47,7 @@ end
 -- current view isn't offered this epoch.
 local function view_local_pos(views)
   local cur = math.floor((Model.view_mode or 1) + 0.5)
-  local name = UI.hud.controls.view.options[cur]
+  local name = UI.world.controls.view.options[cur]
   for i, v in ipairs(views) do
     if v == name then return i end
   end
@@ -56,8 +56,8 @@ end
 
 -- The selected epoch's param rows, each with its slider rect.
 local function param_rows()
-  local p = UI.hud.params
-  local ep = UI.hud.epochs[current_epoch()]
+  local p = UI.world.params
+  local ep = UI.world.epochs[current_epoch()]
   local rows = {}
   if ep then
     local y = p.origin_y
@@ -76,7 +76,7 @@ end
 -- The element-mix grid (Epoch 1): a 2-column grid of compact sliders, each
 -- emitting/reading `ab_<symbol>`.
 local function element_rows()
-  local e = UI.hud.elements
+  local e = UI.world.elements
   local rows = {}
   if e then
     for i, item in ipairs(e.items) do
@@ -99,7 +99,7 @@ end
 -- slider keyed by its CelestialState id. Returns the config, the row rects, the
 -- panel-left x, and a capture rect (so dragging a slider doesn't also orbit).
 local function celestial_rows(sw)
-  local cz = UI.hud.celestial
+  local cz = UI.world.celestial
   if not cz then
     return nil, {}, 0, nil
   end
@@ -122,7 +122,7 @@ end
 -- The bottom evolution-timeline bar: full width minus margins, ~1 inch tall.
 -- Returns the config and its screen rect (the scrub track).
 local function timeline_bar(sw, sh)
-  local t = UI.hud.timeline
+  local t = UI.world.timeline
   if not t then
     return nil, nil
   end
@@ -139,7 +139,7 @@ function M.update(mx, my, clicked, sw, sh, down)
   if not (UI and Model and Widgets) then
     return {}
   end
-  local c = UI.hud.controls
+  local c = UI.world.controls
   local s = {}
 
   local views = epoch_views()
@@ -178,7 +178,7 @@ function M.update(mx, my, clicked, sw, sh, down)
     s.timeline = Widgets.slider_update(ws, "timeline", tlrect, mx, my, clicked, down, Model.timeline or 0, 0, 1)
   end
 
-  local capture = UI.hud.capture and point_in(mx, my, UI.hud.capture)
+  local capture = UI.world.capture and point_in(mx, my, UI.world.capture)
   if ccap and point_in(mx, my, ccap) then
     capture = true
   end
@@ -190,7 +190,7 @@ function M.update(mx, my, clicked, sw, sh, down)
 end
 
 local function stats(cmds)
-  local s = UI.hud.stats
+  local s = UI.world.stats
   local function line(spec, text)
     local cc = spec.color
     cmds[#cmds + 1] = { kind = "text", x = s.x, y = spec.y, text = text, size = spec.size, r = cc[1], g = cc[2], b = cc[3], a = cc[4] }
@@ -202,7 +202,7 @@ local function stats(cmds)
 end
 
 local function controls(cmds)
-  local c = UI.hud.controls
+  local c = UI.world.controls
   local lc = c.label_color
   local function lbl(text, y)
     cmds[#cmds + 1] = { kind = "text", x = c.label_x, y = y + 4, text = text, size = c.label_size, r = lc[1], g = lc[2], b = lc[3], a = lc[4] }
@@ -221,7 +221,7 @@ end
 
 local function params(cmds)
   local p, rows = param_rows()
-  local ep = UI.hud.epochs[current_epoch()]
+  local ep = UI.world.epochs[current_epoch()]
   local hc = p.header_color
   cmds[#cmds + 1] = {
     kind = "text",
@@ -266,7 +266,7 @@ local function elements(cmds)
     local val = Model["ab_" .. row.sym] or 0
     cmds[#cmds + 1] =
       { kind = "text", x = row.x, y = row.y, text = row.sym, size = e.label_size, r = lc[1], g = lc[2], b = lc[3], a = lc[4] }
-    Widgets.slider_draw(cmds, row.r, val, 0, e.max, UI.hud.params.slider_style)
+    Widgets.slider_draw(cmds, row.r, val, 0, e.max, UI.world.params.slider_style)
   end
 end
 
@@ -304,7 +304,7 @@ local function timeline(cmds, sw, sh)
   if not t then
     return
   end
-  local epochs = UI.hud.epochs or {}
+  local epochs = UI.world.epochs or {}
   local n = #epochs
   if n == 0 then
     return

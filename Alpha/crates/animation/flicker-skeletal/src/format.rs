@@ -97,6 +97,11 @@ pub struct Mesh {
     /// (`tools/skin_outfit.py --build-cloth`). Empty/absent → the mesh is fully rigid.
     #[serde(default)]
     pub cloth: Cloth,
+    /// Facial identity morph targets — the character-creator "create-a-face" system.
+    /// Sparse per-vertex position deltas from the bind face, blended BEFORE skinning
+    /// (`skin::skin_morphed`). Empty/absent → no morphs (serde-default keeps old files loading).
+    #[serde(default)]
+    pub morphs: Vec<Morph>,
 }
 
 /// A contiguous run of `indices` sharing one material. Because the converter emits
@@ -191,7 +196,7 @@ pub struct ClothParams {
 
 impl Default for ClothParams {
     fn default() -> Self {
-        Self { gravity: [0.0, 0.0, -600.0], stiffness: 0.06, damping: 0.9, iterations: 8, max_dt: 1.0 / 30.0 }
+        Self { gravity: [0.0, 0.0, -600.0], stiffness: 0.015, damping: 0.9, iterations: 8, max_dt: 1.0 / 30.0 }
     }
 }
 
@@ -203,6 +208,25 @@ pub struct Vertex {
     pub uv: [f32; 2],
     pub joints: [u32; 4],
     pub weights: [f32; 4],
+}
+
+/// A facial identity morph target: a named, sparse set of per-vertex position deltas from
+/// the bind face (only affected verts are listed). Blended by a player-driven weight in the
+/// create-a-face UI; static per character at runtime. DNA-forward — a future DNA/RigLogic
+/// import maps its identity morphs onto ours by `name`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Morph {
+    pub name: String,
+    #[serde(default)]
+    pub deltas: Vec<MorphDelta>,
+}
+
+/// One vertex's contribution to a `Morph`: index into `Mesh::vertices` (`v`) plus the position
+/// delta (`d`), added to the bind position scaled by the morph's blend weight.
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct MorphDelta {
+    pub v: u32,
+    pub d: [f32; 3],
 }
 
 #[derive(Debug, Deserialize)]
@@ -602,5 +626,36 @@ mod tests {
         remap_outfit_joints(&mut mesh, &outfit_names, &base);
         // outfit joint 1 = "ghost" (absent) → 0; joint 0 = "spine" → 1.
         assert_eq!(mesh.vertices[0].joints, [0, 1, 1, 1]);
+    }
+
+    /// D.1 regression: the canonical base-A rig loads through the real loader with the
+    /// added face group (`jaw`, `eye_l`, `eye_r` under `head`) → 66 bones, and no stray
+    /// asset under the character dir breaks the recursive rig parse. `#[ignore]`d because
+    /// it reads the ~33 MB canonical rig; run explicitly with
+    /// `cargo test -p flicker-skeletal -- --ignored`.
+    #[test]
+    #[ignore]
+    fn loads_canonical_base_a_with_face_group() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/characters/PrismHumanBaseA");
+        if !dir.exists() {
+            eprintln!("skipping: canonical content not present at {}", dir.display());
+            return;
+        }
+        let model = load_dir(&dir).expect("canonical base-A rig should load");
+        assert_eq!(model.bones.len(), 66, "base-A + face group must be 66 bones");
+        let head = model
+            .bones
+            .iter()
+            .position(|b| b.name == "head")
+            .expect("head bone present") as i32;
+        for name in ["jaw", "eye_l", "eye_r"] {
+            let b = model
+                .bones
+                .iter()
+                .find(|b| b.name == name)
+                .unwrap_or_else(|| panic!("missing face bone {name}"));
+            assert_eq!(b.parent, head, "{name} must be a child of head");
+        }
     }
 }
