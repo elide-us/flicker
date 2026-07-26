@@ -12,8 +12,8 @@
 //! set is small and static, so the atlas does not repack mid-frame.
 
 use glyphon::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 
 use crate::pipeline_mesh::DEPTH_FORMAT;
@@ -31,16 +31,41 @@ pub enum FontRole {
     /// Body / prose (the default).
     #[default]
     Body,
+    /// Runic decorations (the `Prism Rune` face — Elder Futhark corner glyphs).
+    Rune,
 }
 
 impl FontRole {
     /// The font-family name this role selects — the internal family name the
-    /// matching `Alpha/content/fonts` face is registered under.
+    /// matching `Alpha/content/sensorium/fonts` face is registered under.
     fn family(self) -> &'static str {
         match self {
             FontRole::Display => "Prism Display",
             FontRole::Label => "Prism Label",
             FontRole::Body => "Prism Body",
+            FontRole::Rune => "Prism Rune",
+        }
+    }
+
+    /// The weight this role draws at. `bold` selects the heavier cut on the roles
+    /// that ship one (Display 600→700); roles with a single weight ignore it and
+    /// the nearest registered face is chosen.
+    fn weight(self, bold: bool) -> Weight {
+        match (self, bold) {
+            (FontRole::Display, true) => Weight(700),
+            (FontRole::Display, false) => Weight(600),
+            (FontRole::Label, _) => Weight(600),
+            (FontRole::Body, _) => Weight(400),
+            (FontRole::Rune, _) => Weight(400),
+        }
+    }
+
+    /// Letter-spacing as a fraction of the em. Cinzel caps (Label) read as carved
+    /// inscription only when tracked; prose and headings stay at `0.0`.
+    fn tracking(self) -> f32 {
+        match self {
+            FontRole::Label => 0.16,
+            FontRole::Display | FontRole::Body | FontRole::Rune => 0.0,
         }
     }
 }
@@ -51,6 +76,7 @@ struct QueuedText {
     top: f32,
     color: Color,
     layer: f32,
+    clip: Option<[f32; 4]>,
 }
 
 pub struct TextPipeline {
@@ -65,6 +91,8 @@ pub struct TextPipeline {
     /// `(layer, renderer index)` for each distinct layer prepared this frame,
     /// ascending. Built in `prepare`.
     bands: Vec<(f32, usize)>,
+    /// Framebuffer size cached in `prepare` — the scissor reset before glyphon draws.
+    screen: (u32, u32),
 }
 
 impl TextPipeline {
@@ -90,6 +118,7 @@ impl TextPipeline {
             renderers,
             queued: Vec::new(),
             bands: Vec::new(),
+            screen: (0, 0),
         }
     }
 
@@ -106,9 +135,25 @@ impl TextPipeline {
         self.font_system.db_mut().load_font_data(bytes.to_vec());
     }
 
+    /// Shape one run into a fresh buffer with the face selected by `role` +
+    /// `italic`/`bold`. The family carries the Prism role; weight and italic map
+    /// onto the matching registered face (`FontRole::weight` / cosmic-text picks
+    /// the nearest), falling back to a system face for any glyph a UI face lacks.
+    fn shape(&mut self, text: &str, size: f32, role: FontRole, italic: bool, bold: bool) -> Buffer {
+        let attrs = Attrs::new()
+            .family(Family::Name(role.family()))
+            .weight(role.weight(bold))
+            .style(if italic { Style::Italic } else { Style::Normal });
+        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, size * 1.2));
+        buffer.set_size(&mut self.font_system, None, None);
+        buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        buffer
+    }
+
     /// Queue a string for rendering at `layer`. `position` is the top-left of the
     /// text in pixels. `size` is the font size in pixels. `color` is RGBA in 0..1.
-    /// `role` selects the face.
+    /// `role` selects the face; `italic`/`bold` select its style within the family.
     #[allow(clippy::too_many_arguments)] // low-level text submit; each param is distinct
     pub fn push(
         &mut self,
@@ -119,33 +164,37 @@ impl TextPipeline {
         color: [f32; 4],
         layer: f32,
         role: FontRole,
+        italic: bool,
+        bold: bool,
+        tracking: f32,
+        clip: Option<[f32; 4]>,
     ) {
-        let metrics = Metrics::new(size, size * 1.2);
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, None, None);
-        buffer.set_text(
-            &mut self.font_system,
-            text,
-            Attrs::new().family(Family::Name(role.family())),
-            Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut self.font_system, false);
-
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let c = Color::rgba(
-            to_u8(color[0]),
-            to_u8(color[1]),
-            to_u8(color[2]),
-            to_u8(color[3]),
-        );
+        let c = Color::rgba(to_u8(color[0]), to_u8(color[1]), to_u8(color[2]), to_u8(color[3]));
 
-        self.queued.push(QueuedText {
-            buffer,
-            left,
-            top,
-            color: c,
-            layer,
-        });
+        // Per-call `tracking` overrides the role default when non-negative (a data
+        // cell passes 0.0 to stay tight so fixed-width numeric columns align).
+        let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
+        if track == 0.0 {
+            let buffer = self.shape(text, size, role, italic, bold);
+            self.queued.push(QueuedText { buffer, left, top, color: c, layer, clip });
+            return;
+        }
+        // Tracked caps: cosmic-text has no letter-spacing, so lay out one glyph at
+        // a time, advancing by the glyph's own width plus the role's spacing.
+        // Label strings are short, so the per-glyph buffers stay cheap.
+        let mut x = left;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                x += size * 0.28 + track;
+                continue;
+            }
+            let mut tmp = [0u8; 4];
+            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold);
+            let w = buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5);
+            self.queued.push(QueuedText { buffer, left: x, top, color: c, layer, clip });
+            x += w + track;
+        }
     }
 
     /// The distinct layers present this frame, ascending.
@@ -155,26 +204,43 @@ impl TextPipeline {
 
     /// Measure `text` at font `size`: the max line width and total height in
     /// pixels. Shapes a throwaway buffer (no upload), so it can be called for
-    /// layout before drawing. Mirrors the shaping in [`Self::push`] so the
-    /// measurement matches what gets drawn.
-    pub fn measure(&mut self, text: &str, size: f32, role: FontRole) -> (f32, f32) {
-        let metrics = Metrics::new(size, size * 1.2);
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, None, None);
-        buffer.set_text(
-            &mut self.font_system,
-            text,
-            Attrs::new().family(Family::Name(role.family())),
-            Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut self.font_system, false);
-        let mut width = 0.0_f32;
-        let mut lines = 0_usize;
-        for run in buffer.layout_runs() {
-            width = width.max(run.line_w);
-            lines += 1;
+    /// layout before drawing. Mirrors the shaping *and tracking* in [`Self::push`]
+    /// so the measurement matches what gets drawn.
+    pub fn measure(
+        &mut self,
+        text: &str,
+        size: f32,
+        role: FontRole,
+        italic: bool,
+        bold: bool,
+        tracking: f32,
+    ) -> (f32, f32) {
+        let line_height = size * 1.2;
+        // Per-call `tracking` overrides the role default when non-negative (a data
+        // cell passes 0.0 to stay tight so fixed-width numeric columns align).
+        let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
+        if track == 0.0 {
+            let buffer = self.shape(text, size, role, italic, bold);
+            let mut width = 0.0_f32;
+            let mut lines = 0_usize;
+            for run in buffer.layout_runs() {
+                width = width.max(run.line_w);
+                lines += 1;
+            }
+            return (width, lines.max(1) as f32 * line_height);
         }
-        (width, lines.max(1) as f32 * metrics.line_height)
+        // Tracked single line — mirror push's per-glyph advance.
+        let mut width = 0.0_f32;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                width += size * 0.28 + track;
+                continue;
+            }
+            let mut tmp = [0u8; 4];
+            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold);
+            width += buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5) + track;
+        }
+        ((width - track).max(0.0), line_height)
     }
 
     pub fn prepare(
@@ -185,6 +251,7 @@ impl TextPipeline {
         height: u32,
     ) -> Result<(), glyphon::PrepareError> {
         self.bands.clear();
+        self.screen = (width, height);
         self.viewport.update(queue, Resolution { width, height });
         if self.queued.is_empty() {
             return Ok(());
@@ -210,12 +277,7 @@ impl TextPipeline {
                     left: q.left,
                     top: q.top,
                     scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: width as i32,
-                        bottom: height as i32,
-                    },
+                    bounds: text_bounds(q.clip, width, height),
                     default_color: q.color,
                     custom_glyphs: &[],
                 })
@@ -245,7 +307,30 @@ impl TextPipeline {
         let Some(&(_, index)) = self.bands.iter().find(|(l, _)| *l == layer) else {
             return Ok(());
         };
+        // Reset any scissor a prior 2D pipeline left this layer so glyphon clips text
+        // only by each area's `bounds` (that is where a scroll region masks its labels).
+        crate::pipeline_ui::set_scissor(
+            pass,
+            glam::Vec2::new(self.screen.0 as f32, self.screen.1 as f32),
+            None,
+        );
         self.renderers[index].render(&self.atlas, &self.viewport, pass)
+    }
+}
+
+/// A glyphon clip rect for one text area: `clip` (px x,y,w,h) clamped to the
+/// framebuffer, or the whole frame when `None`. glyphon clips each area to its
+/// `bounds`, so a scroll region masks its labels without a wgpu scissor.
+fn text_bounds(clip: Option<[f32; 4]>, width: u32, height: u32) -> TextBounds {
+    let (w, h) = (width as i32, height as i32);
+    match clip {
+        Some([x, y, cw, ch]) => TextBounds {
+            left: (x as i32).clamp(0, w),
+            top: (y as i32).clamp(0, h),
+            right: ((x + cw) as i32).clamp(0, w),
+            bottom: ((y + ch) as i32).clamp(0, h),
+        },
+        None => TextBounds { left: 0, top: 0, right: w, bottom: h },
     }
 }
 

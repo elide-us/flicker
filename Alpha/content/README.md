@@ -20,9 +20,7 @@ Alpha/content/
 ├─ flights/    <name>.flight                                 # camera cinematics (flicker-flight)
 ├─ meshes/     <char>/*.json                                 # mesh / morph definitions
 ├─ textures/   <char>/*.png                                  # texture maps
-├─ scripts/    *.lua                                         # shared front-end Lua (splash/menu/settings/pause)
-├─ resources/  ui_elements.json                              # shared UI layouts (json)
-├─ assets/     *.png                                         # shared graphics (publisher / engine logos)
+├─ sensorium/  scripts/ resources/ fonts/ assets/            # "Sensorium" — the UI + input content (shell + HUD Lua, ui_elements.json, Prism fonts, logos)
 ├─ bakes/      cluster_X_Y_Z.json.gz                         # baked voxel clusters (see below)
 └─ characters/ <char>/…                                      # RAW export bundles (see below)
 ```
@@ -33,14 +31,14 @@ out of this tree.)
 ### `ui_elements.json` is a shared library (one file)
 
 `ui_elements.json` is a **flat map of named UI-element definitions**, not a per-client
-file. There is **one** shared copy — `resources/ui_elements.json` — loaded into a
+file. There is **one** shared copy — `sensorium/resources/ui_elements.json` — loaded into a
 ScriptHost and exposed to Lua as `UI`; each client's scripts read the elements they
 need by name (unused keys are ignored). Clients **add their elements to the shared
 file** rather than shipping a private copy: the shell contributes
 `modal`/`screens`/`settings`/`logo`/`loading`; flicker-csg contributes `hud`. If two
 clients would want the same top-level key, **namespace the key** (e.g. `csg_hud` vs
 `world_hud`) — not the file. Migrate the remaining clients (world, sol2, voxel-cluster)
-the same way: merge their elements in, repoint them at `resources/ui_elements.json`,
+the same way: merge their elements in, repoint them at `sensorium/resources/ui_elements.json`,
 delete the local copy.
 
 (Genuinely distinct per-client *data* files — e.g. a client's `.flight` — stay

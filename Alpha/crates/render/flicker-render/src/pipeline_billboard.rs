@@ -348,7 +348,7 @@ impl BillboardPipeline {
     pub fn render<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
-        textures: &'a [crate::texture::LoadedTexture],
+        textures: &'a [Option<crate::texture::LoadedTexture>],
     ) {
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
         // Alpha-blended (depth-writing) billboards first…
@@ -456,7 +456,7 @@ fn draw_runs<'a>(
     vertex_buffer: &'a wgpu::Buffer,
     vertices: &[BillboardVertex],
     runs: &'a [Run],
-    textures: &'a [crate::texture::LoadedTexture],
+    textures: &'a [Option<crate::texture::LoadedTexture>],
 ) {
     if runs.is_empty() {
         return;
@@ -465,7 +465,7 @@ fn draw_runs<'a>(
     let bytes = std::mem::size_of_val(vertices) as u64;
     pass.set_vertex_buffer(0, vertex_buffer.slice(0..bytes));
     for run in runs {
-        let Some(tex) = textures.get(run.texture.0 as usize) else {
+        let Some(tex) = textures.get(run.texture.0 as usize).and_then(|t| t.as_ref()) else {
             continue;
         };
         let Some(bg) = tex.billboard_bind_group.as_ref() else {

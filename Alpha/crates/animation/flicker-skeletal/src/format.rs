@@ -17,11 +17,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use glam::{Mat4, Vec3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ─────────────────────────────── wire types (verbatim contract) ───────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RigFile {
     #[serde(default)]
     pub format: String,
@@ -35,6 +35,14 @@ pub struct RigFile {
     pub mesh: Mesh,
     #[serde(default)]
     pub clips: Vec<Clip>,
+    /// How this asset mounts onto a skeleton (folded-in `fits.json`). Populated for props /
+    /// garments; empty for a character. serde-default keeps older files loading.
+    #[serde(default)]
+    pub attach: Attach,
+    /// Collision volumes (physics / hitbox / attach roles) carried by this asset. Schema-only
+    /// today (the `mechanics` cluster consumes it later). serde-default keeps older files loading.
+    #[serde(default)]
+    pub collision: Collision,
     /// Play clips as ROTATION-ONLY on this rig: keep each bone's own rest translation
     /// (its bone offset/length) instead of the clip's baked source-skeleton offsets.
     /// Set for rigs RETARGETED from a differently-proportioned authoring skeleton (e.g.
@@ -44,7 +52,7 @@ pub struct RigFile {
     pub retarget: bool,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Source {
     #[serde(default)]
     pub file: String,
@@ -60,13 +68,13 @@ pub struct Source {
     pub textures: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Skeleton {
     #[serde(default)]
     pub bones: Vec<BoneRaw>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoneRaw {
     pub name: String,
     pub parent: i32,
@@ -81,7 +89,19 @@ fn identity16() -> [f32; 16] {
     ]
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+fn quat_identity() -> [f32; 4] {
+    [0.0, 0.0, 0.0, 1.0]
+}
+
+fn one3() -> [f32; 3] {
+    [1.0, 1.0, 1.0]
+}
+
+fn one_f32() -> f32 {
+    1.0
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Mesh {
     #[serde(default)]
     pub vertices: Vec<Vertex>,
@@ -107,14 +127,14 @@ pub struct Mesh {
 /// A contiguous run of `indices` sharing one material. Because the converter emits
 /// a non-deduplicated vertex list with sequential indices, `[start, start+count)`
 /// is equally a range into `indices` and into `vertices`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Submesh {
     pub material: usize,
     pub start: usize,
     pub count: usize,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Material {
     #[serde(default)]
     pub name: String,
@@ -135,6 +155,15 @@ pub struct Material {
     /// Ambient-occlusion PNG basename, or empty. LINEAR data (R channel).
     #[serde(default)]
     pub ao: String,
+    /// Emissive PNG basename, or empty → non-emissive. sRGB colour data (self-illumination).
+    /// The content standard's `Emit` map (`Alpha/content/README.md`).
+    #[serde(default)]
+    pub emit: String,
+    /// Packed occlusion-roughness-metalness PNG basename (R=occlusion, G=roughness, B=metalness),
+    /// or empty. LINEAR data. The content standard's canonical `ORM` map; when present a renderer
+    /// prefers it over the separate `ao`/`roughness`/`metalness` basenames above.
+    #[serde(default)]
+    pub orm: String,
     /// Flat RGB (0..1) used when `base_color` is empty (untextured props). Empty →
     /// neutral gray.
     #[serde(default)]
@@ -144,7 +173,7 @@ pub struct Material {
 /// Secondary-motion cloth data for a garment: which vertices swing on which jiggle
 /// chains. Emitted by `tools/skin_outfit.py --build-cloth`, consumed by [`crate::cloth`].
 /// All positions are in BIND (source/rig) space, the same space as the mesh vertices.
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Cloth {
     #[serde(default)]
     pub regions: Vec<ClothRegion>,
@@ -152,7 +181,7 @@ pub struct Cloth {
 
 /// One dangly region (a bell sleeve, a skirt hem …) — a fan of chains hung from one bone,
 /// plus the region's vertices bound along those chains.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClothRegion {
     pub name: String,
     /// Body bone the chains hang from (drives their anchor point + home direction).
@@ -165,7 +194,7 @@ pub struct ClothRegion {
 
 /// A single jiggle chain: a straight hang from `anchor` along `dir`, `segments` links of
 /// `seg_len` each. Same construction args as [`crate::jiggle::JiggleChain::new`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClothChain {
     pub anchor: [f32; 3],
     pub dir: [f32; 3],
@@ -175,7 +204,7 @@ pub struct ClothChain {
 
 /// A vertex's attachment: which region chain (`c`) it follows and where along it —
 /// segment `k`, fraction `f` in `0..1` along that segment.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClothBind {
     pub v: u32,
     pub c: u32,
@@ -185,7 +214,7 @@ pub struct ClothBind {
 
 /// Per-region jiggle dials (mirrors [`crate::jiggle::JiggleParams`], as plain arrays for
 /// the wire). Defaults suit a light garment in cm / z-up.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClothParams {
     pub gravity: [f32; 3],
     pub stiffness: f32,
@@ -200,7 +229,7 @@ impl Default for ClothParams {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vertex {
     pub p: [f32; 3],
     pub n: [f32; 3],
@@ -214,7 +243,7 @@ pub struct Vertex {
 /// the bind face (only affected verts are listed). Blended by a player-driven weight in the
 /// create-a-face UI; static per character at runtime. DNA-forward — a future DNA/RigLogic
 /// import maps its identity morphs onto ours by `name`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Morph {
     pub name: String,
     #[serde(default)]
@@ -223,13 +252,112 @@ pub struct Morph {
 
 /// One vertex's contribution to a `Morph`: index into `Mesh::vertices` (`v`) plus the position
 /// delta (`d`), added to the bind position scaled by the morph's blend weight.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MorphDelta {
     pub v: u32,
     pub d: [f32; 3],
 }
 
-#[derive(Debug, Deserialize)]
+/// How a prop / garment mounts onto a skeleton — the self-describing fold of the `fits.json`
+/// sidecar (one recorded placement per asset). A rigid prop (weapon, sheath) carries this so the
+/// import editor can snap it to a socket; a fitted garment carries its placement the same way.
+///
+/// `socket` names the bone/slot it hangs from (accepts the `slot` key from legacy `fits.json`);
+/// `offset` is in WORLD axes at rest (x lateral, y depth, z up — NOT bone axes); `rotate` is a
+/// quaternion `[x,y,z,w]`; `scale` × `uniform` size the RAW (unscaled) vendor mesh. The socket's
+/// upright correction is re-derived from the rig at load, never stored here. serde-default: an
+/// absent section means the asset has no recorded fit (the import editor infers a default).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attach {
+    #[serde(default, alias = "slot")]
+    pub socket: String,
+    #[serde(default)]
+    pub offset: [f32; 3],
+    #[serde(default = "quat_identity")]
+    pub rotate: [f32; 4],
+    #[serde(default = "one3")]
+    pub scale: [f32; 3],
+    #[serde(default = "one_f32")]
+    pub uniform: f32,
+}
+
+// Hand-written so an ABSENT `attach` block (RigFile's `#[serde(default)]`) yields the SAME
+// sensible values as a present-but-partial one — identity rotation, unit scale — instead of the
+// derived all-zeros (which would give a zero quaternion and zero scale). Mirrors `ClothParams`.
+impl Default for Attach {
+    fn default() -> Self {
+        Self {
+            socket: String::new(),
+            offset: [0.0, 0.0, 0.0],
+            rotate: quat_identity(),
+            scale: one3(),
+            uniform: one_f32(),
+        }
+    }
+}
+
+/// Collision volumes carried by an asset — the golden-spec three-role model. SCHEMA ONLY here:
+/// the primitive geometry + overlap-query runtime + capsule-authoring live in the `mechanics`
+/// cluster (a later slice). serde-default lets assets start carrying volumes before the runtime
+/// consumes them, and keeps every existing file (which has none) loading.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Collision {
+    #[serde(default)]
+    pub volumes: Vec<CollisionVolume>,
+}
+
+/// One collision primitive, parented to a bone (so it follows the pose). `bone` resolves by NAME
+/// like every clip track (share-by-name); the `shape` carries the primitive + its dimensions in
+/// the bone's local frame (Z-up / cm); `role` tags what the volume is for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollisionVolume {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub bone: String,
+    pub shape: CollisionShape,
+    #[serde(default)]
+    pub role: CollisionRole,
+}
+
+/// The primitive geometry of a [`CollisionVolume`], internally tagged by `kind`
+/// (`"sphere"` / `"capsule"` / `"box"`). Capsule = segment `a`..`b` + `radius`; box = oriented
+/// half-extents about `center`; sphere = `center` + `radius`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CollisionShape {
+    Sphere {
+        center: [f32; 3],
+        radius: f32,
+    },
+    Capsule {
+        a: [f32; 3],
+        b: [f32; 3],
+        radius: f32,
+    },
+    Box {
+        center: [f32; 3],
+        half_extents: [f32; 3],
+        #[serde(default = "quat_identity")]
+        rotation: [f32; 4],
+    },
+}
+
+/// What a [`CollisionVolume`] is for (the golden-spec three roles). serde-default = `Physics`
+/// (the persistent occupy-the-world / damageable-hurtbox volume).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollisionRole {
+    /// Persistent, always-on: item-vs-world occupancy and the damageable hurtbox.
+    #[default]
+    Physics,
+    /// Transient combat box, switched on/off by a TAE `HitboxActive` tick-window.
+    Hitbox,
+    /// An attachment point where a prop/weapon mounts (a socket, possibly a bone).
+    Attach,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Clip {
     pub name: String,
     #[serde(default = "default_tick_rate")]
@@ -244,13 +372,13 @@ fn default_tick_rate() -> u32 {
     60
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Track {
     pub bone: String,
     pub keys: Vec<Keyframe>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keyframe {
     #[serde(default)]
     pub t: u32,
@@ -312,6 +440,10 @@ pub struct Model {
     pub orbit_radius: f32,
     /// Rotation-only clip playback for a retargeted rig (see [`RigFile::retarget`]).
     pub retarget: bool,
+    /// The rig file's mount record (folded-in `fits.json`); default for a character with none.
+    pub attach: Attach,
+    /// The rig file's collision volumes (schema-only until the `mechanics` runtime lands).
+    pub collision: Collision,
 }
 
 /// Decode a contract matrix (16 floats) into a glam `Mat4`.
@@ -512,6 +644,8 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
         world,
         orbit_radius: radius,
         retarget: rig_file.retarget,
+        attach: rig_file.attach,
+        collision: rig_file.collision,
     })
 }
 
@@ -519,11 +653,18 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
 /// Bones/clips are ignored; the prop is rendered rigid at an attach transform. In the
 /// same source space (Z-up/cm) as the rig, so the rig's `world` matrix maps it too.
 pub fn load_mesh(path: &Path) -> Result<Mesh> {
+    Ok(load_mesh_with_attach(path)?.0)
+}
+
+/// Like [`load_mesh`] but also returns the prop's folded-in `attach` mount record (default when
+/// the file carries none). The fit editor uses this to place a prop at its recorded socket/offset
+/// straight from the one self-describing file — no `fits.json` sidecar — without re-parsing it.
+pub fn load_mesh_with_attach(path: &Path) -> Result<(Mesh, Attach)> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading prop {}", path.display()))?;
     let file: RigFile = serde_json::from_str(&text)
         .with_context(|| format!("parsing prop {}", path.display()))?;
-    Ok(file.mesh)
+    Ok((file.mesh, file.attach))
 }
 
 /// Remap a mesh's joint indices from an outfit's OWN (reduced) bone list into a base
@@ -564,6 +705,13 @@ fn remap_outfit_joints(mesh: &mut Mesh, outfit_names: &[String], base: &[Bone]) 
 /// skeleton block is returned unchanged (legacy: joints already index the base — e.g.
 /// an outfit exported against the full skeleton, where the remap is the identity anyway).
 pub fn load_outfit(path: &Path, base: &[Bone]) -> Result<Mesh> {
+    Ok(load_outfit_with_attach(path, base)?.0)
+}
+
+/// Like [`load_outfit`] but also returns the garment's folded-in `attach` mount record (default
+/// when the file carries none) — the fit editor reads a piece's placement from its one
+/// self-describing file instead of the shared `fits.json` sidecar.
+pub fn load_outfit_with_attach(path: &Path, base: &[Bone]) -> Result<(Mesh, Attach)> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading outfit {}", path.display()))?;
     let file: RigFile = serde_json::from_str(&text)
@@ -573,7 +721,7 @@ pub fn load_outfit(path: &Path, base: &[Bone]) -> Result<Mesh> {
     if !outfit_names.is_empty() {
         remap_outfit_joints(&mut mesh, &outfit_names, base);
     }
-    Ok(mesh)
+    Ok((mesh, file.attach))
 }
 
 #[cfg(test)]
@@ -608,6 +756,87 @@ mod tests {
         remap_outfit_joints(&mut mesh, &outfit_names, &base);
         // arm→2, spine→1; the padded slots (outfit joint 0 = arm) also map to 2.
         assert_eq!(mesh.vertices[0].joints, [2, 1, 2, 2]);
+    }
+
+    /// WS-C C-α: the new self-describing sections round-trip through serde — Material `emit`/`orm`,
+    /// the `attach` mount (with the legacy `slot` alias folding into `socket`), and `collision`
+    /// volumes with their tagged shape + role.
+    #[test]
+    fn self_describing_sections_deserialize() {
+        let json = r#"{
+            "format": "flicker.rig", "version": 2,
+            "mesh": { "materials": [ { "name": "body", "base_color": "Body_BaseColor.png",
+                "emit": "Body_Emit.png", "orm": "Body_ORM.png" } ] },
+            "attach": { "slot": "lhand", "offset": [1.0, 2.0, 3.0], "rotate": [0.0, 0.0, 0.0, 1.0],
+                "uniform": 37.5 },
+            "collision": { "volumes": [
+                { "name": "pelvis_hull", "bone": "pelvis",
+                  "shape": { "kind": "capsule", "a": [0.0,0.0,0.0], "b": [0.0,0.0,10.0], "radius": 8.0 },
+                  "role": "physics" },
+                { "name": "blade_edge", "bone": "Weapon_R",
+                  "shape": { "kind": "box", "center": [0.0,0.0,0.0], "half_extents": [1.0,1.0,30.0] },
+                  "role": "hitbox" }
+            ] }
+        }"#;
+        let f: RigFile = serde_json::from_str(json).expect("self-describing rig parses");
+        let m = &f.mesh.materials[0];
+        assert_eq!(m.emit, "Body_Emit.png");
+        assert_eq!(m.orm, "Body_ORM.png");
+        // `slot` alias folds into `socket`; the omitted `scale` still defaults to unit.
+        assert_eq!(f.attach.socket, "lhand");
+        assert_eq!(f.attach.offset, [1.0, 2.0, 3.0]);
+        assert_eq!(f.attach.uniform, 37.5);
+        assert_eq!(f.attach.scale, [1.0, 1.0, 1.0], "omitted attach.scale defaults to unit");
+        assert_eq!(f.collision.volumes.len(), 2);
+        assert!(matches!(f.collision.volumes[0].role, CollisionRole::Physics));
+        assert!(matches!(f.collision.volumes[0].shape,
+            CollisionShape::Capsule { radius, .. } if radius == 8.0));
+        assert!(matches!(f.collision.volumes[1].role, CollisionRole::Hitbox));
+        assert!(matches!(f.collision.volumes[1].shape, CollisionShape::Box { .. }));
+    }
+
+    /// WS-C C-α backward-compat: a file that predates the self-describing sections still loads —
+    /// every new field is serde-default (emit/orm empty, attach identity/unit, collision empty),
+    /// including when the whole `attach`/`collision` blocks are absent.
+    #[test]
+    fn legacy_rig_without_new_sections_defaults() {
+        let json = r#"{
+            "format": "flicker.rig", "version": 1,
+            "mesh": { "materials": [ { "name": "body", "base_color": "Body_BaseColor.png",
+                "roughness": "Body_Roughness.png" } ] }
+        }"#;
+        let f: RigFile = serde_json::from_str(json).expect("legacy rig parses");
+        let m = &f.mesh.materials[0];
+        assert_eq!(m.base_color, "Body_BaseColor.png");
+        assert_eq!(m.emit, "", "emit defaults empty");
+        assert_eq!(m.orm, "", "orm defaults empty");
+        // Absent `attach` block must default to identity/unit (not the derived all-zeros).
+        assert_eq!(f.attach.socket, "");
+        assert_eq!(f.attach.rotate, [0.0, 0.0, 0.0, 1.0], "absent attach rotate = identity");
+        assert_eq!(f.attach.scale, [1.0, 1.0, 1.0], "absent attach scale = unit");
+        assert_eq!(f.attach.uniform, 1.0, "absent attach uniform = one");
+        assert!(f.collision.volumes.is_empty(), "collision defaults empty");
+    }
+
+    /// WS-C C-γ: `load_mesh_with_attach` surfaces a prop's inline `attach` mount straight from its
+    /// one self-describing file (the folded `fits.json`) — `slot` alias, unit defaults for omitted
+    /// fields.
+    #[test]
+    fn load_mesh_with_attach_reads_inline_attach() {
+        let path = std::env::temp_dir().join("flicker_skeletal_ws_c_attach_roundtrip.json");
+        std::fs::write(
+            &path,
+            r#"{ "format": "flicker.rig", "attach": { "slot": "lhand", "uniform": 37.5,
+                "offset": [1.0, 2.0, 3.0] }, "mesh": { "vertices": [] } }"#,
+        )
+        .unwrap();
+        let (mesh, attach) = load_mesh_with_attach(&path).expect("prop with inline attach loads");
+        assert!(mesh.vertices.is_empty());
+        assert_eq!(attach.socket, "lhand", "slot folds into socket");
+        assert_eq!(attach.uniform, 37.5);
+        assert_eq!(attach.offset, [1.0, 2.0, 3.0]);
+        assert_eq!(attach.scale, [1.0, 1.0, 1.0], "omitted attach.scale defaults to unit");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// A bone name the base doesn't have collapses to root (0), not out of bounds.

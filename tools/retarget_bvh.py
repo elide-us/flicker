@@ -14,8 +14,12 @@ Pure Python (numpy for vector/matrix arithmetic, matching tools/skin_outfit.py).
 
 Pipeline (spec docs/animation-system-rebuild-spec.md sections C.1/C.2/C.4):
   parse BVH hierarchy+motion  ->  Y-up -> Z-up basis change  ->  name-map (C.1)  ->
-  rest-rebase (C.2)  ->  emit 30 fps clip, integer ticks, source frame count 1:1 (TAE),
-  in BOTH the root-motion and in-place locomotion variants (C.4).
+  rest-rebase (C.2)  ->  emit the clip at the SOURCE frame rate (integer ticks, source frame
+  count 1:1)  ->  resample UP to the 60 Hz canon (memory 302BBB85: interpolate the 30 fps
+  source to 60; source frames are kept VERBATIM on the even ticks and slerp/lerp in-betweens
+  fill the odd ticks, so per-frame TAE accuracy holds)  ->  write BOTH the root-motion and
+  in-place locomotion variants (C.4). The retarget math (retarget_clip) stays native-rate; the
+  rate conversion (resample_rig) is a separate clip->clip transform, each gated by its own test.
 
 Why this is a retarget and not a re-author:
   Every clip stores rotations RELATIVE to its own skeleton's rest, so Motifect rotations cannot
@@ -56,124 +60,27 @@ import copy
 import argparse
 import numpy as np
 
+# The rest-rebase math (quaternion algebra + Y-up->Z-up convert + the minimal-swing align kernel)
+# lives in the shared canonical primitive — the ONE rest-rebase primitive (memory 614E5958), used
+# by this offline-BVH bake AND the Blender rig tool. `tools/` is on sys.path when this runs as a
+# script or is imported by its test, so a bare import resolves.
+from flicker_rebase import (
+    C_YUP_TO_ZUP, convert_global, q_axis, q_between, qconj, qinv, qmul, qnorm, qrot,
+    quat_from_mat3, slerp,
+)
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKELETON = os.path.join(REPO, "Alpha/content/characters/PrismHumanBaseA/PrismHumanBaseA.json")
 # NOTE: PrismHumanBaseA.rbp.json is now OBSOLETE — the retarget reference is the mesh's actual
 # bind (FK'd from the skeleton) plus a per-clip source base pose, not a hand-authored RBP.
 
-TICK_RATE_HZ = 30
+SOURCE_FPS = 30   # Motifect BVH native sample rate (fallback if a BVH omits its Frame Time)
+CANON_FPS = 60    # golden-spec 60 Hz output canon (memory 302BBB85): all baked content is 60 Hz
 
 
-# --------------------------- quaternion algebra --------------------------------
-# Quaternions are numpy [x, y, z, w] (glam convention). Hamilton product, so `qmul(a, b)`
-# is "apply b, then a" and `qmul(parent, local)` composes a global rotation exactly as glam
-# `parent * local` and as pose.rs composes parent*child.
-
-def qmul(a, b):
-    ax, ay, az, aw = a
-    bx, by, bz, bw = b
-    return np.array([
-        aw * bx + ax * bw + ay * bz - az * by,
-        aw * by - ax * bz + ay * bw + az * bx,
-        aw * bz + ax * by - ay * bx + az * bw,
-        aw * bw - ax * bx - ay * by - az * bz,
-    ], dtype=np.float64)
-
-
-def qconj(a):
-    return np.array([-a[0], -a[1], -a[2], a[3]], dtype=np.float64)
-
-
-def qnorm(a):
-    n = math.sqrt(float(a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3]))
-    return a / n if n > 0 else np.array([0.0, 0.0, 0.0, 1.0])
-
-
-def qinv(a):
-    # Unit-quaternion inverse == conjugate; normalise first for numerical safety.
-    return qconj(qnorm(a))
-
-
-def q_axis(axis_char, deg):
-    """Right-handed rotation of `deg` degrees about a principal axis, as a quaternion."""
-    a = math.radians(deg)
-    s, c = math.sin(a * 0.5), math.cos(a * 0.5)
-    if axis_char == "X":
-        return np.array([s, 0.0, 0.0, c])
-    if axis_char == "Y":
-        return np.array([0.0, s, 0.0, c])
-    if axis_char == "Z":
-        return np.array([0.0, 0.0, s, c])
-    raise ValueError(axis_char)
-
-
-def qrot(q, v):
-    """Rotate 3-vector v by quaternion q: q . (v,0) . inv(q)."""
-    p = np.array([v[0], v[1], v[2], 0.0])
-    r = qmul(qmul(q, p), qconj(q))
-    return r[:3]
-
-
-def q_between(u, v):
-    """Minimal (swing-only) quaternion rotating unit vector u onto unit vector v."""
-    un = np.linalg.norm(u)
-    vn = np.linalg.norm(v)
-    u = u / un if un > 1e-12 else u
-    v = v / vn if vn > 1e-12 else v
-    d = float(np.dot(u, v))
-    if d > 0.999999:
-        return np.array([0.0, 0.0, 0.0, 1.0])
-    if d < -0.999999:  # antiparallel: any perpendicular axis, 180 deg
-        axis = np.cross(u, np.array([1.0, 0.0, 0.0]))
-        if np.linalg.norm(axis) < 1e-6:
-            axis = np.cross(u, np.array([0.0, 1.0, 0.0]))
-        axis = axis / np.linalg.norm(axis)
-        return np.array([axis[0], axis[1], axis[2], 0.0])
-    axis = np.cross(u, v)
-    s = math.sqrt((1.0 + d) * 2.0)
-    return qnorm(np.array([axis[0] / s, axis[1] / s, axis[2] / s, s / 2.0]))
-
-
-def quat_from_mat3(m):
-    """glam-style quaternion from a 3x3 rotation matrix (column-vector convention)."""
-    t = m[0, 0] + m[1, 1] + m[2, 2]
-    if t > 0.0:
-        s = math.sqrt(t + 1.0) * 2.0
-        w = 0.25 * s
-        x = (m[2, 1] - m[1, 2]) / s
-        y = (m[0, 2] - m[2, 0]) / s
-        z = (m[1, 0] - m[0, 1]) / s
-    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
-        s = math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
-        w = (m[2, 1] - m[1, 2]) / s
-        x = 0.25 * s
-        y = (m[0, 1] + m[1, 0]) / s
-        z = (m[0, 2] + m[2, 0]) / s
-    elif m[1, 1] > m[2, 2]:
-        s = math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
-        w = (m[0, 2] - m[2, 0]) / s
-        x = (m[0, 1] + m[1, 0]) / s
-        y = 0.25 * s
-        z = (m[1, 2] + m[2, 1]) / s
-    else:
-        s = math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
-        w = (m[1, 0] - m[0, 1]) / s
-        x = (m[0, 2] + m[2, 0]) / s
-        y = (m[1, 2] + m[2, 1]) / s
-        z = 0.25 * s
-    return qnorm(np.array([x, y, z, w]))
-
-
-# Y-up -> Z-up basis change, applied as a similarity transform to every source global
-# rotation and to the root translation. Rx(+90deg): source up (+Y) -> our up (+Z), source
-# forward (+Z) -> our -Y; X unchanged. Verified by the foot/height diagnostics: the standing
-# hip (source Y~93) lands at Z~93 (up), and the retargeted stance foot comes out level.
-C_YUP_TO_ZUP = q_axis("X", 90.0)
-
-
-def convert_global(q, C=C_YUP_TO_ZUP):
-    """Similarity transform of a source-space global rotation into our Z-up space."""
-    return qmul(qmul(C, q), qconj(C))
+# (quaternion algebra, the Y-up->Z-up convert, and the align kernel are imported from
+# flicker_rebase above — see memory 614E5958. `qmul/q_between/convert_global/slerp/…` resolve
+# exactly as before; the Motifect-specific glue below is this bake's own call site.)
 
 
 # ------------------------------- BVH parsing -----------------------------------
@@ -488,6 +395,7 @@ def retarget_clip(bvh_path, target):
     joints, frames, frame_time = parse_bvh(bvh_path)
     layout = bvh_channel_layout(joints)
     nframes = len(frames)
+    native_hz = int(round(1.0 / frame_time)) if frame_time > 1e-9 else SOURCE_FPS  # ~30 for Motifect
     Sm = source_base_pose(joints, target)     # source posed to match our bind (spec C.2, rewritten)
     bind_global = target["bind_global"]        # A_b: the mesh's actual bind, the retarget reference
     names = target["names"]
@@ -535,7 +443,7 @@ def retarget_clip(bvh_path, target):
         "morphs": [],
         "clips": [{
             "name": clip_name,
-            "tick_rate_hz": TICK_RATE_HZ,
+            "tick_rate_hz": native_hz,
             "duration_ticks": nframes,
             "tracks": [{"bone": nm, "keys": tracks[nm]} for nm in ordered],
         }],
@@ -572,6 +480,64 @@ def make_in_place(rig, target):
     return ip
 
 
+# --------------------------- 60 Hz canon resample ------------------------------
+# Golden-spec time canon (memory 302BBB85): the game clocks at 60 Hz and ALL content is baked at
+# 60 Hz. The Motifect source is 30 fps, so we upsample x2 — but the source frames are kept EXACTLY
+# (they land on the even ticks) and only interpolated in-betweens are added on the odd ticks, so
+# per-frame TAE accuracy survives the rate change (a hitbox window on source frame k is now tick
+# 2k). This is a pure clip->clip transform, independent of the retarget math above.
+
+def _lerp_list(a, b, u):
+    return [a[i] + (b[i] - a[i]) * u for i in range(len(a))]
+
+
+def resample_keys(keys, mult):
+    """Upsample one track's keyframe list by integer factor `mult`: source frame k -> tick k*mult
+    (copied VERBATIM), with mult-1 slerp/lerp in-betweens filling k*mult+1 .. k*mult+(mult-1).
+    Copying source keys byte-for-byte is what preserves per-frame (TAE) data through the rate
+    change; only the added in-betweens are interpolated."""
+    if mult == 1:
+        return [dict(k) for k in keys]
+    out = []
+    n = len(keys)
+    for k in range(n - 1):
+        a, b = keys[k], keys[k + 1]
+        out.append({"t": k * mult, "T": a["T"], "R": a["R"], "S": a["S"]})  # source frame, verbatim
+        for j in range(1, mult):
+            u = j / mult
+            out.append({
+                "t": k * mult + j,
+                "T": _round_t(_lerp_list(a["T"], b["T"], u)),
+                "R": _round_q(slerp(a["R"], b["R"], u)),
+                "S": _round_t(_lerp_list(a["S"], b["S"], u)),
+            })
+    last = keys[n - 1]
+    out.append({"t": (n - 1) * mult, "T": last["T"], "R": last["R"], "S": last["S"]})  # last, verbatim
+    return out
+
+
+def resample_rig(rig, out_fps):
+    """Return a copy of `rig` with every clip resampled from its native tick rate to `out_fps`.
+    `out_fps` must be a positive INTEGER MULTIPLE of the clip's native rate so every source frame
+    lands exactly on a tick (60 Hz canon over the 30 fps Motifect source = x2). A same-rate request
+    is a no-op deep copy. duration_ticks is a frame COUNT, so N frames -> (N-1)*mult+1."""
+    out = copy.deepcopy(rig)
+    for clip in out["clips"]:
+        native = clip.get("tick_rate_hz", SOURCE_FPS)
+        if out_fps == native:
+            continue
+        ratio = out_fps / native
+        mult = int(round(ratio))
+        if mult < 1 or abs(ratio - mult) > 1e-6:
+            raise SystemExit("resample_rig: out_fps %s is not an integer multiple of the clip rate "
+                             "%s (needed so source frames land on exact ticks)" % (out_fps, native))
+        for tr in clip["tracks"]:
+            tr["keys"] = resample_keys(tr["keys"], mult)
+        clip["duration_ticks"] = (clip["duration_ticks"] - 1) * mult + 1
+        clip["tick_rate_hz"] = out_fps
+    return out
+
+
 def dump_json(obj, path):
     """Deterministic serialisation: fixed key order (as built), stable float repr."""
     with open(path, "w") as fh:
@@ -579,10 +545,13 @@ def dump_json(obj, path):
         fh.write("\n")
 
 
-def emit_variants(bvh_path, target, base_dir):
-    """Retarget one BVH and write BOTH variants under base_dir/In-Place and base_dir/RootMotion."""
-    rig_rm = retarget_clip(bvh_path, target)          # root motion (full pelvis travel)
-    rig_ip = make_in_place(rig_rm, target)            # in place (pelvis planar pinned)
+def emit_variants(bvh_path, target, base_dir, out_fps=CANON_FPS):
+    """Retarget one BVH and write BOTH variants under base_dir/In-Place and base_dir/RootMotion.
+    The retarget runs at the source rate, then the clip is resampled to the `out_fps` canon (60 Hz)
+    BEFORE the in-place variant is derived, so both variants ship at the same rate."""
+    rig_rm = retarget_clip(bvh_path, target)          # root motion, native source rate (full travel)
+    rig_rm = resample_rig(rig_rm, out_fps)            # -> 60 Hz canon (source frames kept on even ticks)
+    rig_ip = make_in_place(rig_rm, target)            # in place (pelvis planar pinned), same rate
     stem = os.path.splitext(os.path.basename(bvh_path))[0]
 
     ip_dir = os.path.join(base_dir, "In-Place")
@@ -607,6 +576,9 @@ def main():
     ap.add_argument("input", help="a .bvh file or a directory of .bvh files")
     ap.add_argument("-o", "--out", required=True,
                     help="output BASE dir; In-Place/ + RootMotion/ subdirs are created under it")
+    ap.add_argument("--fps", type=int, default=CANON_FPS,
+                    help="output tick rate (default %d, the golden-spec 60 Hz canon); must be an "
+                         "integer multiple of the ~30 fps source" % CANON_FPS)
     args = ap.parse_args()
 
     target = load_target()
@@ -616,9 +588,9 @@ def main():
     if os.path.isdir(args.input):
         files = sorted(f for f in os.listdir(args.input) if f.lower().endswith(".bvh"))
         for f in files:
-            emit_variants(os.path.join(args.input, f), target, base)
+            emit_variants(os.path.join(args.input, f), target, base, args.fps)
     else:
-        emit_variants(args.input, target, base)
+        emit_variants(args.input, target, base, args.fps)
 
 
 if __name__ == "__main__":

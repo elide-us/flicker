@@ -14,6 +14,7 @@
 //! sprites *and* text cover a lower layer's text. The depth buffer is never
 //! used for 2D (mirrors DirectXTK's `DepthNone` `SpriteBatch` default).
 
+mod frame_graph;
 mod mesh;
 mod pipeline_billboard;
 mod pipeline_ground_fog;
@@ -27,21 +28,28 @@ mod pipeline_text;
 mod pipeline_triangle;
 mod pipeline_ui;
 mod pipeline_volumetric;
+mod quad_grid;
 mod renderer;
+mod stage;
 mod texture;
 
 #[cfg(test)]
 mod layering_test;
 
+pub use frame_graph::{CompositeTarget, FrameGraph, Label, PanelFrame, Rect};
 pub use mesh::{
     ray_triangle, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting,
 };
 pub use pipeline_ground_fog::GroundFog;
-pub use pipeline_mesh_textured::{PbrMaps, TexturedMeshHandle, TexturedVertex};
+pub use pipeline_mesh_textured::{
+    build_textured_verts, PbrMaps, TexturedMeshHandle, TexturedVertex,
+};
 pub use pipeline_skinned::{SkinnedMeshHandle, SkinnedMeshPipeline, SkinnedVertex};
 pub use pipeline_volumetric::{VolumetricDisk, MAX_VOLUMETRIC_BODIES};
 pub use pipeline_text::FontRole;
+pub use quad_grid::{QuadGrid, QuadStyle, QuadView, EDITOR_QUADS};
 pub use renderer::{RenderTargetHandle, Renderer};
+pub use stage::{grid_segments, grid_segments_xy, ring_segments};
 pub use texture::TextureHandle;
 
 // Re-export the math types we expose in our public API so callers don't have

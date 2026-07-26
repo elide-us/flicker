@@ -33,7 +33,21 @@ use flicker_script::{HudCommand, ScriptHost, TextAlign};
 ///
 /// [`UiNode`]: flicker_script::UiNode
 pub mod component;
-pub use component::{run_ui, UiFrame, UiInput, UiState};
+pub use component::{run_ui, DragPayload, StageSlot, UiFrame, UiInput, UiState};
+
+/// The **template tier** — named Rust builders that compose walker pieces into a
+/// [`UiNode`] subtree, invoked by name from per-scene arrangement DATA. See
+/// [`template`].
+///
+/// [`UiNode`]: flicker_script::UiNode
+pub mod template;
+pub use template::{builtin_templates, expand, BuildCtx, Slots, TemplateFn, TemplateRegistry};
+
+/// The floating in-world **chat panel** builder — a bare `UiNode` builder (not a
+/// registered template) a scene rebuilds each frame with a live rect + log so the
+/// window can move/resize. See [`chat_panel`](chat_panel::chat_panel).
+pub mod chat_panel;
+pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEntry};
 
 /// The embedded reusable Lua widget toolkit (slider / stepper / dropdown /
 /// button). Exposed to a script as the `Widgets` global by [`load_widgets`].
@@ -91,15 +105,32 @@ pub fn render_hud(
                 layer,
                 align,
                 font,
+                italic,
+                bold,
+                tracking,
             } => {
                 renderer.set_layer(base + layer);
                 let role = font_role(*font);
                 let left = match align {
-                    TextAlign::Center => x - renderer.measure_text_role(text, *size, role).x * 0.5,
-                    TextAlign::Right => x - renderer.measure_text_role(text, *size, role).x,
+                    TextAlign::Center => {
+                        x - renderer.measure_text_role(text, *size, role, *italic, *bold, *tracking).x
+                            * 0.5
+                    }
+                    TextAlign::Right => {
+                        x - renderer.measure_text_role(text, *size, role, *italic, *bold, *tracking).x
+                    }
                     TextAlign::Left => *x,
                 };
-                renderer.draw_text_role(text, Vec2::new(left, *y), *size, *color, role);
+                renderer.draw_text_role(
+                    text,
+                    Vec2::new(left, *y),
+                    *size,
+                    *color,
+                    role,
+                    *italic,
+                    *bold,
+                    *tracking,
+                );
             }
             HudCommand::Panel {
                 x,
@@ -128,9 +159,14 @@ pub fn render_hud(
                     *feather,
                 );
             }
+            HudCommand::Clip { rect } => match rect {
+                Some(r) => renderer.set_clip(*r),
+                None => renderer.clear_clip(),
+            },
         }
     }
     renderer.set_layer(base);
+    renderer.clear_clip();
 }
 
 /// Bridge the script-side [`flicker_script::FontRole`] onto the renderer's
@@ -142,6 +178,7 @@ fn font_role(role: flicker_script::FontRole) -> flicker_render::FontRole {
         flicker_script::FontRole::Display => flicker_render::FontRole::Display,
         flicker_script::FontRole::Label => flicker_render::FontRole::Label,
         flicker_script::FontRole::Body => flicker_render::FontRole::Body,
+        flicker_script::FontRole::Rune => flicker_render::FontRole::Rune,
     }
 }
 
@@ -221,6 +258,78 @@ pub fn load_styles_str(json: &str) -> serde_json::Value {
     };
     resolve_tokens(&mut ui);
     ui
+}
+
+/// Parse a per-scene **arrangement** JSON string into the walker's [`UiNode`] tree
+/// and [`expand`](template::expand) its templates — the data-path counterpart to a
+/// Lua `M.tree()`. A scene names a template and fills its slots as DATA; this
+/// returns the same cached tree shape [`run_ui`] walks every frame. On a parse
+/// error it logs and returns an empty `page`, so the scene renders nothing rather
+/// than panicking.
+///
+/// Colour is NOT here: an arrangement carries structure, dotted `style` paths and
+/// bindings only — so the one palette (`theme.tokens`) is never forked. Styles
+/// come from [`load_styles`] / [`load_styles_str`] as usual.
+///
+/// [`UiNode`]: flicker_script::UiNode
+pub fn load_arrangement_str(json: &str, reg: &TemplateRegistry) -> flicker_script::UiNode {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(value) => match flicker_script::parse_ui_json(&value) {
+            Ok(tree) => template::expand(tree, reg),
+            Err(e) => {
+                tracing::error!("arrangement parse failed: {e}");
+                empty_page()
+            }
+        },
+        Err(e) => {
+            tracing::error!("arrangement JSON parse failed: {e}");
+            empty_page()
+        }
+    }
+}
+
+fn empty_page() -> flicker_script::UiNode {
+    flicker_script::UiNode {
+        component: "page".to_string(),
+        ..Default::default()
+    }
+}
+
+/// Deep-merge several `ui_elements.json` **fragments** into one styles root and
+/// expand its `$token`s — the loader the proposed per-scene split (one shared
+/// `theme` fragment plus per-scene sections) will use. Today it is called with the
+/// single embedded file, so it is effectively a pass-through; when the split lands,
+/// the shared palette fragment and a scene fragment merge here BEFORE token
+/// resolution (tokens must resolve in one root). Later fragments win on a key clash.
+pub fn load_styles_merged(fragments: &[&str]) -> serde_json::Value {
+    let mut root = serde_json::Value::Object(Default::default());
+    for frag in fragments {
+        match serde_json::from_str::<serde_json::Value>(frag) {
+            Ok(value) => merge_json(&mut root, value),
+            Err(e) => tracing::error!("ui_elements fragment parse failed (merged styles): {e}"),
+        }
+    }
+    resolve_tokens(&mut root);
+    root
+}
+
+/// Recursive object merge for [`load_styles_merged`]: `patch`'s keys overlay
+/// `base`; two objects merge key-by-key, everything else (arrays, scalars)
+/// replaces wholesale.
+fn merge_json(base: &mut serde_json::Value, patch: serde_json::Value) {
+    match (base, patch) {
+        (serde_json::Value::Object(b), serde_json::Value::Object(p)) => {
+            for (k, v) in p {
+                match b.get_mut(&k) {
+                    Some(slot) => merge_json(slot, v),
+                    None => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (base, patch) => *base = patch,
+    }
 }
 
 /// Expand `"$name"` design-token references against the `theme.tokens` map, in

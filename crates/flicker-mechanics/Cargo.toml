@@ -1,0 +1,20 @@
+[package]
+name = "flicker-mechanics"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# flicker-mechanics — the mechanics cluster (golden-spec WS-D, collision node CDDBC150). Game
+# mechanics that sit WITH combat + animation, not a low-level physics layer (memory B5E4CFC6):
+# collision primitives + overlap queries, hitbox↔hurtbox resolution, and (later) the encounter kit.
+# This first slice is the pure GEOMETRY layer — glam only, no animation/render deps.
+#
+# POC location (crates/) per the cluster migration policy; graduates to Alpha/crates/mechanics/
+# once it has had its API deep-pass and is build/test/clippy-clean and standardized.
+[dependencies]
+glam.workspace = true
+# The format→runtime bridge + auto-fit read the `flicker.rig` skeleton + `collision` section.
+# mechanics is "fed by animation" (memory B5E4CFC6), so this dependency direction is intended;
+# flicker-skeletal is glam-only, so there is no cycle. The `collision`/`drop`/`debug` modules
+# stay pure geometry (glam only) — only `bridge` touches the format.
+flicker-skeletal.workspace = true

@@ -33,66 +33,84 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ─────────────────────────────── authored (wire) types ────────────────────────
 
 /// A content pack file. For this slice we only read `state_machine`; later slices add
 /// the rig reference, mesh/skin variants, weapon packs, and ability defs alongside it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PackFile {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub format: String,
     #[serde(default)]
     pub version: u32,
+    /// Hand-authored provenance/doc note (`_note` key). Round-tripped so the editor's
+    /// save never erases it (there is no `deny_unknown_fields`, but this is the one
+    /// non-schema key real packs carry).
+    #[serde(default, rename = "_note", skip_serializing_if = "String::is_empty")]
+    pub note: String,
     pub state_machine: StateMachineDef,
 }
 
 /// The authored state graph.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StateMachineDef {
     /// Name of the state to start in.
     pub initial: String,
     /// Crossfade duration (in ticks) applied to any transition that doesn't set its
     /// own `blend_ticks`. `0` (the default) = hard-cut everywhere unless a transition
     /// opts in — so an un-annotated pack keeps the original snap behaviour.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub default_blend_ticks: u32,
     /// Tick rate (Hz) of the clip library this pack drives — the clock its clips'
     /// `duration_ticks` are baked to. Defaults to 60 (the legacy Katanami export rate).
     /// The Motifect retarget bakes at 30, so the Prism pack sets `tick_rate_hz: 30`;
     /// otherwise the machine advances a 30 fps clip at 60 Hz and plays it double-speed.
-    #[serde(default = "default_tick_rate_hz")]
+    #[serde(default = "default_tick_rate_hz", skip_serializing_if = "is_default_tick_rate")]
     pub tick_rate_hz: u32,
     /// Transitions evaluated from **every** state, before the per-state ones — the
     /// "from any state" edges (hit reaction, death). Highest-precedence.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub any: Vec<TransitionDef>,
     pub states: Vec<StateDef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StateDef {
     pub name: String,
     /// Clip name to play in this state (resolved to an index at build).
     pub clip: String,
     /// Does the clip loop? Locomotion/idle loop; attacks/reactions play once.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub looping: bool,
     /// Auto-advance to this state when a non-looping clip completes (e.g.
     /// `Jump_Start` → `Jump_Loop`). A convenience alternative to a `clip_done`
     /// transition; explicit transitions of higher priority still win.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
     /// Locomotion authority: `true` = the clip's root track drives translation
     /// (opt-in, for climbs/specials); `false` (default) = in-place, capsule-driven.
     /// Recorded now; the capsule mover lands in a later slice.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub root_motion: bool,
-    #[serde(default)]
+    /// Stamina paid on ENTRY, not at a tick — a combo's second swing is its own state, so
+    /// the cost is a property of entering this state rather than a window inside it.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub stamina_cost: f32,
+    /// This state is holding guard. Blocking is a HELD state, not a window: the
+    /// block→stamina conversion is computed by the resolver from the incoming hit and is
+    /// never authored per-tick.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blocking: bool,
+    /// Half-angle (degrees) of the guard arc while [`Self::blocking`]. Absent = the
+    /// resolver's default arc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_angle: Option<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitions: Vec<TransitionDef>,
     /// The TAE event timeline for this state's clip.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<EventDef>,
 }
 
@@ -104,7 +122,29 @@ fn default_tick_rate_hz() -> u32 {
     60
 }
 
-#[derive(Debug, Clone, Deserialize)]
+// `skip_serializing_if` predicates so a saved pack omits schema defaults and keeps the
+// clean, hand-authored shape (no `looping: true`, `priority: 0`, `next: null`, `[]` noise).
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn is_zero_i32(v: &i32) -> bool {
+    *v == 0
+}
+fn is_true(v: &bool) -> bool {
+    *v
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn is_default_tick_rate(v: &u32) -> bool {
+    *v == 60
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitionDef {
     /// Target state name.
     pub to: String,
@@ -112,20 +152,29 @@ pub struct TransitionDef {
     pub on: Trigger,
     /// Only permit the transition while the play-head is inside this tick window — a
     /// cancel/combo window. Absent = allowed any time.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<TickWindow>,
     /// Higher priority is evaluated first (default 0). Ties keep authored order.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub priority: i32,
     /// Crossfade duration (ticks) into the target state, overriding the machine's
     /// `default_blend_ticks`. `Some(0)` forces a hard cut (e.g. a snappy hit react);
     /// `None` (default) inherits the machine default.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend_ticks: Option<u32>,
+    /// **The reactive transition.** Admissible only while an *incoming* attack of this
+    /// shape is live — the counter-move answer (step on the thrust, leap the sweep).
+    ///
+    /// Distinct from [`Self::window`], which gates on the actor's OWN playhead: this gates
+    /// on someone else's. The client is never told a counter window is open, so it must
+    /// read the animation and the server decides whether the answer was available —
+    /// cheat-proof by construction, because there is no flag to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_incoming: Option<HitType>,
 }
 
 /// An inclusive `[start, end]` tick interval.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TickWindow {
     pub start: u32,
     pub end: u32,
@@ -145,7 +194,7 @@ impl TickWindow {
 /// direction: `move_forward` = moving with no side/back held, `move_left`/`move_right`/
 /// `move_back` = moving with that direction held. Used to select strafe/directional
 /// locomotion clips (a discrete-state stand-in for a 2D locomotion blend space).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Trigger {
     Move,
@@ -169,23 +218,27 @@ pub enum Trigger {
     ClipDone,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventDef {
     /// Tick this event fires at (a one-shot) or the start of its window.
     pub tick: u32,
     /// Inclusive end tick for a **window** event (hitbox-active, i-frames, cancel);
     /// absent = a one-shot at `tick`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<u32>,
     pub kind: EventKind,
     /// Free-form tag — a bone name for a hitbox capsule, an sfx id, a foot label, …
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub label: String,
+    /// Optional souls-combat metadata (hitbox capsule + damage, cues). Absent on plain
+    /// locomotion events, so existing packs are unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combat: Option<CombatMeta>,
 }
 
 /// The souls-like combat-metadata vocabulary carried on the timeline. Fired/reported
 /// by this slice; consumed (capsules, invulnerability, …) by later slices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     Footstep,
@@ -195,8 +248,15 @@ pub enum EventKind {
     Iframe,
     /// Cancel/combo window — the feel of souls combos.
     CancelWindow,
-    /// Parry / deflect window.
+    /// Parry / deflect window. **Its `tick` is the highest-stakes number in a pack:**
+    /// clip-start → catch-window-open is the server's commit horizon, so `min(tick)` across
+    /// every parry state sets the netcode latency budget.
     Parry,
+    /// Poise cannot be broken for this window — the attacker trades stagger for commitment.
+    HyperArmor,
+    /// The attack is announced for this window: the readable warning a perilous attack owes
+    /// the player. Its width is the player's reaction budget.
+    Telegraph,
     Sfx,
     /// Weapon appears in hand / ground pickup swap.
     Equip,
@@ -213,11 +273,200 @@ impl EventKind {
             EventKind::Iframe => "IFRAME",
             EventKind::CancelWindow => "CANCEL",
             EventKind::Parry => "PARRY",
+            EventKind::HyperArmor => "ARMOR",
+            EventKind::Telegraph => "TELL",
             EventKind::Sfx => "sfx",
             EventKind::Equip => "equip",
             EventKind::WeaponTrail => "trail",
         }
     }
+}
+
+/// Souls-combat metadata authored onto a TAE event — the hitbox capsule + damage numbers
+/// and the feedback cues the TAE editor's inspector edits. Every field is optional so a
+/// plain `footstep` carries none and pre-existing packs deserialize unchanged.
+///
+/// **Authored only.** The state machine still merely FIRES/REPORTS windows; acting on
+/// these (spawning capsules, applying damage/poise) is the mechanics/collision slice.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CombatMeta {
+    /// Bone the hitbox capsule / effect binds to (e.g. `Weapon_R`). Distinct from
+    /// [`EventDef::label`], which stays the free-form tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attach_bone: Option<String>,
+    /// Hitbox capsule radius, in metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capsule_radius: Option<f32>,
+    /// Damage dealt as `[min, max]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damage: Option<[f32; 2]>,
+    /// Poise damage dealt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poise_damage: Option<f32>,
+    /// How the hit connects — selects the damage/reaction class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hit_type: Option<HitType>,
+    /// SFX cue id fired with this event (e.g. `sfx_spear_heavy`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sfx_cue: Option<String>,
+    /// VFX cue id fired with this event (e.g. `vfx_ember_arc`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vfx_cue: Option<String>,
+    /// What this window does to whoever it lands on, beyond damage. The motion channels
+    /// ride the hitbox window, so a melee proc and a spell snare share ONE surface.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<EffectSpec>,
+    /// Which answers this attack admits. Defaults to all; narrowing it to exactly one is
+    /// what makes an attack **perilous**.
+    #[serde(default, skip_serializing_if = "ResponseMask::is_all")]
+    pub response_mask: ResponseMask,
+    /// Shrinks the defender's effective catch window about its centre (1.0 = unchanged).
+    ///
+    /// **Authored on the ATTACKER, deliberately:** a perfect-parry-only move is hard
+    /// because of what the attacker did, not because the defender's parry got worse — the
+    /// defender's own `parry_active` window is untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parry_window_scale: Option<f32>,
+}
+
+/// How a hit connects — the motion/reaction class of a hitbox window.
+///
+/// `Sweep` and `Grab` complete the perilous-attack taxonomy: they are the discriminators a
+/// **reactive transition** ([`TransitionDef::on_incoming`]) matches against, so a defender
+/// can author a response admissible only against a specific incoming attack shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HitType {
+    Slash,
+    Thrust,
+    Strike,
+    /// Low horizontal arc — answered by jumping over it.
+    Sweep,
+    /// Unblockable seize — answered by getting out of range.
+    Grab,
+}
+
+/// One answer a defender may give an incoming attack.
+///
+/// A normal attack accepts a MENU of these; a **perilous** attack accepts exactly one —
+/// which is the whole of the perilous-attack mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Response {
+    Block,
+    Parry,
+    Dodge,
+    Jump,
+    Counter,
+}
+
+impl Response {
+    pub const ALL: [Response; 5] =
+        [Response::Block, Response::Parry, Response::Dodge, Response::Jump, Response::Counter];
+
+    fn bit(self) -> u8 {
+        match self {
+            Response::Block => 1 << 0,
+            Response::Parry => 1 << 1,
+            Response::Dodge => 1 << 2,
+            Response::Jump => 1 << 3,
+            Response::Counter => 1 << 4,
+        }
+    }
+}
+
+/// Which answers an attack admits. A compact bitmask at runtime (40 raiders each resolve
+/// their own answer against one boss window), but authored and serialized as a readable
+/// list of names — `["dodge"]` for a grab, `["jump"]` for a sweep.
+///
+/// **Default is ALL**, so every pack authored before perilous attacks existed keeps
+/// admitting every answer, and the field never appears in a save unless it narrows something.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResponseMask(u8);
+
+impl ResponseMask {
+    /// Every answer permitted — the default, and what an un-annotated attack means.
+    pub const ALL: ResponseMask = ResponseMask(0b1_1111);
+
+    pub fn from_slice(items: &[Response]) -> Self {
+        ResponseMask(items.iter().fold(0, |m, r| m | r.bit()))
+    }
+
+    pub fn allows(self, r: Response) -> bool {
+        self.0 & r.bit() != 0
+    }
+
+    pub fn is_all(&self) -> bool {
+        *self == ResponseMask::ALL
+    }
+
+    /// Exactly one answer admitted — the definition of a perilous attack.
+    pub fn is_perilous(self) -> bool {
+        self.0.count_ones() == 1
+    }
+
+    pub fn responses(self) -> impl Iterator<Item = Response> {
+        Response::ALL.into_iter().filter(move |r| self.allows(*r))
+    }
+}
+
+impl Default for ResponseMask {
+    fn default() -> Self {
+        ResponseMask::ALL
+    }
+}
+
+impl Serialize for ResponseMask {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.responses().collect::<Vec<_>>().serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResponseMask {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(ResponseMask::from_slice(&Vec::<Response>::deserialize(d)?))
+    }
+}
+
+/// Which of the actor channels an authored effect writes.
+///
+/// Tracks the four-channel motion algebra plus its two non-motion channels: every control
+/// effect writes **exactly one** of these and nothing else, so a melee proc and a spell
+/// snare share one authoring surface with no bespoke per-effect code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectChannel {
+    /// Who produces the actor's inputs (fear, charm, stun).
+    InputSource,
+    /// Multiplier on tick advance (slow, haste, stun at 0).
+    PlayheadRate,
+    /// Multiplier on locomotion velocity (snare, root at 0).
+    MoveScale,
+    /// Triggers removed from the actor's input set (silence, disarm).
+    TriggerMask,
+    /// Mitigation modifier (expose, sunder).
+    MitigationMod,
+    /// Damage over time (poison, disease).
+    Dot,
+}
+
+/// An effect an authored window applies to whoever it lands on.
+///
+/// **Authored only**, like the rest of [`CombatMeta`] — the resolver that reads these is a
+/// later slice. Deliberately one flat shape rather than a variant per effect: the channel
+/// says *what* is written, `magnitude` *how much*, `duration_ticks` *how long*.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectSpec {
+    pub channel: EffectChannel,
+    /// Channel-dependent: a rate/scale multiplier, a mitigation delta, damage per tick.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub magnitude: f32,
+    /// How long it persists. `0` = instantaneous / single application.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub duration_ticks: u32,
+    /// Free-form authoring tag (`poison_light`, `snare_web`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
 }
 
 // ─────────────────────────────── runtime (resolved) form ──────────────────────
@@ -706,18 +955,142 @@ fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Load a `flicker.pack` JSON and return its state-machine definition.
+/// Load a `flicker.pack` JSON and return just its state-machine definition — the common
+/// read-only path (packeditor/paperdoll only need the graph).
 pub fn load_pack(path: &Path) -> Result<StateMachineDef> {
+    Ok(read_pack(path)?.state_machine)
+}
+
+/// Read a whole `flicker.pack` JSON — the `format`/`version`/`_note` header plus the
+/// state machine. The editor holds the full [`PackFile`] so a save round-trips the
+/// header (notably the hand-authored `_note`), which `load_pack` drops.
+pub fn read_pack(path: &Path) -> Result<PackFile> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("reading pack {}", path.display()))?;
-    let pack: PackFile =
-        serde_json::from_str(&text).with_context(|| format!("parsing pack {}", path.display()))?;
-    Ok(pack.state_machine)
+    serde_json::from_str(&text).with_context(|| format!("parsing pack {}", path.display()))
+}
+
+/// Write a `flicker.pack` JSON (pretty-printed, trailing newline) — the inverse of
+/// [`read_pack`] and the editor's save path.
+pub fn write_pack(path: &Path, pack: &PackFile) -> Result<()> {
+    let mut text = serde_json::to_string_pretty(pack)
+        .with_context(|| format!("serializing pack {}", path.display()))?;
+    text.push('\n');
+    std::fs::write(path, text).with_context(|| format!("writing pack {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every real pack in the content tree.
+    fn real_packs() -> Vec<std::path::PathBuf> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../Alpha/content/characters");
+        let mut out = Vec::new();
+        let Ok(dirs) = std::fs::read_dir(&root) else {
+            return out;
+        };
+        for d in dirs.flatten() {
+            let Ok(files) = std::fs::read_dir(d.path()) else { continue };
+            for f in files.flatten() {
+                let p = f.path();
+                if p.to_str().is_some_and(|s| s.ends_with(".pack.json")) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// **THE ADDITIVE-SERDE GUARD.** Every combat field added for the authoring contract is
+    /// `#[serde(default, skip_serializing_if = …)]`, so a pack authored before they existed
+    /// must re-serialize without acquiring a single one of them. Without this, the first
+    /// save in the editor would silently rewrite every hand-authored pack in the repo.
+    #[test]
+    fn existing_packs_do_not_acquire_the_new_combat_fields_on_save() {
+        let packs = real_packs();
+        if packs.is_empty() {
+            return; // content tree absent in this checkout
+        }
+        for path in packs {
+            let pack = read_pack(&path).expect("real pack parses");
+            let out = serde_json::to_string_pretty(&pack).expect("re-serializes");
+            for field in [
+                "stamina_cost",
+                "blocking",
+                "guard_angle",
+                "effects",
+                "response_mask",
+                "parry_window_scale",
+                "on_incoming",
+            ] {
+                assert!(
+                    !out.contains(field),
+                    "{}: saving acquired `{field}` — a default leaked into the file",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Load → save → load must be stable: the second parse equals the first. Proves the
+    /// editor's Save is idempotent rather than drifting a pack a little on every write.
+    #[test]
+    fn real_packs_round_trip_stably() {
+        for path in real_packs() {
+            let a = read_pack(&path).expect("parses");
+            let text = serde_json::to_string(&a).expect("serializes");
+            let b: PackFile = serde_json::from_str(&text).expect("re-parses");
+            let a_sm = &a.state_machine;
+            let b_sm = &b.state_machine;
+            assert_eq!(a_sm.initial, b_sm.initial);
+            assert_eq!(a_sm.states.len(), b_sm.states.len());
+            assert_eq!(a.note, b.note, "{}: _note lost", path.display());
+            for (x, y) in a_sm.states.iter().zip(&b_sm.states) {
+                assert_eq!(x.name, y.name);
+                assert_eq!(x.clip, y.clip);
+                assert_eq!(x.events.len(), y.events.len(), "{}: events lost", x.name);
+                assert_eq!(x.transitions.len(), y.transitions.len());
+            }
+        }
+    }
+
+    /// The mask defaults to "every answer", so an un-annotated attack is unchanged; exactly
+    /// one answer is the definition of a perilous attack.
+    #[test]
+    fn response_mask_defaults_to_all_and_detects_perilous() {
+        let all = ResponseMask::default();
+        assert!(all.is_all());
+        assert!(Response::ALL.iter().all(|r| all.allows(*r)));
+        assert!(!all.is_perilous(), "a normal attack admits a menu");
+
+        let sweep = ResponseMask::from_slice(&[Response::Jump]);
+        assert!(sweep.is_perilous());
+        assert!(sweep.allows(Response::Jump) && !sweep.allows(Response::Block));
+        // Round-trips through the readable name list.
+        let json = serde_json::to_string(&sweep).unwrap();
+        assert_eq!(json, r#"["jump"]"#);
+        assert_eq!(serde_json::from_str::<ResponseMask>(&json).unwrap(), sweep);
+    }
+
+    /// A reactive transition and the two new hit shapes must survive a round trip by name.
+    ///
+    /// NOTE the trigger here is `jump` (leap the sweep) because that is the only one of the
+    /// five [`Response`] answers with a corresponding input [`Trigger`] today — there is no
+    /// `parry`/`block`/`dodge`/`counter` input, so the Mikiri (`on_incoming: thrust`) has no
+    /// input to gate on yet. Tracked as the contract's one unenumerated gap.
+    #[test]
+    fn reactive_transition_round_trips_by_name() {
+        let json = r#"{"to":"LeapSweep","on":"jump","on_incoming":"sweep"}"#;
+        let t: TransitionDef = serde_json::from_str(json).unwrap();
+        assert_eq!(t.on_incoming, Some(HitType::Sweep));
+        assert_eq!(serde_json::to_string(&t).unwrap(), json, "no default noise added");
+        // The taxonomy the mask discriminates on.
+        for (h, name) in [(HitType::Sweep, "\"sweep\""), (HitType::Grab, "\"grab\"")] {
+            assert_eq!(serde_json::to_string(&h).unwrap(), name);
+        }
+    }
 
     /// Small synthetic graph exercising locomotion, a clip-done chain, a cancel window,
     /// timeline events, and an any-state hit edge.
@@ -770,6 +1143,78 @@ mod tests {
             last = sm.tick(inputs);
         }
         last
+    }
+
+    #[test]
+    fn pack_round_trips_and_preserves_note() {
+        // A pack with a `_note` header, an any-state edge, and both window + one-shot events.
+        let src = r#"{
+          "format": "flicker.pack", "version": 1,
+          "_note": "hand-authored provenance — must survive a save",
+          "state_machine": {
+            "initial": "Idle",
+            "any": [ { "to": "Dame", "on": "hit" } ],
+            "states": [
+              { "name": "Idle", "clip": "idle",
+                "transitions": [ { "to": "Walk", "on": "move" } ] },
+              { "name": "Walk", "clip": "walk", "looping": false, "next": "Idle",
+                "events": [
+                  { "tick": 3, "kind": "footstep", "label": "L" },
+                  { "tick": 2, "end": 4, "kind": "hitbox_active", "label": "Weapon_R" } ] }
+            ]
+          }
+        }"#;
+        let pack: PackFile = serde_json::from_str(src).unwrap();
+        assert_eq!(pack.note, "hand-authored provenance — must survive a save");
+
+        let out1 = serde_json::to_string_pretty(&pack).unwrap();
+        assert!(out1.contains("_note"), "note key must be written back");
+        assert!(out1.contains("\"any\""), "any-state edges must survive");
+        assert!(out1.contains("hitbox_active"), "window events must survive");
+
+        // Idempotent once normalized: re-parse + re-serialize is byte-identical.
+        let reparsed: PackFile = serde_json::from_str(&out1).unwrap();
+        let out2 = serde_json::to_string_pretty(&reparsed).unwrap();
+        assert_eq!(out1, out2, "save must round-trip stably");
+
+        // Skips keep the output clean: no `null` Options, no default scalars, no `[]`.
+        assert!(!out1.contains("null"), "None Options are omitted, not written as null");
+        assert!(!out1.contains("\"priority\""), "default priority 0 is omitted");
+        assert!(out1.contains("\"looping\": false"), "non-default looping is kept");
+    }
+
+    #[test]
+    fn combat_metadata_is_optional_and_round_trips() {
+        // A legacy pack (no `combat` key anywhere) still deserializes untouched.
+        let legacy: PackFile = serde_json::from_str(GRAPH).unwrap();
+        let walk = legacy.state_machine.states.iter().find(|s| s.name == "Walk").unwrap();
+        assert!(walk.events[0].combat.is_none(), "legacy events carry no combat metadata");
+
+        // An authored hitbox window with the full TAE-inspector payload round-trips.
+        let src = r#"{
+          "format": "flicker.pack", "version": 1,
+          "state_machine": {
+            "initial": "Attack",
+            "states": [
+              { "name": "Attack", "clip": "attack", "looping": false,
+                "events": [ {
+                  "tick": 12, "end": 17, "kind": "hitbox_active", "label": "Weapon_R",
+                  "combat": {
+                    "attach_bone": "R_Weapon_Tip", "capsule_radius": 0.35,
+                    "damage": [42.0, 58.0], "poise_damage": 28.0, "hit_type": "thrust",
+                    "sfx_cue": "sfx_spear_heavy", "vfx_cue": "vfx_ember_arc" } } ] }
+            ]
+          }
+        }"#;
+        let pack: PackFile = serde_json::from_str(src).unwrap();
+        let combat = pack.state_machine.states[0].events[0].combat.clone().unwrap();
+        assert_eq!(combat.attach_bone.as_deref(), Some("R_Weapon_Tip"));
+        assert_eq!(combat.hit_type, Some(HitType::Thrust));
+        assert_eq!(combat.damage, Some([42.0, 58.0]));
+
+        let out = serde_json::to_string_pretty(&pack).unwrap();
+        let reparsed: PackFile = serde_json::from_str(&out).unwrap();
+        assert_eq!(reparsed.state_machine.states[0].events[0].combat, Some(combat));
     }
 
     #[test]

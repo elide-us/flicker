@@ -46,10 +46,10 @@ const URGENT: [f32; 3] = [0.95, 0.30, 0.25];
 /// The vector HUD panel (`hud_clicktrainer.lua`) + the shared UI-element layout.
 const HUD_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Alpha/content/scripts/hud_clicktrainer.lua"
+    "/../../Alpha/content/sensorium/scripts/hud_clicktrainer.lua"
 );
 const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/resources/ui_elements.json");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
 /// Top-left region (px) reserved for the HUD panel, so every target stays
 /// clickable (the HUD absorbs clicks in its own area). A touch larger than the
 /// panel; targets that would land inside it are re-rolled.

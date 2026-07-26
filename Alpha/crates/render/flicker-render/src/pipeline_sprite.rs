@@ -53,17 +53,21 @@ pub struct SpritePipeline {
     runs: Vec<Run>,
     /// Distinct layers present this frame, ascending.
     layer_set: Vec<f32>,
+    /// Framebuffer size cached from the latest `push` — the scissor's full-frame reset.
+    screen: Vec2,
 }
 
 /// One quad awaiting draw: its six vertices, texture, and sort layer.
 struct Quad {
     layer: f32,
+    clip: Option<[f32; 4]>,
     texture: TextureHandle,
     verts: [Vertex; 6],
 }
 
 struct Run {
     layer: f32,
+    clip: Option<[f32; 4]>,
     texture: TextureHandle,
     vertex_offset: u32,
     vertex_count: u32,
@@ -169,6 +173,7 @@ impl SpritePipeline {
             upload: Vec::new(),
             runs: Vec::new(),
             layer_set: Vec::new(),
+            screen: Vec2::ZERO,
         }
     }
 
@@ -181,6 +186,7 @@ impl SpritePipeline {
 
     /// Push one quad at `position` (top-left in pixels) with the given pixel `size`,
     /// multiplied by `color` (RGBA in 0..1) in the fragment shader, sorting at `layer`.
+    #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
         screen: Vec2,
@@ -189,7 +195,9 @@ impl SpritePipeline {
         size: Vec2,
         color: [f32; 4],
         layer: f32,
+        clip: Option<[f32; 4]>,
     ) {
+        self.screen = screen;
         let to_ndc =
             |p: Vec2| -> [f32; 2] { [(p.x / screen.x) * 2.0 - 1.0, 1.0 - (p.y / screen.y) * 2.0] };
 
@@ -200,6 +208,7 @@ impl SpritePipeline {
 
         self.quads.push(Quad {
             layer,
+            clip,
             texture,
             verts: [
                 Vertex {
@@ -262,7 +271,11 @@ impl SpritePipeline {
             // Coalesce with the previous run only when both layer and texture
             // match; a layer change always starts a new run (and a new band).
             match self.runs.last_mut() {
-                Some(run) if run.layer == quad.layer && run.texture == quad.texture => {
+                Some(run)
+                    if run.layer == quad.layer
+                        && run.texture == quad.texture
+                        && run.clip == quad.clip =>
+                {
                     run.vertex_count += 6;
                 }
                 _ => {
@@ -271,6 +284,7 @@ impl SpritePipeline {
                     }
                     self.runs.push(Run {
                         layer: quad.layer,
+                        clip: quad.clip,
                         texture: quad.texture,
                         vertex_offset,
                         vertex_count: 6,
@@ -298,7 +312,7 @@ impl SpritePipeline {
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         layer: f32,
-        textures: &'a [crate::texture::LoadedTexture],
+        textures: &'a [Option<crate::texture::LoadedTexture>],
     ) {
         if self.runs.iter().all(|r| r.layer != layer) {
             return;
@@ -307,10 +321,11 @@ impl SpritePipeline {
         let bytes = (self.upload.len() * std::mem::size_of::<Vertex>()) as u64;
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
         for run in self.runs.iter().filter(|r| r.layer == layer) {
-            let Some(tex) = textures.get(run.texture.0 as usize) else {
+            let Some(tex) = textures.get(run.texture.0 as usize).and_then(|t| t.as_ref()) else {
                 continue;
             };
             pass.set_bind_group(0, &tex.bind_group, &[]);
+            crate::pipeline_ui::set_scissor(pass, self.screen, run.clip);
             let start = run.vertex_offset;
             let end = start + run.vertex_count;
             pass.draw(start..end, 0..1);

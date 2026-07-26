@@ -48,7 +48,7 @@ const DIM: [f32; 4] = [0.70, 0.75, 0.85, 1.0];
 
 const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/world_ui.lua");
 const UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/resources/ui_elements.json");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
 
 /// Splash + first generation. Renders one frame, then builds the world.
 pub struct Loading {

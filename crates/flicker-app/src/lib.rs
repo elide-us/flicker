@@ -5,15 +5,17 @@
 //! [`Renderer`](flicker_render::Renderer); each frame it accumulates input,
 //! computes `dt`, calls [`App::update`], then [`App::render`].
 
+mod gamepad;
 mod runner;
 
-pub use runner::run;
+pub use runner::{last_window_geometry, run, WindowGeometry};
 
 // Re-export so games can `use flicker::app::{App, run, InputState, Key};`
 // (plus the bindings layer) without reaching into
 // `flicker::core::input::*` themselves.
 pub use flicker_core::input::bindings::{
-    AbstractControls, Action, AxisDirection, Bindings, ControlConfig, InputBinding, InputMap,
+    AbstractControls, Action, AxisDirection, Bindings, ContextualBindings, ControlConfig,
+    InputBinding, InputContext, InputMap,
 };
 pub use flicker_core::input::{
     DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputState, Key,

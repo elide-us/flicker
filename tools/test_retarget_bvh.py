@@ -9,10 +9,14 @@ NO app. Run:  python3 tools/test_retarget_bvh.py
                    where the SOURCE limb points (<2deg, all frames). This is the property that
                    fixes both the crossed arms and the toe-up feet; the raw base-A bind foot is
                    still pitched ~-38deg (we track the source instead of mutating the bind).
-  3. Timing      — output tick count == source frame count, tick_rate_hz == 30, ticks 0..N-1.
+  3. Timing      — native retarget: output tick count == source frame count, tick_rate_hz == 30
+                   (source native rate), ticks 0..N-1.
   4. Determinism — retargeting the same input twice yields byte-identical JSON.
   5. In-place/RM — In-Place pins the pelvis planar (X/Y) to rest (Z bob kept); RootMotion
                    keeps the pelvis's full planar travel (spec section C.4).
+  6. 60Hz canon  — resample_rig upsamples 30->60 (memory 302BBB85): source frames survive
+                   VERBATIM on the even ticks (per-frame TAE accuracy), odd ticks are the
+                   equidistant slerp / lerp midpoints; same-rate is a no-op; deterministic.
 """
 import os
 import sys
@@ -209,10 +213,67 @@ def test_in_place_vs_root_motion():
             "root-motion %.0fcm planar travel preserved" % (rx, ry, zbob, planar))
 
 
+# --------------------------------- test 6 --------------------------------------
+
+def test_resample_60hz():
+    """The 30->60 Hz canon resample (memory 302BBB85). The retarget math is native-rate; this
+    upsamples it x2. Source frames must survive VERBATIM on the even ticks (per-frame TAE
+    accuracy), the odd ticks must be the equidistant slerp midpoints, a same-rate request is a
+    no-op, and the transform is deterministic."""
+    target = R.load_target()
+    native = R.retarget_clip(WALK, target)
+    nclip = native["clips"][0]
+    n = nclip["duration_ticks"]
+    assert nclip["tick_rate_hz"] == 30, nclip["tick_rate_hz"]
+
+    up = R.resample_rig(native, 60)
+    uc = up["clips"][0]
+    assert uc["tick_rate_hz"] == 60, uc["tick_rate_hz"]
+    assert uc["duration_ticks"] == 2 * n - 1, (uc["duration_ticks"], n)
+
+    ntrk = {t["bone"]: t["keys"] for t in nclip["tracks"]}
+    for tr in uc["tracks"]:
+        keys = tr["keys"]
+        assert len(keys) == 2 * n - 1, (tr["bone"], len(keys))
+        assert [k["t"] for k in keys] == list(range(2 * n - 1)), tr["bone"]
+        src = ntrk[tr["bone"]]
+        # even ticks == source frames, byte-for-byte (T/R/S preserved through the rate change)
+        for k in range(n):
+            e = keys[2 * k]
+            assert e["T"] == src[k]["T"] and e["R"] == src[k]["R"] and e["S"] == src[k]["S"], \
+                ("even-tick source not verbatim", tr["bone"], k)
+        # odd ticks == the u=0.5 interpolant: unit quat, equidistant from both source neighbours
+        # (implementation-independent slerp property), and T is the exact lerp mean.
+        for k in range(n - 1):
+            mid = keys[2 * k + 1]
+            mq = np.asarray(mid["R"], float)
+            assert abs(np.linalg.norm(mq) - 1.0) < 1e-5, ("odd-tick R not unit", tr["bone"], k)
+            q0 = R.qnorm(np.asarray(src[k]["R"], float))
+            q1 = R.qnorm(np.asarray(src[k + 1]["R"], float))
+            d0, d1 = abs(float(np.dot(mq, q0))), abs(float(np.dot(mq, q1)))
+            assert abs(d0 - d1) < 1e-4, ("odd-tick not equidistant (not slerp 0.5)", tr["bone"], k)
+            expT = [round(0.5 * (src[k]["T"][c] + src[k + 1]["T"][c]), 6) for c in range(3)]
+            assert all(abs(mid["T"][c] - expT[c]) < 1e-6 for c in range(3)), ("odd-tick T not lerp", tr["bone"], k)
+
+    # same-rate resample is a no-op
+    same = R.resample_rig(native, 30)["clips"][0]
+    assert same["duration_ticks"] == n and same["tick_rate_hz"] == 30, "same-rate resample mutated the clip"
+
+    # deterministic across runs
+    with tempfile.TemporaryDirectory() as d:
+        pa = os.path.join(d, "a.json"); pb = os.path.join(d, "b.json")
+        R.dump_json(R.resample_rig(native, 60), pa)
+        R.dump_json(R.resample_rig(native, 60), pb)
+        assert open(pa, "rb").read() == open(pb, "rb").read(), "resample output not deterministic"
+
+    return "%d src frames -> %d ticks @60hz; source verbatim on even ticks, slerp/lerp mids on odd" % (n, 2 * n - 1)
+
+
 def main():
     tests = [("1 identity", test_identity), ("2 reproduces", test_reproduces_source),
              ("3 timing", test_timing), ("4 determinism", test_determinism),
-             ("5 in-place/RM", test_in_place_vs_root_motion)]
+             ("5 in-place/RM", test_in_place_vs_root_motion),
+             ("6 60hz canon", test_resample_60hz)]
     failed = 0
     for label, fn in tests:
         try:

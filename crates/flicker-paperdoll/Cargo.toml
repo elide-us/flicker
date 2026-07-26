@@ -27,6 +27,8 @@ flicker = { path = "../flicker" }
 flicker-shell.workspace = true
 # The GPU-free skeletal-animation runtime (format/pose/skin/state).
 flicker-skeletal.workspace = true
+# The mechanics cluster: collision primitives + the auto-fit + the debug wireframe (WS-D).
+flicker-mechanics.workspace = true
 glam.workspace = true
 anyhow.workspace = true
 # Decodes the converted albedo PNGs (assets/*.png) at load time for Slice 2 texturing.

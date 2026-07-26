@@ -36,31 +36,100 @@ pub struct Resolution {
     pub h: u32,
 }
 
-/// A full display setting: presentation mode + resolution.
+/// A full display setting: presentation mode + resolution + (windowed) position.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct DisplaySetting {
     pub mode: DisplayMode,
     pub res: Resolution,
+    /// Last windowed outer position (top-left, physical px). `None` = let the OS
+    /// place the window (first launch). Persisted so the window reopens where it
+    /// was; on restore it is clamped fully on-screen. Meaningless in fullscreen.
+    #[serde(default)]
+    pub pos: Option<[i32; 2]>,
 }
 
 impl DisplaySetting {
-    /// The startup default: 1080p windowed. (The runner opens a 960×540
-    /// *logical* window, which is 1920×1080 physical on a 2× display.)
+    /// The startup default: 1080p windowed, OS-placed. `apply` clamps the size to
+    /// the monitor, so on a smaller screen the window shrinks to fit rather than
+    /// opening larger than the display.
     pub const DEFAULT: DisplaySetting = DisplaySetting {
         mode: DisplayMode::Windowed,
-        res: Resolution { w: 1920, h: 1080 },
+        // A comfortably-sub-screen first-launch size (720p). `apply` clamps it down
+        // further on a smaller monitor; the user's resized + persisted size takes
+        // over after the first run.
+        res: Resolution { w: 1280, h: 720 },
+        pos: None,
     };
 
-    /// Apply this setting to the window via the renderer.
+    /// Apply this setting to the window via the renderer. Windowed mode CLAMPS the
+    /// size to the monitor (never larger than the screen) and, if a position is
+    /// stored, restores it nudged fully on-screen.
     pub fn apply(self, renderer: &Renderer) {
         match self.mode {
-            DisplayMode::Windowed => renderer.set_windowed(self.res.w, self.res.h),
+            DisplayMode::Windowed => {
+                let (mw, mh) = renderer.monitor_size().unwrap_or((self.res.w, self.res.h));
+                let w = self.res.w.min(mw);
+                let h = self.res.h.min(mh);
+                renderer.set_windowed(w, h);
+                if let Some([px, py]) = self.pos {
+                    // Clamp so the whole window stays on-screen. The window is now
+                    // ≤ the monitor, so a valid on-screen position always exists.
+                    let max_x = mw.saturating_sub(w) as i32;
+                    let max_y = mh.saturating_sub(h) as i32;
+                    renderer.set_outer_position(px.clamp(0, max_x), py.clamp(0, max_y));
+                }
+            }
             DisplayMode::BorderlessFullscreen => renderer.set_borderless_fullscreen(),
             DisplayMode::ExclusiveFullscreen => {
                 renderer.set_exclusive_fullscreen(self.res.w, self.res.h);
             }
         }
     }
+}
+
+impl Default for DisplaySetting {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Windowed resolution rungs the settings panel offers (physical px). These MUST stay
+/// index-aligned with the `settings.video.resolution` dropdown options in
+/// `ui_elements.json` — this array is the single source for that index↔size mapping.
+/// `apply` clamps the chosen rung to the monitor, so a rung larger than the screen
+/// simply fits to the screen.
+pub const RESOLUTIONS: [Resolution; 6] = [
+    Resolution { w: 1280, h: 720 },
+    Resolution { w: 1600, h: 900 },
+    Resolution { w: 1920, h: 1080 },
+    Resolution { w: 2560, h: 1440 },
+    Resolution { w: 3440, h: 1440 },
+    Resolution { w: 3840, h: 2160 },
+];
+
+/// The dropdown index of a display mode (its position in [`DisplayMode::ALL`]).
+pub fn mode_index(mode: DisplayMode) -> usize {
+    DisplayMode::ALL.iter().position(|m| *m == mode).unwrap_or(0)
+}
+
+/// The resolution dropdown index CLOSEST to `res` (nearest rung by pixel distance),
+/// so an off-ladder size (a drag-resized window) still shows a sensible selection.
+pub fn resolution_index(res: Resolution) -> usize {
+    RESOLUTIONS
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, r)| {
+            let dw = i64::from(r.w) - i64::from(res.w);
+            let dh = i64::from(r.h) - i64::from(res.h);
+            dw * dw + dh * dh
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0)
+}
+
+/// The resolution at dropdown index `idx`, if in range.
+pub fn resolution_at(idx: usize) -> Option<Resolution> {
+    RESOLUTIONS.get(idx).copied()
 }
 
 /// Process-wide current setting (the window is the real state; this mirrors it
@@ -73,10 +142,19 @@ pub fn current() -> DisplaySetting {
 }
 
 /// Record `setting` as current (call right after applying it to the window) and
-/// persist it to `settings.json`.
+/// persist it — the shell folds it into the unified `settings.json` (one file, one
+/// writer), so it no longer clobbers or is clobbered by the game settings.
 pub fn set_current(setting: DisplaySetting) {
+    {
+        *CURRENT.lock().expect("display settings lock") = setting;
+    }
+    crate::shell::persist_display_setting(setting);
+}
+
+/// Seed [`CURRENT`] from a loaded setting WITHOUT persisting — used by the shell's
+/// settings load so restoring the saved value doesn't immediately re-save it.
+pub(crate) fn seed(setting: DisplaySetting) {
     *CURRENT.lock().expect("display settings lock") = setting;
-    save_to_disk(setting);
 }
 
 /// Where the per-user `settings.json` is read/written — the running app's project
@@ -87,8 +165,8 @@ pub fn set_current(setting: DisplaySetting) {
 static SETTINGS_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Set the directory the shell persists `settings.json` into (the app's project
-/// root, usually its `CARGO_MANIFEST_DIR`). Call once at startup, before
-/// [`load_from_disk`].
+/// root, usually its `CARGO_MANIFEST_DIR`). Call once at startup, before the shell
+/// loads the settings.
 pub fn set_settings_dir(dir: Option<PathBuf>) {
     *SETTINGS_DIR.lock().expect("settings dir lock") = dir;
 }
@@ -104,37 +182,7 @@ pub fn settings_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Path to the persisted settings file, in the app's project root.
-fn settings_path() -> PathBuf {
-    settings_dir().join("settings.json")
-}
-
-/// Load the persisted display setting from `settings.json` into [`CURRENT`], if
-/// the file exists and parses. Best-effort: a missing or invalid file leaves
-/// the default in place. Call once at startup, before the window opens.
-pub fn load_from_disk() {
-    let path = settings_path();
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    match serde_json::from_slice::<DisplaySetting>(&bytes) {
-        Ok(setting) => {
-            *CURRENT.lock().expect("display settings lock") = setting;
-            tracing::info!("loaded display settings from {}", path.display());
-        }
-        Err(e) => tracing::warn!("ignoring invalid {}: {e}", path.display()),
-    }
-}
-
-/// Write `setting` to `settings.json` (best-effort; logs on failure).
-fn save_to_disk(setting: DisplaySetting) {
-    let path = settings_path();
-    match serde_json::to_vec_pretty(&setting) {
-        Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
-                tracing::warn!("failed to write {}: {e}", path.display());
-            }
-        }
-        Err(e) => tracing::warn!("failed to serialize display settings: {e}"),
-    }
-}
+// Display persistence is unified into the shell's `GameSettings` (one `settings.json`,
+// one writer): `set_current` folds a change into it, and the shell's settings load
+// seeds `CURRENT` via `seed`. The old DisplaySetting-only file I/O — which shared the
+// same file with `GameSettings` and clobbered it — is gone.

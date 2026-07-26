@@ -13,11 +13,12 @@ use flicker::app::{
     run as run_app, AbstractControls, Action, GamepadConfig, InputMap, InputState, Key,
     RebindCapture,
 };
-use flicker::render::{Renderer, TextureHandle, Vec2};
+use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneManager, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles_str, load_ui_json_str, load_widgets, render_hud, run_ui, UiInput, UiState,
+    builtin_templates, expand, load_styles_str, load_ui_json_str, load_widgets, render_hud, run_ui,
+    UiInput, UiState,
 };
 
 use crate::display;
@@ -65,9 +66,9 @@ impl SceneInfo {
 
 /// One launchable scene: a stable action `id`, its display `label`, its Prism style
 /// `variant` (`primary`/`secondary`/`danger`), and the `factory` that builds it.
-/// In the default menu it is one launch button; in a launcher (`scene_select`) it is
-/// one scene-panel row, using its optional [`SceneInfo`]. On click the menu replaces
-/// itself with `factory()`.
+/// In the default menu it is one launch button; in a launcher (`scene_select`) it
+/// becomes a scene-panel row IF it carries [`SceneInfo`], and otherwise stays a plain
+/// launch button in the popup. On click the menu replaces itself with `factory()`.
 pub struct SceneEntry {
     pub id: String,
     pub label: String,
@@ -170,26 +171,62 @@ fn scene_select() -> bool {
 /// on the winit loop. Blocks until the window closes. The one entry point a client calls.
 pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     display::set_settings_dir(config.settings_dir.clone());
-    display::load_from_disk();
+    GameSettings::load(); // unified settings.json → GAME_SETTINGS + seeds display::CURRENT
     SCENE_SELECT.with(|s| s.set(config.scene_select));
     set_scenes(config.scenes);
-    run_app(SceneManager::new(Box::new(LogoScene::new())))
+    let result = run_app(SceneManager::new(Box::new(LogoScene::new())));
+    // The window is gone now; persist its final windowed size + position so the next
+    // launch reopens the same way.
+    persist_window_geometry();
+    result
 }
 
-/// Take any pending input-settings change made in the pause→settings overlay,
-/// for the in-game scene to apply; `None` when nothing changed. (The push side
-/// from the settings scene is a designed-but-unwired seam, so this returns
-/// `None` today.)
+/// After the event loop exits, fold the window's final WINDOWED size + position into
+/// the persisted display setting so the next launch reopens the same size in the same
+/// spot. A fullscreen exit keeps the last stored windowed placement. Reads the
+/// geometry flicker-app captured at exit (`exiting`).
+fn persist_window_geometry() {
+    let Some(geom) = flicker::app::last_window_geometry() else {
+        return;
+    };
+    if geom.fullscreen {
+        return; // a fullscreen exit isn't a windowed placement — keep the stored one
+    }
+    let snapshot = {
+        let mut gs = GAME_SETTINGS.lock().expect("settings lock");
+        gs.display.res = display::Resolution { w: geom.width, h: geom.height };
+        gs.display.pos = Some([geom.x, geom.y]);
+        gs.clone()
+    };
+    snapshot.save();
+}
+
+/// Take any pending input-settings change made in the pause→settings overlay, for
+/// the in-game scene to apply LIVE; `None` when nothing changed since the last poll.
+/// The settings scene pushes on Apply/Back (see `UnifiedSettingsScene::commit_settings`);
+/// a scene SEEDS its initial values from [`input_controls`] at enter, then polls this
+/// for later changes.
+///
+/// The `AbstractControls` carries only the LOOK settings the panel owns (mouse
+/// sensitivity + invert); a scene applies those and KEEPS its own `move_speed` (a
+/// gameplay control). `InputMap` carries the current keybinds.
 pub fn take_pending_input() -> Option<(InputMap, AbstractControls, GamepadConfig)> {
     INPUT_SETTINGS.lock().ok().and_then(|mut p| p.take())
 }
 
-/// Full settings state persisted to `settings.json`.
+/// Full settings state persisted to `settings.json` — the ONE persisted struct with
+/// the ONE writer (`save`), so nothing clobbers. The display setting is folded in
+/// here: it used to be a separate DisplaySetting written to the SAME `settings.json`,
+/// which overwrote (and was overwritten by) the game settings.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct GameSettings {
     audio: AudioSettings,
     video: VideoSettings,
     input: InputSettings,
+    /// Window mode + size + windowed position. The live value is mirrored in the
+    /// `display` module's `CURRENT`; this is its persisted home.
+    #[serde(default)]
+    display: display::DisplaySetting,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -208,8 +245,6 @@ impl Default for AudioSettings {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct VideoSettings {
-    display_mode: usize,
-    resolution: usize,
     quality: usize,
     vsync: bool,
     fps_limit: usize,
@@ -217,7 +252,10 @@ struct VideoSettings {
 
 impl Default for VideoSettings {
     fn default() -> Self {
-        Self { display_mode: 1, resolution: 3, quality: 3, vsync: true, fps_limit: 2 }
+        // Display mode + resolution are NOT here: they belong to the single
+        // `DisplaySetting` (`GameSettings.display`), which the Video-tab dropdowns
+        // read/write directly via the `display` module — one source of truth.
+        Self { quality: 3, vsync: true, fps_limit: 2 }
     }
 }
 
@@ -272,16 +310,48 @@ impl GameSettings {
             Err(e) => tracing::warn!("failed to serialize settings: {e}"),
         }
     }
+
+    /// Load the unified settings from `settings.json` into `GAME_SETTINGS`, and SEED
+    /// the display module's live `CURRENT` from it. Best-effort: a missing/invalid
+    /// file leaves the defaults in place. Call once at startup, before the window
+    /// opens (the display setting is applied later, in `LogoScene::enter`).
+    fn load() {
+        let path = Self::settings_path();
+        let Ok(bytes) = std::fs::read(&path) else {
+            return;
+        };
+        match serde_json::from_slice::<GameSettings>(&bytes) {
+            Ok(loaded) => {
+                display::seed(loaded.display);
+                *GAME_SETTINGS.lock().expect("settings lock") = loaded;
+                tracing::info!("loaded settings from {}", path.display());
+            }
+            Err(e) => tracing::warn!("ignoring invalid {}: {e}", path.display()),
+        }
+    }
+}
+
+/// Fold a display-setting change into the unified `GameSettings` and persist it —
+/// `display::set_current` calls this so display + game settings share ONE file with
+/// ONE writer (no clobber). The file write happens after the lock is released.
+pub(crate) fn persist_display_setting(setting: display::DisplaySetting) {
+    let snapshot = {
+        let mut gs = GAME_SETTINGS.lock().expect("settings lock");
+        gs.display = setting;
+        gs.clone()
+    };
+    snapshot.save();
 }
 
 static GAME_SETTINGS: Mutex<GameSettings> = Mutex::new(GameSettings {
     audio: AudioSettings { master: 0.8, music: 0.6, sfx: 0.7, voice: 0.9 },
-    video: VideoSettings { display_mode: 1, resolution: 3, quality: 3, vsync: true, fps_limit: 2 },
+    video: VideoSettings { quality: 3, vsync: true, fps_limit: 2 },
     input: InputSettings {
         mouse_sensitivity: 0.005, sprint_sensitivity: 0.005, invert_pitch: false, invert_yaw: false,
         raw_input: true, stick_sensitivity: 2.0, left_deadzone: 0.2, right_deadzone: 0.2,
         trigger_threshold: 0.5, invert_stick_pitch: false, invert_stick_yaw: false, deadzone_shape: 0,
     },
+    display: display::DisplaySetting::DEFAULT,
 });
 
 /// Input settings changes pushed from the pause scene and consumed by
@@ -289,10 +359,40 @@ static GAME_SETTINGS: Mutex<GameSettings> = Mutex::new(GameSettings {
 static INPUT_SETTINGS: Mutex<Option<(InputMap, AbstractControls, GamepadConfig)>> =
     Mutex::new(None);
 
+/// Build an [`AbstractControls`] from the persisted input settings — the mouse LOOK
+/// settings the settings panel owns (sensitivity + invert). `move_speed` and the
+/// gamepad fields stay at their defaults on purpose: a scene keeps its OWN
+/// `move_speed` (a gameplay control) and merges only these look fields.
+fn input_controls_from(settings: &GameSettings) -> AbstractControls {
+    AbstractControls {
+        mouse_sensitivity: settings.input.mouse_sensitivity,
+        invert_mouse_pitch: settings.input.invert_pitch,
+        invert_mouse_yaw: settings.input.invert_yaw,
+        ..AbstractControls::default()
+    }
+}
+
+/// Publish an input-settings change for the in-game scene to pick up on its next
+/// [`take_pending_input`] poll — the push side of the settings→engine seam.
+fn set_pending_input(map: InputMap, controls: AbstractControls, gamepad: GamepadConfig) {
+    if let Ok(mut pending) = INPUT_SETTINGS.lock() {
+        *pending = Some((map, controls, gamepad));
+    }
+}
+
+/// The current input LOOK controls (mouse sensitivity + invert) from the persisted
+/// settings — for a scene to SEED its controls when it enters, so the settings
+/// panel's values apply from the first frame (not only after a live change). Pairs
+/// with [`take_pending_input`] (live changes). `move_speed` stays the caller's to keep.
+pub fn input_controls() -> AbstractControls {
+    let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
+    input_controls_from(&settings)
+}
+
 /// How long the logo splash shows before auto-advancing to the menu.
 /// Lua-driven intro splash (`scripts/logo.lua`, `UI.logo`): a sequence of
 /// full-screen logos that fade in / hold / fade out before the menu.
-const LOGO_SCRIPT: &str = include_str!("../../../../content/scripts/logo.lua");
+const LOGO_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/logo.lua");
 
 /// Intro logo images, in play order (publisher then engine), exposed to the
 /// script as the `Textures` names in `UI.logo.images`. Embedded in the crate so
@@ -300,11 +400,11 @@ const LOGO_SCRIPT: &str = include_str!("../../../../content/scripts/logo.lua");
 const LOGO_IMAGES: [(&str, &[u8]); 2] = [
     (
         "elideus",
-        include_bytes!("../../../../content/assets/elideus_productions_yellow.png"),
+        include_bytes!("../../../../content/sensorium/assets/elideus_productions_yellow.png"),
     ),
     (
         "clay",
-        include_bytes!("../../../../content/assets/clay_engine_infinity_grey.png"),
+        include_bytes!("../../../../content/sensorium/assets/clay_engine_infinity_grey.png"),
     ),
 ];
 
@@ -439,6 +539,7 @@ const CONFIRM_SECS: f32 = 15.0;
 /// A selection made in the settings dropdowns.
 enum DisplayChange {
     Mode(display::DisplayMode),
+    Resolution(display::Resolution),
 }
 
 /// Apply `change` to the window immediately and record it as current. Returns
@@ -455,8 +556,19 @@ fn apply_display_change(
             display::DisplaySetting {
                 mode: m,
                 res: prev.res,
+                pos: prev.pos,
             },
             matches!(m, display::DisplayMode::ExclusiveFullscreen),
+        ),
+        DisplayChange::Resolution(res) => (
+            display::DisplaySetting {
+                mode: prev.mode,
+                res,
+                pos: prev.pos,
+            },
+            // A windowed resize is low-risk (drag it back); confirm only when it
+            // drives an exclusive-fullscreen mode.
+            matches!(prev.mode, display::DisplayMode::ExclusiveFullscreen),
         ),
     };
     next.apply(renderer);
@@ -526,27 +638,27 @@ impl Scene for ConfirmDisplayScene {
 }
 
 /// The unified settings Lua script, embedded so clients inherit it.
-const SETTINGS_SCRIPT: &str = include_str!("../../../../content/scripts/settings.lua");
+const SETTINGS_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/settings.lua");
 
 /// The shared front-end modal, now a DECLARATIVE component tree (menu / pause /
 /// confirm, selected by the published `MENU.screen`), embedded. Rendered by the
 /// Rust component walker (`run_ui`); replaces the retired `modal.lua`.
-const MENU_SCRIPT: &str = include_str!("../../../../content/scripts/menu.lua");
+const MENU_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/menu.lua");
 
 /// The shell's declarative UI layout (`modal`/`screens`/`settings`/`logo`/
 /// `loading`), embedded. The client's in-game HUD layout is separate.
-const SHELL_UI_JSON: &str = include_str!("../../../../content/resources/ui_elements.json");
+const SHELL_UI_JSON: &str = include_str!("../../../../content/sensorium/resources/ui_elements.json");
 
-// The composable vector-UI component library (`content/scripts/ui/`): a shared
+// The composable vector-UI component library (`content/sensorium/scripts/ui/`): a shared
 // `core` + one component per file + the `layout` engine, registered as
 // requireable Lua modules via `ScriptHost::new_with_modules`. (Foundation slice —
 // screens migrate onto these next.)
 #[cfg(test)]
-const UI_CORE: &str = include_str!("../../../../content/scripts/ui/core.lua");
+const UI_CORE: &str = include_str!("../../../../content/sensorium/scripts/ui/core.lua");
 #[cfg(test)]
-const UI_BUTTON: &str = include_str!("../../../../content/scripts/ui/button.lua");
+const UI_BUTTON: &str = include_str!("../../../../content/sensorium/scripts/ui/button.lua");
 #[cfg(test)]
-const UI_LAYOUT: &str = include_str!("../../../../content/scripts/ui/layout.lua");
+const UI_LAYOUT: &str = include_str!("../../../../content/sensorium/scripts/ui/layout.lua");
 
 /// Expose the embedded shell `ui_elements.json` to `script` as the `UI` global,
 /// so a screen reads its layout from named elements (`UI.modal.panel.w`) instead
@@ -557,41 +669,9 @@ fn expose_ui_elements(script: &ScriptHost) {
 }
 
 // `load_widgets` (and the embedded `widgets.lua` toolkit) live in `flicker-ui`
-// and are imported above; `scripts/widgets.lua` was retired.
-
-/// Load an embedded UI script `source` (named `chunk_name` for error messages),
-/// register the theme's textures by name (index = id), expose the shell
-/// `ui_elements.json` as the `UI` global, and the `Widgets` toolkit. Best-effort:
-/// a load failure logs and yields `(None, textures)` so the scene degrades
-/// gracefully. The shared front-door for every Lua-driven shell screen.
-fn load_ui_script(
-    source: &str,
-    chunk_name: &str,
-    theme: &Theme,
-) -> (Option<ScriptHost>, Vec<TextureHandle>) {
-    let entries = theme.lua_textures();
-    let textures = entries.iter().map(|(_, handle)| *handle).collect();
-    let script = match ScriptHost::new(source, chunk_name) {
-        Ok(script) => {
-            let ids: Vec<(&str, u32)> = entries
-                .iter()
-                .enumerate()
-                .map(|(i, (name, _))| (*name, i as u32))
-                .collect();
-            if let Err(e) = script.set_texture_ids(&ids) {
-                tracing::error!("texture registration failed for {chunk_name}: {e}");
-            }
-            expose_ui_elements(&script);
-            load_widgets(&script);
-            Some(script)
-        }
-        Err(e) => {
-            tracing::error!("script load failed ({chunk_name}): {e}");
-            None
-        }
-    };
-    (script, textures)
-}
+// and are imported above; `scripts/widgets.lua` was retired. Each Lua-driven shell
+// screen builds its own `ScriptHost` inline (see `LogoScene` / `MenuView` /
+// `UnifiedSettingsScene`), registering textures + the `UI` global the same way.
 
 /// One item published to `menu.lua`'s data-driven button list: a stable action
 /// `id`, its display `label`, and its Prism style `variant`. The engine reads back
@@ -676,6 +756,54 @@ fn confirm_items() -> Vec<MenuItem> {
     ]
 }
 
+#[cfg(test)]
+mod menu_template_tests {
+    use super::*;
+
+    /// Build `menu.lua`'s tree for a screen GPU-free (no Theme / textures) and expand it
+    /// through the walker template registry — the exact script path `MenuView` caches.
+    fn expanded_tree(screen: &str, items: &[MenuItem]) -> UiNode {
+        let s = ScriptHost::new(MENU_SCRIPT, "menu.lua").expect("menu.lua parses + loads");
+        expose_ui_elements(&s);
+        publish_menu(&s, screen, items, &[]);
+        let tree = s
+            .ui_tree()
+            .expect("menu.lua tree() builds")
+            .expect("menu.lua exposes tree()");
+        expand(tree, &builtin_templates())
+    }
+
+    fn has_unresolved_template(n: &UiNode) -> bool {
+        n.template.is_some() || n.children.iter().any(has_unresolved_template)
+    }
+
+    /// Pause + display-confirm now route through the `popup_menu` / `choice_dialog`
+    /// templates. This asserts `menu.lua` parses, `tree()` builds, and every template node
+    /// fully expands with real content — a typo'd template name would fall back to an empty
+    /// page (caught by the non-empty-children assert), and any unexpanded node is caught too.
+    #[test]
+    fn pause_and_confirm_bridge_through_templates() {
+        let pause = expanded_tree("pause", &pause_items());
+        assert_eq!(pause.component, "page", "pause → popup_menu full-bleed page");
+        assert!(!pause.children.is_empty(), "pause popup expanded to real content");
+        assert!(!has_unresolved_template(&pause), "no template marker survives expand");
+
+        let confirm = expanded_tree("confirm", &confirm_items());
+        assert_eq!(confirm.component, "page", "confirm → choice_dialog full-bleed page");
+        assert!(!confirm.children.is_empty(), "confirm popup expanded to real content");
+        assert!(!has_unresolved_template(&confirm), "no template marker survives expand");
+    }
+
+    /// The launcher MENU screen keeps its bespoke two-column composition (no templates) and
+    /// must still build unchanged.
+    #[test]
+    fn menu_screen_still_builds_bespoke() {
+        let menu = expanded_tree("menu", &menu_chrome_items());
+        assert_eq!(menu.component, "page");
+        assert!(!menu.children.is_empty());
+    }
+}
+
 /// The walker-rendered front-end modal (menu / pause / confirm) — the shared
 /// machinery behind every gothic-modal scene, replacing the legacy `ModalUi`.
 /// Loads the shared `menu.lua` component tree, publishes its screen + button list
@@ -713,7 +841,10 @@ impl MenuView {
                 load_widgets(&s); // parity with the other shell screens
                 publish_menu(&s, screen, items, scenes); // the `MENU` data global
                 match s.ui_tree() {
-                    Ok(Some(t)) => Some(t),
+                    // Expand any `template` nodes (pause→popup_menu, confirm→choice_dialog)
+                    // into their piece subtree once, before the tree is cached — identity for a
+                    // template-free tree (the launcher menu is unaffected).
+                    Ok(Some(t)) => Some(expand(t, &builtin_templates())),
                     Ok(None) => {
                         tracing::error!("menu.lua exposes no tree()");
                         None
@@ -751,6 +882,8 @@ impl MenuView {
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
             screen: size,
+            typed: String::new(),
+            backspace: false,
         };
         let frame = run_ui(tree, model, &self.styles, &snap, &mut self.ui_state);
         self.commands = frame.commands;
@@ -775,83 +908,196 @@ impl MenuView {
 /// [`SettingsResult`] when popped so the calling scene can apply changes.
 struct UnifiedSettingsScene {
     theme: Theme,
-    script: Option<ScriptHost>,
+    /// The 1×1 white + theme textures for `render_hud` (`textures[0]` = white).
     textures: Vec<TextureHandle>,
+    /// The declarative `settings.lua` tree, built + expanded ONCE (walker-driven).
+    tree: Option<UiNode>,
+    /// Resolved `ui_elements.json` styles (dotted `style` paths resolve against it).
+    styles: serde_json::Value,
+    /// Retained walker interaction state (open dropdown, slider drag capture).
+    ui_state: UiState,
+    /// Draw commands stashed by `update`'s `run_ui`, blitted in `render`.
+    commands: Vec<HudCommand>,
     rebind: RebindCapture,
     /// Local copy of settings (edits buffered here, persisted on apply).
     settings: GameSettings,
     /// Current input map (mutated by rebinds).
     input_map: InputMap,
-    /// Last mouse position for render-time model.
-    last_cursor: Vec2,
-    /// Last mouse down state for render-time model.
-    last_down: bool,
-    /// Last scroll wheel delta for render-time model.
+    /// Active category rail selection: "video" / "audio" / "input" (scene state,
+    /// published to the tree as `sec_*` gates + fed back from `go_*` actions).
+    section: String,
+    /// Active input sub-tab: "keyboard" / "mouse" / "controller" (two-way via the
+    /// `input_subtab` pill bind).
+    input_subtab: String,
+    /// Active controller profile (two-way via the `ctrl_profile` select bind).
+    ctrl_profile: String,
+    /// Scroll offset (px) of the content region — round-tripped through the `scroll`
+    /// node's `scroll_off` bind, reset to 0 on a section / sub-tab change.
+    scroll_off: f32,
+    /// This frame's mouse-wheel delta, published to the `scroll` node's `wheel` key
+    /// (UiInput has no wheel field, so it rides the Model like any other value).
     last_scroll: f32,
+    /// "SETTINGS APPLIED" flash countdown (s), decayed by `dt`.
+    applied: f32,
     /// Previous-frame Escape state, for edge-detecting Esc-to-close / cancel-rebind.
     esc_prev: bool,
+    /// True once any buffered setting or keybind differs from what was last persisted —
+    /// gates the unsaved-changes confirm on close. Set on a real edit, cleared on commit.
+    dirty: bool,
+    /// The unsaved-changes confirm dialog is showing (× / Esc while `dirty`). While set,
+    /// the scene processes ONLY that dialog's actions (modal).
+    confirm_close: bool,
+    /// The restore-defaults acknowledgement is showing. Modal like `confirm_close`.
+    restore_note: bool,
 }
+
+/// Backend range of the mouse look sensitivity (the `m_look` row's display slider
+/// runs 0..100 over this — mapped here, so the slider stays a plain 0..100 bind).
+const LOOK_SENS_MIN: f32 = 0.001;
+const LOOK_SENS_MAX: f32 = 0.02;
+
+/// The unwired PREVIEW controls' fixed values (from `settings.*.groups` `default`s),
+/// published read-only as `pv_<id>` so the layout preview shows sensible numbers.
+/// These rows are inert (their control's `enabled_bind` is the always-false `off`).
+const PREVIEW_NUMS: &[(&str, f64)] = &[
+    ("pv_fov", 90.0),
+    ("pv_gamma", 50.0),
+    ("pv_a_master", 80.0),
+    ("pv_a_music", 70.0),
+    ("pv_a_fx", 85.0),
+    ("pv_a_amb", 55.0),
+    ("pv_a_voice", 100.0),
+    ("pv_m_aim", 65.0),
+    ("pv_m_edge_speed", 55.0),
+];
+const PREVIEW_BOOLS: &[(&str, bool)] = &[("pv_a_subs", false), ("pv_m_edge", true)];
 
 impl UnifiedSettingsScene {
     fn new(theme: Theme, input_map: &InputMap) -> Self {
-        let (script, textures) = load_ui_script(SETTINGS_SCRIPT, "settings.lua", &theme);
+        let entries = theme.lua_textures();
+        let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
+        let styles = load_styles_str(SHELL_UI_JSON);
+        // Build the declarative tree ONCE, then expand its `window` template into
+        // pieces — the same cache point MenuView uses. The script host is dropped after.
+        let tree = match ScriptHost::new(SETTINGS_SCRIPT, "settings.lua") {
+            Ok(s) => {
+                let ids: Vec<(&str, u32)> = entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| (*name, i as u32))
+                    .collect();
+                if let Err(e) = s.set_texture_ids(&ids) {
+                    tracing::error!("settings texture registration failed: {e}");
+                }
+                expose_ui_elements(&s); // the `UI` global (chrome config + styles)
+                match s.ui_tree() {
+                    // Expand the `window` template into its piece subtree once, before caching.
+                    Ok(Some(t)) => Some(expand(t, &builtin_templates())),
+                    Ok(None) => {
+                        tracing::error!("settings.lua exposes no tree()");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!("settings tree build failed: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("settings.lua load failed: {e}");
+                None
+            }
+        };
         let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
         Self {
             theme,
-            script,
             textures,
+            tree,
+            styles,
+            ui_state: UiState::new(),
+            commands: Vec::new(),
             rebind: RebindCapture::new(),
             settings,
             input_map: input_map.clone(),
-            last_cursor: Vec2::ZERO,
-            last_down: false,
+            section: "video".to_string(),
+            input_subtab: "keyboard".to_string(),
+            ctrl_profile: "default".to_string(),
+            scroll_off: 0.0,
             last_scroll: 0.0,
+            applied: 0.0,
             esc_prev: false,
+            dirty: false,
+            confirm_close: false,
+            restore_note: false,
         }
     }
 
-    /// Build the per-frame Model for the settings script.
-    fn model(&self, sw: f32, sh: f32) -> ValueMap {
-        let mut m = ValueMap::new()
-            .with("mx", self.last_cursor.x as f64)
-            .with("my", self.last_cursor.y as f64)
-            .with("clicked", false)
-            .with("down", self.last_down)
-            .with("sw", sw as f64)
-            .with("sh", sh as f64)
-            .with("scroll", self.last_scroll as f64);
+    /// Build the per-frame Model the walker reads: the section/sub-tab gates + header
+    /// text + nav styling (scene state), the scroll offset + wheel delta, and every
+    /// control's value bind. The `select`/`pill_toggle` binds are STRINGS (0-based
+    /// index) because the walker matches option `value`s textually; the scene parses
+    /// the index back in `update`.
+    fn model(&self) -> ValueMap {
+        let mut m = ValueMap::new();
 
-        // Audio settings (flat keys)
-        m.set("audio_master", self.settings.audio.master as f64);
-        m.set("audio_music", self.settings.audio.music as f64);
-        m.set("audio_sfx", self.settings.audio.sfx as f64);
-        m.set("audio_voice", self.settings.audio.voice as f64);
+        // ── section + sub-tab visibility gates, header text, nav button styling ──
+        for id in ["video", "audio", "input"] {
+            m.set(format!("sec_{id}"), self.section == id);
+            let style = if self.section == id {
+                "modal.buttons.variants.primary"
+            } else {
+                "modal.buttons.variants.secondary"
+            };
+            m.set(format!("nav_{id}_style"), style);
+        }
+        for id in ["keyboard", "mouse", "controller"] {
+            m.set(format!("sub_{id}"), self.input_subtab == id);
+        }
+        let (kicker, title, color) = match self.section.as_str() {
+            "audio" => ("MIXING & OUTPUT", "Audio", "theme.tokens.sig_yellow"),
+            "input" => ("BINDINGS & DEVICES", "Input", "theme.tokens.sig_red"),
+            _ => ("DISPLAY & RENDERING", "Video", "theme.tokens.sig_blue"),
+        };
+        m.set("kicker", kicker);
+        m.set("sec_title", title);
+        m.set("kicker_color_path", color);
+        m.set("input_subtab", self.input_subtab.as_str());
+        m.set("ctrl_profile", self.ctrl_profile.as_str());
 
-        // Video settings (flat keys)
-        m.set("video_display_mode", self.settings.video.display_mode as f64);
-        m.set("video_resolution", self.settings.video.resolution as f64);
-        m.set("video_quality", self.settings.video.quality as f64);
+        // ── scroll (two-way offset + the frame's wheel delta) + gates ──
+        m.set("scroll_off", self.scroll_off as f64);
+        m.set("wheel", self.last_scroll as f64);
+        m.set("off", false); // unwired controls point `enabled_bind` here → inert
+        m.set("rebinding", self.rebind.is_active());
+        m.set("applied", self.applied > 0.0);
+        m.set("confirm_close", self.confirm_close); // unsaved-changes dialog gate
+        m.set("restore_note", self.restore_note); // restore-defaults ack gate
+
+        // ── wired VIDEO (display mode + resolution ride the live DisplaySetting) ──
+        let disp = display::current();
+        m.set("video_display_mode", display::mode_index(disp.mode).to_string());
+        m.set("video_resolution", display::resolution_index(disp.res).to_string());
+        m.set("video_quality", self.settings.video.quality.to_string());
         m.set("video_vsync", self.settings.video.vsync);
-        m.set("video_fps_limit", self.settings.video.fps_limit as f64);
+        m.set("video_fps_limit", self.settings.video.fps_limit.to_string());
 
-        // Input mouse settings (flat keys)
-        m.set("input_mouse_sensitivity", self.settings.input.mouse_sensitivity as f64);
-        m.set("input_mouse_sprint_sensitivity", self.settings.input.sprint_sensitivity as f64);
+        // ── wired MOUSE (look sensitivity mapped backend → 0..100 display) ──
+        let pct = ((self.settings.input.mouse_sensitivity - LOOK_SENS_MIN)
+            / (LOOK_SENS_MAX - LOOK_SENS_MIN)
+            * 100.0)
+            .clamp(0.0, 100.0);
+        m.set("look_sens_pct", pct as f64);
         m.set("input_mouse_invert_pitch", self.settings.input.invert_pitch);
-        m.set("input_mouse_invert_yaw", self.settings.input.invert_yaw);
-        m.set("input_mouse_raw_input", self.settings.input.raw_input);
 
-        // Input controller settings (flat keys)
-        m.set("input_ctrl_stick_sensitivity", self.settings.input.stick_sensitivity as f64);
-        m.set("input_ctrl_left_deadzone", self.settings.input.left_deadzone as f64);
-        m.set("input_ctrl_right_deadzone", self.settings.input.right_deadzone as f64);
-        m.set("input_ctrl_trigger_threshold", self.settings.input.trigger_threshold as f64);
-        m.set("input_ctrl_invert_stick_pitch", self.settings.input.invert_stick_pitch);
-        m.set("input_ctrl_invert_stick_yaw", self.settings.input.invert_stick_yaw);
-        m.set("input_ctrl_deadzone_shape", self.settings.input.deadzone_shape as f64);
+        // ── unwired PREVIEW values (read-only; their controls are inert) ──
+        for (k, v) in PREVIEW_NUMS {
+            m.set(*k, *v);
+        }
+        for (k, v) in PREVIEW_BOOLS {
+            m.set(*k, *v);
+        }
 
-        // Current keyboard bindings → the settings key caps show real keys
-        // (`bind_<ActionId>`), instead of always "unbound". First binding wins.
+        // Current keyboard bindings → the key caps show real keys (`bind_<ActionId>`).
         for (id, action) in KEYBOARD_ACTIONS {
             let label = self
                 .input_map
@@ -862,15 +1108,29 @@ impl UnifiedSettingsScene {
             m.set(format!("bind_{id}"), label);
         }
 
-        // Rebind state
-        if self.rebind.is_active() {
-            if let Some(action) = self.rebind.current_action() {
-                m.set("rebind_action", format!("{action}"));
-                m.set("rebind_gamepad", self.rebind.is_gamepad());
-            }
-        }
-
         m
+    }
+
+    /// Persist the buffered settings to `GAME_SETTINGS` + `settings.json`, and PUSH
+    /// the input portion (mouse look + current keybinds) to the live game scene via
+    /// [`INPUT_SETTINGS`] — so a change in pause→settings reaches the running scene
+    /// on its next [`take_pending_input`] poll. Scene-owned controls (`move_speed`)
+    /// are deliberately NOT pushed (see [`input_controls_from`]).
+    fn commit_settings(&self) {
+        {
+            let mut gs = GAME_SETTINGS.lock().expect("settings lock");
+            // Preserve the LIVE display setting (maintained via `set_current`); the
+            // buffered `self.settings.display` copy could be stale and clobber it.
+            let display = gs.display;
+            *gs = self.settings.clone();
+            gs.display = display;
+            gs.save();
+        }
+        set_pending_input(
+            self.input_map.clone(),
+            input_controls_from(&self.settings),
+            GamepadConfig::default(),
+        );
     }
 }
 
@@ -879,150 +1139,182 @@ impl Scene for UnifiedSettingsScene {
         true
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        let Some(script) = self.script.as_ref() else {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        let Some(tree) = self.tree.as_ref() else {
             return Transition::Pop;
         };
 
         let size = renderer.size();
-        self.last_cursor = input.mouse_position;
-        self.last_down = input.mouse_left;
-        self.last_scroll = input.mouse_wheel_delta;
+        self.last_scroll = input.mouse_wheel_delta; // published to the scroll node's `wheel`
+        self.applied = (self.applied - dt.as_secs_f32()).max(0.0); // decay the flash
         let esc_edge = input.key_down(Key::Escape) && !self.esc_prev;
         self.esc_prev = input.key_down(Key::Escape);
 
-        // Run Lua update
-        let _ = script.set_model(&self.model(size.x, size.y));
-        let results = script.update(input, size.x, size.y).unwrap_or_else(|e| {
-            tracing::error!("settings update failed: {e}");
-            ValueMap::new()
-        });
+        // One walker pass: lay out + hit-test + draw the cached tree. UiInput has no
+        // wheel field — the wheel rides the Model (`wheel`) instead.
+        let snap = UiInput {
+            mouse: input.mouse_position,
+            clicked: input.mouse_left_pressed,
+            down: input.mouse_left,
+            screen: size,
+            typed: String::new(),
+            backspace: false,
+        };
+        let frame = run_ui(tree, &self.model(), &self.styles, &snap, &mut self.ui_state);
+        self.commands = frame.commands;
+        let results = frame.results;
 
-        // ── Handle rebind (Esc or a click cancels; else capture the next input) ──
+        // ── Rebind capture (Esc or a click cancels; else grab the next input) ──
+        // The walker still drew this frame (so the screen updates); its actions are
+        // ignored while capturing.
         if self.rebind.is_active() {
-            if esc_edge || results.is_on("settings_rebind_cancel") {
+            if esc_edge || input.mouse_left_pressed {
                 self.rebind.cancel();
             } else if let Some((action, binding)) = self.rebind.poll(input, &mut self.input_map) {
                 tracing::info!("rebound {action} to {binding}");
+                self.dirty = true;
             }
             return Transition::None;
         }
 
-        // ── Restore defaults (reset the local buffer; persisted on Apply/Back) ──
+        // ── Restore-defaults acknowledgement (modal): OK / Esc dismisses it ──
+        if self.restore_note {
+            if results.is_on("restore_ok") || esc_edge {
+                self.restore_note = false;
+            }
+            return Transition::None;
+        }
+
+        // ── Unsaved-changes confirm (modal): Save / Discard / Cancel (Esc = Cancel) ──
+        if self.confirm_close {
+            if results.is_on("confirm_save") {
+                self.commit_settings();
+                return Transition::Pop;
+            }
+            if results.is_on("confirm_discard") {
+                return Transition::Pop;
+            }
+            if results.is_on("confirm_cancel") || esc_edge {
+                self.confirm_close = false;
+            }
+            return Transition::None;
+        }
+
+        // ── Category rail + input sub-tab + controller profile (scene state) ──
+        for id in ["video", "audio", "input"] {
+            if results.is_on(&format!("go_{id}")) && self.section != id {
+                self.section = id.to_string();
+                self.scroll_off = 0.0;
+            }
+        }
+        if let Some(t) = results.text("input_subtab") {
+            if t != self.input_subtab {
+                self.input_subtab = t.to_string();
+                self.scroll_off = 0.0;
+            }
+        }
+        if let Some(p) = results.text("ctrl_profile") {
+            self.ctrl_profile = p.to_string();
+        }
+        if let Some(v) = results.number("scroll_off") {
+            self.scroll_off = v as f32;
+        }
+
+        // ── Restore defaults: reset the buffer, mark dirty, and pop the ack notice ──
         if results.is_on("settings_restore") {
             self.settings = GameSettings::default();
             self.input_map = InputMap::wasd_and_mouse();
+            self.dirty = true;
+            self.restore_note = true;
         }
 
-        // ── Apply: persist without closing (the script shows the flash) ──
+        // ── Apply: persist without closing (flash the confirmation) ──
         if results.is_on("settings_apply") {
-            let mut gs = GAME_SETTINGS.lock().expect("settings lock");
-            *gs = self.settings.clone();
-            gs.save();
+            self.commit_settings();
+            self.dirty = false;
+            self.applied = 2.0;
         }
 
-        // ── Back / close (Back button, × chip, or Esc): persist and pop ──
-        if esc_edge || results.is_on("settings_back") {
-            {
-                let mut gs = GAME_SETTINGS.lock().expect("settings lock");
-                *gs = self.settings.clone();
-                gs.save();
-            }
+        // ── Save and Close: persist and pop ──
+        if results.is_on("settings_back") {
+            self.commit_settings();
             return Transition::Pop;
         }
 
-        // ── Apply audio changes ──
-        if let Some(v) = results.number("audio_master") {
-            self.settings.audio.master = v as f32;
-        }
-        if let Some(v) = results.number("audio_music") {
-            self.settings.audio.music = v as f32;
-        }
-        if let Some(v) = results.number("audio_sfx") {
-            self.settings.audio.sfx = v as f32;
-        }
-        if let Some(v) = results.number("audio_voice") {
-            self.settings.audio.voice = v as f32;
+        // ── Close (× or Esc): confirm first when there are unsaved edits, else discard ──
+        if esc_edge || results.is_on("settings_close") {
+            if self.dirty {
+                self.confirm_close = true;
+            } else {
+                return Transition::Pop;
+            }
         }
 
         // ── Apply video changes ──
-        if let Some(v) = results.number("video_display_mode") {
-            let new_mode = v as usize;
-            if new_mode != self.settings.video.display_mode {
-                self.settings.video.display_mode = new_mode;
-                let mode = display::DisplayMode::ALL[new_mode.min(2)];
-                let change = DisplayChange::Mode(mode);
-                if let Some(prev) = apply_display_change(change, renderer) {
+        // Display mode + resolution edit the SINGLE DisplaySetting directly. The
+        // select binds carry a 0-based index STRING (walker matches option values
+        // textually), parsed here; apply only on an ACTUAL change (the binds report
+        // the current index every frame, so guard against re-applying).
+        if let Some(idx) = results.text("video_display_mode").and_then(|s| s.parse::<usize>().ok()) {
+            let idx = idx.min(display::DisplayMode::ALL.len() - 1);
+            let mode = display::DisplayMode::ALL[idx];
+            if mode != display::current().mode {
+                if let Some(prev) = apply_display_change(DisplayChange::Mode(mode), renderer) {
                     return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
                 }
             }
         }
-        if let Some(v) = results.number("video_resolution") {
-            self.settings.video.resolution = v as usize;
+        if let Some(idx) = results.text("video_resolution").and_then(|s| s.parse::<usize>().ok()) {
+            if let Some(res) = display::resolution_at(idx) {
+                if res != display::current().res {
+                    if let Some(prev) = apply_display_change(DisplayChange::Resolution(res), renderer)
+                    {
+                        return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
+                    }
+                }
+            }
         }
-        if let Some(v) = results.number("video_quality") {
-            self.settings.video.quality = v as usize;
+        // Each write only fires (and marks dirty) on an ACTUAL change — the binds report
+        // the current value every frame, so an unguarded assignment would flag dirty forever.
+        if let Some(q) = results.text("video_quality").and_then(|s| s.parse::<usize>().ok()) {
+            if q != self.settings.video.quality {
+                self.settings.video.quality = q;
+                self.dirty = true;
+            }
         }
-        if results.is_on("video_vsync") {
-            self.settings.video.vsync = true;
-        } else if let Some(flicker::script::Value::Bool(b)) = results.get("video_vsync") {
-            self.settings.video.vsync = *b;
+        if let Some(flicker::script::Value::Bool(b)) = results.get("video_vsync") {
+            if *b != self.settings.video.vsync {
+                self.settings.video.vsync = *b;
+                self.dirty = true;
+            }
         }
-        if let Some(v) = results.number("video_fps_limit") {
-            self.settings.video.fps_limit = v as usize;
+        if let Some(f) = results.text("video_fps_limit").and_then(|s| s.parse::<usize>().ok()) {
+            if f != self.settings.video.fps_limit {
+                self.settings.video.fps_limit = f;
+                self.dirty = true;
+            }
         }
 
-        // ── Apply input mouse changes ──
-        if let Some(v) = results.number("input_mouse_sensitivity") {
-            self.settings.input.mouse_sensitivity = v as f32;
-        }
-        if let Some(v) = results.number("input_mouse_sprint_sensitivity") {
-            self.settings.input.sprint_sensitivity = v as f32;
+        // ── Apply input mouse changes (look slider is 0..100 display → backend) ──
+        if let Some(pct) = results.number("look_sens_pct") {
+            let sens = LOOK_SENS_MIN + (pct as f32 / 100.0) * (LOOK_SENS_MAX - LOOK_SENS_MIN);
+            if (sens - self.settings.input.mouse_sensitivity).abs() > f32::EPSILON {
+                self.settings.input.mouse_sensitivity = sens;
+                self.dirty = true;
+            }
         }
         if let Some(flicker::script::Value::Bool(b)) = results.get("input_mouse_invert_pitch") {
-            self.settings.input.invert_pitch = *b;
-        }
-        if let Some(flicker::script::Value::Bool(b)) = results.get("input_mouse_invert_yaw") {
-            self.settings.input.invert_yaw = *b;
-        }
-        if let Some(flicker::script::Value::Bool(b)) = results.get("input_mouse_raw_input") {
-            self.settings.input.raw_input = *b;
+            if *b != self.settings.input.invert_pitch {
+                self.settings.input.invert_pitch = *b;
+                self.dirty = true;
+            }
         }
 
-        // ── Apply input controller changes ──
-        if let Some(v) = results.number("input_controller_stick_sensitivity") {
-            self.settings.input.stick_sensitivity = v as f32;
-        }
-        if let Some(v) = results.number("input_controller_left_deadzone") {
-            self.settings.input.left_deadzone = v as f32;
-        }
-        if let Some(v) = results.number("input_controller_right_deadzone") {
-            self.settings.input.right_deadzone = v as f32;
-        }
-        if let Some(v) = results.number("input_controller_trigger_threshold") {
-            self.settings.input.trigger_threshold = v as f32;
-        }
-        if let Some(flicker::script::Value::Bool(b)) =
-            results.get("input_controller_invert_stick_pitch")
-        {
-            self.settings.input.invert_stick_pitch = *b;
-        }
-        if let Some(flicker::script::Value::Bool(b)) =
-            results.get("input_controller_invert_stick_yaw")
-        {
-            self.settings.input.invert_stick_yaw = *b;
-        }
-        if let Some(v) = results.number("input_controller_deadzone_shape") {
-            self.settings.input.deadzone_shape = v as usize;
-        }
-
-        // ── Start rebind ──
-        if results.is_on("settings_rebind_active") {
-            if let Some(action_str) = results.text("settings_rebind_action") {
-                let for_gamepad = results.is_on("settings_rebind_gamepad");
-                if let Some(action) = parse_action(action_str) {
-                    self.rebind.start(action, for_gamepad);
-                }
+        // ── Start rebind (a keycap button fires `rebind_<ActionId>`) ──
+        for (id, action) in KEYBOARD_ACTIONS {
+            if results.is_on(&format!("rebind_{id}")) {
+                self.rebind.start(*action, false);
+                break;
             }
         }
 
@@ -1030,23 +1322,17 @@ impl Scene for UnifiedSettingsScene {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        let Some(script) = self.script.as_ref() else {
-            return;
-        };
-
-        let size = renderer.size();
-        let _ = script.set_model(&self.model(size.x, size.y));
-
-        match script.draw(size.x, size.y) {
-            Ok(commands) => render_hud(renderer, &commands, self.textures[0], &self.textures),
-            Err(e) => tracing::error!("settings draw failed: {e}"),
+        // Blit the commands stashed by `update`'s walker pass (`textures[0]` = white).
+        if let Some(&white) = self.textures.first() {
+            render_hud(renderer, &self.commands, white, &self.textures);
         }
     }
 }
 
 /// The keyboard actions the settings screen lists, in display order — the id
-/// strings match `ui_elements.json`'s `settings.input.keyboard` groups (and
-/// [`parse_action`]). Used to publish each action's current binding to the script.
+/// strings match `ui_elements.json`'s `settings.input.keyboard` groups. Used both
+/// to publish each action's current binding (`bind_<id>`) and to dispatch a
+/// `rebind_<id>` action fired by its keycap button back to the `Action`.
 const KEYBOARD_ACTIONS: &[(&str, Action)] = &[
     ("MoveForward", Action::MoveForward),
     ("MoveBackward", Action::MoveBackward),
@@ -1068,36 +1354,6 @@ const KEYBOARD_ACTIONS: &[(&str, Action)] = &[
     ("Cancel", Action::Cancel),
     ("Quit", Action::Quit),
 ];
-
-/// Parse an action string back into the `Action` enum.
-fn parse_action(s: &str) -> Option<Action> {
-    match s {
-        "MoveForward" => Some(Action::MoveForward),
-        "MoveBackward" => Some(Action::MoveBackward),
-        "StrafeLeft" => Some(Action::StrafeLeft),
-        "StrafeRight" => Some(Action::StrafeRight),
-        "MoveUp" => Some(Action::MoveUp),
-        "MoveDown" => Some(Action::MoveDown),
-        "Jump" => Some(Action::Jump),
-        "Sprint" => Some(Action::Sprint),
-        "Crouch" => Some(Action::Crouch),
-        "Interact" => Some(Action::Interact),
-        "Reload" => Some(Action::Reload),
-        "PrimaryAction" => Some(Action::PrimaryAction),
-        "SecondaryAction" => Some(Action::SecondaryAction),
-        "Confirm" => Some(Action::Confirm),
-        "Cancel" => Some(Action::Cancel),
-        "Menu" => Some(Action::Menu),
-        "Inventory" => Some(Action::Inventory),
-        "Map" => Some(Action::Map),
-        "Quit" => Some(Action::Quit),
-        "LookUp" => Some(Action::LookUp),
-        "LookDown" => Some(Action::LookDown),
-        "LookLeft" => Some(Action::LookLeft),
-        "LookRight" => Some(Action::LookRight),
-        _ => None,
-    }
-}
 
 /// Main menu: a thin shell over the shared [`MenuView`] (`screen = "menu"`). The
 /// walker owns layout/hit-testing; this scene builds the button list from the scene
@@ -1122,15 +1378,18 @@ impl MenuScene {
     }
 
     /// The popup buttons. Default menu: one launch button per scene + SETTINGS/QUIT.
-    /// Launcher (`scene_select`): the scenes move to the right panel, so the popup is
-    /// just the SETTINGS/QUIT chrome.
+    /// Launcher (`scene_select`): scenes with `SceneInfo` move to the right panel, but
+    /// an info-less scene (e.g. Click Trainer) stays a popup button above SETTINGS/QUIT.
     fn items(&self) -> Vec<MenuItem> {
-        if scene_select() {
-            return menu_chrome_items();
-        }
+        // In a launcher, scenes that carry panel metadata (`SceneInfo`) render as
+        // right-hand cards; scenes WITHOUT it stay plain launch buttons in the popup
+        // (the `SceneEntry::info` contract). The default (non-launcher) menu makes
+        // every scene a button. Settings/Quit chrome always trails.
+        let launcher = scene_select();
         let mut items: Vec<MenuItem> = self
             .scenes
             .iter()
+            .filter(|e| !launcher || e.info.is_none())
             .map(|e| MenuItem::new(e.id.clone(), e.label.clone(), e.variant.as_str()))
             .collect();
         items.extend(menu_chrome_items());
@@ -1290,7 +1549,7 @@ mod script_smoke {
     #[test]
     fn ui_component_library_composes() {
         // A demo screen: `require` the layout engine + the button component (each
-        // its own file under content/scripts/ui/), lay two buttons out as a row,
+        // its own file under content/sensorium/scripts/ui/), lay two buttons out as a row,
         // and draw them. Proves the real component files compose end-to-end and
         // the layout engine resolves grow-sizing to pixels.
         const DEMO: &str = r#"
@@ -1384,12 +1643,16 @@ mod script_smoke {
                 .ui_tree()
                 .expect("tree parses")
                 .expect("menu.lua exposes tree()");
+            // Pause/confirm now return `template` nodes — expand them exactly as MenuView does.
+            let tree = expand(tree, &builtin_templates());
             let model = ValueMap::new().with("subtitle", "Reverting in 9s");
             let snap = UiInput {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
                 down: false,
                 screen: Vec2::new(1920.0, 1080.0),
+                typed: String::new(),
+                backspace: false,
             };
             let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
             assert!(
@@ -1459,6 +1722,8 @@ mod script_smoke {
             clicked: false,
             down: false,
             screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
         };
         let frame = run_ui(&tree, &ValueMap::new(), &styles, &snap, &mut UiState::new());
         for sc in &scenes {
@@ -1507,61 +1772,119 @@ mod script_smoke {
     }
 
     #[test]
-    fn settings_script_runs_all_sections() {
+    fn settings_tree_runs_every_section() {
+        // The declarative `settings.lua` builds a component tree; the walker draws it.
+        // This is the walker-drive analogue of the old immediate-mode smoke test: it
+        // parses settings.lua, expands its `window` template, and runs `run_ui` for
+        // each section, asserting the section's marker content renders (a Lua typo or a
+        // bad template name would fall out here) — the same shape as `menu_template_tests`.
         use flicker::render::Vec2;
         use flicker::script::HudCommand;
 
+        let styles = load_styles_str(SHELL_UI_JSON);
         let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
-        host.set_texture_ids(&[
-            ("white", 0),
-            ("panel", 1),
-            ("settings_panel", 2),
-            ("button", 3),
-            ("muse", 4),
-        ])
-        .expect("register textures");
+        host.set_texture_ids(&[("white", 0), ("panel", 1), ("settings_panel", 2)])
+            .expect("register textures");
         expose_ui_elements(&host);
-        load_widgets(&host); // the workbench uses Widgets.* for hit-testing
+        let tree = host
+            .ui_tree()
+            .expect("settings.lua tree() builds")
+            .expect("settings.lua exposes tree()");
+        // Expand the `window` template exactly as `UnifiedSettingsScene::new` does.
+        let tree = expand(tree, &builtin_templates());
+        fn has_unresolved_template(n: &UiNode) -> bool {
+            n.template.is_some() || n.children.iter().any(has_unresolved_template)
+        }
+        assert!(!has_unresolved_template(&tree), "the window template fully expands");
 
-        let (sw, sh) = (1920.0_f32, 1080.0_f32);
-        let model = || {
-            ValueMap::new()
-                .with("scroll", 0.0)
-                .with("video_display_mode", 0.0)
-                .with("video_resolution", 2.0)
-                .with("video_quality", 2.0)
-                .with("video_vsync", true)
-                .with("video_fps_limit", 1.0)
-                .with("input_mouse_sensitivity", 0.005)
-                .with("input_mouse_invert_pitch", false)
-                .with("bind_MoveForward", "W")
+        // The per-frame model the scene publishes for `(section, sub-tab)` — gates +
+        // header text + the (stringified-index) control binds.
+        let model = |section: &str, subtab: &str| {
+            let mut m = ValueMap::new();
+            for id in ["video", "audio", "input"] {
+                m.set(format!("sec_{id}"), section == id);
+                m.set(format!("nav_{id}_style"), "modal.buttons.variants.secondary");
+            }
+            for id in ["keyboard", "mouse", "controller"] {
+                m.set(format!("sub_{id}"), subtab == id);
+            }
+            let title = match section {
+                "audio" => "Audio",
+                "input" => "Input",
+                _ => "Video",
+            };
+            m.set("kicker", "SECTION");
+            m.set("sec_title", title);
+            m.set("kicker_color_path", "theme.tokens.sig_blue");
+            m.set("input_subtab", subtab);
+            m.set("ctrl_profile", "default");
+            m.set("scroll_off", 0.0);
+            m.set("wheel", 0.0);
+            m.set("off", false);
+            m.set("rebinding", false);
+            m.set("applied", false);
+            m.set("video_display_mode", "0");
+            m.set("video_resolution", "2");
+            m.set("video_quality", "2");
+            m.set("video_vsync", true);
+            m.set("video_fps_limit", "1");
+            m.set("look_sens_pct", 50.0);
+            m.set("input_mouse_invert_pitch", false);
+            m.set("bind_MoveForward", "W");
+            m
         };
-        let click = |x: f32, y: f32| {
-            let mut i = InputState::new();
-            i.mouse_position = Vec2::new(x, y);
-            i.mouse_left_pressed = true;
-            i
+        let snap = UiInput {
+            mouse: Vec2::new(-1.0, -1.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
         };
-        let has_text = |cmds: &[HudCommand], s: &str| {
-            cmds.iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+        let has = |cmds: &[HudCommand], s: &str| {
+            cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
         };
-        // Run a frame's update+draw and assert a marker string rendered.
-        let frame = |input: &InputState, marker: &str| {
-            host.set_model(&model()).expect("model");
-            host.update(input, sw, sh).expect("settings update");
-            let cmds = host.draw(sw, sh).expect("settings draw");
-            assert!(
-                has_text(&cmds, marker),
-                "settings screen did not render '{marker}'"
-            );
+        let run = |section: &str, subtab: &str| {
+            run_ui(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new()).commands
         };
 
-        // Nav rail + sub-tab pixel positions for a 1920×1080 window (see layout()).
-        frame(&InputState::new(), "Video"); // default section
-        frame(&click(488.0, 335.0), "NOT YET IMPLEMENTED"); // Audio nav → stub
-        frame(&click(488.0, 382.0), "MOVEMENT"); // Input nav → keyboard bindings
-        frame(&click(1459.0, 274.0), "No controller detected"); // Controller pill
-        frame(&click(1351.0, 274.0), "Look Sensitivity"); // Mouse pill
+        let video = run("video", "keyboard");
+        // The NEW window-template chrome: a corner rune glyph proves it expanded.
+        assert!(has(&video, "ᛞ"), "window rune corners render");
+        assert!(has(&video, "Video") && has(&video, "Display Mode"), "video section rows");
+        assert!(has(&run("audio", "keyboard"), "NOT YET IMPLEMENTED"), "audio stub");
+        assert!(has(&run("input", "keyboard"), "MOVEMENT"), "input keyboard groups");
+        assert!(has(&run("input", "mouse"), "Look Sensitivity"), "input mouse rows");
+        assert!(
+            has(&run("input", "controller"), "No controller detected"),
+            "input controller notes"
+        );
+    }
+
+    #[test]
+    fn launcher_cards_vs_buttons_by_scene_info() {
+        // In a launcher, a scene WITH `SceneInfo` renders as a right-hand card; one
+        // WITHOUT it stays a plain launch button in the popup, above the SETTINGS/QUIT
+        // chrome. Click Trainer is that info-less minigame button.
+        fn dummy() -> Box<dyn Scene> {
+            unreachable!("items()/scene_rows() read metadata only — never call the factory")
+        }
+        set_scenes(vec![
+            SceneEntry::new("solarbirth", "Solar Birth", "primary", dummy)
+                .with_info(SceneInfo::new("Solar Birth", "Cinematic", "Celestial", "d", "m")),
+            SceneEntry::new("clicktrainer", "CLICK TRAINER", "primary", dummy),
+        ]);
+        SCENE_SELECT.with(|s| s.set(true));
+        let menu = MenuScene::new();
+
+        // Popup buttons: the info-less scene, then the standard chrome — in that order.
+        let items = menu.items();
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["clicktrainer", "settings", "quit"]);
+
+        // Scene-selection panel: only the info-bearing scene becomes a card.
+        let panel_rows = menu.scene_rows();
+        let rows: Vec<&str> = panel_rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(rows, ["solarbirth"]);
     }
 }

@@ -1,10 +1,10 @@
 {
   "format": "flicker.pack",
   "version": 1,
-  "_note": "Locomotion state graph for PrismHumanBaseA, driving the retargeted Motifect clip library (Alpha/content/retarget/clips — In-Place bare stems, so it plays on a treadmill). tick_rate_hz is 30 to match the Motifect bake; the state machine otherwise advances these 30 fps clips at its 60 Hz default = double speed. Directional walk/run/crouch are discrete strafe/back states gated by move_left/right/back/forward — a stand-in for a 2D locomotion blend space, mirroring Katanami.pack.json. Combat (Attack/Dame/Death) + TAE footstep/hitbox events are deferred: those clips live in the Motifect combat pack, not yet retargeted.",
+  "_note": "Locomotion state graph for PrismHumanBaseA, driving the retargeted Motifect clip library (Alpha/content/retarget/clips — In-Place bare stems, so it plays on a treadmill). tick_rate_hz is 60 — the golden-spec time canon (memory 302BBB85): the Motifect clips are now baked at 60 Hz (source 30 fps upsampled x2 by tools/retarget_bvh.py, source frames kept verbatim on the even ticks), so they play at correct speed under the state machine's 60 Hz clock. Directional walk/run/crouch are discrete strafe/back states gated by move_left/right/back/forward — a stand-in for a 2D locomotion blend space, mirroring Katanami.pack.json. Combat (Attack/Dame/Death) + TAE footstep/hitbox events are deferred: those clips live in the Motifect combat pack, not yet retargeted.",
   "state_machine": {
     "initial": "Idle",
-    "tick_rate_hz": 30,
+    "tick_rate_hz": 60,
     "default_blend_ticks": 6,
 
     "states": [

@@ -32,6 +32,7 @@ mod shell;
 mod theme;
 
 pub use shell::{
-    run, take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo, ShellConfig,
+    input_controls, run, take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo,
+    ShellConfig,
 };
 pub use theme::Theme;

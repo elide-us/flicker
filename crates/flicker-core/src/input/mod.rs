@@ -182,8 +182,8 @@ pub enum GamepadButton {
     // ── Face buttons (Xbox layout names) ──
     South,   // A / Cross
     East,    // B / Circle
-    North,   // X / Square
-    West,    // Y / Triangle
+    North,   // Y / Triangle
+    West,    // X / Square
 
     // ── Shoulder / trigger ──
     LeftBumper,
@@ -218,8 +218,8 @@ impl fmt::Display for GamepadButton {
         match self {
             Self::South => write!(f, "A / Cross"),
             Self::East => write!(f, "B / Circle"),
-            Self::North => write!(f, "X / Square"),
-            Self::West => write!(f, "Y / Triangle"),
+            Self::North => write!(f, "Y / Triangle"),
+            Self::West => write!(f, "X / Square"),
             Self::LeftBumper => write!(f, "LB"),
             Self::RightBumper => write!(f, "RB"),
             Self::LeftTrigger => write!(f, "LT"),
@@ -467,6 +467,14 @@ pub struct InputState {
 
     // ── Keyboard ──
     keys_held: HashSet<Key>,
+    /// OS-committed text for this frame (post-IME / post-layout, from winit
+    /// `KeyEvent.text`), for a focused text field to append. Empty except on
+    /// frames with text entry. Driver-set via [`push_typed`](Self::push_typed);
+    /// reset after each `App::update`, like [`mouse_left_pressed`].
+    typed_text: String,
+    /// `true` only on the frame Backspace transitions up→down. Edge (no
+    /// auto-repeat yet). Driver-set; reset after each `App::update`.
+    backspace_edge: bool,
 
     // ── Gamepad ──
     gamepads: HashMap<usize, GamepadState>,
@@ -484,6 +492,8 @@ impl Default for InputState {
             mouse_left_pressed: false,
             mouse_wheel_delta: 0.0,
             keys_held: HashSet::new(),
+            typed_text: String::new(),
+            backspace_edge: false,
             gamepads: HashMap::new(),
         }
     }
@@ -499,6 +509,17 @@ impl InputState {
     /// Is this key currently held down?
     pub fn key_down(&self, key: Key) -> bool {
         self.keys_held.contains(&key)
+    }
+
+    /// OS-committed text entered this frame (post-IME), for a focused text
+    /// field to append. Empty on frames with no text entry.
+    pub fn typed(&self) -> &str {
+        &self.typed_text
+    }
+
+    /// Did Backspace transition up→down this frame? An edge, reset each frame.
+    pub fn backspace(&self) -> bool {
+        self.backspace_edge
     }
 
     /// Is any key bound to `action` currently held?
@@ -617,6 +638,24 @@ impl InputState {
         }
     }
 
+    /// Append OS-committed text for this frame (driver hook; from winit
+    /// `KeyEvent.text`). Callers should strip control characters first.
+    pub fn push_typed(&mut self, text: &str) {
+        self.typed_text.push_str(text);
+    }
+
+    /// Flag a Backspace edge for this frame (driver hook).
+    pub fn flag_backspace(&mut self) {
+        self.backspace_edge = true;
+    }
+
+    /// Clear this frame's text-entry edges. The driver calls this after
+    /// `App::update`, alongside the mouse-edge resets.
+    pub fn clear_frame_text(&mut self) {
+        self.typed_text.clear();
+        self.backspace_edge = false;
+    }
+
     /// Update a mouse button's held state.
     pub fn set_mouse_button(&mut self, button: MouseButton, down: bool) {
         match button {
@@ -683,6 +722,17 @@ mod tests {
         assert!(gp.button_down(GamepadButton::South));
         assert!(!gp.button_down(GamepadButton::East));
         assert!((gp.axis_value(GamepadAxis::LeftStickX) - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn face_button_labels_match_physical_position() {
+        // North is the TOP face button (Y / Triangle), West is the LEFT (X / Square) —
+        // gilrs' convention, preserved by the straight ingestion in flicker-app::runner.
+        // A prior bug had these two labels swapped in the settings UI.
+        assert_eq!(GamepadButton::North.to_string(), "Y / Triangle");
+        assert_eq!(GamepadButton::West.to_string(), "X / Square");
+        assert_eq!(GamepadButton::South.to_string(), "A / Cross");
+        assert_eq!(GamepadButton::East.to_string(), "B / Circle");
     }
 
     #[test]

@@ -58,12 +58,14 @@ impl Vertex {
 /// One panel awaiting draw: its six vertices plus the layer they sort on.
 struct Panel {
     layer: f32,
+    clip: Option<[f32; 4]>,
     verts: [Vertex; 6],
 }
 
 /// A contiguous block of one layer's vertices within the uploaded buffer.
 struct Band {
     layer: f32,
+    clip: Option<[f32; 4]>,
     vertex_start: u32,
     vertex_count: u32,
 }
@@ -73,6 +75,8 @@ pub struct UiPipeline {
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_buffer_capacity: u64,
+    /// Framebuffer size cached from the latest `push` — the scissor's full-frame reset.
+    screen: Vec2,
     /// Submitted panels, in submission order, tagged with their layer.
     panels: Vec<Panel>,
     /// Scratch built in `prepare`: `panels` flattened into vertices, ordered by
@@ -144,6 +148,7 @@ impl UiPipeline {
             pipeline,
             vertex_buffer,
             vertex_buffer_capacity: initial_capacity,
+            screen: Vec2::ZERO,
             panels: Vec::new(),
             upload: Vec::new(),
             bands: Vec::new(),
@@ -175,7 +180,9 @@ impl UiPipeline {
         border_color: [f32; 4],
         feather: f32,
         layer: f32,
+        clip: Option<[f32; 4]>,
     ) {
+        self.screen = screen;
         let to_ndc =
             |p: Vec2| -> [f32; 2] { [(p.x / screen.x) * 2.0 - 1.0, 1.0 - (p.y / screen.y) * 2.0] };
         let extent = [size.x * 0.5, size.y * 0.5];
@@ -197,6 +204,7 @@ impl UiPipeline {
 
         self.panels.push(Panel {
             layer,
+            clip,
             verts: [
                 mk(to_ndc(tl), [0.0, 0.0]),
                 mk(to_ndc(bl), [0.0, size.y]),
@@ -234,13 +242,20 @@ impl UiPipeline {
         let mut start = 0u32;
         while idx < order.len() {
             let layer = self.panels[order[idx]].layer;
+            let clip = self.panels[order[idx]].clip;
             let mut count = 0u32;
-            while idx < order.len() && self.panels[order[idx]].layer == layer {
+            // Split a layer's run into sub-bands at each clip change, so a scroll
+            // region's panels draw under their own scissor while the rest stay full.
+            while idx < order.len()
+                && self.panels[order[idx]].layer == layer
+                && self.panels[order[idx]].clip == clip
+            {
                 count += 6;
                 idx += 1;
             }
             self.bands.push(Band {
                 layer,
+                clip,
                 vertex_start: start,
                 vertex_count: count,
             });
@@ -261,19 +276,44 @@ impl UiPipeline {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.upload));
     }
 
-    /// Draw only the panels submitted at `layer` (no-op if none).
+    /// Draw the panels submitted at `layer` (no-op if none). A layer may hold
+    /// several bands when a scroll region set a clip mid-layer; each band draws
+    /// under its own scissor (full frame when unclipped), so a clip never leaks
+    /// onto the next.
     pub fn render_layer<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, layer: f32) {
-        let Some(band) = self.bands.iter().find(|b| b.layer == layer) else {
-            return;
-        };
-        pass.set_pipeline(&self.pipeline);
         let bytes = (self.upload.len() * std::mem::size_of::<Vertex>()) as u64;
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
-        pass.draw(
-            band.vertex_start..band.vertex_start + band.vertex_count,
-            0..1,
-        );
+        let mut bound = false;
+        for band in self.bands.iter().filter(|b| b.layer == layer) {
+            if !bound {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
+                bound = true;
+            }
+            set_scissor(pass, self.screen, band.clip);
+            pass.draw(
+                band.vertex_start..band.vertex_start + band.vertex_count,
+                0..1,
+            );
+        }
     }
+}
+
+/// Apply a 2D scissor: `clip` (px x,y,w,h) clamped to the framebuffer, or the full
+/// frame when `None`. Every clipped 2D pipeline sets this per band so a scroll
+/// region's clip masks only its own draws and resets for everything after.
+pub(crate) fn set_scissor(pass: &mut wgpu::RenderPass, screen: Vec2, clip: Option<[f32; 4]>) {
+    let (sw, sh) = (screen.x.max(0.0), screen.y.max(0.0));
+    let (x, y, w, h) = match clip {
+        Some([cx, cy, cw, ch]) => {
+            let x0 = cx.clamp(0.0, sw);
+            let y0 = cy.clamp(0.0, sh);
+            let x1 = (cx + cw).clamp(0.0, sw);
+            let y1 = (cy + ch).clamp(0.0, sh);
+            (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+        }
+        None => (0.0, 0.0, sw, sh),
+    };
+    pass.set_scissor_rect(x as u32, y as u32, w as u32, h as u32);
 }
 
 #[cfg(test)]
@@ -323,6 +363,7 @@ mod tests {
             [0.30, 0.40, 0.60, 1.0], // border colour
             0.0,                     // feather
             0.0,                     // layer
+            None,                    // clip
         );
         pipeline.prepare(&device, &queue);
         device.poll(wgpu::Maintain::Wait);

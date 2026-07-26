@@ -1,0 +1,20 @@
+[package]
+name = "flicker-content"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# flicker-content — the in-app content pipeline (golden-spec WS-F, content-pipeline node A3A3259C).
+# Point at a folder of raw sources → scan → classify → (FBX parse → canonical rig → bake) → the ONE
+# flicker.rig, with NO external tools (Aaron 2026-07-21: in-app Rust FBX, not Blender/Python).
+# This first slice is the INGEST stage — scan + classify + pick the riggable candidate(s), with the
+# ">1 → let the user choose" guard. Pure std; the FBX parser + rigging + bake land in later slices.
+# POC location (crates/) per the cluster migration policy; graduates once hardened.
+[dependencies]
+ufbx = "0.11.2"
+anyhow.workspace = true
+glam.workspace = true
+serde_json.workspace = true
+# The canonical flicker.rig format types (RigFile/Skeleton/Mesh/…) live here; the bake writes them
+# via their (now additive) Serialize derive — one schema, no parallel restatement.
+flicker-skeletal.workspace = true

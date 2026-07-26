@@ -1,0 +1,15 @@
+[package]
+name = "flicker-orrery"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The fixed Prism planet-layout model — an *orrery* (the worlds + their orbits).
+# GPU-free and shared: the solar-birth cinematic and the from-Home heliocentric sky
+# both read the SAME roster from here (single source of truth — never copied).
+[lib]
+name = "flicker_orrery"
+path = "src/lib.rs"
+
+[dependencies]
+glam.workspace = true

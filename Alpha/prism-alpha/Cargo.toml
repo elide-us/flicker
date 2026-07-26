@@ -5,8 +5,8 @@ edition.workspace = true
 publish = false
 
 # prism-alpha — the unified Prism client shell (the single harness). One binary
-# that hosts every Prism scene (pack editor / click trainer / paperdoll rigging /
-# solar-birth cinematic / voxel-cluster terrain / planet formation) behind the
+# that hosts every Prism scene (Loomforge / Kilnworks rigging benches / click
+# trainer / solar-birth cinematic / voxel-cluster terrain) behind the
 # shared front-end (splash → menu → scene → pause). The individual `flicker-*` app
 # crates remain thin STANDALONE entry points to the SAME scenes.
 #
@@ -23,9 +23,11 @@ flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
 flicker-clicktrainer = { path = "../../crates/flicker-clicktrainer" }
+flicker-controllertester = { path = "../../crates/flicker-controllertester" }
 flicker-solarbirth = { path = "../../crates/flicker-solarbirth" }
-flicker-paperdoll = { path = "../../crates/flicker-paperdoll" }
+flicker-loomforge = { path = "../../crates/flicker-loomforge" }
 flicker-pocclusters = { path = "../../crates/flicker-pocclusters" }
+flicker-assetpipeline = { path = "../../crates/flicker-assetpipeline" }
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

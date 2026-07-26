@@ -85,6 +85,10 @@ pub struct Camera {
     pub fov_y_radians: f32,
     pub near: f32,
     pub far: f32,
+    /// `None` = perspective (uses `fov_y_radians`). `Some(h)` = ORTHOGRAPHIC with vertical view
+    /// `height` = `h` world units (the horizontal extent follows the aspect ratio) — the editor's
+    /// front/side/top panels. All existing constructors default this to `None`.
+    pub ortho_height: Option<f32>,
 }
 
 impl Camera {
@@ -93,9 +97,17 @@ impl Camera {
         Mat4::look_at_rh(self.position, self.target, self.up)
     }
 
-    /// Camera-to-clip projection matrix. `aspect` is `width / height`.
+    /// Camera-to-clip projection matrix. `aspect` is `width / height`. Orthographic when
+    /// `ortho_height` is set (a box `height` tall, `height × aspect` wide), else perspective.
     pub fn projection(&self, aspect: f32) -> Mat4 {
-        Mat4::perspective_rh(self.fov_y_radians, aspect, self.near, self.far)
+        match self.ortho_height {
+            Some(height) => {
+                let half_h = height * 0.5;
+                let half_w = half_h * aspect;
+                Mat4::orthographic_rh(-half_w, half_w, -half_h, half_h, self.near, self.far)
+            }
+            None => Mat4::perspective_rh(self.fov_y_radians, aspect, self.near, self.far),
+        }
     }
 
     /// Combined `projection × view`. Multiplied with a model matrix
@@ -193,6 +205,13 @@ impl Camera {
             ..Self::default()
         }
     }
+
+    /// Turn this camera ORTHOGRAPHIC with the given vertical view `height` (world units) — for the
+    /// editor's front/side/top panels. Keeps position/target/up (the view direction) unchanged.
+    pub fn with_ortho_height(mut self, height: f32) -> Self {
+        self.ortho_height = Some(height);
+        self
+    }
 }
 
 impl Default for Camera {
@@ -204,6 +223,7 @@ impl Default for Camera {
             fov_y_radians: 60.0_f32.to_radians(),
             near: 0.1,
             far: 10000.0,
+            ortho_height: None,
         }
     }
 }

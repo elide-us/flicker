@@ -99,7 +99,14 @@ pub struct Renderer {
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
 
-    textures: Vec<LoadedTexture>,
+    /// Uploaded textures, indexed by `TextureHandle`. A `None` slot is a freed
+    /// entry available for reuse (see `free_texture_slots`): storage is a slot
+    /// pool, not append-only, so a freed render-target colour returns its slot
+    /// and its GPU texture (dropped here; wgpu frees it once the GPU is done
+    /// reading). Mirrors the `meshes` pool below.
+    textures: Vec<Option<LoadedTexture>>,
+    /// Indices into `textures` that are `None` and ready to reuse.
+    free_texture_slots: Vec<u32>,
     /// Uploaded meshes, indexed by `MeshHandle`. A `None` slot is a freed
     /// entry available for reuse (see `free_mesh_slots`): storage is a slot
     /// pool, not append-only, so an evicted LOD mesh returns its slot and
@@ -134,6 +141,10 @@ pub struct Renderer {
     /// raises it per scene so overlays sort above the scene beneath. See
     /// [`Renderer::set_layer`].
     current_layer: f32,
+    /// Optional scissor rect (px: x, y, w, h) applied to subsequent 2D draws
+    /// (`draw_ui_panel`/`draw_sprite`/`draw_text`) until changed — the clip a
+    /// scroll region sets so its content is masked to its rect. `None` = full frame.
+    current_clip: Option<[f32; 4]>,
 
     /// Offscreen render targets, indexed by [`RenderTargetHandle`] (slot pool).
     render_targets: Vec<Option<RenderTarget>>,
@@ -141,6 +152,33 @@ pub struct Renderer {
     /// Whether the sky draws in the pass currently being encoded — set by `prepare_frame`,
     /// read by `encode_passes`, so the offscreen and swapchain paths share one encode path.
     sky_this_frame: bool,
+}
+
+/// Insert `value` into a slot-pool vec, reusing a freed index if one is available
+/// else appending, and return the slot index. The reuse discipline shared by the
+/// texture and render-target pools (and mirrored inline by the mesh pools), so
+/// storage stays bounded by the number of *live* entries rather than the number
+/// ever created. Pure — unit-tested in `slot_pool_tests`.
+fn pool_alloc<T>(slots: &mut Vec<Option<T>>, free: &mut Vec<u32>, value: T) -> u32 {
+    if let Some(slot) = free.pop() {
+        slots[slot as usize] = Some(value);
+        slot
+    } else {
+        let slot = slots.len() as u32;
+        slots.push(Some(value));
+        slot
+    }
+}
+
+/// Free a slot-pool entry, returning its index to `free` for reuse and handing back
+/// the removed value (so a caller can cascade — a render target frees its colour
+/// texture). An already-free or out-of-range index is ignored (returns `None`).
+fn pool_free<T>(slots: &mut [Option<T>], free: &mut Vec<u32>, id: u32) -> Option<T> {
+    let taken = slots.get_mut(id as usize).and_then(Option::take);
+    if taken.is_some() {
+        free.push(id);
+    }
+    taken
 }
 
 impl Renderer {
@@ -255,12 +293,14 @@ impl Renderer {
             depth_texture,
             depth_view,
             textures: Vec::new(),
+            free_texture_slots: Vec::new(),
             meshes: Vec::new(),
             free_mesh_slots: Vec::new(),
             camera: None,
             scene: SceneLighting::default(),
             draw_sky: false,
             current_layer: 0.0,
+            current_clip: None,
             render_targets: Vec::new(),
             free_target_slots: Vec::new(),
             sky_this_frame: false,
@@ -285,6 +325,25 @@ impl Renderer {
     /// exclusive); `false` when windowed.
     pub fn is_fullscreen(&self) -> bool {
         self.window.fullscreen().is_some()
+    }
+
+    /// The window's current outer position (top-left, physical px), or `None` if
+    /// the platform can't report it. Used to persist the windowed placement.
+    pub fn outer_position(&self) -> Option<(i32, i32)> {
+        self.window.outer_position().ok().map(|p| (p.x, p.y))
+    }
+
+    /// Move the window's top-left to `(x, y)` in physical px (windowed mode). The
+    /// caller clamps `(x, y)` to keep the window on-screen.
+    pub fn set_outer_position(&self, x: i32, y: i32) {
+        self.window
+            .set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
+    }
+
+    /// The window's current inner (content) size in physical px.
+    pub fn inner_size(&self) -> (u32, u32) {
+        let s = self.window.inner_size();
+        (s.width, s.height)
     }
 
     /// Switch to a windowed view at the given physical size. The actual resize
@@ -420,9 +479,13 @@ impl Renderer {
                 },
             ],
         }));
-        let id = self.textures.len() as u32;
-        self.textures.push(tex);
-        TextureHandle(id)
+        // Slot-pool insert (reuse a freed slot, else append) so a freed render-target
+        // colour recycles its slot instead of leaking — see `pool_alloc`.
+        TextureHandle(pool_alloc(
+            &mut self.textures,
+            &mut self.free_texture_slots,
+            tex,
+        ))
     }
 
     /// Upload a 3D mesh and return a handle. The mesh persists across
@@ -468,6 +531,17 @@ impl Renderer {
         }
     }
 
+    /// Free a texture slot, returning it to the reuse pool. Dropping the
+    /// [`LoadedTexture`] drops its GPU texture + bind groups; wgpu defers the
+    /// actual free until the device finishes reading, so this is safe the same
+    /// frame the texture was last drawn. An already-free or unknown handle is
+    /// ignored. Private: the only freeable textures today are render-target
+    /// colours (via [`Self::free_render_target`]); directly-uploaded textures
+    /// (atlases, sprite sheets) live for the app's lifetime.
+    fn free_texture(&mut self, handle: TextureHandle) {
+        pool_free(&mut self.textures, &mut self.free_texture_slots, handle.0);
+    }
+
     /// Reset all per-frame draw queues. Called by the runner at the start
     /// of every frame. Mesh **storage** (uploaded vertex/index buffers)
     /// is retained; only the per-frame mesh **draw queue** clears.
@@ -486,6 +560,7 @@ impl Renderer {
         self.volumetric_params = None;
         self.ground_fog_params = None;
         self.current_layer = 0.0;
+        self.current_clip = None;
     }
 
     /// Set the ambient 2D layer for subsequent `draw_sprite`/`draw_text`/
@@ -503,6 +578,19 @@ impl Renderer {
     /// The current ambient 2D layer (see [`Renderer::set_layer`]).
     pub fn layer(&self) -> f32 {
         self.current_layer
+    }
+
+    /// Clip subsequent 2D draws to `rect` (px: x, y, w, h) until [`Renderer::clear_clip`].
+    /// Every `draw_ui_panel`/`draw_sprite`/`draw_text` submitted while a clip is set is
+    /// masked to it (a scroll region's viewport); the clip is captured per-draw, so it
+    /// survives the per-layer painter's-order sort. Reset each `begin_frame`.
+    pub fn set_clip(&mut self, rect: [f32; 4]) {
+        self.current_clip = Some(rect);
+    }
+
+    /// Clear the 2D scissor clip — subsequent draws fill the whole frame again.
+    pub fn clear_clip(&mut self) {
+        self.current_clip = None;
     }
 
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
@@ -529,6 +617,7 @@ impl Renderer {
             size,
             color,
             self.current_layer,
+            self.current_clip,
         );
     }
 
@@ -567,6 +656,7 @@ impl Renderer {
             border_color,
             feather,
             self.current_layer,
+            self.current_clip,
         );
     }
 
@@ -581,11 +671,15 @@ impl Renderer {
     /// top-left baseline in pixels; `size` is the font size in pixels; `color`
     /// is RGBA in 0..1.
     pub fn draw_text(&mut self, text: &str, position: Vec2, size: f32, color: [f32; 4]) {
-        self.draw_text_role(text, position, size, color, crate::FontRole::Body);
+        self.draw_text_role(text, position, size, color, crate::FontRole::Body, false, false, -1.0);
     }
 
     /// Submit a string of text in the face selected by `role`
-    /// ([`FontRole`](crate::FontRole)).
+    /// ([`FontRole`](crate::FontRole)), styled by `italic`/`bold` within the
+    /// family (`bold` selects the heavier cut on roles that ship one). `tracking`
+    /// is the letter-spacing as an em fraction; a negative value uses the role's
+    /// default (so numeric cells pass `0.0` to keep fixed-width columns aligned).
+    #[allow(clippy::too_many_arguments)] // each param is a distinct text attribute
     pub fn draw_text_role(
         &mut self,
         text: &str,
@@ -593,6 +687,9 @@ impl Renderer {
         size: f32,
         color: [f32; 4],
         role: crate::FontRole,
+        italic: bool,
+        bold: bool,
+        tracking: f32,
     ) {
         self.text.push(
             text,
@@ -602,6 +699,10 @@ impl Renderer {
             color,
             self.current_layer,
             role,
+            italic,
+            bold,
+            tracking,
+            self.current_clip,
         );
     }
 
@@ -609,13 +710,23 @@ impl Renderer {
     /// rendered size (max line width, total height) in pixels. For laying out UI
     /// before drawing — shapes a throwaway buffer, no upload.
     pub fn measure_text(&mut self, text: &str, size: f32) -> Vec2 {
-        self.measure_text_role(text, size, crate::FontRole::Body)
+        self.measure_text_role(text, size, crate::FontRole::Body, false, false, -1.0)
     }
 
-    /// Measure `text` at font `size` in the face selected by `role`. Mirror of
-    /// [`Self::measure_text`] for non-body faces (titles/labels).
-    pub fn measure_text_role(&mut self, text: &str, size: f32, role: crate::FontRole) -> Vec2 {
-        let (w, h) = self.text.measure(text, size, role);
+    /// Measure `text` at font `size` in the face selected by `role` and styled by
+    /// `italic`/`bold`. Mirror of [`Self::measure_text`] for non-body faces
+    /// (titles/labels); the style must match the eventual draw so alignment (which
+    /// offsets by the measured width) stays correct.
+    pub fn measure_text_role(
+        &mut self,
+        text: &str,
+        size: f32,
+        role: crate::FontRole,
+        italic: bool,
+        bold: bool,
+        tracking: f32,
+    ) -> Vec2 {
+        let (w, h) = self.text.measure(text, size, role, italic, bold, tracking);
         Vec2::new(w, h)
     }
 
@@ -884,6 +995,19 @@ impl Renderer {
     /// into it with [`Self::render_to_texture`]. Uses the swapchain colour format + a private
     /// `Depth32Float`, so every 3D/2D pipeline renders into it unchanged.
     pub fn create_render_target(&mut self, width: u32, height: u32) -> RenderTargetHandle {
+        let target = self.make_render_target(width, height);
+        RenderTargetHandle(pool_alloc(
+            &mut self.render_targets,
+            &mut self.free_target_slots,
+            target,
+        ))
+    }
+
+    /// Build a fresh offscreen [`RenderTarget`] at `width × height`: a colour texture
+    /// in the swapchain format (registered as a sampleable [`TextureHandle`]) plus a
+    /// private `Depth32Float`. Shared by [`Self::create_render_target`] and
+    /// [`Self::resize_render_target`].
+    fn make_render_target(&mut self, width: u32, height: u32) -> RenderTarget {
         let w = width.max(1);
         let h = height.max(1);
         let color_tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -911,21 +1035,12 @@ impl Renderer {
         );
         let color = self.register_texture(tex);
         let (depth_texture, depth_view) = create_depth_view(&self.device, w, h);
-        let target = RenderTarget {
+        RenderTarget {
             color,
             depth_view,
             depth_texture,
             size: Vec2::new(w as f32, h as f32),
-        };
-        let id = if let Some(slot) = self.free_target_slots.pop() {
-            self.render_targets[slot as usize] = Some(target);
-            slot
-        } else {
-            let slot = self.render_targets.len() as u32;
-            self.render_targets.push(Some(target));
-            slot
-        };
-        RenderTargetHandle(id)
+        }
     }
 
     /// The sampleable colour [`TextureHandle`] of a render target — draw it as a sprite,
@@ -935,6 +1050,44 @@ impl Renderer {
             .get(target.0 as usize)
             .and_then(|t| t.as_ref())
             .map(|t| t.color)
+    }
+
+    /// Free an offscreen render target: return its slot to the pool **and** free its
+    /// colour texture slot — closing the append-only leak (before, only the target
+    /// handle was reclaimed; the colour texture lived forever). Mirrors
+    /// [`Self::free_mesh`]; safe to call the same frame the target was last sampled
+    /// (wgpu defers the GPU free). A handle already freed (or never created) is ignored.
+    /// Afterwards the handle and any [`TextureHandle`] from [`Self::target_texture`]
+    /// are stale — do not reuse them.
+    pub fn free_render_target(&mut self, target: RenderTargetHandle) {
+        if let Some(rt) = pool_free(&mut self.render_targets, &mut self.free_target_slots, target.0)
+        {
+            self.free_texture(rt.color);
+        }
+    }
+
+    /// Resize an existing target in place: the [`RenderTargetHandle`] stays valid, but
+    /// its colour texture is rebuilt (re-fetch via [`Self::target_texture`] after). A
+    /// no-op if the size is unchanged or the handle is unknown/freed. Frees the old
+    /// colour slot. Gives panels a way to track the window (the view targets were
+    /// created once at the initial size — paperdoll's resize gap).
+    pub fn resize_render_target(&mut self, target: RenderTargetHandle, width: u32, height: u32) {
+        let (w, h) = (width.max(1), height.max(1));
+        match self.render_targets.get(target.0 as usize) {
+            // Unchanged size → skip; rebuilding every frame would churn GPU textures.
+            Some(Some(rt)) if rt.size == Vec2::new(w as f32, h as f32) => return,
+            Some(Some(_)) => {}
+            _ => return, // unknown or freed handle
+        }
+        let old_color = self.render_targets[target.0 as usize]
+            .as_ref()
+            .expect("checked present above")
+            .color;
+        // Build the replacement BEFORE freeing the old colour, so the new colour never
+        // aliases the old slot.
+        let fresh = self.make_render_target(w, h);
+        self.render_targets[target.0 as usize] = Some(fresh);
+        self.free_texture(old_color);
     }
 
     /// Render a **self-contained sub-scene** into an offscreen `target`, clearing it to
@@ -975,7 +1128,10 @@ impl Renderer {
                 label: Some("flicker.render_target_encoder"),
             });
         {
-            let color_view = &self.textures[color.0 as usize].view;
+            let color_view = &self.textures[color.0 as usize]
+                .as_ref()
+                .expect("render target colour texture present")
+                .view;
             let depth_view = &self.render_targets[target.0 as usize]
                 .as_ref()
                 .expect("render target present")
@@ -1214,5 +1370,36 @@ fn scene_to_sky_uniform(s: &SceneLighting, inv_view_proj: Mat4, camera_pos: Vec3
         zenith: [s.sky_zenith.x, s.sky_zenith.y, s.sky_zenith.z, 0.0],
         horizon: [s.sky_horizon.x, s.sky_horizon.y, s.sky_horizon.z, 0.0],
         star_rotation: s.star_rotation.to_cols_array_2d(),
+    }
+}
+
+#[cfg(test)]
+mod slot_pool_tests {
+    use super::{pool_alloc, pool_free};
+
+    #[test]
+    fn reuses_freed_slots_before_growing() {
+        let mut slots: Vec<Option<&str>> = Vec::new();
+        let mut free: Vec<u32> = Vec::new();
+
+        let a = pool_alloc(&mut slots, &mut free, "a");
+        let b = pool_alloc(&mut slots, &mut free, "b");
+        assert_eq!((a, b), (0, 1));
+        assert_eq!(slots.len(), 2);
+
+        // Free the first slot — its value comes back, the index is queued for reuse.
+        assert_eq!(pool_free(&mut slots, &mut free, a), Some("a"));
+        assert!(slots[0].is_none());
+
+        // The next alloc REUSES slot 0 rather than growing — the leak fix.
+        let c = pool_alloc(&mut slots, &mut free, "c");
+        assert_eq!(c, 0);
+        assert_eq!(slots.len(), 2, "reuse must not grow the pool");
+        assert_eq!(slots[0], Some("c"));
+
+        // Double-free and out-of-range are ignored (return None, no spurious reuse).
+        assert_eq!(pool_free(&mut slots, &mut free, 0), Some("c"));
+        assert_eq!(pool_free(&mut slots, &mut free, 0), None);
+        assert_eq!(pool_free(&mut slots, &mut free, 99), None);
     }
 }

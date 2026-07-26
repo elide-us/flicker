@@ -14,7 +14,7 @@ use flicker::render::{Renderer, TextureHandle, Vec2};
 // ===== palette — the Prism design language =====
 // Cold carved stone lit by sapphire rune-light; aged bronze is the only
 // structural metal. Baked once into the panel/button chrome; mirrors the
-// `theme.tokens` in Alpha/content/resources/ui_elements.json (the Lua-side
+// `theme.tokens` in Alpha/content/sensorium/resources/ui_elements.json (the Lua-side
 // single source of the same palette).
 
 type Rgb = (u8, u8, u8);
@@ -60,7 +60,7 @@ const LOAD_BORDER: [f32; 4] = [0.169, 0.188, 0.235, 1.0];
 const LOAD_SHADOW: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
 /// The Muse — the main-menu character, embedded so every shell app inherits her.
-const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/assets/muse.png");
+const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/sensorium/assets/muse.png");
 
 // ===== texture sizes (drawn 1:1, so the baked borders never distort) =====
 
@@ -513,15 +513,27 @@ impl Theme {
     /// art, including the shared 1×1 white pixel (reused for scrim, backdrop,
     /// hover sheen, and outlines).
     pub fn build(renderer: &mut Renderer) -> Self {
-        // The three Prism faces (Alpha/content/fonts, instanced single weights)
-        // registered under their role family names so `FontRole` selects them;
-        // any glyph a face lacks falls back to a system font.
+        // The six Prism faces (Alpha/content/sensorium/fonts) registered under their role
+        // family names so `FontRole` + italic/bold select them: five instanced
+        // text weights + the renamed `Prism Rune` (Noto Sans Runic) for glyphs.
+        // Any glyph a face lacks falls back to a system font.
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/fonts/CormorantGaramond-SemiBold.ttf"
+            "../../../../content/sensorium/fonts/CormorantGaramond-SemiBold.ttf" // Prism Display 600
         ));
-        renderer.register_ui_font(include_bytes!("../../../../content/fonts/Cinzel-Medium.ttf"));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/fonts/EBGaramond-Regular.ttf"
+            "../../../../content/sensorium/fonts/CormorantGaramond-Bold.ttf" // Prism Display 700 (bold)
+        ));
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/sensorium/fonts/Cinzel-SemiBold.ttf" // Prism Label 600 (tracked caps)
+        ));
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/sensorium/fonts/EBGaramond-Regular.ttf" // Prism Body 400
+        ));
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/sensorium/fonts/EBGaramond-Italic.ttf" // Prism Body italic (flavor)
+        ));
+        renderer.register_ui_font(include_bytes!(
+            "../../../../content/sensorium/fonts/NotoSansRunic-Prism.ttf" // Prism Rune (corner glyphs)
         ));
 
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
@@ -589,7 +601,7 @@ impl Theme {
             LOAD_BORDER,
             0.0,
         );
-        centered_text(r, "LOADING", layout.panel, layout.title_y, 34.0, COL_TITLE);
+        centered_text(r, "LOADING", layout.panel, layout.title_y, 34.0, COL_TITLE, true);
 
         let p = layout.panel;
         let frame = FRAME as f32;
@@ -638,11 +650,12 @@ fn centered_text(
     y: f32,
     size: f32,
     color: [f32; 4],
+    bold: bool,
 ) {
     let role = flicker::render::FontRole::Display;
-    let w = r.measure_text_role(text, size, role).x;
+    let w = r.measure_text_role(text, size, role, false, bold, -1.0).x;
     let x = (container.x + (container.w - w) * 0.5).max(container.x);
-    r.draw_text_role(text, Vec2::new(x, y), size, color, role);
+    r.draw_text_role(text, Vec2::new(x, y), size, color, role, false, bold, -1.0);
 }
 
 #[cfg(test)]

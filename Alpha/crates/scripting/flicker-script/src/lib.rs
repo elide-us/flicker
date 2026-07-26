@@ -116,6 +116,8 @@ pub enum FontRole {
     /// Body / prose (the default).
     #[default]
     Body,
+    /// Runic decorations — Elder Futhark corner glyphs and the like.
+    Rune,
 }
 
 /// A draw command emitted by a HUD script for the engine to render.
@@ -151,6 +153,11 @@ pub enum HudCommand {
         layer: f32,
     },
     /// A line of text positioned at `(x, y)` per `align`, in the face `font`.
+    /// `italic`/`bold` style it within the family (Body italic "for flavor";
+    /// `bold` selects the heavier display cut). `tracking` is letter-spacing as an
+    /// em fraction; `< 0.0` means "use the role default" (a numeric/data cell
+    /// passes `0.0` to stay tight so fixed-width columns align). All plain data,
+    /// like `font`, mapped to concrete weights/styles/spacing by the render bridge.
     Text {
         x: f32,
         y: f32,
@@ -160,6 +167,9 @@ pub enum HudCommand {
         layer: f32,
         align: TextAlign,
         font: FontRole,
+        italic: bool,
+        bold: bool,
+        tracking: f32,
     },
     /// A **vector UI panel**: a rounded rectangle filled with a solid or 2-stop
     /// linear gradient (`color`→`color2` along `grad`: `0.0` solid, `1.0`
@@ -183,6 +193,12 @@ pub enum HudCommand {
         feather: f32,
         layer: f32,
     },
+    /// A **scissor clip** state command: `rect` (px x,y,w,h) masks every later 2D
+    /// draw to it until the next `Clip` (`None` restores the full frame). Emitted by
+    /// the walker's `scroll` region so its content is masked to its viewport; the
+    /// render bridge maps it to `Renderer::set_clip`/`clear_clip`. Carries no layer —
+    /// it toggles the clip captured by subsequent draws in submission order.
+    Clip { rect: Option<[f32; 4]> },
 }
 
 /// A parent-relative anchor for an absolutely-placed node — the corner/edge its
@@ -238,8 +254,14 @@ pub struct UiNode {
     pub height: Option<f32>,
     /// Gap between children along the main axis (container nodes).
     pub gap: f32,
-    /// Inset padding on all sides (container nodes).
+    /// Inset padding on all sides (container nodes). `pad_x`/`pad_y` override it
+    /// per-axis when set — a bar that wants a wide horizontal inset but must keep its
+    /// full height (a title bar, a footer) sets `pad_x` large and `pad_y` small.
     pub pad: f32,
+    /// Horizontal inset override (left+right); falls back to `pad` when `None`.
+    pub pad_x: Option<f32>,
+    /// Vertical inset override (top+bottom); falls back to `pad` when `None`.
+    pub pad_y: Option<f32>,
     /// Scalar prop overrides (label, style name, font role, range key, format, …).
     pub props: HashMap<String, Value>,
     /// Two-way data binding: the `Model` key this node reads its value from and
@@ -251,6 +273,13 @@ pub struct UiNode {
     pub visible_bind: Option<String>,
     /// `Model` key gating interactivity — the node draws dim / inert when false.
     pub enabled_bind: Option<String>,
+    /// Names a **template** builder (a Rust fn that composes pieces) instead of a
+    /// leaf `component`; expanded by `flicker-widgets::expand` before the tree is
+    /// cached. A node carries `component` OR `template`.
+    pub template: Option<String>,
+    /// Named child groups a template builder splices into place (`header` / `body`
+    /// / …). Empty for every non-template node.
+    pub slots: HashMap<String, Vec<UiNode>>,
 }
 
 /// A single value crossing the engine↔script boundary — the *only* value
@@ -572,6 +601,9 @@ impl ScriptHost {
                     layer: read_layer(&cmd)?,
                     align: read_align(&cmd)?,
                     font: read_font(&cmd)?,
+                    italic: cmd.get::<Option<bool>>("italic")?.unwrap_or(false),
+                    bold: cmd.get::<Option<bool>>("bold")?.unwrap_or(false),
+                    tracking: cmd.get::<Option<f32>>("tracking")?.unwrap_or(-1.0),
                 }),
                 "panel" => {
                     // `color` is stop 0; `color2` (r2..a2) defaults to it (solid);
@@ -668,6 +700,7 @@ fn read_font(cmd: &Table) -> mlua::Result<FontRole> {
     Ok(match cmd.get::<Option<String>>("font")?.as_deref() {
         Some("display") => FontRole::Display,
         Some("label") => FontRole::Label,
+        Some("rune") => FontRole::Rune,
         _ => FontRole::Body,
     })
 }
@@ -676,8 +709,9 @@ fn read_font(cmd: &Table) -> mlua::Result<FontRole> {
 /// table becomes a scalar entry in [`UiNode::props`]. Kept in one place so the
 /// props sweep and the structural reads cannot disagree about what is a prop.
 const UI_STRUCTURAL_KEYS: &[&str] = &[
-    "id", "component", "type", "children", "anchor", "offset", "size", "grow", "width", "height",
-    "gap", "pad", "bind", "action", "visible", "visible_bind", "enabled", "enabled_bind",
+    "id", "component", "type", "template", "slots", "children", "anchor", "offset", "size", "grow",
+    "width", "height", "gap", "pad", "pad_x", "pad_y", "bind", "action", "visible", "visible_bind",
+    "enabled", "enabled_bind",
 ];
 
 /// Map an anchor name to [`UiAnchor`]; unknown / absent → `None` (the node flows).
@@ -699,12 +733,19 @@ fn parse_anchor(name: Option<String>) -> Option<UiAnchor> {
 /// Parse one Lua node table (and, recursively, its `children`) into a [`UiNode`].
 /// Known keys are read structurally; every remaining string-keyed **scalar** goes
 /// into [`UiNode::props`] (tables — `children` / `offset` — are handled here and
-/// never leak into props). `component` (or its alias `type`) is required.
+/// never leak into props). A node carries `component` (alias `type`) OR a
+/// `template` name.
 fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
     let component = t
         .get::<Option<String>>("component")?
-        .or(t.get::<Option<String>>("type")?)
-        .ok_or_else(|| mlua::Error::RuntimeError("ui node missing `component`".to_string()))?;
+        .or(t.get::<Option<String>>("type")?);
+    let template = t.get::<Option<String>>("template")?;
+    if component.is_none() && template.is_none() {
+        return Err(mlua::Error::RuntimeError(
+            "ui node missing `component` or `template`".to_string(),
+        ));
+    }
+    let component = component.unwrap_or_default();
 
     let children = match t.get::<Option<Table>>("children")? {
         Some(list) => {
@@ -724,6 +765,19 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
         ],
         None => [0.0, 0.0],
     };
+
+    // Named child groups a template builder splices: `slots = { header = { ... } }`.
+    let mut slots = HashMap::new();
+    if let Some(map) = t.get::<Option<Table>>("slots")? {
+        for pair in map.pairs::<String, Table>() {
+            let (name, list) = pair?;
+            let mut nodes = Vec::new();
+            for item in list.sequence_values::<Table>() {
+                nodes.push(parse_ui_node(&item?)?);
+            }
+            slots.insert(name, nodes);
+        }
+    }
 
     // Everything not read structurally, if it is a scalar, is a prop.
     let mut props = HashMap::new();
@@ -758,6 +812,8 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
         height: t.get::<Option<f32>>("height")?,
         gap: t.get::<Option<f32>>("gap")?.unwrap_or(0.0),
         pad: t.get::<Option<f32>>("pad")?.unwrap_or(0.0),
+        pad_x: t.get::<Option<f32>>("pad_x")?,
+        pad_y: t.get::<Option<f32>>("pad_y")?,
         props,
         bind: t.get::<Option<String>>("bind")?,
         action: t.get::<Option<String>>("action")?,
@@ -767,6 +823,108 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
         enabled_bind: t
             .get::<Option<String>>("enabled_bind")?
             .or(t.get::<Option<String>>("enabled")?),
+        template,
+        slots,
+    })
+}
+
+/// Parse one **arrangement JSON** object (and, recursively, its `children` /
+/// `slots`) into a [`UiNode`] — the data-path counterpart to [`parse_ui_node`],
+/// reading the SAME [`UI_STRUCTURAL_KEYS`] so a scene authored as data and one
+/// authored in Lua cannot drift. Every remaining scalar becomes a prop; a node
+/// carries `component` (alias `type`) OR a `template` name.
+pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
+    use serde_json::Value as J;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "ui node must be a JSON object".to_string())?;
+
+    let component = obj
+        .get("component")
+        .or_else(|| obj.get("type"))
+        .and_then(J::as_str)
+        .map(str::to_string);
+    let template = obj.get("template").and_then(J::as_str).map(str::to_string);
+    if component.is_none() && template.is_none() {
+        return Err("ui node missing `component` or `template`".to_string());
+    }
+
+    let children = match obj.get("children") {
+        Some(J::Array(items)) => items
+            .iter()
+            .map(parse_ui_json)
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => Vec::new(),
+    };
+
+    let mut slots = HashMap::new();
+    if let Some(J::Object(map)) = obj.get("slots") {
+        for (name, val) in map {
+            if let J::Array(items) = val {
+                let nodes = items
+                    .iter()
+                    .map(parse_ui_json)
+                    .collect::<Result<Vec<_>, _>>()?;
+                slots.insert(name.clone(), nodes);
+            }
+        }
+    }
+
+    let offset = match obj.get("offset") {
+        Some(J::Array(a)) => [
+            a.first().and_then(J::as_f64).unwrap_or(0.0) as f32,
+            a.get(1).and_then(J::as_f64).unwrap_or(0.0) as f32,
+        ],
+        _ => [0.0, 0.0],
+    };
+
+    let mut props = HashMap::new();
+    for (key, val) in obj {
+        if UI_STRUCTURAL_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let value = match val {
+            J::Bool(b) => Value::Bool(*b),
+            J::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
+            J::String(s) => Value::Text(s.clone()),
+            _ => continue,
+        };
+        props.insert(key.clone(), value);
+    }
+
+    Ok(UiNode {
+        id: obj
+            .get("id")
+            .and_then(J::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        component: component.unwrap_or_default(),
+        children,
+        anchor: parse_anchor(obj.get("anchor").and_then(J::as_str).map(str::to_string)),
+        offset,
+        size: obj.get("size").and_then(J::as_f64).map(|n| n as f32),
+        grow: obj.get("grow").and_then(J::as_f64).map(|n| n as f32),
+        width: obj.get("width").and_then(J::as_f64).map(|n| n as f32),
+        height: obj.get("height").and_then(J::as_f64).map(|n| n as f32),
+        gap: obj.get("gap").and_then(J::as_f64).unwrap_or(0.0) as f32,
+        pad: obj.get("pad").and_then(J::as_f64).unwrap_or(0.0) as f32,
+        pad_x: obj.get("pad_x").and_then(J::as_f64).map(|n| n as f32),
+        pad_y: obj.get("pad_y").and_then(J::as_f64).map(|n| n as f32),
+        props,
+        bind: obj.get("bind").and_then(J::as_str).map(str::to_string),
+        action: obj.get("action").and_then(J::as_str).map(str::to_string),
+        visible_bind: obj
+            .get("visible_bind")
+            .or_else(|| obj.get("visible"))
+            .and_then(J::as_str)
+            .map(str::to_string),
+        enabled_bind: obj
+            .get("enabled_bind")
+            .or_else(|| obj.get("enabled"))
+            .and_then(J::as_str)
+            .map(str::to_string),
+        template,
+        slots,
     })
 }
 
@@ -901,6 +1059,9 @@ mod tests {
                 layer: 0.0,
                 align: TextAlign::Left,
                 font: FontRole::Body,
+                italic: false,
+                bold: false,
+                tracking: -1.0,
             }],
             "component drew text tagged by the required core"
         );
@@ -1002,6 +1163,9 @@ mod tests {
                     layer: 0.0,
                     align: TextAlign::Left,
                     font: FontRole::Body,
+                    italic: false,
+                    bold: false,
+                    tracking: -1.0,
                 },
             ]
         );
@@ -1048,6 +1212,9 @@ mod tests {
                     layer: 3.0,
                     align: TextAlign::Center,
                     font: FontRole::Body,
+                    italic: false,
+                    bold: false,
+                    tracking: -1.0,
                 },
             ]
         );

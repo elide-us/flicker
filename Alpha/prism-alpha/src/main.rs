@@ -14,6 +14,7 @@
 use anyhow::Result;
 
 use flicker_clicktrainer::ClickTrainer;
+use flicker_controllertester::ControllerTester;
 use flicker_shell::{SceneEntry, SceneInfo, ShellConfig};
 
 fn main() -> Result<()> {
@@ -38,25 +39,38 @@ fn main() -> Result<()> {
                 "Clay 0.1 · Cinematic · flight-path",
             ),
         ),
-        SceneEntry::new("clicktrainer", "Click Trainer", "primary", || {
+        // Click Trainer stays a plain launch button in the menu popup (above Settings),
+        // not a scene-selection card — a quick minigame, not one of the showcase scenes.
+        // No `SceneInfo` ⇒ the shell renders it as a popup button (see `SceneEntry::info`).
+        SceneEntry::new("clicktrainer", "CLICK TRAINER", "primary", || {
             Box::new(ClickTrainer::new())
+        }),
+        SceneEntry::new("controllertester", "Controller Tester", "primary", || {
+            Box::new(ControllerTester::new())
         })
         .with_info(SceneInfo::new(
-            "Click Trainer",
-            "Mini-Game",
-            "2D",
-            "Aim / click-training drill — sprite targets under a vector HUD.",
-            "Clay 0.1 · 2D · sprite+vector",
+            "Controller Tester",
+            "Diagnostic",
+            "Input",
+            "Live gamepad / keyboard / mouse readout — buttons, sticks and triggers light up as you press them.",
+            "Clay 0.1 · Tool · gilrs",
         )),
-        SceneEntry::new("paperdoll", "Paper Doll", "primary", flicker_paperdoll::scene).with_info(
-            SceneInfo::new(
-                "Paper Doll",
+        SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
+            .with_info(SceneInfo::new(
+                "Loomforge Bench",
                 "Rigging",
-                "Animation POC",
-                "Skeletal rig + clip playback and the fit / dress gadget.",
-                "Clay 0.1 · Tool · 66-bone",
-            ),
-        ),
+                "Animation",
+                "Author a state machine, packs, creatures, and TAE windows — and save the pack back.",
+                "Clay 0.1 · Editor · flicker.pack",
+            )),
+        SceneEntry::new("assetpipeline", "Kilnworks Bench", "primary", flicker_assetpipeline::scene)
+            .with_info(SceneInfo::new(
+                "Kilnworks Bench",
+                "Rigging",
+                "Content",
+                "Open a source folder and drive it through classify, rig conform, attach and bake.",
+                "Clay 0.1 · Editor · flicker.rig",
+            )),
         SceneEntry::new("pocclusters", "Cluster Editor", "primary", flicker_pocclusters::scene)
             .with_info(SceneInfo::new(
                 "Cluster Editor",

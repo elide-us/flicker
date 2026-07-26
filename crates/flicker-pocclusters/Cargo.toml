@@ -15,6 +15,8 @@ flicker = { path = "../flicker" }
 # The reusable front-end shell (splash / menu / settings / pause) this scene runs
 # inside; it also provides the pause overlay + theme.
 flicker-shell.workspace = true
+# The shared planet-layout model (roster + orbits) the from-Home sky draws.
+flicker-orrery.workspace = true
 flicker-voxel.workspace = true
 flicker-worker.workspace = true
 glam.workspace = true

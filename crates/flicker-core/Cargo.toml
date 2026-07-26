@@ -11,3 +11,6 @@ tracing.workspace = true
 thiserror.workspace = true
 flate2.workspace = true
 serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

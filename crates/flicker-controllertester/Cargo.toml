@@ -1,0 +1,18 @@
+[package]
+name = "flicker-controllertester"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# A diagnostic PACKAGE (library only) — the Controller Tester `Scene`, driven by the
+# unified `prism-alpha` launcher. Draws a live controller diagram (face buttons, d-pad,
+# bumpers, triggers and sticks light up / move as you press them) plus a keyboard + mouse
+# readout, using only engine services (the vector UI panel + text). No Lua HUD, so it
+# touches no `ui_elements.json`.
+[lib]
+name = "flicker_controllertester"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { path = "../flicker" }
+flicker-shell.workspace = true

@@ -29,7 +29,7 @@
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec2, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::mesh::MeshIndices;
@@ -48,6 +48,83 @@ pub struct TexturedVertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub tangent: [f32; 4],
+}
+
+/// Build a [`TexturedVertex`] list for a contiguous, **non-deduplicated** triangle range
+/// (each 3 sequential vertices form one triangle — the converter emits geometry that
+/// way). Computes a per-triangle tangent from the 3 positions + UVs (standard
+/// `dP/dUV` solve) and assigns it, orthonormalized against each corner's normal, to all
+/// three corners — no cross-vertex averaging needed. `w` carries the handedness sign so
+/// the shader can reconstruct the bitangent. Positions/normals come from `pos`/`nrm`
+/// (skinned or bind geometry); UVs from `uv`. All are indexed by absolute vertex index `j`.
+///
+/// Lives here, beside the vertex type it builds, because every textured-mesh caller needs
+/// the same tangent basis: the paperdoll's body/prop/garment uploads and the asset-pipeline
+/// editor's fit preview. An INDEXED mesh must be expanded to a flat triangle list first —
+/// the consecutive-triple assumption is what lets one tangent serve all three corners.
+pub fn build_textured_verts(
+    range: std::ops::Range<usize>,
+    pos: impl Fn(usize) -> [f32; 3],
+    nrm: impl Fn(usize) -> [f32; 3],
+    uv: impl Fn(usize) -> [f32; 2],
+) -> Vec<TexturedVertex> {
+    let count = range.len();
+    let mut out: Vec<TexturedVertex> = range
+        .map(|j| TexturedVertex {
+            position: pos(j),
+            normal: nrm(j),
+            uv: uv(j),
+            // Placeholder; overwritten per-triangle below.
+            tangent: [1.0, 0.0, 0.0, 1.0],
+        })
+        .collect();
+
+    // Each consecutive triple is one triangle (local indices 3k, 3k+1, 3k+2).
+    let tris = count / 3;
+    for tk in 0..tris {
+        let i0 = tk * 3;
+        let i1 = i0 + 1;
+        let i2 = i0 + 2;
+        let p0 = Vec3::from(out[i0].position);
+        let p1 = Vec3::from(out[i1].position);
+        let p2 = Vec3::from(out[i2].position);
+        let uv0 = Vec2::from(out[i0].uv);
+        let uv1 = Vec2::from(out[i1].uv);
+        let uv2 = Vec2::from(out[i2].uv);
+
+        let e1 = p1 - p0;
+        let e2 = p2 - p0;
+        let d1 = uv1 - uv0;
+        let d2 = uv2 - uv0;
+        let det = d1.x * d2.y - d2.x * d1.y;
+
+        // Tangent = normalize(dP/dU). Degenerate UVs (det≈0) fall back to an arbitrary
+        // basis so the TBN stays finite (the shader re-orthonormalizes anyway).
+        let (tangent, sign) = if det.abs() > 1e-8 {
+            let r = 1.0 / det;
+            let t = (e1 * d2.y - e2 * d1.y) * r;
+            let bt = (e2 * d1.x - e1 * d2.x) * r;
+            // Handedness: +1 if the geometric bitangent agrees with N×T, else -1.
+            let n = (Vec3::from(out[i0].normal)
+                + Vec3::from(out[i1].normal)
+                + Vec3::from(out[i2].normal))
+            .normalize_or_zero();
+            let sign = if n.cross(t).dot(bt) < 0.0 { -1.0 } else { 1.0 };
+            let t = t.normalize_or_zero();
+            let t = if t.length_squared() < 1e-12 {
+                Vec3::X
+            } else {
+                t
+            };
+            (t, sign)
+        } else {
+            (Vec3::X, 1.0)
+        };
+        for li in [i0, i1, i2] {
+            out[li].tangent = [tangent.x, tangent.y, tangent.z, sign];
+        }
+    }
+    out
 }
 
 /// Optional PBR map handles for one textured-mesh draw. Any `None` slot samples the
@@ -486,7 +563,7 @@ impl TexturedMeshPipeline {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        textures: &[LoadedTexture],
+        textures: &[Option<LoadedTexture>],
     ) {
         self.frame_material_bgs.clear();
         if self.queued.is_empty() {
@@ -613,7 +690,11 @@ impl TexturedMeshPipeline {
     /// Issue the queued draws. Group 0 = uniforms (dynamic per-draw offset), group 1 =
     /// this draw's combined material bind group (built in `prepare`). `textures` is only
     /// needed to skip draws whose mesh handle is gone.
-    pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, _textures: &'a [LoadedTexture]) {
+    pub fn render<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        _textures: &'a [Option<LoadedTexture>],
+    ) {
         if self.queued.is_empty() {
             return;
         }
@@ -640,8 +721,14 @@ impl TexturedMeshPipeline {
 }
 
 /// Look up a texture's view in the renderer's store.
-fn view_for(textures: &[LoadedTexture], handle: TextureHandle) -> Option<&wgpu::TextureView> {
-    textures.get(handle.0 as usize).map(|t| &t.view)
+fn view_for(
+    textures: &[Option<LoadedTexture>],
+    handle: TextureHandle,
+) -> Option<&wgpu::TextureView> {
+    textures
+        .get(handle.0 as usize)
+        .and_then(|t| t.as_ref())
+        .map(|t| &t.view)
 }
 
 /// Build a 1×1 solid-colour LINEAR texture and return `(texture, view)`. Used for the

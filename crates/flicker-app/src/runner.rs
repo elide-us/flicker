@@ -6,22 +6,19 @@
 //! the first time `resumed` is dispatched.
 //!
 //! Each frame the runner:
-//! 1. Pumps the `gilrs` gamepad event queue.
+//! 1. Reads controller state via [`crate::gamepad`] (GameController on macOS, gilrs else).
 //! 2. Updates the [`InputState`] snapshot from accumulated events.
 //! 3. Computes `dt` since the previous frame.
 //! 4. Calls `App::update(dt, &input)`.
 //! 5. Calls `App::render(renderer)` between `begin_frame` and `end_frame`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use flicker_core::input::{
-    GamepadAxis, GamepadButton, InputState, Key, MouseButton,
-};
+use flicker_core::input::{InputState, Key, MouseButton};
 use flicker_render::Renderer;
 use glam::Vec2;
-use gilrs::{self, Gilrs};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -29,6 +26,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::gamepad::GamepadReader;
 use crate::App;
 
 struct Runner<A: App> {
@@ -38,10 +36,8 @@ struct Runner<A: App> {
     app_initialized: bool,
     input: InputState,
     last_update: Option<Instant>,
-    gilrs: Gilrs,
-    /// Maps gilrs gamepad ID → our player index.
-    gamepad_id_map: std::collections::HashMap<gilrs::GamepadId, usize>,
-    next_player: usize,
+    /// Reads controllers each frame — GameController framework on macOS, gilrs elsewhere.
+    gamepad: GamepadReader,
 }
 
 impl<A: App> ApplicationHandler for Runner<A> {
@@ -72,10 +68,8 @@ impl<A: App> ApplicationHandler for Runner<A> {
             self.renderer = Some(renderer);
         }
 
-        // Connect any gamepads that were present at startup.
-        while let Some(event) = self.gilrs.next_event() {
-            self.handle_gilrs_event(event);
-        }
+        // Read any controllers already connected at startup.
+        self.gamepad.poll(&mut self.input);
 
         if !self.app_initialized {
             if let Some(renderer) = self.renderer.as_mut() {
@@ -129,15 +123,36 @@ impl<A: App> ApplicationHandler for Runner<A> {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = matches!(event.state, ElementState::Pressed);
-                if let Some(key) = translate_key(event.physical_key) {
-                    self.input.set_key(key, down);
+                let key = translate_key(event.physical_key);
+                if let Some(k) = key {
+                    if down && k == Key::Backspace {
+                        self.input.flag_backspace();
+                    }
+                    self.input.set_key(k, down);
+                }
+                // Committed text for focused UI text fields (post-IME / post-layout).
+                // Press only; drop control chars (Enter/Tab/Backspace/Escape are
+                // consumed as keycodes above, so they never reach a text field).
+                if down {
+                    let mut pushed = false;
+                    if let Some(text) = event.text.as_ref() {
+                        let printable: String =
+                            text.chars().filter(|c| !c.is_control()).collect();
+                        if !printable.is_empty() {
+                            self.input.push_typed(&printable);
+                            pushed = true;
+                        }
+                    }
+                    // Fallback: some platforms/layouts don't populate `text` for the
+                    // space bar — commit a space explicitly so text fields still get it.
+                    if !pushed && key == Some(Key::Space) {
+                        self.input.push_typed(" ");
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Pump gamepad events first (before we borrow renderer).
-                while let Some(event) = self.gilrs.next_event() {
-                    self.handle_gilrs_event(event);
-                }
+                // Read controller state for this frame.
+                self.gamepad.poll(&mut self.input);
 
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;
@@ -157,6 +172,7 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 // Reset per-frame edges.
                 self.input.mouse_wheel_delta = 0.0;
                 self.input.mouse_left_pressed = false;
+                self.input.clear_frame_text();
 
                 if self.app.should_quit() {
                     tracing::info!("app requested quit");
@@ -174,89 +190,25 @@ impl<A: App> ApplicationHandler for Runner<A> {
             _ => {}
         }
     }
-}
 
-impl<A: App> Runner<A> {
-    fn handle_gilrs_event(&mut self, event: gilrs::Event) {
-        match event.event {
-            gilrs::EventType::Connected => {
-                let player = self.next_player;
-                self.next_player += 1;
-                self.gamepad_id_map.insert(event.id, player);
-                self.input.gamepad_mut(player);
-                tracing::info!("gamepad {} connected as player {}", event.id, player);
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Capture the window's final geometry so the shell can persist "where the
+        // window was" after `run` returns. winit calls this as the loop exits, while
+        // the window is still alive.
+        if let Some(window) = self.window.as_ref() {
+            let inner = window.inner_size();
+            let (x, y) = window.outer_position().map(|p| (p.x, p.y)).unwrap_or((0, 0));
+            let geom = WindowGeometry {
+                x,
+                y,
+                width: inner.width,
+                height: inner.height,
+                fullscreen: window.fullscreen().is_some(),
+            };
+            if let Ok(mut last) = LAST_WINDOW_GEOMETRY.lock() {
+                *last = Some(geom);
             }
-            gilrs::EventType::Disconnected => {
-                if let Some(player) = self.gamepad_id_map.remove(&event.id) {
-                    self.input.remove_gamepad(player);
-                    tracing::info!("gamepad {} (player {}) disconnected", event.id, player);
-                }
-            }
-            gilrs::EventType::ButtonPressed(button, _) => {
-                if let (Some(&player), Some(btn)) = (
-                    self.gamepad_id_map.get(&event.id),
-                    translate_gamepad_button(button),
-                ) {
-                    self.input.gamepad_mut(player).set_button(btn, true);
-                }
-            }
-            gilrs::EventType::ButtonReleased(button, _) => {
-                if let (Some(&player), Some(btn)) = (
-                    self.gamepad_id_map.get(&event.id),
-                    translate_gamepad_button(button),
-                ) {
-                    self.input.gamepad_mut(player).set_button(btn, false);
-                }
-            }
-            gilrs::EventType::AxisChanged(axis, value, _) => {
-                if let (Some(&player), Some(ax)) = (
-                    self.gamepad_id_map.get(&event.id),
-                    translate_gamepad_axis(axis),
-                ) {
-                    self.input.gamepad_mut(player).set_axis(ax, value);
-                }
-            }
-            _ => {}
         }
-    }
-}
-
-/// Translate a gilrs button into our [`GamepadButton`] enum.
-fn translate_gamepad_button(button: gilrs::Button) -> Option<GamepadButton> {
-    match button {
-        gilrs::Button::South => Some(GamepadButton::South),
-        gilrs::Button::East => Some(GamepadButton::East),
-        gilrs::Button::North => Some(GamepadButton::North),
-        gilrs::Button::West => Some(GamepadButton::West),
-        gilrs::Button::DPadUp => Some(GamepadButton::DPadUp),
-        gilrs::Button::DPadDown => Some(GamepadButton::DPadDown),
-        gilrs::Button::DPadLeft => Some(GamepadButton::DPadLeft),
-        gilrs::Button::DPadRight => Some(GamepadButton::DPadRight),
-        gilrs::Button::LeftTrigger => Some(GamepadButton::LeftBumper),
-        gilrs::Button::LeftTrigger2 => Some(GamepadButton::LeftTrigger),
-        gilrs::Button::RightTrigger => Some(GamepadButton::RightBumper),
-        gilrs::Button::RightTrigger2 => Some(GamepadButton::RightTrigger),
-        gilrs::Button::Select => Some(GamepadButton::Select),
-        gilrs::Button::Start => Some(GamepadButton::Start),
-        gilrs::Button::Mode => Some(GamepadButton::Guide),
-        gilrs::Button::LeftThumb => Some(GamepadButton::LeftStick),
-        gilrs::Button::RightThumb => Some(GamepadButton::RightStick),
-        gilrs::Button::C => Some(GamepadButton::C),
-        gilrs::Button::Z => Some(GamepadButton::Z),
-        _ => None,
-    }
-}
-
-/// Translate a gilrs axis into our [`GamepadAxis`] enum.
-fn translate_gamepad_axis(axis: gilrs::Axis) -> Option<GamepadAxis> {
-    match axis {
-        gilrs::Axis::LeftStickX => Some(GamepadAxis::LeftStickX),
-        gilrs::Axis::LeftStickY => Some(GamepadAxis::LeftStickY),
-        gilrs::Axis::RightStickX => Some(GamepadAxis::RightStickX),
-        gilrs::Axis::RightStickY => Some(GamepadAxis::RightStickY),
-        gilrs::Axis::LeftZ => Some(GamepadAxis::LeftTrigger),
-        gilrs::Axis::RightZ => Some(GamepadAxis::RightTrigger),
-        _ => None,
     }
 }
 
@@ -397,19 +349,31 @@ fn translate_key(key: PhysicalKey) -> Option<Key> {
     })
 }
 
+/// A window's outer position + inner size (physical px) at event-loop exit.
+#[derive(Copy, Clone, Debug)]
+pub struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    /// `true` if the window was fullscreen at exit — its position is then not a
+    /// meaningful windowed placement, so the shell keeps the last windowed one.
+    pub fullscreen: bool,
+}
+
+/// Window geometry captured when the event loop last exited (see [`run`]).
+static LAST_WINDOW_GEOMETRY: Mutex<Option<WindowGeometry>> = Mutex::new(None);
+
+/// The window's geometry captured at the last event-loop exit, if available — for
+/// the shell to persist the windowed size + position across launches.
+pub fn last_window_geometry() -> Option<WindowGeometry> {
+    LAST_WINDOW_GEOMETRY.lock().ok().and_then(|g| *g)
+}
+
 /// Run the application. Blocks until the event loop exits.
 pub fn run<A: App>(app: A) -> Result<()> {
     let event_loop = EventLoop::new().context("failed to create winit event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
-
-    let gilrs = match Gilrs::new() {
-        Ok(g) => g,
-        Err(gilrs::Error::NotImplemented(g)) => {
-            tracing::warn!("gamepads unavailable on this platform");
-            g
-        }
-        Err(e) => return Err(anyhow::anyhow!("gilrs init failed: {e}")),
-    };
 
     let mut runner = Runner {
         app,
@@ -418,9 +382,7 @@ pub fn run<A: App>(app: A) -> Result<()> {
         app_initialized: false,
         input: InputState::new(),
         last_update: None,
-        gilrs,
-        gamepad_id_map: std::collections::HashMap::new(),
-        next_player: 0,
+        gamepad: GamepadReader::new(),
     };
 
     event_loop

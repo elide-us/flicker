@@ -15,7 +15,7 @@ use flicker_shell::{PauseScene, Theme};
 use flicker_flight::{Flight, FlightPlayer};
 
 use crate::camera::OrbitCam;
-use crate::system::{self, Planet, SYSTEM_INNER, SYSTEM_OUTER};
+use crate::system::{self, BodyKind, Planet, SYSTEM_INNER, SYSTEM_OUTER};
 
 const TEXT: [f32; 4] = [0.90, 0.92, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.78, 1.0];
@@ -30,6 +30,13 @@ const MOON_OMEGA: f32 = 0.9;
 const MOON_INCL: f32 = 0.45;
 const MOON_RADIUS: f32 = 0.11;
 const MOON_COLOR: [f32; 3] = [0.66, 0.68, 0.72];
+
+/// The dust cloud reaches well past the outermost planet, so the *formed* system
+/// sits inside a big enveloping nebula — bigger and denser than a thin
+/// protoplanetary ring (the planets already exist, so the cloud is drama, not
+/// accretion). A cinematic (art) choice, tunable freely — see the art-vs-reality
+/// rule; only the roster/bodies are ruled reality.
+const DUST_OUTER: f32 = SYSTEM_OUTER * 1.4;
 
 pub struct Sim {
     cam: OrbitCam,
@@ -80,28 +87,34 @@ impl Sim {
     }
 
     /// Configure the volumetric dust cloud for this frame: the disk geometry, the
-    /// formation clock (inside-out dissipation), and an annular gap at each
-    /// planet's orbit (the "clearing" — cosmetic, no accounting).
+    /// formation clock (inside-out dissipation), and annular lanes carved **only at
+    /// the giants' orbits** (the "clearing" — cosmetic, no accounting). Bigger and
+    /// denser than a thin accretion ring: the planets are already formed, so the
+    /// cloud reads as one billowing nebula they sit inside, not a stack of rings.
     fn set_dust(&self, renderer: &mut Renderer) {
+        // Only the giants (gas + ice) part the dust into lanes; the inner worlds no
+        // longer clear rings, so the dense cloud stays continuous but for a few
+        // dramatic gaps that let starlight break through as god-rays.
         let mut gaps: Vec<(f32, f32)> = self
             .planets
             .iter()
+            .filter(|p| matches!(p.kind, BodyKind::GasGiant | BodyKind::IceGiant))
             .map(|p| {
-                let width = (0.5 + p.orbit * 0.06).min(1.6);
-                (p.orbit, width)
+                let width = (0.6 + p.a * 0.06).min(1.8);
+                (p.a, width)
             })
             .collect();
         gaps.truncate(MAX_VOLUMETRIC_BODIES);
         renderer.set_volumetric_disk(VolumetricDisk {
             inner: SYSTEM_INNER,
-            outer: SYSTEM_OUTER,
-            snow_line: 6.0, // a visual density feature, not a physics boundary here
-            scale_height: 0.07,
-            density: 2.7, // heavier → darker, more occluding dust
+            outer: DUST_OUTER, // engulf the system with a halo margin
+            snow_line: 4.6,    // a visual density feature (the Earth→Light gap), not a physics boundary here
+            scale_height: 0.10, // taller billows — a cloud, not a pancake
+            density: 3.5,       // denser → darker, more occluding, stronger god-rays
             formation: self.flight.progress(),
             time: self.flight.progress() * 10.0, // a few inner-disk rotations of swirl over the fly-in
-            tint: Vec3::new(0.038, 0.033, 0.052), // darker dust
-            glow: Vec3::new(0.70, 0.38, 0.20),    // dimmer warm centre
+            tint: Vec3::new(0.038, 0.033, 0.052), // dark dust
+            glow: Vec3::new(0.85, 0.44, 0.22),    // warm heart, seen through the denser dust
             gaps,
         });
     }
@@ -119,17 +132,6 @@ impl Default for Sim {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// A closed ring of `segs` line segments in the disk plane (XZ) at `radius` — the
-/// faint orbit-reference circles.
-fn orbit_circle(radius: f32, segs: usize) -> Vec<(Vec3, Vec3)> {
-    use std::f32::consts::TAU;
-    let p = |i: usize| {
-        let a = i as f32 / segs as f32 * TAU;
-        Vec3::new(radius * a.cos(), 0.0, radius * a.sin())
-    };
-    (0..segs).map(|i| (p(i), p(i + 1))).collect()
 }
 
 /// A gentle per-planet tilt for its ring plane so rings read as tilted discs.
@@ -234,7 +236,7 @@ impl Scene for Sim {
 
         // Faint orbit-reference circles.
         for p in &self.planets {
-            renderer.draw_lines(&orbit_circle(p.orbit, 128), [0.30, 0.36, 0.52, 0.16]);
+            renderer.draw_lines(&system::orbit_ellipse(p, 128), [0.30, 0.36, 0.52, 0.16]);
         }
 
         // The planets: each a school-coloured sphere on its circular orbit, lit by
@@ -302,7 +304,7 @@ impl Sim {
         renderer.draw_text("planets (inner → outer):", Vec2::new(16.0, y), 14.0, TEXT);
         y += 22.0;
         for p in &self.planets {
-            let mut tags = Vec::new();
+            let mut tags = vec![p.kind.label()];
             if p.moon {
                 tags.push("moon");
             }
@@ -312,13 +314,8 @@ impl Sim {
             if p.occulted {
                 tags.push("occulted");
             }
-            let suffix = if tags.is_empty() {
-                String::new()
-            } else {
-                format!("  ({})", tags.join(", "))
-            };
             renderer.draw_text(
-                &format!("{}{suffix}", p.name),
+                &format!("{}  ({})", p.name, tags.join(", ")),
                 Vec2::new(24.0, y),
                 13.0,
                 [p.color[0].max(0.35), p.color[1].max(0.35), p.color[2].max(0.35), 1.0],

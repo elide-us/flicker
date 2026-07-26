@@ -62,6 +62,26 @@ pub enum Action {
     Interact,
     Reload,
 
+    // ── Souls combat intents ──
+    // These are INTENTS, not abilities: the equipped loadout resolves each to a concrete
+    // ability/state (a rapier's `Defend` parries, a greatshield's blocks). The button set
+    // stays small and stable while capability varies in equipment DATA. See the input
+    // contract design (MCP `C60AE43C`).
+    /// Light attack (RB / LMB).
+    AttackLight,
+    /// Heavy attack (RT / RMB).
+    AttackHeavy,
+    /// Defensive intent (LB, held as a stance) — resolves to block / parry / deflect.
+    Defend,
+    /// Weapon or spell special (LT).
+    Special,
+    /// Evade intent (B tap) — resolves to roll / step / hop.
+    Dodge,
+    /// Toggle target lock-on (RS press).
+    LockOn,
+    /// Use the readied item / consumable.
+    UseItem,
+
     // ── UI ──
     Confirm,
     Cancel,
@@ -93,6 +113,13 @@ impl fmt::Display for Action {
             Self::Crouch => write!(f, "Crouch"),
             Self::Interact => write!(f, "Interact"),
             Self::Reload => write!(f, "Reload"),
+            Self::AttackLight => write!(f, "Light Attack"),
+            Self::AttackHeavy => write!(f, "Heavy Attack"),
+            Self::Defend => write!(f, "Defend"),
+            Self::Special => write!(f, "Special"),
+            Self::Dodge => write!(f, "Dodge"),
+            Self::LockOn => write!(f, "Lock On"),
+            Self::UseItem => write!(f, "Use Item"),
             Self::Confirm => write!(f, "Confirm"),
             Self::Cancel => write!(f, "Cancel"),
             Self::Menu => write!(f, "Menu"),
@@ -161,11 +188,45 @@ impl fmt::Display for AxisDirection {
 /// Use [`InputMap::wasd_and_mouse`] or [`InputMap::gamepad_default`]
 /// for sensible presets, then customize at runtime.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "InputMapData", into = "InputMapData")]
 pub struct InputMap {
     /// action → list of physical bindings
     action_to_bindings: HashMap<Action, Vec<InputBinding>>,
     /// reverse lookup: physical input → action (for conflict detection)
     input_to_action: HashMap<InputBinding, Action>,
+}
+
+/// On-disk form of [`InputMap`]. Only the forward map is stored; the reverse
+/// `input_to_action` index is rebuilt on load.
+///
+/// Why this exists: `input_to_action` is keyed by [`InputBinding`], a non-unit enum that
+/// JSON cannot use as an object key — serializing the live struct directly fails at
+/// runtime, which is why rebinds never persisted. Storing the bindings as a flat list of
+/// pairs sidesteps map-key encoding entirely and rebuilds both indices through [`bind`],
+/// preserving the one-input-one-action invariant.
+///
+/// [`bind`]: InputMap::bind
+#[derive(Serialize, Deserialize)]
+struct InputMapData {
+    action_to_bindings: Vec<(Action, Vec<InputBinding>)>,
+}
+
+impl From<InputMap> for InputMapData {
+    fn from(map: InputMap) -> Self {
+        Self { action_to_bindings: map.action_to_bindings.into_iter().collect() }
+    }
+}
+
+impl From<InputMapData> for InputMap {
+    fn from(data: InputMapData) -> Self {
+        let mut map = InputMap::empty();
+        for (action, inputs) in data.action_to_bindings {
+            for input in inputs {
+                map.bind(action, input);
+            }
+        }
+        map
+    }
 }
 
 impl InputMap {
@@ -413,11 +474,180 @@ impl InputMap {
         map.bind(Action::Quit, InputBinding::GamepadButton(GamepadButton::Guide));
         map
     }
+
+    /// A gamepad-axis binding, terse — for the preset builders below.
+    fn gp_axis(axis: GamepadAxis, direction: AxisDirection) -> InputBinding {
+        InputBinding::GamepadAxis { axis, direction }
+    }
+
+    /// The default Xbox layout for the souls-combat game, matching the ruled control
+    /// design (MCP `DE46BDB8`). Physical positions: A=`South` B=`East` X=`West` Y=`North`.
+    ///
+    /// Binds the **press** action of each control. Tap-vs-hold (B = dodge / sprint),
+    /// long-press, and the Y-modifier chords (Y+LB two-hand, Y+LT kick) are resolved by the
+    /// input-concept layer above the map, not by a raw binding, so they are absent here.
+    pub fn xbox_souls() -> Self {
+        use AxisDirection::{Negative as Neg, Positive as Pos};
+        use GamepadAxis::{LeftStickX, LeftStickY, RightStickX, RightStickY};
+        let mut map = Self::empty();
+        // Left stick = move, right stick = look.
+        map.bind(Action::MoveForward, Self::gp_axis(LeftStickY, Pos));
+        map.bind(Action::MoveBackward, Self::gp_axis(LeftStickY, Neg));
+        map.bind(Action::StrafeRight, Self::gp_axis(LeftStickX, Pos));
+        map.bind(Action::StrafeLeft, Self::gp_axis(LeftStickX, Neg));
+        map.bind(Action::LookRight, Self::gp_axis(RightStickX, Pos));
+        map.bind(Action::LookLeft, Self::gp_axis(RightStickX, Neg));
+        map.bind(Action::LookUp, Self::gp_axis(RightStickY, Pos));
+        map.bind(Action::LookDown, Self::gp_axis(RightStickY, Neg));
+        // Stick presses.
+        map.bind(Action::LockOn, InputBinding::GamepadButton(GamepadButton::RightStick));
+        map.bind(Action::Crouch, InputBinding::GamepadButton(GamepadButton::LeftStick));
+        // Attacks / defend / special on the shoulders.
+        map.bind(Action::AttackLight, InputBinding::GamepadButton(GamepadButton::RightBumper));
+        map.bind(Action::AttackHeavy, InputBinding::GamepadButton(GamepadButton::RightTrigger));
+        map.bind(Action::Defend, InputBinding::GamepadButton(GamepadButton::LeftBumper));
+        map.bind(Action::Special, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+        // Face buttons (A=South, B=East, X=West, Y=North).
+        map.bind(Action::Dodge, InputBinding::GamepadButton(GamepadButton::East));
+        map.bind(Action::Jump, InputBinding::GamepadButton(GamepadButton::North));
+        map.bind(Action::Interact, InputBinding::GamepadButton(GamepadButton::South));
+        map.bind(Action::Interact, InputBinding::GamepadButton(GamepadButton::West));
+        // Meta.
+        map.bind(Action::Menu, InputBinding::GamepadButton(GamepadButton::Start));
+        map.bind(Action::Map, InputBinding::GamepadButton(GamepadButton::Select));
+        map
+    }
+
+    /// The default keyboard+mouse layout for the souls-combat game — souls-first, with a
+    /// modest tactical surface rather than an MMO ability-spam bar (MCP `4AC56490` §6).
+    /// Keyboards have keys to spare, so no modifier chords: Kick / two-hand get their own
+    /// keys when added. A starting point; every bind is rebindable.
+    pub fn kbm_souls() -> Self {
+        let mut map = Self::empty();
+        // Movement (WASD); mouse look is delta-based, not an action bind.
+        map.bind(Action::MoveForward, InputBinding::Key(Key::W));
+        map.bind(Action::MoveBackward, InputBinding::Key(Key::S));
+        map.bind(Action::StrafeLeft, InputBinding::Key(Key::A));
+        map.bind(Action::StrafeRight, InputBinding::Key(Key::D));
+        map.bind(Action::Sprint, InputBinding::Key(Key::LeftShift));
+        map.bind(Action::Crouch, InputBinding::Key(Key::C));
+        map.bind(Action::Dodge, InputBinding::Key(Key::Space));
+        map.bind(Action::Jump, InputBinding::Key(Key::LeftAlt));
+        // Combat.
+        map.bind(Action::AttackLight, InputBinding::MouseButton(MouseButton::Left));
+        map.bind(Action::AttackHeavy, InputBinding::MouseButton(MouseButton::Right));
+        map.bind(Action::Defend, InputBinding::Key(Key::Q));
+        map.bind(Action::Special, InputBinding::Key(Key::R));
+        map.bind(Action::LockOn, InputBinding::MouseButton(MouseButton::Middle));
+        // Interaction / items / UI.
+        map.bind(Action::Interact, InputBinding::Key(Key::E));
+        map.bind(Action::UseItem, InputBinding::Key(Key::F));
+        map.bind(Action::Inventory, InputBinding::Key(Key::I));
+        map.bind(Action::Map, InputBinding::Key(Key::M));
+        map.bind(Action::Menu, InputBinding::Key(Key::Escape));
+        map.bind(Action::Quit, InputBinding::Key(Key::Escape));
+        map
+    }
 }
 
 impl Default for InputMap {
     fn default() -> Self {
         Self::wasd_and_mouse()
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Section: Input Contexts
+// ───────────────────────────────────────────────────────────────────
+
+/// Which action map is live. A first-class **engine service**: the same physical button
+/// can mean different things per context (LB = `Defend` in `World`, tab in `Menu`).
+///
+/// This is the engine's context set, extended by adding a variant — the per-context
+/// storage in [`ContextualBindings`] is generic over it. Not every game uses every
+/// context (a game with no mounts never pushes `Mounted`), but the engine expresses them
+/// so a client can. Ratified in MCP `4AC56490` §5.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InputContext {
+    /// Gameplay: movement + combat.
+    World,
+    /// Menus / inventory / journal navigation.
+    Menu,
+    /// A radial selector (chat wheel, item radial).
+    Radial,
+    /// A text field owns the keyboard (chat entry, rename, search). Gameplay
+    /// movement/look is suppressed while active; typed characters flow to the
+    /// focused UI field instead. Register it with an empty map so no gameplay
+    /// `Action` resolves; the base `World` map still underlies it on the stack.
+    TextEntry,
+    /// Riding a creature.
+    Mounted,
+    /// Free flight.
+    Flying,
+    /// Piloting a vehicle.
+    Vehicle,
+}
+
+/// Per-context input maps plus the active-context stack — the runtime home of the
+/// [`InputContext`] service.
+///
+/// A stack, not a single value, because contexts nest: opening a menu over the world
+/// pushes [`InputContext::Menu`] and closing it pops back to whatever was underneath. The
+/// base of the stack is always [`InputContext::World`], so [`active`](Self::active) always
+/// has an answer. A context with no map of its own falls back to the `World` map, so a
+/// partially-configured context still moves the camera rather than going dead.
+#[derive(Clone, Debug)]
+pub struct ContextualBindings {
+    maps: HashMap<InputContext, InputMap>,
+    stack: Vec<InputContext>,
+}
+
+impl ContextualBindings {
+    /// New service with `world` as the base `World` map. Add more contexts with
+    /// [`with`](Self::with).
+    pub fn new(world: InputMap) -> Self {
+        let mut maps = HashMap::new();
+        maps.insert(InputContext::World, world);
+        Self { maps, stack: vec![InputContext::World] }
+    }
+
+    /// Register a map for a context (builder style).
+    pub fn with(mut self, context: InputContext, map: InputMap) -> Self {
+        self.maps.insert(context, map);
+        self
+    }
+
+    /// The context currently on top of the stack.
+    pub fn active(&self) -> InputContext {
+        self.stack.last().copied().unwrap_or(InputContext::World)
+    }
+
+    /// Push a context (e.g. a menu opening over the world).
+    pub fn push(&mut self, context: InputContext) {
+        self.stack.push(context);
+    }
+
+    /// Pop the top context, never emptying below the `World` base. Returns the popped
+    /// context, or `None` if only the base remained.
+    pub fn pop(&mut self) -> Option<InputContext> {
+        if self.stack.len() > 1 {
+            self.stack.pop()
+        } else {
+            None
+        }
+    }
+
+    /// The map for the active context, falling back to the `World` map.
+    pub fn active_map(&self) -> &InputMap {
+        self.maps
+            .get(&self.active())
+            .or_else(|| self.maps.get(&InputContext::World))
+            .expect("the World map is always present")
+    }
+
+    /// Is `action` pressed in the active context?
+    pub fn action_pressed(&self, action: Action, input: &InputState) -> bool {
+        self.active_map().action_pressed(action, input)
     }
 }
 
@@ -847,5 +1077,111 @@ mod tests {
         let mut input = InputState::new();
         input.set_key(Key::Up, true);
         assert!(input.action_active(&b, Action::MoveForward));
+    }
+
+    // ── InputMap serde (rebinds persist to disk) ──
+
+    #[test]
+    fn input_map_round_trips_through_json() {
+        // The defect this guards: `input_to_action` was keyed by `InputBinding` (a non-unit
+        // enum), so serializing the live map to JSON failed and rebinds never persisted.
+        let map = InputMap::xbox_souls();
+        let json = serde_json::to_string(&map).expect("InputMap serializes to JSON");
+        let back: InputMap = serde_json::from_str(&json).expect("InputMap deserializes");
+        for action in [
+            Action::AttackLight,
+            Action::Defend,
+            Action::Dodge,
+            Action::LockOn,
+            Action::Interact,
+            Action::MoveForward,
+        ] {
+            assert_eq!(map.bindings_for(action), back.bindings_for(action), "{action} survives");
+        }
+        // the reverse index is rebuilt on load, not serialized
+        assert_eq!(
+            back.action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            Some(Action::Dodge),
+        );
+    }
+
+    // ── Ruled souls presets ──
+
+    #[test]
+    fn xbox_souls_binds_ruled_layout() {
+        use GamepadButton as B;
+        let m = InputMap::xbox_souls();
+        let expect = |a: Action, b: B| {
+            assert_eq!(m.action_for(InputBinding::GamepadButton(b)), Some(a));
+        };
+        expect(Action::AttackLight, B::RightBumper);
+        expect(Action::AttackHeavy, B::RightTrigger);
+        expect(Action::Defend, B::LeftBumper);
+        expect(Action::Special, B::LeftTrigger);
+        expect(Action::Dodge, B::East); // B = dodge (hold-B sprint is the concept layer)
+        expect(Action::Jump, B::North); // Y = jump
+        expect(Action::LockOn, B::RightStick);
+        expect(Action::Crouch, B::LeftStick);
+    }
+
+    #[test]
+    fn kbm_souls_binds_combat() {
+        let m = InputMap::kbm_souls();
+        assert_eq!(
+            m.action_for(InputBinding::MouseButton(MouseButton::Left)),
+            Some(Action::AttackLight),
+        );
+        assert_eq!(
+            m.action_for(InputBinding::MouseButton(MouseButton::Right)),
+            Some(Action::AttackHeavy),
+        );
+        assert_eq!(m.action_for(InputBinding::Key(Key::Q)), Some(Action::Defend));
+        assert_eq!(m.action_for(InputBinding::Key(Key::Space)), Some(Action::Dodge));
+    }
+
+    // ── Input contexts ──
+
+    #[test]
+    fn context_switch_changes_which_action_a_button_fires() {
+        let world = {
+            let mut m = InputMap::empty();
+            m.bind(Action::MoveForward, InputBinding::Key(Key::W));
+            m
+        };
+        let menu = {
+            let mut m = InputMap::empty();
+            m.bind(Action::Confirm, InputBinding::Key(Key::W));
+            m
+        };
+        let mut cb = ContextualBindings::new(world).with(InputContext::Menu, menu);
+        let mut input = InputState::new();
+        input.set_key(Key::W, true);
+
+        // World active: W = MoveForward.
+        assert_eq!(cb.active(), InputContext::World);
+        assert!(cb.action_pressed(Action::MoveForward, &input));
+        assert!(!cb.action_pressed(Action::Confirm, &input));
+
+        // Push Menu: the same key now fires Confirm.
+        cb.push(InputContext::Menu);
+        assert!(cb.action_pressed(Action::Confirm, &input));
+        assert!(!cb.action_pressed(Action::MoveForward, &input));
+
+        // Pop back to World; the base can never be popped away.
+        assert_eq!(cb.pop(), Some(InputContext::Menu));
+        assert!(cb.action_pressed(Action::MoveForward, &input));
+        assert_eq!(cb.pop(), None);
+    }
+
+    #[test]
+    fn context_without_its_own_map_falls_back_to_world() {
+        // Radial has no map registered → it should read the World map rather than go dead.
+        let mut cb = ContextualBindings::new(InputMap::xbox_souls());
+        cb.push(InputContext::Radial);
+        assert_eq!(cb.active(), InputContext::Radial);
+        assert_eq!(
+            cb.active_map().action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            Some(Action::Dodge),
+        );
     }
 }

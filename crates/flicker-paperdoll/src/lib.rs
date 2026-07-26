@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
-    Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, PbrMaps, Renderer, TextureHandle,
-    TexturedMeshHandle, TexturedVertex, Vec2, Vec3,
+    build_textured_verts, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, PbrMaps,
+    QuadGrid, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
@@ -36,6 +36,7 @@ use glam::Mat4;
 use flicker_shell::{PauseScene, Theme};
 use flicker_skeletal::state::{Inputs, StateMachine};
 use flicker_skeletal::{cloth, format, jiggle, pose, skin, state};
+use flicker_mechanics as mechanics;
 
 /// The pendant hangs from the neck on a jiggle chain (secondary motion) instead of riding
 /// rigidly. Rig-local cm, z-up, forward = −Y (the toes point −Y). The drape leans forward +
@@ -95,15 +96,35 @@ use format::Model;
 /// (layout, the `UI.paperdoll` section) — the same split every flicker client uses.
 const HUD_SCRIPT_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Alpha/content/scripts/hud_paperdoll.lua"
+    "/../../Alpha/content/sensorium/scripts/hud_paperdoll.lua"
 );
 const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/resources/ui_elements.json");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
 
 /// A submesh's GPU upload for the current frame — textured (albedo) or flat (gray).
 enum SubGpu {
     Textured(TexturedMeshHandle),
     Flat(MeshHandle),
+}
+
+/// A base-body submesh uploaded for the editor grid: a textured draw (albedo + PBR maps) or a
+/// flat-coloured draw. Built once per frame, drawn into all four RTT panels, then freed.
+enum PanelSub {
+    Textured { h: TexturedMeshHandle, tex: TextureHandle, maps: PbrMaps },
+    Flat(MeshHandle),
+}
+
+/// Scene lighting for the editor panels — a warm key + cool fill over a soft ambient, so the
+/// character reads with form (the renderer's default is flatter). Mirrors the packeditor portrait.
+fn pip_scene() -> SceneLighting {
+    SceneLighting {
+        sun_dir: Vec3::new(0.4, 0.8, 0.5).normalize(),
+        sun_color: Vec3::splat(0.85),
+        moon_dir: Vec3::new(-0.5, 0.3, -0.4).normalize(),
+        moon_color: Vec3::new(0.20, 0.22, 0.30),
+        ambient: Vec3::splat(0.35),
+        ..SceneLighting::default()
+    }
 }
 
 /// Resolve a material's PBR map names against a texture table. Free-standing so the prop
@@ -343,6 +364,42 @@ struct RecordedFit {
     rotate: glam::Quat,
 }
 
+impl RecordedFit {
+    /// Build from a piece's INLINE `attach` section — the folded-in fit (WS-C C-γ). `None` when
+    /// the section is empty (no `socket` recorded), so the caller falls back to the legacy shared
+    /// `fits.json` sidecar. The upright socket correction is never carried here (re-derived from
+    /// the rig at load), exactly like the sidecar path.
+    fn from_attach(a: &format::Attach) -> Option<Self> {
+        if a.socket.is_empty() {
+            return None;
+        }
+        Some(Self {
+            uniform: a.uniform,
+            scale: a.scale,
+            offset: a.offset,
+            rotate: glam::Quat::from_xyzw(a.rotate[0], a.rotate[1], a.rotate[2], a.rotate[3]).normalize(),
+        })
+    }
+}
+
+/// Insert-or-replace ONLY the top-level `attach` section in a piece's own self-describing file
+/// (WS-C C-γ — the fold of the shared `fits.json`). A read-modify-write that preserves everything
+/// else (the piece's multi-MB mesh); a compact write keeps these single-line files a clean 1-line
+/// diff instead of pretty-printing the whole mesh. Factored out of `record_fits` so the mesh-
+/// preservation guarantee is unit-testable before the Record button mutates real content.
+fn write_inline_attach(path: &Path, attach: serde_json::Value) -> Result<()> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading piece {}", path.display()))?;
+    let mut doc: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("parsing piece {}", path.display()))?;
+    doc.as_object_mut()
+        .with_context(|| format!("piece {} is not a JSON object", path.display()))?
+        .insert("attach".to_string(), attach);
+    std::fs::write(path, serde_json::to_string(&doc)?)
+        .with_context(|| format!("writing piece {}", path.display()))?;
+    Ok(())
+}
+
 fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return HashMap::new();
@@ -440,34 +497,36 @@ impl Slot {
         fits: &HashMap<String, RecordedFit>,
     ) -> Self {
         let path = chars.join(def.dir).join(def.file);
-        let content = if !path.exists() {
+        // Load the piece AND its inline `attach` mount (WS-C C-γ): a piece carries its own fit in
+        // its one self-describing file, so we no longer depend on the shared `fits.json` sidecar.
+        let (content, attach) = if !path.exists() {
             tracing::info!("slot '{}': no piece at {} — cell stays empty", def.key, path.display());
-            None
+            (None, format::Attach::default())
         } else {
             match def.fit {
-                Fit::Garment => match format::load_outfit(&path, bones) {
-                    Ok(mesh) => {
+                Fit::Garment => match format::load_outfit_with_attach(&path, bones) {
+                    Ok((mesh, attach)) => {
                         tracing::info!("slot '{}': garment {} verts", def.key, mesh.vertices.len());
-                        Some(SlotContent::Garment(OutfitLayer::new(mesh, bones)))
+                        (Some(SlotContent::Garment(OutfitLayer::new(mesh, bones))), attach)
                     }
                     Err(e) => {
                         tracing::warn!("slot '{}': garment failed ({e}); cell stays empty", def.key);
-                        None
+                        (None, format::Attach::default())
                     }
                 },
                 Fit::Prop(socket) => match bones.iter().position(|b| b.name == socket) {
                     None => {
                         tracing::warn!("slot '{}': rig has no '{socket}' socket; cell stays empty", def.key);
-                        None
+                        (None, format::Attach::default())
                     }
-                    Some(bone) => match format::load_mesh(&path) {
-                        Ok(mesh) => {
+                    Some(bone) => match format::load_mesh_with_attach(&path) {
+                        Ok((mesh, attach)) => {
                             tracing::info!("slot '{}': prop {} verts @ {socket}", def.key, mesh.vertices.len());
-                            Some(SlotContent::Prop { mesh, parts: Vec::new(), bone, uploaded: false })
+                            (Some(SlotContent::Prop { mesh, parts: Vec::new(), bone, uploaded: false }), attach)
                         }
                         Err(e) => {
                             tracing::warn!("slot '{}': prop failed ({e}); cell stays empty", def.key);
-                            None
+                            (None, format::Attach::default())
                         }
                     },
                 },
@@ -487,18 +546,21 @@ impl Slot {
                 rot: glam::Quat::IDENTITY,
             },
         };
-        // A RECORDED fit overrides the inferred default — the whole point of recording. The
-        // upright correction is always re-derived from the rig, never stored: it is a
-        // property of the socket, not of the piece, so a rig change must not be overridden
-        // by a stale file.
+        // A RECORDED fit overrides the inferred default — the whole point of recording. Prefer the
+        // piece's INLINE `attach` (WS-C C-γ: the fit folded into its own self-describing file); fall
+        // back to the legacy shared `musefit/fits.json` sidecar for pieces not yet re-recorded. The
+        // upright correction is always re-derived from the rig, never stored: it is a property of
+        // the socket, not of the piece, so a rig change must not be overridden by a stale file.
         let asset = def.file.trim_end_matches(".json");
-        if let Some(r) = fits.get(asset) {
+        let recorded = RecordedFit::from_attach(&attach).or_else(|| fits.get(asset).copied());
+        if let Some(r) = recorded {
             fit.uniform = r.uniform;
             fit.scale = Vec3::from(r.scale);
             fit.offset = Vec3::from(r.offset);
             fit.user_rot = r.rotate;
+            let src = if attach.socket.is_empty() { "fits.json" } else { "inline attach" };
             tracing::info!(
-                "slot '{}': recorded fit — size {:.2}, stretch {:?}, offset {:?}, rot {:?}",
+                "slot '{}': recorded fit ({src}) — size {:.2}, stretch {:?}, offset {:?}, rot {:?}",
                 def.key, r.uniform, r.scale, r.offset, r.rotate
             );
         } else if content.is_some() {
@@ -526,78 +588,6 @@ const KATANA_COLOR: [f32; 3] = [0.55, 0.57, 0.62];
 fn pack_rgb666(r: f32, g: f32, b: f32) -> u32 {
     let q = |c: f32| ((c.clamp(0.0, 1.0) * 63.0).round() as u32) & 0x3F;
     0xFFF | (q(r) << 12) | (q(g) << 18) | (q(b) << 24)
-}
-
-/// Build a `TexturedVertex` list for a contiguous, **non-deduplicated** triangle range
-/// (each 3 sequential vertices form one triangle — the converter emits geometry that
-/// way). Computes a per-triangle tangent from the 3 positions + UVs (standard
-/// `dP/dUV` solve) and assigns it, orthonormalized against each corner's normal, to all
-/// three corners — no cross-vertex averaging needed. `w` carries the handedness sign so
-/// the shader can reconstruct the bitangent. Positions/normals come from `pn` (skinned
-/// or bind geometry); UVs from `uvs`. Both are indexed by absolute vertex index `j`.
-fn build_textured_verts(
-    range: std::ops::Range<usize>,
-    pos: impl Fn(usize) -> [f32; 3],
-    nrm: impl Fn(usize) -> [f32; 3],
-    uv: impl Fn(usize) -> [f32; 2],
-) -> Vec<TexturedVertex> {
-    let count = range.len();
-    let mut out: Vec<TexturedVertex> = range
-        .map(|j| TexturedVertex {
-            position: pos(j),
-            normal: nrm(j),
-            uv: uv(j),
-            // Placeholder; overwritten per-triangle below.
-            tangent: [1.0, 0.0, 0.0, 1.0],
-        })
-        .collect();
-
-    // Each consecutive triple is one triangle (local indices 3k, 3k+1, 3k+2).
-    let tris = count / 3;
-    for tk in 0..tris {
-        let i0 = tk * 3;
-        let i1 = i0 + 1;
-        let i2 = i0 + 2;
-        let p0 = Vec3::from(out[i0].position);
-        let p1 = Vec3::from(out[i1].position);
-        let p2 = Vec3::from(out[i2].position);
-        let uv0 = Vec2::from(out[i0].uv);
-        let uv1 = Vec2::from(out[i1].uv);
-        let uv2 = Vec2::from(out[i2].uv);
-
-        let e1 = p1 - p0;
-        let e2 = p2 - p0;
-        let d1 = uv1 - uv0;
-        let d2 = uv2 - uv0;
-        let det = d1.x * d2.y - d2.x * d1.y;
-
-        // Tangent = normalize(dP/dU). Degenerate UVs (det≈0) fall back to an arbitrary
-        // basis so the TBN stays finite (the shader re-orthonormalizes anyway).
-        let (tangent, sign) = if det.abs() > 1e-8 {
-            let r = 1.0 / det;
-            let t = (e1 * d2.y - e2 * d1.y) * r;
-            let bt = (e2 * d1.x - e1 * d2.x) * r;
-            // Handedness: +1 if the geometric bitangent agrees with N×T, else -1.
-            let n = (Vec3::from(out[i0].normal)
-                + Vec3::from(out[i1].normal)
-                + Vec3::from(out[i2].normal))
-            .normalize_or_zero();
-            let sign = if n.cross(t).dot(bt) < 0.0 { -1.0 } else { 1.0 };
-            let t = t.normalize_or_zero();
-            let t = if t.length_squared() < 1e-12 {
-                Vec3::X
-            } else {
-                t
-            };
-            (t, sign)
-        } else {
-            (Vec3::X, 1.0)
-        };
-        for li in [i0, i1, i2] {
-            out[li].tangent = [tangent.x, tangent.y, tangent.z, sign];
-        }
-    }
-    out
 }
 
 /// Orbit camera mirrored from `flicker-world`'s `OrbitCam` (drag rotates, wheel
@@ -734,6 +724,22 @@ struct Viewer {
     show_mesh: bool,
     show_skeleton: bool,
     show_textures: bool,
+    /// Debug overlay: draw the auto-fit collision volumes (WS-D). Toggled from the HUD.
+    show_collision: bool,
+    /// Auto-fit collision volume per bone (WS-D D4b) — capsules in each bone's LOCAL frame,
+    /// posed by the current `globals` for the overlay + (later) combat queries.
+    collision_volumes: Vec<mechanics::Volume>,
+    /// The "whole-unit" character pill: ONE upright capsule bounding the body, for simple non-IK
+    /// terrain/movement collision. Computed once from the bind mesh (feet→head), fixed in the
+    /// character's root frame (it does not deform with the pose), drawn in the overlay.
+    body_pill: mechanics::Shape,
+    /// The bone the user clicked to select in the rig view (index into `model.bones`), for the
+    /// joint editor (Slice 2). Highlighted amber in the skeleton overlay + read out in the HUD stats.
+    selected_bone: Option<usize>,
+    /// The 2×2 editor viewport (Perspective TL, Top TR, Side BL, Front BR) — the shared
+    /// `flicker-render` grid, which owns the offscreen targets, the per-view cameras and the
+    /// composite. `None` until `setup` runs, which needs the renderer to create the targets.
+    grid: Option<QuadGrid>,
     /// The Animation/Pose toggle (Lua). `true` = the state machine drives the pose (real
     /// runtime animation, blended); `false` = A-pose (bind), the fitting reference. Idle is
     /// an authored stance, so bind — not Idle — is the honest pose to line a piece up in.
@@ -877,6 +883,15 @@ impl Viewer {
             NECKLACE_PENDANT_CM / longest.max(1e-3)
         };
 
+        // Auto-fit a default collision volume per bone (WS-D D4b) — computed before the literal
+        // moves `model`. Drives the debug overlay now; the source for combat queries later.
+        let collision_volumes = mechanics::autofit_capsules(&model.bones);
+        // The whole-unit movement pill: one upright capsule bounding the bind mesh (feet→head), for
+        // simple non-IK terrain collision. Fixed in the root frame (computed from the rest mesh, so
+        // it never deforms with the pose). 0.14 × height ≈ a humanoid radius.
+        let body_pill =
+            mechanics::upright_capsule(model.mesh.vertices.iter().map(|v| Vec3::from(v.p)), 0.14);
+
         Self {
             model,
             cam,
@@ -898,6 +913,11 @@ impl Viewer {
             show_mesh: has_mesh,
             show_skeleton: !has_mesh,
             show_textures: true,
+            show_collision: false,
+            collision_volumes,
+            body_pill,
+            selected_bone: None,
+            grid: None,
             // Start ANIMATED so the model is seen moving, not stuck in bind (user,
             // 2026-07-16: "see the model with animations attached and not get the A pose").
             // Toggle to Pose for fitting.
@@ -948,6 +968,7 @@ impl Viewer {
             .with("show_mesh", self.show_mesh)
             .with("show_textures", self.show_textures)
             .with("show_skeleton", self.show_skeleton)
+            .with("show_collision", self.show_collision)
             .with("animate", self.animate)
             .with("blend", self.blend_enabled)
             // Fit gadget: `fit_active` gates the whole panel, so with nothing selected the
@@ -990,7 +1011,7 @@ impl Viewer {
             .with(
                 "stats",
                 format!(
-                    "{} · {} bones · worn {}/{}",
+                    "{} · {} bones · worn {}/{}{}",
                     if self.preview {
                         match self.model.clips.get(self.preview_clip) {
                             Some(c) => format!(
@@ -1015,6 +1036,13 @@ impl Viewer {
                     self.model.bones.len(),
                     worn,
                     self.slots.len(),
+                    self.selected_bone
+                        .and_then(|i| self.model.bones.get(i))
+                        .map(|b| {
+                            let t = b.local.w_axis.truncate();
+                            format!(" · bone {} @ ({:.1}, {:.1}, {:.1})", b.name, t.x, t.y, t.z)
+                        })
+                        .unwrap_or_default(),
                 ),
             );
         for s in &self.slots {
@@ -1178,6 +1206,7 @@ impl Viewer {
         self.show_mesh = res.is_on("show_mesh");
         self.show_textures = res.is_on("show_textures");
         self.show_skeleton = res.is_on("show_skeleton");
+        self.show_collision = res.is_on("show_collision");
         self.animate = res.is_on("animate");
         self.blend_enabled = res.is_on("blend");
         // One-frame attack pulse; consumed by the next state-machine advance.
@@ -1226,7 +1255,7 @@ impl Viewer {
             self.record_note = match self.record_fits(&chars) {
                 Ok(n) => {
                     tracing::info!("Record: wrote {n} fit(s)");
-                    format!("Saved {n} pieces -> musefit/fits.json")
+                    format!("Saved {n} pieces -> inline attach")
                 }
                 Err(e) => {
                     tracing::error!("Record failed: {e}");
@@ -1305,37 +1334,27 @@ impl Viewer {
     /// written — it is re-derived from the rig each load, so a rig fix can't be shadowed by
     /// a stale record.
     fn record_fits(&self, chars: &Path) -> Result<usize> {
-        let mut fits = serde_json::Map::new();
+        let mut n = 0;
         for s in self.slots.iter().chain(self.sheaths.iter()) {
             if s.content.is_none() {
                 continue;
             }
-            let asset = s.def.file.trim_end_matches(".json");
-            fits.insert(
-                asset.to_string(),
-                serde_json::json!({
-                    "slot": s.def.key,
-                    "uniform": s.fit.uniform,
-                    "scale": [s.fit.scale.x, s.fit.scale.y, s.fit.scale.z],
-                    "offset": [s.fit.offset.x, s.fit.offset.y, s.fit.offset.z],
-                    "rotate": [s.fit.user_rot.x, s.fit.user_rot.y, s.fit.user_rot.z, s.fit.user_rot.w],
-                }),
-            );
+            // `offset` is WORLD axes at rest (x lateral, y depth, z up — NOT bone axes); `scale`
+            // × `uniform` size the raw ~1.899-normalised vendor mesh; `rotate` is a quaternion.
+            // The socket's upright correction is deliberately NOT written — it is re-derived from
+            // the rig each load, so a rig fix can never be shadowed by a stale record.
+            let attach = serde_json::json!({
+                "socket": s.def.key,
+                "offset": [s.fit.offset.x, s.fit.offset.y, s.fit.offset.z],
+                "rotate": [s.fit.user_rot.x, s.fit.user_rot.y, s.fit.user_rot.z, s.fit.user_rot.w],
+                "scale": [s.fit.scale.x, s.fit.scale.y, s.fit.scale.z],
+                "uniform": s.fit.uniform,
+            });
+            // Fold the fit INLINE into the piece's own self-describing file (WS-C C-γ).
+            write_inline_attach(&chars.join(s.def.dir).join(s.def.file), attach)?;
+            n += 1;
         }
-        let n = fits.len();
-        let doc = serde_json::json!({
-            "_comment": "Recorded piece placements, keyed by ASSET name (the fit belongs to the \
-piece, not the slot). Eyeballed in flicker-paperdoll and written by its Record button; read \
-back at load to override the inferred default. `scale` multiplies the raw vendor mesh (every \
-asset arrives normalised to a ~1.899 longest axis, carrying no real scale). `offset` is in \
-WORLD axes at rest — x lateral, y depth, z up — NOT bone axes. The socket's upright \
-correction is deliberately NOT stored: it is re-derived from the rig each load, so fixing the \
-rig can never be shadowed by a stale record.",
-            "fits": fits,
-        });
-        let path = chars.join("musefit").join(FITS_FILE);
-        std::fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
-        tracing::info!("recorded {n} fit(s) → {}", path.display());
+        tracing::info!("recorded {n} inline attach fit(s) into their piece files");
         Ok(n)
     }
 
@@ -1405,15 +1424,77 @@ rig can never be shadowed by a stale record.",
 
     /// Parent→child bone segments in engine space (`world` maps source space to
     /// engine space, including the vertical reframing offset).
-    fn bone_segments(&self, world: Mat4, globals: &[Mat4]) -> Vec<(Vec3, Vec3)> {
-        let mut segs = Vec::with_capacity(self.model.bones.len());
+    /// Click-to-select the BONE whose joint segment (parent→child) is nearest the cursor ray — the
+    /// rig/joint editor's pick (Slice 2). Returns the bone index, or `None` if the rig has no
+    /// selectable segments. The synthetic root (no parent) has no segment and is skipped. Picks the
+    /// globally-nearest bone (no distance threshold yet — a screen-space cutoff can refine it).
+    fn pick_bone(&self, cursor: Vec2, viewport: Vec2, world: Mat4, globals: &[Mat4]) -> Option<usize> {
+        let (o, d) = self.cam.camera().pick_ray(cursor, viewport)?;
+        let mut best: Option<(usize, f32)> = None;
         for (i, bone) in self.model.bones.iter().enumerate() {
             if bone.parent < 0 {
                 continue;
             }
             let a = world.transform_point3(globals[bone.parent as usize].w_axis.truncate());
             let b = world.transform_point3(globals[i].w_axis.truncate());
-            segs.push((a, b));
+            let (pr, ps) = mechanics::closest_point_ray_segment(o, d, a, b);
+            let dist = (pr - ps).length();
+            if best.is_none_or(|(_, bd)| dist < bd) {
+                best = Some((i, dist));
+            }
+        }
+        best.map(|(i, _)| i)
+    }
+
+    /// The selected bone's world-space segment (parent→child), for highlighting it in the panels.
+    fn selected_bone_seg(&self, world: Mat4, globals: &[Mat4]) -> Option<(Vec3, Vec3)> {
+        let i = self.selected_bone?;
+        let bone = self.model.bones.get(i)?;
+        if bone.parent < 0 {
+            return None;
+        }
+        let a = world.transform_point3(globals[bone.parent as usize].w_axis.truncate());
+        let b = world.transform_point3(globals[i].w_axis.truncate());
+        Some((a, b))
+    }
+
+    fn bone_segments(&self, world: Mat4, globals: &[Mat4]) -> Vec<(Vec3, Vec3)> {
+        // Rig-view geometry lives in the shared overlay lib (flicker-mechanics); the scene just
+        // supplies the topology + posed globals.
+        let parents: Vec<i32> = self.model.bones.iter().map(|b| b.parent).collect();
+        mechanics::debug::joint_segments(world, &parents, globals)
+    }
+
+    /// The auto-fit collision volumes as wireframe line segments in engine space — each volume's
+    /// shape placed by its bone's current pose (`world * globals[bone]`), for the debug overlay.
+    fn collision_segments(&self, world: Mat4, globals: &[Mat4]) -> Vec<(Vec3, Vec3)> {
+        let mut segs = Vec::new();
+        // The whole-unit movement pill: bounds the body, fixed in the root frame (drawn at `world`).
+        segs.extend(mechanics::debug::wireframe(&self.body_pill.transformed(world)));
+        // Player: the auto-fit capsule per bone, placed by the bone's current pose.
+        for vol in &self.collision_volumes {
+            let Some(bone_global) = globals.get(vol.bone) else {
+                continue;
+            };
+            let shape = vol.world(world * *bone_global);
+            segs.extend(mechanics::debug::wireframe(&shape));
+        }
+        // Items: fit a capsule to each WORN ITEM's mesh (the weapons + their scabbards) and place it
+        // at the prop's own world transform. Rigid props carry no skeleton, so the fit is over the
+        // mesh. Cosmetic props (hair, pendant) and body-following garments are EXCLUDED — an auto-fit
+        // over the ponytail was the big stray cylinder round the head/shoulders.
+        for (i, slot) in self.slots.iter().chain(self.sheaths.iter()).enumerate() {
+            let worn = slot.on || (i >= self.slots.len() && slot.loaded());
+            if !worn || !matches!(slot.def.key, "rhand" | "lhand" | "katana_sheath" | "dagger_sheath") {
+                continue;
+            }
+            let Some(SlotContent::Prop { mesh, bone, .. }) = &slot.content else {
+                continue;
+            };
+            let model = world * globals[*bone] * slot.fit.matrix();
+            let shape =
+                mechanics::fit_capsule(mesh.vertices.iter().map(|v| Vec3::from(v.p))).transformed(model);
+            segs.extend(mechanics::debug::wireframe(&shape));
         }
         segs
     }
@@ -1427,30 +1508,8 @@ rig can never be shadowed by a stale record.",
     /// "hunch") shows its axis visibly crossing the joint line. Leaf bones (no child) are
     /// skipped — there's no limb to compare against.
     fn bone_axis_segments(&self, world: Mat4, globals: &[Mat4]) -> Vec<(Vec3, Vec3)> {
-        let mut segs = Vec::with_capacity(self.model.bones.len());
-        for i in 0..self.model.bones.len() {
-            // Skip the synthetic root: it sits at the origin with its child a whole body-height
-            // away, so its axis would draw one long stray line — and it isn't a limb anyway.
-            if self.model.bones[i].parent < 0 {
-                continue;
-            }
-            let Some(child) = self.model.bones.iter().position(|b| b.parent == i as i32) else {
-                continue;
-            };
-            let origin = globals[i].w_axis.truncate();
-            let x_axis = globals[i].x_axis.truncate();
-            let to_child = globals[child].w_axis.truncate() - origin;
-            let len = to_child.length();
-            if x_axis.length_squared() < 1e-12 || len <= 1e-6 {
-                continue;
-            }
-            let dir = x_axis.normalize() * len * to_child.dot(x_axis).signum();
-            segs.push((
-                world.transform_point3(origin),
-                world.transform_point3(origin + dir),
-            ));
-        }
-        segs
+        let parents: Vec<i32> = self.model.bones.iter().map(|b| b.parent).collect();
+        mechanics::debug::frame_axis_segments(world, &parents, globals)
     }
 }
 
@@ -1502,18 +1561,10 @@ impl Scene for Viewer {
                 }
             }
         }
-        // Skin-variant albedos (1/2/3 keys) — Katanami bundle; loaded if present, a missing
-        // variant (e.g. Color_2 has no hair atlas) falls back to Color_1 at resolve time.
-        for v in [
-            "Katanami2_Body_BaseColor.png",
-            "Katanami3_Body_BaseColor.png",
-            "Katanami3_Hair_BaseColor.png",
-        ] {
-            wanted.push((v.to_string(), true, self.assets.clone()));
-        }
         // Dedup by basename (first source dir wins). Basenames don't collide across the
-        // Katanami (`Katanami_*`/`Eyes_*`) and Muse (`Baked_*`) sets, so the flat
-        // basename-keyed `textures` map stays unambiguous.
+        // Muse (`Baked_*`) set + the base body's own maps, so the flat basename-keyed `textures`
+        // map stays unambiguous. (The old Katanami skin-variant (1/2/3) loads were removed with
+        // the legacy strip — they looked in the base dir, which never had them: dead no-ops.)
         wanted.sort_by(|a, b| a.0.cmp(&b.0));
         wanted.dedup_by(|a, b| a.0 == b.0);
         for (name, is_srgb, dir) in &wanted {
@@ -1605,6 +1656,10 @@ impl Scene for Viewer {
         }
         // 1×1 white pixel — `render_hud` tints it to build the HUD's solid quads.
         self.hud_white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+
+        // Editor 2×2 grid: the shared `flicker-render` viewport grid creates one offscreen target
+        // per view, sized to its screen cell, and composites each back as a framed, labelled panel.
+        self.grid = Some(QuadGrid::editor(renderer));
 
         // The in-scene Lua HUD: inventory bar + view toggles + stat readout. A failure
         // here leaves `script: None` and the scene simply renders without a HUD.
@@ -1719,6 +1774,8 @@ impl Scene for Viewer {
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
                 screen,
+                typed: String::new(),
+                backspace: false,
             };
             let frame = {
                 // Disjoint field borrows: `ui_tree`/`ui_styles` read, `ui_state` mutated.
@@ -1735,12 +1792,31 @@ impl Scene for Viewer {
             if input.mouse_left_pressed && !over_hud && !self.last_globals.is_empty() {
                 let world = self.last_world;
                 let globals = std::mem::take(&mut self.last_globals);
-                self.editing = self.pick_slot(input.mouse_position, screen, world, &globals);
-                self.last_globals = globals;
-                match self.editing.and_then(|i| self.slot_at(i)) {
-                    Some(s) => tracing::info!("selected '{}' for fitting", s.def.key),
-                    None => tracing::info!("selection cleared"),
+                if self.show_skeleton {
+                    // Rig view: a click selects a BONE (the joint editor, Slice 2). The interactive
+                    // perspective is grid view 0, so map the click into that cell — the grid owns
+                    // the layout, so the pick ray matches exactly what that panel displays.
+                    let cell = self.grid.as_ref().map(|g| (g.local_cursor(0, input.mouse_position, screen), g.cell(0, screen).size));
+                    if let Some((Some(local), viewport)) = cell {
+                        self.selected_bone = self.pick_bone(local, viewport, world, &globals);
+                        match self.selected_bone {
+                            Some(i) => tracing::info!(
+                                "selected bone '{}' (local {:?})",
+                                self.model.bones[i].name,
+                                self.model.bones[i].local.w_axis.truncate(),
+                            ),
+                            None => tracing::info!("bone selection cleared"),
+                        }
+                    }
+                } else {
+                    // Normal view: a click selects a WORN piece for fitting (existing behaviour).
+                    self.editing = self.pick_slot(input.mouse_position, screen, world, &globals);
+                    match self.editing.and_then(|i| self.slot_at(i)) {
+                        Some(s) => tracing::info!("selected '{}' for fitting", s.def.key),
+                        None => tracing::info!("selection cleared"),
+                    }
                 }
+                self.last_globals = globals;
             }
         }
 
@@ -1874,8 +1950,6 @@ impl Scene for Viewer {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        renderer.set_camera(&self.cam.camera());
-
         // POSE selection. Animate → the state machine's current clip+tick, crossfaded with
         // the outgoing pose while a transition ramps (unless Blend is off). Pose, or a
         // pack-less body, → A-pose (bind): each bone's own rest local, the honest fitting
@@ -1909,6 +1983,117 @@ impl Scene for Viewer {
 
         let world = Mat4::from_translation(Vec3::new(0.0, self.world_y, 0.0)) * self.model.world;
         self.last_world = world; // paired with `last_globals` for next frame's pick
+
+        // ── Editor RTT panels: render the character (skinned mesh) + skeleton from each view into
+        // its offscreen target and composite it into a screen quadrant, all through the frame graph
+        // BEFORE the main-frame draws. Its offscreen passes reset the per-frame draw queues, so the
+        // main-view `set_camera` must come AFTER `fg.execute`. The base body is skinned + uploaded
+        // ONCE here and drawn into all four panels (freed after execute); the skeleton is drawn as
+        // an OVERLAY so it reads through the mesh.
+        if let Some(grid) = self.grid.as_ref() {
+            let base_layer = renderer.layer();
+            let joints = self.bone_segments(world, &globals);
+            let axes = self.bone_axis_segments(world, &globals);
+            let sel = self.selected_bone_seg(world, &globals);
+            const JOINT: [f32; 4] = [0.35, 0.9, 1.0, 1.0];
+            const AXIS: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
+            const SELECTED: [f32; 4] = [1.0, 0.8, 0.15, 1.0];
+
+            // Skin the base body once + upload each submesh (textured / flat), to draw into every
+            // panel. This is the mesh the grid was missing — it used to draw only into the hidden
+            // main frame. Honors the Mesh / Textures toggles (`show_mesh` / `show_textures`).
+            let mut panel_subs: Vec<PanelSub> = Vec::new();
+            if self.show_mesh && !self.model.mesh.vertices.is_empty() {
+                let skinned = skin::skin(&self.model.mesh, &palette);
+                for &(mat, start, count) in &self.sub {
+                    if count == 0 || start + count > skinned.len() {
+                        continue;
+                    }
+                    let material = self.model.mesh.materials.get(mat);
+                    let base = material.map(|m| m.base_color.as_str()).unwrap_or("");
+                    let tex = if self.show_textures { self.variant_albedo(base) } else { None };
+                    let indices: Vec<u32> = (0..count as u32).collect();
+                    match tex {
+                        Some(th) => {
+                            let maps = material.map(|m| self.resolve_maps(m)).unwrap_or_default();
+                            let verts = build_textured_verts(
+                                start..start + count,
+                                |j| skinned[j].position,
+                                |j| skinned[j].normal,
+                                |j| self.model.mesh.vertices[j].uv,
+                            );
+                            let h = renderer.upload_textured_mesh(&verts, MeshIndices::U32(&indices));
+                            panel_subs.push(PanelSub::Textured { h, tex: th, maps });
+                        }
+                        None => {
+                            let mat_id = material
+                                .filter(|m| m.color.len() >= 3)
+                                .map(|m| pack_rgb666(m.color[0], m.color[1], m.color[2]))
+                                .unwrap_or(FLAT_GRAY_MATERIAL);
+                            let verts: Vec<MeshVertex> = (start..start + count)
+                                .map(|j| MeshVertex {
+                                    position: skinned[j].position,
+                                    normal: skinned[j].normal,
+                                    material: mat_id,
+                                })
+                                .collect();
+                            let h = renderer.upload_mesh(&verts, MeshIndices::U32(&indices));
+                            panel_subs.push(PanelSub::Flat(h));
+                        }
+                    }
+                }
+            }
+
+            // Bones over the mesh only when the Skeleton toggle is on, or when there's no mesh to
+            // show (mirrors the main-frame rule at the skeleton overlay) — so a textured body reads
+            // clean by default and `Skeleton` reveals the rig.
+            let draw_bones = self.show_skeleton || panel_subs.is_empty();
+
+            // The grid renders each view into its offscreen target and composites it into its
+            // screen cell (framed + labelled) one 2D layer above the backdrop. Target ordering and
+            // the frame/portrait/label blit are centralized in `flicker-render` — no hand-ordering,
+            // no free-a-target-mid-loop hazard, and the panel unit is emitted together so it can no
+            // longer fall behind the HUD (both former bugs stay structurally impossible). The base
+            // body is skinned/uploaded once above and drawn into every view; freed after the pass.
+            let subs = &panel_subs;
+            let jref = &joints;
+            let aref = &axes;
+            grid.render(
+                renderer,
+                base_layer + 1.0,
+                self.model.orbit_radius,
+                &self.cam.camera(),
+                |r, _view| {
+                    r.set_scene(pip_scene());
+                    for sub in subs {
+                        match sub {
+                            PanelSub::Textured { h, tex, maps } => {
+                                r.draw_textured_mesh_pbr(*h, *tex, *maps, world, MeshDrawOptions::default());
+                            }
+                            PanelSub::Flat(h) => r.draw_mesh(*h, world, MeshDrawOptions::default()),
+                        }
+                    }
+                    if draw_bones {
+                        r.draw_lines_overlay(jref, JOINT);
+                        r.draw_lines_overlay(aref, AXIS);
+                        if let Some(seg) = sel {
+                            r.draw_lines_overlay(&[seg], SELECTED);
+                        }
+                    }
+                },
+            );
+
+            // Free the per-panel meshes AFTER the graph runs (freeing earlier would blank panels).
+            for sub in panel_subs {
+                match sub {
+                    PanelSub::Textured { h, .. } => renderer.free_textured_mesh(h),
+                    PanelSub::Flat(h) => renderer.free_mesh(h),
+                }
+            }
+        }
+
+        // Main-view camera (after the panel RTT passes, which reset the draw queues).
+        renderer.set_camera(&self.cam.camera());
 
         // Slice 2/3: CPU-skinned mesh, one draw per material submesh. Skin all
         // vertices once, then per submesh build textured (albedo) or flat (gray) GPU
@@ -2165,12 +2350,46 @@ impl Scene for Viewer {
                 renderer.draw_lines(&joints, JOINT);
                 renderer.draw_lines(&axes, AXIS);
             }
+            // Highlight the SELECTED bone's segment (Slice 2) in amber, always over the top.
+            if let Some(i) = self.selected_bone {
+                if let Some(bone) = self.model.bones.get(i) {
+                    if bone.parent >= 0 {
+                        let a = world.transform_point3(globals[bone.parent as usize].w_axis.truncate());
+                        let b = world.transform_point3(globals[i].w_axis.truncate());
+                        const SELECTED: [f32; 4] = [1.0, 0.8, 0.15, 1.0]; // amber
+                        renderer.draw_lines_overlay(&[(a, b)], SELECTED);
+                    }
+                }
+            }
+        }
+
+        // Collision-volume debug overlay (WS-D D6): the auto-fit capsules/spheres, wireframed on the
+        // posed bones, so the collision coverage is visible on the character.
+        if self.show_collision {
+            let segs = self.collision_segments(world, &globals);
+            const COLLISION: [f32; 4] = [0.25, 1.0, 0.45, 0.9]; // green
+            if mesh_drawn {
+                renderer.draw_lines_overlay(&segs, COLLISION);
+            } else {
+                renderer.draw_lines(&segs, COLLISION);
+            }
         }
 
         // ── HUD ── (all readouts live in the Lua HUD; see `hud_model`)
         // The stat readout that used to live here as a `draw_text` line is now published
         // as `Model.stats` and drawn by the Lua HUD (see `hud_model`), alongside the
         // inventory bar and the view toggles — rendered at the end of this method.
+        // Editor 2×2 grid backdrop: an opaque fullscreen fill UNDER the quad composites (emitted a
+        // layer up by the frame graph above), so the covered main scene doesn't show through the
+        // 2px quad seams. (Skipping the covered main-scene draw entirely is a perf follow-up.)
+        if self.grid.is_some() {
+            let screen = renderer.size();
+            renderer.draw_ui_panel(
+                Vec2::ZERO, screen, [0.03, 0.03, 0.04, 1.0], [0.03, 0.03, 0.04, 1.0], 0.0, 0.0, 0.0,
+                [0.0; 4], 0.0,
+            );
+        }
+
         // ── The Lua HUD, last so it lays over the scene: the inventory bar, the view
         // toggles, and the stat readout. `update` already published the Model and applied
         // the script's reported state; this only turns its plain-data commands into draw
@@ -2178,29 +2397,45 @@ impl Scene for Viewer {
         if let Some(white) = self.hud_white {
             // The walker already produced this frame's commands in `update`; here we
             // only blit them (the strict boundary — the script never sees a renderer).
+            //
+            // Lift the WHOLE HUD above the RTT-panel composites. The frame graph emits each panel
+            // (frame → portrait → label) at `base + 1`; the HUD sits at `base + 2` so its own
+            // ui-panels (view checkboxes, inventory cells) are never buried under a panel's sprite
+            // (within a layer the paint order is ui-panels → sprites → text).
+            let base = renderer.layer();
+            renderer.set_layer(base + 2.0);
             render_hud(renderer, &self.hud_commands, white, &[]);
+            renderer.set_layer(base);
         }
     }
 }
 
 /// Build the viewer scene: the BASE body rig + mesh + textures come from `base_dir`,
-/// while the clip library + state `.pack` come from `anim_dir` (the base borrows another
-/// character's animation set, resolved by shared bone names — see `format::load_dirs`).
+/// the clip library + state `.pack` are the base's OWN retargeted Motifect locomotion set (the
+/// retired Katanami library is no longer loaded — legacy strip, resolved by shared bone names).
 /// The Muse outfit overlay loads from the sibling `muse/` dir. Panics with a clear
 /// message if the base assets can't be read — the point of this viewer is to play the
 /// *real* exported data.
-fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
-    // ALSO load the retargeted Motifect clip library (Alpha/content/retarget/clips)
-    // ALONGSIDE the Katanami set, so the new In-Place / RootMotion clips (e.g.
-    // `walk_forward`) are cyclable with the up/down clip control for testing. Katanami
-    // stays the pack/state-machine + texture source below. Revert: drop `retarget_dir`
-    // from the load_dirs list.
-    let retarget_dir = base_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|content| content.join("retarget/clips"))
-        .unwrap_or_else(|| base_dir.join("retarget/clips"));
-    let model = format::load_dirs(&[base_dir, anim_dir, retarget_dir.as_path()])
+fn build_viewer(base_dir: &Path) -> Viewer {
+    // The unified base (PrismHumanBaseA) + its retargeted Motifect LOCOMOTION library
+    // (Alpha/content/retarget/clips/locomotion — In-Place / RootMotion, e.g. `walk_forward`,
+    // cyclable with the up/down control). The retired Katanami clip library is NO LONGER loaded
+    // (legacy strip, 2026-07-21): the base owns its own clips + pack, so the ↑/↓ preview and the SM
+    // see only the current data. Only the locomotion library is loaded — the other per-library
+    // trees (`retarget/clips/<lib>/`: combat / daily_life / …) would pull ~800 MB and collide on
+    // shared stems.
+    // Prefer a per-body clip library `retarget/clips/<base>/locomotion` when present — clips
+    // retargeted onto THIS body's own bind (in-app `flicker-content::retarget`), e.g. HumanBaseA's
+    // flat-foot re-bake. It lives OUTSIDE the character dir (so `load_dirs`' base-dir recursion
+    // doesn't double-load it). Falls back to the shared `retarget/clips/locomotion`.
+    let base_name = base_dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    let content_root = base_dir.parent().and_then(|p| p.parent());
+    let retarget_dir = content_root
+        .map(|c| c.join(format!("retarget/clips/{base_name}/locomotion")))
+        .filter(|d| d.is_dir())
+        .or_else(|| content_root.map(|c| c.join("retarget/clips/locomotion")))
+        .unwrap_or_else(|| base_dir.join("retarget/clips/locomotion"));
+    let model = format::load_dirs(&[base_dir, retarget_dir.as_path()])
         .expect("load flicker.rig assets");
     tracing::info!(
         "loaded rig: {} bones, {} clips, mesh {} verts (base {}, source {}/{})",
@@ -2225,14 +2460,13 @@ fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
     // The pack's runtime state machine drives the Animate view. States reference clips by
     // NAME, resolved against the model's clip list (same as the rig loader resolves tracks).
     // Missing pack → Animate simply shows bind; only a bad `initial` is fatal at build.
-    // Base A now owns its locomotion pack (`<base>/PrismHumanBaseA.pack.json`, driving the
-    // 30 fps Motifect clips); fall back to the borrowed Katanami pack for a base that has
-    // none of its own.
+    // Base A owns its locomotion pack (`<base>/PrismHumanBaseA.pack.json`, driving the Motifect
+    // clips). No Katanami fallback (legacy strip): a base with no pack of its own falls through to
+    // `load_pack` erroring → Animate shows bind.
     let pack_path = base_dir
         .file_name()
         .map(|n| base_dir.join(format!("{}.pack.json", n.to_string_lossy())))
-        .filter(|p| p.exists())
-        .unwrap_or_else(|| anim_dir.join("Katanami.pack.json"));
+        .unwrap_or_else(|| base_dir.join("pack.json"));
     let (sm, sm_states) = match state::load_pack(&pack_path) {
         Ok(def) => {
             let names: Vec<String> = def.states.iter().map(|s| s.name.clone()).collect();
@@ -2267,13 +2501,13 @@ fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
     // change. `base_dir` is <chars>/PrismHumanBaseA, so its parent is the tree root.
     let chars = base_dir.parent().unwrap_or(base_dir).to_path_buf();
     // DEBUG (D.4 test): load base B (male) alongside base A so `X` hot-swaps the body. Both use
-    // the SAME anim+retarget clip dirs → identical clip lists (by name/order), so the whole
-    // Model swaps cleanly and the retargeted clips drive base B's own bind (the D.3 fix).
+    // the SAME retarget clip dir → identical clip lists (by name/order), so the whole Model swaps
+    // cleanly and the retargeted clips drive base B's own bind (the D.3 fix).
     let alt_model = base_dir
         .parent()
         .map(|c| c.join("PrismHumanBaseB"))
         .filter(|d| d.exists())
-        .and_then(|d| format::load_dirs(&[d.as_path(), anim_dir, retarget_dir.as_path()]).ok());
+        .and_then(|d| format::load_dirs(&[d.as_path(), retarget_dir.as_path()]).ok());
     if alt_model.is_some() {
         tracing::info!("base B (male) loaded alongside base A — press X to toggle the body");
     }
@@ -2286,15 +2520,17 @@ fn build_viewer(base_dir: &Path, anim_dir: &Path) -> Viewer {
 /// Content lives under `Alpha/content/characters/`. The BASE body is PrismHumanBaseA
 /// — a Meshy AUTO-rigged female whose 24-bone Mixamo rig was renamed to our canonical
 /// bone names (`tools/blender/rename_meshy_to_canonical.py`) and exported with
-/// retarget=true, so the shared clips drive HER proportions (rotation-only) rather than
-/// snapping her to Katanami's. It borrows the Katanami ANIMATION library (clips + pack)
-/// by shared bone names; finger/twist tracks stay unresolved until slice 2.
+/// retarget=true, so the shared clips drive HER proportions (rotation-only). It plays its OWN
+/// retargeted Motifect locomotion clips + `PrismHumanBaseA.pack.json`; the retired Katanami
+/// library is no longer loaded (legacy strip). Finger/twist tracks stay unresolved (no source).
 pub fn scene() -> Box<dyn Scene> {
+    // SMOKE TEST (WS-F, 2026-07-21): pointed at `HumanBaseA` — the first roster base run end-to-end
+    // through the in-app Rust pipeline (`flicker-content::import_folder`: scan→parse→conform→bake),
+    // NOT the Blender tool. Lets the raised-groin pelvis be judged in-window against the shared
+    // locomotion clips. Revert to `PrismHumanBaseA` (the Blender-baked reference) to compare.
     let base_dir =
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/PrismHumanBaseA"));
-    let anim_dir =
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/katanami"));
-    Box::new(build_viewer(&base_dir, &anim_dir))
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/HumanBaseA"));
+    Box::new(build_viewer(&base_dir))
 }
 
 #[cfg(test)]
@@ -2403,8 +2639,10 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../Alpha/content/characters/PrismHumanBaseA"
         ));
-        let retarget =
-            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/retarget/clips"));
+        let retarget = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/retarget/clips/locomotion"
+        ));
         let pack_path = base.join("PrismHumanBaseA.pack.json");
         if !pack_path.exists() || !retarget.join("In-Place").exists() {
             return; // no converted fixtures on this checkout
@@ -2623,6 +2861,8 @@ mod tests {
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
             screen: Vec2::new(w, h),
+            typed: String::new(),
+            backspace: false,
         };
         run_ui(&tree, model, &styles, &snap, &mut UiState::new())
     }
@@ -2648,6 +2888,52 @@ mod tests {
             .with("fit_x", 0.0_f32)
             .with("fit_y", 0.0_f32)
             .with("fit_z", 0.0_f32)
+    }
+
+    /// WS-C C-γ safety: the Record read-modify-write folds `attach` INTO a real piece file while
+    /// preserving its (multi-MB) mesh, and the result reloads to a runtime fit — with a second
+    /// record replacing (not duplicating) the section. Guards content integrity before the Record
+    /// button mutates real content; skips if the sample asset isn't present.
+    #[test]
+    fn record_folds_attach_inline_without_disturbing_the_mesh() {
+        let src = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/characters/musefit/Dagger.json"
+        ));
+        if !src.exists() {
+            eprintln!("skipping: {} not present", src.display());
+            return;
+        }
+        let tmp = std::env::temp_dir().join("flicker_paperdoll_ws_c_record_roundtrip.json");
+        std::fs::copy(&src, &tmp).expect("copy sample piece");
+
+        let before = format::load_mesh(&tmp).expect("baseline load").vertices.len();
+        assert!(before > 0, "sample piece should have geometry");
+
+        // Exactly the Record path: build the attach json, fold it in.
+        let attach = serde_json::json!({
+            "socket": "lhand", "offset": [4.6_f32, -13.0, 4.1],
+            "rotate": [0.0_f32, 0.0, 0.0, 1.0], "scale": [1.0_f32, 1.0, 1.0], "uniform": 37.76_f32,
+        });
+        write_inline_attach(&tmp, attach).expect("fold attach inline");
+
+        let (mesh, at) = format::load_mesh_with_attach(&tmp).expect("reload folded piece");
+        assert_eq!(mesh.vertices.len(), before, "record must not disturb the mesh");
+        assert_eq!(at.socket, "lhand");
+        assert!((at.uniform - 37.76).abs() < 1e-3);
+        assert!(RecordedFit::from_attach(&at).is_some(), "inline attach must yield a recorded fit");
+
+        // Idempotent: re-recording REPLACES (not duplicates) attach; mesh still intact.
+        let attach2 = serde_json::json!({
+            "socket": "lhand", "offset": [0.0_f32, 0.0, 0.0], "rotate": [0.0_f32, 0.0, 0.0, 1.0],
+            "scale": [1.0_f32, 1.0, 1.0], "uniform": 5.0_f32,
+        });
+        write_inline_attach(&tmp, attach2).expect("second fold");
+        let (mesh2, at2) = format::load_mesh_with_attach(&tmp).expect("reload again");
+        assert_eq!(mesh2.vertices.len(), before, "re-record must not disturb the mesh");
+        assert!((at2.uniform - 5.0).abs() < 1e-3, "re-record replaces the attach");
+
+        let _ = std::fs::remove_file(&tmp);
     }
 
     /// With nothing selected the gadget must not run at all — no phantom slot to edit.
@@ -2962,7 +3248,7 @@ mod tests {
         let status = |msg: &str| {
             run_hud(&h, &fit_model(true).with("fit_status", msg), &InputState::new(), w, hgt).commands
         };
-        assert!(has_text(&status("Saved 9 pieces -> musefit/fits.json"), "Saved 9 pieces"),
+        assert!(has_text(&status("Saved 9 pieces -> inline attach"), "Saved 9 pieces"),
             "the confirmation must be drawn");
 
         // Blank (the engine expires it) → gone, so a stale "saved" can't be misread as fresh.
@@ -2995,7 +3281,7 @@ mod tests {
         let model = fit_model(true);
         let mut state = UiState::new();
         let mut captures = |mx: f32, my: f32, clicked: bool, down: bool| {
-            let snap = UiInput { mouse: Vec2::new(mx, my), clicked, down, screen: Vec2::new(w, hgt) };
+            let snap = UiInput { mouse: Vec2::new(mx, my), clicked, down, screen: Vec2::new(w, hgt), typed: String::new(), backspace: false };
             run_ui(&tree, &model, &styles, &snap, &mut state).results.is_on("hud_hit")
         };
 

@@ -86,7 +86,7 @@ fn higher_layer_covers_lower_across_pipelines() {
         1,
         1,
     );
-    let textures = vec![white];
+    let textures = vec![Some(white)];
     let tex = TextureHandle(0);
     let screen = Vec2::new(SIZE as f32, SIZE as f32);
 
@@ -98,7 +98,7 @@ fn higher_layer_covers_lower_across_pipelines() {
     //   - RED triangle at layer 2 over the corner (cross-pipeline, on top of all)
     sprite.push(screen, tex, Vec2::ZERO, screen, [0.0, 0.0, 1.0, 1.0], 1.0);
     sprite.push(screen, tex, Vec2::ZERO, screen, [0.0, 1.0, 0.0, 1.0], 0.0);
-    text.push("WWWWWW", 2.0, 26.0, 24.0, [0.0, 0.0, 0.0, 1.0], 0.0, crate::FontRole::Body);
+    text.push("WWWWWW", 2.0, 26.0, 24.0, [0.0, 0.0, 0.0, 1.0], 0.0, crate::FontRole::Body, false, false, -1.0);
     triangle.push(
         screen,
         Vec2::new(0.0, 0.0),

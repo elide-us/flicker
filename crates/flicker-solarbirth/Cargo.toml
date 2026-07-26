@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 flicker = { path = "../flicker" }
+flicker-orrery.workspace = true
 flicker-shell.workspace = true
 flicker-flight.workspace = true
 glam.workspace = true

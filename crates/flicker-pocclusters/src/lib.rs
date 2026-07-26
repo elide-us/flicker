@@ -22,7 +22,7 @@
 //!   * Escape: open the pause menu (Resume / Quit).
 //!
 //! Debug toggles are driven by a DECLARATIVE component-tree HUD
-//! (`Alpha/content/scripts/hud_pocclusters.lua`): the Lua declares the panel via
+//! (`Alpha/content/sensorium/scripts/hud_pocclusters.lua`): the Lua declares the panel via
 //! `M.tree()` (checkboxes + the move-speed / sensitivity sliders) and the
 //! flicker-widgets Rust walker (`run_ui`) owns layout, hit-test, and draw. Six
 //! clickable checkboxes replace the old `1`/`2`/`\` key handling:
@@ -48,18 +48,26 @@
 //! scene picker. This crate exposes a `scene()` factory and no longer builds a
 //! standalone binary.
 
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState};
+use flicker::app::{
+    AbstractControls, Action, ContextualBindings, GamepadConfig, InputContext, InputMap,
+    InputState, Key,
+};
+use flicker::net::chat::{ChatClient, ChatCommand, ChatEvent};
 use flicker::render::{
-    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, SceneLighting,
-    TextureHandle, Vec2, Vec3,
+    Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
+    Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{load_styles, load_ui_json, render_hud, run_ui, UiInput, UiState};
+use flicker::ui::{
+    chat_panel, load_styles, load_ui_json, render_hud, run_ui, ChatLineKind, ChatLineView,
+    ChatView, RosterEntry, UiInput, UiState,
+};
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -67,6 +75,9 @@ use flicker_voxel::{
     Scene as WorldScene, CLUSTER_DIM, NAV_DIM,
 };
 use flicker_worker::WorkerPool;
+
+mod celestial;
+use celestial::CelestialState;
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
@@ -81,6 +92,24 @@ enum GamePhase {
     Booting,
     Active,
 }
+
+/// An in-flight drag of the floating chat window (scene-owned, since the walker
+/// has no window move/resize — its geometry is static). `Move` remembers the
+/// grab offset from the window's top-left so the window tracks the cursor.
+#[derive(Copy, Clone, PartialEq)]
+enum ChatDrag {
+    None,
+    Move { grab: Vec2 },
+    Resize,
+}
+
+// Chat-window hit regions + minimum size (device px). The grip is the top strip
+// that drags the window; the corner box resizes it. These are hit rects, so they
+// only need to roughly cover the drawn title bar / `◢` handle.
+const CHAT_GRIP_H: f32 = 34.0;
+const CHAT_CORNER: f32 = 22.0;
+const CHAT_MIN_W: f32 = 420.0;
+const CHAT_MIN_H: f32 = 180.0;
 
 struct GameScene {
     /// LOD-0 source-of-truth cluster data (see `docs/architecture.md`):
@@ -131,7 +160,19 @@ struct GameScene {
     /// per-frame delta. `None` when right is not held.
     last_look_cursor: Option<Vec2>,
 
-    bindings: InputMap,
+    /// The from-Home sky (sun/moon/planets/constellations), driven by the Celestial
+    /// Cycle panel. The body layout is the shared `flicker_orrery` roster.
+    celestial: CelestialState,
+    /// Soft white disc texture for the planet billboards, uploaded once in `enter`.
+    planet_disc: Option<TextureHandle>,
+    /// Star glow sprite (core + halo + glint) for the constellation stars.
+    star_tex: Option<TextureHandle>,
+
+    /// Per-context action maps + the active-context stack. `World` = wasd_and_mouse
+    /// (gameplay movement + look); `TextEntry` = an empty map, pushed while the chat
+    /// input owns the keyboard so no gameplay Action resolves. Movement/look read
+    /// `active_map()` and are gated on `active() == World`.
+    bindings: ContextualBindings,
     controls: AbstractControls,
     gamepad_config: GamepadConfig,
 
@@ -217,6 +258,43 @@ struct GameScene {
 
     /// Previous-frame menu action level, for press-edge detection.
     menu_prev: bool,
+
+    // ── In-world chat (clay-chat client; DesignSync ChatPanel over clay-chat v0.1) ──
+    /// The clay-chat client (background socket thread). `None` until `enter` connects;
+    /// dropped in `exit` to disconnect. Inbound events drained each frame like `build_rx`.
+    chat: Option<ChatClient>,
+    /// Retained walker state for the chat pass (keyboard focus), separate from the HUD's.
+    chat_ui_state: UiState,
+    /// This frame's chat draw commands — a SECOND `run_ui` pass over the floating
+    /// panel, blitted after the HUD in `render` (so it layers on top).
+    chat_commands: Vec<HudCommand>,
+    /// The floating window's rect `(x, y, w, h)` in device px — scene-owned so it can
+    /// move/resize (walker geometry is static). Seeded bottom-centre in `enter`.
+    chat_rect: (f32, f32, f32, f32),
+    /// Does the chat input own the keyboard? Mirrored onto the `TextEntry` context.
+    chat_focus: bool,
+    /// In-flight title-drag (move) / corner-drag (resize), or `None`.
+    chat_drag: ChatDrag,
+    /// The local nick (updated from the server's `NickAck` / `Renamed`).
+    chat_nick: String,
+    /// Joined channels (wire form, e.g. `"#general"`) — one tab each.
+    chat_active: String,
+    chat_channels: Vec<String>,
+    /// Per-channel scrollback + roster, built from decoded events.
+    chat_logs: HashMap<String, Vec<ChatLineView>>,
+    chat_rosters: HashMap<String, Vec<RosterEntry>>,
+    /// The input field's current text (mirrors the walker `chat_input` bind).
+    chat_input: String,
+    /// The active log's scroll offset (`f32::MAX` = follow newest).
+    chat_scroll: f32,
+    /// Press-edge latches for T (hand-off in), Enter (send), Escape (cancel).
+    t_prev: bool,
+    enter_prev: bool,
+    esc_prev: bool,
+    /// While the T that handed off is still held, swallow keyboard text so the
+    /// trigger key (and its auto-repeats) never types into the field. Cleared when
+    /// T releases.
+    chat_key_guard: bool,
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
     /// `enter`.
@@ -249,7 +327,8 @@ impl Default for GameScene {
             yaw: 0.0,
             pitch: 0.0,
             last_look_cursor: None,
-            bindings: InputMap::wasd_and_mouse(),
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse())
+                .with(InputContext::TextEntry, InputMap::empty()),
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
             ui_tree: None,
@@ -266,12 +345,32 @@ impl Default for GameScene {
             locomotion_walk: false,
             lod_field: [[0u8; FIELD_DIM as usize]; FIELD_DIM as usize],
             digit_atlas: None,
+            planet_disc: None,
+            star_tex: None,
+            celestial: CelestialState::default(),
             pick_meshes: Vec::new(),
             selection: None,
             vy: 0.0,
             grounded: false,
             walk_needs_snap: false,
             menu_prev: false,
+            chat: None,
+            chat_ui_state: UiState::new(),
+            chat_commands: Vec::new(),
+            chat_rect: (0.0, 0.0, 0.0, 0.0),
+            chat_focus: false,
+            chat_drag: ChatDrag::None,
+            chat_nick: String::new(),
+            chat_active: String::new(),
+            chat_channels: Vec::new(),
+            chat_logs: HashMap::new(),
+            chat_rosters: HashMap::new(),
+            chat_input: String::new(),
+            chat_scroll: f32::MAX,
+            t_prev: false,
+            enter_prev: false,
+            esc_prev: false,
+            chat_key_guard: false,
             ui_theme: None,
             phase: GamePhase::Booting,
             nav_ready_target: 0,
@@ -284,15 +383,16 @@ impl Default for GameScene {
 /// the shared content tree alongside the other clients' HUD scripts.
 const HUD_SCRIPT_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Alpha/content/scripts/hud_pocclusters.lua"
+    "/../../Alpha/content/sensorium/scripts/hud_pocclusters.lua"
 );
 
-/// Path to the **shared** UI-element library (this scene reads `UI.pocclusters`
-/// from it — its layout + styles live alongside the shell front-end elements, not
-/// a client-local copy).
+/// The scene's HUD layout + `$token` styles live in the shared `ui_elements.json` —
+/// the ONE global UI-element definition + Prism palette every prism-alpha scene reads —
+/// under the `pocclusters` key. NOT a per-scene copy: a second file would need its own
+/// `theme.tokens`, forking the palette, which the one-colour-source rule forbids.
 const HUD_UI_ELEMENTS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Alpha/content/resources/ui_elements.json"
+    "/../../Alpha/content/sensorium/resources/ui_elements.json"
 );
 
 impl GameScene {
@@ -503,29 +603,19 @@ fn display_corner(cluster: &Cluster, m: [i32; 3]) -> CornerVector {
     }
 }
 
-/// One corner of a virtual voxel, with both coordinate frames kept
-/// explicit. `owner_relative` is the same value the owning voxel
-/// stores (the provenance/write-back handle, *if* editing ever
-/// arrives); `self_relative` is the same world point expressed from
-/// the dual cell's centre `p` — what the renderer and the math reason
-/// in. Same point, two frames; storing both keeps the bookkeeping
-/// visible while debugging.
+/// One corner of a virtual voxel. A corner is a neighbour voxel's stored vector `V`
+/// (owned by the voxel whose min-corner is `m = p + (bx-1, by-1, bz-1)`), kept in the
+/// two frames the inspector + renderer reason in: `self_relative` (that vector expressed
+/// from THIS cell's centre `p` — its local frame) and `world` (its absolute position).
 #[derive(Copy, Clone, Debug)]
 struct VirtualVoxelCorner {
-    /// Owning voxel's min-corner in cluster-local grid coords:
-    /// `m = p + (bx - 1, by - 1, bz - 1)` per the octant mapping.
-    owner_local: [i32; 3],
-    /// `V.to_components()`: corner offset from `m` (the owner's own
-    /// min corner), range `[-0.5, 1.5]`. The owner's default value of
-    /// `(0.5, 0.5, 0.5)` is its cell centre.
-    owner_relative: [f32; 3],
-    /// `(m - p) + V.to_components()`: same world point expressed from
-    /// `p`. For default owners this collapses to `(bx - 0.5, by - 0.5,
-    /// bz - 0.5)` → corner at `p ± 0.5`, the clean lattice cube.
+    /// `(m - p) + V.to_components()`: the corner expressed from this cell's centre `p`
+    /// — this voxel's local frame. For default owners this collapses to
+    /// `(bx - 0.5, by - 0.5, bz - 0.5)`, the clean lattice cube. The inspector panel's
+    /// `local` columns.
     self_relative: [f32; 3],
-    /// Absolute world-space corner position (`cluster_origin + m +
-    /// V`). The renderer consumes this; picking uses it for hit
-    /// outlines.
+    /// Absolute world-space corner position (`cluster_origin + m + V`). The renderer's
+    /// wireframe overlay consumes this; the inspector panel's `world` columns.
     world: Vec3,
 }
 
@@ -554,8 +644,6 @@ impl VirtualVoxel {
         let off = cluster_id.world_offset();
         let cluster_origin = Vec3::new(off[0], off[1], off[2]);
         let mut corners = [VirtualVoxelCorner {
-            owner_local: [0; 3],
-            owner_relative: [0.0; 3],
             self_relative: [0.0; 3],
             world: Vec3::ZERO,
         }; 8];
@@ -576,12 +664,7 @@ impl VirtualVoxel {
             ];
             let world = cluster_origin
                 + Vec3::new(m[0] as f32 + v[0], m[1] as f32 + v[1], m[2] as f32 + v[2]);
-            *corner = VirtualVoxelCorner {
-                owner_local: m,
-                owner_relative: v,
-                self_relative,
-                world,
-            };
+            *corner = VirtualVoxelCorner { self_relative, world };
         }
         Self {
             cluster: cluster_id,
@@ -1193,17 +1276,18 @@ impl GameScene {
 
         // Horizontal intent, flattened to the XZ plane (R/F are inert while
         // walking).
+        let map = self.bindings.active_map();
         let mut horizontal = Vec3::ZERO;
-        if input.input_active(&self.bindings, Action::MoveForward) {
+        if input.input_active(map, Action::MoveForward) {
             horizontal += self.move_forward();
         }
-        if input.input_active(&self.bindings, Action::MoveBackward) {
+        if input.input_active(map, Action::MoveBackward) {
             horizontal -= self.move_forward();
         }
-        if input.input_active(&self.bindings, Action::StrafeRight) {
+        if input.input_active(map, Action::StrafeRight) {
             horizontal += self.move_right();
         }
-        if input.input_active(&self.bindings, Action::StrafeLeft) {
+        if input.input_active(map, Action::StrafeLeft) {
             horizontal -= self.move_right();
         }
         let step = horizontal.normalize_or_zero() * WALK_SPEED * dt_s;
@@ -1261,85 +1345,305 @@ impl GameScene {
     /// the stat lines PRE-FORMATTED to the exact strings the text nodes display — the
     /// component walker has no printf, so the formatting lives here. The deep
     /// virtual-voxel inspector is *not* here; it stays Rust (`render`).
-    fn hud_model(&self) -> ValueMap {
-        let controls_line = if self.locomotion_walk {
-            "walk \u{2014} WASD on surface, gravity, right-drag look"
-        } else {
-            "fly \u{2014} WASD move, R/F up/down, right-drag look"
+    /// Post the current input line. A leading `/` is a client command
+    /// (`/join /part /leave /nick /names`); anything else — including `/me`, which
+    /// round-trips as a plain message and renders as an emote by the `/me ` convention —
+    /// is a `MSG` to the active channel. Clears the input.
+    fn send_chat_input(&mut self) {
+        let text = std::mem::take(&mut self.chat_input).trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some(client) = self.chat.as_ref() else {
+            return;
         };
-        let pick = match self.selection {
+        if let Some(rest) = text.strip_prefix('/') {
+            let mut it = rest.splitn(2, ' ');
+            let verb = it.next().unwrap_or("").to_ascii_lowercase();
+            let arg = it.next().unwrap_or("").trim().to_string();
+            match verb.as_str() {
+                "join" | "j" => {
+                    if !arg.is_empty() {
+                        client.send(ChatCommand::Join(arg));
+                    }
+                }
+                "part" | "leave" => {
+                    let channel = if arg.is_empty() { self.chat_active.clone() } else { arg };
+                    client.send(ChatCommand::Part(channel));
+                }
+                "nick" => {
+                    if !arg.is_empty() {
+                        client.send(ChatCommand::Nick(arg));
+                    }
+                }
+                "names" => client.send(ChatCommand::Names(self.chat_active.clone())),
+                _ => client.send(ChatCommand::Msg {
+                    channel: self.chat_active.clone(),
+                    text,
+                }),
+            }
+        } else {
+            client.send(ChatCommand::Msg {
+                channel: self.chat_active.clone(),
+                text,
+            });
+        }
+    }
+
+    /// Append a line to a channel's scrollback (ring-capped), auto-following the
+    /// active channel to newest.
+    fn push_chat_line(&mut self, channel: &str, kind: ChatLineKind, text: String) {
+        const CAP: usize = 300;
+        let log = self.chat_logs.entry(channel.to_string()).or_default();
+        log.push(ChatLineView { kind, text });
+        if log.len() > CAP {
+            let drop = log.len() - CAP;
+            log.drain(0..drop);
+        }
+        if channel == self.chat_active {
+            self.chat_scroll = f32::MAX;
+        }
+    }
+
+    fn roster_add(&mut self, channel: &str, nick: &str, my_nick: &str) {
+        let roster = self.chat_rosters.entry(channel.to_string()).or_default();
+        if !roster.iter().any(|m| m.label == nick) {
+            roster.push(RosterEntry {
+                label: nick.to_string(),
+                op: false,
+                you: nick == my_nick,
+            });
+        }
+    }
+
+    fn roster_remove(&mut self, channel: &str, nick: &str) {
+        if let Some(roster) = self.chat_rosters.get_mut(channel) {
+            roster.retain(|m| m.label != nick);
+        }
+    }
+
+    /// Fold one decoded [`ChatEvent`] into the per-channel logs + rosters (+ our own
+    /// nick / active channel on the events that change them).
+    fn apply_event(&mut self, ev: ChatEvent, my_nick: &str) {
+        match ev {
+            ChatEvent::Connected => {
+                let active = self.chat_active.clone();
+                self.push_chat_line(&active, ChatLineKind::Joined, "· connected".to_string());
+            }
+            ChatEvent::Disconnected(reason) => {
+                let active = self.chat_active.clone();
+                let msg = match reason {
+                    Some(r) => format!("· disconnected — {r}"),
+                    None => "· disconnected".to_string(),
+                };
+                self.push_chat_line(&active, ChatLineKind::Left, msg);
+            }
+            ChatEvent::Chat { channel, from, text } => {
+                let (kind, line) = if let Some(rest) = text.strip_prefix("/me ") {
+                    (ChatLineKind::Emote, format!("✦ {from} {rest}"))
+                } else if from == my_nick {
+                    (ChatLineKind::You, format!("{from}   {text}"))
+                } else {
+                    (ChatLineKind::Say, format!("{from}   {text}"))
+                };
+                self.push_chat_line(&channel, kind, line);
+            }
+            ChatEvent::Joined { nick, channel } => {
+                self.roster_add(&channel, &nick, my_nick);
+                self.push_chat_line(&channel, ChatLineKind::Joined, format!("◈ {nick} joined"));
+                if nick == my_nick {
+                    // Our own JOIN success: ensure the tab exists (+ seed the roster for
+                    // a channel we joined mid-session) and switch to it.
+                    if !self.chat_channels.iter().any(|c| c == &channel) {
+                        self.chat_channels.push(channel.clone());
+                        if let Some(c) = self.chat.as_ref() {
+                            c.send(ChatCommand::Names(channel.clone()));
+                        }
+                    }
+                    self.chat_active = channel;
+                    self.chat_scroll = f32::MAX;
+                }
+            }
+            ChatEvent::Parted { nick, channel } => {
+                self.roster_remove(&channel, &nick);
+                self.push_chat_line(&channel, ChatLineKind::Left, format!("◌ {nick} left"));
+                if nick == my_nick {
+                    self.chat_channels.retain(|c| c != &channel);
+                    self.chat_logs.remove(&channel);
+                    self.chat_rosters.remove(&channel);
+                    if self.chat_active == channel {
+                        self.chat_active = self.chat_channels.first().cloned().unwrap_or_default();
+                        self.chat_scroll = f32::MAX;
+                    }
+                }
+            }
+            ChatEvent::Renamed { old, new } => {
+                if old == self.chat_nick {
+                    self.chat_nick = new.clone();
+                }
+                let you = new == self.chat_nick;
+                let mut touched: Vec<String> = Vec::new();
+                for (channel, roster) in self.chat_rosters.iter_mut() {
+                    let mut hit = false;
+                    for member in roster.iter_mut() {
+                        if member.label == old {
+                            member.label = new.clone();
+                            member.you = you;
+                            hit = true;
+                        }
+                    }
+                    if hit {
+                        touched.push(channel.clone());
+                    }
+                }
+                for channel in touched {
+                    self.push_chat_line(&channel, ChatLineKind::Renamed, format!("ᛥ {old} is now {new}"));
+                }
+            }
+            ChatEvent::Names { channel, names } => {
+                let roster = names
+                    .into_iter()
+                    .map(|label| RosterEntry {
+                        you: label == my_nick,
+                        op: false,
+                        label,
+                    })
+                    .collect();
+                self.chat_rosters.insert(channel, roster);
+            }
+            ChatEvent::NickAck(nick) => {
+                self.chat_nick = nick.clone();
+                let active = self.chat_active.clone();
+                self.push_chat_line(&active, ChatLineKind::Joined, format!("· you are now '{nick}'"));
+            }
+            ChatEvent::Notice(text) => {
+                let active = self.chat_active.clone();
+                self.push_chat_line(&active, ChatLineKind::Left, format!("· {text}"));
+            }
+            ChatEvent::Error(text) => {
+                let active = self.chat_active.clone();
+                self.push_chat_line(&active, ChatLineKind::Op, format!("⚠ {text}"));
+            }
+            ChatEvent::Channels(_) | ChatEvent::Pong(_) => {}
+        }
+    }
+
+    fn hud_model(&self) -> ValueMap {
+        let walk_mode = self.locomotion_walk;
+        let mode_tag = if walk_mode { "Walk mode" } else { "Fly mode" };
+
+        // Left-panel readout rows (label -> value), pre-formatted here (the walker has
+        // no printf) and bound by `text_bind` in hud_pocclusters.lua.
+        let cam_val = format!(
+            "({:.1}, {:.1}, {:.1}) \u{00B7} yaw {:.0}\u{00B0} pitch {:.0}\u{00B0}",
+            self.position.x, self.position.y, self.position.z,
+            self.yaw.to_degrees(), self.pitch.to_degrees(),
+        );
+        let grid_val = format!("{} clusters \u{00B7} {}\u{00B3} voxels", self.meshes.len(), CLUSTER_DIM);
+        let move_val = format!(
+            "{} \u{00B7} {:.0} u/s",
+            if walk_mode { "walk" } else { "fly" },
+            self.controls.move_speed,
+        );
+        let diag_val = format!("arrows {} \u{00B7} nav {}", self.corner_arrows.len(), self.navs.len());
+
+        // Pick: shown blue when a face is selected (`has_pick`), dim "none" otherwise.
+        let has_pick = self.selection.is_some();
+        let pick_val = match self.selection {
             Some((id, p)) => format!(
-                "pick: ({}, {}, {}, lod {}) p = ({}, {}, {})",
+                "cluster ({}, {}, {}) lod {} \u{00B7} voxel ({}, {}, {})",
                 id.x(), id.y(), id.z(), id.lod(), p[0], p[1], p[2],
             ),
-            None => "pick: (none \u{2014} left-click a face)".to_string(),
+            None => String::new(),
         };
-        // Walk readout (surface-walk mode only; its text node is gated on `walk`).
-        let walk_line = if self.locomotion_walk {
+
+        // Walk readout (its row is gated on `walk`).
+        let walk_val = if walk_mode {
             let ground = match self.ground_height_at(self.position.x, self.position.z) {
                 Some(g) => format!("{g:.0}"),
                 None => "\u{2014}".to_string(),
             };
-            let grounded = if self.grounded { "grounded" } else { "airborne" };
-            format!("walk: {grounded}   ground y: {ground}   vy: {:+.1}", self.vy)
+            format!(
+                "{} \u{00B7} ground y {} \u{00B7} vy {:+.1}",
+                if self.grounded { "grounded" } else { "airborne" }, ground, self.vy,
+            )
         } else {
             String::new()
         };
-        ValueMap::new()
-            // Feature toggles (BOOL, two-way). `arrows` is deliberately distinct from
-            // the corner-arrow COUNT folded into `stat_diag`, so the keys don't collide.
+
+        let mut m = ValueMap::new()
+            // Debug-overlay toggles (BOOL, two-way).
             .with("wireframe", self.wireframe_on)
             .with("arrows", self.corner_arrows_on)
             .with("navmesh", self.navmesh_on)
             .with("camera_lod", self.camera_lod_on)
             .with("lod_billboards", self.lod_billboards_on)
-            .with("walk", self.locomotion_walk)
-            // Sliders (NUMBER, two-way).
+            .with("walk", walk_mode)
+            // Move-speed slider (NUMBER, two-way) + its readout. Mouse sensitivity is
+            // owned by the shell settings panel now, so it is not a HUD control.
             .with("move_speed", self.controls.move_speed)
-            .with("look_sens", self.controls.mouse_sensitivity)
-            // Stat lines (pre-formatted strings bound by `text_bind`).
-            .with(
-                "stat_title",
+            .with("speed_val", format!("{:.0} u/s", self.controls.move_speed))
+            // Header + readout strings.
+            .with("mode_tag", mode_tag)
+            .with("title_line", format!("Cluster field {0}\u{00D7}{0} \u{2014} {mode_tag}", FIELD_DIM))
+            .with("cam_val", cam_val)
+            .with("grid_val", grid_val)
+            .with("move_val", move_val)
+            .with("diag_val", diag_val)
+            .with("has_pick", has_pick)
+            .with("no_pick", !has_pick)
+            .with("pick_val", pick_val)
+            .with("walk_val", walk_val)
+            // Celestial Cycle: seven two-way NUMBER binds (celestial math units) +
+            // their pre-formatted readouts + three view toggles. Formatting lives in
+            // `celestial` (the walker has no printf).
+            .with("cc_sun", self.celestial.time_of_day)
+            .with("cc_sun_val", celestial::fmt_clock(self.celestial.time_of_day))
+            .with("cc_moon", self.celestial.moon_phase)
+            .with("cc_moon_val", celestial::fmt_moon(self.celestial.moon_phase))
+            .with("cc_year", self.celestial.year_month)
+            .with("cc_year_val", celestial::fmt_month(self.celestial.year_month))
+            .with("cc_speed", self.celestial.sim_speed)
+            .with("cc_speed_val", celestial::fmt_speed(self.celestial.sim_speed))
+            .with("cc_fog", self.celestial.fog)
+            .with("cc_fog_val", celestial::fmt_fog(self.celestial.fog))
+            .with("cc_lat", self.celestial.latitude)
+            .with("cc_lat_val", celestial::fmt_lat(self.celestial.latitude))
+            .with("cc_epoch", self.celestial.epoch)
+            .with("cc_epoch_val", celestial::fmt_epoch(self.celestial.epoch))
+            .with("constellations", self.celestial.show_constellations)
+            .with("planets", self.celestial.show_planets)
+            .with("celestial_paths", self.celestial.show_paths);
+
+        // Right-panel inspector: the selected voxel's 8 corners. Each corner is a
+        // neighbour voxel's stored vector translated into THIS voxel's local frame
+        // (`self_relative`) plus its absolute world position. Published only while a
+        // face is selected (the panel is gated on `has_pick`); the 3D wireframe of the
+        // same cell is drawn as a world overlay in `render`.
+        if let Some(vv) = self.current_virtual_voxel() {
+            m.set(
+                "insp_title",
+                format!("Cell ({}, {}, {})", vv.center_local[0], vv.center_local[1], vv.center_local[2]),
+            );
+            m.set(
+                "insp_sub",
                 format!(
-                    "flicker-pocclusters \u{2014} {0}\u{00D7}{0} field \u{2014} {controls_line}",
-                    FIELD_DIM,
+                    "cluster ({}, {}, {}) lod {} \u{00B7} 8 corners",
+                    vv.cluster.x(), vv.cluster.y(), vv.cluster.z(), vv.cluster.lod(),
                 ),
-            )
-            .with(
-                "stat_pos",
-                format!(
-                    "pos: ({:.0}, {:.0}, {:.0})  yaw: {:.2}  pitch: {:.2}",
-                    self.position.x, self.position.y, self.position.z, self.yaw, self.pitch,
-                ),
-            )
-            .with(
-                "stat_clusters",
-                format!(
-                    "clusters: {}   extent: {}\u{00B3} voxels each",
-                    self.meshes.len(),
-                    CLUSTER_DIM,
-                ),
-            )
-            .with(
-                "stat_config",
-                format!(
-                    "config \u{2014} speed: {:.0}  sens: {:.4}  invert-Y: {}  invert-X: {}",
-                    self.controls.move_speed,
-                    self.controls.mouse_sensitivity,
-                    self.controls.invert_mouse_pitch,
-                    self.controls.invert_mouse_yaw,
-                ),
-            )
-            .with(
-                "stat_diag",
-                format!(
-                    "corner arrows stored: {}   nav clusters (rings 0\u{2013}2): {}",
-                    self.corner_arrows.len(),
-                    self.navs.len(),
-                ),
-            )
-            .with("stat_pick", pick)
-            .with("stat_walk", walk_line)
+            );
+            for (i, c) in vv.corners.iter().enumerate() {
+                let sign = |bit: usize| if (i >> bit) & 1 == 1 { '+' } else { '-' };
+                m.set(format!("insp_c{i}_name"), format!("c{i} {}{}{}", sign(0), sign(1), sign(2)));
+                m.set(format!("insp_c{i}_lx"), format!("{:.2}", c.self_relative[0]));
+                m.set(format!("insp_c{i}_ly"), format!("{:.2}", c.self_relative[1]));
+                m.set(format!("insp_c{i}_lz"), format!("{:.2}", c.self_relative[2]));
+                m.set(format!("insp_c{i}_wx"), format!("{:.2}", c.world.x));
+                m.set(format!("insp_c{i}_wy"), format!("{:.2}", c.world.y));
+                m.set(format!("insp_c{i}_wz"), format!("{:.2}", c.world.z));
+            }
+        }
+        m
     }
 }
 
@@ -1390,9 +1694,46 @@ impl Scene for GameScene {
         self.digit_atlas =
             Some(renderer.load_texture(&build_digit_atlas(), ATLAS_W as u32, ATLAS_H as u32));
 
+        // Soft white disc for the planet billboards riding the sky dome.
+        let (disc, dw, dh) = celestial::build_disc_texture();
+        self.planet_disc = Some(renderer.load_texture(&disc, dw, dh));
+
+        // Star glow sprite (core + halo + glint) for the constellation stars.
+        let (glow, gw, gh) = celestial::build_star_glow_texture();
+        self.star_tex = Some(renderer.load_texture(&glow, gw, gh));
+
         // Gothic UI theme — drawn as the loading widget while Booting, and
         // handed to each PauseScene we push (so pausing never re-uploads).
         self.ui_theme = Some(Theme::build(renderer));
+
+        // Seed the mouse LOOK settings from the shell's settings panel (sensitivity +
+        // invert) so the panel's values apply from the first frame; `move_speed` stays
+        // a scene control. Live changes arrive via `take_pending_input` in `update`.
+        let look = flicker_shell::input_controls();
+        self.controls.mouse_sensitivity = look.mouse_sensitivity;
+        self.controls.invert_mouse_pitch = look.invert_mouse_pitch;
+        self.controls.invert_mouse_yaw = look.invert_mouse_yaw;
+
+        // Connect the in-world chat to the clay-chat server (background socket
+        // thread; inbound events are drained each Active frame). Optimistically show
+        // #general until the server's own join echo confirms it, and seed the roster
+        // with a NAMES. If the server is down the client just reports Disconnected.
+        let nick = default_chat_nick();
+        self.chat_nick = nick.clone();
+        self.chat_active = "#general".to_string();
+        self.chat_channels = vec!["#general".to_string()];
+        let client = ChatClient::connect(nick);
+        client.send(ChatCommand::Join("#general".to_string()));
+        client.send(ChatCommand::Names("#general".to_string()));
+        self.chat = Some(client);
+
+        // Float the window bottom-centre, ~3/5 of the screen wide (wide, not docked).
+        let screen = renderer.size();
+        let w = (screen.x * 0.6).clamp(CHAT_MIN_W, (screen.x - 40.0).max(CHAT_MIN_W));
+        let h = (screen.y * 0.42).clamp(CHAT_MIN_H, (screen.y - 40.0).max(CHAT_MIN_H));
+        let x = ((screen.x - w) * 0.5).max(0.0);
+        let y = (screen.y - h - 24.0).max(0.0);
+        self.chat_rect = (x, y, w, h);
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
@@ -1411,22 +1752,109 @@ impl Scene for GameScene {
         }
 
         // Pick up input settings changes made in the pause→settings overlay.
-        if let Some((map, controls, gp_cfg)) = flicker_shell::take_pending_input() {
-            self.bindings = map;
-            self.controls = controls;
-            self.gamepad_config = gp_cfg;
+        // Live input-settings changes from pause→settings: apply the mouse LOOK
+        // settings the panel owns (sensitivity + invert) + any keybind change.
+        // `move_speed` is a scene control (the HUD slider), so it is NOT overwritten
+        // — a wholesale `self.controls = controls` would reset it to the panel default.
+        if let Some((map, look, _gp)) = flicker_shell::take_pending_input() {
+            // Rebuild the context service around the new World map (rebinds only
+            // touch gameplay); TextEntry stays the empty keyboard-capture map.
+            self.bindings =
+                ContextualBindings::new(map).with(InputContext::TextEntry, InputMap::empty());
+            self.controls.mouse_sensitivity = look.mouse_sensitivity;
+            self.controls.invert_mouse_pitch = look.invert_mouse_pitch;
+            self.controls.invert_mouse_yaw = look.invert_mouse_yaw;
         }
 
-        // Menu action edge detection pushes the pause overlay. The scene
-        // manager then freezes us, so no gameplay runs until it pops.
+        // Advance the celestial clock (sun/moon/planets/epoch) by the panel's Speed;
+        // paused when Speed is 0. Drives the day/night sky in `render`.
+        self.celestial.update(dt);
+
+        // ── Chat hand-off / move / resize (BEFORE the pause check, so Esc leaves chat
+        // rather than opening the menu). T HANDS OFF into the chat input from gameplay —
+        // a ONE-WAY enter, not a toggle; the input state is terminated only by Esc
+        // (cancel) or Enter (send). Clicking the panel also enters (title drags, corner
+        // resizes, body focuses); a click OUTSIDE does NOT exit. Focus is mirrored onto
+        // the TextEntry context so gameplay movement + look suppress while chat owns the
+        // keyboard. ──
+        let screen = renderer.size();
+        let chat_was_focused = self.chat_focus;
+        // Set unconditionally by the chat pass below, before the world-pick reads it.
+        let chat_hit;
+
+        // T hands off (one-way). The trigger keystroke — and its auto-repeats while T is
+        // held — must NOT type, so guard keyboard text from the hand-off until T has been
+        // released for a FULL frame. The extra frame is load-bearing: macOS routes key
+        // text through its text-input system, which can deliver the committed 't' a frame
+        // LATER than the raw key-down — after a release-frame-only guard would already
+        // have cleared, leaking the trigger 't' into the field.
+        let t_down = input.key_down(Key::T);
+        let t_was_down = self.t_prev;
+        let t_edge = t_down && !t_was_down;
+        self.t_prev = t_down;
+        if t_edge && !self.chat_focus {
+            self.chat_focus = true;
+            self.chat_key_guard = true;
+        }
+        if self.chat_key_guard && !t_down && !t_was_down {
+            self.chat_key_guard = false;
+        }
+
+        // Esc terminates the input state (cancel; the draft is kept).
+        let esc_down = input.key_down(Key::Escape);
+        if esc_down && !self.esc_prev && self.chat_focus {
+            self.chat_focus = false;
+        }
+        self.esc_prev = esc_down;
+
+        let (mut cx, mut cy, mut cw, mut ch) = self.chat_rect;
+        let m = input.mouse_position;
+        if input.mouse_left_pressed {
+            // Enter on any in-panel click; a click outside does NOT exit (Esc/Enter only).
+            if in_rect(m, cx + cw - CHAT_CORNER, cy + ch - CHAT_CORNER, CHAT_CORNER, CHAT_CORNER) {
+                self.chat_drag = ChatDrag::Resize;
+                self.chat_focus = true;
+            } else if in_rect(m, cx, cy, cw, CHAT_GRIP_H) {
+                self.chat_drag = ChatDrag::Move { grab: Vec2::new(m.x - cx, m.y - cy) };
+                self.chat_focus = true;
+            } else if in_rect(m, cx, cy, cw, ch) {
+                self.chat_focus = true;
+            }
+        }
+        if input.mouse_left {
+            match self.chat_drag {
+                ChatDrag::Move { grab } => {
+                    cx = (m.x - grab.x).clamp(0.0, (screen.x - cw).max(0.0));
+                    cy = (m.y - grab.y).clamp(0.0, (screen.y - ch).max(0.0));
+                }
+                ChatDrag::Resize => {
+                    cw = (m.x - cx).clamp(CHAT_MIN_W, (screen.x - cx).max(CHAT_MIN_W));
+                    ch = (m.y - cy).clamp(CHAT_MIN_H, (screen.y - cy).max(CHAT_MIN_H));
+                }
+                ChatDrag::None => {}
+            }
+        } else {
+            self.chat_drag = ChatDrag::None;
+        }
+        self.chat_rect = (cx, cy, cw, ch);
+
+        if self.chat_focus && self.bindings.active() != InputContext::TextEntry {
+            self.bindings.push(InputContext::TextEntry);
+        } else if !self.chat_focus && self.bindings.active() == InputContext::TextEntry {
+            self.bindings.pop();
+        }
+
+        // Menu action edge detection pushes the pause overlay. Suppressed while chat
+        // had the keyboard this frame (Esc blurs chat instead); `action_pressed` is
+        // context-aware, so it also reads the empty TextEntry map as inactive.
         let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev;
+        let menu_pressed = menu_down && !self.menu_prev && !chat_was_focused;
         self.menu_prev = menu_down;
         if menu_pressed {
             let theme = self.ui_theme.expect("pause theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                &self.bindings,
+                self.bindings.active_map(),
                 &self.controls,
                 &self.gamepad_config,
             )));
@@ -1448,6 +1876,8 @@ impl Scene for GameScene {
                 clicked: input.mouse_left_pressed,
                 down: input.mouse_left,
                 screen,
+                typed: String::new(),
+                backspace: false,
             };
             let frame = {
                 // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state` mutated.
@@ -1470,8 +1900,36 @@ impl Scene for GameScene {
             if let Some(v) = results.number("move_speed") {
                 self.controls.move_speed = v as f32;
             }
-            if let Some(v) = results.number("look_sens") {
-                self.controls.mouse_sensitivity = v as f32;
+            // Mouse sensitivity is owned by the shell settings panel now (not a HUD
+            // control) — it arrives via `input_controls()` (enter) + `take_pending_input`.
+
+            // Celestial Cycle controls (two-way): the three view toggles + the seven
+            // sliders. The walker echoes the model value when not dragging, so these
+            // are idempotent against the clock that auto-advanced earlier this frame;
+            // a drag scrubs it.
+            self.celestial.show_constellations = results.is_on("constellations");
+            self.celestial.show_planets = results.is_on("planets");
+            self.celestial.show_paths = results.is_on("celestial_paths");
+            if let Some(v) = results.number("cc_sun") {
+                self.celestial.time_of_day = v as f32;
+            }
+            if let Some(v) = results.number("cc_moon") {
+                self.celestial.moon_phase = v as f32;
+            }
+            if let Some(v) = results.number("cc_year") {
+                self.celestial.year_month = v as f32;
+            }
+            if let Some(v) = results.number("cc_speed") {
+                self.celestial.sim_speed = v as f32;
+            }
+            if let Some(v) = results.number("cc_fog") {
+                self.celestial.fog = v as f32;
+            }
+            if let Some(v) = results.number("cc_lat") {
+                self.celestial.latitude = v as f32;
+            }
+            if let Some(v) = results.number("cc_epoch") {
+                self.celestial.epoch = v as f32;
             }
 
             // Locomotion mode is now a `walk` checkbox (was the old dropdown).
@@ -1509,11 +1967,116 @@ impl Scene for GameScene {
             }
         }
 
-        // Left-click → world pick (inspector), but only when the click did NOT land
-        // on the HUD (`hud_hit`, reported by the walker above) — so toggling a
-        // checkbox or grabbing a slider doesn't also fire a face pick behind the
-        // panel. Right-drag is for look; left-click is for pick.
-        if input.mouse_left_pressed && !hud_hit {
+        // ── Chat panel: drain the socket into the per-channel logs/rosters, then
+        // build + run the floating window as a SECOND walker pass (its own UiState)
+        // so it can move/resize each frame; its commands layer over the HUD in
+        // `render`. `chat_hit` gates the world pick like `hud_hit`. ──
+        {
+            let my_nick = self.chat_nick.clone();
+            while let Some(ev) = self.chat.as_ref().and_then(|c| c.try_recv()) {
+                self.apply_event(ev, &my_nick);
+            }
+
+            // Keep the field focused across non-field clicks while chat has focus;
+            // drop focus (and the caret) when it doesn't.
+            if self.chat_focus {
+                self.chat_ui_state.request_focus("chat_input");
+            } else {
+                self.chat_ui_state.clear_focus();
+            }
+
+            let (cx, cy, cw, ch) = self.chat_rect;
+            let empty_lines: Vec<ChatLineView> = Vec::new();
+            let empty_roster: Vec<RosterEntry> = Vec::new();
+            let lines = self.chat_logs.get(&self.chat_active).unwrap_or(&empty_lines);
+            let roster = self.chat_rosters.get(&self.chat_active).unwrap_or(&empty_roster);
+            let tree = chat_panel(
+                cx,
+                cy,
+                cw,
+                ch,
+                &ChatView {
+                    style: "pocclusters.chat",
+                    active: &self.chat_active,
+                    channels: &self.chat_channels,
+                    lines,
+                    roster,
+                    nick: &self.chat_nick,
+                },
+            );
+
+            let mut cmodel = ValueMap::new();
+            cmodel.set("chat_tab", self.chat_active.as_str());
+            cmodel.set("chat_scroll", self.chat_scroll as f64);
+            cmodel.set("chat_wheel", input.mouse_wheel_delta as f64);
+            cmodel.set("chat_input", self.chat_input.as_str());
+
+            let cin = UiInput {
+                mouse: input.mouse_position,
+                // Suppress the walker click while a title/corner drag is in flight, so
+                // a drag never also toggles a tab or button under the cursor.
+                clicked: input.mouse_left_pressed && matches!(self.chat_drag, ChatDrag::None),
+                down: input.mouse_left,
+                screen,
+                typed: if self.chat_focus && !self.chat_key_guard {
+                    input.typed().to_string()
+                } else {
+                    String::new()
+                },
+                backspace: self.chat_focus && !self.chat_key_guard && input.backspace(),
+            };
+            let cframe = run_ui(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state);
+            chat_hit = cframe.results.is_on("hud_hit");
+            self.chat_commands = cframe.commands;
+
+            if let Some(t) = cframe.results.text("chat_input") {
+                self.chat_input = t.to_string();
+            }
+            if let Some(s) = cframe.results.number("chat_scroll") {
+                self.chat_scroll = s as f32;
+            }
+            if let Some(sel) = cframe.results.text("chat_tab") {
+                if sel != self.chat_active && self.chat_channels.iter().any(|c| c == sel) {
+                    self.chat_active = sel.to_string();
+                    self.chat_scroll = f32::MAX;
+                }
+            }
+
+            // Enter (while focused) or the send button posts; ＋ joins the typed
+            // channel; ✕ leaves the active channel.
+            let enter_down = input.key_down(Key::Enter);
+            let enter_send = self.chat_focus && enter_down && !self.enter_prev;
+            self.enter_prev = enter_down;
+            if enter_send || cframe.results.is_on("chat_send") {
+                self.send_chat_input();
+                // Enter/Send terminates the input state — control returns to gameplay
+                // (T hands off again for the next message, the /tell-macro model).
+                self.chat_focus = false;
+            }
+            if cframe.results.is_on("chat_join") {
+                let channel = self.chat_input.trim().to_string();
+                if !channel.is_empty() {
+                    if let Some(c) = self.chat.as_ref() {
+                        c.send(ChatCommand::Join(channel));
+                    }
+                    self.chat_input.clear();
+                }
+            }
+            if cframe.results.is_on("chat_part") {
+                if let Some(c) = self.chat.as_ref() {
+                    c.send(ChatCommand::Part(self.chat_active.clone()));
+                }
+            }
+        }
+
+        // Left-click → world pick (inspector), but only in the World context (not while
+        // chat owns the keyboard) and when the click did NOT land on the HUD (`hud_hit`)
+        // or the chat panel (`chat_hit`). Right-drag is for look.
+        if input.mouse_left_pressed
+            && !hud_hit
+            && !chat_hit
+            && self.bindings.active() == InputContext::World
+        {
             if let Some((id, hit_world)) = self.try_pick(input.mouse_position, renderer.size()) {
                 let p = Self::hit_to_local_p(id, hit_world);
                 tracing::info!(
@@ -1526,45 +2089,53 @@ impl Scene for GameScene {
             }
         }
 
-        // Look: right-drag, with invert/sensitivity applied by config.
-        if input.mouse_right {
-            if let Some(prev) = self.last_look_cursor {
-                let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
-                self.yaw -= dyaw;
-                self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
+        // Look + movement drive the camera only in the World context — while the chat
+        // input owns the keyboard (TextEntry), the keystrokes go to the panel and the
+        // camera holds still.
+        if self.bindings.active() == InputContext::World {
+            // Look: right-drag, with invert/sensitivity applied by config.
+            if input.mouse_right {
+                if let Some(prev) = self.last_look_cursor {
+                    let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
+                    self.yaw -= dyaw;
+                    self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
+                }
+                self.last_look_cursor = Some(input.mouse_position);
+            } else {
+                self.last_look_cursor = None;
             }
-            self.last_look_cursor = Some(input.mouse_position);
+
+            // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp),
+            // per the surface-walk locomotion mode.
+            if self.locomotion_walk {
+                self.walk_step(dt_s, input);
+            } else {
+                let map = self.bindings.active_map();
+                let mut motion = Vec3::ZERO;
+                if input.input_active(map, Action::MoveForward) {
+                    motion += self.move_forward();
+                }
+                if input.input_active(map, Action::MoveBackward) {
+                    motion -= self.move_forward();
+                }
+                if input.input_active(map, Action::StrafeRight) {
+                    motion += self.move_right();
+                }
+                if input.input_active(map, Action::StrafeLeft) {
+                    motion -= self.move_right();
+                }
+                if input.input_active(map, Action::MoveUp) {
+                    motion += Vec3::Y;
+                }
+                if input.input_active(map, Action::MoveDown) {
+                    motion -= Vec3::Y;
+                }
+                if motion.length_squared() > 0.0 {
+                    self.position += motion.normalize() * self.controls.move_speed * dt_s;
+                }
+            }
         } else {
             self.last_look_cursor = None;
-        }
-
-        // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp),
-        // per the surface-walk locomotion mode.
-        if self.locomotion_walk {
-            self.walk_step(dt_s, input);
-        } else {
-            let mut motion = Vec3::ZERO;
-            if input.input_active(&self.bindings, Action::MoveForward) {
-                motion += self.move_forward();
-            }
-            if input.input_active(&self.bindings, Action::MoveBackward) {
-                motion -= self.move_forward();
-            }
-            if input.input_active(&self.bindings, Action::StrafeRight) {
-                motion += self.move_right();
-            }
-            if input.input_active(&self.bindings, Action::StrafeLeft) {
-                motion -= self.move_right();
-            }
-            if input.input_active(&self.bindings, Action::MoveUp) {
-                motion += Vec3::Y;
-            }
-            if input.input_active(&self.bindings, Action::MoveDown) {
-                motion -= Vec3::Y;
-            }
-            if motion.length_squared() > 0.0 {
-                self.position += motion.normalize() * self.controls.move_speed * dt_s;
-            }
         }
 
         Transition::None
@@ -1592,12 +2163,18 @@ impl Scene for GameScene {
             fov_y_radians: 60.0_f32.to_radians(),
             near: 0.1,
             far: 10000.0,
+            ortho_height: None,
         });
 
-        // Fixed studio lighting for the whole world — one steady key light over
-        // an ambient floor, no day/night cycle and no procedural sky. Keeps the
-        // voxel geometry legible while editing (see `world_lighting`).
-        renderer.set_scene(world_lighting());
+        // The from-Home sky: sun/moon lights + ambient + fog + eclipse + the
+        // star-field rotation, computed from the Celestial Cycle controls. `draw_sky`
+        // renders the gradient, sun/moon discs, Milky-Way "galactic cloud" and the
+        // eclipse corona from this same `SceneLighting`.
+        renderer.set_scene(self.celestial.lighting());
+        renderer.draw_sky();
+        // The seven worlds on the ecliptic (geocentric, from the shared roster), the
+        // ecliptic track, and the night constellations (the Chalice + placeholders).
+        self.celestial.draw(renderer, self.position, self.planet_disc, self.star_tex);
 
         // Draw each cluster's extent as a white wireframe box. The extent is
         // LOD-independent, so iterate the grid positions directly.
@@ -1679,66 +2256,17 @@ impl Scene for GameScene {
             }
         }
 
-        // Virtual-voxel inspector: 12-edge wireframe of the dual cell
-        // at the selected lattice point, plus a per-corner readout of
-        // both translation frames (owner-relative `V` as the owner
-        // voxel stores it, and self-relative — same world point
-        // expressed from `p`). Inspect-only; both frames are kept so
-        // the bookkeeping is visible while debugging.
+        // Virtual-voxel inspector — the 12-edge wireframe of the selected dual cell,
+        // a world-space overlay. The per-corner numeric readout now lives in the
+        // walker's inspector PANEL (`hud_model` publishes `insp_c*`, drawn by the HUD),
+        // so this draws only the 3D outline. Darker than the bright-white cluster
+        // bounding box so the dual cell reads as a distinct overlay, not a sub-box.
         if let Some(vv) = self.current_virtual_voxel() {
             let mut segments: Vec<(Vec3, Vec3)> = Vec::with_capacity(12);
             for &(o0, o1) in &CUBE_EDGES {
                 segments.push((vv.corners[o0].world, vv.corners[o1].world));
             }
-            // Darker than the bright-white cluster bounding box so the
-            // dual cell reads as a distinct overlay rather than a
-            // sub-box of the cluster.
             renderer.draw_lines(&segments, [0.7, 0.7, 0.75, 1.0]);
-
-            // Per-corner readout. Anchored to the right side of the
-            // screen so it doesn't fight the left-column diagnostics
-            // or the scripted HUD's checkbox panel. The leading
-            // (-/+ -/+ -/+) tag is the octant bit pattern decoded
-            // back into per-axis sign, matching the brief's table.
-            let surface_w = renderer.size().x;
-            let panel_w = 620.0;
-            let panel_x = (surface_w - panel_w - 16.0).max(16.0);
-            renderer.draw_text(
-                &format!(
-                    "virt voxel  cluster ({}, {}, {}, lod {})  p = ({}, {}, {})",
-                    vv.cluster.x(),
-                    vv.cluster.y(),
-                    vv.cluster.z(),
-                    vv.cluster.lod(),
-                    vv.center_local[0],
-                    vv.center_local[1],
-                    vv.center_local[2]
-                ),
-                Vec2::new(panel_x, 16.0),
-                16.0,
-                [0.95, 0.85, 0.60, 1.0],
-            );
-            for o in 0..8 {
-                let c = &vv.corners[o];
-                let bx = (o & 1) as i32;
-                let by = ((o >> 1) & 1) as i32;
-                let bz = ((o >> 2) & 1) as i32;
-                let tag = |b: i32| if b == 1 { '+' } else { '-' };
-                let line = format!(
-                    "o={} ({}{}{})  m=({:>3},{:>3},{:>3})  V=({:+.3},{:+.3},{:+.3})  self=({:+.3},{:+.3},{:+.3})",
-                    o,
-                    tag(bx), tag(by), tag(bz),
-                    c.owner_local[0], c.owner_local[1], c.owner_local[2],
-                    c.owner_relative[0], c.owner_relative[1], c.owner_relative[2],
-                    c.self_relative[0], c.self_relative[1], c.self_relative[2],
-                );
-                renderer.draw_text(
-                    &line,
-                    Vec2::new(panel_x, 40.0 + (o as f32) * 18.0),
-                    13.0,
-                    [0.82, 0.86, 0.92, 1.0],
-                );
-            }
         }
 
         // The component-walker HUD: blit this frame's draw commands (built in
@@ -1746,36 +2274,37 @@ impl Scene for GameScene {
         // — the 1×1 fill pixel — is the entire texture table.
         if let Some(white) = self.white {
             render_hud(renderer, &self.hud_commands, white, &[]);
+            // The floating chat window, layered on top of the HUD (its own walker pass
+            // in `update`). Empty while Booting, so nothing draws until the world is up.
+            render_hud(renderer, &self.chat_commands, white, &[]);
         }
+    }
+
+    fn exit(&mut self, _renderer: &mut Renderer) {
+        // Drop the client → its background socket thread winds down (see `ChatClient`).
+        self.chat = None;
     }
 }
 
 // `render_hud` now lives in `flicker-ui` (the reusable UI surface) and is
 // imported above; the call sites below are unchanged.
 
-/// Fixed studio lighting for the whole flicker-pocclusters world: one steady
-/// directional key light over a flat ambient floor — no day/night cycle, no
-/// sun/moon motion, no procedural sky. A pure constant, so the mesh shader
-/// lights every cluster identically each frame and the voxel form stays
-/// readable while carving. This replaced the POC's `compute_scene` day/night
-/// model; tune the numbers here to taste — nothing animates them.
-fn world_lighting() -> SceneLighting {
-    SceneLighting {
-        // A single fixed key light, angled down from the front-left so faces
-        // catch a clear shading gradient (flat ambient alone reads featureless).
-        sun_dir: Vec3::new(0.4, 1.0, 0.35).normalize(),
-        sun_color: Vec3::splat(0.85),
-        // No second (moon) light.
-        moon_color: Vec3::ZERO,
-        // Ambient floor lifts the shadowed side so nothing crushes to black.
-        ambient: Vec3::splat(0.32),
-        // No sky pass is requested in `render`, so the sky palette goes unused;
-        // everything else stays at the inert defaults (no fog, grade, or point
-        // light).
-        ..SceneLighting::default()
-    }
+
+
+/// Point-in-rect test in device px (top-left origin).
+fn in_rect(p: Vec2, x: f32, y: f32, w: f32, h: f32) -> bool {
+    p.x >= x && p.x < x + w && p.y >= y && p.y < y + h
 }
 
+/// The chat nick for this client — the OS user name (the client codec sanitizes it),
+/// else a default. There is no auth/registration at this stage; the web side owns
+/// identity later, so this is just a friendly label for the raw-protocol test.
+fn default_chat_nick() -> String {
+    std::env::var("USER")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "prism".to_string())
+}
 
 /// Directory the scene reads baked clusters from on startup (contour-from-primitive
 /// is the fallback when a bake is absent). Resolved against this crate's source dir
@@ -1860,9 +2389,10 @@ mod script_smoke {
     use super::*;
 
     /// Every key `hud_pocclusters.lua`'s `tree()` binds: the six toggle bools, the
-    /// two slider numbers, and the pre-formatted stat lines.
+    /// move-speed slider + readout, the pre-formatted status/pick/walk strings, and —
+    /// with `has_pick` set — the inspector's per-corner cells.
     fn model() -> ValueMap {
-        ValueMap::new()
+        let mut m = ValueMap::new()
             .with("wireframe", true)
             .with("arrows", false)
             .with("navmesh", false)
@@ -1870,14 +2400,26 @@ mod script_smoke {
             .with("lod_billboards", false)
             .with("walk", true)
             .with("move_speed", 60.0_f32)
-            .with("look_sens", 0.0025_f32)
-            .with("stat_title", "flicker-pocclusters \u{2014} 3\u{00D7}3 field \u{2014} walk")
-            .with("stat_pos", "pos: (1, 2, 3)  yaw: 0.50  pitch: -0.25")
-            .with("stat_clusters", "clusters: 9   extent: 256\u{00B3} voxels each")
-            .with("stat_config", "config \u{2014} speed: 60  sens: 0.0025")
-            .with("stat_diag", "corner arrows stored: 12   nav clusters (rings 0\u{2013}2): 5")
-            .with("stat_pick", "pick: (none \u{2014} left-click a face)")
-            .with("stat_walk", "walk: grounded   ground y: 128   vy: -1.5")
+            .with("speed_val", "60 u/s")
+            .with("mode_tag", "Walk mode")
+            .with("title_line", "Cluster field 3\u{00D7}3 \u{2014} Walk mode")
+            .with("cam_val", "(1.0, 2.0, 3.0) \u{00B7} yaw 29\u{00B0} pitch -14\u{00B0}")
+            .with("grid_val", "9 clusters \u{00B7} 256\u{00B3} voxels")
+            .with("move_val", "walk \u{00B7} 60 u/s")
+            .with("diag_val", "arrows 12 \u{00B7} nav 5")
+            .with("has_pick", true)
+            .with("no_pick", false)
+            .with("pick_val", "cluster (1, 0, 2) lod 0 \u{00B7} voxel (10, 20, 30)")
+            .with("walk_val", "grounded \u{00B7} ground y 128 \u{00B7} vy -1.5")
+            .with("insp_title", "Cell (10, 20, 30)")
+            .with("insp_sub", "cluster (1, 0, 2) lod 0 \u{00B7} 8 corners");
+        for i in 0..8 {
+            m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
+            for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
+                m.set(format!("insp_c{i}_{ax}"), "0.50");
+            }
+        }
+        m
     }
 
     #[test]
@@ -1896,6 +2438,8 @@ mod script_smoke {
             clicked: false,
             down: false,
             screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
         };
         let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
         assert!(!frame.commands.is_empty(), "the HUD draws its panel + controls");
@@ -1905,10 +2449,15 @@ mod script_smoke {
                 .iter()
                 .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
         };
-        assert!(has_text("flicker-pocclusters"), "the title stat line renders");
+        assert!(has_text("Cluster field"), "the title line renders");
         assert!(
             has_text("Wireframe overlay"),
             "the data-driven checkbox list renders its labels"
+        );
+        assert!(has_text("Corner"), "the inspector table header renders");
+        assert!(
+            has_text("Cell (10, 20, 30)"),
+            "the inspector panel renders while has_pick is set"
         );
     }
 }

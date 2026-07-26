@@ -37,6 +37,14 @@ args = ap.parse_args(argv)
 OUT_DIR = os.path.dirname(os.path.abspath(args.out))
 os.makedirs(OUT_DIR, exist_ok=True)
 
+# The rest-rebase align primitive is SHARED with the offline BVH bake — ONE primitive (memory
+# 614E5958). Load flicker_rebase.py from tools/ (the parent of this blender/ dir) via the same
+# module-by-path mechanism used for io_scene below. (Blender bundles numpy, which it imports.)
+_rebase_py = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "flicker_rebase.py")
+_rb_spec = importlib.util.spec_from_file_location("flicker_rebase", _rebase_py)
+_fr_rebase = importlib.util.module_from_spec(_rb_spec)
+_rb_spec.loader.exec_module(_fr_rebase)
+
 # Meshy (Mixamo-style) -> canonical (see memory 03BBF8F4). Spine is bottom-up in Meshy:
 # Spine02 is the LOWEST, so Spine02->spine_01.
 RENAME = {
@@ -73,21 +81,12 @@ def _fk(bones):
         L = _m(b["local"]); p = b["parent"]; G[i] = L if p < 0 else _mul(G[p], L)
     return G
 def _rot3(A): return [[A[r][c] if c < 3 else 0.0 for c in range(4)] for r in range(3)] + [[0, 0, 0, 1]]
-def _nrm(v):
-    d = math.sqrt(sum(x*x for x in v)) or 1.0; return [x/d for x in v]
-def _crs(a, b): return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]
 def _pos(G): return [G[0][3], G[1][3], G[2][3]]
 def _sub(a, b): return [a[i]-b[i] for i in range(3)]
-def _align(u, v):
-    """Minimal rotation (4x4) taking unit vector u onto unit vector v (Rodrigues)."""
-    u = _nrm(u); v = _nrm(v); c = sum(u[i]*v[i] for i in range(3)); ax = _crs(u, v)
-    s = math.sqrt(sum(x*x for x in ax))
-    if s < 1e-8:
-        return [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] if c > 0 \
-            else [[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
-    x, y, z = [a/s for a in ax]; C = 1-c
-    return [[c+x*x*C, x*y*C-z*s, x*z*C+y*s, 0], [y*x*C+z*s, c+y*y*C, y*z*C-x*s, 0],
-            [z*x*C-y*s, z*y*C+x*s, c+z*z*C, 0], [0, 0, 0, 1]]
+# Minimal swing rotation (4x4) taking unit vector u onto unit vector v — THE shared rest-rebase
+# primitive (memory 614E5958), identical to retarget_bvh's `q_between` in quaternion form (pinned
+# by tools/test_flicker_rebase.py). Was a local `_align`/Rodrigues copy; now the one canonical impl.
+_align = _fr_rebase.align_mat
 # Limb bones whose rest frame is aligned to THIS body's own limb (key -> the child joint down the
 # same chain that defines the limb direction): arms, legs, feet. Torso bones (pelvis, spine,
 # clavicle, neck, head) are NOT limb-aligned — they keep Katanami's world orientation, so the

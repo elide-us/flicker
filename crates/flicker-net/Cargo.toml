@@ -6,7 +6,9 @@ license.workspace = true
 
 [dependencies]
 flicker-core.workspace = true
-tokio.workspace = true
+# `io-util` (AsyncBufReadExt/AsyncWriteExt/BufReader/lines) on top of the
+# workspace set (rt-multi-thread/macros/net/sync/time) for the clay-chat line client.
+tokio = { workspace = true, features = ["io-util"] }
 tokio-tungstenite.workspace = true
 reqwest.workspace = true
 serde.workspace = true
