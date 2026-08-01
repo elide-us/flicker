@@ -5,24 +5,37 @@
 
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
-    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, Vec2, Vec3,
+    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, TextureHandle, Vec3,
     VolumetricDisk, MAX_VOLUMETRIC_BODIES,
 };
 use flicker::scene::{Scene, Transition};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{
+    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
+};
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_flight::{Flight, FlightPlayer};
 
 use crate::camera::OrbitCam;
+use crate::route::RootHandler;
 use crate::system::{self, BodyKind, Planet, SYSTEM_INNER, SYSTEM_OUTER};
-
-const TEXT: [f32; 4] = [0.90, 0.92, 0.97, 1.0];
-const DIM: [f32; 4] = [0.62, 0.66, 0.78, 1.0];
 
 /// The bundled intro cinematic (an authored `.flight`), loaded at runtime so it
 /// can be retuned in the file without recompiling.
 const INTRO_FLIGHT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/flights/intro.flight");
+
+/// The declarative HUD tree (`hud_solarbirth.lua`) + the shared UI-element layout.
+const HUD_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/sensorium/scripts/hud_solarbirth.lua"
+);
+const HUD_UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
 
 /// The moon orbits Home at this multiple of Home's radius, at this angular speed.
 const MOON_ORBIT_MULT: f32 = 2.6;
@@ -53,11 +66,37 @@ pub struct Sim {
     cinematic: bool,
     /// Free-running clock (seconds) driving the planets' orbital motion.
     anim_time: f32,
-    // Shell pause plumbing.
-    bindings: InputMap,
-    menu_prev: bool,
+    // ── Input seam (spec §9): the resolve▸dispatch bus this scene routes its pause
+    // arbitration through. The old `menu_prev` edge bool is gone — the stateful edge
+    // `Resolver` owns the Menu press edge; `ev` is a REUSED `Fired` scratch buffer (no
+    // per-frame alloc — RT-7); `route` is the router's request queue; `tick` is the
+    // resolver's monotonic `TickTime` (NOT wall-clock — spec §3.2a).
+    bindings: ContextualBindings,
+    gamepad_config: GamepadConfig,
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
+    /// Space replays the fly-in — a bespoke cinematic key (not a mapped `ActionSignal`),
+    /// so it stays a direct edge-detected key read off the raw snapshot (spec §9).
     space_prev: bool,
     theme: Option<Theme>,
+
+    // ── The declarative HUD (S10): a walker tree replaces the immediate
+    // `draw_text` readout. The host is retained as the Lua component library;
+    // the tree + the screen's declared intents are cached at enter. ──
+    script: Option<ScriptHost>,
+    ui_tree: Option<UiNode>,
+    ui_intents: UiIntents,
+    ui_styles: serde_json::Value,
+    ui_state: UiState,
+    /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
+    /// 1×1 white texture (the theme's) backing `render_hud`'s rect fills.
+    white: Option<TextureHandle>,
 }
 
 impl Sim {
@@ -73,10 +112,22 @@ impl Sim {
             flight: FlightPlayer::new(flight),
             cinematic: true,
             anim_time: 0.0,
-            bindings: InputMap::wasd_and_mouse(),
-            menu_prev: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
             space_prev: false,
             theme: None,
+            script: None,
+            ui_tree: None,
+            ui_intents: UiIntents::default(),
+            ui_styles: serde_json::Value::Object(Default::default()),
+            ui_state: UiState::new(),
+            hud_commands: Vec::new(),
+            fired_sigs: Vec::new(),
+            white: None,
         }
     }
 
@@ -84,6 +135,41 @@ impl Sim {
     fn replay(&mut self) {
         self.flight.restart();
         self.cinematic = true;
+    }
+
+    /// One roster legend row, pre-formatted: `"Home  (rocky, moon)"`. Display
+    /// DATA (Prism-ruled names + class tags), so it rides the Model — the tree's
+    /// `roster_<i>` binds — rather than being baked into the tree as copy.
+    fn roster_row(p: &Planet) -> String {
+        let mut tags = vec![p.kind.label()];
+        if p.moon {
+            tags.push("moon");
+        }
+        if p.rings {
+            tags.push("rings");
+        }
+        if p.occulted {
+            tags.push("occulted");
+        }
+        format!("{}  ({})", p.name, tags.join(", "))
+    }
+
+    /// The per-frame HUD model: the pre-formatted flight-phase line, the roster
+    /// legend rows, plus the transient `sig_<name>` mirror of last frame's
+    /// fired intents.
+    fn hud_model(&self) -> ValueMap {
+        let seg = self.flight.segment_name();
+        let phase = if self.flight.progress() >= 1.0 {
+            format!("the Prism system · {seg} · settled")
+        } else {
+            format!("the Prism system · {seg} · approaching {:.0}%", self.flight.progress() * 100.0)
+        };
+        let mut m = ValueMap::new().with("phase", phase);
+        for (i, p) in self.planets.iter().enumerate() {
+            m.set(format!("roster_{}", i + 1), Self::roster_row(p));
+        }
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+        m
     }
 
     /// Configure the volumetric dust cloud for this frame: the disk geometry, the
@@ -162,33 +248,122 @@ impl Scene for Sim {
         self.ring_mesh = Some(renderer.upload_mesh(&rv, MeshIndices::U32(&ri)));
 
         // Gothic theme for the shell pause overlay we push on Esc.
-        self.theme = Some(Theme::build(renderer));
+        let theme = Theme::build(renderer);
+        self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
+        self.theme = Some(theme);
+
+        // The declarative HUD (S10): styles + the `hud_solarbirth.lua` tree,
+        // built once. The fixed roster rides the `ROSTER` data global (name +
+        // tag line per planet, inner → outer); values ride the Model.
+        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
+            Ok(script) => {
+                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.solarbirth`)
+                // Structure only: the name picks each row's colour path; the
+                // row TEXT rides the `roster_<i>` Model binds (see `hud_model`).
+                let roster: Vec<serde_json::Value> = self
+                    .planets
+                    .iter()
+                    .map(|p| serde_json::json!({ "name": p.name }))
+                    .collect();
+                if let Err(e) =
+                    script.set_global_json("ROSTER", &serde_json::Value::Array(roster))
+                {
+                    tracing::error!("ROSTER global publish failed: {e}");
+                }
+                match script.ui_tree() {
+                    Ok(Some(tree)) => {
+                        self.ui_intents = UiIntents::of(&tree);
+                        self.ui_tree = Some(tree);
+                    }
+                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
+                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
+                }
+                self.script = Some(script);
+            }
+            Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
+        }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _r: &Renderer) -> Transition {
-        // Esc / Menu → push the shell pause overlay (edge-detected).
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev;
-        self.menu_prev = menu_down;
-        if menu_pressed {
+    fn update(&mut self, dt: Duration, input: &InputState, r: &Renderer) -> Transition {
+        // Walk the cached HUD tree: layout + hit-test + draw in one pass. Bare
+        // text on space (no styled containers), so it never claims the pointer
+        // (`hud_hit` stays false) and drag-to-orbit keeps working across it.
+        let mut over_hud = false;
+        if let Some(tree) = self.ui_tree.as_ref() {
+            let model = self.hud_model();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen: r.size(),
+                typed: String::new(),
+                backspace: false,
+                wheel: input.mouse_wheel_delta,
+            };
+            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
+            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            over_hud = frame.results.is_on("hud_hit");
+            self.hud_commands = frame.commands;
+        }
+
+        // ── The input seam (spec §9): ONE resolve + ONE dispatch replaces the old
+        // `menu_prev` edge. `Menu` (Esc) resolves over the active World map, wraps to
+        // an `InputEvent`, and dispatches through the chain; the walker layer's
+        // DECLARED `on_menu` intent (S10) is the pause-open edge. `ev` is the REUSED
+        // `Fired` buffer; the `InputEvent` list is a per-frame local because it
+        // borrows this frame's snapshot (RT-7 holds — a steady-state frame resolves
+        // zero edges). ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Reconcile any router-owned context/focus intents (none this scene — the
+        // chain has no context-pushing handler — but kept for the standard shape).
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto the
+        // shell pause push — the root's hardcoded Menu arm is gone.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.theme.expect("theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                &self.bindings,
+                self.bindings.active_map(),
                 &AbstractControls::default(),
-                &GamepadConfig::default(),
+                &self.gamepad_config,
             )));
         }
 
-        // Space replays the fly-in from the top.
+        // Space replays the fly-in from the top — a bespoke cinematic key (not a mapped
+        // `ActionSignal`), so it stays a direct edge-detected key read (spec §9).
         let space = input.key_down(Key::Space);
         if space && !self.space_prev {
             self.replay();
         }
         self.space_prev = space;
 
-        // Camera: the flight drives the pose until the first drag; a drag hands
-        // manual orbit control back. The flight advances only while it's driving.
+        // Camera: the flight drives the pose until the first drag; a drag hands manual
+        // orbit control back. The orbit camera stays POLLED off the raw snapshot (mouse
+        // drag + wheel are not mapped controls). The flight advances only while driving.
         let dts = dt.as_secs_f32();
         self.cam.update(input, !self.cinematic);
         if self.cinematic {
@@ -273,61 +448,17 @@ impl Scene for Sim {
             renderer.draw_mesh(mmesh, model, MeshDrawOptions::default());
         }
 
-        self.hud(renderer);
-    }
-}
-
-impl Sim {
-    fn hud(&self, renderer: &mut Renderer) {
-        renderer.draw_text("flicker · solarbirth", Vec2::new(16.0, 16.0), 24.0, TEXT);
-        let seg = self.flight.segment_name();
-        let phase = if self.flight.progress() >= 1.0 {
-            format!("{seg} · settled")
-        } else {
-            format!("{seg} · approaching {:.0}%", self.flight.progress() * 100.0)
-        };
-        renderer.draw_text(
-            &format!("the Prism system · {phase}"),
-            Vec2::new(16.0, 50.0),
-            16.0,
-            [0.78, 0.74, 0.92, 1.0],
-        );
-        renderer.draw_text(
-            "drag rotate · wheel zoom · Space replay fly-in · Esc pause",
-            Vec2::new(16.0, 74.0),
-            13.0,
-            DIM,
-        );
-
-        // Roster legend, inner → outer.
-        let mut y = 104.0;
-        renderer.draw_text("planets (inner → outer):", Vec2::new(16.0, y), 14.0, TEXT);
-        y += 22.0;
-        for p in &self.planets {
-            let mut tags = vec![p.kind.label()];
-            if p.moon {
-                tags.push("moon");
-            }
-            if p.rings {
-                tags.push("rings");
-            }
-            if p.occulted {
-                tags.push("occulted");
-            }
-            renderer.draw_text(
-                &format!("{}  ({})", p.name, tags.join(", ")),
-                Vec2::new(24.0, y),
-                13.0,
-                [p.color[0].max(0.35), p.color[1].max(0.35), p.color[2].max(0.35), 1.0],
-            );
-            y += 18.0;
+        // The declarative HUD (walker commands stashed by `update`).
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::INTRO_FLIGHT;
+    use super::*;
+    use flicker_input_core::ActionSignal;
 
     /// The bundled intro cinematic must parse — guards the asset at test time so a
     /// typo doesn't surface only as a runtime panic when the scene starts.
@@ -336,5 +467,68 @@ mod tests {
         let f = flicker_flight::Flight::load(INTRO_FLIGHT).expect("intro.flight parses");
         assert_eq!(f.segments.len(), 2, "glide + coast");
         assert!(f.loops(), "the coast tail loops");
+    }
+
+    /// Load the real `hud_solarbirth.lua` + the shared layout and walk a frame:
+    /// the vocabulary gate holds, the root declares the pause intent, the roster
+    /// legend renders one row per planet, and bare text never claims the pointer
+    /// (so drag-to-orbit keeps working across the readout).
+    #[test]
+    fn hud_tree_is_well_formed_and_draws_the_roster() {
+        use flicker::render::Vec2;
+        use flicker::ui::run_ui;
+
+        let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+            .expect("hud_solarbirth.lua loads");
+        load_ui_json(&script, HUD_UI_ELEMENTS);
+        let planets = system::roster();
+        let roster: Vec<serde_json::Value> = planets
+            .iter()
+            .map(|p| serde_json::json!({ "name": p.name }))
+            .collect();
+        script
+            .set_global_json("ROSTER", &serde_json::Value::Array(roster))
+            .expect("ROSTER publishes");
+        let tree = script.ui_tree().expect("tree builds").expect("script exposes tree()");
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_solarbirth.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_solarbirth.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+        let intents = UiIntents::of(&tree);
+        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+
+        let styles = load_styles(HUD_UI_ELEMENTS);
+        let mut model = ValueMap::new().with("phase", "the Prism system · glide · approaching 40%");
+        for (i, p) in planets.iter().enumerate() {
+            model.set(format!("roster_{}", i + 1), Sim::roster_row(p));
+        }
+        let snap = UiInput {
+            mouse: Vec2::new(30.0, 30.0), // parked ON the readout text
+            clicked: false,
+            down: false,
+            screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+        let texts = frame
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Text { .. }))
+            .count();
+        // title + phase + hint + roster header + one row per planet.
+        assert_eq!(texts, 4 + planets.len(), "every readout line renders");
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "bare text on space never claims the pointer (drag-to-orbit works across it)"
+        );
     }
 }

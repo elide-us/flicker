@@ -14,6 +14,10 @@ flicker = { path = "../flicker" }
 # Shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The app
 # routes through `flicker_shell::run`; no per-app shell/UI copy.
 flicker-shell.workspace = true
+# Input event bus (spec §4/§9): the Resolver -> Router seam the scene dispatches
+# discrete edges (Menu -> pause) through, reusing the proven bus read-only.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 flicker-worldgrid.workspace = true
 flicker-worldgen.workspace = true
 flicker-materials.workspace = true

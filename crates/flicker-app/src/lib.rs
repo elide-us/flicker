@@ -5,23 +5,20 @@
 //! [`Renderer`](flicker_render::Renderer); each frame it accumulates input,
 //! computes `dt`, calls [`App::update`], then [`App::render`].
 
-mod gamepad;
 mod runner;
 
 pub use runner::{last_window_geometry, run, WindowGeometry};
 
-// Re-export so games can `use flicker::app::{App, run, InputState, Key};`
-// (plus the bindings layer) without reaching into
-// `flicker::core::input::*` themselves.
-pub use flicker_core::input::bindings::{
-    AbstractControls, Action, AxisDirection, Bindings, ContextualBindings, ControlConfig,
-    InputBinding, InputContext, InputMap,
+// Convenience re-export so games can `use flicker::app::{App, run, InputState, Key};`
+// alongside the runner entry points. The canonical home of every input type is
+// `flicker-input-core`; this is a courtesy surface on the integration crate,
+// re-exported straight from it under the canonical names.
+pub use flicker_input_core::{
+    AbstractControls, ActionSignal, AxisDirection, ContextBindings, ContextualBindings,
+    DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputBinding,
+    InputContext, InputMap, InputProfile, InputState, Key, MouseButton, SignalBinding,
 };
-pub use flicker_core::input::{
-    DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputState, Key,
-    MouseButton,
-};
-pub use flicker_core::input::settings_gui::{GuiRenderer, InputSettingsPanel, RebindCapture};
+pub use flicker_input_core::rebind::RebindCapture;
 
 use std::time::Duration;
 

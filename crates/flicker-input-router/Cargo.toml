@@ -1,0 +1,13 @@
+[package]
+name = "flicker-input-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The event bus + focus + consumer API: the arbitration every scene hand-rolls
+# today, formalized. Pure, window-free, unit-testable. Depends ONLY on
+# `flicker-input-core` (frontend → router, never the reverse). No platform, no
+# `flicker-widgets`/`flicker-scene`. `Focusable.rect` is a plain `[f32; 4]`, so
+# no `glam` dep is needed. See spec §2/§4/§5.
+[dependencies]
+flicker-input-core.workspace = true

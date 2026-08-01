@@ -33,6 +33,6 @@ mod theme;
 
 pub use shell::{
     input_controls, run, take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo,
-    ShellConfig,
+    ShellConfig, REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM,
 };
 pub use theme::Theme;

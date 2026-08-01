@@ -1,6 +1,6 @@
 //! Orbit camera: drag to rotate around the planet, wheel to zoom.
 
-use flicker::app::InputState;
+use flicker_input_core::InputState;
 use flicker::render::{Camera, Vec2, Vec3};
 
 pub struct OrbitCam {
@@ -27,12 +27,13 @@ impl OrbitCam {
         }
     }
 
-    /// Apply this frame's input: left-drag rotates, wheel zooms. `allow_rotate`
-    /// is `false` while the pointer is over the HUD, so clicking a widget doesn't
-    /// also spin the planet (wheel-zoom still works).
-    pub fn update(&mut self, input: &InputState, allow_rotate: bool) {
+    /// Apply this frame's input: dragging rotates, wheel zooms. `rotate` is the
+    /// mapped drag control (PrimaryAction / left mouse) resolved off the input bus,
+    /// already gated so a HUD-widget click doesn't also spin the planet; wheel-zoom
+    /// stays a raw (unmapped) read and works regardless.
+    pub fn update(&mut self, input: &InputState, rotate: bool) {
         let mouse = input.mouse_position;
-        if input.mouse_left && allow_rotate {
+        if rotate {
             if self.dragging {
                 let delta = mouse - self.prev_mouse;
                 self.yaw -= delta.x * 0.01;

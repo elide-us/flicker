@@ -15,7 +15,7 @@
 //! drawn as a white wireframe box; two debug toggles let the user
 //! inspect the meshes interactively (see controls below).
 //!
-//! Camera controls (rebindable via `Bindings`):
+//! Camera controls (rebindable via the `InputMap`):
 //!   * WASD: move forward/back/strafe in the camera's facing.
 //!   * R / F: rise / descend (world Y up / down).
 //!   * Right-drag: free-look yaw + pitch.
@@ -53,21 +53,24 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use flicker::app::{
-    AbstractControls, Action, ContextualBindings, GamepadConfig, InputContext, InputMap,
-    InputState, Key,
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputContext, InputMap, InputState,
 };
+use flicker_input_core::{apply_deadzone, ActionSignal, Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker::net::chat::{ChatClient, ChatCommand, ChatEvent};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    chat_panel, load_styles, load_ui_json, render_hud, run_ui, ChatLineKind, ChatLineView,
-    ChatView, RosterEntry, UiInput, UiState,
+    chat_panel, load_styles, load_ui_json, render_hud, run_ui_with, ChatLineKind, ChatLineView,
+    ChatView, RosterEntry, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
 };
+// The HUD + chat panels render through `run_ui_with` (Lua component dispatch).
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -78,6 +81,9 @@ use flicker_worker::WorkerPool;
 
 mod celestial;
 use celestial::CelestialState;
+
+mod route;
+use route::{CommandHandler, GameplayBase, RootHandler};
 
 /// Side length of the cluster field, in clusters. A 3×3 row in XZ
 /// gives one fully-interior cluster (all four lateral neighbors
@@ -181,8 +187,28 @@ struct GameScene {
     /// cached tree every frame with fresh Model bindings). `None` if the script
     /// failed to load — the scene still runs without a HUD.
     ui_tree: Option<UiNode>,
+    /// Retained HUD script host: its Lua component library (`ui.*` modules) services the
+    /// walker's per-frame button-draw dispatch via `run_ui_with`. `None` if the script
+    /// failed to load — the walker then falls back to the all-Rust draw path. Kept
+    /// alongside `ui_tree` (both shared-borrowed each frame while `ui_state` is mutated).
+    ui_host: Option<ScriptHost>,
+    /// The screen's declarative signal bindings (S9), collected from the cached
+    /// tree's ROOT `on_<signal>` props at the same build point (`on_menu =
+    /// "pause_open"`). The walker layer consumes a declared signal; `update`
+    /// maps the fired name onto its transition.
+    ui_intents: UiIntents,
+    /// Intent names fired last frame — republished ONCE into the next HUD Model
+    /// as the transient `sig_<name>` mirror (S9), then dropped.
+    fired_sigs: Vec<String>,
     /// Retained walker interaction state (slider drag capture) across frames.
     ui_state: UiState,
+    /// The screen's declared surface set (S8): the inspector panel + the "none"
+    /// pick row (both derived from the selection each frame) and the floating
+    /// chat window (always on today — declared so S9 can toggle/diff it). Owns
+    /// the `visible_bind` gates both walker passes read; published into each
+    /// pass's Model. (`walk` is NOT here: it is the surface-walk checkbox's
+    /// two-way control bind that some rows also gate on.)
+    surfaces: Surfaces,
     /// The Prism-token-resolved `ui_elements.json` the walker resolves node
     /// `style` paths against (colours/sizes; the palette stays single-sourced).
     ui_styles: serde_json::Value,
@@ -256,8 +282,16 @@ struct GameScene {
     /// generated asynchronously, so the snap waits for it).
     walk_needs_snap: bool,
 
-    /// Previous-frame menu action level, for press-edge detection.
-    menu_prev: bool,
+    /// The new-input-model per-frame seam (spec §5/§9): a stateful edge [`Resolver`]
+    /// (replaces every `*_prev` bool + `menu_prev`), a REUSED `Fired` scratch buffer
+    /// (no per-frame alloc — RT-7), the router's request queue, the exclusive-
+    /// TextEntry chat handler (owns the T hand-off + the key guard), and a monotonic
+    /// frame `tick` that is the `Resolver`'s `TickTime` (NOT wall-clock — spec §3.2a).
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    command: CommandHandler,
+    tick: u64,
 
     // ── In-world chat (clay-chat client; DesignSync ChatPanel over clay-chat v0.1) ──
     /// The clay-chat client (background socket thread). `None` until `enter` connects;
@@ -271,8 +305,6 @@ struct GameScene {
     /// The floating window's rect `(x, y, w, h)` in device px — scene-owned so it can
     /// move/resize (walker geometry is static). Seeded bottom-centre in `enter`.
     chat_rect: (f32, f32, f32, f32),
-    /// Does the chat input own the keyboard? Mirrored onto the `TextEntry` context.
-    chat_focus: bool,
     /// In-flight title-drag (move) / corner-drag (resize), or `None`.
     chat_drag: ChatDrag,
     /// The local nick (updated from the server's `NickAck` / `Renamed`).
@@ -287,14 +319,6 @@ struct GameScene {
     chat_input: String,
     /// The active log's scroll offset (`f32::MAX` = follow newest).
     chat_scroll: f32,
-    /// Press-edge latches for T (hand-off in), Enter (send), Escape (cancel).
-    t_prev: bool,
-    enter_prev: bool,
-    esc_prev: bool,
-    /// While the T that handed off is still held, swallow keyboard text so the
-    /// trigger key (and its auto-repeats) never types into the field. Cleared when
-    /// T releases.
-    chat_key_guard: bool,
     /// Gothic UI theme: drawn as the loading widget while `Booting`, and handed
     /// to each `PauseScene` we push (so pausing never re-uploads). `None` until
     /// `enter`.
@@ -323,7 +347,14 @@ impl Default for GameScene {
             white: None,
             meshes: Vec::new(),
             navs: Vec::new(),
-            position: Vec3::ZERO,
+            // Field CENTER in X/Z (same center expression as the walk recenter), a
+            // fly-safe height up the cluster's vertical extent so the camera starts
+            // INSIDE the map rather than at the world origin corner (spec task D).
+            position: Vec3::new(
+                FIELD_DIM as f32 * 0.5 * CLUSTER_DIM as f32,
+                CLUSTER_DIM as f32 * 0.75,
+                FIELD_DIM as f32 * 0.5 * CLUSTER_DIM as f32,
+            ),
             yaw: 0.0,
             pitch: 0.0,
             last_look_cursor: None,
@@ -332,7 +363,18 @@ impl Default for GameScene {
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
             ui_tree: None,
+            ui_host: None,
+            ui_intents: UiIntents::default(),
+            fired_sigs: Vec::new(),
             ui_state: UiState::new(),
+            // The Screen declaration (S8). `inspector`/`pick_none` publish under the
+            // pre-existing tree keys (`has_pick`/`no_pick`); `chat` gates the floating
+            // window's root and starts on (nothing hides it yet — S9 data).
+            surfaces: Surfaces::new(vec![
+                Surface::new("inspector").key("has_pick"),
+                Surface::new("pick_none").key("no_pick").on(),
+                Surface::new("chat").on(),
+            ]),
             ui_styles: serde_json::Value::Null,
             hud_commands: Vec::new(),
             wireframe_on: false,
@@ -353,12 +395,15 @@ impl Default for GameScene {
             vy: 0.0,
             grounded: false,
             walk_needs_snap: false,
-            menu_prev: false,
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            command: CommandHandler::default(),
+            tick: 0,
             chat: None,
             chat_ui_state: UiState::new(),
             chat_commands: Vec::new(),
             chat_rect: (0.0, 0.0, 0.0, 0.0),
-            chat_focus: false,
             chat_drag: ChatDrag::None,
             chat_nick: String::new(),
             chat_active: String::new(),
@@ -367,10 +412,6 @@ impl Default for GameScene {
             chat_rosters: HashMap::new(),
             chat_input: String::new(),
             chat_scroll: f32::MAX,
-            t_prev: false,
-            enter_prev: false,
-            esc_prev: false,
-            chat_key_guard: false,
             ui_theme: None,
             phase: GamePhase::Booting,
             nav_ready_target: 0,
@@ -404,7 +445,8 @@ impl GameScene {
     fn new() -> Self {
         let ui_styles = load_styles(HUD_UI_ELEMENTS);
         let mut ui_tree = None;
-        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+        let mut ui_host = None;
+        match ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES) {
             Ok(s) => {
                 load_ui_json(&s, HUD_UI_ELEMENTS); // HUD layout constants (`UI.pocclusters`)
                 match s.ui_tree() {
@@ -413,12 +455,19 @@ impl GameScene {
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
                 tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
-                // The parsed `UiNode` is fully owned, so the script host is dropped here.
+                // Retain the host so its Lua component library (`ui.*`) can service the
+                // walker's per-frame button-draw dispatch via `run_ui_with`.
+                ui_host = Some(s);
             }
             Err(e) => tracing::error!("HUD script load failed (continuing without it): {e}"),
         }
+        // The screen's declarative bindings (S9), read off the parsed root once —
+        // cached exactly like the tree they were collected from.
+        let ui_intents = ui_tree.as_ref().map(UiIntents::of).unwrap_or_default();
         Self {
             ui_tree,
+            ui_host,
+            ui_intents,
             ui_styles,
             ..Self::default()
         }
@@ -1275,20 +1324,30 @@ impl GameScene {
         }
 
         // Horizontal intent, flattened to the XZ plane (R/F are inert while
-        // walking).
-        let map = self.bindings.active_map();
+        // walking). Digital move via the active context's `signal_held` (keyboard /
+        // d-pad); stick move via the 120 Hz analog latch (gamepad). Both sources are
+        // summed so a player can use either (spec §9 / RT-13).
+        let cfg = &self.gamepad_config;
         let mut horizontal = Vec3::ZERO;
-        if input.input_active(map, Action::MoveForward) {
+        if self.bindings.signal_held(ActionSignal::MoveForward, input, cfg) {
             horizontal += self.move_forward();
         }
-        if input.input_active(map, Action::MoveBackward) {
+        if self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg) {
             horizontal -= self.move_forward();
         }
-        if input.input_active(map, Action::StrafeRight) {
+        if self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg) {
             horizontal += self.move_right();
         }
-        if input.input_active(map, Action::StrafeLeft) {
+        if self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg) {
             horizontal -= self.move_right();
+        }
+        if let Some(latch) = input.analog_latch() {
+            let s = apply_deadzone(
+                latch.left_stick,
+                self.gamepad_config.left_stick_deadzone,
+                self.gamepad_config.deadzone_shape,
+            );
+            horizontal += self.move_forward() * s.y + self.move_right() * s.x;
         }
         let step = horizontal.normalize_or_zero() * WALK_SPEED * dt_s;
         let new_x = self.position.x + step.x;
@@ -1547,8 +1606,9 @@ impl GameScene {
         );
         let diag_val = format!("arrows {} \u{00B7} nav {}", self.corner_arrows.len(), self.navs.len());
 
-        // Pick: shown blue when a face is selected (`has_pick`), dim "none" otherwise.
-        let has_pick = self.selection.is_some();
+        // Pick: shown blue when a face is selected (the `inspector` / `pick_none`
+        // surfaces of the Screen declaration, synced from the selection in `update`
+        // and published below), dim "none" otherwise.
         let pick_val = match self.selection {
             Some((id, p)) => format!(
                 "cluster ({}, {}, {}) lod {} \u{00B7} voxel ({}, {}, {})",
@@ -1590,8 +1650,6 @@ impl GameScene {
             .with("grid_val", grid_val)
             .with("move_val", move_val)
             .with("diag_val", diag_val)
-            .with("has_pick", has_pick)
-            .with("no_pick", !has_pick)
             .with("pick_val", pick_val)
             .with("walk_val", walk_val)
             // Celestial Cycle: seven two-way NUMBER binds (celestial math units) +
@@ -1614,6 +1672,9 @@ impl GameScene {
             .with("constellations", self.celestial.show_constellations)
             .with("planets", self.celestial.show_planets)
             .with("celestial_paths", self.celestial.show_paths);
+
+        // The declared surfaces' gates (`has_pick` / `no_pick` / `chat`) — one publish.
+        self.surfaces.publish(&mut m);
 
         // Right-panel inspector: the selected voxel's 8 corners. Each corner is a
         // neighbour voxel's stored vector translated into THIS voxel's local frame
@@ -1643,6 +1704,12 @@ impl GameScene {
                 m.set(format!("insp_c{i}_wz"), format!("{:.2}", c.world.z));
             }
         }
+
+        // The transient `sig_<name>` mirror (S9): intent names fired last frame
+        // ride exactly this ONE publish for scripts to observe (`update` clears
+        // them right after the walk).
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+
         m
     }
 }
@@ -1656,14 +1723,14 @@ pub fn scene() -> Box<dyn Scene> {
 
 impl Scene for GameScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        // Frame the whole field from outside its -Z face, angled down. Done
+        // Start INSIDE the field, near its centre, angled slightly down. Done
         // before generation so the nav-ring gate (and the boot readiness
         // target) use the real camera pose.
         let field_extent = FIELD_DIM as f32 * CLUSTER_DIM as f32;
         let center_x = field_extent * 0.5;
-        self.position = Vec3::new(center_x, field_extent * 1.1, -field_extent * 0.5);
-        self.yaw = 0.0; // face +Z, into the field.
-        self.pitch = -0.55; // look down at it.
+        self.position = Vec3::new(center_x, CLUSTER_DIM as f32 * 0.75, center_x);
+        self.yaw = 0.0; // face +Z, across the field.
+        self.pitch = -0.55; // angled slightly down.
 
         // How many clusters fall in the local nav range — the boot gate waits
         // for all of them to be meshed *and* to have a nav surface (§ user's
@@ -1770,95 +1837,62 @@ impl Scene for GameScene {
         // paused when Speed is 0. Drives the day/night sky in `render`.
         self.celestial.update(dt);
 
-        // ── Chat hand-off / move / resize (BEFORE the pause check, so Esc leaves chat
-        // rather than opening the menu). T HANDS OFF into the chat input from gameplay —
-        // a ONE-WAY enter, not a toggle; the input state is terminated only by Esc
-        // (cancel) or Enter (send). Clicking the panel also enters (title drags, corner
-        // resizes, body focuses); a click OUTSIDE does NOT exit. Focus is mirrored onto
-        // the TextEntry context so gameplay movement + look suppress while chat owns the
-        // keyboard. ──
+        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the old
+        // `chat_focus` / T-Esc-click hand-off + `menu_prev` edge + `hud_hit`/`chat_hit` +
+        // `active()==World` gate ladder. ──
+        //
+        // The active CONTEXT is the durable "chat owns the keyboard" truth: `TextEntry`
+        // sits on the stack exactly while the chat line is focused, so gameplay
+        // movement/look/pick suppress automatically (its map is empty). That is what the
+        // deleted `chat_focus` bool used to track.
         let screen = renderer.size();
-        let chat_was_focused = self.chat_focus;
-        // Set unconditionally by the chat pass below, before the world-pick reads it.
-        let chat_hit;
+        let focused = self.bindings.active() == InputContext::TextEntry;
 
-        // T hands off (one-way). The trigger keystroke — and its auto-repeats while T is
-        // held — must NOT type, so guard keyboard text from the hand-off until T has been
-        // released for a FULL frame. The extra frame is load-bearing: macOS routes key
-        // text through its text-input system, which can deliver the committed 't' a frame
-        // LATER than the raw key-down — after a release-frame-only guard would already
-        // have cleared, leaking the trigger 't' into the field.
-        let t_down = input.key_down(Key::T);
-        let t_was_down = self.t_prev;
-        let t_edge = t_down && !t_was_down;
-        self.t_prev = t_down;
-        if t_edge && !self.chat_focus {
-            self.chat_focus = true;
-            self.chat_key_guard = true;
-        }
-        if self.chat_key_guard && !t_down && !t_was_down {
-            self.chat_key_guard = false;
-        }
-
-        // Esc terminates the input state (cancel; the draft is kept).
-        let esc_down = input.key_down(Key::Escape);
-        if esc_down && !self.esc_prev && self.chat_focus {
-            self.chat_focus = false;
-        }
-        self.esc_prev = esc_down;
-
-        let (mut cx, mut cy, mut cw, mut ch) = self.chat_rect;
-        let m = input.mouse_position;
-        if input.mouse_left_pressed {
-            // Enter on any in-panel click; a click outside does NOT exit (Esc/Enter only).
-            if in_rect(m, cx + cw - CHAT_CORNER, cy + ch - CHAT_CORNER, CHAT_CORNER, CHAT_CORNER) {
-                self.chat_drag = ChatDrag::Resize;
-                self.chat_focus = true;
-            } else if in_rect(m, cx, cy, cw, CHAT_GRIP_H) {
-                self.chat_drag = ChatDrag::Move { grab: Vec2::new(m.x - cx, m.y - cy) };
-                self.chat_focus = true;
-            } else if in_rect(m, cx, cy, cw, ch) {
-                self.chat_focus = true;
-            }
-        }
-        if input.mouse_left {
-            match self.chat_drag {
-                ChatDrag::Move { grab } => {
-                    cx = (m.x - grab.x).clamp(0.0, (screen.x - cw).max(0.0));
-                    cy = (m.y - grab.y).clamp(0.0, (screen.y - ch).max(0.0));
+        // Chat window move/resize (scene-owned window management, NOT input arbitration):
+        // update the rect and report whether a left-press landed in the panel this frame
+        // (a click-to-enter). The focus/context change itself is the command handler's
+        // job, just below.
+        let mut click_focus = false;
+        {
+            let (mut cx, mut cy, mut cw, mut ch) = self.chat_rect;
+            let m = input.mouse_position;
+            if input.mouse_left_pressed {
+                if in_rect(m, cx + cw - CHAT_CORNER, cy + ch - CHAT_CORNER, CHAT_CORNER, CHAT_CORNER) {
+                    self.chat_drag = ChatDrag::Resize;
+                    click_focus = true;
+                } else if in_rect(m, cx, cy, cw, CHAT_GRIP_H) {
+                    self.chat_drag = ChatDrag::Move { grab: Vec2::new(m.x - cx, m.y - cy) };
+                    click_focus = true;
+                } else if in_rect(m, cx, cy, cw, ch) {
+                    click_focus = true;
                 }
-                ChatDrag::Resize => {
-                    cw = (m.x - cx).clamp(CHAT_MIN_W, (screen.x - cx).max(CHAT_MIN_W));
-                    ch = (m.y - cy).clamp(CHAT_MIN_H, (screen.y - cy).max(CHAT_MIN_H));
-                }
-                ChatDrag::None => {}
             }
-        } else {
-            self.chat_drag = ChatDrag::None;
+            if input.mouse_left {
+                match self.chat_drag {
+                    ChatDrag::Move { grab } => {
+                        cx = (m.x - grab.x).clamp(0.0, (screen.x - cw).max(0.0));
+                        cy = (m.y - grab.y).clamp(0.0, (screen.y - ch).max(0.0));
+                    }
+                    ChatDrag::Resize => {
+                        cw = (m.x - cx).clamp(CHAT_MIN_W, (screen.x - cx).max(CHAT_MIN_W));
+                        ch = (m.y - cy).clamp(CHAT_MIN_H, (screen.y - cy).max(CHAT_MIN_H));
+                    }
+                    ChatDrag::None => {}
+                }
+            } else {
+                self.chat_drag = ChatDrag::None;
+            }
+            self.chat_rect = (cx, cy, cw, ch);
         }
-        self.chat_rect = (cx, cy, cw, ch);
 
-        if self.chat_focus && self.bindings.active() != InputContext::TextEntry {
-            self.bindings.push(InputContext::TextEntry);
-        } else if !self.chat_focus && self.bindings.active() == InputContext::TextEntry {
-            self.bindings.pop();
-        }
-
-        // Menu action edge detection pushes the pause overlay. Suppressed while chat
-        // had the keyboard this frame (Esc blurs chat instead); `action_pressed` is
-        // context-aware, so it also reads the empty TextEntry map as inactive.
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev && !chat_was_focused;
-        self.menu_prev = menu_down;
-        if menu_pressed {
-            let theme = self.ui_theme.expect("pause theme built in enter");
-            return Transition::Push(Box::new(PauseScene::new(
-                theme,
-                self.bindings.active_map(),
-                &self.controls,
-                &self.gamepad_config,
-            )));
-        }
+        // Exclusive TextEntry keyboard owner: the T hand-off / Esc-cancel / Enter-submit
+        // state machine + the trigger-key guard (4B15929B), promoted out of the scene into
+        // `CommandHandler`. Runs before the chat pass so `guard` gates this frame's
+        // typed(); its TextEntry-context + focus intents go into the reused RouteCtx and
+        // are reconciled after dispatch.
+        self.route.requests.clear();
+        let text = self.command.drive(input, focused, click_focus, &mut self.route);
+        let guard = self.command.guard();
 
         // The in-scene HUD is a DECLARATIVE component tree walked by the Rust
         // component walker (`run_ui`): build the Model, walk the cached tree → this
@@ -1869,6 +1903,11 @@ impl Scene for GameScene {
         // also fire a face pick behind the panel.
         let screen = renderer.size();
         let mut hud_hit = false;
+        // Surface states derived from scene state, synced once — the Screen
+        // declaration is then published into BOTH walker passes' Models.
+        let has_pick = self.selection.is_some();
+        self.surfaces.set("inspector", has_pick);
+        self.surfaces.set("pick_none", !has_pick);
         if self.ui_tree.is_some() {
             let model = self.hud_model();
             let snap = UiInput {
@@ -1878,11 +1917,15 @@ impl Scene for GameScene {
                 screen,
                 typed: String::new(),
                 backspace: false,
+                wheel: input.mouse_wheel_delta,
             };
             let frame = {
-                // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state` mutated.
+                // Disjoint field borrows: `ui_tree` / `ui_styles` / `ui_host` read,
+                // `ui_state` mutated. `lib` routes button draws to the Lua component
+                // (render-identical to `draw_button`); `None` would keep the all-Rust path.
                 let tree = self.ui_tree.as_ref().unwrap();
-                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
+                let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
+                run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
             };
             let results = frame.results;
             self.hud_commands = frame.commands;
@@ -1970,16 +2013,18 @@ impl Scene for GameScene {
         // ── Chat panel: drain the socket into the per-channel logs/rosters, then
         // build + run the floating window as a SECOND walker pass (its own UiState)
         // so it can move/resize each frame; its commands layer over the HUD in
-        // `render`. `chat_hit` gates the world pick like `hud_hit`. ──
-        {
+        // `render`. Reports `chat_hit` (pointer over the panel → the walker consumes
+        // the click) and this frame's send/join/part button edges (acted on after
+        // dispatch). ──
+        let (chat_hit, chat_send, chat_join, chat_part) = {
             let my_nick = self.chat_nick.clone();
             while let Some(ev) = self.chat.as_ref().and_then(|c| c.try_recv()) {
                 self.apply_event(ev, &my_nick);
             }
 
-            // Keep the field focused across non-field clicks while chat has focus;
-            // drop focus (and the caret) when it doesn't.
-            if self.chat_focus {
+            // Re-assert the chat field's focus each frame (run_ui clears focus on any
+            // clicked frame) from the context-derived truth (replaces `chat_focus`).
+            if focused {
                 self.chat_ui_state.request_focus("chat_input");
             } else {
                 self.chat_ui_state.clear_focus();
@@ -1990,7 +2035,7 @@ impl Scene for GameScene {
             let empty_roster: Vec<RosterEntry> = Vec::new();
             let lines = self.chat_logs.get(&self.chat_active).unwrap_or(&empty_lines);
             let roster = self.chat_rosters.get(&self.chat_active).unwrap_or(&empty_roster);
-            let tree = chat_panel(
+            let mut tree = chat_panel(
                 cx,
                 cy,
                 cw,
@@ -2004,11 +2049,15 @@ impl Scene for GameScene {
                     nick: &self.chat_nick,
                 },
             );
+            // The floating window is a DECLARED surface of this screen: its root
+            // rides the `chat` gate (always on today), so hiding it is a helper
+            // call — not a bespoke code path — once something wants to (S9).
+            tree.visible_bind = Some("chat".into());
 
             let mut cmodel = ValueMap::new();
+            self.surfaces.publish(&mut cmodel);
             cmodel.set("chat_tab", self.chat_active.as_str());
             cmodel.set("chat_scroll", self.chat_scroll as f64);
-            cmodel.set("chat_wheel", input.mouse_wheel_delta as f64);
             cmodel.set("chat_input", self.chat_input.as_str());
 
             let cin = UiInput {
@@ -2018,15 +2067,23 @@ impl Scene for GameScene {
                 clicked: input.mouse_left_pressed && matches!(self.chat_drag, ChatDrag::None),
                 down: input.mouse_left,
                 screen,
-                typed: if self.chat_focus && !self.chat_key_guard {
+                // Route typed text / backspace to the field only while it owns the
+                // keyboard (TextEntry) and the trigger-key guard is clear (4B15929B) —
+                // the promoted `chat_focus && !chat_key_guard`.
+                typed: if focused && !guard {
                     input.typed().to_string()
                 } else {
                     String::new()
                 },
-                backspace: self.chat_focus && !self.chat_key_guard && input.backspace(),
+                backspace: focused && !guard && input.backspace(),
+                wheel: input.mouse_wheel_delta,
             };
-            let cframe = run_ui(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state);
-            chat_hit = cframe.results.is_on("hud_hit");
+            // Same Lua component library as the HUD pass (services the chat panel's
+            // buttons, e.g. close); disjoint from the `&mut self.chat_ui_state` borrow.
+            let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
+            let cframe =
+                run_ui_with(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state, lib);
+            let chat_hit = cframe.results.is_on("hud_hit");
             self.chat_commands = cframe.commands;
 
             if let Some(t) = cframe.results.text("chat_input") {
@@ -2042,41 +2099,110 @@ impl Scene for GameScene {
                 }
             }
 
-            // Enter (while focused) or the send button posts; ＋ joins the typed
-            // channel; ✕ leaves the active channel.
-            let enter_down = input.key_down(Key::Enter);
-            let enter_send = self.chat_focus && enter_down && !self.enter_prev;
-            self.enter_prev = enter_down;
-            if enter_send || cframe.results.is_on("chat_send") {
-                self.send_chat_input();
-                // Enter/Send terminates the input state — control returns to gameplay
-                // (T hands off again for the next message, the /tell-macro model).
-                self.chat_focus = false;
-            }
-            if cframe.results.is_on("chat_join") {
-                let channel = self.chat_input.trim().to_string();
-                if !channel.is_empty() {
-                    if let Some(c) = self.chat.as_ref() {
-                        c.send(ChatCommand::Join(channel));
-                    }
-                    self.chat_input.clear();
-                }
-            }
-            if cframe.results.is_on("chat_part") {
+            (
+                chat_hit,
+                cframe.results.is_on("chat_send"),
+                cframe.results.is_on("chat_join"),
+                cframe.results.is_on("chat_part"),
+            )
+        };
+
+        // ── Resolve discrete edges over the active context → wrap → dispatch through the
+        // 4-handler chain (root → command → walker → gameplay). `ev` is the REUSED Fired
+        // buffer (no per-frame alloc); the InputEvent list is a short-lived local because
+        // it borrows THIS frame's snapshot, so it cannot be a persistent field — RT-7 is
+        // preserved because steady-state frames resolve zero edges and allocate nothing. ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+
+        let mut root = RootHandler;
+        let mut gameplay = GameplayBase::default();
+        // The walker layer wraps the CHAT walker's retained focus (it owns the
+        // `chat_input` field) + this frame's pointer-consume = HUD `hud_hit` OR chat
+        // `chat_hit` (the old two-gate fall-through, folded into the one walker
+        // layer) + the screen's DECLARED intents (S9: `on_menu = "pause_open"`).
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+        let mut walker = WalkerHandler::hud(&mut self.chat_ui_state, hud_hit || chat_hit)
+            .with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 4] =
+                [&mut root, &mut self.command, &mut walker, &mut gameplay];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+
+        // Any exit leaves TextEntry (Enter/send = submit, Esc = cancel): pop the context +
+        // clear focus through the router queue. The panel's send button folds into submit.
+        let submit = text.submit || chat_send;
+        if submit || text.cancel {
+            self.route.pop_context();
+            self.route.clear_focus();
+        }
+
+        // Surface context wiring (S9): any declared-surface flip since last frame
+        // becomes Push/PopContext on the same queue (no pocclusters surface
+        // carries a context today — the seam is standard, the call a live no-op).
+        self.surfaces.apply_surface_contexts(&mut self.route);
+        // Reconcile this frame's context push/pop into ContextualBindings and apply the
+        // resolved focus decision THROUGH the walker — one id for mouse + gamepad (§4.2a).
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        // The screen's fired intents (S9), drained once per frame: acted on below
+        // and queued for the one-frame `sig_<name>` Model mirror.
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // Chat side effects (post the line / join / leave) — identical to the old inline
+        // handling, now driven by the command handler's submit + the panel buttons.
+        if submit {
+            self.send_chat_input();
+        }
+        if chat_join {
+            let channel = self.chat_input.trim().to_string();
+            if !channel.is_empty() {
                 if let Some(c) = self.chat.as_ref() {
-                    c.send(ChatCommand::Part(self.chat_active.clone()));
+                    c.send(ChatCommand::Join(channel));
                 }
+                self.chat_input.clear();
+            }
+        }
+        if chat_part {
+            if let Some(c) = self.chat.as_ref() {
+                c.send(ChatCommand::Part(self.chat_active.clone()));
             }
         }
 
-        // Left-click → world pick (inspector), but only in the World context (not while
-        // chat owns the keyboard) and when the click did NOT land on the HUD (`hud_hit`)
-        // or the chat panel (`chat_hit`). Right-drag is for look.
-        if input.mouse_left_pressed
-            && !hud_hit
-            && !chat_hit
-            && self.bindings.active() == InputContext::World
-        {
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto its
+        // pause push — the root's hardcoded Menu arm is gone. Under TextEntry the
+        // guard is doubly structural: the empty map resolves no Menu at all, and
+        // the command layer's capture sits above the walker anyway.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+            let theme = self.ui_theme.expect("pause theme built in enter");
+            return Transition::Push(Box::new(PauseScene::new(
+                theme,
+                self.bindings.active_map(),
+                &self.controls,
+                &self.gamepad_config,
+            )));
+        }
+
+        // Gameplay base (Pass-only): the world-pick runs only when a `PrimaryAction`
+        // press bubbled past the walker to the base — the typed form of the old
+        // `!hud_hit && !chat_hit && active()==World` gate.
+        if gameplay.pick {
             if let Some((id, hit_world)) = self.try_pick(input.mouse_position, renderer.size()) {
                 let p = Self::hit_to_local_p(id, hit_world);
                 tracing::info!(
@@ -2089,11 +2215,12 @@ impl Scene for GameScene {
             }
         }
 
-        // Look + movement drive the camera only in the World context — while the chat
-        // input owns the keyboard (TextEntry), the keystrokes go to the panel and the
-        // camera holds still.
+        // Camera look + movement — the gameplay base owns the frame only in World (the
+        // exclusive TextEntry context suppresses it; mouse-look has no discrete event to
+        // gate, so this stays the base handler's frame-ownership check). Digital move via
+        // `signal_held` (keyboard / d-pad) + left-stick via the analog latch; mouse-look
+        // via `mouse_position` + right-stick via the analog latch (spec §9 / RT-13).
         if self.bindings.active() == InputContext::World {
-            // Look: right-drag, with invert/sensitivity applied by config.
             if input.mouse_right {
                 if let Some(prev) = self.last_look_cursor {
                     let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
@@ -2104,31 +2231,53 @@ impl Scene for GameScene {
             } else {
                 self.last_look_cursor = None;
             }
+            // Right-stick look via the 120 Hz analog latch (Option-aware: no pad → no
+            // stick contribution). dt-scaled so it matches the mouse feel.
+            if let Some(latch) = input.analog_latch() {
+                let s = apply_deadzone(
+                    latch.right_stick,
+                    self.gamepad_config.right_stick_deadzone,
+                    self.gamepad_config.deadzone_shape,
+                );
+                if s != Vec2::ZERO {
+                    let (dyaw, dpitch) = self.controls.look_delta_stick(s);
+                    self.yaw -= dyaw * dt_s;
+                    self.pitch = (self.pitch + dpitch * dt_s).clamp(-1.5, 1.5);
+                }
+            }
 
-            // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp),
-            // per the surface-walk locomotion mode.
+            // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp).
             if self.locomotion_walk {
                 self.walk_step(dt_s, input);
             } else {
-                let map = self.bindings.active_map();
+                let cfg = &self.gamepad_config;
                 let mut motion = Vec3::ZERO;
-                if input.input_active(map, Action::MoveForward) {
+                if self.bindings.signal_held(ActionSignal::MoveForward, input, cfg) {
                     motion += self.move_forward();
                 }
-                if input.input_active(map, Action::MoveBackward) {
+                if self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg) {
                     motion -= self.move_forward();
                 }
-                if input.input_active(map, Action::StrafeRight) {
+                if self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg) {
                     motion += self.move_right();
                 }
-                if input.input_active(map, Action::StrafeLeft) {
+                if self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg) {
                     motion -= self.move_right();
                 }
-                if input.input_active(map, Action::MoveUp) {
+                if self.bindings.signal_held(ActionSignal::MoveUp, input, cfg) {
                     motion += Vec3::Y;
                 }
-                if input.input_active(map, Action::MoveDown) {
+                if self.bindings.signal_held(ActionSignal::MoveDown, input, cfg) {
                     motion -= Vec3::Y;
+                }
+                // Left-stick fly (analog channel, Option-aware; deadzoned like digital).
+                if let Some(latch) = input.analog_latch() {
+                    let s = apply_deadzone(
+                        latch.left_stick,
+                        self.gamepad_config.left_stick_deadzone,
+                        self.gamepad_config.deadzone_shape,
+                    );
+                    motion += self.move_forward() * s.y + self.move_right() * s.x;
                 }
                 if motion.length_squared() > 0.0 {
                     self.position += motion.normalize() * self.controls.move_speed * dt_s;
@@ -2286,7 +2435,7 @@ impl Scene for GameScene {
     }
 }
 
-// `render_hud` now lives in `flicker-ui` (the reusable UI surface) and is
+// `render_hud` now lives in `flicker-widgets` (the reusable UI surface) and is
 // imported above; the call sites below are unchanged.
 
 
@@ -2424,13 +2573,37 @@ mod script_smoke {
 
     #[test]
     fn hud_tree_walks_with_model() {
-        let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud_pocclusters.lua");
+        // The HUD's display copy is `$token`s now (S10 strings gate); load the
+        // shipped table so the walked commands carry the resolved en-us text.
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
+        let host = ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES)
+            .expect("load hud_pocclusters.lua");
         load_ui_json(&host, HUD_UI_ELEMENTS); // HUD layout (`UI.pocclusters`)
         let tree = host
             .ui_tree()
             .expect("tree parses")
             .expect("hud_pocclusters.lua exposes tree()");
         let styles = load_styles(HUD_UI_ELEMENTS);
+
+        // Vocabulary gate: an unknown kind renders NOTHING (anchor-overlaid children, no
+        // draw arm), so a name left behind by a rename would be invisible until someone
+        // opened the window.
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_pocclusters.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_pocclusters.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
 
         // A static frame (no hover): the panel draws its stats + checkboxes + sliders.
         let snap = UiInput {
@@ -2440,8 +2613,10 @@ mod script_smoke {
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
-        let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
+        let frame =
+            run_ui_with(&tree, &model(), &styles, &snap, &mut UiState::new(), Some(&host));
         assert!(!frame.commands.is_empty(), "the HUD draws its panel + controls");
         let has_text = |needle: &str| {
             frame

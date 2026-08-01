@@ -25,6 +25,11 @@ path = "src/lib.rs"
 flicker = { path = "../flicker" }
 # The reusable front-end shell (splash/menu/settings/pause) this viewer runs inside.
 flicker-shell.workspace = true
+# Input event bus (spec §9): the resolver's discrete edges (flicker-input-core) routed
+# through the shared handler chain (flicker-input-router) — Menu → pause, HUD-consume,
+# world-pick gating. Reused read-only; the bus itself is built + proven elsewhere.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 # The GPU-free skeletal-animation runtime (format/pose/skin/state).
 flicker-skeletal.workspace = true
 # The mechanics cluster: collision primitives + the auto-fit + the debug wireframe (WS-D).

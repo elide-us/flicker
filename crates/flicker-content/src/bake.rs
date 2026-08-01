@@ -112,6 +112,79 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
 ///     (`flicker-paperdoll::write_inline_attach`), which is why `export_prop` also omits them.
 ///
 /// Byte-shape parity with the Python `io_scene_flicker_rig.py::export_prop`.
+/// Recompute the mesh's skin WEIGHTS from the current skeleton — the in-app replacement for a
+/// source rig's (often poor) auto-skinning. Each vertex is bound to its nearest bone SEGMENTS
+/// (joint→first-child) by inverse-square distance, top-4, normalised. Run AFTER the bones are
+/// repositioned inside the mesh: the rest pose and `inverse_bind` are untouched, so this changes only
+/// how the mesh DEFORMS when posed, never where it sits at rest.
+pub fn bake_skin(model: &mut RawModel) {
+    let n = model.bones.len();
+    if n == 0 || model.vertices.is_empty() {
+        return;
+    }
+    let globals = rest_world_frames(model);
+    let heads: Vec<Vec3> = globals.iter().map(|g| g.w_axis.truncate()).collect();
+    // A bone's body = the segment from its joint to its FIRST child's joint; a leaf is a point.
+    let tails: Vec<Vec3> = (0..n)
+        .map(|i| {
+            model
+                .bones
+                .iter()
+                .position(|b| b.parent == i as i32)
+                .map(|c| heads[c])
+                .unwrap_or(heads[i])
+        })
+        .collect();
+    for v in &mut model.vertices {
+        let p = Vec3::from_array(v.p);
+        let mut scored: Vec<(usize, f32)> =
+            (0..n).map(|i| (i, dist_point_segment(p, heads[i], tails[i]))).collect();
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut joints = [0u32; 4];
+        let mut weights = [0.0f32; 4];
+        let mut sum = 0.0;
+        for (k, &(bi, dist)) in scored.iter().take(4).enumerate() {
+            let w = 1.0 / (dist * dist + 1e-3);
+            joints[k] = bi as u32;
+            weights[k] = w;
+            sum += w;
+        }
+        if sum > 0.0 {
+            for w in &mut weights {
+                *w /= sum;
+            }
+        }
+        v.joints = joints;
+        v.weights = weights;
+    }
+}
+
+/// Rest WORLD frame per bone, composed from the stored local TRS (parents precede children).
+fn rest_world_frames(model: &RawModel) -> Vec<Mat4> {
+    let mut g: Vec<Mat4> = Vec::with_capacity(model.bones.len());
+    for b in &model.bones {
+        let local = Mat4::from_scale_rotation_translation(
+            Vec3::from_array(b.scale),
+            Quat::from_array(b.rotation),
+            Vec3::from_array(b.translation),
+        );
+        let world = match usize::try_from(b.parent) {
+            Ok(p) if p < g.len() => g[p] * local,
+            _ => local,
+        };
+        g.push(world);
+    }
+    g
+}
+
+/// Shortest distance from point `p` to the segment `a`–`b`.
+fn dist_point_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_squared();
+    let t = if len2 > 1e-12 { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    (p - (a + ab * t)).length()
+}
+
 pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
     let vertices: Vec<Vertex> = model
         .vertices

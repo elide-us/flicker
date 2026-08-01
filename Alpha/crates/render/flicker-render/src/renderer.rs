@@ -671,7 +671,7 @@ impl Renderer {
     /// top-left baseline in pixels; `size` is the font size in pixels; `color`
     /// is RGBA in 0..1.
     pub fn draw_text(&mut self, text: &str, position: Vec2, size: f32, color: [f32; 4]) {
-        self.draw_text_role(text, position, size, color, crate::FontRole::Body, false, false, -1.0);
+        self.draw_text_role(text, position, size, color, crate::FontRole::Body, false, false, -1.0, None);
     }
 
     /// Submit a string of text in the face selected by `role`
@@ -690,6 +690,7 @@ impl Renderer {
         italic: bool,
         bold: bool,
         tracking: f32,
+        wrap: Option<f32>,
     ) {
         self.text.push(
             text,
@@ -703,6 +704,7 @@ impl Renderer {
             bold,
             tracking,
             self.current_clip,
+            wrap,
         );
     }
 

@@ -1,7 +1,7 @@
 //! Orbit camera: drag to rotate around the planet, wheel to zoom. (Salvaged from
 //! the old `flicker-world` viewer — unchanged.)
 
-use flicker::app::InputState;
+use flicker_input_core::InputState;
 use flicker::render::{Camera, Vec2, Vec3};
 
 pub struct OrbitCam {

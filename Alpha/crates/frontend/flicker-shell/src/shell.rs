@@ -6,20 +6,23 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
-use flicker::app::{
-    run as run_app, AbstractControls, Action, GamepadConfig, InputMap, InputState, Key,
-    RebindCapture,
-};
+use flicker::app::run as run_app;
 use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneManager, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles_str, load_ui_json_str, load_widgets, render_hud, run_ui,
-    UiInput, UiState,
+    builtin_templates, expand, focusables_of, load_styles_str, load_ui_json_str, render_hud,
+    run_ui_with, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
 };
+use flicker_input_core::{
+    AbstractControls, ActionSignal, ContextualBindings, Fired, GamepadConfig, InputMap,
+    InputProfile, InputState, Key, RebindCapture, Resolver,
+};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 
 use crate::display;
 use crate::theme::Theme;
@@ -64,11 +67,28 @@ impl SceneInfo {
     }
 }
 
+// ── Play-mode realms (the launcher's tier-1 → tier-2 map) ──────────────────
+// A launcher's ROOT menu lists the three Prism play modes; each opens a tier-2
+// page listing the scenes MEMBER of that realm. Membership is `SceneEntry::realms`
+// (a tag list, so a tool can be shared across modes); `SceneInfo::mode` stays a
+// pure display string. A realm-less entry (e.g. Click Trainer) stays a root-level
+// launch button.
+
+/// Adventurer mode ("Explore the World") — the player-facing tier-2 page.
+pub const REALM_ADVENTURER: &str = "adventurer";
+/// DM mode ("Build the World") — under construction; its tier-2 page is a note.
+pub const REALM_DM: &str = "dm";
+/// Developer mode — the scene-select launcher (benches / tools / POCs) as tier 2.
+pub const REALM_DEVELOPER: &str = "developer";
+/// The launcher root's mode tiers, in display order.
+const REALMS: [&str; 3] = [REALM_ADVENTURER, REALM_DM, REALM_DEVELOPER];
+
 /// One launchable scene: a stable action `id`, its display `label`, its Prism style
 /// `variant` (`primary`/`secondary`/`danger`), and the `factory` that builds it.
 /// In the default menu it is one launch button; in a launcher (`scene_select`) it
-/// becomes a scene-panel row IF it carries [`SceneInfo`], and otherwise stays a plain
-/// launch button in the popup. On click the menu replaces itself with `factory()`.
+/// becomes a scene-panel row on its realm's tier-2 page IF it carries [`SceneInfo`]
+/// (and a realm), and otherwise stays a plain launch button in the popup. On click
+/// the menu replaces itself with `factory()`.
 pub struct SceneEntry {
     pub id: String,
     pub label: String,
@@ -76,6 +96,10 @@ pub struct SceneEntry {
     pub factory: SceneFactory,
     /// Rich metadata for the scene-selection panel; `None` = a plain launch button.
     pub info: Option<SceneInfo>,
+    /// The play-mode realms this scene belongs to ([`REALM_ADVENTURER`] /
+    /// [`REALM_DM`] / [`REALM_DEVELOPER`]) — a list because tools are SHARED across
+    /// modes. Empty = no realm: the entry stays on the launcher's root menu.
+    pub realms: Vec<String>,
 }
 
 impl SceneEntry {
@@ -92,12 +116,20 @@ impl SceneEntry {
             variant: variant.into(),
             factory: Rc::new(factory),
             info: None,
+            realms: Vec::new(),
         }
     }
 
     /// Attach scene-selection-panel metadata (the launcher's rich row).
     pub fn with_info(mut self, info: SceneInfo) -> Self {
         self.info = Some(info);
+        self
+    }
+
+    /// Tag the scene as a member of a play-mode realm (repeatable — tools are
+    /// shared across modes). It then lists on that mode's tier-2 page.
+    pub fn with_realm(mut self, realm: impl Into<String>) -> Self {
+        self.realms.push(realm.into());
         self
     }
 }
@@ -172,6 +204,14 @@ fn scene_select() -> bool {
 pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     display::set_settings_dir(config.settings_dir.clone());
     GameSettings::load(); // unified settings.json → GAME_SETTINGS + seeds display::CURRENT
+    // Load the UI stringtable for the persisted language (text ruling 2026-07-31):
+    // shell display strings are `$token`s; `en-us` is the seed locale, and an unset
+    // language means exactly that.
+    {
+        let lang = GAME_SETTINGS.lock().map(|s| s.language.clone()).unwrap_or_default();
+        let lang = if lang.is_empty() { "en-us".to_string() } else { lang };
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, &lang);
+    }
     SCENE_SELECT.with(|s| s.set(config.scene_select));
     set_scenes(config.scenes);
     let result = run_app(SceneManager::new(Box::new(LogoScene::new())));
@@ -223,10 +263,22 @@ struct GameSettings {
     audio: AudioSettings,
     video: VideoSettings,
     input: InputSettings,
+    /// The persisted input PROFILE — per-context keybinds (World rebinds live here),
+    /// analog tuning, gamepad config. This is the fix for the "rebinds lost on relaunch"
+    /// gap (spec §7.2): `InputSettings` above is scalars only and never carried the
+    /// `InputMap`. `#[serde(default)]` so an older `settings.json` without this key still
+    /// loads (→ [`InputProfile::default`]).
+    #[serde(default)]
+    input_profile: InputProfile,
     /// Window mode + size + windowed position. The live value is mirrored in the
     /// `display` module's `CURRENT`; this is its persisted home.
     #[serde(default)]
     display: display::DisplaySetting,
+    /// The UI language — selects the stringtable locale (tier-3 player config; text
+    /// ruling 2026-07-31). Empty (the derived default / an older settings.json) reads
+    /// as `en-us` at load; a future Settings dropdown writes it.
+    #[serde(default)]
+    language: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -343,16 +395,12 @@ pub(crate) fn persist_display_setting(setting: display::DisplaySetting) {
     snapshot.save();
 }
 
-static GAME_SETTINGS: Mutex<GameSettings> = Mutex::new(GameSettings {
-    audio: AudioSettings { master: 0.8, music: 0.6, sfx: 0.7, voice: 0.9 },
-    video: VideoSettings { quality: 3, vsync: true, fps_limit: 2 },
-    input: InputSettings {
-        mouse_sensitivity: 0.005, sprint_sensitivity: 0.005, invert_pitch: false, invert_yaw: false,
-        raw_input: true, stick_sensitivity: 2.0, left_deadzone: 0.2, right_deadzone: 0.2,
-        trigger_threshold: 0.5, invert_stick_pitch: false, invert_stick_yaw: false, deadzone_shape: 0,
-    },
-    display: display::DisplaySetting::DEFAULT,
-});
+// `LazyLock` (not a bare `const Mutex::new`) because `input_profile` holds a populated
+// `InputProfile` (`Vec`/`String`/`HashMap`) that cannot be built in a const initializer.
+// The lazy seed is exactly `GameSettings::default()`, so the pre-load defaults match the
+// derived `Default` with no hand-maintained duplicate literal to drift (`405F7034`).
+static GAME_SETTINGS: LazyLock<Mutex<GameSettings>> =
+    LazyLock::new(|| Mutex::new(GameSettings::default()));
 
 /// Input settings changes pushed from the pause scene and consumed by
 /// the game scene. `None` when no pending change exists.
@@ -387,6 +435,15 @@ fn set_pending_input(map: InputMap, controls: AbstractControls, gamepad: Gamepad
 pub fn input_controls() -> AbstractControls {
     let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
     input_controls_from(&settings)
+}
+
+/// The current persisted input [`InputProfile`] — the per-context keybinds (with the
+/// World rebinds), analog tuning, and gamepad config. Parallels [`input_controls`]: a
+/// scene / the settings overlay SEEDS its `InputMap` from this at enter, so a rebind
+/// made last session is live from the first frame (spec §7.2). Live in-session changes
+/// still flow through [`take_pending_input`].
+pub fn input_profile() -> InputProfile {
+    GAME_SETTINGS.lock().expect("settings lock").input_profile.clone()
 }
 
 /// How long the logo splash shows before auto-advancing to the menu.
@@ -480,7 +537,6 @@ impl Scene for LogoScene {
                     tracing::error!("logo texture registration failed: {e}");
                 }
                 expose_ui_elements(&script);
-                load_widgets(&script);
                 Some(script)
             }
             Err(e) => {
@@ -590,7 +646,7 @@ struct ConfirmDisplayScene {
 impl ConfirmDisplayScene {
     fn new(theme: Theme, previous: display::DisplaySetting) -> Self {
         Self {
-            view: MenuView::new(&theme, "confirm", &confirm_items(), &[]),
+            view: MenuView::new(&theme, "confirm", &MenuPage::default(), &confirm_items(), &[]),
             previous,
             remaining: CONFIRM_SECS,
         }
@@ -648,17 +704,17 @@ const MENU_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/me
 /// The shell's declarative UI layout (`modal`/`screens`/`settings`/`logo`/
 /// `loading`), embedded. The client's in-game HUD layout is separate.
 const SHELL_UI_JSON: &str = include_str!("../../../../content/sensorium/resources/ui_elements.json");
+/// The UI stringtable (`{ token: { locale: text } }`) — every shell display string is a
+/// `$token` into this (text ruling 2026-07-31); tier-2 content, en-us seeded.
+const SHELL_STRINGS_JSON: &str = include_str!("../../../../content/data/stringtable.json");
 
-// The composable vector-UI component library (`content/sensorium/scripts/ui/`): a shared
-// `core` + one component per file + the `layout` engine, registered as
-// requireable Lua modules via `ScriptHost::new_with_modules`. (Foundation slice —
-// screens migrate onto these next.)
+// Granular handles to the `ui/*.lua` component library, for tests that build bespoke
+// module sets. The LIVE list every scene registers is `flicker::ui::UI_COMPONENT_MODULES`
+// (single source of truth).
 #[cfg(test)]
 const UI_CORE: &str = include_str!("../../../../content/sensorium/scripts/ui/core.lua");
 #[cfg(test)]
 const UI_BUTTON: &str = include_str!("../../../../content/sensorium/scripts/ui/button.lua");
-#[cfg(test)]
-const UI_LAYOUT: &str = include_str!("../../../../content/sensorium/scripts/ui/layout.lua");
 
 /// Expose the embedded shell `ui_elements.json` to `script` as the `UI` global,
 /// so a screen reads its layout from named elements (`UI.modal.panel.w`) instead
@@ -668,10 +724,27 @@ fn expose_ui_elements(script: &ScriptHost) {
     load_ui_json_str(script, SHELL_UI_JSON);
 }
 
-// `load_widgets` (and the embedded `widgets.lua` toolkit) live in `flicker-ui`
-// and are imported above; `scripts/widgets.lua` was retired. Each Lua-driven shell
-// screen builds its own `ScriptHost` inline (see `LogoScene` / `MenuView` /
-// `UnifiedSettingsScene`), registering textures + the `UI` global the same way.
+/// Publish the built-in input profiles to a settings script as the `PROFILES` data
+/// global — the controller tab's selector options (spec §7.3). Each entry is
+/// `{ value, label }`: `value` is the stable [`InputProfile::name`] (persisted), `label`
+/// the display string. Variable-length structure, so it rides a data global like `MENU`
+/// (not the flat Model). When unpublished (e.g. a build-time tree check), `settings.lua`
+/// falls back to a single "Default" option.
+fn publish_profiles(script: &ScriptHost) {
+    let list: Vec<serde_json::Value> = InputProfile::PRESET_NAMES
+        .iter()
+        .map(|(value, label)| serde_json::json!({ "value": value, "label": label }))
+        .collect();
+    if let Err(e) = script.set_global_json("PROFILES", &serde_json::Value::Array(list)) {
+        tracing::error!("PROFILES global publish failed: {e}");
+    }
+}
+
+// Every shell screen is walker-driven (or, for the logo splash, plain
+// immediate Lua) — none loads the legacy `Widgets` toolkit (S10). Each
+// Lua-driven shell screen builds its own `ScriptHost` inline (see `LogoScene` /
+// `MenuView` / `UnifiedSettingsScene`), registering textures + the `UI` global
+// the same way.
 
 /// One item published to `menu.lua`'s data-driven button list: a stable action
 /// `id`, its display `label`, and its Prism style `variant`. The engine reads back
@@ -700,12 +773,41 @@ struct SceneRow {
     meta: String,
 }
 
-/// Publish the screen + its button list (+ optional scene-panel rows) to a menu
-/// script as the `MENU` data global (nested JSON — variable-length *structure*, so
-/// it rides this channel, not the flat `Model`). `menu.lua`'s `tree()` loops
-/// `MENU.items` (popup buttons) and `MENU.scenes` (panel rows); `scene_select` gates
-/// the two-column launcher layout.
-fn publish_menu(script: &ScriptHost, screen: &str, items: &[MenuItem], scenes: &[SceneRow]) {
+/// The page-level MENU fields beyond the item/scene lists: which mode tier the
+/// screen shows and the tier's presentation data. All ride the `MENU` global;
+/// `menu.lua` stays realm-agnostic and reads only these.
+struct MenuPage {
+    /// The realm id of the tier-2 page ("" = the root / a mode-less menu). Non-empty
+    /// makes `menu.lua` declare `on_cancel = "menu_back"` on the screen root, so
+    /// Escape/pad-B fires the same result the BACK button does.
+    mode: String,
+    /// A note token rendered as the popup footer ("" = none) — the DM page's
+    /// under-construction "$dm_coming_soon".
+    note: String,
+    /// Whether the scene panel renders its header block (caption / title / count).
+    /// `false` on the Adventurer page: exactly its entry, no other notes.
+    panel_head: bool,
+}
+
+impl Default for MenuPage {
+    fn default() -> Self {
+        Self { mode: String::new(), note: String::new(), panel_head: true }
+    }
+}
+
+/// Publish the screen + its page fields + its button list (+ optional scene-panel
+/// rows) to a menu script as the `MENU` data global (nested JSON — variable-length
+/// *structure*, so it rides this channel, not the flat `Model`). `menu.lua`'s
+/// `tree()` loops `MENU.items` (popup buttons) and `MENU.scenes` (panel rows);
+/// `scene_select` gates the two-column launcher layout, `mode`/`note`/`panel_head`
+/// the tier-2 page chrome.
+fn publish_menu(
+    script: &ScriptHost,
+    screen: &str,
+    page: &MenuPage,
+    items: &[MenuItem],
+    scenes: &[SceneRow],
+) {
     let items_arr: Vec<serde_json::Value> = items
         .iter()
         .map(|it| serde_json::json!({ "id": it.id, "label": it.label, "variant": it.variant }))
@@ -721,6 +823,9 @@ fn publish_menu(script: &ScriptHost, screen: &str, items: &[MenuItem], scenes: &
         .collect();
     let menu = serde_json::json!({
         "screen": screen,
+        "mode": page.mode,
+        "note": page.note,
+        "panel_head": page.panel_head,
         "scene_select": !scenes.is_empty(),
         "items": items_arr,
         "scenes": scenes_arr,
@@ -731,28 +836,46 @@ fn publish_menu(script: &ScriptHost, screen: &str, items: &[MenuItem], scenes: &
 }
 
 /// The menu's standard trailing chrome buttons (after the launchable scenes).
+/// Labels are stringtable tokens (`$…`), resolved at the draw boundary.
 fn menu_chrome_items() -> Vec<MenuItem> {
     vec![
-        MenuItem::new("settings", "SETTINGS", "secondary"),
-        MenuItem::new("quit", "QUIT", "danger"),
+        MenuItem::new("settings", "$menu_settings", "secondary"),
+        MenuItem::new("quit", "$menu_quit", "danger"),
     ]
+}
+
+/// The launcher root's mode buttons (tier 1): one per Prism play mode, in
+/// [`REALMS`] order. Each fires `mode_<realm>`, which the menu scene turns into a
+/// [`Transition::Push`] of that realm's tier-2 menu page.
+fn mode_items() -> Vec<MenuItem> {
+    vec![
+        MenuItem::new(format!("mode_{REALM_ADVENTURER}"), "$menu_explore_world", "primary"),
+        MenuItem::new(format!("mode_{REALM_DM}"), "$menu_build_world", "primary"),
+        MenuItem::new(format!("mode_{REALM_DEVELOPER}"), "$menu_developer_mode", "secondary"),
+    ]
+}
+
+/// The tier-2 pages' leading BACK button — the same `menu_back` result the page
+/// root's `on_cancel` intent (Escape / pad-B) fires; both Pop to the root menu.
+fn back_item() -> MenuItem {
+    MenuItem::new("menu_back", "$menu_back", "secondary")
 }
 
 /// The pause overlay's buttons — resume, settings, return to the main menu, quit.
 fn pause_items() -> Vec<MenuItem> {
     vec![
-        MenuItem::new("resume", "RETURN TO WORLD", "primary"),
-        MenuItem::new("settings", "SETTINGS", "secondary"),
-        MenuItem::new("main_menu", "MAIN MENU", "secondary"),
-        MenuItem::new("quit", "QUIT", "danger"),
+        MenuItem::new("resume", "$menu_resume", "primary"),
+        MenuItem::new("settings", "$menu_settings", "secondary"),
+        MenuItem::new("main_menu", "$menu_main_menu", "secondary"),
+        MenuItem::new("quit", "$menu_quit", "danger"),
     ]
 }
 
 /// The display-confirm dialog's buttons.
 fn confirm_items() -> Vec<MenuItem> {
     vec![
-        MenuItem::new("keep", "KEEP", "primary"),
-        MenuItem::new("revert", "REVERT", "danger"),
+        MenuItem::new("keep", "$menu_keep", "primary"),
+        MenuItem::new("revert", "$menu_revert", "danger"),
     ]
 }
 
@@ -762,15 +885,20 @@ mod menu_template_tests {
 
     /// Build `menu.lua`'s tree for a screen GPU-free (no Theme / textures) and expand it
     /// through the walker template registry — the exact script path `MenuView` caches.
-    fn expanded_tree(screen: &str, items: &[MenuItem]) -> UiNode {
+    fn expanded_tree(screen: &str, page: &MenuPage, items: &[MenuItem]) -> UiNode {
         let s = ScriptHost::new(MENU_SCRIPT, "menu.lua").expect("menu.lua parses + loads");
         expose_ui_elements(&s);
-        publish_menu(&s, screen, items, &[]);
+        publish_menu(&s, screen, page, items, &[]);
         let tree = s
             .ui_tree()
             .expect("menu.lua tree() builds")
             .expect("menu.lua exposes tree()");
         expand(tree, &builtin_templates())
+    }
+
+    /// A tier-2 page's `MenuPage` exactly as `MenuScene::page` derives it.
+    fn tier_page(realm: &'static str) -> MenuPage {
+        MenuScene::for_mode(realm).page()
     }
 
     fn has_unresolved_template(n: &UiNode) -> bool {
@@ -783,13 +911,13 @@ mod menu_template_tests {
     /// page (caught by the non-empty-children assert), and any unexpanded node is caught too.
     #[test]
     fn pause_and_confirm_bridge_through_templates() {
-        let pause = expanded_tree("pause", &pause_items());
-        assert_eq!(pause.component, "page", "pause → popup_menu full-bleed page");
+        let pause = expanded_tree("pause", &MenuPage::default(), &pause_items());
+        assert_eq!(pause.component, "screen", "pause → popup_menu full-bleed page");
         assert!(!pause.children.is_empty(), "pause popup expanded to real content");
         assert!(!has_unresolved_template(&pause), "no template marker survives expand");
 
-        let confirm = expanded_tree("confirm", &confirm_items());
-        assert_eq!(confirm.component, "page", "confirm → choice_dialog full-bleed page");
+        let confirm = expanded_tree("confirm", &MenuPage::default(), &confirm_items());
+        assert_eq!(confirm.component, "screen", "confirm → choice_dialog full-bleed page");
         assert!(!confirm.children.is_empty(), "confirm popup expanded to real content");
         assert!(!has_unresolved_template(&confirm), "no template marker survives expand");
     }
@@ -798,9 +926,119 @@ mod menu_template_tests {
     /// must still build unchanged.
     #[test]
     fn menu_screen_still_builds_bespoke() {
-        let menu = expanded_tree("menu", &menu_chrome_items());
-        assert_eq!(menu.component, "page");
+        let menu = expanded_tree("menu", &MenuPage::default(), &menu_chrome_items());
+        assert_eq!(menu.component, "screen");
         assert!(!menu.children.is_empty());
+    }
+
+    /// The tier-navigation intent wiring (S9): a tier-2 page's ROOT declares
+    /// `on_cancel = "menu_back"` — so Escape/pad-B rides the mini-bus to the SAME
+    /// result the BACK button fires and the scene pops to the root — while the
+    /// root menu declares none (Escape at the root is a no-op, as before).
+    #[test]
+    fn tier2_pages_declare_the_back_intent_and_the_root_does_not() {
+        for realm in REALMS {
+            let tree = expanded_tree("menu", &tier_page(realm), &[back_item()]);
+            let intents = UiIntents::of(&tree);
+            assert_eq!(
+                intents.result_for(ActionSignal::Cancel),
+                Some("menu_back"),
+                "tier-2 '{realm}' page root declares on_cancel = menu_back"
+            );
+        }
+        let root = expanded_tree("menu", &MenuPage::default(), &mode_items());
+        assert_eq!(
+            UiIntents::of(&root).result_for(ActionSignal::Cancel),
+            None,
+            "the root menu declares no cancel intent"
+        );
+    }
+
+    /// End-to-end for directional nav (spec §8): the MENU screen's popup buttons must
+    /// carry the `tab_group`/`nav_ordinal` props authored in `menu.lua` AND survive
+    /// `expand()`, so the walker can flatten them into focusables. A regression here
+    /// silently kills d-pad / gamepad menu nav (build stays green, so this guards it).
+    #[test]
+    fn menu_buttons_carry_nav_groups() {
+        fn collect(n: &UiNode, out: &mut Vec<(String, String, u32)>) {
+            if !n.tab_group.is_empty() {
+                out.push((n.id.clone(), n.tab_group.clone(), n.nav_ordinal));
+            }
+            for c in &n.children {
+                collect(c, out);
+            }
+        }
+        // No scenes published here, so the only focusables are the popup chrome
+        // buttons — all in the "menu" group, ordered by their published position.
+        let menu = expanded_tree("menu", &MenuPage::default(), &menu_chrome_items());
+        let mut nav = Vec::new();
+        collect(&menu, &mut nav);
+        assert!(!nav.is_empty(), "menu popup exposes focusable buttons");
+        assert!(nav.iter().all(|(_, g, _)| g == "menu"), "chrome buttons form the 'menu' group: {nav:?}");
+        assert!(nav.iter().any(|(id, _, ord)| id == "settings" && *ord == 0), "SETTINGS is ordinal 0");
+        assert!(nav.iter().any(|(id, _, ord)| id == "quit" && *ord == 1), "QUIT is ordinal 1");
+    }
+
+    /// VOCABULARY GATE for the screens every client ships — including the launcher's
+    /// mode tiers (root + the three tier-2 pages). A component kind the engine does
+    /// not know draws NOTHING — the walker anchor-overlays its children and the draw
+    /// arm falls through — so a typo or a name left behind by a rename is invisible
+    /// until someone opens the window. This turns that into a build failure.
+    #[test]
+    fn the_shipped_screens_name_only_kinds_the_engine_knows() {
+        // The launcher root's mode buttons + Click-Trainer-style plain launch item
+        // (a stringtable-token label, per the S10 strings gate).
+        let mut root_items = mode_items();
+        root_items.push(MenuItem::new("clicktrainer", "$ct_click_trainer", "primary"));
+        root_items.extend(menu_chrome_items());
+        let mut cases = vec![
+            ("menu", MenuPage::default(), root_items),
+            ("pause", MenuPage::default(), pause_items()),
+            ("confirm", MenuPage::default(), confirm_items()),
+        ];
+        // Each tier-2 page's popup: BACK + the chrome (its scene rows are client
+        // DATA riding the panel, exercised by the launcher render tests instead).
+        for realm in REALMS {
+            let mut items = vec![back_item()];
+            items.extend(menu_chrome_items());
+            cases.push(("menu", tier_page(realm), items));
+        }
+        for (screen, page, items) in cases {
+            let tree = expanded_tree(screen, &page, &items);
+            assert!(
+                flicker::ui::unknown_kinds(&tree).is_empty(),
+                "menu.lua screen '{screen}' (mode '{}') names unknown kinds: {:?}",
+                page.mode,
+                flicker::ui::unknown_kinds(&tree)
+            );
+            // The strings gate (S10): every display literal is a `$token`.
+            assert!(
+                flicker::ui::raw_display_literals(&tree).is_empty(),
+                "menu.lua screen '{screen}' (mode '{}') ships raw display literals: {:?}",
+                page.mode,
+                flicker::ui::raw_display_literals(&tree)
+            );
+        }
+
+        // settings.lua is built by its own scene, so exercise it the same way.
+        let s = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("settings.lua loads");
+        expose_ui_elements(&s);
+        let tree = s
+            .ui_tree()
+            .expect("settings.lua tree() builds")
+            .expect("settings.lua exposes tree()");
+        let tree = expand(tree, &builtin_templates());
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "settings.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "settings.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
     }
 }
 
@@ -813,21 +1051,67 @@ mod menu_template_tests {
 struct MenuView {
     textures: Vec<TextureHandle>,
     tree: Option<UiNode>,
+    /// The `menu.lua` VM, RETAINED past tree-build so it also serves as the Lua
+    /// component library (`ui.*` modules) the walker dispatches per-node DRAW to. Its
+    /// `handles`/`draw_component` render the migrated controls (button today); an
+    /// un-ported kind falls back to the Rust arm, so this is drop-in behaviour-identical.
+    host: Option<ScriptHost>,
     styles: serde_json::Value,
     ui_state: UiState,
     commands: Vec<HudCommand>,
+    // ── Directional-nav (spec §8) — keyboard + gamepad focus traversal of the
+    //    menu buttons. The walker owns the shared focus id; these drive it. ──
+    /// Edge resolver over the `Menu` context (owns prev-frame + press-times).
+    resolver: Resolver,
+    /// The `Menu` binding map (arrows / d-pad → `Nav*`, bumpers → `Tab*`, A/Enter →
+    /// `Confirm`, B/Esc → `Cancel`), sourced from the canonical profile.
+    bindings: ContextualBindings,
+    gamepad: GamepadConfig,
+    /// Router request queue (nav writes focus directly; `Cancel` queues a pop).
+    route: RouteCtx,
+    /// Reused `Fired` buffer — no per-frame alloc (spec RT-7).
+    nav_ev: Vec<Fired>,
+    /// Monotonic tick for the resolver's edge timing (spec §3.2a).
+    nav_tick: u64,
+    /// The screen's declarative signal bindings (S9), collected from the cached
+    /// tree's ROOT `on_<signal>` props once at build. The walker layer consumes
+    /// a declared signal and its fired result name folds into the returned
+    /// results exactly like a click. (No menu screen declares one today; the
+    /// machinery is uniform with the settings overlay.)
+    intents: UiIntents,
+    /// Result names fired last frame, republished ONCE into the next walk's
+    /// Model as the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
+    /// One-time guard for the default-focus init: `false` until the first `update`
+    /// that finds ≥1 focusable, then `true` forever. Keeps the initial highlight a
+    /// ONE-TIME seed (not a per-frame re-focus), so a later click that clears/moves
+    /// the shared focus id sticks and mouse motion never re-grabs it (see `update`).
+    nav_initialized: bool,
 }
 
 impl MenuView {
     /// Load `menu.lua`, register the theme textures (so `Textures.muse` resolves),
-    /// expose the shell layout + styles, publish the `screen` + `items`, and build
-    /// the component tree ONCE — the parsed `UiNode` is fully owned, so the script
+    /// expose the shell layout + styles, publish the `screen` + `page` + `items`, and
+    /// build the component tree ONCE — the parsed `UiNode` is fully owned, so the script
     /// host is dropped after. Best-effort: a failure leaves a view that draws nothing.
-    fn new(theme: &Theme, screen: &str, items: &[MenuItem], scenes: &[SceneRow]) -> Self {
+    fn new(
+        theme: &Theme,
+        screen: &str,
+        page: &MenuPage,
+        items: &[MenuItem],
+        scenes: &[SceneRow],
+    ) -> Self {
         let entries = theme.lua_textures();
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = load_styles_str(SHELL_UI_JSON);
-        let tree = match ScriptHost::new(MENU_SCRIPT, "menu.lua") {
+        // Build with the `ui.*` component modules installed, so the SAME host both
+        // builds the tree AND serves as the Lua component library the walker dispatches
+        // DRAW to (one VM per screen). The host is RETAINED (not dropped) for that.
+        let (host, tree) = match ScriptHost::new_with_modules(
+            MENU_SCRIPT,
+            "menu.lua",
+            UI_COMPONENT_MODULES,
+        ) {
             Ok(s) => {
                 let ids: Vec<(&str, u32)> = entries
                     .iter()
@@ -838,9 +1122,8 @@ impl MenuView {
                     tracing::error!("menu texture registration failed: {e}");
                 }
                 expose_ui_elements(&s); // the `UI` global (chrome config + styles)
-                load_widgets(&s); // parity with the other shell screens
-                publish_menu(&s, screen, items, scenes); // the `MENU` data global
-                match s.ui_tree() {
+                publish_menu(&s, screen, page, items, scenes); // the `MENU` data global
+                let tree = match s.ui_tree() {
                     // Expand any `template` nodes (pause→popup_menu, confirm→choice_dialog)
                     // into their piece subtree once, before the tree is cached — identity for a
                     // template-free tree (the launcher menu is unaffected).
@@ -853,19 +1136,39 @@ impl MenuView {
                         tracing::error!("menu tree build failed: {e}");
                         None
                     }
-                }
+                };
+                (Some(s), tree)
             }
             Err(e) => {
                 tracing::error!("menu.lua load failed: {e}");
-                None
+                (None, None)
             }
         };
+        // The `Menu` context map (nav / confirm / cancel on keyboard + pad) from the
+        // canonical profile — single-sourced, not re-declared here (spec §7.1).
+        let menu_map = InputProfile::default_profile()
+            .context_map("Menu")
+            .cloned()
+            .unwrap_or_else(InputMap::empty);
+        // The screen's declarative bindings (S9), read off the EXPANDED root once
+        // — cached exactly like the tree it was collected from.
+        let intents = tree.as_ref().map(UiIntents::of).unwrap_or_default();
         Self {
             textures,
             tree,
+            host,
             styles,
             ui_state: UiState::new(),
             commands: Vec::new(),
+            resolver: Resolver::new(),
+            bindings: ContextualBindings::new(menu_map),
+            gamepad: GamepadConfig::default(),
+            route: RouteCtx::new(),
+            nav_ev: Vec::new(),
+            nav_tick: 0,
+            intents,
+            fired_sigs: Vec::new(),
+            nav_initialized: false,
         }
     }
 
@@ -876,6 +1179,26 @@ impl MenuView {
         let Some(tree) = self.tree.as_ref() else {
             return ValueMap::new();
         };
+
+        // ── One-time default focus (spec §8 polish) ─────────────────────────────
+        // On the FIRST frame this popup has focusable buttons, seed the shared focus
+        // id with the TOP one (first in tree order = lowest `nav_ordinal`) when nothing
+        // holds it yet — so a controller opens the menu already on its first item and
+        // the first d-pad press moves FROM it (`nav` steps by ordinal within the group).
+        // `nav_initialized` makes this a ONE-TIME seed, never a per-frame default: after
+        // it fires, a click that clears/moves focus (run_ui de-focuses on a clicked
+        // frame) STICKS, and moving the mouse without clicking never re-grabs the
+        // highlight — a per-frame re-focus would fight both. Runs before `run_ui` so the
+        // very first rendered frame already draws the top button highlighted.
+        if !self.nav_initialized {
+            if let Some(first) = focusables_of(tree).into_iter().next() {
+                if self.ui_state.focused().is_none() {
+                    self.ui_state.request_focus(first.id);
+                }
+                self.nav_initialized = true;
+            }
+        }
+
         let size = renderer.size();
         let snap = UiInput {
             mouse: input.mouse_position,
@@ -884,10 +1207,65 @@ impl MenuView {
             screen: size,
             typed: String::new(),
             backspace: false,
+            wheel: input.mouse_wheel_delta,
         };
-        let frame = run_ui(tree, model, &self.styles, &snap, &mut self.ui_state);
+        // The transient `sig_<name>` mirror (S9): names fired last frame ride
+        // exactly ONE Model publish for scripts to observe, then drop. Costs a
+        // Model clone only on the rare frame after an intent fired.
+        let mirrored;
+        let model = if self.fired_sigs.is_empty() {
+            model
+        } else {
+            let mut m = model.clone();
+            UiIntents::mirror_into(&mut m, &self.fired_sigs);
+            self.fired_sigs.clear();
+            mirrored = m;
+            &mirrored
+        };
+        // Dispatch per-node DRAW to the Lua component library (the retained host);
+        // `button` renders via `ui/button.lua`, every other kind via its Rust arm.
+        let lib = self.host.as_ref().map(|h| h as &dyn ComponentLibrary);
+        let frame = run_ui_with(tree, model, &self.styles, &snap, &mut self.ui_state, lib);
         self.commands = frame.commands;
-        frame.results
+        let mut results = frame.results;
+        let hud_hit = results.is_on("hud_hit");
+
+        // ── Directional nav (spec §8): resolve this frame's menu edges (arrows /
+        //    d-pad → Nav*, bumpers → Tab*, Enter/A → Confirm, Esc/B → Cancel), route
+        //    them through the walker layer (which writes the ONE shared focus id),
+        //    and fold a Confirm into `results` the SAME way a click does. `menu.lua`
+        //    now authors `tab_group`/`nav_ordinal` for EVERY popup (menu / pause /
+        //    confirm), so all three are pad-navigable via this path. ──
+        self.nav_tick = self.nav_tick.wrapping_add(1);
+        self.nav_ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad, input, self.nav_tick, &mut self.nav_ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .nav_ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree).with_intents(&self.intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Confirm on a focused button fires its action exactly like a click
+        // (`results.set(action, true)`), so the scene's existing action handling runs.
+        if let Some(action) = walker.activated() {
+            results.set(action, true);
+        }
+        // A declared intent that fired folds into results the SAME way (S9) —
+        // and is queued for the one-frame `sig_<name>` Model mirror above.
+        for name in walker.take_fired() {
+            results.set(name.as_str(), true);
+            self.fired_sigs.push(name);
+        }
+        self.route.requests.clear();
+
+        results
     }
 
     /// Blit the stashed commands (`textures[0]` is the 1×1 white for rect fills).
@@ -912,6 +1290,10 @@ struct UnifiedSettingsScene {
     textures: Vec<TextureHandle>,
     /// The declarative `settings.lua` tree, built + expanded ONCE (walker-driven).
     tree: Option<UiNode>,
+    /// The `settings.lua` VM, RETAINED as the Lua component library the walker
+    /// dispatches per-node DRAW to (button today) — same one-VM-per-screen shape as
+    /// [`MenuView`]'s `host`.
+    host: Option<ScriptHost>,
     /// Resolved `ui_elements.json` styles (dotted `style` paths resolve against it).
     styles: serde_json::Value,
     /// Retained walker interaction state (open dropdown, slider drag capture).
@@ -923,32 +1305,75 @@ struct UnifiedSettingsScene {
     settings: GameSettings,
     /// Current input map (mutated by rebinds).
     input_map: InputMap,
-    /// Active category rail selection: "video" / "audio" / "input" (scene state,
-    /// published to the tree as `sec_*` gates + fed back from `go_*` actions).
-    section: String,
+    /// The screen's declared surface set (S8): the section rail + input sub-tab
+    /// radio groups, the rebind banner + applied flash, and the two overlay
+    /// dialogs. Owns every `visible_bind` gate `settings.lua` reads; published
+    /// into the Model once per frame ([`Surfaces::publish`] in `model`).
+    surfaces: Surfaces,
     /// Active input sub-tab: "keyboard" / "mouse" / "controller" (two-way via the
-    /// `input_subtab` pill bind).
+    /// `input_subtab` pill bind; the `sub_*` gates mirror it through `surfaces`).
     input_subtab: String,
     /// Active controller profile (two-way via the `ctrl_profile` select bind).
     ctrl_profile: String,
-    /// Scroll offset (px) of the content region — round-tripped through the `scroll`
-    /// node's `scroll_off` bind, reset to 0 on a section / sub-tab change.
+    /// Scroll offset (px) of the content region — round-tripped through the `list`
+    /// node's `scroll_off` bind, reset to 0 on a section / sub-tab change. The
+    /// wheel itself rides `UiInput.wheel`; no Model plumbing.
     scroll_off: f32,
-    /// This frame's mouse-wheel delta, published to the `scroll` node's `wheel` key
-    /// (UiInput has no wheel field, so it rides the Model like any other value).
-    last_scroll: f32,
     /// "SETTINGS APPLIED" flash countdown (s), decayed by `dt`.
     applied: f32,
-    /// Previous-frame Escape state, for edge-detecting Esc-to-close / cancel-rebind.
-    esc_prev: bool,
+    /// Previous-frame Escape state — **rebind-cancel only**. Rebind capture keeps
+    /// raw polling by design (it grabs arbitrary keys, so it cannot ride the
+    /// signal bus); every OTHER Esc path goes through the mini-bus below, where
+    /// the Menu-context map's `Cancel` fires the screen's declared
+    /// `settings_close` intent (S9).
+    rebind_esc_prev: bool,
     /// True once any buffered setting or keybind differs from what was last persisted —
     /// gates the unsaved-changes confirm on close. Set on a real edit, cleared on commit.
     dirty: bool,
-    /// The unsaved-changes confirm dialog is showing (× / Esc while `dirty`). While set,
-    /// the scene processes ONLY that dialog's actions (modal).
-    confirm_close: bool,
-    /// The restore-defaults acknowledgement is showing. Modal like `confirm_close`.
-    restore_note: bool,
+    // ── The settings mini-bus (S9): the same resolve ▸ dispatch seam MenuView
+    //    runs, so Esc/pad-B arrive as `Cancel` events the walker layer turns
+    //    into the screen's DECLARED `settings_close` intent. ──
+    /// Edge resolver over the Menu-context map (owns prev-frame + press-times).
+    resolver: Resolver,
+    /// The `Menu` binding map (Esc/B → `Cancel`, arrows/d-pad → `Nav*`, …),
+    /// sourced from the canonical default profile — never re-declared here.
+    bindings: ContextualBindings,
+    gamepad: GamepadConfig,
+    /// Router request queue; also receives the surface-context push/pops from
+    /// [`Surfaces::apply_surface_contexts`] each frame.
+    route: RouteCtx,
+    /// Reused `Fired` buffer — no per-frame alloc (spec RT-7).
+    ev: Vec<Fired>,
+    /// Monotonic tick for the resolver's edge timing (spec §3.2a).
+    tick: u64,
+    /// The screen's declarative bindings (S9): `settings.lua`'s root declares
+    /// `on_cancel = "settings_close"`. Collected once from the cached tree.
+    intents: UiIntents,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror, then dropped.
+    fired_sigs: Vec<String>,
+}
+
+/// The settings screen's **Screen declaration** (S8): every `visible_bind` gate
+/// `settings.lua` reads, declared once. The category rail and the input sub-tab
+/// strip are radio groups (`set_exclusive`); `rebinding` / `applied` are flags
+/// derived from scene state each frame; `confirm_close` / `restore_note` are the
+/// overlay dialogs — modal (the scene's update ladder processes only their
+/// actions while shown), carrying their S9 input-context as data (surfaced in
+/// `visibility_diff`, routed by nothing yet).
+fn settings_surfaces() -> Surfaces {
+    Surfaces::new(vec![
+        Surface::new("sec_video").group("section").on(),
+        Surface::new("sec_audio").group("section"),
+        Surface::new("sec_input").group("section"),
+        Surface::new("sub_keyboard").group("subtab").on(),
+        Surface::new("sub_mouse").group("subtab"),
+        Surface::new("sub_controller").group("subtab"),
+        Surface::new("rebinding"),
+        Surface::new("applied"),
+        Surface::new("confirm_close").context("Menu"),
+        Surface::new("restore_note").context("Menu"),
+    ])
 }
 
 /// Backend range of the mouse look sensitivity (the `m_look` row's display slider
@@ -978,8 +1403,13 @@ impl UnifiedSettingsScene {
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = load_styles_str(SHELL_UI_JSON);
         // Build the declarative tree ONCE, then expand its `window` template into
-        // pieces — the same cache point MenuView uses. The script host is dropped after.
-        let tree = match ScriptHost::new(SETTINGS_SCRIPT, "settings.lua") {
+        // pieces — the same cache point MenuView uses. The host is RETAINED past
+        // tree-build to also serve as the Lua component library (`ui.*` modules).
+        let (host, tree) = match ScriptHost::new_with_modules(
+            SETTINGS_SCRIPT,
+            "settings.lua",
+            UI_COMPONENT_MODULES,
+        ) {
             Ok(s) => {
                 let ids: Vec<(&str, u32)> = entries
                     .iter()
@@ -990,7 +1420,8 @@ impl UnifiedSettingsScene {
                     tracing::error!("settings texture registration failed: {e}");
                 }
                 expose_ui_elements(&s); // the `UI` global (chrome config + styles)
-                match s.ui_tree() {
+                publish_profiles(&s); // the `PROFILES` global (controller-tab selector, §7.3)
+                let tree = match s.ui_tree() {
                     // Expand the `window` template into its piece subtree once, before caching.
                     Ok(Some(t)) => Some(expand(t, &builtin_templates())),
                     Ok(None) => {
@@ -1001,59 +1432,86 @@ impl UnifiedSettingsScene {
                         tracing::error!("settings tree build failed: {e}");
                         None
                     }
-                }
+                };
+                (Some(s), tree)
             }
             Err(e) => {
                 tracing::error!("settings.lua load failed: {e}");
-                None
+                (None, None)
             }
         };
         let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
+        // The Menu-context map for the mini-bus, from the canonical profile
+        // (single-sourced, spec §7.1) — the same seed MenuView uses.
+        let menu_map = InputProfile::default_profile()
+            .context_map("Menu")
+            .cloned()
+            .unwrap_or_else(InputMap::empty);
+        // The screen's declarative bindings (S9), read off the EXPANDED root once.
+        let intents = tree.as_ref().map(UiIntents::of).unwrap_or_default();
         Self {
             theme,
             textures,
             tree,
+            host,
             styles,
             ui_state: UiState::new(),
             commands: Vec::new(),
             rebind: RebindCapture::new(),
             settings,
             input_map: input_map.clone(),
-            section: "video".to_string(),
+            surfaces: settings_surfaces(),
             input_subtab: "keyboard".to_string(),
             ctrl_profile: "default".to_string(),
             scroll_off: 0.0,
-            last_scroll: 0.0,
             applied: 0.0,
-            esc_prev: false,
+            rebind_esc_prev: false,
             dirty: false,
-            confirm_close: false,
-            restore_note: false,
+            resolver: Resolver::new(),
+            bindings: ContextualBindings::new(menu_map),
+            gamepad: GamepadConfig::default(),
+            route: RouteCtx::new(),
+            ev: Vec::new(),
+            tick: 0,
+            intents,
+            fired_sigs: Vec::new(),
+        }
+    }
+
+    /// The active category-rail section, read off the `section` radio group —
+    /// the Screen declaration is the one truth for which section is showing.
+    fn section(&self) -> &'static str {
+        if self.surfaces.is_on("sec_audio") {
+            "audio"
+        } else if self.surfaces.is_on("sec_input") {
+            "input"
+        } else {
+            "video"
         }
     }
 
     /// Build the per-frame Model the walker reads: the section/sub-tab gates + header
-    /// text + nav styling (scene state), the scroll offset + wheel delta, and every
-    /// control's value bind. The `select`/`pill_toggle` binds are STRINGS (0-based
-    /// index) because the walker matches option `value`s textually; the scene parses
-    /// the index back in `update`.
+    /// text + nav styling (scene state), the scroll offset, and every control's
+    /// value bind. The `select`/`pill_toggle` binds are STRINGS (0-based index)
+    /// because the walker matches option `value`s textually; the scene parses the
+    /// index back in `update`.
     fn model(&self) -> ValueMap {
         let mut m = ValueMap::new();
 
-        // ── section + sub-tab visibility gates, header text, nav button styling ──
+        // ── every visibility gate rides the Screen declaration — ONE publish ──
+        self.surfaces.publish(&mut m);
+
+        // ── header text + nav button styling, derived from the active section ──
+        let section = self.section();
         for id in ["video", "audio", "input"] {
-            m.set(format!("sec_{id}"), self.section == id);
-            let style = if self.section == id {
+            let style = if section == id {
                 "modal.buttons.variants.primary"
             } else {
                 "modal.buttons.variants.secondary"
             };
             m.set(format!("nav_{id}_style"), style);
         }
-        for id in ["keyboard", "mouse", "controller"] {
-            m.set(format!("sub_{id}"), self.input_subtab == id);
-        }
-        let (kicker, title, color) = match self.section.as_str() {
+        let (kicker, title, color) = match section {
             "audio" => ("MIXING & OUTPUT", "Audio", "theme.tokens.sig_yellow"),
             "input" => ("BINDINGS & DEVICES", "Input", "theme.tokens.sig_red"),
             _ => ("DISPLAY & RENDERING", "Video", "theme.tokens.sig_blue"),
@@ -1064,14 +1522,9 @@ impl UnifiedSettingsScene {
         m.set("input_subtab", self.input_subtab.as_str());
         m.set("ctrl_profile", self.ctrl_profile.as_str());
 
-        // ── scroll (two-way offset + the frame's wheel delta) + gates ──
+        // ── scroll (two-way offset; the wheel rides UiInput) + the inert gate ──
         m.set("scroll_off", self.scroll_off as f64);
-        m.set("wheel", self.last_scroll as f64);
         m.set("off", false); // unwired controls point `enabled_bind` here → inert
-        m.set("rebinding", self.rebind.is_active());
-        m.set("applied", self.applied > 0.0);
-        m.set("confirm_close", self.confirm_close); // unsaved-changes dialog gate
-        m.set("restore_note", self.restore_note); // restore-defaults ack gate
 
         // ── wired VIDEO (display mode + resolution ride the live DisplaySetting) ──
         let disp = display::current();
@@ -1108,6 +1561,11 @@ impl UnifiedSettingsScene {
             m.set(format!("bind_{id}"), label);
         }
 
+        // The transient `sig_<name>` mirror (S9): intent names fired last frame
+        // ride exactly this ONE publish for the script side to observe (`update`
+        // clears them right after the walk).
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+
         m
     }
 
@@ -1124,6 +1582,11 @@ impl UnifiedSettingsScene {
             let display = gs.display;
             *gs = self.settings.clone();
             gs.display = display;
+            // Fold the live-edited keybinds into the persisted profile's World context
+            // BEFORE `save` — the single writer — so a rebind survives relaunch (the
+            // spec §7.2 fix). The keyboard tab edits `self.input_map` (the World map);
+            // the profile's other contexts (TextEntry / Menu) carry through unchanged.
+            gs.input_profile.set_context_map("World", self.input_map.clone());
             gs.save();
         }
         set_pending_input(
@@ -1132,6 +1595,64 @@ impl UnifiedSettingsScene {
             GamepadConfig::default(),
         );
     }
+
+    /// The modal-dialog slice of the update ladder, extracted as an associated
+    /// fn so the dialog behaviour is unit-testable GPU-free: while a dialog
+    /// surface is up it OWNS the frame — `Some(flow)` tells `update` what to do
+    /// and nothing below the ladder runs. `settings_close` (the × click or the
+    /// bus-fired Esc/B `Cancel` intent — one name, one path) is INTERCEPTED by
+    /// whichever dialog is up: it dismisses the restore ack, and it cancels the
+    /// unsaved-changes confirm rather than closing the overlay underneath it.
+    fn modal_flow(surfaces: &mut Surfaces, results: &ValueMap) -> Option<ModalFlow> {
+        // Restore-defaults acknowledgement: OK / the close intent dismisses it.
+        if surfaces.is_on("restore_note") {
+            if results.is_on("restore_ok") || results.is_on("settings_close") {
+                surfaces.hide("restore_note");
+            }
+            return Some(ModalFlow::Stay);
+        }
+        // Unsaved-changes confirm: Save / Discard / Cancel (close intent = Cancel).
+        if surfaces.is_on("confirm_close") {
+            if results.is_on("confirm_save") {
+                return Some(ModalFlow::CommitAndPop);
+            }
+            if results.is_on("confirm_discard") {
+                return Some(ModalFlow::Pop);
+            }
+            if results.is_on("confirm_cancel") || results.is_on("settings_close") {
+                surfaces.hide("confirm_close");
+            }
+            return Some(ModalFlow::Stay);
+        }
+        None
+    }
+
+    /// The Close request (the × button or the bus-fired Esc — both arrive as the
+    /// declared `settings_close` result): confirm first when there are unsaved
+    /// edits (the dialog surface goes up and the frame CONTINUES), else report
+    /// `true` so `update` pops. Extracted for the same GPU-free tests.
+    fn close_requested(surfaces: &mut Surfaces, results: &ValueMap, dirty: bool) -> bool {
+        if results.is_on("settings_close") {
+            if dirty {
+                surfaces.show("confirm_close");
+            } else {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// What the settings modal ladder decided this frame (see
+/// [`UnifiedSettingsScene::modal_flow`]).
+#[derive(Debug, PartialEq)]
+enum ModalFlow {
+    /// A dialog owns the frame — no transition, nothing below the ladder runs.
+    Stay,
+    /// Save-and-close from the confirm dialog: commit, then pop.
+    CommitAndPop,
+    /// Discard-and-close from the confirm dialog: pop without committing.
+    Pop,
 }
 
 impl Scene for UnifiedSettingsScene {
@@ -1145,13 +1666,20 @@ impl Scene for UnifiedSettingsScene {
         };
 
         let size = renderer.size();
-        self.last_scroll = input.mouse_wheel_delta; // published to the scroll node's `wheel`
         self.applied = (self.applied - dt.as_secs_f32()).max(0.0); // decay the flash
-        let esc_edge = input.key_down(Key::Escape) && !self.esc_prev;
-        self.esc_prev = input.key_down(Key::Escape);
+        // Raw Esc edge for the REBIND branch only (capture polls raw keys by
+        // design). Every other Esc path rides the mini-bus below as `Cancel` →
+        // the declared `settings_close` intent.
+        let esc_down = input.key_down(Key::Escape);
+        let rebind_esc_edge = esc_down && !self.rebind_esc_prev;
+        self.rebind_esc_prev = esc_down;
 
-        // One walker pass: lay out + hit-test + draw the cached tree. UiInput has no
-        // wheel field — the wheel rides the Model (`wheel`) instead.
+        // Derived surface flags: the banner mirrors the capture, the flash its timer.
+        self.surfaces.set("rebinding", self.rebind.is_active());
+        self.surfaces.set("applied", self.applied > 0.0);
+
+        // One walker pass: lay out + hit-test + draw the cached tree. The wheel
+        // rides `UiInput.wheel`; the `list` region under the pointer consumes it.
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -1159,16 +1687,59 @@ impl Scene for UnifiedSettingsScene {
             screen: size,
             typed: String::new(),
             backspace: false,
+            wheel: input.mouse_wheel_delta,
         };
-        let frame = run_ui(tree, &self.model(), &self.styles, &snap, &mut self.ui_state);
+        let model = self.model();
+        let lib = self.host.as_ref().map(|h| h as &dyn ComponentLibrary);
+        let frame = run_ui_with(tree, &model, &self.styles, &snap, &mut self.ui_state, lib);
         self.commands = frame.commands;
-        let results = frame.results;
+        let mut results = frame.results;
+        let hud_hit = results.is_on("hud_hit");
+        self.fired_sigs.clear(); // last frame's mirror rode the walk above — done
 
-        // ── Rebind capture (Esc or a click cancels; else grab the next input) ──
-        // The walker still drew this frame (so the screen updates); its actions are
-        // ignored while capturing.
+        // ── The mini-bus (S9): resolve this frame's Menu-context edges (Esc/B →
+        //    Cancel, arrows/d-pad → Nav*, …) and dispatch them through the walker
+        //    layer, which turns the screen's DECLARED bindings (`on_cancel =
+        //    "settings_close"`) into fired result names. The bus runs even while
+        //    a rebind captures — the resolver must see every edge to stay
+        //    coherent — but the rebind branch below returns before the results
+        //    ladder, so a fired name is simply dropped for that frame. ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree).with_intents(&self.intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Fired intents fold into results the SAME way a click does, and queue
+        // for the one-frame `sig_<name>` Model mirror.
+        for name in walker.take_fired() {
+            results.set(name.as_str(), true);
+            self.fired_sigs.push(name);
+        }
+        // Surface context wiring (S9): flips recorded since the last frame (the
+        // dialogs carry context "Menu") become Push/PopContext requests, then the
+        // whole queue reconciles into the mini-bus bindings and the focus write
+        // goes THROUGH the walker — the standard post-dispatch seam.
+        self.surfaces.apply_surface_contexts(&mut self.route);
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        self.route.requests.clear();
+
+        // ── Rebind capture (raw Esc or a click cancels; else grab the next input) ──
+        // The walker still drew this frame (so the screen updates); its actions
+        // — including a bus-fired `settings_close` — are ignored while capturing.
         if self.rebind.is_active() {
-            if esc_edge || input.mouse_left_pressed {
+            if rebind_esc_edge || input.mouse_left_pressed {
                 self.rebind.cancel();
             } else if let Some((action, binding)) = self.rebind.poll(input, &mut self.input_map) {
                 tracing::info!("rebound {action} to {binding}");
@@ -1177,38 +1748,34 @@ impl Scene for UnifiedSettingsScene {
             return Transition::None;
         }
 
-        // ── Restore-defaults acknowledgement (modal): OK / Esc dismisses it ──
-        if self.restore_note {
-            if results.is_on("restore_ok") || esc_edge {
-                self.restore_note = false;
-            }
-            return Transition::None;
-        }
-
-        // ── Unsaved-changes confirm (modal): Save / Discard / Cancel (Esc = Cancel) ──
-        if self.confirm_close {
-            if results.is_on("confirm_save") {
-                self.commit_settings();
-                return Transition::Pop;
-            }
-            if results.is_on("confirm_discard") {
-                return Transition::Pop;
-            }
-            if results.is_on("confirm_cancel") || esc_edge {
-                self.confirm_close = false;
-            }
-            return Transition::None;
+        // ── The modal dialogs own the frame while up (extracted ladder slice) ──
+        if let Some(flow) = Self::modal_flow(&mut self.surfaces, &results) {
+            return match flow {
+                ModalFlow::Stay => Transition::None,
+                ModalFlow::CommitAndPop => {
+                    self.commit_settings();
+                    Transition::Pop
+                }
+                ModalFlow::Pop => Transition::Pop,
+            };
         }
 
         // ── Category rail + input sub-tab + controller profile (scene state) ──
+        // Fold the reported offset back FIRST: the `list` bind echoes every frame
+        // (the generic control contract), so a section/sub-tab change below must
+        // come after it or its reset-to-top would be overwritten by the echo.
+        if let Some(v) = results.number("scroll_off") {
+            self.scroll_off = v as f32;
+        }
         for id in ["video", "audio", "input"] {
-            if results.is_on(&format!("go_{id}")) && self.section != id {
-                self.section = id.to_string();
+            if results.is_on(&format!("go_{id}")) && self.section() != id {
+                self.surfaces.set_exclusive(&format!("sec_{id}"));
                 self.scroll_off = 0.0;
             }
         }
         if let Some(t) = results.text("input_subtab") {
             if t != self.input_subtab {
+                self.surfaces.set_exclusive(&format!("sub_{t}"));
                 self.input_subtab = t.to_string();
                 self.scroll_off = 0.0;
             }
@@ -1216,16 +1783,13 @@ impl Scene for UnifiedSettingsScene {
         if let Some(p) = results.text("ctrl_profile") {
             self.ctrl_profile = p.to_string();
         }
-        if let Some(v) = results.number("scroll_off") {
-            self.scroll_off = v as f32;
-        }
 
         // ── Restore defaults: reset the buffer, mark dirty, and pop the ack notice ──
         if results.is_on("settings_restore") {
             self.settings = GameSettings::default();
             self.input_map = InputMap::wasd_and_mouse();
             self.dirty = true;
-            self.restore_note = true;
+            self.surfaces.show("restore_note");
         }
 
         // ── Apply: persist without closing (flash the confirmation) ──
@@ -1241,13 +1805,10 @@ impl Scene for UnifiedSettingsScene {
             return Transition::Pop;
         }
 
-        // ── Close (× or Esc): confirm first when there are unsaved edits, else discard ──
-        if esc_edge || results.is_on("settings_close") {
-            if self.dirty {
-                self.confirm_close = true;
-            } else {
-                return Transition::Pop;
-            }
+        // ── Close (the × or the bus-fired Esc, both `settings_close`): confirm
+        //    first when there are unsaved edits, else discard ──
+        if Self::close_requested(&mut self.surfaces, &results, self.dirty) {
+            return Transition::Pop;
         }
 
         // ── Apply video changes ──
@@ -1332,32 +1893,39 @@ impl Scene for UnifiedSettingsScene {
 /// The keyboard actions the settings screen lists, in display order — the id
 /// strings match `ui_elements.json`'s `settings.input.keyboard` groups. Used both
 /// to publish each action's current binding (`bind_<id>`) and to dispatch a
-/// `rebind_<id>` action fired by its keycap button back to the `Action`.
-const KEYBOARD_ACTIONS: &[(&str, Action)] = &[
-    ("MoveForward", Action::MoveForward),
-    ("MoveBackward", Action::MoveBackward),
-    ("StrafeLeft", Action::StrafeLeft),
-    ("StrafeRight", Action::StrafeRight),
-    ("MoveUp", Action::MoveUp),
-    ("MoveDown", Action::MoveDown),
-    ("Jump", Action::Jump),
-    ("Sprint", Action::Sprint),
-    ("Crouch", Action::Crouch),
-    ("Interact", Action::Interact),
-    ("Inventory", Action::Inventory),
-    ("Map", Action::Map),
-    ("Menu", Action::Menu),
-    ("PrimaryAction", Action::PrimaryAction),
-    ("SecondaryAction", Action::SecondaryAction),
-    ("Reload", Action::Reload),
-    ("Confirm", Action::Confirm),
-    ("Cancel", Action::Cancel),
-    ("Quit", Action::Quit),
+/// `rebind_<id>` action fired by its keycap button back to the `ActionSignal`.
+const KEYBOARD_ACTIONS: &[(&str, ActionSignal)] = &[
+    ("MoveForward", ActionSignal::MoveForward),
+    ("MoveBackward", ActionSignal::MoveBackward),
+    ("StrafeLeft", ActionSignal::StrafeLeft),
+    ("StrafeRight", ActionSignal::StrafeRight),
+    ("MoveUp", ActionSignal::MoveUp),
+    ("MoveDown", ActionSignal::MoveDown),
+    ("Jump", ActionSignal::Jump),
+    ("Sprint", ActionSignal::Sprint),
+    ("Crouch", ActionSignal::Crouch),
+    ("Interact", ActionSignal::Interact),
+    ("Inventory", ActionSignal::Inventory),
+    ("Map", ActionSignal::Map),
+    ("Menu", ActionSignal::Menu),
+    ("PrimaryAction", ActionSignal::PrimaryAction),
+    ("SecondaryAction", ActionSignal::SecondaryAction),
+    ("Reload", ActionSignal::Reload),
+    ("Confirm", ActionSignal::Confirm),
+    ("Cancel", ActionSignal::Cancel),
+    ("Quit", ActionSignal::Quit),
 ];
 
 /// Main menu: a thin shell over the shared [`MenuView`] (`screen = "menu"`). The
 /// walker owns layout/hit-testing; this scene builds the button list from the scene
 /// registry and routes each launch action + `settings`/`quit` to a transition.
+///
+/// In a launcher (`scene_select`) the menu is a TWO-TIER STACK of these scenes:
+/// the root shows the play-mode buttons (+ realm-less launch buttons like Click
+/// Trainer), and picking a mode PUSHES a second `MenuScene` carrying that realm —
+/// its tier-2 page (the scene-select panel for its member scenes, or the DM note).
+/// BACK / Escape on a tier-2 page POPS back to the still-live root (stack scenes:
+/// the root stays frozen beneath, so its view — and focus — survive the round trip).
 struct MenuScene {
     theme: Option<Theme>,
     view: Option<MenuView>,
@@ -1365,6 +1933,9 @@ struct MenuScene {
     pending_input: Option<InputMap>,
     /// The launchable scenes (the menu's launch buttons), from the shell registry.
     scenes: Rc<[SceneEntry]>,
+    /// Which tier this menu shows: `None` = the root; `Some(realm)` = that mode's
+    /// tier-2 page. Always `None` outside a launcher.
+    mode: Option<&'static str>,
 }
 
 impl MenuScene {
@@ -1374,37 +1945,71 @@ impl MenuScene {
             view: None,
             pending_input: None,
             scenes: scenes(),
+            mode: None,
         }
     }
 
+    /// A tier-2 menu page for one play-mode realm (launcher only).
+    fn for_mode(realm: &'static str) -> Self {
+        Self { mode: Some(realm), ..Self::new() }
+    }
+
+    /// Whether `entry` belongs to `realm`.
+    fn in_realm(entry: &SceneEntry, realm: &str) -> bool {
+        entry.realms.iter().any(|r| r == realm)
+    }
+
     /// The popup buttons. Default menu: one launch button per scene + SETTINGS/QUIT.
-    /// Launcher (`scene_select`): scenes with `SceneInfo` move to the right panel, but
-    /// an info-less scene (e.g. Click Trainer) stays a popup button above SETTINGS/QUIT.
+    /// Launcher root: the three MODE buttons + realm-less info-less scenes (e.g.
+    /// Click Trainer) as plain launch buttons. Launcher tier-2 page: BACK + the
+    /// realm's info-less scenes. Settings/Quit chrome always trails.
     fn items(&self) -> Vec<MenuItem> {
-        // In a launcher, scenes that carry panel metadata (`SceneInfo`) render as
-        // right-hand cards; scenes WITHOUT it stay plain launch buttons in the popup
-        // (the `SceneEntry::info` contract). The default (non-launcher) menu makes
-        // every scene a button. Settings/Quit chrome always trails.
-        let launcher = scene_select();
-        let mut items: Vec<MenuItem> = self
-            .scenes
-            .iter()
-            .filter(|e| !launcher || e.info.is_none())
-            .map(|e| MenuItem::new(e.id.clone(), e.label.clone(), e.variant.as_str()))
-            .collect();
+        let as_item =
+            |e: &SceneEntry| MenuItem::new(e.id.clone(), e.label.clone(), e.variant.as_str());
+        let mut items: Vec<MenuItem> = if !scene_select() {
+            // Default (non-launcher) menu: every scene is a launch button.
+            self.scenes.iter().map(as_item).collect()
+        } else if let Some(realm) = self.mode {
+            // Tier-2 page: BACK, then the realm's info-less scenes (info-bearing
+            // members render as panel rows — the `SceneEntry::info` contract).
+            std::iter::once(back_item())
+                .chain(
+                    self.scenes
+                        .iter()
+                        .filter(|e| e.info.is_none() && Self::in_realm(e, realm))
+                        .map(as_item),
+                )
+                .collect()
+        } else {
+            // Launcher root: the mode tiers, then realm-less info-less scenes.
+            mode_items()
+                .into_iter()
+                .chain(
+                    self.scenes
+                        .iter()
+                        .filter(|e| e.info.is_none() && e.realms.is_empty())
+                        .map(as_item),
+                )
+                .collect()
+        };
         items.extend(menu_chrome_items());
         items
     }
 
     /// The scene-selection-panel rows — one per registered scene that carries
-    /// `SceneInfo`. Empty unless this client is a launcher (`scene_select`), which is
-    /// what gates the two-column layout.
+    /// `SceneInfo` AND belongs to this page's realm. Empty unless this client is a
+    /// launcher (`scene_select`) on a tier-2 page, which is what gates the
+    /// two-column layout (the root menu is the popup alone).
     fn scene_rows(&self) -> Vec<SceneRow> {
         if !scene_select() {
             return Vec::new();
         }
+        let Some(realm) = self.mode else {
+            return Vec::new();
+        };
         self.scenes
             .iter()
+            .filter(|e| Self::in_realm(e, realm))
             .filter_map(|e| {
                 let info = e.info.as_ref()?;
                 Some(SceneRow {
@@ -1418,12 +2023,28 @@ impl MenuScene {
             })
             .collect()
     }
+
+    /// The page-level MENU fields for this tier (see [`MenuPage`]): tier-2 pages
+    /// carry their realm (=> BACK/on_cancel); the DM page footers its
+    /// under-construction note; the Adventurer page drops the panel header so it
+    /// shows exactly its entry, nothing else.
+    fn page(&self) -> MenuPage {
+        MenuPage {
+            mode: self.mode.unwrap_or("").to_string(),
+            note: match self.mode {
+                Some(REALM_DM) => "$dm_coming_soon".to_string(),
+                _ => String::new(),
+            },
+            panel_head: self.mode != Some(REALM_ADVENTURER),
+        }
+    }
 }
 
 impl Scene for MenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         let theme = Theme::build(renderer);
-        self.view = Some(MenuView::new(&theme, "menu", &self.items(), &self.scene_rows()));
+        self.view =
+            Some(MenuView::new(&theme, "menu", &self.page(), &self.items(), &self.scene_rows()));
         self.theme = Some(theme);
     }
 
@@ -1432,6 +2053,20 @@ impl Scene for MenuScene {
             Some(view) => view.update(input, renderer, &ValueMap::new()),
             None => return Transition::None,
         };
+        // ── Tier navigation (launcher only): a mode button pushes its tier-2 page;
+        //    BACK (the button, or Escape/pad-B via the page root's declared
+        //    `on_cancel` intent — one result name, one path) pops back to the root. ──
+        if scene_select() {
+            if self.mode.is_none() {
+                for realm in REALMS {
+                    if results.is_on(&format!("mode_{realm}")) {
+                        return Transition::Push(Box::new(MenuScene::for_mode(realm)));
+                    }
+                }
+            } else if results.is_on("menu_back") {
+                return Transition::Pop;
+            }
+        }
         // A launch button fired → replace the menu with that scene (the factory is
         // shared via `Rc`, so returning here any number of times is fine).
         for entry in self.scenes.iter() {
@@ -1441,12 +2076,15 @@ impl Scene for MenuScene {
         }
         if results.is_on("settings") {
             let theme = self.theme.expect("theme built in enter");
-            // Default to WASD so the settings key caps show real keys from the
-            // menu (before any game bindings exist).
-            let input_map = self
-                .pending_input
-                .take()
-                .unwrap_or_else(InputMap::wasd_and_mouse);
+            // Seed the settings key caps from the PERSISTED profile's World map (spec
+            // §7.2) — so a rebind made last session shows immediately — falling back to
+            // WASD only if the profile somehow lacks a World context.
+            let input_map = self.pending_input.take().unwrap_or_else(|| {
+                input_profile()
+                    .context_map("World")
+                    .cloned()
+                    .unwrap_or_else(InputMap::wasd_and_mouse)
+            });
             return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map)));
         }
         if results.is_on("quit") {
@@ -1488,7 +2126,7 @@ impl PauseScene {
         _gamepad_config: &GamepadConfig,
     ) -> Self {
         Self {
-            view: MenuView::new(&theme, "pause", &pause_items(), &[]),
+            view: MenuView::new(&theme, "pause", &MenuPage::default(), &pause_items(), &[]),
             theme,
             bindings: input_map.clone(),
             menu_prev: true,
@@ -1503,7 +2141,7 @@ impl Scene for PauseScene {
 
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         // ── Menu action: resume ──
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
+        let menu_down = self.bindings.action_pressed(ActionSignal::Menu, input);
         let menu_pressed = menu_down && !self.menu_prev;
         self.menu_prev = menu_down;
         if menu_pressed {
@@ -1547,61 +2185,112 @@ mod script_smoke {
     use super::*;
 
     #[test]
-    fn ui_component_library_composes() {
-        // A demo screen: `require` the layout engine + the button component (each
-        // its own file under content/sensorium/scripts/ui/), lay two buttons out as a row,
-        // and draw them. Proves the real component files compose end-to-end and
-        // the layout engine resolves grow-sizing to pixels.
-        const DEMO: &str = r#"
-            local layout = require("ui.layout")
-            local button = require("ui.button")
-            local STYLE = { fill = {0.14,0.25,0.47,1}, radius = 4, border = 1,
-              border_color = {0.23,0.35,0.63,1}, label_color = {0.9,0.9,0.85,1}, label_size = 14 }
-            local TREE = { type = "row", gap = 10, pad = 8, children = {
-              { type = "leaf", id = "OK", grow = 1 },
-              { type = "leaf", id = "CANCEL", grow = 1 },
-            } }
+    fn button_dispatches_to_lua_component_through_run_ui() {
+        use flicker::render::Vec2;
+        use flicker::script::{ComponentLibrary, HudCommand};
+        use flicker::ui::run_ui_with;
+
+        // A screen whose tree is a column with one button leaf. The Rust harness lays it
+        // out (the grid/flow engine) and DISPATCHES the button's DRAW to `ui/button.lua`
+        // (component logic in Lua, rendering in Rust) — the S1 seam, end to end via run_ui.
+        const SCREEN: &str = r#"
             local M = {}
-            function M.update() return {} end
-            function M.draw(sw, sh)
-              local cmds = {}
-              for _, leaf in ipairs(layout.resolve(TREE, { x = 0, y = 0, w = 200, h = 40 })) do
-                button.draw(cmds, leaf.rect, { label = leaf.id, style = STYLE })
-              end
-              return cmds
+            function M.tree()
+              return { component = "cell", pad = 8, children = {
+                { component = "button", id = "OK", grow = 1, label = "OK", style = "btn" },
+              } }
             end
+            function M.update() return {} end
+            function M.draw() return {} end
             return M
         "#;
         let host = ScriptHost::new_with_modules(
-            DEMO,
-            "ui-demo",
-            &[
-                ("ui.core", UI_CORE),
-                ("ui.button", UI_BUTTON),
-                ("ui.layout", UI_LAYOUT),
-            ],
+            SCREEN,
+            "s1-screen",
+            &[("ui.core", UI_CORE), ("ui.button", UI_BUTTON)],
         )
-        .expect("component modules load + require resolves");
-        let cmds = host.draw(0.0, 0.0).expect("draw runs");
-        let panels: Vec<_> = cmds
-            .iter()
-            .filter(|c| matches!(c, flicker::script::HudCommand::Panel { .. }))
-            .collect();
-        let texts = cmds
-            .iter()
-            .filter(|c| matches!(c, flicker::script::HudCommand::Text { .. }))
-            .count();
-        assert_eq!(panels.len(), 2, "two button panels");
-        assert_eq!(texts, 2, "two button labels");
-        // Layout: a 200px row, pad 8 → content x=8 w=184; gap 10; two grow=1 →
-        // 87 each. So button 2's panel starts at x = 8 + 87 + 10 = 105.
-        if let flicker::script::HudCommand::Panel { x, w, .. } = panels[0] {
-            assert_eq!(*x, 8.0);
-            assert_eq!(*w, 87.0);
+        .expect("screen + component modules load");
+        assert!(host.handles("button"), "button.lua registered as a component");
+
+        let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
+        let styles = load_styles_str(
+            r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1], "radius": 4,
+                 "label": [0.9, 0.9, 0.85, 1], "label_size": 14 } }"#,
+        );
+        let input = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(200.0, 60.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let frame =
+            run_ui_with(&tree, &ValueMap::new(), &styles, &input, &mut UiState::new(), Some(&host));
+
+        let panels: Vec<_> =
+            frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).collect();
+        let texts = frame.commands.iter().filter(|c| matches!(c, HudCommand::Text { .. })).count();
+        assert_eq!(panels.len(), 1, "the button drew its panel via lua");
+        assert_eq!(texts, 1, "the button drew its label via lua");
+        assert!(
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "OK")),
+            "the button's top-level `label` prop reached the Lua render"
+        );
+        // Column pad 8 in a 200×60 screen → the button's flow rect is (8, 8, 184, 44).
+        if let HudCommand::Panel { x, y, w, h, .. } = panels[0] {
+            assert_eq!((*x, *y, *w, *h), (8.0, 8.0, 184.0, 44.0), "layout engine placed the leaf");
         }
-        if let flicker::script::HudCommand::Panel { x, .. } = panels[1] {
-            assert_eq!(*x, 105.0);
-        }
+    }
+
+    #[test]
+    fn button_lua_glow_on_hover() {
+        use flicker::render::Vec2;
+
+        // ui/button.lua draws a sapphire glow-halo panel BEHIND the slab only on hover:
+        // an idle button emits 1 panel (the slab) + its label; a hovered one emits 2
+        // panels (glow halo + slab) + its label. Locks the component's hover behaviour.
+        const SCREEN: &str = r#"
+            local M = {}
+            function M.tree()
+              return { component = "cell", pad = 8, children = {
+                { component = "button", id = "OK", grow = 1, label = "PLAY", style = "btn" },
+              } }
+            end
+            function M.update() return {} end
+            function M.draw() return {} end
+            return M
+        "#;
+        let host = ScriptHost::new_with_modules(SCREEN, "glow-screen", UI_COMPONENT_MODULES)
+            .expect("component modules load");
+        let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
+        let styles = load_styles_str(
+            r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1.0], "fill_bot": [0.10, 0.18, 0.34, 1.0],
+                 "glow": [0.20, 0.40, 0.80, 0.5], "label": [0.86, 0.90, 1.0, 1.0],
+                 "hover_top": [0.20, 0.32, 0.58, 1.0], "hover_bot": [0.14, 0.24, 0.44, 1.0] } }"#,
+        );
+        let model = ValueMap::new();
+        // Count Panel commands with the pointer OFF the button (idle) vs INSIDE its rect
+        // (8,8,184,44 → the point 100,30 is inside).
+        let panels_at = |mouse: Vec2| {
+            let input = UiInput {
+                mouse,
+                clicked: false,
+                down: false,
+                screen: Vec2::new(200.0, 60.0),
+                typed: String::new(),
+                backspace: false,
+                wheel: 0.0,
+            };
+            run_ui_with(&tree, &model, &styles, &input, &mut UiState::new(), Some(&host))
+                .commands
+                .iter()
+                .filter(|c| matches!(c, HudCommand::Panel { .. }))
+                .count()
+        };
+        assert_eq!(panels_at(Vec2::new(-9.0, -9.0)), 1, "idle button: just the slab");
+        assert_eq!(panels_at(Vec2::new(100.0, 30.0)), 2, "hovered button: glow halo + slab");
     }
 
     #[test]
@@ -1627,18 +2316,18 @@ mod script_smoke {
             ("confirm", confirm_items()),
         ];
         for (screen, items) in cases {
-            let host = ScriptHost::new(MENU_SCRIPT, "menu.lua").expect("load menu.lua");
+            let host = ScriptHost::new_with_modules(MENU_SCRIPT, "menu.lua", UI_COMPONENT_MODULES)
+                .expect("load menu.lua");
             host.set_texture_ids(&[
                 ("white", 0),
-                ("panel", 1),
+                ("cell", 1),
                 ("settings_panel", 2),
                 ("button", 3),
                 ("muse", 4),
             ])
             .expect("register textures");
             expose_ui_elements(&host);
-            load_widgets(&host);
-            publish_menu(&host, screen, &items, &[]);
+            publish_menu(&host, screen, &MenuPage::default(), &items, &[]);
             let tree = host
                 .ui_tree()
                 .expect("tree parses")
@@ -1653,70 +2342,55 @@ mod script_smoke {
                 screen: Vec2::new(1920.0, 1080.0),
                 typed: String::new(),
                 backspace: false,
+                wheel: 0.0,
             };
-            let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+            let frame =
+                run_ui_with(&tree, &model, &styles, &snap, &mut UiState::new(), Some(&host));
             assert!(
                 !frame.commands.is_empty(),
                 "menu screen '{screen}' emits panel + buttons + text"
             );
             // Every published item's label renders as a button text command — the
-            // data-driven list actually produced its buttons.
+            // data-driven list actually produced its buttons. Labels are stringtable
+            // tokens now, so what reaches a command is the RESOLVED text.
             for it in &items {
+                let want = flicker::ui::strings::resolve(&it.label);
                 assert!(
                     frame.commands.iter().any(
-                        |c| matches!(c, HudCommand::Text { text, .. } if text == &it.label)
+                        |c| matches!(c, HudCommand::Text { text, .. } if *text == want)
                     ),
-                    "screen '{screen}' renders button label '{}'",
-                    it.label
+                    "screen '{screen}' renders button label '{want}'"
                 );
             }
         }
     }
 
-    #[test]
-    fn menu_launcher_renders_a_row_per_scene() {
-        // The launcher menu (`scene_select`, i.e. non-empty `MENU.scenes`) builds the
-        // two-column layout: one scene row per published scene, each row's name drawn
-        // and a LOAD button (the shared button template) firing the scene id.
+    /// Walk one launcher menu page (screen "menu") GPU-free and return its draw
+    /// commands — the shared harness for the tier-2 page render tests below.
+    fn menu_page_commands(page: &MenuPage, items: &[MenuItem], scenes: &[SceneRow]) -> Vec<HudCommand> {
         use flicker::render::Vec2;
-        use flicker::script::HudCommand;
 
+        // The page's labels are stringtable tokens ("$menu_load", "$menu_back", …) —
+        // load the SHIPPED table so these tests prove the token→text path end to end.
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
         let styles = load_styles_str(SHELL_UI_JSON);
-        let host = ScriptHost::new(MENU_SCRIPT, "menu.lua").expect("load menu.lua");
+        let host = ScriptHost::new_with_modules(MENU_SCRIPT, "menu.lua", UI_COMPONENT_MODULES)
+            .expect("load menu.lua");
         host.set_texture_ids(&[
             ("white", 0),
-            ("panel", 1),
+            ("cell", 1),
             ("settings_panel", 2),
             ("button", 3),
             ("muse", 4),
         ])
         .expect("register textures");
         expose_ui_elements(&host);
-        load_widgets(&host);
-        let items = menu_chrome_items(); // launcher popup = settings/quit only
-        let scenes = vec![
-            SceneRow {
-                id: "solarbirth".into(),
-                name: "Solar Birth".into(),
-                mode: "Cinematic".into(),
-                region: "Celestial".into(),
-                desc: "A cinematic.".into(),
-                meta: "Clay 0.1".into(),
-            },
-            SceneRow {
-                id: "clicktrainer".into(),
-                name: "Click Trainer".into(),
-                mode: "Mini-Game".into(),
-                region: "2D".into(),
-                desc: "Aim drill.".into(),
-                meta: "Clay 0.1".into(),
-            },
-        ];
-        publish_menu(&host, "menu", &items, &scenes);
+        publish_menu(&host, "menu", page, items, scenes);
         let tree = host
             .ui_tree()
             .expect("tree parses")
             .expect("menu.lua exposes tree()");
+        let tree = expand(tree, &builtin_templates());
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
@@ -1724,24 +2398,113 @@ mod script_smoke {
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
-        let frame = run_ui(&tree, &ValueMap::new(), &styles, &snap, &mut UiState::new());
-        for sc in &scenes {
-            assert!(
-                frame
-                    .commands
-                    .iter()
-                    .any(|c| matches!(c, HudCommand::Text { text, .. } if text == &sc.name)),
-                "launcher renders scene row '{}'",
-                sc.name
-            );
-        }
-        let loads = frame
+        run_ui_with(&tree, &ValueMap::new(), &styles, &snap, &mut UiState::new(), Some(&host))
             .commands
+    }
+
+    fn has_text(cmds: &[HudCommand], s: &str) -> bool {
+        cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+    }
+
+    /// A tier-2 popup's items: BACK, then the settings/quit chrome.
+    fn tier_items() -> Vec<MenuItem> {
+        let mut items = vec![back_item()];
+        items.extend(menu_chrome_items());
+        items
+    }
+
+    #[test]
+    fn menu_launcher_renders_a_row_per_scene() {
+        // A launcher tier-2 page (`scene_select`, i.e. non-empty `MENU.scenes` — the
+        // Developer mode launcher) builds the two-column layout: one scene row per
+        // published scene, each row's name drawn and a LOAD button (the shared button
+        // template) firing the scene id, under the panel header block.
+        let page = MenuScene::for_mode(REALM_DEVELOPER).page();
+        let scenes = vec![
+            SceneRow {
+                id: "pocclusters".into(),
+                name: "Cluster Editor".into(),
+                mode: "Tool".into(),
+                region: "CSG / Voxel".into(),
+                desc: "Voxel field.".into(),
+                meta: "Clay 0.1".into(),
+            },
+            SceneRow {
+                id: "pocepochs".into(),
+                name: "Planet Simulation".into(),
+                mode: "Simulation".into(),
+                region: "World-Gen".into(),
+                desc: "Epoch sim.".into(),
+                meta: "Clay 0.1".into(),
+            },
+        ];
+        let cmds = menu_page_commands(&page, &tier_items(), &scenes);
+        for sc in &scenes {
+            assert!(has_text(&cmds, &sc.name), "launcher renders scene row '{}'", sc.name);
+        }
+        let loads = cmds
             .iter()
             .filter(|c| matches!(c, HudCommand::Text { text, .. } if text == "LOAD"))
             .count();
         assert_eq!(loads, scenes.len(), "one LOAD button per scene");
+        // The Developer launcher keeps the existing panel header + the BACK button.
+        let title = flicker::ui::strings::resolve("$menu_select_a_scene");
+        assert!(has_text(&cmds, &title), "developer page keeps the panel header");
+        let back = flicker::ui::strings::resolve("$menu_back");
+        assert!(has_text(&cmds, &back), "tier-2 popup carries BACK");
+    }
+
+    #[test]
+    fn adventurer_page_shows_exactly_its_entry_and_no_notes() {
+        // The Adventurer tier-2 page: EXACTLY its one entry (Solar Birth) — the panel
+        // header block (caption / title / count note) is dropped and no
+        // under-construction note appears; the popup still carries BACK.
+        let page = MenuScene::for_mode(REALM_ADVENTURER).page();
+        let scenes = vec![SceneRow {
+            id: "solarbirth".into(),
+            name: "Solar Birth".into(),
+            mode: "Cinematic".into(),
+            region: "Celestial".into(),
+            desc: "A cinematic.".into(),
+            meta: "Clay 0.1".into(),
+        }];
+        let cmds = menu_page_commands(&page, &tier_items(), &scenes);
+        assert!(has_text(&cmds, "Solar Birth"), "the one entry renders");
+        let loads = cmds
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Text { text, .. } if text == "LOAD"))
+            .count();
+        assert_eq!(loads, 1, "exactly one LOAD button");
+        for token in ["$menu_select_a_scene", "$menu_demo_caption", "$dm_coming_soon"] {
+            let s = flicker::ui::strings::resolve(token);
+            assert!(!has_text(&cmds, &s), "adventurer page has no '{s}' note");
+        }
+        assert!(
+            !cmds.iter().any(
+                |c| matches!(c, HudCommand::Text { text, .. } if text.ends_with("scenes available"))
+            ),
+            "adventurer page has no scene-count note"
+        );
+        let back = flicker::ui::strings::resolve("$menu_back");
+        assert!(has_text(&cmds, &back), "tier-2 popup carries BACK");
+    }
+
+    #[test]
+    fn dm_page_renders_the_coming_soon_note() {
+        // The DM ("Build the World") tier-2 page: no scenes — a popup page whose
+        // footer is the under-construction note, plus BACK to return to the root.
+        let page = MenuScene::for_mode(REALM_DM).page();
+        let cmds = menu_page_commands(&page, &tier_items(), &[]);
+        let note = flicker::ui::strings::resolve("$dm_coming_soon");
+        assert!(has_text(&cmds, &note), "DM page renders the '{note}' note");
+        let back = flicker::ui::strings::resolve("$menu_back");
+        assert!(has_text(&cmds, &back), "DM popup carries BACK");
+        assert!(
+            !cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "LOAD")),
+            "DM page lists no scenes"
+        );
     }
 
     #[test]
@@ -1775,27 +2538,32 @@ mod script_smoke {
     fn settings_tree_runs_every_section() {
         // The declarative `settings.lua` builds a component tree; the walker draws it.
         // This is the walker-drive analogue of the old immediate-mode smoke test: it
-        // parses settings.lua, expands its `window` template, and runs `run_ui` for
-        // each section, asserting the section's marker content renders (a Lua typo or a
-        // bad template name would fall out here) — the same shape as `menu_template_tests`.
+        // parses settings.lua, expands its `frame` template (Phase 3 migrated it off `window`), and
+        // runs `run_ui` for each section, asserting the section's marker content renders (a Lua typo
+        // or a bad template name would fall out here) — the same shape as `menu_template_tests`.
         use flicker::render::Vec2;
         use flicker::script::HudCommand;
 
+        // The screen's display copy is `$token`s now (S10 strings gate); load the
+        // shipped table so the walked commands carry the resolved en-us text.
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
         let styles = load_styles_str(SHELL_UI_JSON);
-        let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
-        host.set_texture_ids(&[("white", 0), ("panel", 1), ("settings_panel", 2)])
+        let host = ScriptHost::new_with_modules(SETTINGS_SCRIPT, "settings.lua", UI_COMPONENT_MODULES)
+            .expect("load settings.lua");
+        host.set_texture_ids(&[("white", 0), ("cell", 1), ("settings_panel", 2)])
             .expect("register textures");
         expose_ui_elements(&host);
+        publish_profiles(&host); // drive the controller-tab selector opts from PROFILES (§7.3)
         let tree = host
             .ui_tree()
             .expect("settings.lua tree() builds")
             .expect("settings.lua exposes tree()");
-        // Expand the `window` template exactly as `UnifiedSettingsScene::new` does.
+        // Expand the `frame` template exactly as `UnifiedSettingsScene::new` does.
         let tree = expand(tree, &builtin_templates());
         fn has_unresolved_template(n: &UiNode) -> bool {
             n.template.is_some() || n.children.iter().any(has_unresolved_template)
         }
-        assert!(!has_unresolved_template(&tree), "the window template fully expands");
+        assert!(!has_unresolved_template(&tree), "the frame template fully expands");
 
         // The per-frame model the scene publishes for `(section, sub-tab)` — gates +
         // header text + the (stringified-index) control binds.
@@ -1819,7 +2587,6 @@ mod script_smoke {
             m.set("input_subtab", subtab);
             m.set("ctrl_profile", "default");
             m.set("scroll_off", 0.0);
-            m.set("wheel", 0.0);
             m.set("off", false);
             m.set("rebinding", false);
             m.set("applied", false);
@@ -1840,12 +2607,14 @@ mod script_smoke {
             screen: Vec2::new(1920.0, 1080.0),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
         let has = |cmds: &[HudCommand], s: &str| {
             cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
         };
         let run = |section: &str, subtab: &str| {
-            run_ui(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new()).commands
+            run_ui_with(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new(), Some(&host))
+                .commands
         };
 
         let video = run("video", "keyboard");
@@ -1855,36 +2624,284 @@ mod script_smoke {
         assert!(has(&run("audio", "keyboard"), "NOT YET IMPLEMENTED"), "audio stub");
         assert!(has(&run("input", "keyboard"), "MOVEMENT"), "input keyboard groups");
         assert!(has(&run("input", "mouse"), "Look Sensitivity"), "input mouse rows");
+        // Controller tab is now a data-driven profile SELECTOR (§7.3): the refreshed notes
+        // copy renders, and the selected profile (`ctrl_profile = "default"`) shows the
+        // label PROFILES supplied — proving the selector options came from the data global.
+        let controller = run("input", "controller");
+        assert!(has(&controller, "Choose a control profile"), "refreshed controller notes");
         assert!(
-            has(&run("input", "controller"), "No controller detected"),
-            "input controller notes"
+            has(&controller, "Default (Keyboard & Mouse)"),
+            "selector shows the PROFILES-driven label for the active profile"
         );
     }
 
+    /// S9 stage 4, end-to-end minus the GPU: `settings.lua`'s ROOT declares
+    /// `on_cancel = "settings_close"`, and an Esc press runs the REAL path — the
+    /// Menu-context map resolves it to a `Cancel` edge, the router dispatches it
+    /// into the walker layer, and the declared intent fires the same result name
+    /// the × button emits. The exact seam `UnifiedSettingsScene::update` runs.
     #[test]
-    fn launcher_cards_vs_buttons_by_scene_info() {
-        // In a launcher, a scene WITH `SceneInfo` renders as a right-hand card; one
-        // WITHOUT it stays a plain launch button in the popup, above the SETTINGS/QUIT
-        // chrome. Click Trainer is that info-less minigame button.
+    fn esc_in_settings_fires_settings_close_through_the_bus() {
+        use flicker_input_router::{InputHandler, RouteCtx, Router};
+
+        // The settings screen, built + expanded exactly as the scene caches it.
+        let host = ScriptHost::new_with_modules(SETTINGS_SCRIPT, "settings.lua", UI_COMPONENT_MODULES)
+            .expect("load settings.lua");
+        expose_ui_elements(&host);
+        publish_profiles(&host);
+        let tree = host
+            .ui_tree()
+            .expect("settings.lua tree() builds")
+            .expect("settings.lua exposes tree()");
+        let tree = expand(tree, &builtin_templates());
+
+        // The declaration is DATA on the root, collected once like the scene does.
+        let intents = UiIntents::of(&tree);
+        assert_eq!(
+            intents.result_for(ActionSignal::Cancel),
+            Some("settings_close"),
+            "settings.lua's root declares on_cancel = settings_close"
+        );
+
+        // The mini-bus: the canonical Menu map (Esc → Cancel), a fresh resolver,
+        // and the walker layer carrying the declaration.
+        let menu_map = InputProfile::default_profile()
+            .context_map("Menu")
+            .cloned()
+            .expect("default profile carries a Menu context");
+        let bindings = ContextualBindings::new(menu_map);
+        let gamepad = GamepadConfig::default();
+        let mut resolver = Resolver::new();
+        let mut ev: Vec<Fired> = Vec::new();
+
+        // Frame 0 seeds the resolver; frame 1 presses Esc → a Cancel press edge.
+        let idle = InputState::new();
+        resolver.resolve_frame(&bindings, &gamepad, &idle, 0, &mut ev);
+        assert!(ev.is_empty());
+        let mut esc = InputState::new();
+        esc.set_key(Key::Escape, true);
+        resolver.resolve_frame(&bindings, &gamepad, &esc, 1, &mut ev);
+        assert!(
+            ev.iter().any(|f| f.signal == ActionSignal::Cancel),
+            "Esc resolves to Cancel under the Menu map"
+        );
+
+        let events: Vec<InputEvent> = ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, bindings.active(), &esc))
+            .collect();
+        let mut ui = UiState::new();
+        let mut route = RouteCtx::new();
+        let mut walker = WalkerHandler::hud(&mut ui, false).with_nav(&tree).with_intents(&intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut route);
+        }
+        assert_eq!(
+            walker.take_fired(),
+            vec!["settings_close".to_string()],
+            "the Esc press fired the DECLARED intent through the bus"
+        );
+    }
+
+    /// The dirty-state ladder (Aaron's praised flow, S9-preserved): a close
+    /// intent with unsaved edits raises the confirm dialog instead of popping;
+    /// while a dialog is up the SAME intent is intercepted (dismisses the
+    /// dialog, never closes the overlay under it); a clean close pops. Exercises
+    /// the real extracted ladder slice (`modal_flow` / `close_requested`) plus
+    /// the dialogs' S9 context wiring.
+    #[test]
+    fn settings_dialogs_intercept_the_close_intent() {
+        use flicker_input_core::InputContext;
+        use flicker_input_router::RouteCtx;
+
+        let close = ValueMap::new().with("settings_close", true);
+        let mut surfaces = settings_surfaces();
+
+        // Dirty close → the confirm dialog goes up, nothing pops.
+        assert!(!UnifiedSettingsScene::close_requested(&mut surfaces, &close, true));
+        assert!(surfaces.is_on("confirm_close"), "dirty close raises the confirm dialog");
+
+        // Its context flip routes through the S9 seam: Menu pushed while up.
+        let mut route = RouteCtx::new();
+        let mut bindings = ContextualBindings::new(InputMap::empty());
+        surfaces.apply_surface_contexts(&mut route);
+        apply_context_requests(&mut bindings, &route.requests);
+        route.requests.clear();
+        assert_eq!(bindings.active(), InputContext::Menu, "the dialog holds its declared context");
+
+        // The dialog INTERCEPTS the next close intent: it dismisses the dialog
+        // (Esc = Cancel), the overlay itself stays open.
+        assert_eq!(
+            UnifiedSettingsScene::modal_flow(&mut surfaces, &close),
+            Some(ModalFlow::Stay)
+        );
+        assert!(!surfaces.is_on("confirm_close"), "the intent cancelled the dialog, not settings");
+        surfaces.apply_surface_contexts(&mut route);
+        apply_context_requests(&mut bindings, &route.requests);
+        route.requests.clear();
+        assert_eq!(bindings.active(), InputContext::World, "…and its context popped with it");
+
+        // Save / Discard resolve through the dialog as before.
+        surfaces.show("confirm_close");
+        let save = ValueMap::new().with("confirm_save", true);
+        assert_eq!(
+            UnifiedSettingsScene::modal_flow(&mut surfaces, &save),
+            Some(ModalFlow::CommitAndPop)
+        );
+        let discard = ValueMap::new().with("confirm_discard", true);
+        assert_eq!(
+            UnifiedSettingsScene::modal_flow(&mut surfaces, &discard),
+            Some(ModalFlow::Pop)
+        );
+        surfaces.hide("confirm_close");
+
+        // The restore ack intercepts the close intent the same way.
+        surfaces.show("restore_note");
+        assert_eq!(
+            UnifiedSettingsScene::modal_flow(&mut surfaces, &close),
+            Some(ModalFlow::Stay)
+        );
+        assert!(!surfaces.is_on("restore_note"), "the intent dismissed the ack");
+
+        // No dialog + clean → the close intent pops.
+        assert_eq!(UnifiedSettingsScene::modal_flow(&mut surfaces, &close), None);
+        assert!(UnifiedSettingsScene::close_requested(&mut surfaces, &close, false));
+    }
+
+    #[test]
+    fn launcher_tiers_route_scenes_by_realm() {
+        // The mode-launcher map (Aaron-ratified): the ROOT menu lists the three mode
+        // buttons + realm-less launch buttons (Click Trainer) + chrome; each tier-2
+        // page lists ONLY its realm's info-bearing scenes as panel rows — Adventurer
+        // exactly Solar Birth, Developer the dev tools (and NOT solarbirth /
+        // clicktrainer), DM nothing (its page is the note).
         fn dummy() -> Box<dyn Scene> {
             unreachable!("items()/scene_rows() read metadata only — never call the factory")
         }
         set_scenes(vec![
             SceneEntry::new("solarbirth", "Solar Birth", "primary", dummy)
+                .with_realm(REALM_ADVENTURER)
                 .with_info(SceneInfo::new("Solar Birth", "Cinematic", "Celestial", "d", "m")),
             SceneEntry::new("clicktrainer", "CLICK TRAINER", "primary", dummy),
+            SceneEntry::new("pocclusters", "Cluster Editor", "primary", dummy)
+                .with_realm(REALM_DEVELOPER)
+                .with_info(SceneInfo::new("Cluster Editor", "Tool", "CSG / Voxel", "d", "m")),
+            SceneEntry::new("pocepochs", "Planet Simulation", "primary", dummy)
+                .with_realm(REALM_DEVELOPER)
+                .with_info(SceneInfo::new("Planet Simulation", "Simulation", "World-Gen", "d", "m")),
         ]);
         SCENE_SELECT.with(|s| s.set(true));
-        let menu = MenuScene::new();
 
-        // Popup buttons: the info-less scene, then the standard chrome — in that order.
-        let items = menu.items();
-        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(ids, ["clicktrainer", "settings", "quit"]);
+        // ROOT: the three modes, the realm-less info-less minigame, the chrome — and
+        // NO panel rows (the root is the popup alone; the launcher panel is tier 2).
+        let root = MenuScene::new();
+        let ids: Vec<String> = root.items().iter().map(|i| i.id.clone()).collect();
+        assert_eq!(
+            ids,
+            ["mode_adventurer", "mode_dm", "mode_developer", "clicktrainer", "settings", "quit"]
+        );
+        assert!(root.scene_rows().is_empty(), "the root menu publishes no scene rows");
+        assert_eq!(root.page().mode, "", "the root is mode-less");
 
-        // Scene-selection panel: only the info-bearing scene becomes a card.
-        let panel_rows = menu.scene_rows();
-        let rows: Vec<&str> = panel_rows.iter().map(|r| r.id.as_str()).collect();
+        // ADVENTURER: exactly Solar Birth; popup = BACK + chrome; header suppressed.
+        let adventurer = MenuScene::for_mode(REALM_ADVENTURER);
+        let ids: Vec<String> = adventurer.items().iter().map(|i| i.id.clone()).collect();
+        assert_eq!(ids, ["menu_back", "settings", "quit"]);
+        let rows: Vec<String> = adventurer.scene_rows().iter().map(|r| r.id.clone()).collect();
         assert_eq!(rows, ["solarbirth"]);
+        assert!(!adventurer.page().panel_head, "adventurer page drops the panel header");
+        assert!(adventurer.page().note.is_empty(), "adventurer page carries no note");
+
+        // DEVELOPER: the dev tools — and NOT solarbirth (moved) or clicktrainer (root).
+        let developer = MenuScene::for_mode(REALM_DEVELOPER);
+        let rows: Vec<String> = developer.scene_rows().iter().map(|r| r.id.clone()).collect();
+        assert_eq!(rows, ["pocclusters", "pocepochs"]);
+        assert!(developer.page().panel_head, "developer launcher keeps its header");
+
+        // DM: no scenes; the page carries the under-construction note token.
+        let dm = MenuScene::for_mode(REALM_DM);
+        assert!(dm.scene_rows().is_empty());
+        assert_eq!(dm.page().note, "$dm_coming_soon");
+
+        // A shared tool lists on EVERY realm it is tagged with (multi-mode).
+        set_scenes(vec![SceneEntry::new("sharedtool", "Shared Tool", "primary", dummy)
+            .with_realm(REALM_ADVENTURER)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new("Shared Tool", "Tool", "Both", "d", "m"))]);
+        for realm in [REALM_ADVENTURER, REALM_DEVELOPER] {
+            let rows = MenuScene::for_mode(realm).scene_rows();
+            assert_eq!(rows.len(), 1, "shared tool lists in '{realm}'");
+        }
+    }
+}
+
+#[cfg(test)]
+mod persistence {
+    //! The spec §7.2 fix: a keybind rebind must survive relaunch. `save`/`load` go
+    //! through the real `settings.json` (a user path, so the true relaunch round-trip is
+    //! an IN-WINDOW check), but they serialize with `serde_json::to_vec_pretty` /
+    //! `from_slice` — exactly what these tests exercise here, on the same private
+    //! `GameSettings`, with the same `set_context_map("World", …)` mutation
+    //! `commit_settings` performs. The analogue of the `InputMapData` round-trip test.
+    use super::*;
+    use flicker_input_core::InputBinding;
+
+    /// Serialize/deserialize the exact way `GameSettings::{save,load}` do.
+    fn round_trip(gs: &GameSettings) -> GameSettings {
+        let bytes = serde_json::to_vec_pretty(gs).expect("GameSettings serializes");
+        serde_json::from_slice(&bytes).expect("GameSettings deserializes")
+    }
+
+    #[test]
+    fn rebind_survives_gamesettings_round_trip() {
+        // Start from defaults (World = WASD): W is MoveForward.
+        let mut gs = GameSettings::default();
+        assert_eq!(
+            gs.input_profile.context_map("World").unwrap().action_for(InputBinding::Key(Key::W)),
+            Some(ActionSignal::MoveForward),
+        );
+
+        // Rebind MoveForward onto the Up arrow in the World map, then fold it into the
+        // profile — the exact step `commit_settings` runs before `save`.
+        let mut world = gs.input_profile.context_map("World").cloned().unwrap();
+        world.bind(ActionSignal::MoveForward, InputBinding::Key(Key::Up));
+        gs.input_profile.set_context_map("World", world);
+
+        // Persist → reload (the save/load serialization path, minus disk).
+        let loaded = round_trip(&gs);
+
+        // The seed source (`input_profile().context_map("World")`) now carries the rebind,
+        // resolved through the STABLE NAME "World" (spec §7.1a) — this is what the menu
+        // settings seed reads at line ~`unwrap_or_else`.
+        let reloaded_world = loaded.input_profile.context_map("World").expect("World persists");
+        assert_eq!(
+            reloaded_world.action_for(InputBinding::Key(Key::Up)),
+            Some(ActionSignal::MoveForward),
+            "the rebind survived save→load",
+        );
+    }
+
+    #[test]
+    fn old_settings_without_profile_still_load() {
+        // A pre-§7.2 settings.json has no `input_profile` key. `#[serde(default)]` must
+        // let it load, filling the default profile (World = WASD) — old files still work.
+        let legacy = r#"{
+            "audio": { "master": 0.8, "music": 0.6, "sfx": 0.7, "voice": 0.9 },
+            "video": { "quality": 3, "vsync": true, "fps_limit": 2 },
+            "input": {
+                "mouse_sensitivity": 0.005, "sprint_sensitivity": 0.005,
+                "invert_pitch": false, "invert_yaw": false, "raw_input": true,
+                "stick_sensitivity": 2.0, "left_deadzone": 0.2, "right_deadzone": 0.2,
+                "trigger_threshold": 0.5, "invert_stick_pitch": false,
+                "invert_stick_yaw": false, "deadzone_shape": 0
+            }
+        }"#;
+        let gs: GameSettings = serde_json::from_str(legacy).expect("legacy settings still load");
+        assert_eq!(
+            gs.input_profile.context_map("World").unwrap().action_for(InputBinding::Key(Key::W)),
+            Some(ActionSignal::MoveForward),
+            "missing profile defaults to WASD World",
+        );
     }
 }

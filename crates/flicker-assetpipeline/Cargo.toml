@@ -25,6 +25,11 @@ flicker-content.workspace = true
 flicker-skeletal.workspace = true
 # Rig-view overlay geometry (joint segments / bone axes) + ray-vs-segment picking.
 flicker-mechanics.workspace = true
+# The shared input event bus + core resolver (spec section 9): this scene dispatches
+# Esc->pause and the HUD pointer-consume through the router. Reused read-only — the
+# bus is built and proven elsewhere; this crate only consumes it.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 glam.workspace = true
 # Native open-folder dialog for the Load step.
 rfd.workspace = true

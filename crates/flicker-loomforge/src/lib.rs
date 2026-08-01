@@ -16,23 +16,32 @@
 mod canvas;
 mod doc;
 mod packs;
+mod route;
 mod stage;
 mod tae;
 
 pub use doc::{EditorDoc, Tab, Tool};
 
 use doc::{next_trigger, trigger_label, EdgeRef};
+use route::RootHandler;
 use flicker_skeletal::state::{EventKind, Response, Trigger};
 
 use std::path::Path;
 use std::time::Duration;
 
 use canvas::{CanvasArea, CardRect};
-use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState};
+use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
 use flicker::render::{FrameGraph, Rect as StageRect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, Transition};
-use flicker::script::{HudCommand, UiAnchor, UiNode, Value, ValueMap};
-use flicker::ui::{load_styles, render_hud, run_ui, UiInput, UiState};
+use flicker::script::{
+    ComponentLibrary, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap,
+};
+use flicker::ui::{
+    load_styles, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
+};
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use stage::{StageReq, StageRig};
 
@@ -108,11 +117,38 @@ pub struct LoomforgeBench {
 
     ui_state: UiState,
     ui_styles: serde_json::Value,
+    /// The screen's declarative signal bindings (S9). Loomforge REBUILDS its tree
+    /// every frame (live rects), but the root's `on_<signal>` props are static
+    /// data, so the declaration is collected from the first built tree and kept —
+    /// the same cache-with-the-tree discipline, at this scene's tree lifetime.
+    ui_intents: UiIntents,
+    /// Intent names fired last frame — republished ONCE into the next frame's
+    /// Model as the transient `sig_<name>` mirror (S9), then dropped.
+    fired_sigs: Vec<String>,
+    /// Component-library host built once at construction: dispatches `button` DRAW to the
+    /// Lua twin (`ui/button.lua`) so the Rust `UiNode` tree renders through the shared
+    /// component library instead of the walker's built-in `draw_button`. `None` = all-Rust.
+    ui_lib: Option<ScriptHost>,
     hud_commands: Vec<HudCommand>,
     hud_white: Option<TextureHandle>,
     theme: Option<Theme>,
-    bindings: InputMap,
-    menu_prev: bool,
+
+    /// Per-context action maps + the active-context stack. Only the `World` base
+    /// (`wasd_and_mouse`) is populated — the editor has no modal contexts — but it
+    /// is a `ContextualBindings` so the [`Resolver`] can resolve against it and the
+    /// pause overlay reads its `active_map()`.
+    bindings: ContextualBindings,
+    gamepad_config: GamepadConfig,
+    /// The input-router seam (spec §5/§9): a stateful edge [`Resolver`] (replaces the
+    /// `menu_prev` bool), a REUSED `Fired` scratch buffer (no per-frame alloc — RT-7),
+    /// the router's request queue, and a monotonic frame `tick` that is the resolver's
+    /// `TickTime` (NOT wall-clock — spec §3.2a). Menu (Esc → pause) and the walker's
+    /// `hud_hit` pointer-consume route through the bus; the bespoke canvas/timeline
+    /// tools below stay scene-owned raw-pointer logic.
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
 
     /// This frame's state-card rects — the scene-owned canvas geometry, recomputed in
     /// `update` so hit-testing (select / drop) and `render` agree on one layout.
@@ -234,11 +270,24 @@ impl LoomforgeBench {
             status: String::new(),
             ui_state: UiState::new(),
             ui_styles: serde_json::Value::Null,
+            ui_intents: UiIntents::default(),
+            fired_sigs: Vec::new(),
+            ui_lib: match ScriptHost::library(UI_COMPONENT_MODULES) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::error!("loomforge ui component library failed: {e}");
+                    None
+                }
+            },
             hud_commands: Vec::new(),
             hud_white: None,
             theme: None,
-            bindings: InputMap::wasd_and_mouse(),
-            menu_prev: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
             cards: Vec::new(),
             canvas_area: CanvasArea { pos: Vec2::ZERO, size: Vec2::ZERO },
             edges: Vec::new(),
@@ -317,7 +366,12 @@ impl LoomforgeBench {
     /// Rebuilt every frame from the document — the walker is immediate-mode, so there
     /// is no retained widget tree to keep in sync.
     fn build_tree(&self, screen: Vec2) -> UiNode {
-        let mut page = node("page");
+        let mut page = node("screen");
+        // The screen's input DECLARATION (S9): Menu (Esc / pad Start) fires
+        // `pause_open`; `update` maps the fired name onto its pause push. Same
+        // prop the Lua-authored screens carry — this root is just built in Rust.
+        page.props
+            .insert("on_menu".into(), Value::Text("pause_open".into()));
         page.children = vec![
             self.top_bar(screen),
             self.tab_bar(screen),
@@ -340,7 +394,7 @@ impl LoomforgeBench {
         let rig = label_node(self.rig_badge(), 11.0, "loomforge.badge.color", Some(240.0));
 
         // Spacer soaks the middle so the actions sit hard right.
-        let mut spacer = node("panel");
+        let mut spacer = node("cell");
         spacer.grow = Some(1.0);
 
         let mut validate = node("button");
@@ -404,7 +458,7 @@ impl LoomforgeBench {
     /// (see `draw_canvas`), which is why nothing here covers that rect.
     fn sm_chrome(&self, screen: Vec2) -> UiNode {
         let r = Self::regions(screen);
-        let mut root = node("page");
+        let mut root = node("screen");
         root.id = "sm_page".into();
         root.anchor = Some(UiAnchor::TopLeft);
         root.width = Some(screen.x);
@@ -460,7 +514,7 @@ impl LoomforgeBench {
     /// seven-lane geometry — this page only adds the chrome around it.
     fn tae_chrome(&self, screen: Vec2) -> UiNode {
         let r = Self::tae_regions(screen);
-        let mut root = node("page");
+        let mut root = node("screen");
         root.id = "tae_page".into();
         root.anchor = Some(UiAnchor::TopLeft);
         root.width = Some(screen.x);
@@ -472,7 +526,7 @@ impl LoomforgeBench {
 
     /// Left rail: which clip is being edited, and the seven event tracks with live counts.
     fn tae_track_list(&self, r: &TaeRegions) -> UiNode {
-        let mut col = node("column");
+        let mut col = node("cell");
         col.id = "tae_tracks".into();
         col.anchor = Some(UiAnchor::TopLeft);
         col.offset = [0.0, r.top];
@@ -614,7 +668,7 @@ impl LoomforgeBench {
 
     /// Centre: the 300px Stage doll over the transport bar.
     fn tae_preview(&self, r: &TaeRegions) -> UiNode {
-        let mut col = node("column");
+        let mut col = node("cell");
         col.id = "tae_preview".into();
         col.anchor = Some(UiAnchor::TopLeft);
         col.offset = [r.track_w, r.top];
@@ -639,7 +693,7 @@ impl LoomforgeBench {
 
         // The doll, sized to whatever the preview box allows (the design's 300px cap).
         let side = (r.preview_h - 90.0).min(r.preview_w - 24.0).clamp(64.0, TAE_STAGE_MAX);
-        let mut doll = node("stage");
+        let mut doll = node("rtt");
         doll.id = TAE_STAGE_ID.into();
         doll.width = Some(side);
         doll.height = Some(side);
@@ -672,7 +726,7 @@ impl LoomforgeBench {
     /// map 1:1 onto `EventDef` + `CombatMeta`, so every field shown is authored data that
     /// Save writes back — even though no combat runtime consumes it yet.
     fn tae_inspector(&self, r: &TaeRegions) -> UiNode {
-        let mut col = node("column");
+        let mut col = node("cell");
         col.id = "tae_inspector".into();
         col.anchor = Some(UiAnchor::TopLeft);
         col.offset = [r.screen.x - r.insp_w, r.top];
@@ -845,7 +899,7 @@ impl LoomforgeBench {
         let grid_w = (screen.x - rail_w - detail_w).max(160.0);
         let h = (screen.y - top).max(80.0);
 
-        let mut root = node("page");
+        let mut root = node("screen");
         root.id = "pack_page".into();
         root.anchor = Some(UiAnchor::TopLeft);
         root.width = Some(screen.x);
@@ -861,7 +915,7 @@ impl LoomforgeBench {
     /// Filter rail: pack-kind rows with live counts, then the skeletons actually present.
     /// Both are toggles — an empty selection means "unfiltered", so the browser opens full.
     fn pack_filter_rail(&self, top: f32, w: f32, h: f32) -> UiNode {
-        let mut rail = node("column");
+        let mut rail = node("cell");
         rail.id = "pack_filter".into();
         rail.anchor = Some(UiAnchor::TopLeft);
         rail.offset = [0.0, top];
@@ -897,7 +951,7 @@ impl LoomforgeBench {
 
     /// The card grid — wrapped into rows because the walker's `row` does not wrap itself.
     fn pack_grid(&self, x: f32, top: f32, w: f32, h: f32) -> UiNode {
-        let mut col = node("column");
+        let mut col = node("cell");
         col.id = "pack_grid".into();
         col.anchor = Some(UiAnchor::TopLeft);
         col.offset = [x, top];
@@ -950,7 +1004,7 @@ impl LoomforgeBench {
     /// One pack card: a Stage doll over the pack's name and derived kind.
     fn pack_card(&self, idx: usize, e: &packs::PackEntry) -> UiNode {
         let sel = idx == self.pack_sel;
-        let mut card = node("column");
+        let mut card = node("cell");
         card.id = format!("packcard_{idx}");
         card.action = Some(format!("packcard_{idx}"));
         card.width = Some(PACK_CARD_W);
@@ -959,7 +1013,7 @@ impl LoomforgeBench {
         card.gap = 3.0;
         card = prop(card, "style", text_val(active_style(sel)));
 
-        let mut thumb = node("stage");
+        let mut thumb = node("rtt");
         thumb.id = format!("{PACK_STAGE_PREFIX}{idx}");
         thumb.width = Some(PACK_STAGE);
         thumb.height = Some(PACK_STAGE);
@@ -981,7 +1035,7 @@ impl LoomforgeBench {
 
     /// Detail pane — the selected pack's manifest, read straight off the file.
     fn pack_detail(&self, x: f32, top: f32, w: f32, h: f32) -> UiNode {
-        let mut col = node("column");
+        let mut col = node("cell");
         col.id = "pack_detail".into();
         col.anchor = Some(UiAnchor::TopLeft);
         col.offset = [x, top];
@@ -1041,7 +1095,7 @@ impl LoomforgeBench {
     }
 
     fn tool_rail(&self, r: &Regions) -> UiNode {
-        let mut rail = node("column");
+        let mut rail = node("cell");
         rail.id = "tool_rail".into();
         rail.anchor = Some(UiAnchor::TopLeft);
         rail.offset = [0.0, r.top];
@@ -1075,7 +1129,7 @@ impl LoomforgeBench {
     /// Pack Manager: the loaded pack plus its clip library, where every clip row is a
     /// **drag source** (`drag_kind`) the canvas resolves into a `bind_clip`.
     fn pack_rail(&self, r: &Regions) -> UiNode {
-        let mut rail = node("column");
+        let mut rail = node("cell");
         rail.id = "pack_rail".into();
         rail.anchor = Some(UiAnchor::TopLeft);
         rail.offset = [r.rail_x, r.top];
@@ -1348,7 +1402,7 @@ impl LoomforgeBench {
         row = prop(row, "drag_kind", text_val("clip"));
         row = prop(row, "drag_id", text_val(name));
 
-        let mut doll = node("stage");
+        let mut doll = node("rtt");
         doll.id = stage_id(name);
         doll.size = Some(CLIP_STAGE);
         doll = prop(doll, "style", text_val("loomforge.clip_stage"));
@@ -1389,7 +1443,7 @@ impl LoomforgeBench {
     /// The non-graph tabs still report live document facts until their pages land.
     fn summary_body(&self, screen: Vec2) -> UiNode {
         let top = TOP_BAR_H + TAB_BAR_H;
-        let mut body = node("column");
+        let mut body = node("cell");
         body.id = "body".into();
         body.anchor = Some(UiAnchor::TopLeft);
         body.offset = [0.0, top];
@@ -1476,7 +1530,7 @@ impl LoomforgeBench {
         doc.clip_index(&state.clip)
     }
 
-    fn build_stage_reqs(&self, slots: Vec<flicker::ui::StageSlot>) -> Vec<StageReq> {
+    fn build_stage_reqs(&self, slots: Vec<flicker::ui::RttSlot>) -> Vec<StageReq> {
         let Some(doc) = &self.doc else { return Vec::new() };
         if !self.stage_rig.has_source(DOLL_SOURCE) {
             return Vec::new();
@@ -1732,22 +1786,10 @@ impl Scene for LoomforgeBench {
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        // Esc / Menu → the shell pause overlay (edge-detected); the scene manager
-        // freezes us while it is up.
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev;
-        self.menu_prev = menu_down;
-        if menu_pressed {
-            if let Some(theme) = self.theme {
-                return Transition::Push(Box::new(PauseScene::new(
-                    theme,
-                    &self.bindings,
-                    &AbstractControls::default(),
-                    &GamepadConfig::default(),
-                )));
-            }
-        }
-
+        // Input arbitration (Esc → pause + the HUD pointer-consume) now runs through the
+        // ONE event bus in the resolve → dispatch block below, once this frame's walker
+        // pass has produced `over_hud`. The node-graph / TAE-timeline tools keep their
+        // own bespoke raw-pointer picking/drag and their `over_hud` gate.
         let screen = renderer.size();
         self.cursor = input.mouse_position;
         // One clock for every doll — each clip loops on its own duration.
@@ -1767,6 +1809,12 @@ impl Scene for LoomforgeBench {
         self.edges = self.build_edges();
 
         let tree = self.build_tree(screen);
+        // The screen's declarative bindings (S9): the root props are static even
+        // though the tree rebuilds per frame, so collect them once from the first
+        // build (empty only until then — loomforge's root always declares).
+        if self.ui_intents.is_empty() {
+            self.ui_intents = UiIntents::of(&tree);
+        }
         // The one doll under the pointer animates; the rest hold their poster. Resolved
         // from last frame's rects, so hover costs no extra layout pass — and a frame of
         // lag on "start dancing" is imperceptible.
@@ -1774,6 +1822,9 @@ impl Scene for LoomforgeBench {
         if let Some(clip) = self.hot_stage.as_deref().and_then(|h| h.strip_prefix(STAGE_PREFIX)) {
             model.set(live_key(clip), true);
         }
+        // The transient `sig_<name>` mirror (S9): intent names fired last frame
+        // ride exactly this ONE publish, then drop (cleared after the walk).
+        UiIntents::mirror_into(&mut model, &self.fired_sigs);
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -1781,15 +1832,17 @@ impl Scene for LoomforgeBench {
             screen,
             typed: String::new(),
             backspace: false,
+            wheel: input.mouse_wheel_delta,
         };
-        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        let lib = self.ui_lib.as_ref().map(|h| h as &dyn ComponentLibrary);
+        let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
         // Copy out what the canvas needs before `frame` is consumed / `self` mutated.
         let over_hud = frame.results.is_on("hud_hit");
         let dropped = frame.results.is_on("drag_dropped");
         let drag_is_clip = frame.results.text("drag_kind") == Some("clip");
         let drag_id = frame.results.text("drag_id").map(str::to_string);
         self.hud_commands = frame.commands;
-        let slots = frame.stages;
+        let slots = frame.rtts;
         self.apply_actions(&frame.results);
 
         // Dolls for this frame, and which one the pointer is inside (for the next).
@@ -1799,6 +1852,63 @@ impl Scene for LoomforgeBench {
             .iter()
             .find(|r| r.id.starts_with(STAGE_PREFIX) && rect_contains(&r.rect, self.cursor))
             .map(|r| r.id.clone());
+
+        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the old
+        // `menu_prev` edge. The resolver turns this frame's raw snapshot into discrete
+        // `Fired` edges over the active map; each is wrapped with the active context and
+        // routed through the chain (root → walker). `ev` is the REUSED scratch buffer;
+        // the `InputEvent` list is a short-lived local because it borrows THIS frame's
+        // snapshot (RT-7: steady-state frames resolve zero edges and allocate nothing). ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+
+        // Chain: the scene root (declares World) then the walker layer, which consumes
+        // the pointer signal while `over_hud` (the canonical `hud_hit`) and the screen's
+        // DECLARED intents (S9: the root's `on_menu = "pause_open"`). The bespoke tools
+        // below still read the raw pointer and gate on `over_hud`, so this walker layer
+        // only formalizes the arbitration for anything on the bus.
+        self.fired_sigs.clear(); // last frame's mirror rode the walk above — done
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Reconcile any context push/pop the chain queued (none in this editor today) and
+        // clear the queue for next frame — keeps the seam complete if a modal is added.
+        apply_context_requests(&mut self.bindings, &self.route.requests);
+        // The screen's fired intents (S9), drained once: acted on below and queued for
+        // the one-frame `sig_<name>` Model mirror.
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer consumed
+        // the Menu press and fired the name; the scene maps it onto its pause push —
+        // the root's hardcoded Menu arm is gone.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+            if let Some(theme) = self.theme {
+                return Transition::Push(Box::new(PauseScene::new(
+                    theme,
+                    self.bindings.active_map(),
+                    &AbstractControls::default(),
+                    &self.gamepad_config,
+                )));
+            }
+        }
 
         if self.tab == Tab::StateMachine {
             let hit = canvas::hit_test(&self.cards, input.mouse_position);
@@ -2603,7 +2713,7 @@ mod tests {
         let doll = row
             .children
             .iter()
-            .find(|c| c.component == "stage")
+            .find(|c| c.component == "rtt")
             .expect("the row carries a doll");
         assert_eq!(doll.props.get("source"), Some(&text_val(DOLL_SOURCE)));
         assert_eq!(

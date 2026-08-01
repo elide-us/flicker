@@ -115,7 +115,7 @@
 
   "_bucket_shell": "══ SHELL CHROME ══  Front-end shell (Alpha/crates/frontend/flicker-shell), embedded via include_str! and inherited by every client: modal + screens (its instances) + menu + settings + logo + loading. Scripts: menu.lua, settings.lua, logo.lua.",
 
-  "_modal_comment": "Prism carved-stone modal, drawn (not baked): the shared style for the main menu / pause 'Sanctum' / display-confirm, all rendered by modal.lua from `screens.<Model.screen>`. Chrome = `panel` HudCommands (rounded-rect + 2-stop gradient + border + soft drop-shadow); buttons pick a `variant` (primary sapphire / secondary stone / danger rust). The panel auto-sizes to its content, so a screen just lists its title/subtitle/items. Sizes are px; every colour a `$token`.",
+  "_modal_comment": "Prism carved-stone modal, drawn (not baked): the shared style for the main menu / pause 'Sanctum' / display-confirm — declared by menu.lua (`MENU.screen` picks the form) through the `popup_panel`/`popup_menu`/`choice_dialog` templates and rendered by the component walker. Chrome = `panel` HudCommands (rounded-rect + 2-stop gradient + border); buttons pick a `variant` (primary sapphire / secondary stone / danger rust). The panel auto-sizes to its content, so a screen just lists its title/subtitle/items. Sizes are px; every colour a `$token`.",
 
   "modal": {
     "panel": {
@@ -175,23 +175,23 @@
       "scrim": "$stone0",
       "muse": true,
       "spectrum": true,
-      "studio": "ELIDEUS PRODUCTIONS · CLAY ENGINE",
-      "title": "Prism",
+      "studio": "$menu_elideus_productions_clay_engine",
+      "title": "$menu_prism",
       "title_size": 58,
-      "subtitle": "THE SEVEN SHARDS"
+      "subtitle": "$menu_the_seven_shards"
     },
     "pause": {
       "layout": "center",
       "overlay": "$scrim",
-      "title": "Sanctum",
+      "title": "$pause_sanctum",
       "title_size": 46,
-      "subtitle": "GATHER YOURSELF · THE WORLD RUNS ON",
-      "footer": "ESC TO RETURN"
+      "subtitle": "$pause_gather_yourself_the_world_runs_on",
+      "footer": "$pause_esc_to_return"
     },
     "confirm": {
       "layout": "center",
       "overlay": "$scrim_dim",
-      "title": "Keep Display?",
+      "title": "$confirm_display_title",
       "title_size": 38
     }
   },
@@ -229,32 +229,34 @@
     "runes": { "size": 16, "inset": 14, "top": "$rune_glow", "bot": "$bronze_dim" },
     "titlebar": {
       "h": 52, "pad_x": 30, "wash": "$accent_wash", "seam": "$seam",
-      "mark": "$bronze", "title": "Settings", "title_size": 24, "title_color": "$ink_bright",
+      "_fill_note": "fill_top/fill_bot = the declared `wash` so draw_panel_bg actually tints the bar (was falling back to the dark PANEL constant); `color` = `title_color` so the title text picks it up (draw_text reads `color`/`label_color`, not `title_color`).",
+      "fill_top": "$accent_wash", "fill_bot": "$accent_wash", "color": "$ink_bright",
+      "mark": "$bronze", "title": "$set_settings", "title_size": 24, "title_color": "$ink_bright",
       "hint": "ESC TO CLOSE", "hint_size": 9, "hint_color": "$faint",
       "close": { "size": 26, "radius": 3, "bg": "$danger_bg", "border": "$danger_border", "label": "$danger_text", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi" }
     },
     "nav": {
       "w": 236, "pad": 16, "seam": "$seam",
-      "header": "CATEGORIES", "header_size": 9, "header_color": "$faint",
+      "header": "$set_categories", "header_size": 9, "header_color": "$faint",
       "row_h": 42, "gap": 5, "gem": 9, "label_size": 13,
       "active_top": "$accent_wash_2", "active_bot": "$accent_wash", "active_border": "$rune_glow", "active_label": "$ink_bright",
       "inactive_label": "$dim",
-      "footer_title": "PRISM · CLAY ENGINE", "footer_title_color": "$bronze_dim",
-      "footer_sub": "Adventurer & RTS shared kit", "footer_sub_color": "$faint"
+      "footer_title": "$set_prism_clay_engine", "footer_title_color": "$bronze_dim",
+      "footer_sub": "$set_adventurer_and_rts_shared_kit", "footer_sub_color": "$faint"
     },
     "content": {
       "pad_x": 34, "pad_top": 22, "kicker_size": 10, "title_size": 32, "title_color": "$ink_bright", "seam": "$seam", "scrollbar": "$bronze_dim"
     },
     "footer": {
       "h": 58, "pad_x": 34, "seam": "$seam",
-      "restore": "RESTORE DEFAULTS", "restore_color": "$muted", "restore_hover": "$danger_hi",
-      "applied": "SETTINGS APPLIED", "applied_color": "$rune_glow_hi",
-      "apply": "APPLY", "save_close": "SAVE AND CLOSE"
+      "restore": "$set_restore_defaults", "restore_color": "$muted", "restore_hover": "$danger_hi",
+      "applied": "$settings_applied", "applied_color": "$rune_glow_hi",
+      "apply": "$set_apply", "save_close": "$set_save_and_close"
     },
     "dialogs": {
-      "close_title": "Unsaved Changes", "close_msg": "Do you want to save your changes?",
-      "save": "SAVE & CLOSE", "discard": "DISCARD", "cancel": "CANCEL",
-      "restore_title": "Defaults Restored", "restore_msg": "All settings have been reset to their default values.", "ok": "OK"
+      "close_title": "$set_unsaved_changes", "close_msg": "$set_do_you_want_to_save_your_changes",
+      "save": "$set_save_and_close_2", "discard": "$set_discard", "cancel": "$set_cancel_2",
+      "restore_title": "$set_defaults_restored", "restore_msg": "$set_all_settings_have_been_reset_to_their_de", "ok": "$set_ok"
     },
     "row": {
       "h": 50, "group_gap": 22, "seam": "$seam",
@@ -284,82 +286,82 @@
       "text_color": "$ink_label", "accent": "$rune_glow_hi", "hint_color": "$dim_soft"
     },
     "nav_items": [
-      { "id": "video", "label": "VIDEO", "gem": "$sig_blue", "kicker": "DISPLAY & RENDERING", "kicker_color": "$sig_blue", "title": "Video" },
-      { "id": "audio", "label": "AUDIO", "gem": "$sig_yellow", "kicker": "MIXING & OUTPUT", "kicker_color": "$sig_yellow", "title": "Audio" },
-      { "id": "input", "label": "INPUT", "gem": "$sig_red", "kicker": "BINDINGS & DEVICES", "kicker_color": "$sig_red", "title": "Input" }
+      { "id": "video", "label": "$set_video", "gem": "$sig_blue", "kicker": "DISPLAY & RENDERING", "kicker_color": "$sig_blue", "title": "Video" },
+      { "id": "audio", "label": "$set_audio", "gem": "$sig_yellow", "kicker": "MIXING & OUTPUT", "kicker_color": "$sig_yellow", "title": "Audio" },
+      { "id": "input", "label": "$set_input", "gem": "$sig_red", "kicker": "BINDINGS & DEVICES", "kicker_color": "$sig_red", "title": "Input" }
     ],
     "video": {
       "groups": [
-        { "name": "DISPLAY", "rows": [
-          { "id": "display_mode", "kind": "dropdown", "name": "Display Mode", "desc": "How the game fills your screen", "options": ["Windowed", "Borderless Window", "Fullscreen"], "wired": true },
-          { "id": "resolution", "kind": "dropdown", "name": "Resolution", "desc": "Rendering resolution of the viewport", "options": ["1280 × 720", "1600 × 900", "1920 × 1080", "2560 × 1440", "3440 × 1440", "3840 × 2160"], "wired": true },
-          { "id": "quality", "kind": "segment", "name": "Graphics Quality", "desc": "Master preset for all render features", "options": ["Low", "Medium", "High", "Ultra"], "wired": true }
+        { "name": "$set_display", "rows": [
+          { "id": "display_mode", "kind": "dropdown", "name": "$set_display_mode", "desc": "$set_how_the_game_fills_your_screen", "options": ["$set_windowed", "$set_borderless_window", "$set_fullscreen"], "wired": true },
+          { "id": "resolution", "kind": "dropdown", "name": "$set_resolution", "desc": "$set_rendering_resolution_of_the_viewport", "options": ["1280 × 720", "1600 × 900", "1920 × 1080", "2560 × 1440", "3440 × 1440", "3840 × 2160"], "wired": true },
+          { "id": "quality", "kind": "segment", "name": "$set_graphics_quality", "desc": "$set_master_preset_for_all_render_features", "options": ["$set_low", "$set_medium", "$set_high", "$set_ultra"], "wired": true }
         ] },
-        { "name": "PERFORMANCE", "rows": [
-          { "id": "vsync", "kind": "toggle", "name": "Vertical Sync", "desc": "Sync frames to the display to prevent tearing", "wired": true },
-          { "id": "fps_limit", "kind": "cycler", "name": "Frame Rate Limit", "desc": "Cap the maximum frames per second", "options": ["30", "60", "120", "144", "Unlimited"], "wired": true }
+        { "name": "$set_performance", "rows": [
+          { "id": "vsync", "kind": "toggle", "name": "$set_vertical_sync", "desc": "$set_sync_frames_to_the_display_to_prevent_te", "wired": true },
+          { "id": "fps_limit", "kind": "cycler", "name": "$set_frame_rate_limit", "desc": "$set_cap_the_maximum_frames_per_second", "options": ["30", "60", "120", "144", "$set_unlimited"], "wired": true }
         ] },
-        { "name": "IMAGE", "rows": [
-          { "id": "fov", "kind": "slider", "name": "Field of View", "desc": "Adventurer camera angle · 60–120°", "min": 60, "max": 120, "default": 90, "suffix": "°", "wired": false },
-          { "id": "gamma", "kind": "slider", "name": "Brightness", "desc": "Gamma of the rendered scene", "min": 0, "max": 100, "default": 50, "wired": false }
+        { "name": "$set_image", "rows": [
+          { "id": "fov", "kind": "slider", "name": "$set_field_of_view", "desc": "$set_adventurer_camera_angle_60_120", "min": 60, "max": 120, "default": 90, "suffix": "°", "wired": false },
+          { "id": "gamma", "kind": "slider", "name": "$set_brightness", "desc": "$set_gamma_of_the_rendered_scene", "min": 0, "max": 100, "default": 50, "wired": false }
         ] }
       ]
     },
     "audio": {
       "dim": 0.5,
-      "stub": { "title": "NOT YET IMPLEMENTED", "title_color": "$bronze", "body": "No audio modules exist in the Clay Engine yet. These controls are a layout preview and are inactive.", "body_color": "$dim_soft", "border": "$bronze_dim", "top": "$accent_wash" },
+      "stub": { "title": "$set_not_yet_implemented", "title_color": "$bronze", "body": "$set_no_audio_modules_exist_in_the_clay_engin", "body_color": "$dim_soft", "border": "$bronze_dim", "top": "$accent_wash" },
       "groups": [
-        { "name": "VOLUME", "rows": [
-          { "id": "a_master", "kind": "slider", "name": "Master Volume", "min": 0, "max": 100, "default": 80, "wired": false },
-          { "id": "a_music", "kind": "slider", "name": "Music", "min": 0, "max": 100, "default": 70, "wired": false },
-          { "id": "a_fx", "kind": "slider", "name": "Effects", "min": 0, "max": 100, "default": 85, "wired": false },
-          { "id": "a_amb", "kind": "slider", "name": "Ambient", "min": 0, "max": 100, "default": 55, "wired": false },
-          { "id": "a_voice", "kind": "slider", "name": "Voice", "min": 0, "max": 100, "default": 100, "wired": false }
+        { "name": "$set_volume", "rows": [
+          { "id": "a_master", "kind": "slider", "name": "$set_master_volume", "min": 0, "max": 100, "default": 80, "wired": false },
+          { "id": "a_music", "kind": "slider", "name": "$set_music", "min": 0, "max": 100, "default": 70, "wired": false },
+          { "id": "a_fx", "kind": "slider", "name": "$set_effects", "min": 0, "max": 100, "default": 85, "wired": false },
+          { "id": "a_amb", "kind": "slider", "name": "$set_ambient", "min": 0, "max": 100, "default": 55, "wired": false },
+          { "id": "a_voice", "kind": "slider", "name": "$set_voice", "min": 0, "max": 100, "default": 100, "wired": false }
         ] },
-        { "name": "OUTPUT", "rows": [
-          { "id": "a_device", "kind": "static", "name": "Output Device", "value": "System Default", "wired": false },
-          { "id": "a_subs", "kind": "toggle", "name": "Subtitles", "wired": false }
+        { "name": "$set_output", "rows": [
+          { "id": "a_device", "kind": "static", "name": "$set_output_device", "value": "$set_system_default", "wired": false },
+          { "id": "a_subs", "kind": "toggle", "name": "$set_subtitles", "wired": false }
         ] }
       ]
     },
     "input": {
-      "tabs": [ { "id": "keyboard", "label": "KEYBOARD" }, { "id": "mouse", "label": "MOUSE" }, { "id": "controller", "label": "CONTROLLER" } ],
+      "tabs": [ { "id": "keyboard", "label": "$set_keyboard" }, { "id": "mouse", "label": "$set_mouse" }, { "id": "controller", "label": "$set_controller" } ],
       "keyboard": {
         "groups": [
-          { "name": "MOVEMENT", "actions": [
-            { "id": "MoveForward", "label": "Move Forward" }, { "id": "MoveBackward", "label": "Move Backward" },
-            { "id": "StrafeLeft", "label": "Strafe Left" }, { "id": "StrafeRight", "label": "Strafe Right" },
-            { "id": "MoveUp", "label": "Move Up" }, { "id": "MoveDown", "label": "Move Down" },
-            { "id": "Jump", "label": "Jump" }, { "id": "Sprint", "label": "Sprint" }, { "id": "Crouch", "label": "Crouch" }
+          { "name": "$set_movement", "actions": [
+            { "id": "MoveForward", "label": "$set_move_forward" }, { "id": "MoveBackward", "label": "$set_move_backward" },
+            { "id": "StrafeLeft", "label": "$set_strafe_left" }, { "id": "StrafeRight", "label": "$set_strafe_right" },
+            { "id": "MoveUp", "label": "$set_move_up" }, { "id": "MoveDown", "label": "$set_move_down" },
+            { "id": "Jump", "label": "$set_jump" }, { "id": "Sprint", "label": "$set_sprint" }, { "id": "Crouch", "label": "$set_crouch" }
           ] },
-          { "name": "INTERFACE", "actions": [
-            { "id": "Interact", "label": "Interact" }, { "id": "Inventory", "label": "Inventory" },
-            { "id": "Map", "label": "World Map" }, { "id": "Menu", "label": "Menu" }
+          { "name": "$set_interface", "actions": [
+            { "id": "Interact", "label": "$set_interact" }, { "id": "Inventory", "label": "$set_inventory" },
+            { "id": "Map", "label": "$set_world_map" }, { "id": "Menu", "label": "$set_menu" }
           ] },
-          { "name": "ACTIONS", "actions": [
-            { "id": "PrimaryAction", "label": "Primary Action" }, { "id": "SecondaryAction", "label": "Secondary Action" },
-            { "id": "Reload", "label": "Reload" }, { "id": "Confirm", "label": "Confirm" }, { "id": "Cancel", "label": "Cancel" },
-            { "id": "Quit", "label": "Quit" }
+          { "name": "$set_actions", "actions": [
+            { "id": "PrimaryAction", "label": "$set_primary_action" }, { "id": "SecondaryAction", "label": "$set_secondary_action" },
+            { "id": "Reload", "label": "$set_reload" }, { "id": "Confirm", "label": "$set_confirm" }, { "id": "Cancel", "label": "$set_cancel" },
+            { "id": "Quit", "label": "$set_quit" }
           ] }
         ]
       },
       "mouse": {
         "groups": [
-          { "name": "POINTER", "rows": [
-            { "id": "m_look", "kind": "slider", "name": "Look Sensitivity", "desc": "Adventurer camera turn speed", "min": 0, "max": 100, "backend_min": 0.001, "backend_max": 0.02, "wired": true },
-            { "id": "m_aim", "kind": "slider", "name": "Aim Sensitivity", "desc": "Multiplier while channelling / aiming", "min": 0, "max": 100, "default": 65, "wired": false },
-            { "id": "m_invert", "kind": "toggle", "name": "Invert Vertical Look", "desc": "Flip the up/down axis", "wired": true }
+          { "name": "$set_pointer", "rows": [
+            { "id": "m_look", "kind": "slider", "name": "$set_look_sensitivity", "desc": "$set_adventurer_camera_turn_speed", "min": 0, "max": 100, "backend_min": 0.001, "backend_max": 0.02, "wired": true },
+            { "id": "m_aim", "kind": "slider", "name": "$set_aim_sensitivity", "desc": "$set_multiplier_while_channelling_aiming", "min": 0, "max": 100, "default": 65, "wired": false },
+            { "id": "m_invert", "kind": "toggle", "name": "$set_invert_vertical_look", "desc": "$set_flip_the_up_down_axis", "wired": true }
           ] },
-          { "name": "COMMANDER · RTS", "rows": [
-            { "id": "m_edge", "kind": "toggle", "name": "Edge Pan", "desc": "Scroll the map when the cursor nears the edge", "default_on": true, "wired": false },
-            { "id": "m_edge_speed", "kind": "slider", "name": "Edge Pan Speed", "desc": "Commander camera scroll rate", "min": 0, "max": 100, "default": 55, "wired": false }
+          { "name": "$set_commander_rts", "rows": [
+            { "id": "m_edge", "kind": "toggle", "name": "$set_edge_pan", "desc": "$set_scroll_the_map_when_the_cursor_nears_the", "default_on": true, "wired": false },
+            { "id": "m_edge_speed", "kind": "slider", "name": "$set_edge_pan_speed", "desc": "$set_commander_camera_scroll_rate", "min": 0, "max": 100, "default": 55, "wired": false }
           ] }
         ]
       },
       "controller": {
         "ring": "$edge4", "ring_bg": "$stone0",
-        "title": "No controller detected", "title_size": 24, "title_color": "$ink_label",
-        "body": "Connect a gamepad and it will appear here. Bindings are shared with the Adventurer action bar.", "body_color": "$dim_soft",
+        "title": "$set_choose_a_control_profile", "title_size": 24, "title_color": "$ink_label",
+        "body": "$set_pick_a_starting_layout_above_rebind_indi", "body_color": "$dim_soft",
         "detect": "DETECT CONTROLLER", "enable": "Enable support"
       }
     }
@@ -422,12 +424,17 @@
     "map": { "ok": "$sig_green", "review": "$sig_yellow", "auto": "$sig_blue", "fail": "$hp_hi" },
     "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "border_w": 1, "radius": 4 },
     "well": { "fill_top": "$well", "fill_bot": "$well", "border": "$edge1", "border_w": 1, "radius": 3 },
+    "seam": { "fill_top": "$seam", "fill_bot": "$seam" },
     "checkbox": { "box": "$stone2", "check": "$sig_green", "border": "$edge4", "pad": 3 },
     "slider": { "track": "$stone1", "fill": "$sap_base", "knob": "$sap_border", "label": "$dim_soft", "value": "$ink", "track_h": 6, "knob_w": 9, "label_size": 11 },
     "_choice_comment": "An EXCLUSIVE-CHOICE row and a LIST-SELECTION row. Both are `button`s: exclusivity is state the engine already owns, so a radio needs no component of its own — the caption arrives by text_bind carrying the selected glyph. `choice` is a flat stone row; `rowsel` is the selected-row marker the design specifies (a sapphire accent wash) and draws NOTHING when a row is unselected, so it sits under a bound text without covering it.",
     "choice": { "fill_top": "$stone2", "fill_bot": "$stone1", "hover_top": "$stone3", "hover_bot": "$stone2", "border": "$edge2", "border_w": 1, "radius": 2, "label": "$ink", "hover_label": "$ink_bright" },
     "rowsel": { "fill_top": "$accent_wash_2", "fill_bot": "$accent_wash", "hover_top": "$accent_wash_2", "hover_bot": "$accent_wash_2", "border": "$sapphire", "border_w": 1, "radius": 2, "label": "$ink" },
     "rowsel_off": { "fill_top": "$stage_void", "fill_bot": "$stage_void", "hover_top": "$accent_wash", "hover_bot": "$accent_wash", "radius": 2, "label": "$ink" },
+    "_import_comment": "IMPORT WORKFLOW SELECTOR (Step::Task) — the standard Prism `window` template (a PRESET over `frame`: chiseled `settings.window` border + automatic glowing CORNER RUNES + an 'Import' title bar), sized RESPONSIVELY at `win_frac` of the screen, its `content` slot holding the reusable `option_grid` selector field (heading · sunk well of a flowing card grid · hint), `cols`-per-row for an ARBITRARY workflow count. `card` is the transparent CLICK+HOVER overlay over each tile: idle shows the $edge3 resting edge; hover lights the Prism-DS 'selected ring' ($sapphire border + $sap_glow halo) plus a faint $accent_wash. `import.*` sizes: `win_frac` the window size, `head_size` the title glyph; `sec_/subtitle_/hint_size` the field's heading/subtitle/hint; `grid_*` the grid + well; `card_size`/`pad`/`gap`/`slot_h`/`rune_size`/`title_*`/`desc_*`/`tag_*` each square tile (the italic flavour WRAPS to the card width over its `desc_h`). Tiles carry NO Model label — copy/runes are static in hud_assetpipeline.lua.",
+    "card": { "fill_top": "$stage_void", "fill_bot": "$stage_void", "hover_top": "$accent_wash", "hover_bot": "$accent_wash", "border": "$edge3", "hover_border": "$sapphire", "border_w": 1, "radius": 3, "glow": "$sap_glow", "label": "$stage_void" },
+    "import": { "cols": 4, "win_frac": 0.82, "head_size": 22, "win_gap": 14, "sec_size": 12, "subtitle_size": 13, "hint_size": 11, "grid_gap": 20, "grid_pad": 24, "card_size": 210, "pad": 16, "gap": 6, "slot_h": 60, "rune_size": 32, "title_size": 16, "title_h": 22, "desc_size": 12, "desc_h": 52, "tag_size": 10, "tag_h": 16 },
+    "import_scrim": { "fill_top": "$scrim", "fill_bot": "$scrim" },
     "layout": { "margin": 0 },
     "_workbench_comment": "KILNWORKS WORKBENCH CHROME — a solid TILED layout (not floating overlays): a full-bleed `header` bar filling the top, a `tab_bar` of the six pipeline steps drawn Loomforge-style (NON-interactive — the active step lights via the walker's `style_bind`; the footer Back/Next drives the step), a `body` row holding the framed RTT `holder` (the 2×2 editor viewport) beside a first-class editor rail (`inspector`), and a full-bleed `footer`. `tab_bar`/`tab_active`/`tab_idle` intentionally mirror `loomforge.tab_*` (same $tokens, no hover — the tabs don't respond to the pointer); DEDUP: promote to a shared component block when the design-system component tier lands.",
     "header": {
@@ -441,8 +448,7 @@
     "holder": { "fill_top": "$well", "fill_bot": "$well", "border": "$edge2", "border_w": 1, "radius": 4, "inset": 6 },
     "body": { "margin": 10, "gap": 10 },
     "inspector": { "top": 110, "width": 384, "pad": 18, "gap": 8, "title_size": 20, "title_w": 200, "line_h": 22, "line_size": 13, "badge_size": 10, "badge_w": 120, "head_size": 12, "sub_gap": 4 },
-    "_stage_comment": "PER-STAGE INSPECTOR CONTROLS — one block per wizard step, each shown only while its `on_<step>` flag is set. `classify` = the detected card + the exclusive class rows + the prop sub-type block; `rig` = the paged bone map (`rows` must equal the crate's BONE_ROWS) + the four offset sliders, whose ±range lives HERE so Rust and Lua cannot disagree about it; `attach` = the six socket rows + three offset sliders; `review` = the requirement rows (`rows` must equal REQUIREMENT_ROWS) + the commit button.",
-    "classify": { "row_h": 26, "row_size": 13, "card_h": 46, "card_size": 14, "card_w": 120, "conf_size": 12, "conf_w": 150, "indent": 30 },
+    "_stage_comment": "PER-STAGE INSPECTOR CONTROLS — one block per wizard step, each shown only while its `on_<step>` flag is set. `rig` = the inline piece picker (multi-mesh folders) + the paged bone map (`rows` must equal the crate's BONE_ROWS) + the four offset sliders, whose ±range lives HERE so Rust and Lua cannot disagree about it; `attach` = the six socket rows + three offset sliders; `review` = the requirement rows (`rows` must equal REQUIREMENT_ROWS) + the commit button.",
     "rig": { "rows": 6, "row_h": 22, "row_size": 12, "page_h": 20, "page_size": 11, "page_w": 110, "slider_h": 26, "off_range": 20, "roll_range": 90, "btn_h": 26, "btn_w": 120, "btn_size": 10 },
     "attach": { "rows": 6, "row_h": 24, "row_size": 12, "slider_h": 26, "off_range": 30 },
     "review": { "rows": 4, "row_h": 22, "row_size": 12, "commit_h": 40, "commit_size": 12 },
@@ -461,25 +467,44 @@
   },
 
   "clicktrainer": {
-    "_comment": "flicker-clicktrainer in-game HUD (scripts/hud.lua): a vector stats panel over the 2D sprite target — the reference blend of VECTOR UI + a 2D SPRITE GAME + CLICK ROUTING. The panel reports `hud_hit` so a click on it is a UI click (RESET), never scored as a game miss. Stat values flow from the scene via Model as pre-formatted text.",
+    "_comment": "flicker-clicktrainer in-game HUD (hud_clicktrainer.lua): a DECLARATIVE walker tree — a vector stats panel over the 2D sprite target, the reference blend of VECTOR UI + a 2D SPRITE GAME + CLICK ROUTING. The walker reports `hud_hit` so a click on the panel is a UI click (RESET), never scored as a game miss. Stat values flow from the scene via Model as pre-formatted text.",
     "margin": 16,
-    "panel": { "w": 288, "pad": 16, "radius": 5, "border_w": 1, "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "shadow": "$shadow", "shadow_dy": 14, "shadow_feather": 40, "shadow_grow": 3 },
-    "title": { "text": "CLICK TRAINER", "size": 22, "color": "$ink_bright" },
-    "subtitle": { "text": "click the targets", "size": 13, "color": "$dim_soft" },
-    "divider": "$bronze",
+    "panel": { "w": 288, "pad": 16, "radius": 5, "border_w": 1, "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2" },
+    "title": { "text": "$ct_click_trainer", "size": 22, "color": "$ink_bright" },
+    "subtitle": { "text": "$ct_click_the_targets", "size": 13, "color": "$dim_soft" },
+    "divider": { "color": "$bronze" },
     "row_h": 24,
     "label_size": 14, "label_color": "$dim",
     "value_size": 14, "value_color": "$ink_bright", "accent": "$rune_glow_hi",
     "rows": [
-      { "id": "hits", "label": "Hits" },
-      { "id": "misses", "label": "Misses" },
-      { "id": "accuracy", "label": "Accuracy" },
-      { "id": "react_last", "label": "Reaction" },
-      { "id": "react_best", "label": "Best" },
-      { "id": "react_avg", "label": "Average" }
+      { "id": "hits", "label": "$ct_hits" },
+      { "id": "misses", "label": "$ct_misses" },
+      { "id": "accuracy", "label": "$ct_accuracy" },
+      { "id": "react_last", "label": "$ct_reaction" },
+      { "id": "react_best", "label": "$ct_best" },
+      { "id": "react_avg", "label": "$ct_average" }
     ],
-    "reset": { "label": "RESET", "h": 36, "gap_top": 14 },
-    "hint": { "text": "Esc  ·  menu", "size": 12, "color": "$faint", "gap_top": 10 }
+    "reset": { "label": "$ct_reset", "h": 36, "gap_top": 14 },
+    "hint": { "text": "$ct_esc_menu", "size": 12, "color": "$faint", "gap_top": 10 }
+  },
+
+  "chemistry": {
+    "_comment": "flicker-poc-chemistry HUD (hud_chemistry.lua): the walker readout — loading banner, title/stats/interior/state/crust lines, and the text-only CONSERVATION LEDGER panel (top-right). The seed-element swatch panel + tectonic-event log stay scene-drawn (data-driven literal colours have no walker channel). Colours are $tokens where the legacy literals matched; the rest are the POC's own readout palette, kept verbatim.",
+    "title": { "color": "$bronze" },
+    "text": { "color": [0.85, 0.87, 0.92, 1.0] },
+    "dim": { "color": [0.6, 0.63, 0.68, 1.0] },
+    "interior": { "color": [0.72, 0.8, 0.92, 1.0] },
+    "crust": { "color": [0.8, 0.86, 0.72, 1.0] },
+    "playing": { "color": [0.55, 0.85, 0.55, 1.0] },
+    "paused": { "color": [0.92, 0.78, 0.42, 1.0] },
+    "ok": [0.55, 0.85, 0.55, 1.0],
+    "bad": [0.95, 0.4, 0.4, 1.0],
+    "ledger": {
+      "panel": { "fill": [0.05, 0.06, 0.08, 0.9] },
+      "w": 260,
+      "pad": 12,
+      "row_h": 18
+    }
   },
 
   "loomforge": {
@@ -596,7 +621,7 @@
   "paperdoll": {
     "_comment": "flicker-paperdoll's in-scene HUD (behaviour: Alpha/content/scripts/hud_paperdoll.lua). Replaces the POC keypress toggles + draw_text overlay. `inventory` = the equip-slot bar; a slot's piece is drawn only while its cell is lit. Slot keys are the contract with the engine: it publishes `slot_<key>_loaded`/`slot_<key>_on` on the Model and reads `slot_<key>` back. Sheaths have no cell by design — they are always worn (no sheath/unsheath animations yet).",
     "inventory": {
-      "header": "INVENTORY",
+      "header": "$pd_inventory",
       "header_size": 13,
       "header_color": "$bronze",
       "slot": 54,
@@ -609,16 +634,16 @@
       "cell": { "cell": "$stone3", "hot": "$sig_green", "label": "$ink", "label_size": 12 },
       "empty": { "cell": "$stone1", "hot": "$stone1", "label": "$faint", "label_size": 12 },
       "slots": [
-        { "key": "hair", "label": "Hair" },
-        { "key": "neck", "label": "Neck" },
-        { "key": "chest", "label": "Chest" },
-        { "key": "legs", "label": "Legs" },
-        { "key": "glove_l", "label": "Glove L" },
-        { "key": "glove_r", "label": "Glove R" },
-        { "key": "boot_l", "label": "Boot L" },
-        { "key": "boot_r", "label": "Boot R" },
-        { "key": "rhand", "label": "R Hand" },
-        { "key": "lhand", "label": "L Hand" }
+        { "key": "hair", "label": "$pd_hair" },
+        { "key": "neck", "label": "$pd_neck" },
+        { "key": "chest", "label": "$pd_chest" },
+        { "key": "legs", "label": "$pd_legs" },
+        { "key": "glove_l", "label": "$pd_glove_l" },
+        { "key": "glove_r", "label": "$pd_glove_r" },
+        { "key": "boot_l", "label": "$pd_boot_l" },
+        { "key": "boot_r", "label": "$pd_boot_r" },
+        { "key": "rhand", "label": "$pd_r_hand" },
+        { "key": "lhand", "label": "$pd_l_hand" }
       ]
     },
     "view": {
@@ -630,15 +655,15 @@
       "label_size": 13,
       "label_color": "$ink",
       "checkbox": { "box": "$stone2", "check": "$rune_glow_hi", "border": "$edge4", "pad": 3 },
-      "attack": { "w": 120, "h": 24, "gap_y": 10, "label": "ATTACK", "style": { "cell": "$hp_lo", "hot": "$hp_hi", "label": "$ink_bright", "label_size": 13, "hi": "$sheen", "shadow": "$stone0", "border": "$sig_red" } },
+      "attack": { "w": 120, "h": 24, "gap_y": 10, "label": "$pd_attack", "style": { "cell": "$hp_lo", "hot": "$hp_hi", "label": "$ink_bright", "label_size": 13, "hi": "$sheen", "shadow": "$stone0", "border": "$sig_red" } },
       "_items_note": "`animate` = the Animation/Pose toggle: on drives the pose from the pack's state machine (real runtime animation, blended), off is A-pose/bind (the fitting reference — Idle is an authored stance, already off bind). ↑/↓ cycle animation states, Space pauses. `blend` A/Bs the transition crossfade.",
       "items": [
-        { "key": "animate", "label": "Animate" },
-        { "key": "blend", "label": "Blend xfade" },
-        { "key": "show_mesh", "label": "Mesh" },
-        { "key": "show_textures", "label": "Textures" },
-        { "key": "show_skeleton", "label": "Skeleton" },
-        { "key": "show_collision", "label": "Collision" }
+        { "key": "animate", "label": "$pd_animate" },
+        { "key": "blend", "label": "$pd_blend_xfade" },
+        { "key": "show_mesh", "label": "$pd_mesh" },
+        { "key": "show_textures", "label": "$pd_textures" },
+        { "key": "show_skeleton", "label": "$pd_skeleton" },
+        { "key": "show_collision", "label": "$pd_collision" }
       ]
     },
     "fit": {
@@ -650,7 +675,7 @@
       "slider_h": 12,
       "label_w": 54,
       "value_w": 62,
-      "header": "FIT",
+      "header": "$pd_fit_prefix",
       "header_size": 14,
       "header_color": "$bronze",
       "panel_bg": "$panel_bg",
@@ -670,18 +695,18 @@
       "rotate": { "min": -180.0, "max": 180.0, "nudge": 1.0, "nudge_coarse": 15.0 },
       "_rows_note": "The gadget's rows, in panel order. SHARED CONTRACT: hud.lua lays them out and the engine cycles focus (↑/↓) and nudges (←/→) from this same list, so the order and keys cannot drift apart. `group` selects the row's min/max/nudge block above.",
       "rows": [
-        { "key": "fit_u", "label": "Size", "group": "uniform" },
-        { "key": "fit_sx", "label": "Wide", "group": "scale" },
-        { "key": "fit_sy", "label": "Thick", "group": "scale" },
-        { "key": "fit_sz", "label": "Tall", "group": "scale" },
-        { "key": "fit_rx", "label": "Pitch", "group": "rotate" },
-        { "key": "fit_ry", "label": "Yaw", "group": "rotate" },
-        { "key": "fit_rz", "label": "Roll", "group": "rotate" },
-        { "key": "fit_x", "label": "X (lat)", "group": "offset" },
-        { "key": "fit_y", "label": "Y (depth)", "group": "offset" },
-        { "key": "fit_z", "label": "Z (up)", "group": "offset" }
+        { "key": "fit_u", "label": "$pd_size", "group": "uniform" },
+        { "key": "fit_sx", "label": "$pd_wide", "group": "scale" },
+        { "key": "fit_sy", "label": "$pd_thick", "group": "scale" },
+        { "key": "fit_sz", "label": "$pd_tall", "group": "scale" },
+        { "key": "fit_rx", "label": "$pd_pitch", "group": "rotate" },
+        { "key": "fit_ry", "label": "$pd_yaw", "group": "rotate" },
+        { "key": "fit_rz", "label": "$pd_roll", "group": "rotate" },
+        { "key": "fit_x", "label": "$pd_x_lat", "group": "offset" },
+        { "key": "fit_y", "label": "$pd_y_depth", "group": "offset" },
+        { "key": "fit_z", "label": "$pd_z_up", "group": "offset" }
       ],
-      "record": { "h": 26, "label": "RECORD ALL TO CONTENT" },
+      "record": { "h": 26, "label": "$pd_record_all_to_content" },
       "status": { "size": 12, "gap_y": 5, "ok": "$sig_green", "err": "$hp_hi" },
       "button": { "cell": "$sap_base", "hot": "$sap_hover", "label": "$ink_bright", "label_size": 13, "glow": "$sap_glow", "hi": "$sheen", "border": "$sap_border" }
     },
@@ -728,9 +753,9 @@
     "rune_halo": { "fill": "$rune_halo", "radius": 11, "feather": 7 },
     "keycap": { "fill_top": "$stone2", "fill_bot": "$stone2", "border": "$edge4", "border_w": 1, "radius": 3 },
     "layout": { "margin": 24, "panel_w": 360, "pad": 18, "gap": 12, "section_size": 11, "section_h": 22 },
-    "header": { "title": "Cluster Editor", "title_size": 21, "row_h": 26, "pill_w": 92, "pill_h": 22, "pill_size": 11, "icon": "✦", "icon_size": 15, "icon_w": 20, "lead": 10, "trail": 14 },
+    "header": { "title": "$pc_cluster_editor", "title_size": 21, "row_h": 26, "pill_w": 92, "pill_h": 22, "pill_size": 11, "icon": "✦", "icon_size": 15, "icon_w": 20, "lead": 10, "trail": 14 },
     "readout": {
-      "section": "Readout",
+      "section": "$pc_readout",
       "title_size": 19,
       "title_h": 26,
       "row_h": 19,
@@ -739,23 +764,23 @@
       "value_size": 13,
       "pad": 14,
       "gap": 4,
-      "esc_pre": "Press",
-      "esc_key": "Esc",
-      "esc_post": "for the menu",
+      "esc_pre": "$pc_press",
+      "esc_key": "$pc_esc",
+      "esc_post": "$pc_for_the_menu",
       "esc_size": 14,
       "esc_h": 24,
       "key_w": 34,
       "key_h": 18,
       "key_size": 11,
       "rows": [
-        { "label": "Cam", "bind": "cam_val" },
-        { "label": "Grid", "bind": "grid_val" },
-        { "label": "Move", "bind": "move_val" },
-        { "label": "Diag", "bind": "diag_val" }
+        { "label": "$pc_cam", "bind": "cam_val" },
+        { "label": "$pc_grid", "bind": "grid_val" },
+        { "label": "$pc_move", "bind": "move_val" },
+        { "label": "$pc_diag", "bind": "diag_val" }
       ]
     },
     "toggles": {
-      "section": "Debug Overlays",
+      "section": "$pc_debug_overlays",
       "row_h": 26,
       "box": 20,
       "label_x": 30,
@@ -763,17 +788,17 @@
       "col_w": 152,
       "gap": 6,
       "items": [
-        { "key": "wireframe", "label": "Wireframe overlay" },
-        { "key": "arrows", "label": "Corner-vector arrows" },
-        { "key": "navmesh", "label": "Navmesh wireframe" },
-        { "key": "camera_lod", "label": "Camera-driven LOD" },
-        { "key": "lod_billboards", "label": "LOD billboards" },
-        { "key": "walk", "label": "Surface walk" }
+        { "key": "wireframe", "label": "$pc_wireframe_overlay" },
+        { "key": "arrows", "label": "$pc_corner_vector_arrows" },
+        { "key": "navmesh", "label": "$pc_navmesh_wireframe" },
+        { "key": "camera_lod", "label": "$pc_camera_driven_lod" },
+        { "key": "lod_billboards", "label": "$pc_lod_billboards" },
+        { "key": "walk", "label": "$pc_surface_walk" }
       ]
     },
     "controls": {
-      "section": "Controls",
-      "label": "Move speed",
+      "section": "$pc_controls",
+      "label": "$pc_move_speed",
       "label_size": 15,
       "value_size": 13,
       "row_h": 24,
@@ -784,7 +809,7 @@
       "scale_size": 10,
       "scale_h": 18,
       "min_label": "20",
-      "unit": "units / s",
+      "unit": "$pc_units_s",
       "max_label": "200"
     },
     "celestial": {
@@ -793,14 +818,14 @@
       "panel_w": 360,
       "pad": 16,
       "gap": 12,
-      "title": "Celestial Cycle",
+      "title": "$pc_celestial_cycle",
       "title_size": 21,
       "title_h": 26,
       "icon": "✦",
       "icon_size": 15,
       "icon_w": 20,
       "lead": 8,
-      "hint": "Scrub the celestial timeline to test orbit alignments.",
+      "hint": "$pc_scrub_the_celestial_timeline_to_test_orb",
       "hint_size": 12,
       "hint_h": 18,
       "well_pad": 14,
@@ -812,19 +837,19 @@
       "value_w": 172,
       "track_h": 20,
       "slider_h": 8,
-      "sky_section": "Sky · the paired hands",
-      "world_section": "World · independent",
-      "views_section": "View",
-      "sun": { "label": "Sun", "bind": "cc_sun", "val_bind": "cc_sun_val", "min": 0.0, "max": 24.0 },
-      "moon": { "label": "Moon", "bind": "cc_moon", "val_bind": "cc_moon_val", "min": 0.0, "max": 4.0 },
-      "year": { "label": "Year", "bind": "cc_year", "val_bind": "cc_year_val", "min": 0.0, "max": 12.0 },
-      "speed": { "label": "Speed", "bind": "cc_speed", "val_bind": "cc_speed_val", "min": 0.0, "max": 120.0 },
-      "fog": { "label": "Fog", "bind": "cc_fog", "val_bind": "cc_fog_val", "min": 0.0, "max": 1.0 },
-      "latitude": { "label": "Latitude", "bind": "cc_lat", "val_bind": "cc_lat_val", "min": -90.0, "max": 90.0 },
-      "epoch": { "label": "Epoch", "bind": "cc_epoch", "val_bind": "cc_epoch_val", "min": 0.0, "max": 20.0 },
-      "view_constellations": "Constellations",
-      "view_planets": "Planets / ecliptic",
-      "view_paths": "Celestial paths (Advent)",
+      "sky_section": "$pc_sky_the_paired_hands",
+      "world_section": "$pc_world_independent",
+      "views_section": "$pc_view",
+      "sun": { "label": "$pc_sun", "bind": "cc_sun", "val_bind": "cc_sun_val", "min": 0.0, "max": 24.0 },
+      "moon": { "label": "$pc_moon", "bind": "cc_moon", "val_bind": "cc_moon_val", "min": 0.0, "max": 4.0 },
+      "year": { "label": "$pc_year", "bind": "cc_year", "val_bind": "cc_year_val", "min": 0.0, "max": 12.0 },
+      "speed": { "label": "$pc_speed", "bind": "cc_speed", "val_bind": "cc_speed_val", "min": 0.0, "max": 120.0 },
+      "fog": { "label": "$pc_fog", "bind": "cc_fog", "val_bind": "cc_fog_val", "min": 0.0, "max": 1.0 },
+      "latitude": { "label": "$pc_latitude", "bind": "cc_lat", "val_bind": "cc_lat_val", "min": -90.0, "max": 90.0 },
+      "epoch": { "label": "$pc_epoch", "bind": "cc_epoch", "val_bind": "cc_epoch_val", "min": 0.0, "max": 20.0 },
+      "view_constellations": "$pc_constellations",
+      "view_planets": "$pc_planets_ecliptic",
+      "view_paths": "$pc_celestial_paths_advent",
       "runes": ["ᚦ", "ᛇ", "ᛃ", "ᛒ"]
     },
     "inspector": {
@@ -836,9 +861,8 @@
       "icon_size": 14,
       "icon_w": 20,
       "lead": 8,
-      "legend_mark": "◆",
-      "legend_local": "Local corner",
-      "legend_world": "wX / Y / Z world space",
+      "legend_local": "$pc_local_corner",
+      "legend_world": "$pc_wx_y_z_world_space",
       "legend_size": 9,
       "legend_h": 24,
       "legend_gap": 22,
@@ -853,7 +877,7 @@
       "cell_size": 12,
       "name_w": 88,
       "coord_w": 44,
-      "headers": ["Corner", "X", "Y", "Z", "wX", "wY", "wZ"]
+      "headers": ["$pc_corner", "X", "Y", "Z", "$pc_wx", "$pc_wy", "$pc_wz"]
     },
     "runes": {
       "cell": 22,
@@ -890,6 +914,64 @@
       "line_joined": "$rune_glow",
       "line_left": "$dim",
       "line_renamed": "$bronze"
+    }
+  },
+
+  "pocepochs": {
+    "_comment": "Alpha/flicker-pocepochs HUD (hud_pocepochs.lua): the walker readout — title/stats/state/hints (top-left) + the LIFE-SUPPORTING CONDITIONS panel (bottom-right: 5 ui.gauge rows + the verdict light). The surface-view legend + element-distribution panels stay scene-drawn (per-element literal colours have no walker channel). Colours are $tokens where the legacy literals matched them exactly (the old habitability_hud.lua literals were authored AS mirrors of theme.tokens); the rest keep their POC values verbatim.",
+    "title": { "color": "$bronze" },
+    "text": { "color": [0.85, 0.87, 0.92, 1.0] },
+    "dim": { "color": [0.6, 0.63, 0.68, 1.0] },
+    "playing": { "color": [0.55, 0.85, 0.55, 1.0] },
+    "paused": { "color": [0.92, 0.78, 0.42, 1.0] },
+    "hab": {
+      "panel": { "fill": [0.055, 0.063, 0.086, 0.9], "border": [0.227, 0.353, 0.627, 0.8], "border_w": 1 },
+      "w": 330,
+      "pad": 12,
+      "head_h": 28,
+      "row_h": 42,
+      "bar_h": 12,
+      "foot_h": 50,
+      "header": { "color": "$bronze" },
+      "name_live": "$ink",
+      "name_dead": "$dim",
+      "status_in": "$sig_green",
+      "status_out": "$stam_hi",
+      "status_dead": "$dim",
+      "caption": { "color": "$dim" },
+      "gauge": {
+        "track": [0.078, 0.09, 0.122, 0.95],
+        "band": [0.184, 0.616, 0.357, 0.55],
+        "marker": "$stam_hi",
+        "marker_in": "$sig_green",
+        "no_signal": [0.055, 0.063, 0.086, 0.72],
+        "sheen": [0.9, 0.94, 1.0, 0.1],
+        "marker_w": 5
+      },
+      "light_on": { "fill": "$sig_green" },
+      "light_off": { "fill": [0.24, 0.1, 0.1, 1.0] },
+      "verdict_life": "$sig_green",
+      "verdict_count": "$ink",
+      "observed": { "color": "$dim" },
+      "air": { "color": "$dim" }
+    }
+  },
+
+  "solarbirth": {
+    "_comment": "flicker-solarbirth HUD (hud_solarbirth.lua): the walker readout — title, flight-phase line, controls hint, and the fixed 8-planet roster legend. Roster row colours are the scene's HUD tints: each school colour with every channel floored at 0.35 (the legacy `p.color[i].max(0.35)` lightening), authored here because the walker's colour channel is dotted style paths. The ruled school colours themselves stay in flicker-orrery.",
+    "title": { "color": [0.9, 0.92, 0.97, 1.0] },
+    "phase": { "color": [0.78, 0.74, 0.92, 1.0] },
+    "hint": { "color": [0.62, 0.66, 0.78, 1.0] },
+    "roster_header": { "color": [0.9, 0.92, 0.97, 1.0] },
+    "roster": {
+      "chaos": [0.95, 0.45, 0.35, 1.0],
+      "fire": [0.86, 0.35, 0.35, 1.0],
+      "home": [0.35, 0.52, 0.55, 1.0],
+      "earth": [0.35, 0.64, 0.35, 1.0],
+      "light": [0.95, 0.96, 0.98, 1.0],
+      "air": [0.93, 0.83, 0.35, 1.0],
+      "water": [0.35, 0.4, 0.9, 1.0],
+      "death": [0.35, 0.35, 0.35, 1.0]
     }
   },
 

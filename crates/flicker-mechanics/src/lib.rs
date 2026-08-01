@@ -14,6 +14,7 @@ pub mod bridge;
 pub mod collision;
 pub mod debug;
 pub mod drop;
+pub mod gizmo;
 
 pub use bridge::{
     autofit_capsules, autofit_capsules_from, role_from_format, shape_from_format,
@@ -24,3 +25,4 @@ pub use collision::{
     Shape, Volume,
 };
 pub use drop::{settle_offset, FallingItem, GRAVITY_CM_S2};
+pub use gizmo::{drag_plane, drag_translate, gizmo_segments, pick_handle, Axis, GizmoMode};

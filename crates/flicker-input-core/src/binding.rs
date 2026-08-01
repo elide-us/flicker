@@ -1,0 +1,685 @@
+//! Semantic input bindings: signals decoupled from physical inputs.
+//!
+//! Consumer code asks "is the `MoveForward` signal active?" — never "is the W
+//! key down?". The mapping from physical input to [`ActionSignal`] lives in an
+//! [`InputMap`] table that can be swapped or rebound at runtime.
+//!
+//! This module also carries the §3.5 per-binding descriptors ([`Activation`],
+//! [`BindingDescriptor`]) that encode the three input concepts (stance,
+//! long-press, modifier-chord) without minting new signals.
+
+use std::collections::HashMap;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::device::{AxisDirection, GamepadAxis, Key, MouseButton};
+use crate::signal::ActionSignal;
+use crate::snapshot::{GamepadConfig, InputState};
+
+// ───────────────────────────────────────────────────────────────────
+// Section: Input Mapping
+// ───────────────────────────────────────────────────────────────────
+
+/// A single physical input that can be bound to a signal.
+///
+/// Covers keyboard, mouse, and gamepad inputs. Gamepad axes use
+/// [`AxisDirection`] to specify which half of the axis triggers the
+/// binding.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InputBinding {
+    Key(Key),
+    MouseButton(MouseButton),
+    GamepadButton(crate::device::GamepadButton),
+    GamepadAxis {
+        axis: GamepadAxis,
+        direction: AxisDirection,
+    },
+}
+
+impl fmt::Display for InputBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Key(k) => write!(f, "{k}"),
+            Self::MouseButton(mb) => write!(f, "{mb}"),
+            Self::GamepadButton(gb) => write!(f, "{gb}"),
+            Self::GamepadAxis { axis, direction } => write!(f, "{axis} {direction}"),
+        }
+    }
+}
+
+impl InputBinding {
+    /// THE single "is this control active" query — deadzone/threshold-aware,
+    /// player 0. Consolidates `InputMap::action_pressed`, `InputState::input_active`,
+    /// and the tester's `Control::down` into one (spec §3.2). Stick/trigger axes
+    /// use the passed [`GamepadConfig`] thresholds.
+    pub fn is_down(self, s: &InputState, cfg: &GamepadConfig) -> bool {
+        match self {
+            InputBinding::Key(k) => s.key_down(k),
+            InputBinding::MouseButton(mb) => s.mouse_button_down(mb),
+            InputBinding::GamepadButton(btn) => {
+                s.gamepad(0).is_some_and(|gp| gp.button_down(btn))
+            }
+            InputBinding::GamepadAxis { axis, direction } => s.gamepad(0).is_some_and(|gp| {
+                let v = gp.axis_value(axis);
+                let threshold = match axis {
+                    GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => cfg.left_stick_deadzone,
+                    GamepadAxis::RightStickX | GamepadAxis::RightStickY => cfg.right_stick_deadzone,
+                    GamepadAxis::LeftTrigger | GamepadAxis::RightTrigger => cfg.trigger_threshold,
+                };
+                match direction {
+                    AxisDirection::Positive => v > threshold,
+                    AxisDirection::Negative => v < -threshold,
+                }
+            }),
+        }
+    }
+}
+
+/// Maps semantic signals to one or more physical inputs.
+///
+/// Multiple inputs may map to the same signal (e.g. both W key and
+/// left stick forward for `MoveForward`). One input may only map to
+/// one signal (last-write-wins on conflict).
+///
+/// Use [`InputMap::wasd_and_mouse`] or [`InputMap::gamepad_default`]
+/// for sensible presets, then customize at runtime.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "InputMapData", into = "InputMapData")]
+pub struct InputMap {
+    /// signal → list of physical bindings
+    action_to_bindings: HashMap<ActionSignal, Vec<InputBinding>>,
+    /// reverse lookup: physical input → signal (for conflict detection)
+    input_to_action: HashMap<InputBinding, ActionSignal>,
+}
+
+/// On-disk form of [`InputMap`]. Only the forward map is stored; the reverse
+/// `input_to_action` index is rebuilt on load.
+///
+/// Why this exists: `input_to_action` is keyed by [`InputBinding`], a non-unit enum that
+/// JSON cannot use as an object key — serializing the live struct directly fails at
+/// runtime, which is why rebinds never persisted. Storing the bindings as a flat list of
+/// pairs sidesteps map-key encoding entirely and rebuilds both indices through [`bind`],
+/// preserving the one-input-one-signal invariant.
+///
+/// [`bind`]: InputMap::bind
+#[derive(Serialize, Deserialize)]
+struct InputMapData {
+    action_to_bindings: Vec<(ActionSignal, Vec<InputBinding>)>,
+}
+
+impl From<InputMap> for InputMapData {
+    fn from(map: InputMap) -> Self {
+        Self { action_to_bindings: map.action_to_bindings.into_iter().collect() }
+    }
+}
+
+impl From<InputMapData> for InputMap {
+    fn from(data: InputMapData) -> Self {
+        let mut map = InputMap::empty();
+        for (action, inputs) in data.action_to_bindings {
+            for input in inputs {
+                map.bind(action, input);
+            }
+        }
+        map
+    }
+}
+
+impl InputMap {
+    /// Empty map — nothing bound.
+    pub fn empty() -> Self {
+        Self {
+            action_to_bindings: HashMap::new(),
+            input_to_action: HashMap::new(),
+        }
+    }
+
+    /// Bind a physical input to a semantic signal. If the input is
+    /// already bound to a different signal, that old binding is
+    /// removed first (one-input-one-signal invariant).
+    pub fn bind(&mut self, action: ActionSignal, input: InputBinding) {
+        // Remove from previous signal if re-binding
+        if let Some(old_action) = self.input_to_action.get(&input) {
+            if *old_action != action {
+                if let Some(bindings) = self.action_to_bindings.get_mut(old_action) {
+                    bindings.retain(|b| *b != input);
+                }
+            }
+        }
+        self.input_to_action.insert(input, action);
+        let bindings = self.action_to_bindings.entry(action).or_default();
+        if !bindings.contains(&input) {
+            bindings.push(input);
+        }
+    }
+
+    /// Remove a specific binding from a signal.
+    pub fn unbind(&mut self, action: ActionSignal, input: InputBinding) {
+        self.input_to_action.remove(&input);
+        if let Some(bindings) = self.action_to_bindings.get_mut(&action) {
+            bindings.retain(|b| *b != input);
+        }
+    }
+
+    /// Remove all bindings for a signal.
+    pub fn clear_action(&mut self, action: ActionSignal) {
+        if let Some(bindings) = self.action_to_bindings.remove(&action) {
+            for b in bindings {
+                self.input_to_action.remove(&b);
+            }
+        }
+    }
+
+    /// All physical bindings for a signal.
+    pub fn bindings_for(&self, action: ActionSignal) -> &[InputBinding] {
+        self.action_to_bindings
+            .get(&action)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// The signal bound to a physical input, if any.
+    pub fn action_for(&self, input: InputBinding) -> Option<ActionSignal> {
+        self.input_to_action.get(&input).copied()
+    }
+
+    /// All signals that have at least one binding.
+    pub fn bound_actions(&self) -> impl Iterator<Item = ActionSignal> + '_ {
+        self.action_to_bindings.keys().copied()
+    }
+
+    /// Is the given signal currently pressed? Checks all bindings for
+    /// the signal against the current input state.
+    pub fn action_pressed(&self, action: ActionSignal, input: &InputState) -> bool {
+        self.bindings_for(action).iter().any(|b| match b {
+            InputBinding::Key(k) => input.key_down(*k),
+            InputBinding::MouseButton(mb) => input.mouse_button_down(*mb),
+            InputBinding::GamepadButton(btn) => {
+                input.gamepad(0).is_some_and(|gp| gp.button_down(*btn))
+            }
+            InputBinding::GamepadAxis { axis, direction } => {
+                input.gamepad(0).is_some_and(|gp| {
+                    let v = gp.axis_value(*axis);
+                    match direction {
+                        AxisDirection::Positive => v > 0.5,
+                        AxisDirection::Negative => v < -0.5,
+                    }
+                })
+            }
+        })
+    }
+
+    // ── Preset constructors ──
+
+    /// WASD keyboard + mouse layout. Maps:
+    /// - W/S → forward/backward, A/D → strafe
+    /// - R/F → up/down, Escape → quit
+    /// - Mouse left → primary action, mouse right → secondary action
+    pub fn wasd_and_mouse() -> Self {
+        let mut map = Self::empty();
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::S));
+        map.bind(ActionSignal::StrafeLeft, InputBinding::Key(Key::A));
+        map.bind(ActionSignal::StrafeRight, InputBinding::Key(Key::D));
+        map.bind(ActionSignal::MoveUp, InputBinding::Key(Key::R));
+        map.bind(ActionSignal::MoveDown, InputBinding::Key(Key::F));
+        map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
+        map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
+        // Gamepad menu-open: the Start / hamburger button also opens the menu, so a
+        // scene on this KBM preset is pad-openable too (Start is otherwise unbound
+        // here, so one-input-one-action holds). Mirrors the gamepad presets.
+        map.bind(
+            ActionSignal::Menu,
+            InputBinding::GamepadButton(crate::device::GamepadButton::Start),
+        );
+        map.bind(
+            ActionSignal::PrimaryAction,
+            InputBinding::MouseButton(MouseButton::Left),
+        );
+        map.bind(
+            ActionSignal::SecondaryAction,
+            InputBinding::MouseButton(MouseButton::Right),
+        );
+        map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
+        map.bind(ActionSignal::Sprint, InputBinding::Key(Key::LeftShift));
+        // S9b additive binds: RIGHT Shift also sprints and C also crouches —
+        // paperdoll's combat feed honoured both raw keys before it moved onto
+        // `signal_held`, so the DEFAULT preset carries them for identical
+        // physical behaviour (both keys were unbound here, so nothing is stolen).
+        map.bind(ActionSignal::Sprint, InputBinding::Key(Key::RightShift));
+        map.bind(ActionSignal::Crouch, InputBinding::Key(Key::LeftControl));
+        map.bind(ActionSignal::Crouch, InputBinding::Key(Key::C));
+        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        map.bind(ActionSignal::Reload, InputBinding::Key(Key::X));
+        map
+    }
+
+    /// ESDF keyboard layout. Same idea as WASD but shifted right.
+    pub fn esdf_and_mouse() -> Self {
+        let mut map = Self::empty();
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::E));
+        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::D));
+        map.bind(ActionSignal::StrafeLeft, InputBinding::Key(Key::S));
+        map.bind(ActionSignal::StrafeRight, InputBinding::Key(Key::F));
+        map.bind(ActionSignal::MoveUp, InputBinding::Key(Key::R));
+        map.bind(ActionSignal::MoveDown, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
+        map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
+        // Gamepad menu-open (Start / hamburger), same as wasd_and_mouse.
+        map.bind(
+            ActionSignal::Menu,
+            InputBinding::GamepadButton(crate::device::GamepadButton::Start),
+        );
+        map.bind(
+            ActionSignal::PrimaryAction,
+            InputBinding::MouseButton(MouseButton::Left),
+        );
+        map.bind(
+            ActionSignal::SecondaryAction,
+            InputBinding::MouseButton(MouseButton::Right),
+        );
+        map
+    }
+
+    /// Default Xbox/PS gamepad layout. Maps:
+    /// - Left stick Y → forward/backward, left stick X → strafe
+    /// - Right stick → look
+    /// - A/South → jump, B/East → cancel, X/West → interact, Y/North → inventory
+    /// - Start → menu, Select → map
+    /// - Triggers → primary/secondary action
+    /// - Bumpers → crouch/sprint
+    pub fn gamepad_default() -> Self {
+        use crate::device::GamepadButton;
+        let mut map = Self::empty();
+        // Movement via left stick
+        map.bind(
+            ActionSignal::MoveForward,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            },
+        );
+        map.bind(
+            ActionSignal::MoveBackward,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Negative,
+            },
+        );
+        map.bind(
+            ActionSignal::StrafeRight,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickX,
+                direction: AxisDirection::Positive,
+            },
+        );
+        map.bind(
+            ActionSignal::StrafeLeft,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickX,
+                direction: AxisDirection::Negative,
+            },
+        );
+        // Look via right stick
+        map.bind(
+            ActionSignal::LookRight,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Positive,
+            },
+        );
+        map.bind(
+            ActionSignal::LookLeft,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Negative,
+            },
+        );
+        map.bind(
+            ActionSignal::LookUp,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Positive,
+            },
+        );
+        map.bind(
+            ActionSignal::LookDown,
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Negative,
+            },
+        );
+        // Face buttons
+        map.bind(ActionSignal::Jump, InputBinding::GamepadButton(GamepadButton::South));
+        map.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::West),
+        );
+        map.bind(
+            ActionSignal::Inventory,
+            InputBinding::GamepadButton(GamepadButton::North),
+        );
+        // Triggers & bumpers
+        map.bind(
+            ActionSignal::PrimaryAction,
+            InputBinding::GamepadButton(GamepadButton::RightTrigger),
+        );
+        map.bind(
+            ActionSignal::SecondaryAction,
+            InputBinding::GamepadButton(GamepadButton::LeftTrigger),
+        );
+        map.bind(
+            ActionSignal::Sprint,
+            InputBinding::GamepadButton(GamepadButton::LeftBumper),
+        );
+        map.bind(
+            ActionSignal::Crouch,
+            InputBinding::GamepadButton(GamepadButton::RightBumper),
+        );
+        // Meta
+        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
+        map.bind(ActionSignal::Map, InputBinding::GamepadButton(GamepadButton::Select));
+        map.bind(ActionSignal::Quit, InputBinding::GamepadButton(GamepadButton::Guide));
+        map
+    }
+
+    /// The default Xbox layout for the souls-combat game, matching the ruled control
+    /// design (MCP `DE46BDB8`). Physical positions: A=`South` B=`East` X=`West` Y=`North`.
+    ///
+    /// Binds the **press** action of each control. Tap-vs-hold (B = dodge / sprint),
+    /// long-press, and the Y-modifier chords (Y+LB two-hand, Y+LT kick) are resolved by the
+    /// input-concept layer above the map, not by a raw binding, so they are absent here.
+    pub fn xbox_souls() -> Self {
+        use crate::device::GamepadButton;
+        let mut map = Self::empty();
+        // Move + look come from the 120 Hz analog channel (`InputState::analog_latch`),
+        // NOT the discrete map (spec RT-12 / §7.1): binding the sticks here as well would
+        // double-drive `signal_held(MoveForward)` (once digital, once from the stick). Only
+        // the stick *presses* stay discrete.
+        map.bind(ActionSignal::LockOn, InputBinding::GamepadButton(GamepadButton::RightStick));
+        map.bind(ActionSignal::Crouch, InputBinding::GamepadButton(GamepadButton::LeftStick));
+        // Attacks / defend / special on the shoulders.
+        map.bind(ActionSignal::AttackLight, InputBinding::GamepadButton(GamepadButton::RightBumper));
+        map.bind(ActionSignal::AttackHeavy, InputBinding::GamepadButton(GamepadButton::RightTrigger));
+        map.bind(ActionSignal::Defend, InputBinding::GamepadButton(GamepadButton::LeftBumper));
+        map.bind(ActionSignal::Special, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+        // Face buttons (A=South, B=East, X=West, Y=North).
+        map.bind(ActionSignal::Dodge, InputBinding::GamepadButton(GamepadButton::East));
+        map.bind(ActionSignal::Jump, InputBinding::GamepadButton(GamepadButton::North));
+        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::South));
+        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::West));
+        // Meta.
+        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
+        map.bind(ActionSignal::Map, InputBinding::GamepadButton(GamepadButton::Select));
+        map
+    }
+
+    /// The default keyboard+mouse layout for the souls-combat game — souls-first, with a
+    /// modest tactical surface rather than an MMO ability-spam bar (MCP `4AC56490` §6).
+    /// Keyboards have keys to spare, so no modifier chords: Kick / two-hand get their own
+    /// keys when added. A starting point; every bind is rebindable.
+    pub fn kbm_souls() -> Self {
+        let mut map = Self::empty();
+        // Movement (WASD); mouse look is delta-based, not an action bind.
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::S));
+        map.bind(ActionSignal::StrafeLeft, InputBinding::Key(Key::A));
+        map.bind(ActionSignal::StrafeRight, InputBinding::Key(Key::D));
+        map.bind(ActionSignal::Sprint, InputBinding::Key(Key::LeftShift));
+        map.bind(ActionSignal::Crouch, InputBinding::Key(Key::C));
+        map.bind(ActionSignal::Dodge, InputBinding::Key(Key::Space));
+        map.bind(ActionSignal::Jump, InputBinding::Key(Key::LeftAlt));
+        // Combat.
+        map.bind(ActionSignal::AttackLight, InputBinding::MouseButton(MouseButton::Left));
+        map.bind(ActionSignal::AttackHeavy, InputBinding::MouseButton(MouseButton::Right));
+        map.bind(ActionSignal::Defend, InputBinding::Key(Key::Q));
+        map.bind(ActionSignal::Special, InputBinding::Key(Key::R));
+        map.bind(ActionSignal::LockOn, InputBinding::MouseButton(MouseButton::Middle));
+        // Interaction / items / UI.
+        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        map.bind(ActionSignal::UseItem, InputBinding::Key(Key::F));
+        map.bind(ActionSignal::Inventory, InputBinding::Key(Key::I));
+        map.bind(ActionSignal::Map, InputBinding::Key(Key::M));
+        map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
+        map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
+        map
+    }
+}
+
+impl Default for InputMap {
+    fn default() -> Self {
+        Self::wasd_and_mouse()
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Section: Binding descriptors (§3.5 — the three input concepts)
+// ───────────────────────────────────────────────────────────────────
+
+/// How a bound control's press is interpreted. Toggle-vs-hold is a user-settings
+/// choice per binding (e.g. Crouch defaults `Toggle` with a hold option,
+/// `4AC56490 §3`). Scaffolded this slice; wired to the resolver when combat
+/// scenes land.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Activation {
+    /// Fires while the control is held (momentary).
+    #[default]
+    Press,
+    /// First press latches on, second press latches off.
+    Toggle,
+    /// Fires only after being held past a threshold.
+    Hold,
+}
+
+/// The three input concepts (`C60AE43C §6`) encoded per binding, not as new
+/// signals: **stance** (continuous, read via `signal_held`), **long-press**
+/// ([`on_hold`](Self::on_hold)), and **modifier-chord** ([`modifier`](Self::modifier)).
+///
+/// A scaffold this slice — the per-context reshape table that carries these is
+/// promoted with `InputProfile` in a later build step.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BindingDescriptor {
+    /// Press / toggle / hold interpretation.
+    pub activation: Activation,
+    /// If set, a tap fires the primary signal while a hold past `threshold_ticks`
+    /// fires this alternate signal with `EventKind::Hold`.
+    pub on_hold: Option<(ActionSignal, u32)>,
+    /// When `true`, this control opens the chord layer: it emits `ChordBegin`
+    /// and suppresses the members' normal signals while held.
+    pub modifier: bool,
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Section: Tests
+// ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::GamepadButton;
+    use crate::snapshot::InputState;
+
+    // ── InputMap tests ──
+
+    #[test]
+    fn input_map_wasd_and_mouse() {
+        let map = InputMap::wasd_and_mouse();
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::W)),
+            Some(ActionSignal::MoveForward)
+        );
+        assert_eq!(
+            map.action_for(InputBinding::MouseButton(MouseButton::Left)),
+            Some(ActionSignal::PrimaryAction)
+        );
+    }
+
+    /// S9b: the default preset's ADDITIVE combat-feed binds — RShift sprints
+    /// beside LShift, C crouches beside LCtrl — so paperdoll's signal-fed
+    /// `Inputs` behave identically to its old raw `key_down` reads on the same
+    /// physical keys. Additive means the originals still resolve too.
+    #[test]
+    fn wasd_preset_carries_the_additive_combat_binds() {
+        let map = InputMap::wasd_and_mouse();
+        assert_eq!(map.action_for(InputBinding::Key(Key::LeftShift)), Some(ActionSignal::Sprint));
+        assert_eq!(map.action_for(InputBinding::Key(Key::RightShift)), Some(ActionSignal::Sprint));
+        assert_eq!(map.action_for(InputBinding::Key(Key::LeftControl)), Some(ActionSignal::Crouch));
+        assert_eq!(map.action_for(InputBinding::Key(Key::C)), Some(ActionSignal::Crouch));
+        assert_eq!(map.action_for(InputBinding::Key(Key::Space)), Some(ActionSignal::Jump));
+    }
+
+    #[test]
+    fn input_map_bind_unbind() {
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::Space)),
+            Some(ActionSignal::Jump)
+        );
+        map.unbind(ActionSignal::Jump, InputBinding::Key(Key::Space));
+        assert_eq!(map.action_for(InputBinding::Key(Key::Space)), None);
+    }
+
+    #[test]
+    fn input_map_rebind_enforces_one_action_per_input() {
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::W));
+        // W should now map to MoveBackward, not MoveForward
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::W)),
+            Some(ActionSignal::MoveBackward)
+        );
+        // MoveForward should have no W binding
+        assert!(map.bindings_for(ActionSignal::MoveForward).is_empty());
+    }
+
+    #[test]
+    fn input_map_multiple_inputs_per_action() {
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::Up));
+        assert_eq!(map.bindings_for(ActionSignal::MoveForward).len(), 2);
+    }
+
+    #[test]
+    fn input_map_gamepad_default() {
+        let map = InputMap::gamepad_default();
+        // A/South = jump
+        assert_eq!(
+            map.action_for(InputBinding::GamepadButton(GamepadButton::South)),
+            Some(ActionSignal::Jump)
+        );
+        // Right trigger = primary action
+        assert_eq!(
+            map.action_for(InputBinding::GamepadButton(GamepadButton::RightTrigger)),
+            Some(ActionSignal::PrimaryAction)
+        );
+    }
+
+    #[test]
+    fn input_map_clear_action() {
+        let mut map = InputMap::wasd_and_mouse();
+        assert!(!map.bindings_for(ActionSignal::MoveForward).is_empty());
+        map.clear_action(ActionSignal::MoveForward);
+        assert!(map.bindings_for(ActionSignal::MoveForward).is_empty());
+    }
+
+    #[test]
+    fn input_map_bound_actions() {
+        let map = InputMap::wasd_and_mouse();
+        let actions: Vec<ActionSignal> = map.bound_actions().collect();
+        assert!(actions.contains(&ActionSignal::MoveForward));
+        assert!(actions.contains(&ActionSignal::Quit));
+    }
+
+    // ── is_down (the consolidated query) ──
+
+    #[test]
+    fn is_down_covers_key_and_gamepad() {
+        let cfg = GamepadConfig::default();
+        let mut input = InputState::new();
+        input.set_key(Key::W, true);
+        assert!(InputBinding::Key(Key::W).is_down(&input, &cfg));
+        assert!(!InputBinding::Key(Key::S).is_down(&input, &cfg));
+
+        input.gamepad_mut(0).set_axis(GamepadAxis::LeftStickX, 0.9);
+        assert!(InputBinding::GamepadAxis {
+            axis: GamepadAxis::LeftStickX,
+            direction: AxisDirection::Positive,
+        }
+        .is_down(&input, &cfg));
+    }
+
+    // ── InputMap serde (rebinds persist to disk) ──
+
+    #[test]
+    fn input_map_round_trips_through_json() {
+        // The defect this guards: `input_to_action` was keyed by `InputBinding` (a non-unit
+        // enum), so serializing the live map to JSON failed and rebinds never persisted.
+        let map = InputMap::xbox_souls();
+        let json = serde_json::to_string(&map).expect("InputMap serializes to JSON");
+        let back: InputMap = serde_json::from_str(&json).expect("InputMap deserializes");
+        for action in [
+            ActionSignal::AttackLight,
+            ActionSignal::Defend,
+            ActionSignal::Dodge,
+            ActionSignal::LockOn,
+            ActionSignal::Interact,
+            ActionSignal::MoveForward,
+        ] {
+            assert_eq!(map.bindings_for(action), back.bindings_for(action), "{action} survives");
+        }
+        // the reverse index is rebuilt on load, not serialized
+        assert_eq!(
+            back.action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            Some(ActionSignal::Dodge),
+        );
+    }
+
+    // ── Ruled souls presets ──
+
+    #[test]
+    fn xbox_souls_binds_ruled_layout() {
+        use GamepadButton as B;
+        let m = InputMap::xbox_souls();
+        let expect = |a: ActionSignal, b: B| {
+            assert_eq!(m.action_for(InputBinding::GamepadButton(b)), Some(a));
+        };
+        expect(ActionSignal::AttackLight, B::RightBumper);
+        expect(ActionSignal::AttackHeavy, B::RightTrigger);
+        expect(ActionSignal::Defend, B::LeftBumper);
+        expect(ActionSignal::Special, B::LeftTrigger);
+        expect(ActionSignal::Dodge, B::East); // B = dodge (hold-B sprint is the concept layer)
+        expect(ActionSignal::Jump, B::North); // Y = jump
+        expect(ActionSignal::LockOn, B::RightStick);
+        expect(ActionSignal::Crouch, B::LeftStick);
+    }
+
+    #[test]
+    fn kbm_souls_binds_combat() {
+        let m = InputMap::kbm_souls();
+        assert_eq!(
+            m.action_for(InputBinding::MouseButton(MouseButton::Left)),
+            Some(ActionSignal::AttackLight),
+        );
+        assert_eq!(
+            m.action_for(InputBinding::MouseButton(MouseButton::Right)),
+            Some(ActionSignal::AttackHeavy),
+        );
+        assert_eq!(m.action_for(InputBinding::Key(Key::Q)), Some(ActionSignal::Defend));
+        assert_eq!(m.action_for(InputBinding::Key(Key::Space)), Some(ActionSignal::Dodge));
+    }
+
+    // ── Binding descriptor scaffold ──
+
+    #[test]
+    fn binding_descriptor_defaults() {
+        let d = BindingDescriptor::default();
+        assert_eq!(d.activation, Activation::Press);
+        assert!(d.on_hold.is_none());
+        assert!(!d.modifier);
+    }
+}

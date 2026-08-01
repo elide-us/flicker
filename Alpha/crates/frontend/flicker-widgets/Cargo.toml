@@ -5,13 +5,18 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-# flicker-widgets — the reusable **UI widget toolkit** (promoted from crates/flicker-ui
-# into the Alpha frontend cluster). Owns the embedded immediate-mode Lua widget set
-# (widgets.lua) + the Lua HUD render bridge + the ui_elements.json loader — the shared
-# seam both flicker-shell and every client consume. `flicker-ui` re-exports it for
-# back-compat. See docs/ui-widget-catalog-handoff.md.
+# flicker-widgets — the engine's **UI toolkit** (the Rust component walker + the
+# ui/<kind>.lua component library + templates/Surfaces/intents/stringtable + the
+# Lua HUD render bridge + the ui_elements.json loaders) — the shared seam both
+# flicker-shell and every client consume; the `flicker` umbrella re-exports it as
+# `flicker::ui` (the retired `flicker-ui` shim crate is gone, S10).
 [dependencies]
 flicker-render.workspace = true
 flicker-script.workspace = true
+# The input event bus (+ its core model): the WalkerHandler adapter implements
+# `flicker_input_router::InputHandler` so the walker is a router layer (spec §4/A).
+# One-way edge: widgets → router → core; the router never depends on widgets (no cycle).
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

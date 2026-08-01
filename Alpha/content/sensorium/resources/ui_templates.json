@@ -1,0 +1,128 @@
+{
+  "_comment": "Data TEMPLATE protos for the flicker-widgets template tier: `templates.<name>` is the proto UiNode tree `expand` instantiates for a `{ template: <name> }` node. Instance props substitute into `@name` / `@name=default` (native JSON value) and `@{name}` / `@{name=default}` (string interpolation); `when`: `@name` / `!@name` gates a node on a prop; `{ component: slot, name: <slot> }` splices the instance's named slot (its children are the fallback); `when_filled: true` drops a node when no slot beneath it produced instance content. `$token` strings are stringtable refs resolved at draw — never substituted here. Structural pseudo-props: the instance's `anchor` and `id` are readable as `@anchor` / `@id`.",
+  "templates": {
+    "quad_rtt_view": {
+      "component": "rtt", "id": "@quad_id", "style": "@style=assetpipeline.holder",
+      "source": "@source", "width": "@width", "height": "@height", "grow": 1.0,
+      "live": "@live", "live_bind": "@live_bind", "tint": "@tint"
+    },
+    "side_by_side_rtt": {
+      "component": "row", "grow": 1.0, "gap": "@gap=0",
+      "children": [
+        { "component": "rtt", "id": "@{id}_left", "grow": 1.0, "style": "@style=assetpipeline.holder", "source": "@left_source", "live_bind": "@left_live_bind" },
+        { "component": "rtt", "id": "@{id}_right", "grow": 1.0, "style": "@style=assetpipeline.holder", "source": "@right_source", "live_bind": "@right_live_bind" }
+      ]
+    },
+    "workbench": {
+      "template": "frame",
+      "style": "@style=settings",
+      "w_frac": "@w_frac=1", "h_frac": "@h_frac=1",
+      "slots": {
+        "center": [
+          { "component": "cell", "children": [
+            { "component": "row", "style": "@header_style", "height": "@header_h", "pad": "@header_pad", "gap": "@header_gap", "children": [
+              { "component": "slot", "name": "header" }
+            ] },
+            { "component": "row", "style": "@tab_style", "height": "@tab_h", "pad": "@tab_pad", "gap": "@tab_gap", "children": [
+              { "component": "slot", "name": "tabs" }
+            ] },
+            { "component": "row", "grow": 1.0, "pad": "@body_pad", "gap": "@body_gap", "children": [
+              { "component": "slot", "name": "viewport" },
+              { "component": "slot", "name": "rail" }
+            ] },
+            { "component": "cell", "style": "@footer_style", "height": "@footer_h", "pad": "@footer_pad", "gap": "@footer_gap", "children": [
+              { "component": "row", "gap": "@footer_gap", "height": "@footer_btn_h", "children": [
+                { "component": "slot", "name": "footer" }
+              ] }
+            ] }
+          ] }
+        ]
+      }
+    },
+    "window": {
+      "template": "frame",
+      "style": "@style=settings",
+      "w": "@w", "h": "@h", "w_frac": "@w_frac", "h_frac": "@h_frac",
+      "closable": "@has_close=true",
+      "close_action": "@close_action", "close_style": "@close_style", "close_label": "@close_label",
+      "slots": {
+        "center": [
+          { "component": "cell", "children": [
+            {
+              "component": "cell", "style": "@{style=settings}.titlebar",
+              "height": "@title_h", "pad_x": "@title_pad=16", "pad_y": "@title_pad_y=10", "gap": "@title_gap=4",
+              "align": "@title_align",
+              "children": [
+                { "component": "text", "style": "@{style=settings}.titlebar", "text": "@title", "text_size": "@title_size=22" },
+                { "component": "text", "when": "@subtitle", "style": "@{style=settings}.titlebar", "text": "@subtitle", "text_size": "@subtitle_size=13" }
+              ]
+            },
+            { "component": "cell", "style": "@body_style", "grow": 1.0, "pad": "@body_pad", "children": [
+              { "component": "slot", "name": "content" }
+            ] },
+            { "component": "cell", "when_filled": true, "height": "@footer_h", "align": "@footer_align", "children": [
+              { "component": "row", "when": "@footer_h", "grow": 1.0, "style": "@footer_style", "pad_x": "@footer_pad=16", "pad_y": "@footer_pad_y=10", "gap": "@footer_gap=12", "children": [
+                { "component": "slot", "name": "footer" }
+              ] },
+              { "component": "row", "when": "!@footer_h", "style": "@footer_style", "pad_x": "@footer_pad=16", "pad_y": "@footer_pad_y=10", "gap": "@footer_gap=12", "children": [
+                { "component": "slot", "name": "footer" }
+              ] }
+            ] }
+          ] }
+        ]
+      }
+    },
+    "choice_dialog": {
+      "component": "screen", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0,
+      "children": [
+        { "component": "cell", "style": "@overlay_style", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0 },
+        {
+          "component": "cell", "id": "popup", "style": "@panel_style=modal.panel", "anchor": "center",
+          "width": "@panel_w=404", "pad": "@panel_pad=38", "gap": "@gap=16", "layer": 1.0,
+          "children": [
+            { "component": "text", "text": "@title=", "align": "center", "font": "display", "color": "@title_color=modal.title.color", "text_size": "@title_size=52" },
+            { "component": "text", "when": "@message", "text": "@message", "align": "center", "font": "label", "color": "@message_color=modal.subtitle.color", "text_size": "@message_size=11" },
+            { "component": "text", "when": "@subtitle_bind", "text_bind": "@subtitle_bind", "align": "center", "font": "body", "color": "@subtitle_color=modal.countdown.color", "text_size": "@subtitle_size=15" },
+            { "component": "cell", "style": "@divider_style=modal.divider", "size": 1.0 },
+            { "component": "cell", "gap": "@btn_gap=12", "children": [
+              { "component": "slot", "name": "buttons", "children": [
+                { "component": "button", "when": "@confirm_label", "id": "@confirm_action=confirm", "action": "@confirm_action=confirm", "size": "@btn_h=48", "label": "@confirm_label", "label_size": "@btn_label_size=15", "style": "modal.buttons.variants.@{confirm_variant=primary}" },
+                { "component": "button", "when": "@cancel_label", "id": "@cancel_action=cancel", "action": "@cancel_action=cancel", "size": "@btn_h=48", "label": "@cancel_label", "label_size": "@btn_label_size=15", "style": "modal.buttons.variants.@{cancel_variant=secondary}" }
+              ] }
+            ] }
+          ]
+        }
+      ]
+    },
+    "popup_panel": {
+      "component": "cell", "id": "@id", "style": "@panel_style=modal.panel",
+      "width": "@panel_w=404", "pad": "@panel_pad=38", "gap": "@panel_gap=16", "layer": "@layer=1",
+      "children": [
+        { "component": "text", "text": "@title=", "align": "center", "font": "display", "color": "@title_color=modal.title.color", "text_size": "@title_size=52" },
+        { "component": "text", "when": "@subtitle", "text": "@subtitle", "align": "center", "font": "label", "color": "@subtitle_color=modal.subtitle.color", "text_size": "@subtitle_size=11" },
+        { "component": "cell", "when": "@divider", "style": "@divider_style=modal.divider", "size": 1.0 },
+        { "component": "cell", "gap": "@items_gap=12", "children": [ { "component": "slot", "name": "items" } ] },
+        { "component": "text", "when": "@footer", "text": "@footer", "align": "center", "font": "label", "color": "@footer_color=modal.footer.color", "text_size": "@footer_size=10" }
+      ]
+    },
+    "popup_menu": {
+      "component": "screen", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0,
+      "children": [
+        { "component": "cell", "style": "@overlay_style=screens.pause", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0 },
+        { "component": "slot", "name": "muse" },
+        {
+          "template": "popup_panel",
+          "panel_style": "@panel_style=modal.panel",
+          "panel_w": "@panel_w=404", "panel_pad": "@panel_pad=38", "panel_gap": "@panel_gap=16",
+          "anchor": "@anchor=center", "offset": ["@offset_x=0", "@offset_y=0"],
+          "title": "@title=", "title_size": "@title_size=52", "title_color": "@title_color=modal.title.color",
+          "subtitle": "@subtitle", "subtitle_size": "@subtitle_size=11", "subtitle_color": "@subtitle_color=modal.subtitle.color",
+          "divider": "@divider", "divider_style": "@divider_style=modal.divider",
+          "items_gap": "@items_gap=12",
+          "footer": "@footer", "footer_size": "@footer_size=10", "footer_color": "@footer_color=modal.footer.color",
+          "slots": { "items": [ { "component": "slot", "name": "items" } ] }
+        }
+      ]
+    }
+  }
+}

@@ -13,6 +13,9 @@ members = [
     "crates/flicker-world",
     "crates/flicker-primitive",
     "crates/flicker-core",
+    "crates/flicker-input-core",
+    "crates/flicker-input-router",
+    "crates/flicker-input-device",
     "Alpha/crates/render/flicker-render",
     "crates/flicker-2d",
     "Alpha/crates/scripting/flicker-script",
@@ -25,7 +28,6 @@ members = [
     "Alpha/crates/animation/flicker-flight",
     "crates/flicker-voxel",
     "Alpha/crates/core/flicker-worker",
-    "crates/flicker-ui",
     "crates/flicker",
     "Alpha/flicker-pocepochs",
     "Alpha/crates/animation/flicker-skeletal",
@@ -112,6 +114,13 @@ flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "crates/flicker-primitive" }
 flicker-core = { version = "0.1.0", path = "crates/flicker-core" }
+# Input model + resolution leaf (incubating in crates/; spec §2). Router/device build on it.
+flicker-input-core = { version = "0.1.0", path = "crates/flicker-input-core" }
+# Input event bus + focus + consumer API (spec §4). Depends only on flicker-input-core.
+flicker-input-router = { version = "0.1.0", path = "crates/flicker-input-router" }
+# Platform input sources + the 120 Hz analog sampler (spec §6). The only input crate
+# with OS/hw deps; fills the core snapshot/cache. Must not depend on flicker-app.
+flicker-input-device = { version = "0.1.0", path = "crates/flicker-input-device" }
 flicker-render = { version = "0.1.0", path = "Alpha/crates/render/flicker-render" }
 flicker-2d = { version = "0.1.0", path = "crates/flicker-2d" }
 flicker-script = { version = "0.1.0", path = "Alpha/crates/scripting/flicker-script" }
@@ -124,7 +133,6 @@ flicker-widgets = { version = "0.1.0", path = "Alpha/crates/frontend/flicker-wid
 flicker-flight = { version = "0.1.0", path = "Alpha/crates/animation/flicker-flight" }
 flicker-voxel = { version = "0.1.0", path = "crates/flicker-voxel" }
 flicker-worker = { version = "0.1.0", path = "Alpha/crates/core/flicker-worker" }
-flicker-ui = { version = "0.1.0", path = "crates/flicker-ui" }
 # Alpha crates (promoted, non-POC).
 flicker-skeletal = { version = "0.1.0", path = "Alpha/crates/animation/flicker-skeletal" }
 # mechanics cluster (collision/combat) — POC in crates/ until its hardening pass, then

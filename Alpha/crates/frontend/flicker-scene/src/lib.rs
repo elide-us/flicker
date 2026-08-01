@@ -37,7 +37,8 @@
 
 use std::time::Duration;
 
-use flicker_app::{App, InputState};
+use flicker_app::App;
+use flicker_input_core::InputState;
 use flicker_render::Renderer;
 
 /// One screen / mode of the application — a logo, a menu, the game, a pause

@@ -1,22 +1,34 @@
 //! The **template tier** — the middle of `Scene → Template → Element`.
 //!
 //! A *piece* is one leaf `component` the walker draws (`button`, `slider`, …). A
-//! *template* is a **named Rust builder** that composes pieces into a reusable
-//! arrangement (a Workbench, a PopupMenu, a ChoiceDialog). A *scene* declares a
-//! tree of placed nodes — some plain pieces, some `template` references with
-//! `slots` filled — as DATA; [`expand`] turns every `template` node into the
-//! subtree its builder produces, once, before the tree is cached and walked.
+//! *template* composes pieces into a reusable arrangement (a Workbench, a
+//! PopupMenu, a ChoiceDialog). A *scene* declares a tree of placed nodes — some
+//! plain pieces, some `template` references with `slots` filled — as DATA;
+//! [`expand`] turns every `template` node into the subtree its definition
+//! produces, once, before the tree is cached and walked.
 //!
-//! This crate owns builders because a builder emits [`UiNode`]s — the widget
+//! A template is **pure data by default**: a proto `UiNode` tree in the embedded
+//! `ui_templates.json` (a [`TemplateDef::Data`] entry), instantiated by
+//! substituting the instance's props (`@name` / `@{name}` / `when` — see
+//! `substitute`) and splicing its slots (see `splice_slots`). Only the
+//! STRUCTURAL Components stay **Rust builders** ([`TemplateDef::Builder`]):
+//! `frame` (the 3×3 border grid needs computed track strings), `card`, and
+//! `option_grid` (row-chunking) — and a data proto composes them by reference
+//! (`window` is a `{ "template": "frame" }` node in data).
+//!
+//! This crate owns the tier because instantiation emits [`UiNode`]s — the widget
 //! layer's job. `flicker-script` only *parses* the tree (it gained `template` +
 //! `slots` as plain-data fields); it never learns what a template is, so the
 //! crate stack stays `flicker-widgets → flicker-script`, never the reverse.
 //!
-//! Builders are **pure**: they read scalar props + move named slots into place
-//! and emit nodes whose `style` prop names a dotted path into `theme.tokens`.
-//! They never touch a colour, so a template cannot fork the one palette.
+//! Builders and protos are **pure**: they read scalar props + move named slots
+//! into place and emit nodes whose `style` prop names a dotted path into
+//! `theme.tokens`. They never touch a colour, so a template cannot fork the one
+//! palette. `$token` strings pass through untouched — the stringtable resolves
+//! them at draw.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use flicker_script::{UiAnchor, UiNode, Value};
 
@@ -36,38 +48,88 @@ pub struct BuildCtx {
 /// function table and builders stay unit-testable in isolation.
 pub type TemplateFn = fn(&BuildCtx, &HashMap<String, Value>, &mut Slots) -> UiNode;
 
-/// The name → builder table. A flat `HashMap` is the lightest thing that is still
-/// a registry: [`builtin_templates`] is the one place a template is registered,
-/// and a scene crate can `.insert()` a bespoke builder before it calls
-/// [`expand`] — without editing this crate.
-pub type TemplateRegistry = HashMap<&'static str, TemplateFn>;
+/// One registered template: either a Rust **builder** fn (the structural
+/// Components — `frame` / `card` / `option_grid` — and any bespoke builder a scene
+/// crate registers) or a **data proto** — a `UiNode` tree as plain JSON that
+/// [`expand`] instantiates by substituting the instance's props and splicing its
+/// slots. Data protos live in `ui_templates.json`; the `&'static` borrow points
+/// into the embedded, parse-once [`TEMPLATE_DATA`] document.
+pub enum TemplateDef {
+    Builder(TemplateFn),
+    Data(&'static serde_json::Value),
+}
 
-/// The built-in template set. Add a template in exactly one place: here.
+/// The name → template table. A flat `HashMap` is the lightest thing that is still
+/// a registry: [`builtin_templates`] is the one place a template is registered,
+/// and a scene crate can `.insert()` a bespoke [`TemplateDef::Builder`] before it
+/// calls [`expand`] — without editing this crate.
+pub type TemplateRegistry = HashMap<String, TemplateDef>;
+
+/// The embedded data-template protos (`ui_templates.json`), parsed ONCE. The file
+/// rides `include_str!` exactly like the `ui/*.lua` component modules in `lib.rs`,
+/// so a client binary needs no content path to resolve the built-in templates. A
+/// parse failure warns and yields an empty `templates` map (best-effort, like every
+/// loader here) — the affected templates then fail visibly as "unknown template".
+static TEMPLATE_DATA: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../../content/sensorium/resources/ui_templates.json"
+    ))
+    .unwrap_or_else(|e| {
+        tracing::error!("ui_templates.json parse failed: {e}");
+        serde_json::json!({ "templates": {} })
+    })
+});
+
+/// The built-in template set: every key of the embedded `ui_templates.json` as a
+/// [`TemplateDef::Data`] proto, plus the surviving Rust builders. Builders are
+/// inserted second so a template mid-migration (a proto authored while its builder
+/// still exists) keeps resolving to the builder until the builder is deleted —
+/// the flip IS the deletion.
 pub fn builtin_templates() -> TemplateRegistry {
     let mut m: TemplateRegistry = HashMap::new();
-    m.insert("workbench", workbench as TemplateFn);
-    m.insert("window", window as TemplateFn);
-    m.insert("card", card as TemplateFn);
-    m.insert("popup_menu", popup_menu as TemplateFn);
-    m.insert("choice_dialog", choice_dialog as TemplateFn);
-    m.insert("side_by_side_rtt", side_by_side_rtt as TemplateFn);
-    m.insert("quad_rtt_view", quad_rtt_view as TemplateFn);
+    if let Some(templates) = TEMPLATE_DATA.get("templates").and_then(serde_json::Value::as_object) {
+        for (name, proto) in templates {
+            m.insert(name.clone(), TemplateDef::Data(proto));
+        }
+    }
+    for (name, f) in [
+        ("frame", frame as TemplateFn),
+        ("card", card as TemplateFn),
+        ("option_grid", option_grid as TemplateFn),
+    ] {
+        m.insert(name.to_string(), TemplateDef::Builder(f));
+    }
     m
 }
 
-/// Expand every `template` node into the subtree its builder produces, depth-first
-/// (post-order): a node's `children` and `slots` are expanded **before** the node
-/// itself, so a template that emits another template still resolves. A
-/// template-free tree is returned UNCHANGED (structural identity) — the reason a
-/// scene not yet using templates is completely unaffected when `expand` is wired
-/// into its load path.
-pub fn expand(mut node: UiNode, reg: &TemplateRegistry) -> UiNode {
-    node.children = node.children.into_iter().map(|c| expand(c, reg)).collect();
+/// The template-expansion nesting bound: a chain of template resolutions (a data
+/// proto referencing another template, which references another, …) deeper than
+/// this warns and falls back to the empty screen — the guard against a proto that
+/// (transitively) references itself. Ordinary tree depth is NOT counted; only a
+/// template resolving from within another template's output goes one level down.
+pub const MAX_TEMPLATE_DEPTH: usize = 8;
+
+/// Expand every `template` node into the subtree its builder produces (or its data
+/// proto instantiates), depth-first (post-order): a node's `children` and `slots`
+/// are expanded **before** the node itself, so a template that emits another
+/// template still resolves. A template-free tree is returned UNCHANGED (structural
+/// identity) — the reason a scene not yet using templates is completely unaffected
+/// when `expand` is wired into its load path.
+pub fn expand(node: UiNode, reg: &TemplateRegistry) -> UiNode {
+    expand_depth(node, reg, 0)
+}
+
+/// [`expand`] with the template-nesting depth threaded through: children/slots
+/// recurse at the SAME depth (tree depth is free); resolving a template hands its
+/// built subtree to `depth + 1`, so only template-within-template chains count
+/// toward [`MAX_TEMPLATE_DEPTH`].
+fn expand_depth(mut node: UiNode, reg: &TemplateRegistry, depth: usize) -> UiNode {
+    node.children = node.children.into_iter().map(|c| expand_depth(c, reg, depth)).collect();
     let mut slots: Slots = std::mem::take(&mut node.slots);
     for group in slots.values_mut() {
         let done: Vec<UiNode> = std::mem::take(group)
             .into_iter()
-            .map(|c| expand(c, reg))
+            .map(|c| expand_depth(c, reg, depth))
             .collect();
         *group = done;
     }
@@ -78,8 +140,17 @@ pub fn expand(mut node: UiNode, reg: &TemplateRegistry) -> UiNode {
         return node;
     };
 
+    if depth >= MAX_TEMPLATE_DEPTH {
+        // A proto chain this deep is a cycle in practice; stand in the empty page
+        // (the same fallback as an unknown name) so it fails visibly, not by hang.
+        tracing::warn!(
+            "ui arrangement: template `{name}` exceeded the max expansion depth ({MAX_TEMPLATE_DEPTH})"
+        );
+        return empty_screen(node);
+    }
+
     match reg.get(name.as_str()) {
-        Some(builder) => {
+        Some(TemplateDef::Builder(builder)) => {
             let ctx = BuildCtx {
                 id_prefix: node.id.clone(),
             };
@@ -87,23 +158,307 @@ pub fn expand(mut node: UiNode, reg: &TemplateRegistry) -> UiNode {
             overlay_placement(&mut built, &node);
             built
         }
+        Some(TemplateDef::Data(proto)) => {
+            let props = subst_props(&node);
+            let json = match substitute(proto, &props) {
+                Some(json) => json,
+                None => {
+                    tracing::warn!("ui arrangement: template `{name}` proto substituted away");
+                    return empty_screen(node);
+                }
+            };
+            let parsed = match flicker_script::parse_ui_json(&json) {
+                Ok(parsed) => parsed,
+                Err(e) => {
+                    tracing::warn!("ui arrangement: template `{name}` proto did not parse: {e}");
+                    return empty_screen(node);
+                }
+            };
+            let (mut roots, _) = splice_slots(parsed, &mut slots);
+            if roots.len() != 1 {
+                tracing::warn!(
+                    "ui arrangement: template `{name}` resolved to {} roots (want exactly 1)",
+                    roots.len()
+                );
+                return empty_screen(node);
+            }
+            // Resolve templates the proto itself references (`frame`, …) one nesting
+            // level down, then let the instance place the finished root — exactly the
+            // Builder arm's tail.
+            let mut built = expand_depth(roots.remove(0), reg, depth + 1);
+            overlay_placement(&mut built, &node);
+            built
+        }
         None => {
             // Best-effort, like every other loader here: warn and stand in an empty
             // page so a typo'd template name fails visibly, not with a panic.
             tracing::warn!("ui arrangement: unknown template `{name}`");
-            UiNode {
-                component: "page".to_string(),
-                id: node.id,
-                anchor: node.anchor,
-                offset: node.offset,
-                size: node.size,
-                grow: node.grow,
-                width: node.width,
-                height: node.height,
-                ..Default::default()
+            empty_screen(node)
+        }
+    }
+}
+
+/// The failed-template stand-in: an empty `screen` carrying the instance node's
+/// own placement, so a bad template fails visibly in place, never with a panic.
+fn empty_screen(node: UiNode) -> UiNode {
+    UiNode {
+        component: "screen".to_string(),
+        id: node.id,
+        anchor: node.anchor,
+        offset: node.offset,
+        size: node.size,
+        grow: node.grow,
+        width: node.width,
+        height: node.height,
+        ..Default::default()
+    }
+}
+
+// ── the data-proto instantiation pipeline (the `TemplateDef::Data` arm) ─────────
+//
+// A proto is a `UiNode` tree as plain JSON. Instantiation is three passes:
+//   1. `substitute` — instance props into the JSON (`@name` exact / `@{name}`
+//      interpolation / `when` gates), BEFORE any parse;
+//   2. `flicker_script::parse_ui_json` — the ONE arrangement reader;
+//   3. `splice_slots` — `slot` nodes replaced by the instance's slot content
+//      (post-parse, so spliced nodes are real `UiNode`s, already expanded).
+// Then the result is `expand_depth`ed (protos may reference other templates) and
+// `overlay_placement`d like any built subtree.
+
+/// The substitution context an instance hands its proto: the node's own `props`
+/// plus the STRUCTURAL pseudo-props — `anchor` (the parsers consume an instance's
+/// `anchor` key structurally, so a proto could never see it as a prop) and `id`
+/// (the data twin of `BuildCtx::id_prefix`, always present, possibly empty). A
+/// real prop with either name wins over the pseudo-prop.
+fn subst_props(node: &UiNode) -> HashMap<String, Value> {
+    let mut ctx = node.props.clone();
+    if let Some(a) = node.anchor {
+        ctx.entry("anchor".to_string())
+            .or_insert_with(|| Value::Text(anchor_name(a).to_string()));
+    }
+    ctx.entry("id".to_string()).or_insert_with(|| Value::Text(node.id.clone()));
+    ctx
+}
+
+/// The inverse of `flicker_script`'s anchor parse — the pseudo-prop rendering of
+/// an instance's structural `anchor` for `@anchor` substitution.
+fn anchor_name(a: UiAnchor) -> &'static str {
+    match a {
+        UiAnchor::TopLeft => "top_left",
+        UiAnchor::Top => "top",
+        UiAnchor::TopRight => "top_right",
+        UiAnchor::Left => "left",
+        UiAnchor::Center => "center",
+        UiAnchor::Right => "right",
+        UiAnchor::BottomLeft => "bottom_left",
+        UiAnchor::Bottom => "bottom",
+        UiAnchor::BottomRight => "bottom_right",
+    }
+}
+
+/// Substitute instance `props` into a proto JSON value, recursively. Returns
+/// `None` when the VALUE resolves to "absent" — its holder removes the object key
+/// / drops the array element (the data twin of a builder's `if let Some(v) =
+/// p_text(..)` arms). The rules, applied JSON-level BEFORE any parse:
+///
+/// * a string that is EXACTLY `@name` / `@name=default` → the prop's NATIVE JSON
+///   value (bool / number / string); absent → the default (`true`/`false` → bool,
+///   numeric-looking → number, else string; `=` alone → empty string); absent with
+///   no default → removal;
+/// * a string CONTAINING `@{name}` / `@{name=default}` → string interpolation
+///   (each occurrence replaced by the prop's text / number / bool rendering;
+///   an absent prop with no default removes the WHOLE value);
+/// * an object carrying `"when": "@name"` (truthy: present, not `false`, not
+///   empty text) or `"when": "!@name"` (negated) → dropped when the condition
+///   fails, `when` key stripped when it passes;
+/// * `$`-prefixed strings (`$token` stringtable refs, `$$` escapes) pass through
+///   UNTOUCHED — they resolve at draw, never here.
+fn substitute(proto: &serde_json::Value, props: &HashMap<String, Value>) -> Option<serde_json::Value> {
+    use serde_json::Value as J;
+    match proto {
+        J::String(s) => subst_string(s, props),
+        J::Array(items) => Some(J::Array(items.iter().filter_map(|v| substitute(v, props)).collect())),
+        J::Object(map) => {
+            if let Some(when) = map.get("when") {
+                match when {
+                    J::String(cond) if !when_passes(cond, props) => return None,
+                    J::String(_) => {}
+                    other => tracing::warn!("ui template proto: non-string `when` ({other}) ignored"),
+                }
+            }
+            let mut out = serde_json::Map::new();
+            for (k, v) in map {
+                if k == "when" {
+                    continue;
+                }
+                if let Some(sv) = substitute(v, props) {
+                    out.insert(k.clone(), sv);
+                }
+            }
+            Some(J::Object(out))
+        }
+        other => Some(other.clone()),
+    }
+}
+
+/// A prop is TRUTHY for a `when` gate when it is present, not `Bool(false)`, and
+/// not empty text. (Numbers — including 0 — are truthy: presence is the signal.)
+fn when_passes(cond: &str, props: &HashMap<String, Value>) -> bool {
+    let (negated, name) = match cond.strip_prefix("!@") {
+        Some(name) => (true, name),
+        None => match cond.strip_prefix('@') {
+            Some(name) => (false, name),
+            None => {
+                tracing::warn!("ui template proto: malformed `when` condition `{cond}` ignored");
+                return true;
+            }
+        },
+    };
+    let truthy = match props.get(name) {
+        None | Some(Value::Bool(false)) => false,
+        Some(Value::Text(t)) => !t.is_empty(),
+        Some(_) => true,
+    };
+    negated != truthy
+}
+
+/// Substitute ONE proto string per the rules on [`substitute`].
+fn subst_string(s: &str, props: &HashMap<String, Value>) -> Option<serde_json::Value> {
+    use serde_json::Value as J;
+    // `$token` / `$$` stringtable refs resolve at draw — never substituted here.
+    if s.starts_with('$') {
+        return Some(J::String(s.to_string()));
+    }
+    // Exact form: `@name` or `@name=default` (and nothing else in the string).
+    if let Some(rest) = s.strip_prefix('@') {
+        if !rest.starts_with('{') {
+            let name_len = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').count();
+            let (name, tail) = rest.split_at(name_len);
+            if !name.is_empty() && (tail.is_empty() || tail.starts_with('=')) {
+                return match props.get(name) {
+                    Some(Value::Bool(b)) => Some(J::Bool(*b)),
+                    Some(Value::Number(n)) => match serde_json::Number::from_f64(*n) {
+                        Some(n) => Some(J::Number(n)),
+                        None => {
+                            tracing::warn!("ui template proto: non-finite prop `{name}` removed");
+                            None
+                        }
+                    },
+                    Some(Value::Text(t)) => Some(J::String(t.clone())),
+                    None => tail.strip_prefix('=').map(parse_default),
+                };
             }
         }
     }
+    // Interpolation form: any `@{name}` / `@{name=default}` occurrences.
+    if s.contains("@{") {
+        return interpolate(s, props).map(J::String);
+    }
+    Some(J::String(s.to_string()))
+}
+
+/// A `@name=default` fallback, typed by shape: `true`/`false` → bool (so a
+/// default can feed a `flag`-read prop like `closable`), numeric-looking →
+/// number, anything else (including empty) → string.
+fn parse_default(d: &str) -> serde_json::Value {
+    use serde_json::Value as J;
+    match d {
+        "true" => J::Bool(true),
+        "false" => J::Bool(false),
+        _ => match d.parse::<f64>().ok().and_then(serde_json::Number::from_f64) {
+            Some(n) => J::Number(n),
+            None => J::String(d.to_string()),
+        },
+    }
+}
+
+/// Replace every `@{name}` / `@{name=default}` occurrence in `s` with the prop's
+/// text rendering (`52`, not `52.0`, for whole numbers — `f64`'s `Display`);
+/// `None` (whole-value removal) when any referenced prop is absent with no default.
+fn interpolate(s: &str, props: &HashMap<String, Value>) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("@{") {
+        out.push_str(&rest[..start]);
+        let body = &rest[start + 2..];
+        let Some(end) = body.find('}') else {
+            // Unterminated `@{` — keep the tail literally (best-effort).
+            out.push_str(&rest[start..]);
+            return Some(out);
+        };
+        let token = &body[..end];
+        let (name, default) = match token.split_once('=') {
+            Some((n, d)) => (n, Some(d)),
+            None => (token, None),
+        };
+        match props.get(name) {
+            Some(Value::Text(t)) => out.push_str(t),
+            Some(Value::Number(n)) => out.push_str(&n.to_string()),
+            Some(Value::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
+            None => match default {
+                Some(d) => out.push_str(d),
+                None => return None,
+            },
+        }
+        rest = &body[end + 1..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+/// Splice the instance's slot content into a parsed proto tree: a `slot` node
+/// (`component: "slot"`, prop `name`) is replaced IN PLACE by the named slot's
+/// nodes; an empty/absent slot falls back to the slot node's own children; both
+/// empty → nothing. A node with prop `when_filled: true` is dropped entirely when
+/// no slot beneath it produced instance content (a `window` footer's
+/// omit-when-empty). Returns the node's replacement sequence plus whether any
+/// slot beneath produced instance (not fallback) content.
+fn splice_slots(mut node: UiNode, slots: &mut Slots) -> (Vec<UiNode>, bool) {
+    if node.component == "slot" {
+        let name = crate::config::text(&node.props, "name").unwrap_or_default().to_string();
+        let taken = slots.remove(&name).unwrap_or_default();
+        if !taken.is_empty() {
+            return (taken, true);
+        }
+        // Fallback children — themselves spliced (they may nest further slots).
+        let mut out = Vec::new();
+        let mut produced = false;
+        for c in node.children {
+            let (ns, p) = splice_slots(c, slots);
+            produced |= p;
+            out.extend(ns);
+        }
+        return (out, produced);
+    }
+
+    let mut produced = false;
+    let mut kids = Vec::new();
+    for c in std::mem::take(&mut node.children) {
+        let (ns, p) = splice_slots(c, slots);
+        produced |= p;
+        kids.extend(ns);
+    }
+    node.children = kids;
+    // A proto may nest a template reference whose OWN slot groups hold `slot`
+    // nodes (`window` fills `frame.center` with a section containing slots) —
+    // splice inside those groups too, before the nested template expands.
+    for group in node.slots.values_mut() {
+        let mut spliced = Vec::new();
+        for c in std::mem::take(group) {
+            let (ns, p) = splice_slots(c, slots);
+            produced |= p;
+            spliced.extend(ns);
+        }
+        *group = spliced;
+    }
+
+    if crate::config::flag(&node.props, "when_filled") {
+        node.props.remove("when_filled");
+        if !produced {
+            return (Vec::new(), false);
+        }
+    }
+    (vec![node], produced)
 }
 
 /// Copy the template node's own placement onto the builder's root **only where the
@@ -169,25 +524,21 @@ fn with_text(mut n: UiNode, key: &str, v: &str) -> UiNode {
     n
 }
 
+// Props-map readers — thin wrappers over the shared `config` surface, so the builders and
+// the walker read a scalar the SAME way (one implementation, in `config`).
 fn p_num(p: &HashMap<String, Value>, key: &str) -> Option<f64> {
-    match p.get(key) {
-        Some(Value::Number(n)) => Some(*n),
-        _ => None,
-    }
+    crate::config::num(p, key)
 }
 
 fn p_text<'a>(p: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
-    match p.get(key) {
-        Some(Value::Text(s)) => Some(s.as_str()),
-        _ => None,
-    }
+    crate::config::text(p, key)
 }
 
 /// Read a boolean prop (absent / non-bool / literal `false` → `false`). Shared by
 /// every builder that reads a scene flag (`has_min`, `disabled`, `divider`, …);
 /// the string-and-number sibling of [`p_text`] / [`p_num`].
 fn p_bool(p: &HashMap<String, Value>, key: &str) -> bool {
-    matches!(p.get(key), Some(Value::Bool(true)))
+    crate::config::flag(p, key)
 }
 
 /// Pull a named slot's nodes out (leaving it empty), or an empty vec if absent.
@@ -195,182 +546,180 @@ fn take_slot(slots: &mut Slots, key: &str) -> Vec<UiNode> {
     slots.remove(key).unwrap_or_default()
 }
 
-// ── templates ────────────────────────────────────────────────────────────────
+// ── component builders (composed BY the templates below; one definition each) ──
 
-/// **Workbench** — the full-screen editor bench: a full-bleed header bar, a
-/// (Loomforge-style) tab strip, a work area of `viewport` + a fixed `rail`, and a
-/// full-bleed footer bar. Promotes the Kilnworks `hud_assetpipeline.lua` shape;
-/// the `viewport` slot takes a `QuadRTTView` / `SideBySideRTT` (or any content).
-///
-/// Slots: `header`, `tabs`, `viewport`, `rail`, `footer`. Props (all optional):
-/// `header_h/pad/gap` + `header_style`, `tab_h/pad/gap` + `tab_style`,
-/// `body_pad/gap`, `footer_h/pad/gap` + `footer_btn_h` + `footer_style`. The
-/// numeric params come from the scene (its `ui_elements` section) so the bar
-/// heights stay single-sourced with the rest of its layout.
-fn workbench(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
-    let mut header = with_style(elem("row"), p_text(p, "header_style"));
-    header.height = p_num(p, "header_h").map(|n| n as f32);
-    header.pad = p_num(p, "header_pad").unwrap_or(0.0) as f32;
-    header.gap = p_num(p, "header_gap").unwrap_or(0.0) as f32;
-    header.children = take_slot(slots, "header");
-
-    let mut tabs = with_style(elem("row"), p_text(p, "tab_style"));
-    tabs.height = p_num(p, "tab_h").map(|n| n as f32);
-    tabs.pad = p_num(p, "tab_pad").unwrap_or(0.0) as f32;
-    tabs.gap = p_num(p, "tab_gap").unwrap_or(0.0) as f32;
-    tabs.children = take_slot(slots, "tabs");
-
-    // Work area: the framed viewport takes the leftover width, the rail sits beside
-    // it (first-class panels, not floating over the viewport).
-    let mut body = elem("row");
-    body.grow = Some(1.0);
-    body.pad = p_num(p, "body_pad").unwrap_or(0.0) as f32;
-    body.gap = p_num(p, "body_gap").unwrap_or(0.0) as f32;
-    let mut body_children = take_slot(slots, "viewport");
-    body_children.extend(take_slot(slots, "rail"));
-    body.children = body_children;
-
-    // Footer: a styled bar (panel) wrapping a button row, matching the header.
-    let mut footer_row = elem("row");
-    footer_row.gap = p_num(p, "footer_gap").unwrap_or(0.0) as f32;
-    footer_row.height = p_num(p, "footer_btn_h").map(|n| n as f32);
-    footer_row.children = take_slot(slots, "footer");
-    let mut footer = with_style(elem("panel"), p_text(p, "footer_style"));
-    footer.height = p_num(p, "footer_h").map(|n| n as f32);
-    footer.pad = p_num(p, "footer_pad").unwrap_or(0.0) as f32;
-    footer.gap = p_num(p, "footer_gap").unwrap_or(0.0) as f32;
-    footer.children = vec![footer_row];
-
-    // Root: one full-screen column, top to bottom.
-    let mut col = elem("column");
-    col.anchor = Some(UiAnchor::TopLeft);
-    col = with_num(col, "width_frac", 1.0);
-    col = with_num(col, "height_frac", 1.0);
-    col.children = vec![header, tabs, body, footer];
-    col
+/// **WindowControls** — the Component that occupies a closable frame's top-RIGHT corner:
+/// a single ✕ button that fires `close_action`. ONE definition, composed by every surface
+/// that needs modal window controls (the canonical "one Top Right Corner Component, used in
+/// several Templates"). The [`frame`] injects it into the `ne` cell and suppresses the tr
+/// rune so the ✕ owns the corner; `action` / `style` / `label` are the caller's config.
+fn window_controls(action: &str, style: &str, label: &str) -> UiNode {
+    let mut x = with_style(elem("button"), Some(style));
+    x.action = Some(action.to_string());
+    x.props.insert("label".to_string(), Value::Text(label.to_string()));
+    x
 }
 
-/// **Window** — the canonical carved-stone frame (a DS `Window`): a styled frame
-/// box wrapping a title bar (title · optional minimize / close controls), a
-/// content **well**, and an optional footer, with the four corner **rune** inlays
-/// overlaid on the frame. Generalises the `settings.lua` window chrome (title bar
-/// + body + footer + corner-rune dots) into one reusable builder.
+// ── templates ────────────────────────────────────────────────────────────────
+
+/// **Frame** — the universal border-grid CONTAINER: the chrome shell every window /
+/// panel / dialog derives from, built OVER the `grid` layout kind as a 3×3 border
+/// grid. Where `window` HAND-composes a title-bar row + content well + rune overlay
+/// and leans on patch-props (`title_pad` to inset the title past the corner runes,
+/// `w_frac` for a responsive size), `frame` makes that geometry STRUCTURAL: the
+/// eight edge/corner regions are grid cells whose track widths ARE the decoration
+/// clearance, so the centre content is inset past the corner runes BY CONSTRUCTION —
+/// no `title_pad`. (Phase 2 of the Prism UI frame system; `window` / `workbench`
+/// migrate onto it in Phase 3 — this builder is ADDITIVE and touches neither.)
 ///
-/// The frame is a **`stack`** — a styled box that OVERLAYS its children (a `panel`
-/// would *flow* them top-to-bottom, stacking the runes below the chrome instead of
-/// over it) — so the `rune_corners` inlays share the frame's rect and sit over the
-/// chrome column. A styled `stack` draws through the same `draw_panel_bg` path as a
-/// panel, so it IS "the frame bg" in look. Placed inside a `page` / `stack` scene
-/// root, its `Center` anchor + `w` / `h` float it as a modal; as a bare root the
-/// walker gives it the full screen.
+/// The nine optional named region SLOTS map 1:1 onto the 3×3 grid — nine distinct,
+/// NON-OVERLAPPING zones. Each region, including the `n` (title) and `s` (footer) bars, is
+/// confined to its OWN single cell; the bars sit in the top-/bottom-CENTRE cell, flanked by
+/// the corner cells that hold the runes, so the title never overlaps a corner:
 ///
-/// Slots: `content` (the body), `footer` (the control row — the footer bar is
-/// omitted entirely when this slot is empty). Props (all optional): `title` (bar
-/// caption) + `title_size`; `w` / `h` (frame size); `style` (dotted-path PREFIX,
-/// default `"settings"` → `settings.window` / `.titlebar` / `.titlebar.close` /
-/// `.runes`); `close_action` (default `"close"`) + `has_close` (default true);
-/// `min_action` (default `"minimize"`) + `has_min`; `close_label` / `min_label`;
-/// plus scene-supplied numerics `title_h` / `title_pad` / `title_gap`, `btn_w`,
-/// `body_pad` + `body_style`, `footer_h` / `footer_pad` / `footer_gap` +
-/// `footer_style`. The bar / well / footer styles come from the scene by dotted
-/// path — no colour ever crosses here.
-fn window(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
+/// ```text
+///   nw = (0,0)   n = title  (1,0)   ne = (2,0)
+///   w  = (0,1)   center     (1,1)    e = (2,1)
+///   sw = (0,2)   s = footer (1,2)   se = (2,2)
+/// ```
+///
+/// The column axis is `[w_size | 1fr | e_size]` and the row axis `[n_size | 1fr |
+/// s_size]`. The four CORNER cells (`nw`/`ne`/`sw`/`se`) are the edge-track intersections
+/// that hold the corner-rune clearance; the four EDGE cells (`n`/`s`/`w`/`e`) are the title
+/// / footer / side borders; the `center` holds content, inset past the runes on every side
+/// by the edge tracks BY CONSTRUCTION (the point of the frame). Every region is optional;
+/// because all four edge tracks are `Fixed(px)` an absent region emits no grid child yet its
+/// cell still reserves the space (a Fixed track is content-independent — sidestepping the
+/// grid's Auto-track intrinsic sizing, so an empty edge never collapses the clearance).
+///
+/// The frame ROOT is a styled **`stack`** (like `window`) that OVERLAYS `[grid,
+/// runes]`: the stack carries `settings.window` and draws the frame bg through
+/// `draw_panel_bg`; the border grid is intentionally unstyled/structural (the bg
+/// shows through every region); the `rune_corners` inlay fills the frame rect and is
+/// the LAST child, so its glyphs paint OVER the region grid at the four corners.
+///
+/// Slots (all optional): `center`, `n`, `s`, `w`, `e`, `nw`, `ne`, `sw`, `se`. Props
+/// (all optional): `style` (dotted-path PREFIX, default `"settings"` →
+/// `settings.window` / `.runes`); `w` / `h` (fixed frame size in px) OR `w_frac` /
+/// `h_frac` (a responsive fraction of the parent/screen — a fixed axis wins over its
+/// `*_frac`); `edge` (default size, px, for ALL four edge tracks — default `30.0`,
+/// which is `settings.runes` `inset(14)` + `size(16)`, the corner-rune box extent, so
+/// ANY frame clears the runes intrinsically); and the per-edge overrides `n_size`
+/// (title-bar height), `s_size` (footer height), `w_size` / `e_size` (side borders),
+/// each defaulting to `edge`. The `>= edge` floor is a clearance INVARIANT, not a
+/// clamp: a scene may pass a thinner border deliberately (a frame with no runes), but
+/// a value below ~30 reintroduces the exact top-corner rune collision `window`'s
+/// `title_pad` used to hide. Title / button / footer / body-pad props live in the
+/// region-subtree content, NOT here — `frame` is pure chrome geometry. `col_gap` /
+/// `row_gap` / `pad` stay at the node default `0.0`: the tracks must be flush against
+/// the frame edge and each other for the corner cells to sit exactly at the corners.
+/// An undersized frame (`w_size + e_size > width`, or `n_size + s_size > height`)
+/// yields a negative-extent centre cell (free is unclamped, as in flow), so a
+/// responsive `w_frac` / `h_frac` must stay large enough to exceed the summed edges.
+fn frame(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
     // Dotted-path PREFIX → the reused style blocks (settings.* by default).
     let prefix = p_text(p, "style").unwrap_or("settings").to_string();
     let sty = |leaf: &str| format!("{prefix}.{leaf}");
 
-    // ── title bar: title · flexible spacer · [minimize] · [close] ──
-    let mut title = with_style(elem("text"), Some(sty("titlebar").as_str()));
-    if let Some(t) = p_text(p, "title") {
-        title.props.insert("text".to_string(), Value::Text(t.to_string()));
-    }
-    title
-        .props
-        .insert("text_size".to_string(), Value::Number(p_num(p, "title_size").unwrap_or(22.0)));
+    // ── edge track sizes → the 3×3 border grid's cols / rows ──
+    // `edge` is the STRUCTURAL clearance constant: settings.runes inset(14) +
+    // size(16) ≈ 30, the corner-rune box extent. It is a Rust literal, NOT read from
+    // the token block — colours/geometry never cross into a builder and the theme is
+    // not available here (exactly as the scenes pass a literal title_pad = 30). Any
+    // edge >= this value clears the corner runes on that side by construction.
+    let edge = p_num(p, "edge").unwrap_or(30.0) as f32;
+    let n = p_num(p, "n_size").map(|v| v as f32).unwrap_or(edge);
+    let s = p_num(p, "s_size").map(|v| v as f32).unwrap_or(edge);
+    let w = p_num(p, "w_size").map(|v| v as f32).unwrap_or(edge);
+    let e = p_num(p, "e_size").map(|v| v as f32).unwrap_or(edge);
 
-    // A grow spacer eats the leftover width, pushing the window controls hard-right.
-    let mut spacer = elem("stack");
-    spacer.grow = Some(1.0);
-
-    let btn_w = p_num(p, "btn_w").unwrap_or(40.0) as f32;
-    let mut bar = vec![title, spacer];
-    if p_bool(p, "has_min") {
-        let min_style = p_text(p, "min_style").map(|s| s.to_string()).unwrap_or_else(|| sty("titlebar.close"));
-        let mut min_btn = with_style(elem("button"), Some(min_style.as_str()));
-        min_btn.size = Some(btn_w); // main-axis (width) in the row; height fills the bar
-        min_btn.action = Some(p_text(p, "min_action").unwrap_or("minimize").to_string());
-        min_btn.props.insert("label".to_string(), Value::Text(p_text(p, "min_label").unwrap_or("–").to_string()));
-        bar.push(min_btn);
-    }
-    // Close shows by default (the canonical control); a scene drops it with has_close = false.
-    if !matches!(p.get("has_close"), Some(Value::Bool(false))) {
+    // ── closable: the top-RIGHT corner becomes an ✕ close control instead of a rune ──
+    // A dismissible frame swaps its `ne` corner rune for an ✕ button (fires `close_action`);
+    // the rune overlay then suppresses its `tr` glyph so the two never stack. The button is
+    // injected into the `ne` slot, so the region loop places it in the ne cell (e × n_size).
+    // This is the ONE corner-control capability this pass (Aaron: "replace the top-right rune
+    // with X when the panel can be closed"); move / resize stay for the Window-system phase.
+    let closable = p_bool(p, "closable");
+    if closable {
         let close_style = p_text(p, "close_style").map(|s| s.to_string()).unwrap_or_else(|| sty("titlebar.close"));
-        let mut close_btn = with_style(elem("button"), Some(close_style.as_str()));
-        close_btn.size = Some(btn_w);
-        close_btn.action = Some(p_text(p, "close_action").unwrap_or("close").to_string());
-        close_btn.props.insert("label".to_string(), Value::Text(p_text(p, "close_label").unwrap_or("×").to_string()));
-        bar.push(close_btn);
+        slots.entry("ne".to_string()).or_default().push(window_controls(
+            p_text(p, "close_action").unwrap_or("close"),
+            &close_style,
+            p_text(p, "close_label").unwrap_or("×"),
+        ));
     }
 
-    let mut titlebar = with_style(elem("row"), Some(sty("titlebar").as_str()));
-    titlebar.height = Some(p_num(p, "title_h").unwrap_or(52.0) as f32);
-    // Per-axis inset: a wide horizontal pad, but only a small vertical one, so the bar
-    // keeps its full height and the title + close centre vertically in it. A uniform
-    // `pad` this wide would exceed half a 52px bar and collapse its inner height.
-    titlebar.pad_x = Some(p_num(p, "title_pad").unwrap_or(16.0) as f32);
-    titlebar.pad_y = Some(p_num(p, "title_pad_y").unwrap_or(8.0) as f32);
-    titlebar.gap = p_num(p, "title_gap").unwrap_or(10.0) as f32;
-    titlebar.children = bar;
+    // ── the border grid: structural (unstyled), fills the frame, flush tracks ──
+    // `f32` Display renders 30.0 as "30" and 52.5 as "52.5" — both tokens
+    // `parse_track` reads as `Fixed`; the "1fr" centre parses as `Fr(1.0)`.
+    let mut grid = with_text(elem("grid"), "cols", &format!("{w} 1fr {e}"));
+    grid = with_text(grid, "rows", &format!("{n} 1fr {s}"));
+    grid.anchor = Some(UiAnchor::TopLeft);
+    grid = with_num(grid, "width_frac", 1.0);
+    grid = with_num(grid, "height_frac", 1.0);
 
-    // ── content well: a padded box that grows to fill the body between the bars.
-    // Unstyled by default so the frame fill shows through (like settings.lua); a
-    // scene opts into a recessed fill with `body_style`.
-    let mut well = with_style(elem("panel"), p_text(p, "body_style"));
-    well.grow = Some(1.0);
-    well.pad = p_num(p, "body_pad").unwrap_or(0.0) as f32;
-    well.children = take_slot(slots, "content");
-
-    // ── chrome column: title bar · content well · [footer] ──
-    let mut chrome = vec![titlebar, well];
-    let footer_slot = take_slot(slots, "footer");
-    if !footer_slot.is_empty() {
-        // Footer = a styled bar (panel) wrapping a button row (mirrors `workbench`).
-        let mut footer_row = elem("row");
-        footer_row.grow = Some(1.0);
-        footer_row.gap = p_num(p, "footer_gap").unwrap_or(12.0) as f32;
-        footer_row.children = footer_slot;
-        let mut footer = with_style(elem("panel"), p_text(p, "footer_style"));
-        footer.height = Some(p_num(p, "footer_h").unwrap_or(58.0) as f32);
-        // Per-axis inset (see the title bar): wide sides, short top/bottom, so the button
-        // row keeps the bar's full height instead of a uniform pad collapsing it.
-        footer.pad_x = Some(p_num(p, "footer_pad").unwrap_or(16.0) as f32);
-        footer.pad_y = Some(p_num(p, "footer_pad_y").unwrap_or(10.0) as f32);
-        footer.children = vec![footer_row];
-        chrome.push(footer);
+    // ── stamp each present region into its cell, in a FIXED emission order ──
+    // (nw, n, ne, w, center, e, sw, s, se) for deterministic child / draw ordering.
+    // Every region stamps BOTH `col` AND `row`: a grid child is "explicit" if it
+    // carries either, and the missing axis would silently default to 0 — so both
+    // always cross. A single-node region fills its cell exactly; a multi-node region
+    // stamps each node, which grid stacks overlapping in the same cell (the
+    // documented stack case) — no wrapper kind is introduced.
+    let regions: [(&str, f64, f64); 9] = [
+        ("nw", 0.0, 0.0), ("n", 1.0, 0.0), ("ne", 2.0, 0.0),
+        ("w", 0.0, 1.0), ("center", 1.0, 1.0), ("e", 2.0, 1.0),
+        ("sw", 0.0, 2.0), ("s", 1.0, 2.0), ("se", 2.0, 2.0),
+    ];
+    for (name, col, row) in regions {
+        // ONE region → ONE cell. Every named region — INCLUDING the `n` title bar and the
+        // `s` footer — is confined to its own single grid cell, giving nine distinct,
+        // non-overlapping zones (a true 3×3 border grid). The `n` bar sits in the top-CENTRE
+        // cell (1,0), flanked by the `nw` / `ne` corner cells that hold the runes, so the
+        // title can never overlap a corner rune (the collision a full-bleed `n`/`s` span
+        // reintroduced). A multi-node region stamps every node into the SAME cell, which grid
+        // stacks overlapping (the documented stack case) — no wrapper kind is introduced.
+        for node in take_slot(slots, name) {
+            grid.children.push(with_num(with_num(node, "col", col), "row", row));
+        }
     }
-
-    let mut col = elem("column");
-    col.anchor = Some(UiAnchor::TopLeft);
-    col = with_num(col, "width_frac", 1.0);
-    col = with_num(col, "height_frac", 1.0);
-    col.children = chrome;
 
     // ── rune-inlay overlay: fills the frame; glyphs at the four corners ──
     let mut runes = with_style(elem("rune_corners"), Some(sty("runes").as_str()));
     runes.anchor = Some(UiAnchor::TopLeft);
     runes = with_num(runes, "width_frac", 1.0);
     runes = with_num(runes, "height_frac", 1.0);
+    // A closable frame's ✕ owns the top-right corner — blank the `tr` glyph so it doesn't
+    // paint beneath the button.
+    if closable {
+        runes = with_text(runes, "tr", "");
+    }
 
-    // ── frame: a styled STACK overlaying the chrome column + the rune inlays ──
+    // ── frame: a styled STACK overlaying the border grid + the rune inlays ──
+    // The stack itself carries `settings.window` and draws through `draw_panel_bg`
+    // (a styled stack == a styled panel in look) — that IS the frame bg, identical to
+    // `window`. Size is a fixed `w` / `h` in px OR a RESPONSIVE `w_frac` / `h_frac`
+    // fraction of the parent; a fixed axis wins, `*_frac` fills in only the axis left
+    // unset. Self-pins Center + its own size (like `window`), so a scene cannot
+    // re-anchor the modal through `overlay_placement`.
     let mut frame = with_style(elem("stack"), Some(sty("window").as_str()));
     frame.anchor = Some(UiAnchor::Center);
-    frame.width = p_num(p, "w").map(|n| n as f32);
-    frame.height = p_num(p, "h").map(|n| n as f32);
-    frame.children = vec![col, runes];
+    frame.width = p_num(p, "w").map(|v| v as f32);
+    frame.height = p_num(p, "h").map(|v| v as f32);
+    if frame.width.is_none() {
+        if let Some(wf) = p_num(p, "w_frac") {
+            frame = with_num(frame, "width_frac", wf);
+        }
+    }
+    if frame.height.is_none() {
+        if let Some(hf) = p_num(p, "h_frac") {
+            frame = with_num(frame, "height_frac", hf);
+        }
+    }
+    frame.children = vec![grid, runes];
     frame
 }
 
-/// **Card** — a Prism carved-stone slab: a styled `panel` wrapping a `column`
+/// **Card** — a Prism carved-stone slab: a styled `cell` wrapping a `cell`
 /// of an optional header (a `title` line above an optional `subtitle` line) and
 /// then the `content` slot. A DS Card is inert chrome, so `disabled` does NOT
 /// gate interactivity — it re-points the header text at muted colour paths
@@ -412,11 +761,11 @@ fn card(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNod
     }
 
     // Body: the (optional) header column tight over the spliced content slot.
-    let mut body = elem("column");
+    let mut body = elem("cell");
     body.gap = p_num(p, "gap").unwrap_or(10.0) as f32;
     let mut body_kids: Vec<UiNode> = Vec::new();
     if !header_kids.is_empty() {
-        let mut header = elem("column");
+        let mut header = elem("cell");
         header.gap = p_num(p, "header_gap").unwrap_or(4.0) as f32;
         header.children = header_kids;
         body_kids.push(header);
@@ -428,416 +777,103 @@ fn card(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNod
     // `menu.panel`); `pad` insets the body from the carved-stone edge. Placement
     // (anchor/size/width) is left default so a scene can pin/size the instance
     // through `overlay_placement`.
-    let mut panel = with_style(elem("panel"), Some(p_text(p, "style").unwrap_or("menu.panel")));
+    let mut panel = with_style(elem("cell"), Some(p_text(p, "style").unwrap_or("menu.panel")));
     panel.pad = p_num(p, "pad").unwrap_or(16.0) as f32;
     panel.children = vec![body];
     panel
 }
 
-/// **Popup menu** — the shared modal surface the shell's `MenuView` (menu / pause /
-/// confirm, `menu.lua`'s non-launcher path) generalises: a full-bleed `overlay`
-/// scrim with a centred (or left-hero) popup `panel` floating **above** it on its
-/// own sub-layer, holding a title, an optional subtitle, an optional divider rule,
-/// and the caller's vertical stack of `button`s.
+/// **OptionGrid** — a flowing FIELD of clickable option cards: the reusable "pick a task from a
+/// field of options" control. The import WORKFLOW selector is one instance; the scene selector is
+/// the same idea in a second layout form. A scene LOOPS its own list and builds one option node per
+/// entry (a `card` tile under a click `button`, or any node it likes), passing them as the `cards`
+/// slot; this template arranges them into rows of `cols` inside a recessed WELL, under an optional
+/// caps `heading` and italic `subtitle`, with an optional `hint` pinned to the bottom. Arbitrary
+/// count → more rows. The field GROWS to fill its container (e.g. a `window` well), so the selector
+/// scales with the modal instead of the modal shrinking to the cards.
 ///
-/// Slots: `items` (the popup's button column — one `button` node per entry the scene
-/// supplies, each carrying its own `label`/`action`/`style`), and `muse` (an optional
-/// backdrop `sprite`, spliced behind the popup on the low layer so the popup's panel /
-/// text / buttons always read over it). Props (all optional): `layout`
-/// (`"center"` | `"left"`, default centred), `title` + `title_size` + `title_color`,
-/// `subtitle` + `subtitle_size` + `subtitle_color`, `divider` (bool — draw the rule),
-/// the dotted style paths `overlay_style` / `panel_style` / `divider_style`, and the
-/// `panel_w` / `panel_pad` / `panel_gap` / `items_gap` geometry. Numeric + style
-/// defaults mirror the `modal.*` / `screens.*` blocks so the template renders
-/// standalone; a scene overrides them from its `ui_elements` section. The builder only
-/// names dotted `style`/`color` paths — it never touches a colour, so the one palette
-/// can't fork.
-fn popup_menu(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
-    // Full-bleed dim / gradient behind the popup — the shell's `screens.<screen>` block.
-    let mut scrim = with_style(elem("panel"), Some(p_text(p, "overlay_style").unwrap_or("screens.pause")));
-    scrim.anchor = Some(UiAnchor::TopLeft);
-    scrim = with_num(scrim, "width_frac", 1.0);
-    scrim = with_num(scrim, "height_frac", 1.0);
+/// Slot: `cards` (the option nodes — the scene owns each tile's look and size). Props (all
+/// optional): `cols` (per row, default 4); `heading` + `heading_size` + `heading_color`;
+/// `subtitle` + `subtitle_size` + `subtitle_color` (wraps); `hint` + `hint_size` + `hint_color`;
+/// `gap` (between heading / well / hint), `grid_gap` (between cards), `well_pad`, and the dotted
+/// `well_style` path. Only dotted style/colour PATHS cross here — never a colour.
+fn option_grid(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
+    let cols = (p_num(p, "cols").unwrap_or(4.0) as usize).max(1);
+    let grid_gap = p_num(p, "grid_gap").unwrap_or(20.0) as f32;
 
-    // Popup column: title · (subtitle) · (divider) · the button stack.
-    let mut col: Vec<UiNode> = Vec::new();
-
-    // Title — colour rides a dotted `color` path (text's escape hatch), not `style`;
-    // `size` is the row height it occupies in the flow, `text_size` the glyph size
-    // (mirrors `menu.lua`'s `line()` helper: `size = text_size + 10`).
-    let title_size = p_num(p, "title_size").unwrap_or(52.0);
-    let mut title = with_text(elem("text"), "text", p_text(p, "title").unwrap_or(""));
-    title = with_text(title, "align", "center");
-    title = with_text(title, "font", "display");
-    title = with_text(title, "color", p_text(p, "title_color").unwrap_or("modal.title.color"));
-    title = with_num(title, "text_size", title_size);
-    title.size = Some((title_size + 10.0) as f32);
-    col.push(title);
-
-    if let Some(sub) = p_text(p, "subtitle") {
-        let sub_size = p_num(p, "subtitle_size").unwrap_or(11.0);
-        let mut subtitle = with_text(elem("text"), "text", sub);
-        subtitle = with_text(subtitle, "align", "center");
-        subtitle = with_text(subtitle, "font", "label");
-        subtitle = with_text(subtitle, "color", p_text(p, "subtitle_color").unwrap_or("modal.subtitle.color"));
-        subtitle = with_num(subtitle, "text_size", sub_size);
-        subtitle.size = Some((sub_size + 10.0) as f32);
-        col.push(subtitle);
-    }
-
-    if p_bool(p, "divider") {
-        // A 1px styled rule (its fill comes from the block's `color` key, e.g. bronze).
-        let mut rule = with_style(elem("panel"), Some(p_text(p, "divider_style").unwrap_or("modal.divider")));
-        rule.size = Some(1.0);
-        col.push(rule);
-    }
-
-    // The scene's button stack, wrapped in a column so it keeps its OWN gap, independent
-    // of the popup's title/subtitle spacing (mirrors `menu.lua`'s `button_stack`).
-    let mut items = elem("column");
-    items.gap = p_num(p, "items_gap").unwrap_or(12.0) as f32;
-    items.children = take_slot(slots, "items");
-    col.push(items);
-
-    // Optional footer line under the buttons (e.g. the pause screen's "ESC TO RETURN").
-    if let Some(footer) = p_text(p, "footer") {
-        let fsz = p_num(p, "footer_size").unwrap_or(10.0);
-        let mut f = with_text(elem("text"), "text", footer);
-        f = with_text(f, "align", "center");
-        f = with_text(f, "font", "label");
-        f = with_text(f, "color", p_text(p, "footer_color").unwrap_or("modal.footer.color"));
-        f = with_num(f, "text_size", fsz);
-        f.size = Some((fsz + 10.0) as f32);
-        col.push(f);
-    }
-
-    // The popup: a fixed-width styled panel lifted onto the UI sub-layer, so a Muse
-    // spliced below (low layer) can never cover its panel / text / buttons — within one
-    // layer a same-layer sprite draws over a panel, so the popup must sit a layer up.
-    let mut popup = with_style(elem("panel"), Some(p_text(p, "panel_style").unwrap_or("modal.panel")));
-    popup.width = Some(p_num(p, "panel_w").unwrap_or(404.0) as f32);
-    popup.pad = p_num(p, "panel_pad").unwrap_or(38.0) as f32;
-    popup.gap = p_num(p, "panel_gap").unwrap_or(16.0) as f32;
-    popup = with_num(popup, "layer", 1.0);
-    popup.children = col;
-    // Placement: centred (pause / confirm) or a left-hero with the menu's 150px inset.
-    if p_text(p, "layout") == Some("left") {
-        popup.anchor = Some(UiAnchor::Left);
-        popup.offset = [150.0, 0.0];
-    } else {
-        popup.anchor = Some(UiAnchor::Center);
-    }
-
-    // Root: a full-bleed overlay page — scrim, then the optional Muse (behind), then the
-    // popup. Pinned top-left at frac 1.0 so `overlay_placement` can't re-anchor the whole
-    // modal from a scene's placement props (the page always fills its handed rect).
-    let mut root = elem("page");
-    root.anchor = Some(UiAnchor::TopLeft);
-    root = with_num(root, "width_frac", 1.0);
-    root = with_num(root, "height_frac", 1.0);
-    let mut kids = vec![scrim];
-    kids.extend(take_slot(slots, "muse"));
-    kids.push(popup);
-    root.children = kids;
-    root
-}
-
-/// One centred text line in a dialog's popup column — mirrors the shell modal's
-/// `line`: the node `size` is the row height, the `text_size` prop the glyph size,
-/// `color` a dotted path, centred, in the named `font`. A `bind` names a live Model
-/// key (e.g. the confirm countdown) in place of literal `text`.
-fn dialog_line(
-    text: Option<&str>,
-    bind: Option<&str>,
-    text_size: f64,
-    color: &str,
-    font: &str,
-) -> UiNode {
-    let mut n = elem("text");
-    n.size = Some((text_size + 10.0) as f32);
-    n = with_num(n, "text_size", text_size);
-    n.props.insert("color".to_string(), Value::Text(color.to_string()));
-    n.props.insert("align".to_string(), Value::Text("center".to_string()));
-    n.props.insert("font".to_string(), Value::Text(font.to_string()));
-    match bind {
-        Some(k) => {
-            n.props.insert("text_bind".to_string(), Value::Text(k.to_string()));
+    // One text line: `size` is the row height it reserves in the flow (enough for `lines` lines),
+    // `text_size` the glyph size. A wrapped line breaks to the column width over its reserved height.
+    let line = |text: &str, glyph: f64, lines: f64, color: &str, font: &str, italic: bool, wrap: bool, tracking: f64| -> UiNode {
+        let mut n = elem("text");
+        n.size = Some((glyph * 1.3 * lines) as f32);
+        n = with_num(n, "text_size", glyph);
+        n.props.insert("text".to_string(), Value::Text(text.to_string()));
+        n.props.insert("color".to_string(), Value::Text(color.to_string()));
+        n.props.insert("font".to_string(), Value::Text(font.to_string()));
+        if italic {
+            n.props.insert("italic".to_string(), Value::Bool(true));
         }
-        None => {
-            n.props
-                .insert("text".to_string(), Value::Text(text.unwrap_or("").to_string()));
+        if wrap {
+            n.props.insert("wrap".to_string(), Value::Bool(true));
         }
-    }
-    n
-}
-
-/// One dialog action button: a `button` piece whose `action` fires the choice and
-/// whose fill / label come from `modal.buttons.variants.<variant>` (primary
-/// sapphire / secondary stone / danger rust). `h` is its height in the button column.
-fn variant_button(label: &str, action: &str, variant: &str, h: f64, label_size: f64) -> UiNode {
-    let path = format!("modal.buttons.variants.{variant}");
-    let mut b = with_style(elem("button"), Some(path.as_str()));
-    b.id = action.to_string();
-    b.action = Some(action.to_string());
-    b.size = Some(h as f32);
-    b.props.insert("label".to_string(), Value::Text(label.to_string()));
-    b = with_num(b, "label_size", label_size);
-    b
-}
-
-/// **ChoiceDialog** — a centred modal that poses a question and offers a small set
-/// of actions. Generalises the shell's display-confirm overlay
-/// (`ConfirmDisplayScene`): a full-screen dim `overlay` blocks the scene behind,
-/// and a framed popup floats centred with a `title`, an optional static `message`
-/// and/or a live `subtitle_bind` line (the confirm countdown), a divider rule, and
-/// a vertical stack of action buttons.
-///
-/// Buttons come from props by default — a `confirm_*` then a `cancel_*` entry, each
-/// `{label, action, variant}` where `variant` selects
-/// `modal.buttons.variants.<variant>` — so a scene declares the whole dialog as
-/// pure data. A `buttons` slot, when the scene supplies one, replaces the
-/// prop-built stack outright (ready `button` nodes, any count / order).
-///
-/// Composes-a-builder in spirit: the framed popup is built here from
-/// panel/text/button pieces through the `dialog_line` / `variant_button` helpers —
-/// there is no separate `popup_menu` / `window` builder in the registry yet. If one
-/// lands, this can delegate the frame to it via a direct same-module fn call and
-/// keep the same prop / slot surface.
-///
-/// Slots: optional `buttons`. Props (all optional): `title` + `title_size` +
-/// `title_color`; `message` + `message_size` + `message_color`; `subtitle_bind` +
-/// `subtitle_size` + `subtitle_color`; `overlay_style`, `panel_style`,
-/// `divider_style`; `panel_w`, `panel_pad`, `gap`; `btn_h`, `btn_gap`,
-/// `btn_label_size`; and the per-button
-/// `confirm_label/confirm_action/confirm_variant` +
-/// `cancel_label/cancel_action/cancel_variant`. The numeric knobs default to the
-/// shared `modal.*` metrics, so a scene usually passes only text + actions.
-fn choice_dialog(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
-    // Popup column, top to bottom: title · optional message/live line · divider · buttons.
-    let mut col: Vec<UiNode> = Vec::new();
-
-    // Title — the question, in the display face. Defaults to the modal title size.
-    col.push(dialog_line(
-        p_text(p, "title"),
-        None,
-        p_num(p, "title_size").unwrap_or(52.0),
-        p_text(p, "title_color").unwrap_or("modal.title.color"),
-        "display",
-    ));
-
-    // A static message line (subtitle face) …
-    if let Some(message) = p_text(p, "message") {
-        col.push(dialog_line(
-            Some(message),
-            None,
-            p_num(p, "message_size").unwrap_or(11.0),
-            p_text(p, "message_color").unwrap_or("modal.subtitle.color"),
-            "label",
-        ));
-    }
-    // … and/or a live line bound to a Model key (the confirm countdown), in the body face.
-    if let Some(bind) = p_text(p, "subtitle_bind") {
-        col.push(dialog_line(
-            None,
-            Some(bind),
-            p_num(p, "subtitle_size").unwrap_or(15.0),
-            p_text(p, "subtitle_color").unwrap_or("modal.countdown.color"),
-            "body",
-        ));
-    }
-
-    // Divider rule (the bronze hairline the modal chrome uses).
-    let mut divider = with_style(
-        elem("panel"),
-        Some(p_text(p, "divider_style").unwrap_or("modal.divider")),
-    );
-    divider.size = Some(1.0);
-    col.push(divider);
-
-    // Buttons: a `buttons` slot the scene supplies wins outright; otherwise compose
-    // the confirm (primary) then cancel (secondary) entries from props.
-    let btn_h = p_num(p, "btn_h").unwrap_or(48.0);
-    let btn_label = p_num(p, "btn_label_size").unwrap_or(15.0);
-    let slot_buttons = take_slot(slots, "buttons");
-    let buttons = if !slot_buttons.is_empty() {
-        slot_buttons
-    } else {
-        let mut bs: Vec<UiNode> = Vec::new();
-        if let Some(label) = p_text(p, "confirm_label") {
-            bs.push(variant_button(
-                label,
-                p_text(p, "confirm_action").unwrap_or("confirm"),
-                p_text(p, "confirm_variant").unwrap_or("primary"),
-                btn_h,
-                btn_label,
-            ));
+        if tracking > 0.0 {
+            n = with_num(n, "tracking", tracking);
         }
-        if let Some(label) = p_text(p, "cancel_label") {
-            bs.push(variant_button(
-                label,
-                p_text(p, "cancel_action").unwrap_or("cancel"),
-                p_text(p, "cancel_variant").unwrap_or("secondary"),
-                btn_h,
-                btn_label,
-            ));
-        }
-        bs
+        n
     };
-    let mut button_col = elem("column");
-    button_col.gap = p_num(p, "btn_gap").unwrap_or(12.0) as f32;
-    button_col.children = buttons;
-    col.push(button_col);
 
-    // The framed popup — centred, auto-heights to its column, lifted above the overlay.
-    let mut popup = with_style(
-        elem("panel"),
-        Some(p_text(p, "panel_style").unwrap_or("modal.panel")),
-    );
-    popup.id = "popup".to_string();
-    popup.anchor = Some(UiAnchor::Center);
-    popup.width = Some(p_num(p, "panel_w").unwrap_or(404.0) as f32);
-    popup.pad = p_num(p, "panel_pad").unwrap_or(38.0) as f32;
-    popup.gap = p_num(p, "gap").unwrap_or(16.0) as f32;
-    popup = with_num(popup, "layer", 1.0);
-    popup.children = col;
-
-    // The full-screen dim behind the popup — a *styled* overlay claims the pointer,
-    // so clicks outside the popup don't fall through to the scene it covers. Omit
-    // `overlay_style` for a non-blocking dialog.
-    let mut overlay = with_style(elem("panel"), p_text(p, "overlay_style"));
-    overlay.anchor = Some(UiAnchor::TopLeft);
-    overlay = with_num(overlay, "width_frac", 1.0);
-    overlay = with_num(overlay, "height_frac", 1.0);
-
-    // Root: a full-screen overlay page holding the dim + the centred popup.
-    let mut root = elem("page");
-    root.anchor = Some(UiAnchor::TopLeft);
-    root = with_num(root, "width_frac", 1.0);
-    root = with_num(root, "height_frac", 1.0);
-    root.children = vec![overlay, popup];
-    root
-}
-
-/// One framed RTT panel: a `grow`ing `stage` wearing `style` and keyed by `id`,
-/// that renders `source` into its `StageSlot`. An optional `live_bind` (a Model
-/// key) gates whether the slot draws a fresh target this frame. Shared by both
-/// sides of `side_by_side_rtt` so the two panels differ only in id / source /
-/// liveness. `source` / `live_bind` are omitted when absent, so the walker's own
-/// defaults apply (a missing `source` skips the slot with a warn; missing
-/// `live_bind` falls through to live).
-fn rtt_stage(id: String, source: Option<&str>, style: &str, live_bind: Option<&str>) -> UiNode {
-    let mut stage = with_style(elem("stage"), Some(style));
-    stage.id = id;
-    stage.grow = Some(1.0);
-    if let Some(src) = source {
-        stage
-            .props
-            .insert("source".to_string(), Value::Text(src.to_string()));
+    // Caps tracking: a MODEST letter-spacing for section headers (the `label` face already tracks
+    // 0.16 by default). A scene can override per line; the defaults stay tight — never the 2-em
+    // spread that read as "extra wide".
+    let head_track = p_num(p, "heading_tracking").unwrap_or(0.22);
+    let hint_track = p_num(p, "hint_tracking").unwrap_or(0.16);
+    let mut col: Vec<UiNode> = Vec::new();
+    if let Some(h) = p_text(p, "heading") {
+        col.push(line(h, p_num(p, "heading_size").unwrap_or(12.0), 1.0, p_text(p, "heading_color").unwrap_or("modal.subtitle.color"), "label", false, false, head_track));
     }
-    if let Some(bind) = live_bind {
-        stage
-            .props
-            .insert("live_bind".to_string(), Value::Text(bind.to_string()));
-    }
-    stage
-}
-
-/// **SideBySideRTT** — a two-panel render-to-texture comparison (In-Place vs
-/// Root-Motion, before/after, A/B). A `grow`ing `row` holds two framed `stage`
-/// viewports side by side; each stage reserves its own `StageSlot` (keyed by a
-/// prefix-derived id) for the scene's frame graph to fill. The left panel renders
-/// `left_source`, the right renders `right_source`; both wear the same framed-holder
-/// `style`. A per-side `live_bind` (a Model key) gates whether that panel redraws a
-/// fresh target this frame or blits its cached poster.
-///
-/// This is the `SideBySideRTT` the `workbench` doc names for its `viewport` slot:
-/// its grow-1 root fills the body row's flexible width when dropped there.
-///
-/// Props (all optional): `left_source` / `right_source` (the `stages.<source>`
-/// sub-scene each side draws), `style` (framed-holder style path, default
-/// `assetpipeline.holder`), `gap` (px between the two panels), `left_live_bind` /
-/// `right_live_bind` (per-side liveness Model keys). No slots — a stage is a
-/// reserved rect, not authored children.
-fn side_by_side_rtt(ctx: &BuildCtx, p: &HashMap<String, Value>, _slots: &mut Slots) -> UiNode {
-    let style = p_text(p, "style").unwrap_or("assetpipeline.holder");
-
-    let left = rtt_stage(
-        format!("{}_left", ctx.id_prefix),
-        p_text(p, "left_source"),
-        style,
-        p_text(p, "left_live_bind"),
-    );
-    let right = rtt_stage(
-        format!("{}_right", ctx.id_prefix),
-        p_text(p, "right_source"),
-        style,
-        p_text(p, "right_live_bind"),
-    );
-
-    let mut row = elem("row");
-    row.grow = Some(1.0);
-    row.gap = p_num(p, "gap").unwrap_or(0.0) as f32;
-    row.children = vec![left, right];
-    row
-}
-
-/// **QuadRTTView** — a thin, framed RTT holder: ONE styled `stage` piece whose
-/// reserved [`StageSlot`](crate::component::StageSlot) rect a scene tiles a
-/// `QuadGrid` (a 2×2 of render targets) into. Generalises the Kilnworks
-/// `editor_quad`: the builder only *places and frames* the slot; the scene fills
-/// it from `UiFrame::stages` — so this template takes **no slots**, only scalar
-/// props.
-///
-/// Props (all optional): `source` (the `stages.<source>` offscreen sub-scene to
-/// render), `style` (dotted panel style for the frame + its `inset`/`tint`,
-/// default `assetpipeline.holder`), `quad_id` (the slot id a scene keys its
-/// render target off — else the node's own id via `ctx.id_prefix`), `width` /
-/// `height` (a fixed size; otherwise the holder GROWS to fill its flow slot), and
-/// the pass-throughs `live` / `live_bind` / `tint` that the walker's stage pass
-/// reads straight off the node (see [`StageSlot`](crate::component::StageSlot)).
-fn quad_rtt_view(ctx: &BuildCtx, p: &HashMap<String, Value>, _slots: &mut Slots) -> UiNode {
-    // The frame is one `stage` piece: the walker draws its dotted panel `style` as
-    // the PiP backdrop (and reads `inset` / `tint` from that same block), then
-    // reserves the inset rect as a `StageSlot` for the scene to blit into.
-    let style = p_text(p, "style").unwrap_or("assetpipeline.holder");
-    let mut stage = with_style(elem("stage"), Some(style));
-
-    // Which offscreen sub-scene renders into the slot. The walker skips a stage
-    // with no `source`, so a scene supplies it; the builder just forwards it.
-    if let Some(source) = p_text(p, "source") {
-        stage
-            .props
-            .insert("source".to_string(), Value::Text(source.to_string()));
+    if let Some(s) = p_text(p, "subtitle") {
+        col.push(line(s, p_num(p, "subtitle_size").unwrap_or(13.0), 2.0, p_text(p, "subtitle_color").unwrap_or("modal.subtitle.color"), "body", true, true, 0.0));
     }
 
-    // Stable slot id: an explicit `quad_id` wins, else the template node's own id
-    // (`ctx.id_prefix`). A scene keys its per-slot render target off this id.
-    stage.id = p_text(p, "quad_id")
-        .map(str::to_string)
-        .unwrap_or_else(|| ctx.id_prefix.clone());
-
-    // Size: honour a fixed `width` / `height` if asked; otherwise grow to fill the
-    // parent's flow slot (the viewport-sized default when dropped into a
-    // `workbench` `viewport` slot). `grow` and a fixed size are mutually exclusive
-    // in layout, so only set `grow` when neither dimension was pinned.
-    let w = p_num(p, "width").map(|v| v as f32);
-    let h = p_num(p, "height").map(|v| v as f32);
-    stage.width = w;
-    stage.height = h;
-    if w.is_none() && h.is_none() {
-        stage.grow = Some(1.0);
-    }
-
-    // Liveness + composite tint ride verbatim through to the walker's stage pass:
-    // `live_bind` (a Model key), `live` (a literal bool), `tint` (a dotted colour
-    // path). Copy whichever the scene set, preserving its `Value` type.
-    for key in ["live", "live_bind", "tint"] {
-        if let Some(v) = p.get(key) {
-            stage.props.insert(key.to_string(), v.clone());
+    // Chunk the author-built option cards into rows of `cols` (the walker has no wrap engine, so the
+    // grid is authored as rows). Consumes the slot so nodes move, never clone.
+    let mut rows: Vec<UiNode> = Vec::new();
+    let mut it = take_slot(slots, "cards").into_iter().peekable();
+    while it.peek().is_some() {
+        let mut kids: Vec<UiNode> = Vec::new();
+        for _ in 0..cols {
+            match it.next() {
+                Some(c) => kids.push(c),
+                None => break,
+            }
         }
+        let mut row = elem("row");
+        row.gap = grid_gap;
+        row.children = kids;
+        rows.push(row);
+    }
+    let mut grid = elem("cell");
+    grid.gap = grid_gap;
+    grid.children = rows;
+
+    // The recessed well the cards sit in — grows to fill the field so the hint pins to the bottom.
+    let mut well = with_style(elem("cell"), p_text(p, "well_style"));
+    well.grow = Some(1.0);
+    well.pad = p_num(p, "well_pad").unwrap_or(24.0) as f32;
+    well.children = vec![grid];
+    col.push(well);
+
+    if let Some(hint) = p_text(p, "hint") {
+        col.push(line(hint, p_num(p, "hint_size").unwrap_or(11.0), 1.0, p_text(p, "hint_color").unwrap_or("modal.subtitle.color"), "label", false, false, hint_track));
     }
 
-    stage
+    // Root: a column that grows to fill its container (the window well), so the field tracks the
+    // modal's size — an arbitrary number of cards flows into more rows rather than resizing the modal.
+    let mut root = elem("cell");
+    root.grow = Some(1.0);
+    root.gap = p_num(p, "gap").unwrap_or(14.0) as f32;
+    root.children = col;
+    root
 }
 
 #[cfg(test)]
@@ -846,6 +882,210 @@ mod tests {
 
     fn leaf(component: &str) -> UiNode {
         elem(component)
+    }
+
+    /// Props map from `(key, Value)` pairs — the test-side twin of a scene's node table.
+    fn props_of(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    /// A one-entry Data registry over a leaked (test-'static) proto value.
+    fn data_reg(name: &str, proto: serde_json::Value) -> TemplateRegistry {
+        let mut reg: TemplateRegistry = HashMap::new();
+        reg.insert(name.to_string(), TemplateDef::Data(Box::leak(Box::new(proto))));
+        reg
+    }
+
+    // ── the substitution engine (`substitute` / `when` / interpolation) ──────────
+
+    /// Exact-form `@name` substitution is TYPED: a bool / number / text prop lands as
+    /// its native JSON value, and a `@name=default` fills absence — `true`/`false` as
+    /// bool, numeric-looking as number, else string, `=` alone as empty string.
+    #[test]
+    fn substitute_exact_form_is_typed_and_defaults_fill_absence() {
+        let props = props_of(&[
+            ("flag", Value::Bool(false)),
+            ("n", Value::Number(52.0)),
+            ("t", Value::Text("Prism".into())),
+        ]);
+        let proto = serde_json::json!({
+            "flag": "@flag", "n": "@n", "t": "@t",
+            "dn": "@missing=12", "dt": "@missing=label", "de": "@missing=",
+            "db": "@missing=true"
+        });
+        let out = substitute(&proto, &props).expect("object survives");
+        assert_eq!(out["flag"], serde_json::json!(false), "bool rides native");
+        assert_eq!(out["n"], serde_json::json!(52.0), "number rides native");
+        assert_eq!(out["t"], serde_json::json!("Prism"), "text rides native");
+        assert_eq!(out["dn"], serde_json::json!(12.0), "numeric-looking default → number");
+        assert_eq!(out["dt"], serde_json::json!("label"), "non-numeric default → string");
+        assert_eq!(out["de"], serde_json::json!(""), "`=` alone → empty string");
+        assert_eq!(out["db"], serde_json::json!(true), "`true` default → bool (a `flag` prop)");
+    }
+
+    /// An absent prop with NO default removes its holder: the object key vanishes and
+    /// the array element is dropped (a builder's `if let Some(..)` arms, as data).
+    #[test]
+    fn substitute_absent_prop_removes_key_and_array_element() {
+        let props = props_of(&[("kept", Value::Number(1.0))]);
+        let proto = serde_json::json!({
+            "kept": "@kept",
+            "gone": "@missing",
+            "list": ["@kept", "@missing", "tail"]
+        });
+        let out = substitute(&proto, &props).expect("object survives");
+        assert!(out.get("gone").is_none(), "absent + no default → the key is removed");
+        assert_eq!(out["list"], serde_json::json!([1.0, "tail"]), "the element is dropped");
+    }
+
+    /// `@{name}` interpolation replaces every occurrence with the prop's text
+    /// rendering (whole numbers render bare: `52`, not `52.0`); a default fills
+    /// absence; an absent name with no default removes the WHOLE value.
+    #[test]
+    fn substitute_interpolates_strings_and_removes_on_absent() {
+        let props = props_of(&[
+            ("variant", Value::Text("danger".into())),
+            ("n", Value::Number(52.0)),
+        ]);
+        let proto = serde_json::json!({
+            "style": "modal.buttons.variants.@{variant=primary}",
+            "fallback": "modal.buttons.variants.@{missing=primary}",
+            "multi": "@{variant}-@{n}",
+            "gone": "x-@{missing}"
+        });
+        let out = substitute(&proto, &props).expect("object survives");
+        assert_eq!(out["style"], serde_json::json!("modal.buttons.variants.danger"));
+        assert_eq!(out["fallback"], serde_json::json!("modal.buttons.variants.primary"));
+        assert_eq!(out["multi"], serde_json::json!("danger-52"), "numbers render bare");
+        assert!(out.get("gone").is_none(), "absent interp with no default removes the value");
+    }
+
+    /// `when` gates a node on prop truthiness (present ∧ not `false` ∧ not empty
+    /// text); `!@name` negates; a passing gate strips the `when` key.
+    #[test]
+    fn substitute_when_gates_drop_nodes_and_strip_the_key() {
+        let props = props_of(&[
+            ("subtitle", Value::Text("THE SEVEN SHARDS".into())),
+            ("divider", Value::Bool(false)),
+            ("empty", Value::Text(String::new())),
+        ]);
+        let proto = serde_json::json!({ "children": [
+            { "component": "text", "when": "@subtitle" },
+            { "component": "cell", "when": "@divider" },
+            { "component": "cell", "when": "@empty" },
+            { "component": "cell", "when": "@missing" },
+            { "component": "row", "when": "!@divider" },
+            { "component": "grid", "when": "!@subtitle" }
+        ]});
+        let out = substitute(&proto, &props).expect("object survives");
+        let kids = out["children"].as_array().expect("children array");
+        let kinds: Vec<&str> =
+            kids.iter().map(|k| k["component"].as_str().unwrap_or("?")).collect();
+        assert_eq!(kinds, vec!["text", "row"], "false-bool / empty-text / absent all drop; negation inverts");
+        assert!(kids[0].get("when").is_none(), "a passing gate strips its `when` key");
+    }
+
+    /// `$token` / `$$` strings are stringtable refs resolved at DRAW — the
+    /// substitution engine must pass them through untouched, never double-process.
+    #[test]
+    fn substitute_passes_stringtable_refs_through_untouched() {
+        let props = props_of(&[("t", Value::Text("x".into()))]);
+        let proto = serde_json::json!({ "a": "$menu_quit", "b": "$$5.00", "c": "$with @{t} inside" });
+        let out = substitute(&proto, &props).expect("object survives");
+        assert_eq!(out["a"], serde_json::json!("$menu_quit"));
+        assert_eq!(out["b"], serde_json::json!("$$5.00"));
+        assert_eq!(out["c"], serde_json::json!("$with @{t} inside"), "a `$` string is NEVER interpolated");
+    }
+
+    // ── slot splice + `when_filled` + the depth guard ────────────────────────────
+
+    /// A `slot` node is replaced by the instance's named content; an empty slot
+    /// falls back to the slot node's own children; both empty → nothing.
+    #[test]
+    fn data_slot_splices_content_and_falls_back() {
+        let proto = serde_json::json!({ "component": "cell", "children": [
+            { "component": "slot", "name": "items", "children": [ { "component": "text" } ] },
+            { "component": "slot", "name": "extra" }
+        ]});
+        let reg = data_reg("holder", proto);
+
+        // Filled: the two buttons replace the slot node (fallback discarded).
+        let filled = template_node("holder", vec![("items", vec![leaf("button"), leaf("button")])]);
+        let out = expand(filled, &reg);
+        assert_eq!(out.component, "cell");
+        assert_eq!(out.children.len(), 2);
+        assert!(out.children.iter().all(|c| c.component == "button"));
+
+        // Empty: the `items` fallback text stands in; `extra` (no fallback) yields nothing.
+        let out = expand(template_node("holder", vec![]), &reg);
+        assert_eq!(out.children.len(), 1);
+        assert_eq!(out.children[0].component, "text");
+    }
+
+    /// `when_filled: true` drops its node when no slot beneath produced INSTANCE
+    /// content (fallback does not count), and the marker prop never leaks through.
+    #[test]
+    fn data_when_filled_drops_an_unfilled_wrapper() {
+        let proto = serde_json::json!({ "component": "cell", "children": [
+            { "component": "row", "when_filled": true, "children": [
+                { "component": "slot", "name": "footer" }
+            ]}
+        ]});
+        let reg = data_reg("w", proto);
+
+        let out = expand(template_node("w", vec![("footer", vec![leaf("button")])]), &reg);
+        assert_eq!(out.children.len(), 1, "a filled slot keeps the wrapper");
+        assert_eq!(out.children[0].component, "row");
+        assert!(!out.children[0].props.contains_key("when_filled"), "the marker is stripped");
+
+        let out = expand(template_node("w", vec![]), &reg);
+        assert!(out.children.is_empty(), "an unfilled `when_filled` wrapper is dropped");
+    }
+
+    /// A self-referential data proto trips [`MAX_TEMPLATE_DEPTH`] and falls back to
+    /// the same empty screen as an unknown template — never a hang or a panic.
+    #[test]
+    fn data_depth_guard_stops_a_self_referential_proto() {
+        let proto = serde_json::json!({ "component": "cell", "children": [ { "template": "loop" } ] });
+        let reg = data_reg("loop", proto);
+        let mut node = template_node("loop", vec![]);
+        node.id = "keepme".to_string();
+        let out = expand(node, &reg);
+        // The chain expands MAX_TEMPLATE_DEPTH times, then the innermost falls back.
+        fn depth_of(n: &UiNode) -> usize {
+            n.children.first().map(|c| 1 + depth_of(c)).unwrap_or(0)
+        }
+        assert_eq!(depth_of(&out), MAX_TEMPLATE_DEPTH, "8 cells then the fallback leaf");
+        fn innermost(n: &UiNode) -> &UiNode {
+            n.children.first().map(innermost).unwrap_or(n)
+        }
+        assert_eq!(innermost(&out).component, "screen", "the guard stands in the empty page");
+        assert_eq!(out.component, "cell");
+        assert_eq!(out.id, "keepme", "the instance id still lands via overlay_placement");
+    }
+
+    /// The structural pseudo-props: a proto reads the instance's `anchor` (consumed
+    /// structurally by the parsers, so never a real prop) and `id` (the data twin of
+    /// `BuildCtx::id_prefix`) through the same `@` forms as any prop.
+    #[test]
+    fn data_pseudo_props_expose_instance_anchor_and_id() {
+        let proto = serde_json::json!({ "component": "cell", "children": [
+            { "component": "rtt", "id": "@{id}_left", "anchor": "@anchor=center" }
+        ]});
+        let reg = data_reg("stage", proto);
+        let mut node = template_node("stage", vec![]);
+        node.id = "cmp".to_string();
+        node.anchor = Some(UiAnchor::Left);
+        let out = expand(node, &reg);
+        let inner = &out.children[0];
+        assert_eq!(inner.id, "cmp_left", "`@{{id}}` interpolates the instance id");
+        assert_eq!(inner.anchor, Some(UiAnchor::Left), "`@anchor` reads the structural anchor");
+
+        // Without an instance anchor the default holds.
+        let mut plain = template_node("stage", vec![]);
+        plain.id = "cmp".to_string();
+        let out = expand(plain, &reg);
+        assert_eq!(out.children[0].anchor, Some(UiAnchor::Center), "absent anchor → the default");
     }
 
     fn container(component: &str, children: Vec<UiNode>) -> UiNode {
@@ -869,7 +1109,7 @@ mod tests {
     #[test]
     fn expand_is_identity_for_template_free_tree() {
         let reg = builtin_templates();
-        let tree = container("column", vec![leaf("text"), leaf("button")]);
+        let tree = container("cell", vec![leaf("text"), leaf("button")]);
         // No `template` anywhere → expand must return an equal tree.
         assert_eq!(expand(tree.clone(), &reg), tree);
     }
@@ -882,30 +1122,39 @@ mod tests {
             vec![
                 ("header", vec![leaf("text")]),
                 ("tabs", vec![leaf("button"), leaf("button")]),
-                ("viewport", vec![leaf("stage")]),
-                ("rail", vec![leaf("panel")]),
+                ("viewport", vec![leaf("rtt")]),
+                ("rail", vec![leaf("cell")]),
                 ("footer", vec![leaf("button")]),
             ],
         );
         let out = expand(node, &reg);
-        // Root is the full-screen column with 4 rows: header, tabs, body, footer.
-        assert_eq!(out.component, "column");
-        assert_eq!(out.children.len(), 4);
+        // Root is the full-screen `frame` stack overlaying [grid, runes]; the grid's `center`
+        // cell holds the SECTION (a vertical `cell`) with 4 rows: header · tabs · body · footer.
+        assert_eq!(out.component, "stack");
+        assert_eq!(out.children.len(), 2);
+        let grid = &out.children[0];
+        assert_eq!(grid.component, "grid");
+        assert_eq!(grid.children.len(), 1, "only the center region (the section) is placed");
+        let section = &grid.children[0];
+        assert_eq!(section.component, "cell");
+        assert_eq!(p_num(&section.props, "col"), Some(1.0));
+        assert_eq!(p_num(&section.props, "row"), Some(1.0));
+        assert_eq!(section.children.len(), 4);
         let (header, tabs, body, footer) =
-            (&out.children[0], &out.children[1], &out.children[2], &out.children[3]);
+            (&section.children[0], &section.children[1], &section.children[2], &section.children[3]);
         // header row carries its one slot child.
         assert_eq!(header.component, "row");
         assert_eq!(header.children.len(), 1);
         assert_eq!(header.children[0].component, "text");
         // tabs row carries both buttons.
         assert_eq!(tabs.children.len(), 2);
-        // body row = viewport ++ rail, in order.
+        // body row = viewport ++ rail, in order; grows to fill the middle.
         assert_eq!(body.children.len(), 2);
-        assert_eq!(body.children[0].component, "stage");
-        assert_eq!(body.children[1].component, "panel");
+        assert_eq!(body.children[0].component, "rtt");
+        assert_eq!(body.children[1].component, "cell");
         assert_eq!(body.grow, Some(1.0));
         // footer = panel > row > [button].
-        assert_eq!(footer.component, "panel");
+        assert_eq!(footer.component, "cell");
         assert_eq!(footer.children[0].component, "row");
         assert_eq!(footer.children[0].children[0].component, "button");
     }
@@ -924,8 +1173,11 @@ mod tests {
                 || n.slots.values().flatten().any(has_template)
         }
         assert!(!has_template(&out), "no template marker should survive expand");
-        // The inner workbench became a column nested in the outer body row.
-        assert_eq!(out.children[2].children[0].component, "column");
+        // The outer workbench is a frame stack; the inner one (nested in the viewport slot)
+        // expanded to its OWN frame stack — grid → section cell → body row → inner.
+        assert_eq!(out.component, "stack");
+        let inner = &out.children[0].children[0].children[2].children[0];
+        assert_eq!(inner.component, "stack", "the nested workbench expanded to its own frame");
     }
 
     #[test]
@@ -934,7 +1186,7 @@ mod tests {
         let mut node = template_node("does_not_exist", vec![]);
         node.id = "keepme".to_string();
         let out = expand(node, &reg);
-        assert_eq!(out.component, "page");
+        assert_eq!(out.component, "screen");
         assert_eq!(out.id, "keepme");
         assert!(out.children.is_empty());
     }
@@ -943,37 +1195,36 @@ mod tests {
     fn overlay_places_the_instance_when_the_builder_is_neutral() {
         // A builder that returns a bare panel; the scene pins it center.
         fn bare(_c: &BuildCtx, _p: &HashMap<String, Value>, _s: &mut Slots) -> UiNode {
-            elem("panel")
+            elem("cell")
         }
         let mut reg: TemplateRegistry = HashMap::new();
-        reg.insert("bare", bare as TemplateFn);
+        reg.insert("bare".to_string(), TemplateDef::Builder(bare));
         let mut node = elem("");
         node.template = Some("bare".to_string());
         node.anchor = Some(UiAnchor::Center);
         node.width = Some(400.0);
         let out = expand(node, &reg);
-        assert_eq!(out.component, "panel");
+        assert_eq!(out.component, "cell");
         assert_eq!(out.anchor, Some(UiAnchor::Center));
         assert_eq!(out.width, Some(400.0));
     }
 
     #[test]
-    fn window_frames_titlebar_body_footer_and_rune_overlay() {
+    fn window_frames_header_content_footer_section_over_the_frame() {
         let reg = builtin_templates();
         let mut node = template_node(
             "window",
             vec![
-                ("content", vec![leaf("stage")]),
+                ("content", vec![leaf("rtt")]),
                 ("footer", vec![leaf("button")]),
             ],
         );
         node.props.insert("title".to_string(), Value::Text("Grimoire".to_string()));
         node.props.insert("w".to_string(), Value::Number(640.0));
         node.props.insert("h".to_string(), Value::Number(480.0));
-        node.props.insert("has_min".to_string(), Value::Bool(true));
         let out = expand(node, &reg);
 
-        // Root = the styled frame STACK, sized + centred, overlaying [chrome, runes].
+        // Root = the frame STACK, sized + centred, overlaying [border grid, runes].
         assert_eq!(out.component, "stack");
         assert_eq!(p_text(&out.props, "style"), Some("settings.window"));
         assert_eq!(out.anchor, Some(UiAnchor::Center));
@@ -981,58 +1232,161 @@ mod tests {
         assert_eq!(out.height, Some(480.0));
         assert_eq!(out.children.len(), 2);
 
-        let (col, runes) = (&out.children[0], &out.children[1]);
-        // Overlay: rune_corners fills the frame and points at the reused runes block.
+        let (grid, runes) = (&out.children[0], &out.children[1]);
         assert_eq!(runes.component, "rune_corners");
-        assert_eq!(p_text(&runes.props, "style"), Some("settings.runes"));
+        // Closable by default → the tr (top-right) rune is blanked; the ✕ owns that corner.
+        assert_eq!(p_text(&runes.props, "tr"), Some(""));
 
-        // Chrome column = title bar · content well · footer (footer slot non-empty).
-        assert_eq!(col.component, "column");
-        assert_eq!(col.children.len(), 3);
-        let (titlebar, well, footer) = (&col.children[0], &col.children[1], &col.children[2]);
+        // The grid holds the ne ✕ close button (col 2, row 0) + the SECTION (center, col 1, row 1).
+        assert_eq!(grid.component, "grid");
+        assert_eq!(grid.children.len(), 2);
+        let close = grid.children.iter().find(|c| c.component == "button").expect("ne close button");
+        assert_eq!(p_num(&close.props, "col"), Some(2.0));
+        assert_eq!(p_num(&close.props, "row"), Some(0.0));
+        assert_eq!(close.action.as_deref(), Some("close")); // default close_action
+        assert_eq!(p_text(&close.props, "label"), Some("×"));
 
-        // Title bar: text title · grow spacer · minimize · close (has_min = true).
-        assert_eq!(titlebar.component, "row");
-        assert_eq!(p_text(&titlebar.props, "style"), Some("settings.titlebar"));
-        assert_eq!(titlebar.children.len(), 4);
-        assert_eq!(titlebar.children[0].component, "text");
-        assert_eq!(p_text(&titlebar.children[0].props, "text"), Some("Grimoire"));
-        assert_eq!(titlebar.children[1].component, "stack");
-        assert_eq!(titlebar.children[1].grow, Some(1.0));
-        let (min_btn, close_btn) = (&titlebar.children[2], &titlebar.children[3]);
-        assert_eq!(min_btn.component, "button");
-        assert_eq!(min_btn.action.as_deref(), Some("minimize"));
-        assert_eq!(close_btn.component, "button");
-        assert_eq!(close_btn.action.as_deref(), Some("close")); // default close_action
-        assert_eq!(p_text(&close_btn.props, "style"), Some("settings.titlebar.close"));
+        let section = grid.children.iter().find(|c| c.component == "cell").expect("center section");
+        assert_eq!(p_num(&section.props, "col"), Some(1.0));
+        assert_eq!(p_num(&section.props, "row"), Some(1.0));
+        assert_eq!(section.children.len(), 3, "header · content · footer");
+        let (header, content, footer) = (&section.children[0], &section.children[1], &section.children[2]);
 
-        // Content well: a growing panel wrapping the `content` slot verbatim.
-        assert_eq!(well.component, "panel");
-        assert_eq!(well.grow, Some(1.0));
-        assert_eq!(well.children.len(), 1);
-        assert_eq!(well.children[0].component, "stage");
+        // HEADER cell — a titlebar-styled bar holding the title text.
+        assert_eq!(header.component, "cell");
+        assert_eq!(p_text(&header.props, "style"), Some("settings.titlebar"));
+        assert_eq!(p_text(&header.children[0].props, "text"), Some("Grimoire"));
 
-        // Footer: a panel > row > [the footer slot button] (mirrors workbench).
-        assert_eq!(footer.component, "panel");
+        // CONTENT cell — grows to fill the middle, wraps the `content` slot verbatim.
+        assert_eq!(content.component, "cell");
+        assert_eq!(content.grow, Some(1.0));
+        assert_eq!(content.children[0].component, "rtt");
+
+        // FOOTER cell — wraps a row of the footer slot button.
+        assert_eq!(footer.component, "cell");
         assert_eq!(footer.children[0].component, "row");
         assert_eq!(footer.children[0].children[0].component, "button");
     }
 
     #[test]
-    fn window_omits_the_footer_bar_when_the_slot_is_empty() {
+    fn window_omits_the_footer_cell_when_the_slot_is_empty() {
         let reg = builtin_templates();
-        // Only a content slot; no footer, no has_min.
+        // Only a content slot; no footer.
         let node = template_node("window", vec![("content", vec![leaf("text")])]);
         let out = expand(node, &reg);
-        let col = &out.children[0];
-        // Just the title bar + the content well — no footer panel appended.
-        assert_eq!(col.children.len(), 2);
-        assert_eq!(col.children[0].component, "row"); // title bar
-        assert_eq!(col.children[1].component, "panel"); // content well
-        // Close shows by default; minimize does not (has_min unset) → title · spacer · close.
-        let titlebar = &col.children[0];
-        assert_eq!(titlebar.children.len(), 3);
-        assert_eq!(titlebar.children.last().unwrap().action.as_deref(), Some("close"));
+        let grid = &out.children[0];
+        assert_eq!(grid.component, "grid");
+        // ne ✕ (closable default) + the center section.
+        assert_eq!(grid.children.len(), 2);
+        let section = grid.children.iter().find(|c| c.component == "cell").expect("center section");
+        // header + content only — no footer cell when the footer slot is empty.
+        assert_eq!(section.children.len(), 2);
+        assert_eq!(section.children[0].component, "cell"); // header
+        assert_eq!(section.children[1].component, "cell"); // content
+        assert_eq!(section.children[1].children[0].component, "text"); // the content slot
+    }
+
+    /// A `frame` with `center` / `n` / corner slots expands to a styled `stack`
+    /// overlaying a 3×3 border `grid` (`cols` / `rows` from the edge props) + a rune
+    /// overlay, and each region is spliced into its cell carrying `col` / `row`.
+    #[test]
+    fn frame_emits_border_grid_with_named_region_cells() {
+        let reg = builtin_templates();
+        let mut node = template_node(
+            "frame",
+            vec![
+                ("center", vec![leaf("rtt")]),
+                ("n", vec![leaf("text")]),
+                ("nw", vec![leaf("cell")]),
+                ("se", vec![leaf("cell")]),
+            ],
+        );
+        node.props.insert("w".into(), Value::Number(640.0));
+        node.props.insert("h".into(), Value::Number(480.0));
+        node.props.insert("n_size".into(), Value::Number(52.0));
+        node.props.insert("s_size".into(), Value::Number(58.0));
+        let out = expand(node, &reg);
+
+        // Root: the styled frame STACK, sized + centred, overlaying [grid, runes].
+        assert_eq!(out.component, "stack");
+        assert_eq!(p_text(&out.props, "style"), Some("settings.window"));
+        assert_eq!(out.anchor, Some(UiAnchor::Center));
+        assert_eq!(out.width, Some(640.0));
+        assert_eq!(out.height, Some(480.0));
+        assert_eq!(out.children.len(), 2);
+
+        // Border grid: unstyled, fills the frame, w/e default 30, n=52 / s=58.
+        let (grid, runes) = (&out.children[0], &out.children[1]);
+        assert_eq!(grid.component, "grid");
+        assert_eq!(p_text(&grid.props, "cols"), Some("30 1fr 30"));
+        assert_eq!(p_text(&grid.props, "rows"), Some("52 1fr 58"));
+        assert_eq!(grid.anchor, Some(UiAnchor::TopLeft));
+        assert_eq!(p_num(&grid.props, "width_frac"), Some(1.0));
+        assert_eq!(p_num(&grid.props, "height_frac"), Some(1.0));
+
+        // Rune overlay: last child, points at the reused runes block.
+        assert_eq!(runes.component, "rune_corners");
+        assert_eq!(p_text(&runes.props, "style"), Some("settings.runes"));
+
+        // Emission order (nw, n, center, se here) is fixed; each region is at its cell.
+        let kinds: Vec<&str> = grid.children.iter().map(|c| c.component.as_str()).collect();
+        assert_eq!(kinds, vec!["cell", "text", "rtt", "cell"], "fixed emission order");
+        let at = |kind: &str, col: f64, row: f64| {
+            let c = grid.children.iter().find(|c| c.component == kind).unwrap();
+            assert_eq!(p_num(&c.props, "col"), Some(col), "{kind} col");
+            assert_eq!(p_num(&c.props, "row"), Some(row), "{kind} row");
+        };
+        at("cell", 0.0, 0.0); // nw is the FIRST panel in order
+        at("text", 1.0, 0.0); // n — the title bar in its own top-CENTRE cell (1,0)
+        assert_eq!(p_num(&grid.children[1].props, "col_span"), None, "the n bar is confined to one cell, not full-bleed");
+        at("rtt", 1.0, 1.0); // center — the inset content cell
+        // se is the SECOND panel — index 3 in emission order.
+        let se = &grid.children[3];
+        assert_eq!(p_num(&se.props, "col"), Some(2.0));
+        assert_eq!(p_num(&se.props, "row"), Some(2.0));
+    }
+
+    /// With no edge props at all, every edge defaults to the rune-clearance constant
+    /// (30), and a `w_frac` rides the responsive width_frac path (root stays unsized).
+    #[test]
+    fn frame_defaults_edges_to_rune_clearance_and_is_responsive() {
+        let reg = builtin_templates();
+        let mut node = template_node("frame", vec![("center", vec![leaf("rtt")])]);
+        node.props.insert("w_frac".into(), Value::Number(0.82));
+        let out = expand(node, &reg);
+
+        let grid = &out.children[0];
+        assert_eq!(p_text(&grid.props, "cols"), Some("30 1fr 30"));
+        assert_eq!(p_text(&grid.props, "rows"), Some("30 1fr 30"));
+        // Responsive: no fixed width, width_frac rides the anchored() path.
+        assert_eq!(out.width, None);
+        assert_eq!(p_num(&out.props, "width_frac"), Some(0.82));
+        // Only the centre region is placed, at cell (1,1).
+        assert_eq!(grid.children.len(), 1);
+        assert_eq!(p_num(&grid.children[0].props, "col"), Some(1.0));
+        assert_eq!(p_num(&grid.children[0].props, "row"), Some(1.0));
+    }
+
+    /// An absent region emits no grid child (a Fixed edge track still reserves its
+    /// cell); only the supplied regions carry `col` / `row`.
+    #[test]
+    fn frame_omits_absent_regions() {
+        let reg = builtin_templates();
+        let node = template_node(
+            "frame",
+            vec![("center", vec![leaf("rtt")]), ("n", vec![leaf("text")])],
+        );
+        let out = expand(node, &reg);
+        let grid = &out.children[0];
+        // Emission order → n (the title bar in its own centre cell: col 1, row 0) then center (1,1).
+        assert_eq!(grid.children.len(), 2);
+        assert_eq!(grid.children[0].component, "text");
+        assert_eq!(p_num(&grid.children[0].props, "col"), Some(1.0), "the n bar sits in the top-centre cell");
+        assert_eq!(p_num(&grid.children[0].props, "row"), Some(0.0));
+        assert_eq!(p_num(&grid.children[0].props, "col_span"), None, "the n bar is confined to one cell, not full-bleed");
+        assert_eq!(grid.children[1].component, "rtt");
+        assert_eq!(p_num(&grid.children[1].props, "col"), Some(1.0), "the centre is a single inset cell");
+        assert_eq!(p_num(&grid.children[1].props, "row"), Some(1.0));
     }
 
     #[test]
@@ -1049,7 +1403,7 @@ mod tests {
         let out = expand(node, &reg);
 
         // Root: a carved-stone panel REUSING the menu.panel style block.
-        assert_eq!(out.component, "panel");
+        assert_eq!(out.component, "cell");
         assert_eq!(
             out.props.get("style"),
             Some(&Value::Text("menu.panel".to_string()))
@@ -1058,12 +1412,12 @@ mod tests {
         // panel > column(body) > [ header column, ...content ]
         assert_eq!(out.children.len(), 1);
         let body = &out.children[0];
-        assert_eq!(body.component, "column");
+        assert_eq!(body.component, "cell");
         assert_eq!(body.children.len(), 3);
 
         // Header groups the title (display face) over the subtitle (label caps).
         let header = &body.children[0];
-        assert_eq!(header.component, "column");
+        assert_eq!(header.component, "cell");
         assert_eq!(header.children.len(), 2);
         let (title, sub) = (&header.children[0], &header.children[1]);
         assert_eq!(title.component, "text");
@@ -1102,7 +1456,7 @@ mod tests {
             .insert("subtitle".to_string(), Value::Text("REQUIRES KEY".to_string()));
         node.props.insert("disabled".to_string(), Value::Bool(true));
         node.slots
-            .insert("content".to_string(), vec![leaf("panel")]);
+            .insert("content".to_string(), vec![leaf("cell")]);
         let out = expand(node, &reg);
         let header = &out.children[0].children[0];
         assert_eq!(
@@ -1126,10 +1480,56 @@ mod tests {
     }
 
     #[test]
+    fn option_grid_chunks_an_arbitrary_card_count_into_rows_with_heading_well_and_hint() {
+        let reg = builtin_templates();
+        // FIVE option cards at 2 columns — the whole point is an ARBITRARY count: they must flow into
+        // rows of 2, 2, 1, never resize the field to the cards.
+        let mut node = template_node(
+            "option_grid",
+            vec![(
+                "cards",
+                vec![leaf("button"), leaf("button"), leaf("button"), leaf("button"), leaf("button")],
+            )],
+        );
+        node.props.insert("cols".into(), Value::Number(2.0));
+        node.props.insert("heading".into(), Value::Text("CHOOSE A WORKFLOW".into()));
+        node.props.insert("subtitle".into(), Value::Text("pick one to begin".into()));
+        node.props.insert("hint".into(), Value::Text("SELECT TO BEGIN".into()));
+        node.props.insert("well_style".into(), Value::Text("assetpipeline.well".into()));
+
+        let out = expand(node, &reg);
+
+        // Root: a GROWING column (fills the window well) — heading · subtitle · well · hint.
+        assert_eq!(out.component, "cell");
+        assert_eq!(out.grow, Some(1.0), "the field grows to fill its container, not the reverse");
+        assert_eq!(out.children.len(), 4);
+        let (heading, subtitle, well, hint) =
+            (&out.children[0], &out.children[1], &out.children[2], &out.children[3]);
+
+        assert_eq!(heading.component, "text");
+        assert_eq!(heading.props.get("text"), Some(&Value::Text("CHOOSE A WORKFLOW".into())));
+        assert_eq!(subtitle.props.get("text"), Some(&Value::Text("pick one to begin".into())));
+        assert_eq!(subtitle.props.get("wrap"), Some(&Value::Bool(true)), "the subtitle wraps");
+        assert_eq!(hint.props.get("text"), Some(&Value::Text("SELECT TO BEGIN".into())));
+
+        // Well: a growing styled panel holding the grid column of rows.
+        assert_eq!(well.component, "cell");
+        assert_eq!(well.grow, Some(1.0));
+        assert_eq!(well.props.get("style"), Some(&Value::Text("assetpipeline.well".into())));
+        let grid = &well.children[0];
+        assert_eq!(grid.component, "cell");
+        assert_eq!(grid.children.len(), 3, "5 cards / 2 cols = 3 rows");
+        assert_eq!(grid.children[0].component, "row");
+        assert_eq!(grid.children[0].children.len(), 2);
+        assert_eq!(grid.children[2].children.len(), 1, "the last row holds the remainder");
+    }
+
+    #[test]
     fn popup_menu_composes_scrim_muse_and_layered_popup() {
         let reg = builtin_templates();
         // A left-hero menu popup: title + subtitle + divider + two launch buttons, a Muse
-        // sprite behind, styles pointed at the shell's blocks.
+        // sprite behind, styles pointed at the shell's blocks. The hero placement rides
+        // the instance's structural `anchor` (the `@anchor` pseudo-prop) + `offset_x`.
         let mut node = template_node(
             "popup_menu",
             vec![
@@ -1137,7 +1537,8 @@ mod tests {
                 ("muse", vec![leaf("sprite")]),
             ],
         );
-        node.props.insert("layout".into(), Value::Text("left".into()));
+        node.anchor = Some(UiAnchor::Left);
+        node.props.insert("offset_x".into(), Value::Number(150.0));
         node.props.insert("title".into(), Value::Text("Prism".into()));
         node.props.insert("title_size".into(), Value::Number(58.0));
         node.props.insert("subtitle".into(), Value::Text("THE SEVEN SHARDS".into()));
@@ -1147,14 +1548,14 @@ mod tests {
 
         let out = expand(node, &reg);
 
-        // Root is a full-bleed overlay page: scrim, muse sprite, popup — in that order.
-        assert_eq!(out.component, "page");
+        // Root is a full-bleed overlay screen: scrim, muse sprite, popup — in that order.
+        assert_eq!(out.component, "screen");
         assert_eq!(out.anchor, Some(UiAnchor::TopLeft));
         assert_eq!(out.children.len(), 3);
         let (scrim, muse, popup) = (&out.children[0], &out.children[1], &out.children[2]);
 
         // Scrim: a full-bleed panel styled by `overlay_style`.
-        assert_eq!(scrim.component, "panel");
+        assert_eq!(scrim.component, "cell");
         assert_eq!(scrim.props.get("style"), Some(&Value::Text("screens.menu".into())));
         assert_eq!(scrim.anchor, Some(UiAnchor::TopLeft));
         // Muse slot spliced verbatim, behind the popup.
@@ -1162,7 +1563,7 @@ mod tests {
 
         // Popup: a `modal.panel` lifted onto sub-layer 1 (so the Muse can't cover it),
         // left-anchored with the hero offset.
-        assert_eq!(popup.component, "panel");
+        assert_eq!(popup.component, "cell");
         assert_eq!(popup.props.get("style"), Some(&Value::Text("modal.panel".into())));
         assert_eq!(popup.props.get("layer"), Some(&Value::Number(1.0)));
         assert_eq!(popup.anchor, Some(UiAnchor::Left));
@@ -1183,11 +1584,11 @@ mod tests {
         assert_eq!(subtitle.component, "text");
         assert_eq!(subtitle.props.get("text"), Some(&Value::Text("THE SEVEN SHARDS".into())));
         assert_eq!(subtitle.props.get("color"), Some(&Value::Text("modal.subtitle.color".into())));
-        assert_eq!(divider.component, "panel");
+        assert_eq!(divider.component, "cell");
         assert_eq!(divider.props.get("style"), Some(&Value::Text("modal.divider".into())));
         assert_eq!(divider.size, Some(1.0));
         // Items: the caller's buttons wrapped in a column so they carry their own gap.
-        assert_eq!(items.component, "column");
+        assert_eq!(items.component, "cell");
         assert_eq!(items.children.len(), 2);
         assert_eq!(items.children[0].component, "button");
         assert_eq!(items.children[1].component, "button");
@@ -1203,7 +1604,7 @@ mod tests {
         node.props.insert("title".into(), Value::Text("Keep Display?".into()));
 
         let out = expand(node, &reg);
-        assert_eq!(out.component, "page");
+        assert_eq!(out.component, "screen");
         // Only scrim + popup (no muse spliced).
         assert_eq!(out.children.len(), 2);
         let (scrim, popup) = (&out.children[0], &out.children[1]);
@@ -1215,7 +1616,7 @@ mod tests {
         // Column is just [title, items] — subtitle and divider omitted.
         assert_eq!(popup.children.len(), 2);
         assert_eq!(popup.children[0].component, "text");
-        assert_eq!(popup.children[1].component, "column");
+        assert_eq!(popup.children[1].component, "cell");
         assert_eq!(popup.children[1].children.len(), 1);
         assert_eq!(popup.children[1].children[0].component, "button");
     }
@@ -1241,19 +1642,19 @@ mod tests {
         .collect();
         let out = expand(node, &reg);
 
-        // Root: a full-screen overlay page = [dim overlay, centred popup].
-        assert_eq!(out.component, "page");
+        // Root: a full-screen overlay screen = [dim overlay, centred popup].
+        assert_eq!(out.component, "screen");
         assert_eq!(p_num(&out.props, "width_frac"), Some(1.0));
         assert_eq!(out.children.len(), 2);
         let (overlay, popup) = (&out.children[0], &out.children[1]);
 
         // Overlay: full-screen panel wearing the scene's overlay style.
-        assert_eq!(overlay.component, "panel");
+        assert_eq!(overlay.component, "cell");
         assert_eq!(p_text(&overlay.props, "style"), Some("screens.confirm"));
         assert_eq!(p_num(&overlay.props, "width_frac"), Some(1.0));
 
         // Popup: centred modal panel, lifted above the overlay.
-        assert_eq!(popup.component, "panel");
+        assert_eq!(popup.component, "cell");
         assert_eq!(popup.anchor, Some(UiAnchor::Center));
         assert_eq!(p_text(&popup.props, "style"), Some("modal.panel"));
         assert_eq!(p_num(&popup.props, "layer"), Some(1.0));
@@ -1272,11 +1673,11 @@ mod tests {
         assert_eq!(p_text(&title.props, "align"), Some("center"));
         assert_eq!(subtitle.component, "text");
         assert_eq!(p_text(&subtitle.props, "text_bind"), Some("subtitle"));
-        assert_eq!(divider.component, "panel");
+        assert_eq!(divider.component, "cell");
         assert_eq!(p_text(&divider.props, "style"), Some("modal.divider"));
 
         // Two prop-built buttons, in order, each variant-styled with its action.
-        assert_eq!(buttons.component, "column");
+        assert_eq!(buttons.component, "cell");
         assert_eq!(buttons.children.len(), 2);
         let (keep, revert) = (&buttons.children[0], &buttons.children[1]);
         assert_eq!(keep.component, "button");
@@ -1313,7 +1714,7 @@ mod tests {
         // No message / subtitle → popup column is [title, divider, buttons].
         let popup = &out.children[1];
         let buttons = popup.children.last().expect("button column present");
-        assert_eq!(buttons.component, "column");
+        assert_eq!(buttons.component, "cell");
         // The slot's three buttons win; the confirm/cancel props are ignored.
         assert_eq!(buttons.children.len(), 3);
         assert!(buttons.children.iter().all(|b| b.component == "button"));
@@ -1341,9 +1742,9 @@ mod tests {
         assert_eq!(out.children.len(), 2);
 
         let (left, right) = (&out.children[0], &out.children[1]);
-        // Both are styled `stage`s, each grown to share the row, ids from the prefix.
-        assert_eq!(left.component, "stage");
-        assert_eq!(right.component, "stage");
+        // Both are styled `rtt`s, each grown to share the row, ids from the prefix.
+        assert_eq!(left.component, "rtt");
+        assert_eq!(right.component, "rtt");
         assert_eq!(left.grow, Some(1.0));
         assert_eq!(right.grow, Some(1.0));
         assert_eq!(left.id, "cmp_left");
@@ -1368,7 +1769,7 @@ mod tests {
         }
     }
 
-    /// A `quad_rtt_view` with only a `source` expands to ONE styled `stage` piece
+    /// A `quad_rtt_view` with only a `source` expands to ONE styled `rtt` piece
     /// that grows to fill its slot, defaults to the shared `assetpipeline.holder`
     /// frame, defaults its slot id to the node's own id, and forwards `source` +
     /// the `live_bind` / `tint` pass-throughs for the walker's stage pass.
@@ -1387,8 +1788,8 @@ mod tests {
         );
         let out = expand(node, &reg);
 
-        // One `stage` piece — a thin holder, no children and no leftover slots.
-        assert_eq!(out.component, "stage");
+        // One `rtt` piece — a thin holder, no children and no leftover slots.
+        assert_eq!(out.component, "rtt");
         assert!(out.children.is_empty());
         assert!(out.slots.is_empty());
         // Default frame style + forwarded source / liveness / tint props.
@@ -1404,14 +1805,17 @@ mod tests {
     }
 
     /// The overrides: an explicit `quad_id` becomes the slot id, a `style` prop
-    /// replaces the default frame, a fixed `width`/`height` suppresses `grow` (the
-    /// two are mutually exclusive in layout), and a literal `live` bool rides
-    /// through verbatim.
+    /// replaces the default frame, a fixed size authored STRUCTURALLY on the
+    /// instance node (the only form the Lua/JSON parsers produce — both consume
+    /// `width`/`height` structurally) rides `overlay_placement` onto the stage,
+    /// and a literal `live` bool rides through verbatim.
     #[test]
     fn quad_rtt_view_honours_quad_id_style_and_fixed_size() {
         let reg = builtin_templates();
         let mut node = template_node("quad_rtt_view", vec![]);
         node.id = "node_id".to_string();
+        node.width = Some(512.0);
+        node.height = Some(512.0);
         node.props
             .insert("quad_id".to_string(), Value::Text("kiln_grid".to_string()));
         node.props.insert(
@@ -1420,20 +1824,17 @@ mod tests {
         );
         node.props
             .insert("source".to_string(), Value::Text("lighting".to_string()));
-        node.props.insert("width".to_string(), Value::Number(512.0));
-        node.props.insert("height".to_string(), Value::Number(512.0));
         node.props.insert("live".to_string(), Value::Bool(false));
         let out = expand(node, &reg);
 
-        assert_eq!(out.component, "stage");
+        assert_eq!(out.component, "rtt");
         // `quad_id` wins over the node id; the explicit style overrides the default.
         assert_eq!(out.id, "kiln_grid");
         assert_eq!(text_prop(&out, "style"), Some("loomforge.clip_stage"));
         assert_eq!(text_prop(&out, "source"), Some("lighting"));
-        // A fixed size means NO grow, so it lays out at the requested pixels.
+        // The instance's structural size lands on the stage via `overlay_placement`.
         assert_eq!(out.width, Some(512.0));
         assert_eq!(out.height, Some(512.0));
-        assert_eq!(out.grow, None);
         // Literal liveness bool rides through as a `Bool` value.
         assert_eq!(out.props.get("live"), Some(&Value::Bool(false)));
     }

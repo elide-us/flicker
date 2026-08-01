@@ -8,21 +8,33 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use flicker::app::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
+};
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle, Vec2,
 };
 use flicker::scene::{Scene, Transition};
-use flicker::script::{ScriptHost, ValueMap};
-use flicker::ui::{load_widgets, render_hud};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{
+    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
+};
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_worldengine::{observe, LayerKind, Simulation, MY_PER_TICK};
 
 use crate::camera::OrbitCam;
 use crate::globe::{self, ViewMode};
+use crate::route::RootHandler;
 
-/// The life-supporting-conditions HUD (Lua, composed from the shared widget toolkit).
-const HAB_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/habitability_hud.lua");
+/// The declarative HUD tree (`hud_pocepochs.lua`: readout text + the
+/// life-supporting-conditions gauge panel) + the shared UI-element layout.
+const HUD_SCRIPT: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../content/sensorium/scripts/hud_pocepochs.lua");
+const HUD_UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../content/sensorium/resources/ui_elements.json");
 
 /// Default planet size (grid frequency, ~49.65 mi/hex). ½ Earth — snappy but planet-scale.
 const PLANET_FREQ: u32 = 48;
@@ -66,10 +78,24 @@ pub struct WorldScene {
     cutaway: bool,
     playing: bool,
     play_accum: f32,
-    /// The Lua HUD host for the life-supporting-conditions panel (the shared widget toolkit
-    /// drives its gauges); `None` if the script failed to load (the rest of the HUD still draws).
+    /// The declarative HUD host (`hud_pocepochs.lua`), RETAINED as the Lua
+    /// component library the walker dispatches per-node DRAW to; `None` if the
+    /// script failed to load (the scene-drawn panels still draw).
     script: Option<ScriptHost>,
-    prev_menu: bool,
+    /// The HUD's component tree, parsed ONCE at enter; walked every frame with
+    /// fresh Model bindings.
+    ui_tree: Option<UiNode>,
+    /// The screen's declarative bindings (S9): `on_menu = "pause_open"`.
+    ui_intents: UiIntents,
+    /// Token-resolved `ui_elements.json` styles (dotted `style` paths resolve here).
+    ui_styles: serde_json::Value,
+    /// Retained walker interaction state.
+    ui_state: UiState,
+    /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
     prev_play: bool,
     prev_down: bool,
     prev_view: bool,
@@ -77,6 +103,20 @@ pub struct WorldScene {
     prev_reseed: bool,
     prev_size_down: bool,
     prev_size_up: bool,
+
+    /// Per-context action maps + active-context stack (spec §5/§9). This viewer only
+    /// ever sits in `World`; its map is `wasd_and_mouse`, whose `Menu`→Escape binding is
+    /// what the `Resolver` turns into the pause edge (the promoted `prev_menu`).
+    bindings: ContextualBindings,
+    gamepad_config: GamepadConfig,
+    /// The input seam: a stateful edge `Resolver` (the promoted `prev_menu`), a REUSED
+    /// `Fired` scratch buffer (no per-frame alloc), the router's request queue, and a
+    /// monotonic per-frame `input_tick` — the resolver's `TickTime`, kept distinct from
+    /// the simulation `tick` (which is not monotonic: reset returns it to 0).
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    input_tick: u64,
 }
 
 impl WorldScene {
@@ -101,7 +141,12 @@ impl WorldScene {
             playing: false, // start paused at the Epoch-1 seed; Space begins Epoch 2
             play_accum: 0.0,
             script: None,
-            prev_menu: false,
+            ui_tree: None,
+            ui_intents: UiIntents::default(),
+            ui_styles: serde_json::Value::Object(Default::default()),
+            ui_state: UiState::new(),
+            hud_commands: Vec::new(),
+            fired_sigs: Vec::new(),
             prev_play: false,
             prev_down: false,
             prev_view: false,
@@ -109,6 +154,12 @@ impl WorldScene {
             prev_reseed: false,
             prev_size_down: false,
             prev_size_up: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            input_tick: 0,
         };
         scene.element_dist = scene.compute_element_dist();
         scene.refresh();
@@ -205,31 +256,79 @@ impl WorldScene {
         self.dirty = true;
     }
 
-    /// Publish the life-supporting observer's reading of the current world into the HUD
-    /// `Model` — one flat set of scalars per condition axis (name, position, band, in/out,
-    /// live), plus the aggregate verdict. Pure read; the observer encodes no causal rule.
-    fn habitability_model(&self) -> ValueMap {
+    /// The per-frame HUD model: the readout lines (pre-formatted strings — Rust
+    /// owns the formatting), the life-supporting observer's reading of the
+    /// current world (per axis: the gauge value + name/status/caption binds and
+    /// their colour paths), the aggregate verdict, and the transient
+    /// `sig_<name>` mirror of last frame's fired intents. Pure read; the
+    /// observer encodes no causal rule.
+    fn hud_model(&self) -> ValueMap {
         let mut m = ValueMap::new();
+
+        // ── readout (top-left) ──
+        m.set("stats", self.stats.as_str());
+        let (word, color) = if self.playing {
+            ("PLAYING", "pocepochs.playing.color")
+        } else {
+            ("PAUSED", "pocepochs.paused.color")
+        };
+        m.set("play_state", word);
+        m.set("play_state_color", color);
+        let cut_hint = if self.mode == ViewMode::Layers {
+            format!("  ·  Up slice: {}", if self.cutaway { "on" } else { "off" })
+        } else {
+            String::new()
+        };
+        m.set(
+            "hints",
+            format!(
+                "·  Space play/pause  ·  Down reset  ·  R reseed  ·  [ ] size  ·  V view: {}{}  ·  drag · wheel · Esc",
+                self.mode.label(),
+                cut_hint,
+            ),
+        );
+
+        // ── life-supporting conditions (bottom-right) ──
         if let Some(w) = self.sim.world(self.tick) {
             let h = observe(w);
             for (i, ax) in h.axes.iter().enumerate() {
                 let n = i + 1;
-                m = m
-                    .with(format!("a{n}_name"), ax.name)
-                    .with(format!("a{n}_v"), ax.signal.unwrap_or(-1.0)) // −1 = no signal yet
-                    .with(format!("a{n}_lo"), ax.lo)
-                    .with(format!("a{n}_hi"), ax.hi)
-                    .with(format!("a{n}_lolab"), ax.low_label)
-                    .with(format!("a{n}_hilab"), ax.high_label)
-                    .with(format!("a{n}_in"), ax.in_band());
+                let live = ax.signal.is_some();
+                let (status, status_color) = if live {
+                    if ax.in_band() {
+                        ("in band", "pocepochs.hab.status_in")
+                    } else {
+                        ("out of band", "pocepochs.hab.status_out")
+                    }
+                } else {
+                    ("no signal yet", "pocepochs.hab.status_dead")
+                };
+                m.set(format!("a{n}_name"), ax.name);
+                m.set(
+                    format!("a{n}_name_color"),
+                    if live { "pocepochs.hab.name_live" } else { "pocepochs.hab.name_dead" },
+                );
+                m.set(format!("a{n}_v"), ax.signal.unwrap_or(-1.0)); // −1 = no signal yet
+                m.set(format!("a{n}_lolab"), ax.low_label);
+                m.set(format!("a{n}_hilab"), ax.high_label);
+                m.set(format!("a{n}_status"), status);
+                m.set(format!("a{n}_status_color"), status_color);
             }
-            m = m
-                .with("axes_total", h.axes.len())
-                .with("axes_in", h.axes_in_band)
-                .with("axes_live", h.axes_live)
-                .with("life", h.life_supporting)
-                .with("atm_kind", h.atmosphere_kind);
+            let total = h.axes.len();
+            if h.life_supporting {
+                m.set("life", true);
+                m.set("verdict", "LIFE-SUPPORTING");
+                m.set("verdict_color", "pocepochs.hab.verdict_life");
+            } else {
+                m.set("no_life", true);
+                m.set("verdict", format!("{} / {total} axes in band", h.axes_in_band));
+                m.set("verdict_color", "pocepochs.hab.verdict_count");
+            }
+            m.set("observed", format!("{} / {total} observed", h.axes_live));
+            m.set("air", format!("air: {}", h.atmosphere_kind));
         }
+
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
     }
 
@@ -267,13 +366,41 @@ impl Scene for WorldScene {
         let theme = Theme::build(renderer);
         self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
         self.theme = Some(theme);
-        // The life-supporting-conditions panel is a Lua HUD over the shared widget toolkit.
-        match ScriptHost::from_file(HAB_SCRIPT) {
+
+        // The declarative HUD (S10): styles + the `hud_pocepochs.lua` tree, built
+        // once. Each axis's band (lo/hi) is STATIC observer data, published once
+        // as the `HAB` data global and baked into the gauge nodes as props;
+        // live values ride the Model each frame.
+        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
             Ok(script) => {
-                load_widgets(&script);
+                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.pocepochs`)
+                self.sim.ensure(0);
+                let bands: Vec<serde_json::Value> = self
+                    .sim
+                    .world(0)
+                    .map(|w| {
+                        observe(w)
+                            .axes
+                            .iter()
+                            .map(|ax| serde_json::json!({ "lo": ax.lo, "hi": ax.hi }))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Err(e) = script.set_global_json("HAB", &serde_json::Value::Array(bands)) {
+                    tracing::error!("HAB global publish failed: {e}");
+                }
+                match script.ui_tree() {
+                    Ok(Some(tree)) => {
+                        self.ui_intents = UiIntents::of(&tree);
+                        self.ui_tree = Some(tree);
+                    }
+                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
+                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
+                }
                 self.script = Some(script);
             }
-            Err(e) => tracing::warn!("habitability HUD load failed ({HAB_SCRIPT}): {e}"),
+            Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
         }
     }
 
@@ -281,11 +408,71 @@ impl Scene for WorldScene {
         self.free_meshes(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
-        // Esc → pause menu (edge-detected).
-        let menu = input.key_down(Key::Escape);
-        if menu && !self.prev_menu {
-            self.prev_menu = menu;
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
+        // habitability panel is a styled container, so the pointer over it sets
+        // `hud_hit` — fed to the walker layer below as this frame's
+        // pointer-consume (the camera stays a raw poll, unchanged).
+        let mut over_hud = false;
+        if let Some(tree) = self.ui_tree.as_ref() {
+            let model = self.hud_model();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen: renderer.size(),
+                typed: String::new(),
+                backspace: false,
+                wheel: input.mouse_wheel_delta,
+            };
+            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
+            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            over_hud = frame.results.is_on("hud_hit");
+            self.hud_commands = frame.commands;
+        }
+
+        // ── Input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the hand-rolled
+        // `Esc` edge (`prev_menu`). The active context is always `World` here (no chat /
+        // modal ever pushes `TextEntry`); the walker layer's DECLARED `on_menu` intent
+        // (S10) is the pause-open edge. `ev` is the REUSED `Fired` buffer; the
+        // `InputEvent` list is a short-lived local because it borrows this frame's
+        // snapshot (RT-7: a steady-state frame resolves zero edges). ──
+        self.input_tick = self.input_tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.input_tick,
+            &mut self.ev,
+        );
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+
+        self.route.requests.clear();
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Standard post-dispatch seam; no handler pushes context intents here.
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto the
+        // shell pause push — the root's hardcoded Menu arm is gone. Return before
+        // polling the camera / viewer keys, exactly as the old early-return did.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.theme.expect("theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
@@ -294,8 +481,10 @@ impl Scene for WorldScene {
                 &GamepadConfig::default(),
             )));
         }
-        self.prev_menu = menu;
 
+        // Orbit camera — raw pointer drag + wheel. No ActionSignal binding (exactly like
+        // the reference's raw mouse-look), so it stays a direct read, not a `signal_held`
+        // poll.
         self.cam.update(input, true);
 
         let play = input.key_down(Key::Space);
@@ -420,34 +609,18 @@ impl Scene for WorldScene {
             renderer.draw_mesh(h, Mat4::IDENTITY, MeshDrawOptions::default());
         }
 
-        // Stats + controls.
+        // ── The HUD: the walker commands stashed by `update` (readout text +
+        // the life-supporting gauge panel), then the two panels still
+        // scene-drawn (FLAGGED, S10): the surface-view legend and the
+        // element-distribution readout — their per-row swatch colours are DATA
+        // (legend entries / element_rgb), and the walker's colour channel is
+        // dotted style paths by design. ──
         renderer.set_layer(10.0);
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
+        }
         let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
         let text = [0.85, 0.87, 0.92, 1.0];
-        let dim = [0.6, 0.63, 0.68, 1.0];
-        renderer.draw_text("FLICKER · PLANET SIMULATION", Vec2::new(24.0, 24.0), 26.0, gold);
-        renderer.draw_text(&self.stats, Vec2::new(24.0, 60.0), 17.0, text);
-        let (word, col) = if self.playing {
-            ("PLAYING", [0.55, 0.85, 0.55, 1.0])
-        } else {
-            ("PAUSED", [0.92, 0.78, 0.42, 1.0])
-        };
-        renderer.draw_text(word, Vec2::new(24.0, 88.0), 14.0, col);
-        let cut_hint = if self.mode == ViewMode::Layers {
-            format!("  ·  Up slice: {}", if self.cutaway { "on" } else { "off" })
-        } else {
-            String::new()
-        };
-        renderer.draw_text(
-            &format!(
-                "·  Space play/pause  ·  Down reset  ·  R reseed  ·  [ ] size  ·  V view: {}{}  ·  drag · wheel · Esc",
-                self.mode.label(),
-                cut_hint,
-            ),
-            Vec2::new(96.0, 88.0),
-            14.0,
-            dim,
-        );
 
         // Surface-view legend (top-right) — display only, no controls.
         if let Some(white) = self.white {
@@ -485,17 +658,6 @@ impl Scene for WorldScene {
                 }
             }
         }
-
-        // Life-supporting-conditions panel (Lua HUD over the shared widget toolkit): the
-        // five condition gauges + the aggregate verdict, read live from the observer.
-        if let (Some(script), Some(white)) = (self.script.as_ref(), self.white) {
-            let _ = script.set_model(&self.habitability_model());
-            let size = renderer.size();
-            match script.draw(size.x, size.y) {
-                Ok(cmds) => render_hud(renderer, &cmds, white, &[]),
-                Err(e) => tracing::warn!("habitability HUD draw error: {e}"),
-            }
-        }
     }
 }
 
@@ -519,17 +681,81 @@ mod tests {
         assert_eq!(scene.tick, 0, "reset to Epoch 1");
     }
 
+    /// Load the real `hud_pocepochs.lua` + the shared layout and walk a frame
+    /// against the LIVE observer model: the vocabulary gate holds, the root
+    /// declares the pause intent, and the readout + habitability panel render —
+    /// catches Lua/contract breakage headlessly (no window).
     #[test]
-    fn habitability_hud_loads_and_draws_from_the_observer_model() {
-        // The panel's Lua loads against the real shared widget toolkit, and the observer
-        // model built from the live world drives a draw without error — catches Lua/contract
-        // breakage headlessly (no window).
-        let script = ScriptHost::from_file(HAB_SCRIPT).expect("habitability_hud.lua loads");
-        load_widgets(&script);
-        let scene = WorldScene::new();
-        script.set_model(&scene.habitability_model()).expect("publish observer model");
-        let cmds = script.draw(1280.0, 720.0).expect("panel draws");
-        assert!(!cmds.is_empty(), "the panel emitted draw commands");
+    fn hud_tree_is_well_formed_and_draws_from_the_observer_model() {
+        use flicker::render::Vec2;
+        use flicker::ui::run_ui;
+        use flicker_input_core::ActionSignal;
+
+        // The HUD's display copy is `$token`s now (S10 strings gate); load the
+        // shipped table so the walked commands carry the resolved en-us text.
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
+        let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+            .expect("hud_pocepochs.lua loads");
+        load_ui_json(&script, HUD_UI_ELEMENTS);
+        let mut scene = WorldScene::new();
+        scene.sim.ensure(0);
+        let bands: Vec<serde_json::Value> = scene
+            .sim
+            .world(0)
+            .map(|w| {
+                observe(w)
+                    .axes
+                    .iter()
+                    .map(|ax| serde_json::json!({ "lo": ax.lo, "hi": ax.hi }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(!bands.is_empty(), "the observer exposes the condition axes");
+        script
+            .set_global_json("HAB", &serde_json::Value::Array(bands))
+            .expect("HAB publishes");
+        let tree = script.ui_tree().expect("tree builds").expect("script exposes tree()");
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_pocepochs.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_pocepochs.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+        let intents = UiIntents::of(&tree);
+        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+
+        let styles = load_styles(HUD_UI_ELEMENTS);
+        let model = scene.hud_model();
+        let snap = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+        let has = |s: &str| {
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+        };
+        assert!(has("FLICKER · PLANET SIMULATION"), "readout title renders");
+        assert!(has("PAUSED"), "the state word rides its bind");
+        assert!(has("LIFE-SUPPORTING CONDITIONS"), "habitability panel renders");
+        assert!(
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Rect { .. })),
+            "the gauges emitted their bars"
+        );
     }
 
     #[test]

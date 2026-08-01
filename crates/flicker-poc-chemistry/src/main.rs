@@ -10,6 +10,7 @@
 
 mod camera;
 mod globe;
+mod route;
 mod scene;
 mod sim_thread;
 

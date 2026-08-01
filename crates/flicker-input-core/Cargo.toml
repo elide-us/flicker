@@ -1,0 +1,15 @@
+[package]
+name = "flicker-input-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Pure input model + resolution. No platform crates, no threads. The leaf the
+# whole input stack is built on (`flicker-input-router` and `-device` depend on
+# this; it depends on nothing of ours). See spec §2/§3.
+[dependencies]
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

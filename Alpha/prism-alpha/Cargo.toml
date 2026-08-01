@@ -5,13 +5,12 @@ edition.workspace = true
 publish = false
 
 # prism-alpha — the unified Prism client shell (the single harness). One binary
-# that hosts every Prism scene (Loomforge / Kilnworks rigging benches / click
-# trainer / solar-birth cinematic / voxel-cluster terrain) behind the
-# shared front-end (splash → menu → scene → pause). The individual `flicker-*` app
-# crates remain thin STANDALONE entry points to the SAME scenes.
-#
-# FRAMEWORK PLUMBING ONLY — the scene-selector panel + full roster land with the
-# scene-loader design; today this wires the one lib-ified scene (click trainer).
+# that hosts every Prism scene (Loomforge / Clayworks rigging benches / click
+# trainer / solar-birth cinematic / voxel-cluster terrain / epoch sim) behind the
+# shared front-end (splash → MODE MENU → scene → pause): the root menu lists the
+# three play modes (Explore the World / Build the World / Developer Mode), each
+# opening its tier-2 page (see `roster()` in src/main.rs for the realm map). The
+# individual `flicker-*` crates remain thin entry points to the SAME scenes.
 
 [[bin]]
 name = "prism-alpha"
@@ -28,6 +27,7 @@ flicker-solarbirth = { path = "../../crates/flicker-solarbirth" }
 flicker-loomforge = { path = "../../crates/flicker-loomforge" }
 flicker-pocclusters = { path = "../../crates/flicker-pocclusters" }
 flicker-assetpipeline = { path = "../../crates/flicker-assetpipeline" }
+flicker-pocepochs = { path = "../flicker-pocepochs" }
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

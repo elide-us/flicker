@@ -914,11 +914,14 @@ dependencies = [
  "flicker-2d",
  "flicker-app",
  "flicker-core",
+ "flicker-input-core",
+ "flicker-input-device",
+ "flicker-input-router",
  "flicker-net",
  "flicker-render",
  "flicker-scene",
  "flicker-script",
- "flicker-ui",
+ "flicker-widgets",
 ]
 
 [[package]]
@@ -938,12 +941,9 @@ dependencies = [
  "anyhow",
  "flicker-2d",
  "flicker-core",
+ "flicker-input-core",
+ "flicker-input-device",
  "flicker-render",
- "gilrs",
- "glam",
- "objc2 0.6.4",
- "objc2-foundation 0.3.2",
- "objc2-game-controller",
  "pollster",
  "tracing",
  "tracing-subscriber",
@@ -957,6 +957,8 @@ dependencies = [
  "anyhow",
  "flicker",
  "flicker-content",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-mechanics",
  "flicker-shell",
  "flicker-skeletal",
@@ -985,7 +987,10 @@ version = "0.1.0"
 dependencies = [
  "fastrand",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-shell",
+ "serde_json",
  "tracing",
 ]
 
@@ -1005,6 +1010,8 @@ name = "flicker-controllertester"
 version = "0.1.0"
 dependencies = [
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-shell",
 ]
 
@@ -1039,11 +1046,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-input-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "flicker-input-device"
+version = "0.1.0"
+dependencies = [
+ "flicker-input-core",
+ "gilrs",
+ "glam",
+ "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
+ "objc2-game-controller",
+ "tracing",
+ "winit",
+]
+
+[[package]]
+name = "flicker-input-router"
+version = "0.1.0"
+dependencies = [
+ "flicker-input-core",
+]
+
+[[package]]
 name = "flicker-loomforge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-shell",
  "flicker-skeletal",
  "glam",
@@ -1096,6 +1135,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-mechanics",
  "flicker-shell",
  "flicker-skeletal",
@@ -1111,6 +1152,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-materials",
  "flicker-shell",
  "flicker-worker",
@@ -1129,6 +1172,8 @@ name = "flicker-pocclusters"
 version = "0.1.0"
 dependencies = [
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-orrery",
  "flicker-shell",
  "flicker-voxel",
@@ -1142,12 +1187,13 @@ dependencies = [
 name = "flicker-pocepochs"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-shell",
  "flicker-worldengine",
+ "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1179,6 +1225,7 @@ name = "flicker-scene"
 version = "0.1.0"
 dependencies = [
  "flicker-app",
+ "flicker-input-core",
  "flicker-render",
 ]
 
@@ -1186,7 +1233,7 @@ dependencies = [
 name = "flicker-script"
 version = "0.1.0"
 dependencies = [
- "flicker-core",
+ "flicker-input-core",
  "glam",
  "mlua",
  "serde",
@@ -1201,6 +1248,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "image",
  "serde",
  "serde_json",
@@ -1223,9 +1272,12 @@ version = "0.1.0"
 dependencies = [
  "flicker",
  "flicker-flight",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-orrery",
  "flicker-shell",
  "glam",
+ "serde_json",
  "tracing",
 ]
 
@@ -1235,13 +1287,6 @@ version = "0.1.0"
 dependencies = [
  "flicker-materials",
  "glam",
-]
-
-[[package]]
-name = "flicker-ui"
-version = "0.1.0"
-dependencies = [
- "flicker-widgets",
 ]
 
 [[package]]
@@ -1260,6 +1305,8 @@ dependencies = [
 name = "flicker-widgets"
 version = "0.1.0"
 dependencies = [
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-render",
  "flicker-script",
  "serde_json",
@@ -1276,6 +1323,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
  "flicker-materials",
  "flicker-shell",
  "flicker-worldgen",
@@ -2919,6 +2968,7 @@ dependencies = [
  "flicker-controllertester",
  "flicker-loomforge",
  "flicker-pocclusters",
+ "flicker-pocepochs",
  "flicker-shell",
  "flicker-solarbirth",
  "tracing",

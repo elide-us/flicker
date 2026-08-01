@@ -139,13 +139,23 @@ impl TextPipeline {
     /// `italic`/`bold`. The family carries the Prism role; weight and italic map
     /// onto the matching registered face (`FontRole::weight` / cosmic-text picks
     /// the nearest), falling back to a system face for any glyph a UI face lacks.
-    fn shape(&mut self, text: &str, size: f32, role: FontRole, italic: bool, bold: bool) -> Buffer {
+    fn shape(
+        &mut self,
+        text: &str,
+        size: f32,
+        role: FontRole,
+        italic: bool,
+        bold: bool,
+        wrap: Option<f32>,
+    ) -> Buffer {
         let attrs = Attrs::new()
             .family(Family::Name(role.family()))
             .weight(role.weight(bold))
             .style(if italic { Style::Italic } else { Style::Normal });
         let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, size * 1.2));
-        buffer.set_size(&mut self.font_system, None, None);
+        // `wrap` bounds the layout width so cosmic-text breaks lines to fit it; `None` lays the run
+        // out on a single unbounded line (breaking only on explicit `\n`).
+        buffer.set_size(&mut self.font_system, wrap, None);
         buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut self.font_system, false);
         buffer
@@ -168,6 +178,7 @@ impl TextPipeline {
         bold: bool,
         tracking: f32,
         clip: Option<[f32; 4]>,
+        wrap: Option<f32>,
     ) {
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
         let c = Color::rgba(to_u8(color[0]), to_u8(color[1]), to_u8(color[2]), to_u8(color[3]));
@@ -176,13 +187,14 @@ impl TextPipeline {
         // cell passes 0.0 to stay tight so fixed-width numeric columns align).
         let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
         if track == 0.0 {
-            let buffer = self.shape(text, size, role, italic, bold);
+            let buffer = self.shape(text, size, role, italic, bold, wrap);
             self.queued.push(QueuedText { buffer, left, top, color: c, layer, clip });
             return;
         }
         // Tracked caps: cosmic-text has no letter-spacing, so lay out one glyph at
         // a time, advancing by the glyph's own width plus the role's spacing.
-        // Label strings are short, so the per-glyph buffers stay cheap.
+        // Label strings are short, so the per-glyph buffers stay cheap. Tracked text is
+        // never wrapped (one glyph per buffer), so `wrap` is ignored on this path.
         let mut x = left;
         for ch in text.chars() {
             if ch.is_whitespace() {
@@ -190,7 +202,7 @@ impl TextPipeline {
                 continue;
             }
             let mut tmp = [0u8; 4];
-            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold);
+            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold, None);
             let w = buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5);
             self.queued.push(QueuedText { buffer, left: x, top, color: c, layer, clip });
             x += w + track;
@@ -220,7 +232,7 @@ impl TextPipeline {
         // cell passes 0.0 to stay tight so fixed-width numeric columns align).
         let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
         if track == 0.0 {
-            let buffer = self.shape(text, size, role, italic, bold);
+            let buffer = self.shape(text, size, role, italic, bold, None);
             let mut width = 0.0_f32;
             let mut lines = 0_usize;
             for run in buffer.layout_runs() {
@@ -237,7 +249,7 @@ impl TextPipeline {
                 continue;
             }
             let mut tmp = [0u8; 4];
-            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold);
+            let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold, None);
             width += buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5) + track;
         }
         ((width - track).max(0.0), line_height)

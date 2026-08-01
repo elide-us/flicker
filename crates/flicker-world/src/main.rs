@@ -14,6 +14,7 @@ mod camera;
 mod celestial;
 mod color;
 mod globe;
+mod route;
 mod scene;
 mod world;
 

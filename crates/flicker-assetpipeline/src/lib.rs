@@ -1,4 +1,4 @@
-//! flicker-assetpipeline — **Kilnworks Bench**, the asset-pipeline editor: the interactive host
+//! flicker-assetpipeline — **Clayworks Bench**, the asset-pipeline editor: the interactive host
 //! for the `flicker-content` stages. Sibling of the Loomforge Bench, and headed to match it.
 //!
 //! The realized workflow (golden spec 4916D78B, node A3A3259C): open a folder of raw
@@ -23,26 +23,46 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
+};
 use flicker::render::{
     build_textured_verts, grid_segments_xy, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
     MeshVertex, PbrMaps, QuadGrid, Rect, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle,
     Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, load_ui_json, render_hud, run_ui, UiInput, UiState,
+    builtin_templates, expand, load_styles, load_ui_json, render_hud, run_ui_with, UiInput,
+    UiIntents, UiState, WalkerHandler, UI_COMPONENT_MODULES,
 };
+// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` is test-only.
+#[cfg(test)]
+use flicker::ui::run_ui;
 use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
-    apply_orientation, attach_world, classify_asset, conform_to_canonical, default_reference,
-    fitting_base, garment_socket, parse_fbx, quarter_turn, rename_to_canonical, scan_folder,
-    source_maps, write_garment, write_prop, write_rig, AssetClass, AssetReport, ConformOutput, Fit,
+    attach_world, classify_asset, conform_to_canonical, default_reference,
+    fitting_base, garment_socket, parse_fbx, rename_to_canonical, scan_folder,
+    bake_skin, source_maps, write_garment, write_prop, write_rig, AssetClass, AssetReport,
+    ConformOutput, Fit,
     Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
 };
-use flicker_mechanics::{autofit_capsules_from, debug, Volume};
+use flicker_mechanics::{
+    autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
+    Shape, Volume,
+};
+
+mod route;
+use route::RootHandler;
+
+// The shared input event bus (spec section 9 port): the core resolver turns raw
+// per-frame edges into `Fired` signals; the router dispatches them through this
+// scene's handler chain. Consumed read-only — the bus is proven, this scene builds
+// on it.
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 
 /// The HUD component tree (behaviour), in the shared content tree beside the other
 /// clients' HUD scripts. Resolved against this crate's source dir so the scene finds it
@@ -59,7 +79,31 @@ const HUD_UI_ELEMENTS: &str =
 
 /// Skeleton overlay colours, matching the paperdoll's rig view so the two tools read alike.
 const JOINT: [f32; 4] = [0.35, 0.9, 1.0, 1.0];
-const AXIS: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
+/// The SELECTED joint ball — amber, the same "this one is being edited" role the paperdoll uses,
+/// so a clicked joint reads apart from the cyan of the rest.
+const GIZMO_SEL: [f32; 4] = [1.0, 0.8, 0.15, 1.0];
+/// The translate gizmo's arrow length, as a fraction of the model radius — long enough to grab in
+/// the perspective view without swamping a small joint.
+const GIZMO_ARROW_FRAC: f32 = 0.18;
+/// Skeleton rig-view sizing. Joint balls scale to each joint's BONE LENGTH (so extremity joints read
+/// small) × `BALL_LEN_FRAC`, clamped to `[BALL_MIN_FRAC, BALL_MAX_FRAC]` of the model radius. Bones
+/// draw as octahedral "diamonds" whose waist sits `BONE_WAIST_FRAC` of the bone length from the head.
+const BALL_LEN_FRAC: f32 = 0.14;
+const BALL_MIN_FRAC: f32 = 0.006;
+const BALL_MAX_FRAC: f32 = 0.035;
+const BONE_WAIST_FRAC: f32 = 0.12;
+
+/// How an active joint drag maps cursor motion. Both drag in a PLANE whose normal is the view
+/// direction (so the joint follows the cursor on screen); they differ in EFFECT:
+/// - `Deform` — the PERSPECTIVE spring-back test: writes an ephemeral [`BoneOffset`] so the mesh
+///   deforms while you hold, and RESTORES `restore` on release (the joint snaps back to rest).
+/// - `Reposition` — an ORTHO edit: moves the rest skeleton and re-binds (permanent, mesh static).
+#[derive(Clone, Copy)]
+enum DragMode {
+    Deform { normal: Vec3, restore: BoneOffset },
+    Reposition { normal: Vec3 },
+}
+
 /// Attach markers: aged bronze for the set, rune-blue for the one being edited — the design's
 /// own distinction, and the same two roles the Prism palette gives them elsewhere.
 const MARKER: [f32; 4] = [0.722, 0.592, 0.353, 0.85];
@@ -88,20 +132,24 @@ const PIECE_TINT: [f32; 4] = [1.0, 0.74, 0.40, 1.0];
 /// upload cost at `enter` outweighs a reference the user can already read from the skeleton.
 const BASE_MESH_BUDGET: usize = 150_000;
 
-/// The wizard's six steps, in rail order.
+/// The wizard's steps, in rail order.
+///
+/// `Task` is the ENTRY page — a workflow-selection card grid (Import Character / Accessory / Prop /
+/// Animation). The user DECLARES the workflow here rather than the tool guessing it; choosing a card
+/// opens the folder dialog, and ingest → parse → classify → conform all run inline (see `open`), so
+/// the asset lands DIRECTLY on the rig-edit view. The old Load / Analyze / Classify stops are gone:
+/// each was a page whose only action was "click Next", so the work now happens automatically and the
+/// user is not made to walk through a stage that asks nothing of them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
-    Load,
-    Analyze,
-    Classify,
+    Task,
     Conform,
     Attach,
     Review,
 }
 
 impl Step {
-    const ALL: [Step; 6] =
-        [Step::Load, Step::Analyze, Step::Classify, Step::Conform, Step::Attach, Step::Review];
+    const ALL: [Step; 4] = [Step::Task, Step::Conform, Step::Attach, Step::Review];
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
@@ -114,10 +162,8 @@ impl Step {
     /// Short rail label.
     fn label(self) -> &'static str {
         match self {
-            Step::Load => "Load",
-            Step::Analyze => "Analyze",
-            Step::Classify => "Classify",
-            Step::Conform => "Rig Conform",
+            Step::Task => "Workflow",
+            Step::Conform => "Rig",
             Step::Attach => "Attach",
             Step::Review => "Review",
         }
@@ -126,21 +172,17 @@ impl Step {
     /// Footer title.
     fn title(self) -> &'static str {
         match self {
-            Step::Load => "Load Asset",
-            Step::Analyze => "Analyzing",
-            Step::Classify => "Classify",
-            Step::Conform => "Conform Rig",
+            Step::Task => "Select Workflow",
+            Step::Conform => "Rig",
             Step::Attach => "Attach Points",
-            Step::Review => "Review & Commit",
+            Step::Review => "Review & Export",
         }
     }
 
     /// Footer hint — the one line telling the user what this step is for.
     fn hint(self) -> &'static str {
         match self {
-            Step::Load => "Open a source folder to begin classification and rig conform.",
-            Step::Analyze => "Reading source data and detecting the asset type.",
-            Step::Classify => "Confirm the detected type or override the classification.",
+            Step::Task => "Choose the kind of asset you are importing to begin.",
             Step::Conform => "Map the source skeleton to the internal rig and tune bone offsets.",
             Step::Attach => "Position hold, holster and belt attach points on the standard rig.",
             Step::Review => "Verify engine requirements, then hand off to the pack editor.",
@@ -182,21 +224,21 @@ impl ConformRole {
         }
     }
 
-    /// Rail label — a prop must never read "Rig Conform" over a mount page.
+    /// Rail label — a prop must never read the character "Rig" label over a mount page.
     fn label(self) -> &'static str {
         match self {
-            Self::Skeleton => "Rig Conform",
+            Self::Skeleton => "Rig",
             Self::Mount => "Mount",
             Self::Clip => "Clips",
         }
     }
 
-    /// Footer title for the stage.
+    /// Footer title for the stage — kept identical to the rail label so the two never drift.
     fn title(self) -> &'static str {
         match self {
-            Self::Skeleton => "Conform Rig",
-            Self::Mount => "Mount Piece",
-            Self::Clip => "Adjust Clips",
+            Self::Skeleton => "Rig",
+            Self::Mount => "Mount",
+            Self::Clip => "Clips",
         }
     }
 
@@ -337,6 +379,9 @@ struct Rig {
     offsets: Vec<BoneOffset>,
     /// Selected row in the bone map.
     sel: usize,
+    /// Whether a joint is FOCUSED — has the gizmo and receives ortho nudges. Click a joint (Perspective,
+    /// or Ctrl-click an ortho view) or a bone-map row to focus; click empty space to deselect.
+    focused: bool,
     /// First visible row — the bone list is 66 rows in a 150px box, so it pages.
     window: usize,
 }
@@ -441,10 +486,6 @@ struct Source {
     candidate_sel: usize,
     /// Top row of the picker's visible window (it pages, like the bone map and socket list).
     pick_window: usize,
-    /// Accumulated quarter-turns about X/Y/Z used to stand this source up in the world's Z-up
-    /// ground reckoning. The rotation itself is already applied to `parsed`; this is the record of
-    /// it (shown in the panel, and what makes four presses read as a full turn back to 0°).
-    orient: [u8; 3],
     textures: usize,
     parsed: Option<Parsed>,
     /// What Classify detected, and the override the user may have applied over it.
@@ -609,6 +650,14 @@ impl Orbit {
 /// The editor scene.
 pub struct AssetPipeline {
     step: Step,
+    /// The workflow the user DECLARED on the Task page — the class Load stamps onto the source
+    /// instead of auto-detecting it. `None` before a card is chosen (and on the character/default
+    /// path, which `ConformRole::of(None)` already treats as Skeleton).
+    pending_class: Option<AssetClass>,
+    /// The Prop SUB-TYPE the user DECLARED on the Import panel — the clothing-vs-static fork that
+    /// decides the bake path (`Clothing` → `write_garment`; anything else → `write_prop`). Set by
+    /// the Accessory/Prop cards; `None` (→ `PropKind::Accessory` default) for Character/Animation.
+    pending_prop: Option<PropKind>,
     source: Option<Source>,
     grid: Option<QuadGrid>,
     /// The framed holder rect the HUD reserves for the 2×2 (the `editor_quad` `stage` node). The
@@ -622,15 +671,38 @@ pub struct AssetPipeline {
     show_skeleton: bool,
     /// Cached last cursor, for orbit dragging.
     last_mouse: Vec2,
-    /// Escape is level-triggered by `InputState`, so the edge is tracked here.
-    menu_prev: bool,
     // ── Pause plumbing, as the shell expects (built in `enter`, handed to PauseScene). ──
-    bindings: InputMap,
+    /// Per-context action maps (spec section 9): the `World` base is `wasd_and_mouse`
+    /// — the map the resolver reads and that each pushed `PauseScene` clones. This
+    /// scene has no extra contexts (no text entry / no modal map), so `World` is the
+    /// whole stack and `active()` is always `World`.
+    bindings: ContextualBindings,
     controls: AbstractControls,
     gamepad_config: GamepadConfig,
+    /// The input seam (spec section 5/9): a stateful edge `Resolver` (replaces the
+    /// hand-rolled `menu_prev` bool), a REUSED `Fired` scratch buffer (no per-frame
+    /// alloc — RT-7), and the router's request queue. `tick` is the resolver's
+    /// monotonic `TickTime` — a frame counter, NOT wall-clock (spec section 3.2a).
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
     ui_theme: Option<Theme>,
     // ── HUD (component walker) ──
+    /// The HUD script host, RETAINED so the walker can dispatch a node's draw to its Lua
+    /// component twin (`run_ui_with`): a `button` renders through `ui/button.lua` instead of
+    /// the Rust `draw_button` — render-identical, only the dispatch path differs. `None` when
+    /// the script failed to load, in which case the walker falls back to the all-Rust path.
+    ui_host: Option<ScriptHost>,
     ui_tree: Option<UiNode>,
+    /// The screen's declarative signal bindings (S9), collected from the expanded
+    /// tree's ROOT `on_<signal>` props at the same build point (`on_menu =
+    /// "pause_open"`). The walker layer consumes a declared signal; `update` maps
+    /// the fired name onto its pause push.
+    ui_intents: UiIntents,
+    /// Intent names fired last frame — republished ONCE into the next HUD Model
+    /// as the transient `sig_<name>` mirror (S9), then dropped.
+    fired_sigs: Vec<String>,
     ui_state: UiState,
     ui_styles: serde_json::Value,
     hud_commands: Vec<HudCommand>,
@@ -663,10 +735,26 @@ pub struct AssetPipeline {
     /// asset (or picking another piece in the same folder) silently kept showing the stale upload —
     /// the "ROT buttons do nothing" bug. Any change re-uploads.
     preview: Option<(Uploaded, PreviewKey)>,
+    /// The LIVE CPU-skinned character mesh for the Conform stage — re-skinned and re-uploaded when
+    /// the authored pose (`pose_gen`) changes, so dragging a joint deforms the mesh in view. Keyed by
+    /// the source identity AND `pose_gen`; other stages draw the cheap rest mesh via `preview`.
+    skinned: Option<(Uploaded, (PreviewKey, u64))>,
+    /// Bumped on every authored-offset write (a Conform slider or a gizmo drag) — the skinned-mesh
+    /// cache key, so the live re-skin re-uploads exactly when the pose changes and never otherwise.
+    pose_gen: u64,
+    /// The in-scene transform gizmo's mode (Translate is the only one that drags in slice 1; Rotate
+    /// and Scale draw their handles but are inert). Toggled from the HUD.
+    gizmo_mode: GizmoMode,
+    /// The axis handle being dragged and the pick ray from the PREVIOUS frame — the drag projects the
+    /// new cursor ray against it to get the world delta. `None` when no handle is grabbed.
+    gizmo_drag: Option<(DragMode, (Vec3, Vec3))>,
+    /// Symmetry: an ortho reposition of a left/right joint mirrors to its `_l`/`_r` twin. Default on;
+    /// a HUD toggle turns it off to move one joint alone.
+    mirror_joints: bool,
 }
 
 /// What a cached preview upload was built from. Any difference means the GPU copy is stale.
-type PreviewKey = (PathBuf, usize, [u8; 3]);
+type PreviewKey = (PathBuf, usize);
 
 /// One uploaded preview mesh. TEXTURED when its source resolved an albedo map, else the flat
 /// tinted fallback — `flicker-render` keeps the two pipelines in separate stores with distinct
@@ -944,7 +1032,12 @@ impl AssetPipeline {
     pub fn new() -> Self {
         let ui_styles = load_styles(HUD_UI_ELEMENTS);
         let mut ui_tree = None;
-        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+        // Retain the host (`ui_host`) so the walker can dispatch a node's draw to its Lua
+        // component twin — `run_ui_with` renders a `button` through `ui/button.lua` instead of
+        // the Rust `draw_button`. `from_file_with_modules` installs the requireable `ui.*`
+        // modules those components pull in. `None` on load failure → the all-Rust fallback.
+        let ui_host = match ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES)
+        {
             Ok(s) => {
                 load_ui_json(&s, HUD_UI_ELEMENTS); // layout constants (`UI.assetpipeline`)
                 match s.ui_tree() {
@@ -954,23 +1047,37 @@ impl AssetPipeline {
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree failed to parse: {e}"),
                 }
+                Some(s)
             }
-            Err(e) => tracing::error!("could not load {HUD_SCRIPT_PATH}: {e}"),
-        }
+            Err(e) => {
+                tracing::error!("could not load {HUD_SCRIPT_PATH}: {e}");
+                None
+            }
+        };
         Self {
-            step: Step::Load,
+            step: Step::Task,
+            pending_class: None,
+            pending_prop: None,
             source: None,
             grid: None,
             quad_rect: None,
             orbits: [Orbit::default(); 4],
             show_skeleton: true,
             last_mouse: Vec2::ZERO,
-            menu_prev: false,
-            bindings: InputMap::wasd_and_mouse(),
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
             ui_theme: None,
+            ui_host,
+            // The screen's declarative bindings (S9), read off the expanded root
+            // once — cached exactly like the tree they came from.
+            ui_intents: ui_tree.as_ref().map(UiIntents::of).unwrap_or_default(),
             ui_tree,
+            fired_sigs: Vec::new(),
             ui_state: UiState::new(),
             ui_styles,
             hud_commands: Vec::new(),
@@ -982,6 +1089,11 @@ impl AssetPipeline {
             show_collision: false,
             view_radius: 100.0,
             preview: None,
+            skinned: None,
+            pose_gen: 0,
+            mirror_joints: true,
+            gizmo_mode: GizmoMode::default(),
+            gizmo_drag: None,
         }
     }
 
@@ -1054,7 +1166,6 @@ impl AssetPipeline {
                     scan.riggable.len()
                 );
                 let ok = error.is_none();
-                let single = candidates.len() == 1;
                 self.source = Some(Source {
                     dir,
                     scan,
@@ -1062,12 +1173,15 @@ impl AssetPipeline {
                     candidates,
                     candidate_sel: 0,
                     pick_window: 0,
-                    orient: [0; 3],
                     textures,
                     parsed: None,
                     report: None,
-                    class: None,
-                    prop: PropKind::Accessory,
+                    // The class is DECLARED on the Task page, not guessed here — stamped from the
+                    // workflow the user chose so the whole flow is intent-driven, not auto-detected.
+                    class: self.pending_class,
+                    // The sub-type is DECLARED on the Import panel (Accessory → garment/worn, Prop →
+                    // static) exactly like the class — not guessed. `None` keeps the historical default.
+                    prop: self.pending_prop.unwrap_or(PropKind::Accessory),
                     rig: None,
                     attach: Self::new_attach(),
                     attach_sel: 0,
@@ -1076,10 +1190,18 @@ impl AssetPipeline {
                     committed: None,
                     error,
                 });
-                // One unambiguous mesh → straight on to Analyze. SEVERAL → stay on Load so the user
-                // picks which piece to import first (Next then carries the chosen one forward).
-                if ok && single {
-                    self.step = Step::Analyze;
+                // Land DIRECTLY on the rig-edit view — single- or multi-mesh alike, with zero extra
+                // clicks. A scan error lands here too, surfaced as the inspector's "Blocked:" line
+                // rather than a dead Load page. When the folder holds several riggable meshes the rig
+                // stage shows the inline piece picker (`on_pick`); the first is pre-selected so the
+                // view is never empty.
+                self.step = Step::Conform;
+                if ok {
+                    self.analyze();
+                    // conform() is idempotent and early-returns for Prop/Animation, so a model gets
+                    // its rig here and a prop/animation simply lands on its own Conform role page
+                    // (Mount / Clips) — the source-generic dispatch.
+                    self.conform();
                 }
             }
             Err(e) => tracing::error!("scan failed: {e}"),
@@ -1163,6 +1285,7 @@ impl AssetPipeline {
                     map,
                     offsets: vec![BoneOffset::default(); n],
                     sel: 0,
+                    focused: false,
                     window: 0,
                 });
                 // The bones now carry canonical names, so the attach points can bind to them.
@@ -1326,7 +1449,7 @@ impl AssetPipeline {
         let (key, has_mesh) = {
             let src = self.source.as_ref()?;
             let has_mesh = src.parsed.as_ref().map(|p| !p.model.vertices.is_empty()).unwrap_or(false);
-            let key: PreviewKey = (src.dir.clone(), src.candidate_sel, src.orient);
+            let key: PreviewKey = (src.dir.clone(), src.candidate_sel);
             (key, has_mesh)
         };
         if !has_mesh {
@@ -1362,6 +1485,320 @@ impl AssetPipeline {
             self.preview = Some((up, key));
         }
         self.preview.as_ref().map(|(h, _)| *h)
+    }
+
+    /// The LIVE CPU-skinned character mesh, for the Conform stage: skins `parsed.model.vertices`
+    /// through the posed `parsed.globals` (the authored offsets are already folded into them) and
+    /// re-uploads whenever the pose changes. At the conform rest pose the palette is the identity, so
+    /// this reproduces the bind mesh exactly; an authored offset deforms it — the live re-skin the
+    /// gizmo drives. Same upload path (and texture cache) as [`Self::ensure_source_mesh`], so a
+    /// textured source previews with its real maps. `None` when there is nothing skinnable.
+    fn ensure_skinned_mesh(&mut self, r: &mut Renderer) -> Option<Uploaded> {
+        let (key, ok) = {
+            let src = self.source.as_ref()?;
+            let parsed = src.parsed.as_ref()?;
+            let ok = !parsed.model.vertices.is_empty() && !parsed.model.bones.is_empty();
+            let key = ((src.dir.clone(), src.candidate_sel), self.pose_gen);
+            (key, ok)
+        };
+        if !ok {
+            return None;
+        }
+        let need = match &self.skinned {
+            Some((_, k)) => *k != key,
+            None => true,
+        };
+        if need {
+            if let Some((old, _)) = self.skinned.take() {
+                old.free(r);
+            }
+            // Own the geometry + map paths first, so the immutable borrow of `source` ends before
+            // the texture cache is borrowed mutably for the upload (same ordering as the rest mesh).
+            let (verts, uvs, indices, maps) = {
+                let src = self.source.as_ref()?;
+                let parsed = src.parsed.as_ref()?;
+                let verts = skin_source_verts(&parsed.model, &parsed.globals);
+                let uvs: Vec<[f32; 2]> = parsed.model.vertices.iter().map(|v| v.uv).collect();
+                let maps = source_maps(&src.scan, &src.fbx);
+                (verts, uvs, parsed.model.indices.clone(), maps)
+            };
+            let up = upload_preview(r, &mut self.textures, &maps, &verts, &uvs, &indices);
+            self.skinned = Some((up, key));
+        }
+        self.skinned.as_ref().map(|(h, _)| *h)
+    }
+
+    /// The pick ray in the quad panel UNDER the cursor, in the SAME recentred draw space the skeleton
+    /// is drawn in, plus WHICH cell it hit — so the caller can use the Perspective arrows (cell 0) or
+    /// an ortho panel's view plane (cells 1–3). Built from that cell's own camera exactly as
+    /// [`Self::render`] frames it (view 0 has no ortho, so its camera is the perspective orbit
+    /// verbatim). `None` when the cursor is outside the grid.
+    fn pick_ray_at(&self, cursor: Vec2, screen: Vec2) -> Option<(usize, (Vec3, Vec3))> {
+        let grid = self.grid.as_ref()?;
+        let cell = grid.cell_at(cursor, screen)?;
+        let local = grid.local_cursor(cell, cursor, screen)?;
+        let vp = grid.cell(cell, screen).size;
+        let o = &self.orbits[cell];
+        let cam = grid.camera(cell, o.ortho_radius(self.view_radius), &o.camera(self.view_radius));
+        cam.pick_ray(local, vp).map(|ray| (cell, ray))
+    }
+
+    /// Publish the gizmo-mode toggle captions (the radio glyph + label) — set in BOTH conform-model
+    /// branches so the rig-less default model (the HUD-walk test) still renders real captions.
+    fn set_gizmo_modes(&self, m: &mut ValueMap) {
+        m.set("mode_translate", format!("{} Translate", radio(self.gizmo_mode == GizmoMode::Translate)));
+        m.set("mode_rotate", format!("{} Rotate", radio(self.gizmo_mode == GizmoMode::Rotate)));
+        m.set("mode_scale", format!("{} Scale", radio(self.gizmo_mode == GizmoMode::Scale)));
+    }
+
+    /// Set (or clear) the FOCUSED joint — the one carrying the gizmo. Focus follows selection, so the
+    /// bone-map row tracks it; `None` deselects (clears the gizmo; ortho nudges then do nothing).
+    fn set_focus(&mut self, sel: Option<usize>) {
+        if let Some(rig) = self.source.as_mut().and_then(|s| s.rig.as_mut()) {
+            match sel {
+                Some(i) => {
+                    rig.sel = i;
+                    rig.focused = true;
+                    Self::scroll_to_selection(rig);
+                }
+                None => rig.focused = false,
+            }
+        }
+    }
+
+    /// The in-scene joint-editing interaction (Conform stage), keyed off FOCUS. PERSPECTIVE (cell 0):
+    /// click a joint to FOCUS it (empty space deselects), or drag its arrow to DEFORM (test the skin).
+    /// ORTHO panels (Top/Side/Front): a plain click-drag moves the FOCUSED joint in that view's plane
+    /// (repositioning the rest skeleton, mesh static); Ctrl-click CHANGES focus (or deselects on a
+    /// miss) — so nudging never grabs a neighbour. Returns whether it handled the pointer, so the
+    /// caller suppresses the orbit on the same gesture.
+    fn gizmo_interact(&mut self, input: &InputState, screen: Vec2) -> bool {
+        if self.step != Step::Conform {
+            self.gizmo_drag = None;
+            return false;
+        }
+        let Some((cell, (o, d))) = self.pick_ray_at(input.mouse_position, screen) else {
+            // Cursor left the grid: drop a drag on release, otherwise hold it for next frame.
+            if !input.mouse_left {
+                self.gizmo_drag = None;
+            }
+            return self.gizmo_drag.is_some();
+        };
+        // Owned reads, so the `source` borrow ends before any write. `globals` is the pre-write pose,
+        // which is exactly what the world→parent-local conversion needs.
+        let Some((centre, radius, globals, sel, focused)) = self
+            .source
+            .as_ref()
+            .and_then(|s| s.parsed.as_ref().zip(s.rig.as_ref()))
+            .map(|(p, r)| (p.centre, p.radius, p.globals.clone(), r.sel, r.focused))
+        else {
+            return false;
+        };
+        let recentre = Mat4::from_translation(-centre);
+        let joint_tol = (radius * GIZMO_ARROW_FRAC).max(1.0) * 0.35;
+        let origin =
+            recentre.transform_point3(globals.get(sel).map(|g| g.w_axis.truncate()).unwrap_or(Vec3::ZERO));
+        // Bespoke raw key, per the new input system's "non-ActionSignal keys read raw per scene".
+        let ctrl = input.key_down(Key::LeftControl) || input.key_down(Key::RightControl);
+
+        // Continue an active drag. Perspective = a Deform TEST (springs back on release); ortho =
+        // a Reposition (permanent). Both drag in the view plane.
+        if let Some((mode, ray_prev)) = self.gizmo_drag {
+            if !input.mouse_left {
+                // Release: a perspective deform test snaps the joint back to its pre-drag rest.
+                if let DragMode::Deform { restore, .. } = mode {
+                    self.restore_offset(sel, restore);
+                }
+                self.gizmo_drag = None;
+                return false;
+            }
+            let normal = match mode {
+                DragMode::Deform { normal, .. } => normal,
+                DragMode::Reposition { normal } => normal,
+            };
+            let world_delta = drag_plane(normal, origin, ray_prev, (o, d));
+            self.gizmo_drag = Some((mode, (o, d)));
+            if world_delta != Vec3::ZERO {
+                match mode {
+                    // Perspective: DEFORM the mesh to preview the skin (ephemeral; springs back).
+                    DragMode::Deform { .. } => self.apply_gizmo_delta(sel, &globals, world_delta),
+                    // Ortho: REPOSITION the rest skeleton, mesh static (then Bake Skin).
+                    DragMode::Reposition { .. } => self.reposition_bone(sel, &globals, world_delta),
+                }
+            }
+            return true;
+        }
+
+        if !input.mouse_left_pressed {
+            return false;
+        }
+
+        // The joint ball nearest the pick ray (screen-nearest in an ortho view), if within tolerance.
+        let nearest = || -> Option<usize> {
+            let mut best: Option<(usize, f32)> = None;
+            for (i, g) in globals.iter().enumerate() {
+                let c = recentre.transform_point3(g.w_axis.truncate());
+                let (pr, ps) = closest_point_ray_segment(o, d, c, c);
+                let miss = (pr - ps).length();
+                if best.is_none_or(|(_, bd)| miss < bd) {
+                    best = Some((i, miss));
+                }
+            }
+            best.filter(|&(_, miss)| miss <= joint_tol).map(|(i, _)| i)
+        };
+
+        if cell == 0 {
+            // PERSPECTIVE — grab a joint to FOCUS it and free-drag it as a spring-back DEFORM TEST:
+            // the mesh deforms while you hold, and on release the joint snaps back to rest. Empty
+            // space DESELECTS and leaves the orbit free.
+            match nearest() {
+                Some(i) => {
+                    let restore = self
+                        .source
+                        .as_ref()
+                        .and_then(|s| s.rig.as_ref())
+                        .and_then(|r| r.offsets.get(i).copied())
+                        .unwrap_or_default();
+                    self.set_focus(Some(i));
+                    self.gizmo_drag =
+                        Some((DragMode::Deform { normal: d.normalize_or_zero(), restore }, (o, d)));
+                    true
+                }
+                None => {
+                    self.set_focus(None);
+                    false
+                }
+            }
+        } else if ctrl {
+            // ORTHO + Ctrl — the deliberate "change focus" gesture: nearest joint focuses, a miss
+            // deselects. Without Ctrl an ortho click never re-selects, so a nudge of the focused joint
+            // can't accidentally grab a neighbour.
+            match nearest() {
+                Some(i) => self.set_focus(Some(i)),
+                None => self.set_focus(None),
+            }
+            true
+        } else if focused {
+            // ORTHO, no modifier — the click belongs to the FOCUSED joint: begin a Reposition drag in
+            // this view's plane (normal = the view direction `d`), moving it in the two on-screen axes.
+            self.gizmo_drag = Some((DragMode::Reposition { normal: d.normalize_or_zero() }, (o, d)));
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Write a WORLD-space translation delta onto the selected bone's [`BoneOffset::t`], converting
+    /// it to the bone's PARENT-local frame first — that is the space `t` lives in (folded into the
+    /// pose by [`rest_globals`], so the sliders and the gizmo share one value). `recentre` is
+    /// translation-only, so the world delta needs no un-recentring. Re-derives the pose and bumps
+    /// `pose_gen` so the mesh re-skins live.
+    fn apply_gizmo_delta(&mut self, sel: usize, globals: &[Mat4], world_delta: Vec3) {
+        // Parent's current posed rotation/scale takes the world delta into parent-local (root = world).
+        let parent_inv = self
+            .source
+            .as_ref()
+            .and_then(|s| s.parsed.as_ref())
+            .and_then(|p| p.model.bones.get(sel))
+            .and_then(|b| usize::try_from(b.parent).ok())
+            .and_then(|pi| globals.get(pi))
+            .map(|g| glam::Mat3::from_mat4(*g).inverse())
+            .unwrap_or(glam::Mat3::IDENTITY);
+        let dt = parent_inv * world_delta;
+        if !dt.is_finite() {
+            return;
+        }
+        let Some(src) = self.source.as_mut() else { return };
+        let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) else { return };
+        slot.t[0] += dt.x;
+        slot.t[1] += dt.y;
+        slot.t[2] += dt.z;
+        let offsets = src.rig.as_ref().map(|r| r.offsets.clone()).unwrap_or_default();
+        if let Some(parsed) = src.parsed.as_mut() {
+            parsed.rebuild(&offsets);
+        }
+        self.pose_gen = self.pose_gen.wrapping_add(1);
+    }
+
+    /// ORTHO reposition (the tool's core): move the bone's REST position and RE-BIND, so only the
+    /// SKELETON moves — the mesh stays put. Unlike [`apply_gizmo_delta`] (Perspective, which DEFORMS
+    /// to preview the skin), this edits the rest local translation and re-derives every `inverse_bind`
+    /// to the new rest, keeping the palette identity at rest. Mirrors to the symmetric `_l`/`_r` joint
+    /// when `mirror_joints` is on. Bake Skin afterwards to re-weight to the corrected skeleton.
+    fn reposition_bone(&mut self, sel: usize, globals: &[Mat4], world_delta: Vec3) {
+        let mirror = self.mirror_joints.then(|| self.mirror_of(sel)).flatten();
+        let offsets = self
+            .source
+            .as_ref()
+            .and_then(|s| s.rig.as_ref())
+            .map(|r| r.offsets.clone())
+            .unwrap_or_default();
+        let Some(p) = self.source.as_mut().and_then(|s| s.parsed.as_mut()) else {
+            return;
+        };
+        let dt = parent_local_delta(globals, &p.model, sel, world_delta);
+        if !dt.is_finite() {
+            return;
+        }
+        for k in 0..3 {
+            p.model.bones[sel].translation[k] += dt[k];
+        }
+        if let Some(m) = mirror {
+            // Mirror across the body's symmetry plane (world X): negate the X of the move.
+            let mworld = Vec3::new(-world_delta.x, world_delta.y, world_delta.z);
+            let mdt = parent_local_delta(globals, &p.model, m, mworld);
+            if mdt.is_finite() {
+                for k in 0..3 {
+                    p.model.bones[m].translation[k] += mdt[k];
+                }
+            }
+        }
+        // Re-bind: inverse_bind = (new rest world)⁻¹ for every bone → the mesh is unchanged at rest;
+        // only the skeleton has moved. Bake Skin then re-weights to the corrected bones.
+        let (rest, _) = rest_globals(&p.model, &[]);
+        for (b, g) in p.model.bones.iter_mut().zip(&rest) {
+            b.inverse_bind = g.inverse().to_cols_array();
+        }
+        p.rebuild(&offsets);
+        self.pose_gen = self.pose_gen.wrapping_add(1);
+    }
+
+    /// The symmetric bone of `sel` (its `_l`/`_r` twin), if the rig has one.
+    fn mirror_of(&self, sel: usize) -> Option<usize> {
+        let p = self.source.as_ref()?.parsed.as_ref()?;
+        let mname = mirror_name(&p.model.bones.get(sel)?.name)?;
+        p.model.bones.iter().position(|b| b.name == mname)
+    }
+
+    /// Re-bake the character's skin WEIGHTS from the repositioned skeleton (replacing the source's
+    /// auto-skin), then re-skin the view. The rest pose is untouched, so the mesh does not move — only
+    /// its deformation changes, which the Perspective panel shows.
+    fn bake_skin_now(&mut self) {
+        let offsets = self
+            .source
+            .as_ref()
+            .and_then(|s| s.rig.as_ref())
+            .map(|r| r.offsets.clone())
+            .unwrap_or_default();
+        if let Some(p) = self.source.as_mut().and_then(|s| s.parsed.as_mut()) {
+            bake_skin(&mut p.model);
+            p.rebuild(&offsets);
+        }
+        self.pose_gen = self.pose_gen.wrapping_add(1);
+    }
+
+    /// Restore the focused joint's [`BoneOffset`] to `offset` (its pre-drag value) — the spring-back
+    /// that ends a Perspective deform TEST, snapping the joint back to its rest position.
+    fn restore_offset(&mut self, sel: usize, offset: BoneOffset) {
+        let Some(src) = self.source.as_mut() else { return };
+        if let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) {
+            *slot = offset;
+        }
+        let offsets = src.rig.as_ref().map(|r| r.offsets.clone()).unwrap_or_default();
+        if let Some(p) = src.parsed.as_mut() {
+            p.rebuild(&offsets);
+        }
+        self.pose_gen = self.pose_gen.wrapping_add(1);
     }
 
     /// Build this frame's PROP/GARMENT fit preview — the reference body plus the imported mesh
@@ -1400,7 +1837,7 @@ impl AssetPipeline {
         // Centre the body — and the piece with it — because the quad cameras target the ORIGIN,
         // which in Z-up ground reckoning is the body's feet.
         let recentre = Mat4::from_translation(-base.centre);
-        let base_joints = debug::joint_segments(recentre, &base.parents, &base.globals);
+        let base_joints = debug::bone_diamonds(recentre, &base.parents, &base.globals, BONE_WAIST_FRAC);
         Some(PreviewDraw {
             mesh,
             world: recentre * world,
@@ -1425,25 +1862,39 @@ impl AssetPipeline {
         m.set("show_skeleton", self.show_skeleton);
         m.set("show_base", self.show_base);
         m.set("show_collision", self.show_collision);
+        m.set("mirror", self.mirror_joints);
 
         // Pipeline tabs: one plain label per step (Conform reads its ROLE), plus the active/idle
         // STYLE path for each. The tab bar is non-interactive, so Rust owns which one lights and the
         // footer Back/Next moves it — no done/pending glyphs: the tabs show WHERE you are and the
         // footer buttons move you, which read together without extra marks.
-        for (i, s) in Step::ALL.iter().enumerate() {
-            let label = if *s == Step::Conform { role.label() } else { s.label() };
-            m.set(format!("tab_{i}"), label);
-            let style = if i == step.index() {
-                "assetpipeline.tab_active"
-            } else {
-                "assetpipeline.tab_idle"
-            };
-            m.set(format!("tab_{i}_style"), style);
+        // Only the USER-FACING stops appear (Analyze/Classify run invisibly on Load, so they are
+        // filtered out by `step_applies`); each visible tab carries its label, an on/off flag the
+        // Lua gates its slot with, and its active/idle style. Unused trailing slots are hidden.
+        let visible: Vec<Step> = Step::ALL.iter().copied().filter(|s| self.step_applies(*s)).collect();
+        for i in 0..Step::ALL.len() {
+            match visible.get(i) {
+                Some(s) => {
+                    let label = if *s == Step::Conform { role.label() } else { s.label() };
+                    m.set(format!("tab_{i}"), label);
+                    m.set(format!("tab_{i}_show"), true);
+                    let style = if *s == step {
+                        "assetpipeline.tab_active"
+                    } else {
+                        "assetpipeline.tab_idle"
+                    };
+                    m.set(format!("tab_{i}_style"), style);
+                }
+                None => {
+                    m.set(format!("tab_{i}"), "");
+                    m.set(format!("tab_{i}_show"), false);
+                    m.set(format!("tab_{i}_style"), "assetpipeline.tab_idle");
+                }
+            }
         }
 
         let has = self.source.is_some();
         m.set("has_asset", has);
-        m.set("no_asset", !has);
         match self.source.as_ref() {
             None => {
                 m.set("asset_name", "No asset loaded");
@@ -1462,34 +1913,25 @@ impl AssetPipeline {
         }
         m.set("insp_title", self.inspector_title());
         m.set("insp_badge", self.inspector_badge());
-        // Back is live at Load too, once a folder is open — there it CLEARS the folder, which is
-        // the only meaningful "back" on the first step (reported: Back did nothing on that page).
+        // Back is live once a folder is open — on the Workflow page (the first stop) it CLEARS the
+        // folder, the only meaningful "back" there (reported: Back did nothing on that page).
         m.set("back_enabled", step.index() > 0 || self.source.is_some());
         // The final (Review) stage's forward button becomes "Restart" — always enabled, it loops
-        // back to the Load page to process another asset.
+        // back to the Workflow page to process another asset.
         m.set("next_enabled", self.can_advance() || step == Step::Review);
         m.set("next_label", if step == Step::Review { "RESTART" } else { "NEXT" });
-        // The Load picker appears only when the folder actually holds a choice of meshes.
+        // The piece picker rides on the rig stage, and only when the folder holds a choice of meshes
+        // (a weapon set, an outfit) — a single-mesh folder never shows it.
         let several = self.source.as_ref().map(|s| s.candidates.len() > 1).unwrap_or(false);
-        m.set("on_load_pick", step == Step::Load && several);
+        m.set("on_pick", step == Step::Conform && several);
         self.pick_model(&mut m);
 
-        // Per-stage controls. Each stage's subtree is gated by its own `on_*` flag, so exactly
-        // one set of controls is live and the tree carries no stage branching of its own.
-        // Analyze carries the GROUND-RECKONING control: quarter-turns that stand a mis-oriented
-        // source up before anything downstream reads its axes.
-        m.set("on_analyze", step == Step::Analyze);
-        let orient = self.source.as_ref().map(|s| s.orient).unwrap_or([0; 3]);
-        m.set(
-            "orient_label",
-            format!(
-                "X {}\u{b0}    Y {}\u{b0}    Z {}\u{b0}",
-                orient[0] as u32 * 90,
-                orient[1] as u32 * 90,
-                orient[2] as u32 * 90
-            ),
-        );
-        m.set("on_classify", step == Step::Classify);
+        // Per-stage controls. Each stage's subtree is gated by its own `on_*` flag, so exactly one
+        // set of controls is live and the tree carries no stage branching of its own. The Import
+        // panel (the four workflow cards) is gated `on_task`; its card copy is authored statically in
+        // the HUD, and a click DECLARES the class (+ Prop sub-type) in Rust and opens the folder
+        // dialog at once, so there is no per-card Model label.
+        m.set("on_task", step == Step::Task);
         // CONFORM DISPATCHES BY ROLE: one step, one panel per role. A Skin gets the bone map and
         // its offsets; a prop/garment gets the mount socket + placement (its rig IS that binding);
         // an animation gets an honest "not wired" instead of controls addressing nothing.
@@ -1504,45 +1946,16 @@ impl AssetPipeline {
         m.set("on_attach", at_attach);
         m.set("on_attach_char", at_attach && role == ConformRole::Skeleton);
         m.set("on_review", step == Step::Review);
-        self.classify_model(&mut m);
         self.conform_model(&mut m);
         self.attach_model(&mut m);
         self.fit_model(&mut m);
         self.review_model(&mut m);
+        // The transient `sig_<name>` mirror (S9): intent names fired last frame
+        // ride exactly this ONE publish for scripts to observe (`update` clears
+        // them right after the walk). Distinct from the `on_<step>` MODEL binds
+        // above — those are visibility gates, not root intent props.
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
-    }
-
-    /// CLASSIFY bindings: the detected card, the class radios, and the prop sub-type block
-    /// (which the design dims and disables unless the class is Prop).
-    fn classify_model(&self, m: &mut ValueMap) {
-        let src = self.source.as_ref();
-        let cls = src.and_then(|s| s.class());
-        for (i, c) in [AssetClass::Skin, AssetClass::Prop, AssetClass::Animation]
-            .into_iter()
-            .enumerate()
-        {
-            m.set(format!("cls_{i}"), format!("{}  {}", radio(cls == Some(c)), CLASS_LABEL[i]));
-        }
-        let is_prop = cls == Some(AssetClass::Prop);
-        m.set("cls_is_prop", is_prop);
-        let sub = src.map(|s| s.prop);
-        for (i, k) in
-            [PropKind::Weapon, PropKind::Clothing, PropKind::Environment, PropKind::Accessory]
-                .into_iter()
-                .enumerate()
-        {
-            let on = is_prop && sub == Some(k);
-            m.set(format!("sub_{i}"), format!("{}  {}", radio(on), PROP_LABEL[i]));
-        }
-        let (detected, confidence) = match src.and_then(|s| s.report.as_ref()) {
-            Some(r) => (
-                r.class.id().to_uppercase(),
-                format!("{}% confidence", (r.confidence * 100.0).round() as i32),
-            ),
-            None => ("—".into(), "not analyzed".into()),
-        };
-        m.set("cls_detected", detected);
-        m.set("cls_confidence", confidence);
     }
 
     /// CONFORM bindings: the mapped/total headline, the paged bone map, and the four offset
@@ -1563,6 +1976,7 @@ impl AssetPipeline {
             for (k, _) in OFFSET_AXES {
                 m.set(k, 0.0);
             }
+            self.set_gizmo_modes(m);
             m.set("has_rig", false);
             return;
         };
@@ -1609,6 +2023,7 @@ impl AssetPipeline {
         for (i, (key, _)) in OFFSET_AXES.into_iter().enumerate() {
             m.set(key, if i < 3 { o.t[i] as f64 } else { o.roll as f64 });
         }
+        self.set_gizmo_modes(m);
     }
 
     /// ATTACH bindings: the six points, their parent bones, and the selected point's offsets.
@@ -1745,7 +2160,7 @@ impl AssetPipeline {
         let committed = self.source.as_ref().and_then(|s| s.committed.as_ref());
         m.set(
             "commit_label",
-            if committed.is_some() { "COMMITTED \u{2713}" } else { "COMMIT \u{2192} PACK EDITOR" },
+            if committed.is_some() { "EXPORTED \u{2713}" } else { "EXPORT \u{2192} PACK EDITOR" },
         );
         m.set("commit_enabled", reqs.iter().all(|(ok, _)| *ok));
         // Once a piece is baked, offer the loop straight back to the folder's picker — a weapon set
@@ -1757,10 +2172,10 @@ impl AssetPipeline {
 
     fn inspector_title(&self) -> &'static str {
         match self.step {
-            Step::Load => "Source",
-            Step::Analyze => "Analysis",
-            Step::Classify => "Classification",
-            Step::Conform => "Rig Conform",
+            Step::Task => "Workflow",
+            // Conform dispatches by role, so the inspector title tracks the rail: a prop reads
+            // "Mount", an animation "Clips" — never the character "Rig" label over a page that is neither.
+            Step::Conform => self.conform_role().label(),
             Step::Attach => "Attach Points",
             Step::Review => "Review",
         }
@@ -1778,63 +2193,33 @@ impl AssetPipeline {
         }
         let mut out = Vec::new();
         match self.step {
-            Step::Load => {
-                out.push(format!("Folder    {}", src.dir.display()));
-                out.push(format!("Files     {}", src.scan.entries.len()));
-                out.push(format!("Riggable  {}", src.scan.riggable.len()));
-                out.push(format!("Textures  {}", src.textures));
-                out.push(format!("Mesh      {}", src.file_name()));
-            }
-            Step::Analyze => match src.parsed.as_ref() {
-                None => out.push("Parsing the source mesh...".into()),
-                Some(p) => {
-                    out.push(format!("Bones      {}", p.bones()));
-                    out.push(format!("Vertices   {}", p.verts));
-                    out.push(format!("Triangles  {}", p.tris));
-                    out.push(format!("Textures   {}", src.textures));
-                    out.push(String::new());
-                    // Game-ready is the input contract now (decimation was dropped), so an
-                    // over-budget source is REPORTED here rather than silently reduced.
-                    out.push(if p.tris > TRI_BUDGET {
-                        format!("Over budget: {} tris (target {TRI_BUDGET})", p.tris)
-                    } else {
-                        format!("Within the {TRI_BUDGET}-tri budget.")
-                    });
-                }
-            },
-            // Classify / Conform / Attach / Review carry their own controls in the inspector,
-            // so these lines are the EVIDENCE behind them — why the classifier concluded what it
-            // did, what the conform reports moved, what a socket resolved against.
-            Step::Classify => match src.report.as_ref() {
-                None => out.push("Analyze first — classification reads the skeleton.".into()),
-                Some(r) => {
-                    out.push("Evidence:".into());
-                    out.extend(r.evidence.iter().map(|e| format!("  \u{2022} {e}")));
-                }
-            },
-            // A non-character was routed here: Conform is the CHARACTER step, so it is SKIPPED, and
-            // the inspector states what Commit will do instead — never an invented error.
+            // Task is the entry page and carries no source yet, so the None early-return above
+            // already handled it; this arm exists only to keep the match exhaustive.
+            Step::Task => {}
+            // Conform / Attach / Review carry their own controls in the inspector, so these lines
+            // are the EVIDENCE behind them — what the conform reports moved, what a socket resolved
+            // against, and what the finished bake will carry.
+            // A non-character was routed here: the Rig step is the CHARACTER path, so it is SKIPPED,
+            // and the inspector states what Export will do instead — never an invented error.
             Step::Conform if matches!(src.class(), Some(AssetClass::Prop | AssetClass::Animation)) => {
                 let cls = src.class();
                 let is_clothing = cls == Some(AssetClass::Prop) && src.prop == PropKind::Clothing;
-                out.push(format!(
-                    "Detected class: {}.",
-                    cls.map(|c| c.id()).unwrap_or("unclassified")
-                ));
+                out.push(format!("Class: {}.", class_label(cls)));
                 out.push(String::new());
-                out.push("Conform maps a biped skeleton onto the 66-bone".into());
-                out.push("reference; this asset has none, so it is SKIPPED.".into());
+                out.push("Rigging maps a biped skeleton onto the".into());
+                out.push("66-bone reference; this asset has none,".into());
+                out.push("so it is SKIPPED.".into());
                 out.push(String::new());
                 match cls {
                     Some(AssetClass::Animation) => {
                         out.push("Animation (clip retarget) is not wired yet.".into());
                     }
                     _ if is_clothing => {
-                        out.push("Commit SKINS this garment onto the base body".into());
+                        out.push("Export SKINS this garment onto the base body".into());
                         out.push("(nearest-vertex weight transfer, fit baked in).".into());
                     }
                     _ => {
-                        out.push("Commit bakes the static prop mesh; its socket".into());
+                        out.push("Export bakes the static prop mesh; its socket".into());
                         out.push("and fit are authored in the paperdoll.".into());
                     }
                 }
@@ -1877,18 +2262,26 @@ impl AssetPipeline {
             }
             Step::Review => {
                 out.push(format!("Asset      {}", src.asset_name()));
-                out.push(format!(
-                    "Class      {}",
-                    src.class().map(|c| c.id()).unwrap_or("unclassified")
-                ));
-                out.push(format!(
-                    "Skeleton   {} bones",
-                    src.parsed.as_ref().map(|p| p.bones()).unwrap_or(0)
-                ));
+                out.push(format!("Class      {}", class_label(src.class())));
+                match src.parsed.as_ref() {
+                    Some(p) => {
+                        out.push(format!("Skeleton   {} bones", p.bones()));
+                        // The mesh-budget readout lives here now that Analyze is gone: game-ready is
+                        // the input contract (decimation was dropped), so an over-budget source is
+                        // REPORTED, never silently reduced.
+                        out.push(format!("Triangles  {}", p.tris));
+                        out.push(if p.tris > TRI_BUDGET {
+                            format!("Over budget: {} tris (target {TRI_BUDGET})", p.tris)
+                        } else {
+                            format!("Within the {TRI_BUDGET}-tri budget.")
+                        });
+                    }
+                    None => out.push("Skeleton   0 bones".into()),
+                }
                 out.push(format!("Textures   {}", src.textures));
                 match src.committed.as_ref() {
-                    Some(p) => out.push(format!("Written    {}", p.display())),
-                    None => out.push("Not committed.".into()),
+                    Some(p) => out.push(format!("Exported   {}", p.display())),
+                    None => out.push("Not exported.".into()),
                 }
             }
         }
@@ -1903,15 +2296,7 @@ impl AssetPipeline {
             return "BLOCKED".into();
         }
         match self.step {
-            Step::Load => format!("{} FILES", src.scan.entries.len()),
-            Step::Analyze => match src.parsed.as_ref() {
-                None => "RUNNING".into(),
-                Some(p) => format!("{} BONES", p.bones()),
-            },
-            Step::Classify => match src.report.as_ref() {
-                None => "PENDING".into(),
-                Some(r) => format!("{}%", (r.confidence * 100.0).round() as i32),
-            },
+            Step::Task => String::new(),
             Step::Conform if matches!(src.class(), Some(AssetClass::Prop | AssetClass::Animation)) => {
                 match src.class() {
                     Some(AssetClass::Animation) => "NOT WIRED".into(),
@@ -1937,20 +2322,23 @@ impl AssetPipeline {
         }
     }
 
-    /// Return to the folder's mesh picker to import the NEXT piece. THE loop a weapon set or an
-    /// outfit needs: pick → classify → rig → bake → pick the next. Keeps the open folder and its
-    /// candidate list; drops everything derived from the piece just committed, so the next one
-    /// starts clean rather than inheriting the last one's classification, rig or fit.
+    /// Return to the rig view to import the NEXT piece. THE loop a weapon set or an outfit needs:
+    /// pick → rig → bake → pick the next. Keeps the open folder and its candidate list; drops
+    /// everything derived from the piece just committed, so the next one starts clean rather than
+    /// inheriting the last one's rig or fit. The inline piece picker (`on_pick`) is right there on
+    /// the rig stage for choosing which mesh comes next.
     fn start_next_piece(&mut self) {
         let Some(src) = self.source.as_mut() else { return };
         src.parsed = None;
         src.report = None;
-        src.class = None;
+        // Keep the DECLARED workflow: the next piece in a set is the same class the user chose on
+        // the Workflow page, not a re-detection.
+        src.class = self.pending_class;
         src.rig = None;
         src.committed = None;
         src.error = None;
         src.fit = PropFit::default();
-        self.step = Step::Load;
+        self.step = Step::Conform;
     }
 
     /// BACK: step to the previous stage — or, on the FIRST page where there is none, clear the open
@@ -2004,11 +2392,10 @@ impl AssetPipeline {
     fn can_advance(&self) -> bool {
         let src = self.source.as_ref();
         match self.step {
+            // The Workflow page advances by choosing a card, not the footer Next — so Next is inert
+            // here (the cards declare the class and open the folder, landing on the rig view).
+            Step::Task => false,
             Step::Review => false,
-            Step::Load => src.is_some_and(|s| s.error.is_none()),
-            Step::Analyze => src.and_then(|s| s.parsed.as_ref()).is_some(),
-            // A classification must exist before the rig stages act on it.
-            Step::Classify => src.and_then(|s| s.class()).is_some(),
             // Dispatched by ROLE: a Mount is always authorable (a socket is always selected and its
             // placement defaults are valid), a Skin needs its conform to have produced a rig before
             // Attach can resolve against it, and Clips are not wired so the wizard stops there.
@@ -2030,8 +2417,8 @@ impl AssetPipeline {
     fn apply_stage_results(&mut self, results: &ValueMap) {
         let Some(src) = self.source.as_mut() else { return };
 
-        // Load — the riggable-mesh picker. Choosing a DIFFERENT piece invalidates everything derived
-        // from the previous one, so the wizard can never carry a stale parse/conform forward.
+        // The inline piece picker (rig stage). Choosing a DIFFERENT piece invalidates everything
+        // derived from the previous one, so the wizard can never carry a stale parse/conform forward.
         for i in 0..PICK_ROWS {
             if results.is_on(&format!("pick_sel_{i}")) {
                 let idx = src.pick_window + i;
@@ -2040,53 +2427,19 @@ impl AssetPipeline {
                     src.fbx = src.candidates[idx].clone();
                     src.parsed = None;
                     src.report = None;
-                    src.class = None;
+                    // Preserve the declared workflow across a pick — only the derived state is stale.
+                    src.class = self.pending_class;
                     src.rig = None;
                     src.committed = None;
                     src.error = None;
                 }
             }
         }
-        // Analyze — the GROUND-RECKONING control. A quarter-turn stands a source that arrived on
-        // its side (or whose FBX header lied about its up-axis) into the world's Z-up reckoning,
-        // applied to the working model BEFORE classify/conform/bake read its axes. Exact, so four
-        // presses return it precisely; the conform was derived from the old axes, so it is dropped.
-        for (axis, key) in [(0usize, "orient_x"), (1, "orient_y"), (2, "orient_z")] {
-            if results.is_on(key) {
-                if let Some(p) = src.parsed.as_mut() {
-                    apply_orientation(&mut p.model, quarter_turn(axis));
-                    p.rebuild(&[]);
-                }
-                src.orient[axis] = (src.orient[axis] + 1) % 4;
-                src.rig = None;
-            }
-        }
-
         if results.is_on("pick_prev") {
             src.pick_window = src.pick_window.saturating_sub(PICK_ROWS);
         }
         if results.is_on("pick_next") && src.pick_window + PICK_ROWS < src.candidates.len() {
             src.pick_window += PICK_ROWS;
-        }
-
-        // Classify — three exclusive class buttons + four prop sub-type buttons.
-        for (i, c) in [AssetClass::Skin, AssetClass::Prop, AssetClass::Animation]
-            .into_iter()
-            .enumerate()
-        {
-            if results.is_on(&format!("cls_{i}")) {
-                src.class = Some(c);
-            }
-        }
-        for (i, k) in
-            [PropKind::Weapon, PropKind::Clothing, PropKind::Environment, PropKind::Accessory]
-                .into_iter()
-                .enumerate()
-        {
-            // The design dims and disables the sub-type block unless the class is Prop.
-            if src.class() == Some(AssetClass::Prop) && results.is_on(&format!("sub_{i}")) {
-                src.prop = k;
-            }
         }
 
         // Attach — point selection, then the three offset sliders for the selected point.
@@ -2138,6 +2491,7 @@ impl AssetPipeline {
         for i in 0..BONE_ROWS {
             if results.is_on(&format!("bone_sel_{i}")) && rig.window + i < total {
                 rig.sel = rig.window + i;
+                rig.focused = true; // picking a bone from the list focuses it (draws the gizmo).
             }
         }
         // Paging moves the SELECTION by a page and lets the window follow it. One cursor, not
@@ -2174,6 +2528,9 @@ impl AssetPipeline {
             if let Some(parsed) = src.parsed.as_mut() {
                 parsed.rebuild(&offsets);
             }
+            // Bump the live-skin cache key so the Conform viewport re-skins with the slider's edit,
+            // exactly as a gizmo drag does — the two write the same offset.
+            self.pose_gen = self.pose_gen.wrapping_add(1);
         }
     }
 
@@ -2250,9 +2607,6 @@ const BONE_ROWS: usize = 6;
 /// How many requirement rows the Review tree declares.
 const REQUIREMENT_ROWS: usize = 4;
 
-const CLASS_LABEL: [&str; 3] = ["Skin — mesh + rig + textures", "Prop — attachable object", "Animation — clip on default rig"];
-const PROP_LABEL: [&str; 4] = ["Weapon", "Clothing", "Environment", "Accessory"];
-
 /// The Conform stage's four offset sliders: their Model key and their label. Slider range is
 /// symmetric about zero, so the conform result sits at the centre of every track.
 const OFFSET_AXES: [(&str, &str); 4] =
@@ -2298,6 +2652,74 @@ fn radio(on: bool) -> &'static str {
     }
 }
 
+/// The user-facing name for an asset class. `AssetClass::id()` ("skin"/"prop"/"animation") is a
+/// stable serialization token and must never reach the UI; this is the DISPLAY string, kept separate
+/// so the id cannot leak into a panel and so localization has a single place to hook. Skin reads as
+/// "Character" — the word the user chose on the workflow card, not the internal skin term.
+fn class_label(class: Option<AssetClass>) -> &'static str {
+    match class {
+        Some(AssetClass::Skin) => "Character",
+        Some(AssetClass::Prop) => "Prop",
+        Some(AssetClass::Animation) => "Animation",
+        None => "unclassified",
+    }
+}
+
+/// CPU linear-blend skin of the source mesh into deformed [`MeshVertex`]es (source space), through
+/// the posed `globals` and each bone's `inverse_bind`. Mirrors `flicker-skeletal::skin` but over the
+/// raw [`RawModel`] the pipeline holds — no format conversion. The palette is `globals[b] *
+/// inverse_bind[b]`; at the conform rest pose that is the identity (so the bind mesh is reproduced),
+/// and an authored offset moves the bone's `globals` entry, deforming the vertices it weights.
+fn skin_source_verts(model: &RawModel, globals: &[Mat4]) -> Vec<MeshVertex> {
+    let palette: Vec<Mat4> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(b, bone)| {
+            globals.get(b).copied().unwrap_or(Mat4::IDENTITY) * Mat4::from_cols_array(&bone.inverse_bind)
+        })
+        .collect();
+    model
+        .vertices
+        .iter()
+        .map(|v| {
+            let p = Vec3::from_array(v.p).extend(1.0);
+            let n = Vec3::from_array(v.n);
+            let mut pos = Vec3::ZERO;
+            let mut nrm = Vec3::ZERO;
+            let mut any = false;
+            for k in 0..4 {
+                let w = v.weights[k];
+                if w == 0.0 {
+                    continue;
+                }
+                any = true;
+                let m = palette.get(v.joints[k] as usize).copied().unwrap_or(Mat4::IDENTITY);
+                pos += w * (m * p).truncate();
+                nrm += w * (glam::Mat3::from_mat4(m) * n);
+            }
+            let position = if any { pos.to_array() } else { v.p };
+            let normal = if nrm.length_squared() > 1e-12 { nrm.normalize().to_array() } else { v.n };
+            MeshVertex { position, normal, material: 0 }
+        })
+        .collect()
+}
+
+/// Group per-segment-coloured gizmo lines by colour, so each colour issues as one
+/// `draw_lines_overlay` batch (the renderer takes ONE colour per call). A handful of colours, so a
+/// linear scan beats a map.
+fn group_by_color(segs: Vec<(Vec3, Vec3, [f32; 4])>) -> Vec<([f32; 4], Segments)> {
+    let mut groups: Vec<([f32; 4], Segments)> = Vec::new();
+    for (a, b, c) in segs {
+        if let Some(g) = groups.iter_mut().find(|(gc, _)| *gc == c) {
+            g.1.push((a, b));
+        } else {
+            groups.push((c, vec![(a, b)]));
+        }
+    }
+    groups
+}
+
 /// Rest-pose world frames + parent topology from a parsed model, with the editor's authored
 /// `offsets` folded in. Bones are stored as local TRS relative to their parent, so a single
 /// forward pass composes them; parents always precede children in an FBX skeleton.
@@ -2338,6 +2760,32 @@ fn apply_offsets(model: &mut RawModel, offsets: &[BoneOffset]) {
             * glam::Quat::from_rotation_x(o.roll.to_radians());
         b.rotation = q.to_array();
     }
+}
+
+/// A WORLD-space translation delta expressed in a bone's PARENT-local frame (root = world), using the
+/// pre-edit `globals` for the parent's rotation — the space `RawBone::translation` / `BoneOffset::t`
+/// live in.
+fn parent_local_delta(globals: &[Mat4], model: &RawModel, sel: usize, world_delta: Vec3) -> Vec3 {
+    let parent_inv = model
+        .bones
+        .get(sel)
+        .and_then(|b| usize::try_from(b.parent).ok())
+        .and_then(|pi| globals.get(pi))
+        .map(|g| glam::Mat3::from_mat4(*g).inverse())
+        .unwrap_or(glam::Mat3::IDENTITY);
+    parent_inv * world_delta
+}
+
+/// The symmetric bone NAME for a left/right bone (`thigh_l`↔`thigh_r`), or `None` for a centre bone.
+fn mirror_name(name: &str) -> Option<String> {
+    const PAIRS: [(&str, &str); 6] =
+        [("_l", "_r"), ("_r", "_l"), ("_L", "_R"), ("_R", "_L"), (".L", ".R"), (".R", ".L")];
+    for (a, b) in PAIRS {
+        if let Some(stem) = name.strip_suffix(a) {
+            return Some(format!("{stem}{b}"));
+        }
+    }
+    None
 }
 
 /// Per-bone provenance, read straight out of the conform reports — the bone map's colour key has
@@ -2416,7 +2864,7 @@ fn model_bounds(model: &RawModel, globals: &[Mat4]) -> (Vec3, f32, f32) {
     (centre, ((hi - lo).max_element() * 0.5).max(1.0), lo.z - centre.z)
 }
 
-/// Build the Kilnworks Bench editor as a boxed [`Scene`] for the `prism-alpha` launcher.
+/// Build the Clayworks Bench editor as a boxed [`Scene`] for the `prism-alpha` launcher.
 pub fn scene() -> Box<dyn Scene> {
     Box::new(AssetPipeline::new())
 }
@@ -2449,26 +2897,14 @@ impl Scene for AssetPipeline {
     }
 
     fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        // Escape opens the shell pause overlay (Resume / Settings / Main Menu / Quit) —
-        // the only supported way back out of a scene, since the menu REPLACES the root.
-        let menu_down = input.key_down(Key::Escape);
-        let menu_pressed = menu_down && !self.menu_prev;
-        self.menu_prev = menu_down;
-        if menu_pressed {
-            if let Some(theme) = self.ui_theme {
-                return Transition::Push(Box::new(PauseScene::new(
-                    theme,
-                    &self.bindings,
-                    &self.controls,
-                    &self.gamepad_config,
-                )));
-            }
-        }
-
         // The HUD walks first: it lays out the framed holder, and the rect it reserves for the 2×2 is
         // what the viewport controls below pick against — a cursor outside the holder (over the editor
-        // rail or a bar) lands on no view, so the chrome no longer has to "claim" the pointer.
+        // rail or a bar) lands on no view, so the chrome no longer has to "claim" the pointer. Its
+        // `hud_hit` (the walker's canonical "pointer over UI" verdict) feeds the router's WalkerHandler
+        // layer in the dispatch below; the raw Esc handling that used to sit at the top of this
+        // function now moves onto the bus (the scene-root `Menu` consume, spec section 9).
         let screen = renderer.size();
+        let mut hud_hit = false;
         if self.ui_tree.is_some() {
             let model = self.hud_model();
             let snap = UiInput {
@@ -2478,18 +2914,22 @@ impl Scene for AssetPipeline {
                 screen,
                 typed: String::new(),
                 backspace: false,
+                wheel: input.mouse_wheel_delta,
             };
             let frame = {
-                // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state` mutated.
+                // Disjoint field borrows: `ui_tree` / `ui_styles` / `ui_host` read, `ui_state`
+                // mutated. `lib` routes a node's draw to its Lua component twin when the host
+                // `handles` its kind (buttons today); `None` would be today's all-Rust path.
                 let tree = self.ui_tree.as_ref().unwrap();
-                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
+                let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
+                run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
             };
             self.hud_commands = frame.commands;
             // The framed holder the HUD reserved for the 2×2 (the `editor_quad` stage node): the grid
             // tiles inside exactly this rect, so the four views land in the frame and the rail sits
             // beside them. Setting it on the grid keeps the composite and the pointer-picking in step.
             let viewport = frame
-                .stages
+                .rtts
                 .iter()
                 .find(|s| s.id == "editor_quad")
                 .map(|s| Rect { pos: Vec2::new(s.x, s.y), size: Vec2::new(s.w, s.h) });
@@ -2498,21 +2938,74 @@ impl Scene for AssetPipeline {
                 g.set_viewport(viewport);
             }
             let results = frame.results;
+            // The walker's canonical "pointer over UI" verdict — handed to the WalkerHandler
+            // layer in the dispatch below so the event bus, not a hand-rolled gate, owns
+            // HUD-consume (spec section 9: `hud_hit` is the router mechanism, not legacy).
+            hud_hit = results.is_on("hud_hit");
             self.show_skeleton = results.is_on("show_skeleton");
             self.show_base = results.is_on("show_base");
             self.show_collision = results.is_on("show_collision");
+            // The gizmo mode toggle — exclusive, Rust owns the selection (like the class rows).
+            if results.is_on("mode_translate") {
+                self.gizmo_mode = GizmoMode::Translate;
+            }
+            if results.is_on("mode_rotate") {
+                self.gizmo_mode = GizmoMode::Rotate;
+            }
+            if results.is_on("mode_scale") {
+                self.gizmo_mode = GizmoMode::Scale;
+            }
+            // Joint symmetry — read only on Conform, where the checkbox lives (off the stage `is_on`
+            // reads false and would clear it). Bake Skin re-weights the mesh to the repositioned rig.
+            if self.step == Step::Conform {
+                self.mirror_joints = results.is_on("mirror");
+            }
+            if results.is_on("bake_skin") {
+                self.bake_skin_now();
+            }
 
-            if results.is_on("load") {
+            // Import panel — the four workflow cards ("CHOOSE A THREAD"). Each DECLARES the class
+            // (+ Prop sub-type) the user is importing, never auto-detected, then opens the OS folder
+            // dialog IMMEDIATELY — the card IS the trigger, there is no separate Load button. On a
+            // successful pick the existing `open()` runs parse+conform+land inline (Character → the
+            // gizmo rig view); a CANCELLED pick leaves `source == None`, so we fall back to the panel.
+            // Read here in `update`, NOT `apply_stage_results` (which early-returns with no source).
+            let card = if results.is_on("import_character") {
+                Some((Some(AssetClass::Skin), None))
+            } else if results.is_on("import_accessory") {
+                // Worn things — bound to a bearer. Garment bake (`write_garment`).
+                Some((Some(AssetClass::Prop), Some(PropKind::Clothing)))
+            } else if results.is_on("import_prop") {
+                // Standalone objects of the world — the static bake (`write_prop`).
+                Some((Some(AssetClass::Prop), Some(PropKind::Environment)))
+            } else if results.is_on("import_animation") {
+                Some((Some(AssetClass::Animation), None))
+            } else {
+                None
+            };
+            if let Some((class, prop)) = card {
+                self.pending_class = class;
+                self.pending_prop = prop;
+                self.source = None;
+                // `open()` lands a scanned folder on the rig view (a scan error surfaces there as the
+                // inspector's "Blocked:" line). A CANCELLED dialog leaves `source == None`, so fall
+                // back to the workflow panel.
                 self.load_folder();
+                if self.source.is_none() {
+                    self.step = Step::Task;
+                }
             }
             if results.is_on("back") {
                 self.go_back();
             }
             if results.is_on("next") {
                 if self.step == Step::Review {
-                    // "Restart" on the final stage: drop the finished asset and return to the Load
-                    // page. GPU/theme/input infra is kept — only the per-asset wizard state resets.
-                    self.step = Step::Load;
+                    // "Restart" on the final stage: drop the finished asset and return to the Task
+                    // page — the true entry, where the next workflow is re-declared. GPU/theme/input
+                    // infra is kept; only the per-asset wizard state (and the declared class) resets.
+                    self.step = Step::Task;
+                    self.pending_class = None;
+                    self.pending_prop = None;
                     self.source = None;
                     self.grid = None;
                     self.quad_rect = None;
@@ -2533,12 +3026,68 @@ impl Scene for AssetPipeline {
             self.apply_stage_results(&results);
         }
 
+        // ── Input seam (spec section 9 port): resolve this frame's discrete edges over the
+        // active context, wrap each `Fired` as an `InputEvent`, then dispatch through the
+        // chain (scene root -> HUD walker). `ev` is the REUSED scratch buffer (no per-frame
+        // alloc — RT-7); `events` is a short-lived local because it borrows THIS frame's
+        // snapshot. The 2×2 viewport orbit/pan/zoom below stays POLLED off the bus: the
+        // `editor_quad` holder is a styled `stage` (so `hud_hit` is already true over the
+        // viewport itself), and the controls gate on `QuadGrid::cell_at`, not on a routed
+        // signal — the bespoke per-panel picking the group note says to keep. ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Reconcile router-owned intents THROUGH the walker (one focus id for mouse +
+        // gamepad, spec section 4.2a/4.3). This trivial scene pushes no context and requests
+        // no focus, so it is a no-op today, but keeping the seam standard means a future
+        // handler that does just works.
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        // The screen's fired intents (S9), drained once: acted on below and queued
+        // for the one-frame `sig_<name>` Model mirror.
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer consumed
+        // the Menu press and fired the name; the scene maps it onto the shell pause
+        // overlay (Resume / Settings / Main Menu / Quit), the only supported way back
+        // out of a scene. The root's hardcoded Menu arm is gone.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+            if let Some(theme) = self.ui_theme {
+                return Transition::Push(Box::new(PauseScene::new(
+                    theme,
+                    self.bindings.active_map(),
+                    &self.controls,
+                    &self.gamepad_config,
+                )));
+            }
+        }
+
         // A stage runs as soon as its step is reached and its input exists. Each is guarded
         // against re-running, so this is a no-op on every later frame.
-        match self.step {
-            Step::Analyze => self.analyze(),
-            Step::Conform => self.conform(),
-            _ => {}
+        // Entering the rig view: parse then conform INLINE. The single-mesh Load already ran both
+        // in `open`; the multi-mesh Load→Conform hop runs them here. Both are idempotent (analyze
+        // no-ops once parsed, conform once rigged and early-returns for Prop/Animation), so this is
+        // safe to reach every frame.
+        if self.step == Step::Conform {
+            self.analyze();
+            self.conform();
         }
 
         // A left-click on an ORTHO panel's corner label flips that view to its opposite side
@@ -2563,6 +3112,15 @@ impl Scene for AssetPipeline {
             }
         }
 
+        // The in-scene transform gizmo picks/drags BEFORE the orbit, so a joint or handle grab wins
+        // the gesture; `gizmo` is true while it is handling the pointer, and suppresses the orbit on
+        // the same drag (a pick that hit nothing leaves the orbit free).
+        let gizmo = if flip_target.is_none() {
+            self.gizmo_interact(input, screen)
+        } else {
+            false
+        };
+
         // Viewport controls act on the quad UNDER THE CURSOR only, each on its OWN camera — so
         // panning/zooming/orbiting one panel leaves the other three put.
         let delta = input.mouse_position - self.last_mouse;
@@ -2570,8 +3128,9 @@ impl Scene for AssetPipeline {
         if self.ui_state.drag().is_none() {
             if let Some(i) = self.grid.as_ref().and_then(|g| g.cell_at(input.mouse_position, screen)) {
                 // Orbit (left-drag) is a PERSPECTIVE notion — only the PERSP panel (view 0) rotates;
-                // the ortho views are fixed axes. A flip-label click is not an orbit.
-                if input.mouse_left && flip_target.is_none() && i == 0 {
+                // the ortho views are fixed axes. A flip-label click is not an orbit, and neither is
+                // a gizmo pick/drag.
+                if input.mouse_left && flip_target.is_none() && i == 0 && !gizmo {
                     self.orbits[0].yaw -= delta.x * 0.006;
                     self.orbits[0].pitch = (self.orbits[0].pitch + delta.y * 0.006).clamp(-1.4, 1.4);
                 }
@@ -2612,7 +3171,17 @@ impl Scene for AssetPipeline {
                 .as_ref()
                 .map(|s| matches!(s.class(), Some(AssetClass::Skin) | None))
                 .unwrap_or(false);
-            is_char.then(|| self.ensure_source_mesh(renderer)).flatten()
+            if is_char && self.step == Step::Conform {
+                // Conform draws the LIVE CPU-skinned mesh so an authored bone offset (slider or the
+                // gizmo drag) deforms it in view; it falls back to the rest mesh if there is nothing
+                // to skin yet.
+                self.ensure_skinned_mesh(renderer)
+                    .or_else(|| self.ensure_source_mesh(renderer))
+            } else if is_char {
+                self.ensure_source_mesh(renderer)
+            } else {
+                None
+            }
         };
 
         // Frame on the base body when previewing a piece (a prop skeleton has no extent). The
@@ -2645,14 +3214,59 @@ impl Scene for AssetPipeline {
             let cameras: Vec<Camera> = (0..grid.views().len())
                 .map(|i| grid.camera(i, self.orbits[i].ortho_radius(radius), &self.orbits[i].camera(radius)))
                 .collect();
-            let segs = match (self.show_skeleton, self.source.as_ref().and_then(|s| s.parsed.as_ref())) {
-                (true, Some(p)) => (
-                    debug::joint_segments(recentre, &p.parents, &p.globals),
-                    debug::frame_axis_segments(recentre, &p.parents, &p.globals),
-                ),
-                _ => (Vec::new(), Vec::new()),
+            // Skeleton rig-view: octahedral "diamond" bones + per-joint scaled balls (replaces the old
+            // flat joint lines + orange frame-axis lines). The SELECTED joint (Conform stage) draws
+            // amber with the transform gizmo on it; every non-selected joint draws a cyan ball sized to
+            // its bone length. Recentred exactly like the mesh so they register; drawn in every panel,
+            // but only the PERSP panel picks (see `gizmo_interact`).
+            let parsed = self.source.as_ref().and_then(|s| s.parsed.as_ref());
+            let sel = if self.step == Step::Conform {
+                self.source
+                    .as_ref()
+                    .and_then(|s| s.rig.as_ref())
+                    .filter(|r| r.focused)
+                    .map(|r| r.sel)
+            } else {
+                None
             };
-            let (joints, axes) = (&segs.0, &segs.1);
+            let (bones, balls, sel_ball, gizmo_groups): (
+                Segments,
+                Segments,
+                Segments,
+                Vec<([f32; 4], Segments)>,
+            ) = match (self.show_skeleton, parsed) {
+                (true, Some(p)) => {
+                    let min_r = (radius * BALL_MIN_FRAC).max(0.2);
+                    let max_r = (radius * BALL_MAX_FRAC).max(min_r);
+                    let radii = debug::joint_ball_radii(&p.parents, &p.globals, BALL_LEN_FRAC, min_r, max_r);
+                    let bones = debug::bone_diamonds(recentre, &p.parents, &p.globals, BONE_WAIST_FRAC);
+                    let mut balls = Segments::new();
+                    for (i, g) in p.globals.iter().enumerate() {
+                        if Some(i) == sel {
+                            continue; // the focused joint draws amber below
+                        }
+                        let c = recentre.transform_point3(g.w_axis.truncate());
+                        balls.extend(debug::wireframe(&Shape::Sphere { center: c, radius: radii[i] }));
+                    }
+                    // The FOCUSED joint: a larger amber ball (the grab handle) + the PAN gizmo. The
+                    // gizmo is drawn ONLY in the ortho panels (see the draw loop) — Perspective grabs
+                    // the ball for the spring-back deform test. The GIZMO MODE toggle picks the handle
+                    // shape (translate now; rotate/scale are the seam for later pipeline stages).
+                    let (sel_ball, gizmo_groups) = match sel.and_then(|s| p.globals.get(s).map(|g| (s, g))) {
+                        Some((s, g)) => {
+                            let c = recentre.transform_point3(g.w_axis.truncate());
+                            let r = radii.get(s).copied().unwrap_or(0.5) * 1.4;
+                            let ball = debug::wireframe(&Shape::Sphere { center: c, radius: r });
+                            let size = (radius * GIZMO_ARROW_FRAC).max(1.0);
+                            let lines = gizmo_segments(c, glam::Mat3::IDENTITY, self.gizmo_mode, size, None);
+                            (ball, group_by_color(lines))
+                        }
+                        None => (Segments::new(), Vec::new()),
+                    };
+                    (bones, balls, sel_ball, gizmo_groups)
+                }
+                _ => (Segments::new(), Segments::new(), Segments::new(), Vec::new()),
+            };
             // Collision overlay: the auto-fit capsules + leaf "joint ball" spheres wireframed over
             // the CHARACTER's posed rig, recentred exactly like its skeleton. Only in the character
             // case — a prop preview's frames are placed at a socket, not recentred, so its volumes
@@ -2697,9 +3311,24 @@ impl Scene for AssetPipeline {
                 if let Some(cm) = char_mesh {
                     cm.draw(r, recentre, SUBJECT_TINT);
                 }
-                if !joints.is_empty() {
-                    r.draw_lines_overlay(joints, JOINT);
-                    r.draw_lines_overlay(axes, AXIS);
+                // Skeleton rig-view: octahedral diamond bones + per-joint scaled balls, both cyan.
+                if !bones.is_empty() {
+                    r.draw_lines_overlay(&bones, JOINT);
+                }
+                if !balls.is_empty() {
+                    r.draw_lines_overlay(&balls, JOINT);
+                }
+                // The FOCUSED joint's amber ball — its grab handle in every view.
+                if !sel_ball.is_empty() {
+                    r.draw_lines_overlay(&sel_ball, GIZMO_SEL);
+                }
+                // The pan gizmo on the focused joint — ORTHO panels only (view 0 = Perspective, where
+                // you grab the ball for the spring-back deform test). Its two in-plane arrows are the
+                // move handles for that view; the depth axis points at the camera.
+                if view != 0 {
+                    for (color, lines) in &gizmo_groups {
+                        r.draw_lines_overlay(lines, *color);
+                    }
                 }
                 if !collision.is_empty() {
                     r.draw_lines_overlay(&collision, COLLISION);
@@ -2773,24 +3402,27 @@ mod tests {
         dir.exists().then_some(dir)
     }
 
-    /// An editor with the real asset loaded and walked forward to `step`, running each stage on
-    /// the way exactly as `update` would.
+    /// An editor with the real CHARACTER asset loaded, parsed and conformed, parked on `step`.
+    /// `open` runs ingest → parse → conform inline (exactly as clicking the Import Character card
+    /// does), so the derived state exists just as `update` would leave it; this only sets the step.
     fn at_step(step: Step) -> Option<AssetPipeline> {
         let dir = real_source()?;
         let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Skin);
         ed.open(dir);
         assert!(ed.source.is_some(), "the real source folder scanned");
-        for s in Step::ALL {
-            ed.step = s;
-            match s {
-                Step::Analyze => ed.analyze(),
-                Step::Conform => ed.conform(),
-                _ => {}
-            }
-            if s == step {
-                break;
-            }
-        }
+        ed.analyze();
+        ed.conform();
+        ed.step = step;
+        Some(ed)
+    }
+
+    /// An editor with the real asset loaded and PARSED but NOT conformed — the state the removed
+    /// `at_step(Analyze)` gave. Callers re-route the class (to a prop) or drive the picker from here,
+    /// so the inline conform `open` runs is dropped to leave a clean parse on the rig step.
+    fn parsed() -> Option<AssetPipeline> {
+        let mut ed = at_step(Step::Conform)?;
+        ed.source.as_mut().unwrap().rig = None;
         Some(ed)
     }
 
@@ -2800,7 +3432,7 @@ mod tests {
     #[test]
     fn collision_overlay_has_capsules_and_joint_balls() {
         use flicker_mechanics::collision::Shape;
-        let Some(ed) = at_step(Step::Analyze) else { return };
+        let Some(ed) = parsed() else { return };
         let parsed = ed.source.as_ref().unwrap().parsed.as_ref().unwrap();
         assert!(!parsed.collision.is_empty(), "auto-fit produced collision volumes for the character");
         let capsules = parsed.collision.iter().filter(|v| matches!(v.shape, Shape::Capsule { .. })).count();
@@ -2948,33 +3580,6 @@ mod tests {
         assert!(rig.sel >= rig.window && rig.sel < rig.window + BONE_ROWS, "selection is visible");
     }
 
-    /// CLASSIFY: the detection is a starting point, the override is the user's, and the prop
-    /// sub-type is inert unless the class is Prop — the design's dimmed block, enforced in the
-    /// engine so the visual gate and the behaviour cannot disagree.
-    #[test]
-    fn classification_can_be_overridden_and_gates_the_prop_subtype() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
-            eprintln!("skipping: no content tree");
-            return;
-        };
-        ed.step = Step::Classify;
-        assert_eq!(
-            ed.source.as_ref().unwrap().class(),
-            Some(AssetClass::Skin),
-            "a 66-bone biped detects as a character"
-        );
-
-        // A sub-type click while the class is Skin must not take.
-        ed.apply_stage_results(&ValueMap::new().with("sub_0", true));
-        assert_eq!(ed.source.as_ref().unwrap().prop, PropKind::Accessory, "gated off");
-
-        // Override to Prop, then the sub-type takes.
-        ed.apply_stage_results(&ValueMap::new().with("cls_1", true));
-        assert_eq!(ed.source.as_ref().unwrap().class(), Some(AssetClass::Prop));
-        ed.apply_stage_results(&ValueMap::new().with("sub_0", true));
-        assert_eq!(ed.source.as_ref().unwrap().prop, PropKind::Weapon);
-    }
-
     /// ATTACH: a point sits at its parent bone's conformed frame plus the authored offset, and
     /// all six resolve once the rig carries canonical names.
     #[test]
@@ -3003,8 +3608,8 @@ mod tests {
 
         // Markers only exist on the stages that authored them.
         assert!(!ed.attach_markers(100.0).0.is_empty(), "markers drawn on the Attach stage");
-        ed.step = Step::Analyze;
-        assert!(ed.attach_markers(100.0).0.is_empty(), "and not before it");
+        ed.step = Step::Conform;
+        assert!(ed.attach_markers(100.0).0.is_empty(), "and not on the rig stage before it");
     }
 
     /// REVIEW: every requirement is computed from real state. With the real asset conformed they
@@ -3032,19 +3637,14 @@ mod tests {
         assert!(!ed.hud_model().is_on("commit_enabled"), "a failed check blocks commit");
     }
 
-    /// The wizard cannot be walked past a stage whose input is missing — including the two new
-    /// gates, which is what stops Attach resolving against un-renamed vendor bones.
+    /// The wizard cannot be walked past a stage whose input is missing: the character rig gate is
+    /// what stops Attach resolving against an un-conformed skeleton.
     #[test]
     fn stage_gates_require_their_input() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping: no content tree");
             return;
         };
-        ed.step = Step::Classify;
-        assert!(ed.can_advance(), "a detected class satisfies Classify");
-        ed.source.as_mut().unwrap().report = None;
-        assert!(!ed.can_advance(), "no classification → cannot advance");
-
         ed.step = Step::Conform;
         assert!(!ed.can_advance(), "Conform has not produced a rig yet");
         ed.conform();
@@ -3057,7 +3657,7 @@ mod tests {
     /// This is the fix for "the import expects a specific thing": it now respects the class.
     #[test]
     fn a_prop_is_routed_not_conform_failed() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping: no content tree");
             return;
         };
@@ -3088,7 +3688,7 @@ mod tests {
     /// selects the bake, which is the routing under test).
     #[test]
     fn commit_routes_a_prop_to_the_static_bake() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping: no content tree");
             return;
         };
@@ -3126,8 +3726,8 @@ mod tests {
     }
 
     /// MOST source folders hold SEVERAL riggable meshes — a weapon set is four or five pieces, an
-    /// outfit is tops/pants/gloves/shoes. Such a folder must offer a PICKER, not be refused: it
-    /// loads with the first pre-selected, stays on Load so the user chooses, and picking a different
+    /// outfit is tops/pants/gloves/shoes. Such a folder must offer a PICKER, not be refused: it lands
+    /// on the rig view with the first pre-selected, shows the INLINE picker, and picking a different
     /// piece re-points the import AND drops everything derived from the previous one.
     #[test]
     fn a_multi_mesh_folder_offers_a_picker() {
@@ -3138,6 +3738,7 @@ mod tests {
             return;
         }
         let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Prop); // the Import Accessory / Prop card's declaration
         ed.open(dir);
         {
             let src = ed.source.as_ref().expect("the folder opened");
@@ -3145,13 +3746,11 @@ mod tests {
             assert!(src.error.is_none(), "several meshes is a CHOICE, not an error: {:?}", src.error);
             assert_eq!(src.fbx, src.candidates[0], "the first is pre-selected — never stuck");
         }
-        assert_eq!(ed.step, Step::Load, "stays on Load so the user picks which piece");
-        assert!(ed.can_advance(), "and Next is live, since something IS selected");
-        assert!(ed.hud_model().is_on("on_load_pick"), "the picker is shown for a choice");
+        assert_eq!(ed.step, Step::Conform, "lands on the rig view, first piece ready");
+        assert!(ed.hud_model().is_on("on_pick"), "the inline picker is shown for a choice");
+        assert!(ed.source.as_ref().unwrap().parsed.is_some(), "the first pick is parsed on open");
 
-        // Analyze the first pick, then choose the second — the stale parse must be dropped.
-        ed.analyze();
-        assert!(ed.source.as_ref().unwrap().parsed.is_some(), "the first pick analyzed");
+        // Choose the second — the stale parse must be dropped so nothing derived carries forward.
         ed.apply_stage_results(&ValueMap::new().with("pick_sel_1", true));
         let src = ed.source.as_ref().unwrap();
         assert_eq!(src.candidate_sel, 1);
@@ -3160,10 +3759,10 @@ mod tests {
         assert!(src.report.is_none() && src.rig.is_none(), "and everything derived from it");
     }
 
-    /// THE multi-piece LOOP: once a piece is committed, "import next piece" returns to the folder's
-    /// picker with the folder + its piece list intact and everything derived from the finished piece
+    /// THE multi-piece LOOP: once a piece is committed, "import next piece" returns to the rig view
+    /// with the folder + its piece list intact and everything derived from the finished piece
     /// dropped — so a weapon set or an outfit is walked one piece at a time, formally, without
-    /// leaving the scene or pressing Back through five stages.
+    /// leaving the scene. The inline picker is right there to choose the next piece.
     #[test]
     fn committing_a_piece_offers_the_loop_back_to_the_picker() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3173,9 +3772,8 @@ mod tests {
             return;
         }
         let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Prop);
         ed.open(dir);
-        ed.analyze();
-        ed.source.as_mut().unwrap().class = Some(AssetClass::Prop);
         let scratch = std::env::temp_dir().join("flicker_assetpipeline_next_piece");
         let _ = std::fs::remove_dir_all(&scratch);
         ed.step = Step::Review;
@@ -3189,64 +3787,34 @@ mod tests {
 
         let n = ed.source.as_ref().unwrap().candidates.len();
         ed.start_next_piece();
-        assert_eq!(ed.step, Step::Load, "back at the folder's mesh picker");
+        assert_eq!(ed.step, Step::Conform, "back on the rig view for the next piece");
         let src = ed.source.as_ref().unwrap();
         assert_eq!(src.candidates.len(), n, "the folder and its piece list are kept");
         assert!(
             src.parsed.is_none() && src.rig.is_none() && src.committed.is_none(),
             "the finished piece's state is dropped so the next starts clean"
         );
-        assert!(ed.hud_model().is_on("on_load_pick"), "the picker is showing again");
+        assert!(ed.hud_model().is_on("on_pick"), "the inline picker is showing again");
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
-    /// The GROUND-RECKONING control: a quarter-turn actually turns the WORKING model (so everything
-    /// downstream reads the corrected axes) and drops the conform derived from the old ones. Four
-    /// presses return the asset EXACTLY, so nudging it repeatedly can never drift the bake.
+    /// BACK walks the rail, and on the first page (Workflow) — where there is no earlier step — it
+    /// clears the open folder instead of being inert, so a wrongly-chosen folder is recoverable.
     #[test]
-    fn orientation_control_turns_the_asset_and_returns_exactly() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+    fn back_walks_the_rail_and_clears_the_folder_at_the_top() {
+        let Some(mut ed) = at_step(Step::Conform) else {
             eprintln!("skipping: no content tree");
             return;
         };
-        let before = ed.source.as_ref().unwrap().parsed.as_ref().unwrap().model.vertices[0].p;
-
-        ed.apply_stage_results(&ValueMap::new().with("orient_x", true));
-        {
-            let src = ed.source.as_ref().unwrap();
-            assert_eq!(src.orient, [1, 0, 0], "the quarter-turn is recorded");
-            let after = src.parsed.as_ref().unwrap().model.vertices[0].p;
-            assert_ne!(after, before, "the WORKING model actually turned");
-            assert!(src.rig.is_none(), "a conform from the old axes is dropped");
-        }
-
-        for _ in 0..3 {
-            ed.apply_stage_results(&ValueMap::new().with("orient_x", true));
-        }
-        let src = ed.source.as_ref().unwrap();
-        assert_eq!(src.orient, [0, 0, 0], "four turns read as back to zero");
-        assert_eq!(
-            src.parsed.as_ref().unwrap().model.vertices[0].p,
-            before,
-            "and the model is EXACTLY where it started"
-        );
-    }
-
-    /// BACK on the first page must DO something: there is no earlier step, so it clears the open
-    /// folder. Previously it was inert there, leaving a wrongly-chosen folder unrecoverable.
-    #[test]
-    fn back_steps_back_and_clears_the_folder_on_the_load_page() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
-            eprintln!("skipping: no content tree");
-            return;
-        };
+        // From the rig view, Back returns to the Workflow page with the folder still open.
         ed.go_back();
-        assert_eq!(ed.step, Step::Load, "from a later stage Back steps to the previous one");
+        assert_eq!(ed.step, Step::Task, "Back from the rig view returns to the workflow page");
         assert!(ed.source.is_some(), "which leaves the folder open");
-        assert!(ed.hud_model().is_on("back_enabled"), "Back stays LIVE at Load with a folder open");
+        assert!(ed.hud_model().is_on("back_enabled"), "Back stays LIVE with a folder open — it clears it");
 
+        // Back again on the Workflow page (the first, with no earlier stop) clears the open folder.
         ed.go_back();
-        assert!(ed.source.is_none(), "Back on the Load page clears the open folder");
+        assert!(ed.source.is_none(), "Back on the workflow page clears the open folder");
         assert!(!ed.hud_model().is_on("back_enabled"), "and then there is nothing to go back from");
     }
 
@@ -3256,7 +3824,7 @@ mod tests {
     /// point of the tool: the human places and verifies, the bake honours it.
     #[test]
     fn fit_stage_authors_the_prop_mount() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping: no content tree");
             return;
         };
@@ -3329,6 +3897,21 @@ mod tests {
         let tree = expand(tree, &builtin_templates());
         let styles = load_styles(HUD_UI_ELEMENTS);
 
+        // Vocabulary gate, same spirit as the overflow check below: an unknown kind draws
+        // NOTHING, so a name left behind by a rename is invisible in the window this
+        // harness cannot open.
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_assetpipeline.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_assetpipeline.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+
         // The user's 1600×900 fullscreen (settings.json) and the 1280×720 windowed default.
         const SIZES: [Vec2; 2] = [Vec2::new(1600.0, 900.0), Vec2::new(1280.0, 720.0)];
         let tol = 1.5_f32;
@@ -3340,6 +3923,7 @@ mod tests {
                 screen,
                 typed: String::new(),
                 backspace: false,
+                wheel: 0.0,
             };
             let mut state = UiState::new();
             let frame = run_ui(&tree, model, &styles, &snap, &mut state);
@@ -3362,14 +3946,14 @@ mod tests {
             }
         };
 
-        // Load is the FIRST screen shown and needs no content — always exercise the top bar +
-        // footer here (the empty-state the user first hit).
+        // The Workflow page is the FIRST screen shown and needs no content — always exercise the top
+        // bar + footer here (the empty-state the user first hit).
         for screen in SIZES {
-            check(&AssetPipeline::new().hud_model(), screen, Step::Load);
+            check(&AssetPipeline::new().hud_model(), screen, Step::Task);
         }
 
         // The later stages need a parsed source; skip cleanly when the content tree is absent.
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping stage bounds: no content tree");
             return;
         };
@@ -3410,7 +3994,6 @@ mod tests {
         // One representative bound string per stage — if the stage's subtree failed to build or
         // its binding was renamed, the string never reaches the draw commands.
         for (step, needle) in [
-            (Step::Classify, "SKIN"),
             (Step::Conform, "Internal rig"),
             (Step::Attach, "Grip"),
             (Step::Review, "skeleton conforms"),
@@ -3424,6 +4007,7 @@ mod tests {
                 screen: Vec2::new(1520.0, 980.0),
                 typed: String::new(),
                 backspace: false,
+                wheel: 0.0,
             };
             let mut state = UiState::new();
             let frame = run_ui(&tree, &model, &styles, &snap, &mut state);
@@ -3519,6 +4103,14 @@ mod tests {
     /// failure rather than an empty panel discovered in the window.
     #[test]
     fn hud_tree_walks_against_the_shared_ui_elements() {
+        // The HUD's display copy is `$token`s now (S10 strings gate); load the
+        // shipped table so the walked commands carry the resolved en-us text.
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
         let host = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud_assetpipeline.lua");
         load_ui_json(&host, HUD_UI_ELEMENTS); // layout (`UI.assetpipeline`)
         let tree = host
@@ -3536,6 +4128,7 @@ mod tests {
             screen: Vec2::new(1520.0, 980.0),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &snap, &mut state);
@@ -3543,12 +4136,36 @@ mod tests {
             !frame.commands.is_empty(),
             "the walker drew nothing — the tree resolved to an empty page"
         );
-        // The footer's step hint is a bound string, so seeing it proves the Model→tree
-        // binding actually resolved rather than silently rendering blanks.
+        // The footer's step hint is a bound string, so seeing it proves the Model→tree binding
+        // actually resolved rather than silently rendering blanks. The entry page is Task now, so
+        // its hint is what the first frame draws.
         let drew_hint = frame.commands.iter().any(|c| {
-            matches!(c, HudCommand::Text { text, .. } if text.contains("Open a source folder"))
+            matches!(c, HudCommand::Text { text, .. } if text.contains("Choose the kind of asset"))
         });
         assert!(drew_hint, "the bound step hint did not reach the draw commands");
+
+        // The Task overlay is now built from the STANDARD templates: the `frame` gives the "Import"
+        // title bar (its `n` region) and glowing CORNER RUNES, and each DS `card` gives a workflow-noun
+        // title. Prove those reach the draw commands so a regression in the template wiring fails HERE.
+        let text_is = |needle: &str| {
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == needle))
+        };
+        assert!(text_is("Import"), "the window title bar did not draw");
+        assert!(text_is("Character"), "the first workflow card title did not draw");
+        assert!(
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { font: flicker::script::FontRole::Rune, .. })),
+            "the window's corner runes did not draw"
+        );
+        // The card's italic flavour WRAPS: it reaches the draw commands carrying a wrap width, so a
+        // long line breaks to the card instead of running off it.
+        let wrapped_flavour = frame.commands.iter().any(|c| {
+            matches!(c, HudCommand::Text { text, wrap: Some(w), .. }
+                if text.contains("A soul given form") && *w > 0.0)
+        });
+        assert!(wrapped_flavour, "the card flavour did not draw as wrapped text with a bound width");
     }
 
     /// The right-drag pan slides the LOOK-AT POINT across the view plane so the content tracks the
@@ -3695,7 +4312,7 @@ mod tests {
     /// skip, moving the mount controls onto Conform would only have relocated the dead page.
     #[test]
     fn a_non_character_skips_the_character_only_attach_page() {
-        let Some(mut ed) = at_step(Step::Analyze) else {
+        let Some(mut ed) = parsed() else {
             eprintln!("skipping: no content tree");
             return;
         };
@@ -3715,46 +4332,51 @@ mod tests {
         ed.step = Step::Review;
         assert_eq!(ed.prev_step(), Some(Step::Conform), "and Back hops over it too");
 
-        // The rail keeps the design's fixed six slots: the skipped one is DASHED, not blank, and
-        // Conform renames itself for the role rather than lying with "Rig Conform".
+        // The rail shows only the applicable stops: a prop's character-only Attach slot is DROPPED
+        // (not shown), and the step renames itself for the role rather than lying with "Rig".
+        // For a prop the visible rail is Workflow · Mount · Review.
         ed.step = Step::Conform;
         let m = ed.hud_model();
-        assert!(
-            m.text("rail_4").is_some_and(|s| s.starts_with('\u{2014}')),
-            "the skipped Attach slot must read as not-applicable, got {:?}",
-            m.text("rail_4")
+        assert_eq!(
+            m.text("tab_1"),
+            Some("Mount"),
+            "Conform must name its Mount role, got {:?}",
+            m.text("tab_1")
         );
-        assert!(
-            m.text("rail_3").is_some_and(|s| s.contains("Mount")),
-            "Conform must name its role, got {:?}",
-            m.text("rail_3")
-        );
+        assert_eq!(m.text("tab_2"), Some("Review"), "Attach is skipped, so Review follows directly");
+        assert!(!m.is_on("tab_3_show"), "and the fourth slot is hidden — no character-only Attach");
     }
 
     #[test]
     fn tabs_light_the_current_step_and_conform_reads_its_role() {
         let mut ed = AssetPipeline::new();
-        ed.step = Step::Classify; // index 2
+        ed.step = Step::Conform; // the rig-edit view, reached right after choosing a workflow
         let m = ed.hud_model();
         let text = |k: &str| match m.get(k) {
             Some(flicker::script::Value::Text(s)) => s.clone(),
             other => panic!("{k} is not text: {other:?}"),
         };
-        // Plain labels — no done/active/pending glyphs (the footer Back/Next conveys movement).
-        assert_eq!(text("tab_0"), "Load");
-        assert_eq!(text("tab_3"), "Rig Conform", "Conform's tab reads its role label");
+        // Load / Analyze / Classify are gone (the workflow selector + inline parse/conform replaced
+        // them), so the rail reads Workflow · Rig · Attach · Review. Plain labels — the footer
+        // Back/Next conveys movement.
+        assert_eq!(text("tab_0"), "Workflow");
+        assert_eq!(text("tab_1"), "Rig", "the Conform step's tab reads its role label");
+        assert_eq!(text("tab_2"), "Attach");
         // The current step lights via the active style path; the rest are idle.
-        assert_eq!(text("tab_2_style"), "assetpipeline.tab_active");
+        assert_eq!(text("tab_1_style"), "assetpipeline.tab_active");
         assert_eq!(text("tab_0_style"), "assetpipeline.tab_idle");
-        assert_eq!(text("tab_4_style"), "assetpipeline.tab_idle");
+        assert_eq!(text("tab_2_style"), "assetpipeline.tab_idle");
+        // Four stops are visible (Workflow, Rig, Attach, Review); there is no fifth.
+        assert!(m.is_on("tab_3_show"), "Review is the fourth visible stop");
+        assert!(!m.is_on("tab_4_show"), "and there is no fifth");
     }
 
-    /// Next must never advance past a stage whose input is missing — with no source
-    /// loaded, Load cannot advance, which is what keeps the wizard honest.
+    /// Next must never advance past a stage whose input is missing — on the Workflow page (the
+    /// entry, no source yet) Next is inert, which is what keeps the wizard honest.
     #[test]
     fn cannot_advance_without_a_source() {
         let mut ed = AssetPipeline::new();
-        assert!(!ed.can_advance(), "Load with no folder open cannot advance");
+        assert!(!ed.can_advance(), "the Workflow page advances by a card, not Next");
         ed.step = Step::Review;
         assert!(!ed.can_advance(), "Review is the last step");
     }

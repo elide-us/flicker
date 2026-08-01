@@ -1,7 +1,7 @@
 //! The **Stage** — the live-animating character doll composited into the bench's UI.
 //!
 //! A stage is a panel whose fill is a render-to-texture sub-scene: something says WHERE
-//! (a walker `stage` node reserving a [`StageSlot`], or the scene-owned canvas placing a
+//! (a walker `stage` node reserving a [`RttSlot`], or the scene-owned canvas placing a
 //! card), the shared `stages` block in `ui_elements.json` says WHAT, and `FrameGraph`
 //! decides WHEN. This module owns the WHAT→GPU half: parsing the authored sources,
 //! posing the doll, and declaring the offscreen passes.
@@ -63,7 +63,7 @@ pub struct Source {
 
 /// What the scene wants staged in one slot this frame.
 ///
-/// `rect` is the IMAGE rect — the walker's `StageSlot` already inset it inside the node's
+/// `rect` is the IMAGE rect — the walker's `RttSlot` already inset it inside the node's
 /// frame, and the backdrop panel is drawn by whoever owns the WHERE, so the graph only
 /// blits the doll over it.
 #[derive(Clone)]

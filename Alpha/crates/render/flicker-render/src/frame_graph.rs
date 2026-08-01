@@ -294,6 +294,7 @@ fn emit_composite(r: &mut Renderer, c: &Composite) {
                     false,
                     false,
                     -1.0,
+                    None,
                 );
             }
         }

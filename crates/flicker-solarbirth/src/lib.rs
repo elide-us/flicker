@@ -8,6 +8,7 @@
 //! Controls: drag rotate · wheel zoom · Space replay the fly-in · Esc pause.
 
 mod camera;
+mod route;
 mod scene;
 mod system;
 

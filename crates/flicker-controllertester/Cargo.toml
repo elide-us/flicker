@@ -16,3 +16,8 @@ path = "src/lib.rs"
 [dependencies]
 flicker = { path = "../flicker" }
 flicker-shell.workspace = true
+# The real input model + event bus this inspector drives (spec §10). Imported
+# directly (not via the `flicker::app` bridge) so the tester exercises the same
+# `flicker_input_core` / `flicker_input_router` surface the scenes do.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true

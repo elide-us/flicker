@@ -1,11 +1,11 @@
 //! flicker-clicktrainer: an aim / click-training game — the reference **2D**
 //! client, and the demonstration of blending the engine's two UI modes on one
 //! screen: **2D sprite gameplay** (the target box + lifetime bar, drawn with
-//! `draw_sprite`) UNDER a **vector Lua HUD** (a carved-stone stats panel + a
-//! RESET button, `hud_clicktrainer.lua` + `UI.clicktrainer`), with **clicks routed
-//! correctly** between them.
+//! `draw_sprite`) UNDER a **declarative vector HUD** (a carved-stone stats panel
+//! and a RESET button — a `hud_clicktrainer.lua` component tree walked by the
+//! Rust component walker), with **clicks routed correctly** between them.
 //!
-//! The HUD reports `hud_hit` when the cursor is over its panel; the scene only
+//! The walker reports `hud_hit` when the cursor is over its panel; the scene only
 //! scores a click as a game hit/miss when it did NOT land on the HUD — so the
 //! RESET button (and the panel it sits on) never costs you accuracy. A minigame
 //! PACKAGE (library only); the `prism-alpha` launcher lists this scene as "CLICK TRAINER".
@@ -18,16 +18,25 @@
 //!   lifetime that counts as a miss if it times out.
 //!
 //! Controls: left-click a target to hit it; a misclick or a timed-out target
-//! costs accuracy. RESET zeroes the stats. Esc opens the pause menu.
+//! costs accuracy. RESET zeroes the stats. Esc opens the pause menu (the screen
+//! root's DECLARED `on_menu = "pause_open"` intent — S9/S10).
 
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState};
+use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
 use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, Transition};
-use flicker::script::{ScriptHost, ValueMap};
-use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{
+    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
+};
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
+
+mod route;
+use route::{GameplayBase, RootHandler};
 
 // ── Tuning ───────────────────────────────────────────────────────────
 /// Target edge (px) for the first hit; shrinks toward `TARGET_MIN_SIZE`.
@@ -43,7 +52,7 @@ const TARGET_LIFETIME: f32 = 1.15;
 const CALM: [f32; 3] = [0.30, 0.80, 0.85];
 const URGENT: [f32; 3] = [0.95, 0.30, 0.25];
 
-/// The vector HUD panel (`hud_clicktrainer.lua`) + the shared UI-element layout.
+/// The declarative HUD tree (`hud_clicktrainer.lua`) + the shared UI-element layout.
 const HUD_SCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../Alpha/content/sensorium/scripts/hud_clicktrainer.lua"
@@ -63,9 +72,21 @@ pub struct ClickTrainer {
     /// 1×1 white pixel — the sprite shader tints it, so one texture draws the
     /// target box and its lifetime bar in any colour.
     white: Option<TextureHandle>,
-    /// The vector HUD script (`hud_clicktrainer.lua` + `UI.clicktrainer`). `None` if
-    /// it failed to load — the game still runs, just without the panel.
+    /// The HUD script host, RETAINED past tree-build as the Lua component library
+    /// (`ui.*` modules) the walker dispatches per-node DRAW to. `None` if it
+    /// failed to load — the game still runs, just without the panel.
     script: Option<ScriptHost>,
+    /// The HUD's component tree, parsed ONCE from the script's `tree()` at load;
+    /// the walker redraws this cached tree every frame with fresh Model bindings.
+    ui_tree: Option<UiNode>,
+    /// The screen's declarative bindings (S9), read off the cached tree's root
+    /// (`on_menu = "pause_open"`).
+    ui_intents: UiIntents,
+    /// Token-resolved `ui_elements.json` styles the walker resolves node `style`
+    /// paths against.
+    ui_styles: serde_json::Value,
+    /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
 
     // ── current target ──
     target_pos: Vec2,
@@ -86,13 +107,30 @@ pub struct ClickTrainer {
     total_reaction: f32,
 
     // ── shell / pause plumbing ──
-    /// Bindings drive the pause hotkey (Menu = Esc) and round-trip through the
-    /// settings overlay. The click trainer has no camera, so it doesn't keep an
-    /// `AbstractControls`/`GamepadConfig` — the pause scene takes defaults.
-    bindings: InputMap,
-    menu_prev: bool,
+    /// Per-context action maps (World base only — the click trainer has no chat /
+    /// text-entry context). Drives the pause hotkey (`Menu` = Esc) through the
+    /// resolver and round-trips through the settings overlay; each `PauseScene` we
+    /// push reads its `active_map()`.
+    bindings: ContextualBindings,
+    /// Gamepad calibration (defaults — the click trainer has no camera). Read by the
+    /// resolver each frame and handed to each `PauseScene` we push.
+    gamepad_config: GamepadConfig,
     /// Theme for the pause overlay we push (built once in `enter`).
     ui_theme: Option<Theme>,
+
+    /// The new-input-model per-frame seam (spec §5/§9): a stateful edge [`Resolver`]
+    /// (replaces the `menu_prev` bool), a REUSED `Fired` scratch buffer (no per-frame
+    /// alloc — RT-7), the router's request queue, a monotonic frame `tick` (the
+    /// resolver's `TickTime`, NOT wall-clock — spec §3.2a), and the retained walker
+    /// [`UiState`] the HUD layer writes focus through.
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
+    ui_state: UiState,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
 }
 
 impl ClickTrainer {
@@ -101,6 +139,10 @@ impl ClickTrainer {
         Self {
             white: None,
             script: None,
+            ui_tree: None,
+            ui_intents: UiIntents::default(),
+            ui_styles: serde_json::Value::Object(Default::default()),
+            hud_commands: Vec::new(),
             target_pos: Vec2::ZERO,
             target_size: TARGET_START_SIZE,
             time_remaining: 0.0,
@@ -111,9 +153,15 @@ impl ClickTrainer {
             last_reaction: f32::INFINITY,
             best_reaction: f32::INFINITY,
             total_reaction: 0.0,
-            bindings: InputMap::wasd_and_mouse(),
-            menu_prev: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
             ui_theme: None,
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
+            ui_state: UiState::new(),
+            fired_sigs: Vec::new(),
         }
     }
 
@@ -171,8 +219,9 @@ impl ClickTrainer {
         self.spawned = false; // a fresh target is placed next frame
     }
 
-    /// The per-frame HUD model — every stat pre-formatted to the string the Lua
-    /// panel displays verbatim (`"—"` until there's data).
+    /// The per-frame HUD model — every stat pre-formatted to the string the HUD
+    /// tree's `text_bind`s display verbatim (`"—"` until there's data), plus the
+    /// transient `sig_<name>` mirror of last frame's fired intents.
     fn hud_model(&self) -> ValueMap {
         let react = |t: f32| {
             if t.is_finite() {
@@ -186,13 +235,15 @@ impl ClickTrainer {
         } else {
             f32::INFINITY
         };
-        ValueMap::new()
+        let mut m = ValueMap::new()
             .with("hits", self.hits.to_string())
             .with("misses", self.misses.to_string())
             .with("accuracy", format!("{:.0}%", self.accuracy()))
             .with("react_last", react(self.last_reaction))
             .with("react_best", react(self.best_reaction))
-            .with("react_avg", react(avg))
+            .with("react_avg", react(avg));
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+        m
     }
 }
 
@@ -201,12 +252,23 @@ impl Scene for ClickTrainer {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         // Theme for the pause overlay we push on Esc (built once, reused).
         self.ui_theme = Some(Theme::build(renderer));
-        // The vector HUD: a Lua stats panel over the 2D game. Degrades to no HUD
-        // (the game still plays) if the script can't load.
-        match ScriptHost::from_file(HUD_SCRIPT) {
+        // The declarative HUD: a component tree walked by the engine. Degrades to
+        // no HUD (the game still plays) if the script can't load. The styles are
+        // the token-resolved layout JSON (the same tree Lua reads via `UI`).
+        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
             Ok(script) => {
                 load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.clicktrainer`)
-                load_widgets(&script); // the shared immediate-mode toolkit
+                match script.ui_tree() {
+                    Ok(Some(tree)) => {
+                        // The screen's declarative bindings (S9), read off the
+                        // root once — cached exactly like the tree.
+                        self.ui_intents = UiIntents::of(&tree);
+                        self.ui_tree = Some(tree);
+                    }
+                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
+                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
+                }
                 self.script = Some(script);
             }
             Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
@@ -221,49 +283,99 @@ impl Scene for ClickTrainer {
 
         // Pick up any input-settings change made in the pause→settings overlay.
         if let Some((map, _, _)) = flicker_shell::take_pending_input() {
-            self.bindings = map;
-        }
-
-        // Esc / Menu → push the shell pause overlay (edge-detected). The scene
-        // manager freezes us while it's up, so the target clock stops too.
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev;
-        self.menu_prev = menu_down;
-        if menu_pressed {
-            let theme = self.ui_theme.expect("theme built in enter");
-            return Transition::Push(Box::new(PauseScene::new(
-                theme,
-                &self.bindings,
-                &AbstractControls::default(),
-                &GamepadConfig::default(),
-            )));
+            self.bindings = ContextualBindings::new(map);
         }
 
         if !self.spawned {
             self.spawn(screen);
         }
 
-        // Run the vector HUD. It reports whether the cursor is over the panel (a
-        // UI click, not a game click) and whether RESET fired — this is the
-        // click-routing that lets the two modes share the screen.
+        // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
+        // results carry `hud_hit` (cursor over the panel) and `reset` (the RESET
+        // button's action). `over_hud` feeds the walker layer below as this
+        // frame's pointer-consume, so a click on the panel / RESET is swallowed
+        // before it can score — the click-routing that lets the 2D game and the
+        // vector HUD share one screen.
         let mut over_hud = false;
-        if let Some(script) = self.script.as_ref() {
-            let _ = script.set_model(&self.hud_model());
-            match script.update(input, screen.x, screen.y) {
-                Ok(res) => {
-                    over_hud = res.is_on("hud_hit");
-                    if res.is_on("reset") {
-                        self.reset();
-                    }
-                }
-                Err(e) => tracing::warn!("HUD update failed: {e}"),
+        if let Some(tree) = self.ui_tree.as_ref() {
+            let model = self.hud_model();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen,
+                typed: String::new(),
+                backspace: false,
+                wheel: input.mouse_wheel_delta,
+            };
+            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
+            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            over_hud = frame.results.is_on("hud_hit");
+            if frame.results.is_on("reset") {
+                self.reset();
             }
+            self.hud_commands = frame.commands;
         }
 
-        // Discrete click (press edge, not hold), scored only when it did NOT land
-        // on the HUD: inside the target → a hit that scores + respawns; elsewhere
-        // on the play-field → a misclick (accuracy penalty, the target stays).
-        if input.mouse_left_pressed && !over_hud {
+        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch. The resolver
+        // owns the press edges; the chain arbitrates them:
+        //   [ROOT]  RootHandler   — declares World (no consuming arms — S10)
+        //   [1]     WalkerHandler — consumes the click while `over_hud`, and the
+        //                           screen's DECLARED `on_menu` intent
+        //   [2]     GameplayBase  — a click that bubbled past the HUD scores a hit/miss
+        // `ev` is the REUSED `Fired` buffer; the `InputEvent` list is a short-lived local
+        // (it borrows this frame's snapshot, so it cannot be a field — RT-7 holds because
+        // steady-state frames resolve zero edges and allocate nothing).
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        let mut gameplay = GameplayBase::default();
+        {
+            let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Reconcile any context/focus intents. None arise in this chain today (no
+        // context-pushing handler), but this is the standard post-dispatch seam,
+        // applied through the walker so a future navigable HUD shares one focus id
+        // for mouse + gamepad (spec §4.2a).
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        // The screen's fired intents (S9), drained once: acted on below and queued
+        // for the one-frame `sig_<name>` Model mirror.
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto the
+        // shell pause push — the root's hardcoded Menu arm is gone. The scene
+        // manager freezes us while the overlay is up, so the target clock stops too.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+            let theme = self.ui_theme.expect("theme built in enter");
+            return Transition::Push(Box::new(PauseScene::new(
+                theme,
+                self.bindings.active_map(),
+                &AbstractControls::default(),
+                &self.gamepad_config,
+            )));
+        }
+
+        // A left-click that bubbled past the HUD to the gameplay base is a game click
+        // (the typed form of the old `!over_hud` gate): inside the target → a hit that
+        // scores + respawns; elsewhere on the play-field → a misclick (accuracy
+        // penalty, the target stays).
+        if gameplay.click {
             if self.target_contains(input.mouse_position) {
                 self.hits += 1;
                 self.last_reaction = self.spawn_age;
@@ -312,15 +424,8 @@ impl Scene for ClickTrainer {
             [0.85, 0.85, 0.90, 0.9],
         );
 
-        // ── Vector UI (Lua panel), drawn above the game via its own layer ──
-        if let Some(script) = self.script.as_ref() {
-            let _ = script.set_model(&self.hud_model());
-            let size = renderer.size();
-            match script.draw(size.x, size.y) {
-                Ok(cmds) => render_hud(renderer, &cmds, white, &[]),
-                Err(e) => tracing::warn!("HUD draw failed: {e}"),
-            }
-        }
+        // ── Vector UI (walker commands stashed by `update`), above the game ──
+        render_hud(renderer, &self.hud_commands, white, &[]);
     }
 }
 
@@ -332,16 +437,19 @@ impl Default for ClickTrainer {
 
 #[cfg(test)]
 mod tests {
-    //! Load the real `hud_clicktrainer.lua` + the shared `ui_elements.json` and run a
-    //! frame, so a Lua syntax/runtime error — or a broken click-routing contract —
+    //! Load the real `hud_clicktrainer.lua` + the shared `ui_elements.json` and walk
+    //! a frame, so a Lua syntax/runtime error — or a broken click-routing contract —
     //! fails the build instead of only surfacing in the running app.
     use super::*;
+    use flicker::ui::run_ui;
+    use flicker_input_core::ActionSignal;
 
-    fn host() -> ScriptHost {
-        let h = ScriptHost::from_file(HUD_SCRIPT).expect("load hud.lua");
+    fn tree_and_styles() -> (UiNode, serde_json::Value) {
+        let h = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+            .expect("load hud_clicktrainer.lua");
         load_ui_json(&h, HUD_UI_ELEMENTS);
-        load_widgets(&h);
-        h
+        let tree = h.ui_tree().expect("tree builds").expect("script exposes tree()");
+        (tree, load_styles(HUD_UI_ELEMENTS))
     }
 
     fn model() -> ValueMap {
@@ -354,31 +462,63 @@ mod tests {
             .with("react_avg", "205 ms")
     }
 
-    fn click_at(x: f32, y: f32) -> InputState {
-        let mut i = InputState::new();
-        i.mouse_position = Vec2::new(x, y);
-        i.mouse_left_pressed = true;
-        i
+    fn snap_at(x: f32, y: f32, clicked: bool) -> UiInput {
+        UiInput {
+            mouse: Vec2::new(x, y),
+            clicked,
+            down: clicked,
+            screen: Vec2::new(1280.0, 720.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        }
     }
 
+    /// The vocabulary gate + the screen's S9 declaration: every kind in the real
+    /// tree is one the engine knows, and the root declares the pause intent.
+    #[test]
+    fn tree_is_well_formed_and_declares_the_pause_intent() {
+        let (tree, _) = tree_and_styles();
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_clicktrainer.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_clicktrainer.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+        let intents = UiIntents::of(&tree);
+        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+    }
+
+    /// The click-routing contract through the REAL tree: a pointer on the panel
+    /// sets `hud_hit`; one on the play-field does not; a click on RESET fires the
+    /// `reset` action; and the whole panel draws.
     #[test]
     fn hud_routes_clicks_and_draws() {
-        let h = host();
+        let (tree, styles) = tree_and_styles();
+        let model = model();
 
-        // A click over the top-left panel is CONSUMED by the HUD (hud_hit), so the
-        // scene must not score it as a game click.
-        h.set_model(&model()).unwrap();
-        let res = h.update(&click_at(30.0, 30.0), 1280.0, 720.0).expect("update");
-        assert!(res.is_on("hud_hit"), "a click on the panel must set hud_hit");
+        // A pointer over the top-left panel is the HUD's (hud_hit), so the
+        // scene must not score a click there as a game click.
+        let frame = run_ui(&tree, &model, &styles, &snap_at(30.0, 30.0, false), &mut UiState::new());
+        assert!(frame.results.is_on("hud_hit"), "a pointer on the panel must set hud_hit");
+        assert!(!frame.commands.is_empty(), "the HUD draws the panel + stats");
 
-        // A click out on the play-field is the GAME's, not the HUD's.
-        h.set_model(&model()).unwrap();
-        let res = h.update(&click_at(900.0, 500.0), 1280.0, 720.0).expect("update");
-        assert!(!res.is_on("hud_hit"), "a play-field click is not hud_hit");
+        // A pointer out on the play-field is the GAME's, not the HUD's.
+        let frame =
+            run_ui(&tree, &model, &styles, &snap_at(900.0, 500.0, false), &mut UiState::new());
+        assert!(!frame.results.is_on("hud_hit"), "a play-field pointer is not hud_hit");
 
-        // Draw emits the panel + stats (proves the whole draw path runs).
-        h.set_model(&model()).unwrap();
-        let cmds = h.draw(1280.0, 720.0).expect("draw");
-        assert!(!cmds.is_empty(), "the HUD draws the panel + stats");
+        // A click on the RESET button fires its action (panel: margin 16 + pad 16,
+        // below title/subtitle/divider/6 stat rows → the button row sits ~y 252..288;
+        // click its centre).
+        let frame =
+            run_ui(&tree, &model, &styles, &snap_at(160.0, 270.0, true), &mut UiState::new());
+        assert!(frame.results.is_on("reset"), "a click on RESET fires the reset action");
+        assert!(frame.results.is_on("hud_hit"), "…and it is a HUD click, never a game miss");
     }
 }

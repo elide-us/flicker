@@ -1,0 +1,29 @@
+[package]
+name = "flicker-input-device"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Platform input sources + the 120 Hz analog sampler — the ONLY input crate with
+# OS/hardware deps. It fills the core `InputState` / `AnalogCache` and never
+# serializes (no serde). Depends on `flicker-input-core` (the model types) and
+# `winit` (window events); it must NOT depend on `flicker-app` (flicker-app
+# depends on it). See spec §2 / §6.
+[dependencies]
+flicker-input-core.workspace = true
+glam.workspace = true
+winit.workspace = true
+tracing.workspace = true
+
+# Gamepads: gilrs everywhere EXCEPT macOS, where its raw-IOKit-HID path enumerates
+# Xbox pads but gets no input from them. macOS reads controllers through Apple's
+# GameController framework instead (the path Unreal etc. use), via objc2. This
+# cfg split is load-bearing (spec §6.2, ruling A9599BF3). Versions match
+# `flicker-app/Cargo.toml` exactly.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+gilrs = "0.11"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-game-controller = "0.3"

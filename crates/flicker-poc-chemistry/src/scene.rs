@@ -18,17 +18,35 @@
 
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
+};
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::ui::{
+    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
+    UI_COMPONENT_MODULES,
+};
+use flicker_input_core::{Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use crate::camera::OrbitCam;
 use crate::globe::{self, RADIUS};
+use crate::route::RootHandler;
 use crate::sim_thread::{SimCommand, SimHandle, Snapshot, BED_CONTINENTAL, BED_OCEANIC};
 use flicker_poc_chemistry::PlateEvent;
+
+/// The declarative HUD tree (`hud_chemistry.lua`) + the shared UI-element layout.
+const HUD_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/sensorium/scripts/hud_chemistry.lua"
+);
+const HUD_UI_ELEMENTS: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
 
 /// Radii of the shells (exaggerated for legibility — real crust is a hair-thin
 /// rind on the mantle; here the gaps are opened up so the stack is visible and the
@@ -114,12 +132,41 @@ pub struct ChemScene {
     theme: Option<Theme>,
     white: Option<TextureHandle>,
 
-    // ── key edges ──
-    prev_menu: bool,
+    // ── input bus (spec §5/§9) ──
+    /// World-context bindings (Esc → `Menu`); the resolver resolves the active map.
+    /// The camera + the discrete keys below stay raw, so only `Menu` rides the bus.
+    bindings: ContextualBindings,
+    /// Gamepad axis/deadzone config, handed to the resolver and the pause overlay.
+    gamepad_config: GamepadConfig,
+    /// Stateful edge resolver — the single home of previous-frame state (replaces the
+    /// hand-rolled `prev_menu` bool).
+    resolver: Resolver,
+    /// Reused `Fired` scratch buffer (no per-frame alloc — RT-7).
+    ev: Vec<Fired>,
+    /// The router's per-frame request queue (context/focus intents; none arise here).
+    route: RouteCtx,
+    /// Monotonic frame tick — the resolver's `TickTime` (NOT wall-clock — spec §3.2a).
+    tick: u64,
+
+    // ── bespoke discrete keys (stay raw off the snapshot — Group B data viewer) ──
     prev_play: bool,
     prev_down: bool,
     prev_view: bool,
     prev_reseed: bool,
+
+    // ── The declarative HUD (S10): a walker tree replaces the immediate text
+    // readout + conservation ledger. The host is retained as the Lua component
+    // library; the tree + the screen's declared intents are cached at enter. ──
+    script: Option<ScriptHost>,
+    ui_tree: Option<UiNode>,
+    ui_intents: UiIntents,
+    ui_styles: serde_json::Value,
+    ui_state: UiState,
+    /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
+    /// Intent names fired last frame — republished ONCE into the next Model as
+    /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
+    fired_sigs: Vec<String>,
 }
 
 impl ChemScene {
@@ -141,12 +188,111 @@ impl ChemScene {
             mantle_view: MantleView::Temperature,
             theme: None,
             white: None,
-            prev_menu: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
             prev_play: false,
             prev_down: false,
             prev_view: false,
             prev_reseed: false,
+            script: None,
+            ui_tree: None,
+            ui_intents: UiIntents::default(),
+            ui_styles: serde_json::Value::Object(Default::default()),
+            ui_state: UiState::new(),
+            hud_commands: Vec::new(),
+            fired_sigs: Vec::new(),
         }
+    }
+
+    /// The per-frame HUD model: every readout line pre-formatted (the tree's
+    /// `text_bind`s display them verbatim), the `loading`/`loaded` state gates,
+    /// the state-word + ledger-status colour paths (`color_bind`s), plus the
+    /// transient `sig_<name>` mirror of last frame's fired intents.
+    fn hud_model(&self) -> ValueMap {
+        let mut m = ValueMap::new();
+        match self.snap.as_ref() {
+            None => {
+                m.set("loading", true);
+            }
+            Some(snap) => {
+                let s = &snap.state;
+                m.set("loaded", true);
+                m.set(
+                    "stats",
+                    format!("tick {}  ·  {:.0} My  ·  {} cells", snap.tick, snap.tick_myr, snap.swept_cells),
+                );
+                let core_pct = s.core_mass_kg / s.planet_mass_kg.max(1.0) * 100.0;
+                m.set(
+                    "interior",
+                    format!(
+                        "core {core_pct:.1}%  ·  differentiated {:.0}%  ·  mantle {:.0} K  ·  {} plates  ·  radiogenic {:.0} TW",
+                        s.differentiation_frac * 100.0,
+                        s.mean_mantle_temp_k,
+                        snap.plate_count,
+                        s.radiogenic_power_tw,
+                    ),
+                );
+                let (word, color) = if snap.playing {
+                    ("PLAYING", "chemistry.playing.color")
+                } else {
+                    ("PAUSED", "chemistry.paused.color")
+                };
+                m.set("play_state", word);
+                m.set("play_state_color", color);
+                m.set(
+                    "hints",
+                    format!(
+                        "·  Space play/pause  ·  R reseed  ·  Down reset  ·  V mantle: {}  ·  drag · wheel · Esc menu",
+                        self.mantle_view.label()
+                    ),
+                );
+                m.set(
+                    "crust",
+                    format!(
+                        "crust {:.3}%  ·  continental {:.0}%  ·  mean elevation {:.0} m",
+                        s.crust_frac * 100.0,
+                        s.continental_frac * 100.0,
+                        s.mean_elevation_m,
+                    ),
+                );
+
+                // ── The conservation ledger (text-only; the walker panel shows it). ──
+                let present = s.core_mass_kg
+                    + s.mantle_mass_kg
+                    + s.crust_mass_kg
+                    + s.atmosphere_mass_kg
+                    + s.ocean_mass_kg
+                    + s.escaped_mass_kg;
+                let expected = s.planet_mass_kg + s.delivered_mass_kg;
+                let balanced = (present - expected).abs() <= 1e-6 * expected.max(1.0);
+                let total = expected.max(1.0);
+                let pct = |mass: f64| mass / total * 100.0;
+                let (status, color) = if balanced {
+                    ("balanced ✓", "chemistry.ok")
+                } else {
+                    ("BROKEN ✗", "chemistry.bad")
+                };
+                m.set("ledger_status", format!("Σ {}  ·  {}", fmt_mass(expected), status));
+                m.set("ledger_status_color", color);
+                let rows: [(&str, f64); 6] = [
+                    ("Mantle", s.mantle_mass_kg),
+                    ("Core", s.core_mass_kg),
+                    ("Crust", s.crust_mass_kg),
+                    ("Atmosphere", s.atmosphere_mass_kg),
+                    ("Ocean", s.ocean_mass_kg),
+                    ("Escaped", s.escaped_mass_kg),
+                ];
+                for (i, (label, mass)) in rows.iter().enumerate() {
+                    m.set(format!("ledger_{}", i + 1), format!("{label:<11}{:>6.2}%", pct(*mass)));
+                }
+            }
+        }
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
+        m
     }
 
     fn free_meshes(&mut self, renderer: &mut Renderer) {
@@ -171,6 +317,25 @@ impl Scene for ChemScene {
         let theme = Theme::build(renderer);
         self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
         self.theme = Some(theme);
+
+        // The declarative HUD (S10): styles + the `hud_chemistry.lua` tree, built
+        // once; values ride the Model each frame.
+        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
+            Ok(script) => {
+                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.chemistry`)
+                match script.ui_tree() {
+                    Ok(Some(tree)) => {
+                        self.ui_intents = UiIntents::of(&tree);
+                        self.ui_tree = Some(tree);
+                    }
+                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
+                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
+                }
+                self.script = Some(script);
+            }
+            Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
+        }
     }
 
     fn exit(&mut self, renderer: &mut Renderer) {
@@ -178,19 +343,71 @@ impl Scene for ChemScene {
         // The sim thread shuts down when `self.sim` (SimHandle) drops.
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
-        let menu = input.key_down(Key::Escape);
-        if menu && !self.prev_menu {
-            self.prev_menu = menu;
+    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+        // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
+        // ledger panel is a styled container, so the pointer over it sets
+        // `hud_hit` — fed to the walker layer below as this frame's
+        // pointer-consume (the camera stays a raw poll, unchanged).
+        let mut over_hud = false;
+        if let Some(tree) = self.ui_tree.as_ref() {
+            let model = self.hud_model();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen: renderer.size(),
+                typed: String::new(),
+                backspace: false,
+                wheel: input.mouse_wheel_delta,
+            };
+            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
+            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            over_hud = frame.results.is_on("hud_hit");
+            self.hud_commands = frame.commands;
+        }
+
+        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the raw
+        // `prev_menu` edge. The resolver owns the `Menu` (Esc) press edge; the walker
+        // layer's DECLARED `on_menu` intent (S10) is the pause-open edge. The orbit
+        // camera + the discrete data-viewer keys below stay on the raw snapshot. `ev`
+        // is the REUSED `Fired` buffer; the `InputEvent` list is a short-lived local
+        // (it borrows this frame's snapshot — RT-7).
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        {
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Standard post-dispatch seam; no handler pushes context intents here.
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto the
+        // shell pause push — the root's hardcoded Menu arm is gone.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.theme.expect("theme built in enter");
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                &InputMap::default(),
+                self.bindings.active_map(),
                 &AbstractControls::default(),
-                &GamepadConfig::default(),
+                &self.gamepad_config,
             )));
         }
-        self.prev_menu = menu;
 
         if !self.ready {
             if let Some(s) = self.sim.take_static() {
@@ -230,7 +447,8 @@ impl Scene for ChemScene {
 
     fn render(&mut self, renderer: &mut Renderer) {
         if !self.ready {
-            self.draw_loading(renderer);
+            // The loading banner rides the walker tree (`loading` visible_bind).
+            self.draw_hud(renderer);
             return;
         }
 
@@ -311,113 +529,25 @@ impl Scene for ChemScene {
 }
 
 impl ChemScene {
-    fn draw_loading(&self, renderer: &mut Renderer) {
-        renderer.set_layer(10.0);
-        let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
-        let dim = [0.6, 0.63, 0.68, 1.0];
-        renderer.draw_text("GENERATING PLANET…", Vec2::new(40.0, 60.0), 30.0, gold);
-        renderer.draw_text(
-            "freq 96 · 92,162 cells · bulk-accretion seed · building on the sim thread",
-            Vec2::new(40.0, 104.0),
-            16.0,
-            dim,
-        );
-    }
-
+    /// The HUD: the walker commands stashed by `update` (loading banner, readout
+    /// lines, conservation ledger) + the two panels still scene-drawn (FLAGGED,
+    /// S10): the bulk-seed element swatches and the tectonic-event log — their
+    /// per-row colours are DATA (element_rgb / per-event tints), and the walker's
+    /// colour channel is dotted style paths by design.
     fn draw_hud(&self, renderer: &mut Renderer) {
+        renderer.set_layer(10.0);
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[]);
+        }
+
         let Some(snap) = self.snap.as_ref() else {
             return;
         };
-        let s = &snap.state;
-
-        renderer.set_layer(10.0);
         let gold = [0.722, 0.592, 0.353, 1.0]; // Prism bronze (structural accent)
         let text = [0.85, 0.87, 0.92, 1.0];
-        let dim = [0.6, 0.63, 0.68, 1.0];
-        let green = [0.55, 0.85, 0.55, 1.0];
-
-        renderer.draw_text("FLICKER · CHEMISTRY SIM (M2 · LAYER STACK)", Vec2::new(24.0, 24.0), 24.0, gold);
-        let stats = format!("tick {}  ·  {:.0} My  ·  {} cells", snap.tick, snap.tick_myr, snap.swept_cells);
-        renderer.draw_text(&stats, Vec2::new(24.0, 58.0), 17.0, text);
-
-        let core_pct = s.core_mass_kg / s.planet_mass_kg.max(1.0) * 100.0;
-        let interior = format!(
-            "core {core_pct:.1}%  ·  differentiated {:.0}%  ·  mantle {:.0} K  ·  {} plates  ·  radiogenic {:.0} TW",
-            s.differentiation_frac * 100.0,
-            s.mean_mantle_temp_k,
-            snap.plate_count,
-            s.radiogenic_power_tw,
-        );
-        renderer.draw_text(&interior, Vec2::new(24.0, 84.0), 15.0, [0.72, 0.80, 0.92, 1.0]);
-
-        let (word, col) = if snap.playing {
-            ("PLAYING", green)
-        } else {
-            ("PAUSED", [0.92, 0.78, 0.42, 1.0])
-        };
-        renderer.draw_text(word, Vec2::new(24.0, 108.0), 14.0, col);
-        renderer.draw_text(
-            &format!(
-                "·  Space play/pause  ·  R reseed  ·  Down reset  ·  V mantle: {}  ·  drag · wheel · Esc menu",
-                self.mantle_view.label()
-            ),
-            Vec2::new(110.0, 108.0),
-            14.0,
-            dim,
-        );
-
-        let crust = format!(
-            "crust {:.3}%  ·  continental {:.0}%  ·  mean elevation {:.0} m",
-            s.crust_frac * 100.0,
-            s.continental_frac * 100.0,
-            s.mean_elevation_m,
-        );
-        renderer.draw_text(&crust, Vec2::new(24.0, 132.0), 15.0, [0.80, 0.86, 0.72, 1.0]);
-
         let Some(white) = self.white else {
             return;
         };
-
-        // ── Conservation ledger (top-right). ──
-        {
-            let present = s.core_mass_kg
-                + s.mantle_mass_kg
-                + s.crust_mass_kg
-                + s.atmosphere_mass_kg
-                + s.ocean_mass_kg
-                + s.escaped_mass_kg;
-            let expected = s.planet_mass_kg + s.delivered_mass_kg;
-            let balanced = (present - expected).abs() <= 1e-6 * expected.max(1.0);
-            let total = expected.max(1.0);
-            let pct = |m: f64| m / total * 100.0;
-
-            let rows: [(&str, f64); 6] = [
-                ("Mantle", s.mantle_mass_kg),
-                ("Core", s.core_mass_kg),
-                ("Crust", s.crust_mass_kg),
-                ("Atmosphere", s.atmosphere_mass_kg),
-                ("Ocean", s.ocean_mass_kg),
-                ("Escaped", s.escaped_mass_kg),
-            ];
-            let (pad, row_h, panel_w) = (12.0f32, 18.0f32, 260.0f32);
-            let panel_h = pad + 46.0 + rows.len() as f32 * row_h + pad;
-            let px = renderer.size().x - panel_w - 16.0;
-            let py = 20.0;
-            renderer.draw_sprite(white, Vec2::new(px, py), Vec2::new(panel_w, panel_h), [0.05, 0.06, 0.08, 0.9]);
-            renderer.draw_text("CONSERVATION LEDGER", Vec2::new(px + pad, py + pad), 14.0, gold);
-            let status = if balanced { ("balanced ✓", green) } else { ("BROKEN ✗", [0.95, 0.4, 0.4, 1.0]) };
-            renderer.draw_text(
-                &format!("Σ {}  ·  {}", fmt_mass(expected), status.0),
-                Vec2::new(px + pad, py + pad + 22.0),
-                13.0,
-                status.1,
-            );
-            let mut ry = py + pad + 46.0;
-            for (label, mass) in rows {
-                renderer.draw_text(&format!("{label:<11}{:>6.2}%", pct(mass)), Vec2::new(px + pad, ry), 13.0, text);
-                ry += row_h;
-            }
-        }
 
         // ── Bulk-seed element distribution (left). ──
         if !self.budget_dist.is_empty() {
@@ -536,5 +666,90 @@ fn fmt_event(e: &PlateEvent) -> (String, [f32; 4]) {
         PlateEvent::Split { from, into } => {
             (format!("split  P{from}→{}", into.len()), [0.95, 0.80, 0.40, 1.0])
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Load the real `hud_chemistry.lua` + the shared layout and walk a frame in
+    /// BOTH states: the vocabulary gate holds, the root declares the pause
+    /// intent, the loading banner shows only while `loading`, and the loaded
+    /// readout + ledger render their bound lines.
+    #[test]
+    fn hud_tree_is_well_formed_and_gates_its_states() {
+        use flicker::ui::run_ui;
+        use flicker_input_core::ActionSignal;
+
+        // The HUD's display copy is `$token`s now (S10 strings gate); load the
+        // shipped table so the walked commands carry the resolved en-us text.
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
+        let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+            .expect("hud_chemistry.lua loads");
+        load_ui_json(&script, HUD_UI_ELEMENTS);
+        let tree = script.ui_tree().expect("tree builds").expect("script exposes tree()");
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_chemistry.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_chemistry.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+        let intents = UiIntents::of(&tree);
+        assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+
+        let styles = load_styles(HUD_UI_ELEMENTS);
+        let snap = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let has = |cmds: &[HudCommand], s: &str| {
+            cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+        };
+
+        // Loading state: the banner shows, the readout does not.
+        let loading = ValueMap::new().with("loading", true);
+        let cmds = run_ui(&tree, &loading, &styles, &snap, &mut UiState::new()).commands;
+        assert!(has(&cmds, "GENERATING PLANET…"), "loading banner renders");
+        assert!(!has(&cmds, "FLICKER · CHEMISTRY SIM (M2 · LAYER STACK)"), "readout gated off");
+
+        // Loaded state: readout + ledger lines ride their binds.
+        let loaded = ValueMap::new()
+            .with("loaded", true)
+            .with("stats", "tick 42  ·  84 My  ·  92162 cells")
+            .with("interior", "core 31.0%  ·  differentiated 88%")
+            .with("play_state", "PLAYING")
+            .with("play_state_color", "chemistry.playing.color")
+            .with("hints", "·  Space play/pause")
+            .with("crust", "crust 1.2%")
+            .with("ledger_status", "Σ 5.972e24 kg  ·  balanced ✓")
+            .with("ledger_status_color", "chemistry.ok")
+            .with("ledger_1", "Mantle      68.00%")
+            .with("ledger_2", "Core        31.00%")
+            .with("ledger_3", "Crust        0.50%")
+            .with("ledger_4", "Atmosphere   0.30%")
+            .with("ledger_5", "Ocean        0.10%")
+            .with("ledger_6", "Escaped      0.10%");
+        let cmds = run_ui(&tree, &loaded, &styles, &snap, &mut UiState::new()).commands;
+        assert!(!has(&cmds, "GENERATING PLANET…"), "loading banner gated off");
+        assert!(has(&cmds, "FLICKER · CHEMISTRY SIM (M2 · LAYER STACK)"), "title renders");
+        assert!(has(&cmds, "PLAYING"), "state word rides its bind");
+        assert!(has(&cmds, "CONSERVATION LEDGER"), "ledger panel renders");
+        assert!(has(&cmds, "Mantle      68.00%"), "ledger rows ride their binds");
     }
 }

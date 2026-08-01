@@ -20,8 +20,8 @@ pub mod rig;
 pub mod scan;
 
 pub use bake::{
-    attach_world, bake_garment, bake_prop, bake_rig, fitting_base, garment_socket, write_garment,
-    write_prop, write_rig, write_rig_file, Fit,
+    attach_world, bake_garment, bake_prop, bake_rig, bake_skin, fitting_base, garment_socket,
+    write_garment, write_prop, write_rig, write_rig_file, Fit,
 };
 pub use pipeline::{import_folder, source_maps, ImportSummary, SourceMaps};
 pub use conform::{

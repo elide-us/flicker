@@ -23,20 +23,31 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use flicker::app::{AbstractControls, Action, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
     build_textured_verts, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, PbrMaps,
     QuadGrid, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
-use flicker::ui::{load_styles, load_ui_json, render_hud, run_ui, UiInput, UiState};
+use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::ui::{
+    load_styles, load_ui_json, render_hud, run_ui_with, Surface, Surfaces, UiInput, UiIntents,
+    UiState, WalkerHandler, UI_COMPONENT_MODULES,
+};
+// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` is test-only.
+#[cfg(test)]
+use flicker::ui::run_ui;
 use glam::Mat4;
 
+use flicker_input_core::{ActionSignal, Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_skeletal::state::{Inputs, StateMachine};
 use flicker_skeletal::{cloth, format, jiggle, pose, skin, state};
 use flicker_mechanics as mechanics;
+
+mod route;
+use route::{GameplayBase, RootHandler};
 
 /// The pendant hangs from the neck on a jiggle chain (secondary motion) instead of riding
 /// rigidly. Rig-local cm, z-up, forward = −Y (the toes point −Y). The drape leans forward +
@@ -785,8 +796,21 @@ struct Viewer {
     /// (step 4's lazy build-once — re-pulled only if the screen restructures, which
     /// paperdoll's static HUD never does). The walker runs this every frame.
     ui_tree: Option<UiNode>,
+    /// The screen's declarative signal bindings (S9), collected from the parsed
+    /// tree's ROOT `on_<signal>` props at the same load point (`on_menu =
+    /// "pause_open"`). The walker layer consumes a declared signal; `update`
+    /// maps the fired name onto its pause push.
+    ui_intents: UiIntents,
+    /// Intent names fired last frame — republished ONCE into the next HUD Model
+    /// as the transient `sig_<name>` mirror (S9), then dropped.
+    fired_sigs: Vec<String>,
     /// Retained walker interaction state (slider drag capture) across frames.
     ui_state: UiState,
+    /// The screen's declared surface set (S8): the fit gadget panel, derived from
+    /// the piece selection each frame and published under the tree's pre-existing
+    /// `fit_active` gate. (`animate` is NOT here — it is a two-way checkbox bind
+    /// that some rows also gate on, a control's value, not a managed surface.)
+    surfaces: Surfaces,
     /// The resolved `ui_elements.json` the walker resolves node `style` paths against.
     ui_styles: serde_json::Value,
     /// This frame's HUD draw commands — the walker builds them in `update`, `render`
@@ -795,9 +819,9 @@ struct Viewer {
     /// 1×1 white texture backing `render_hud`'s rect fills.
     hud_white: Option<TextureHandle>,
     // Edge-detection for one-shot INPUT (InputState exposes level state for keys). Only
-    // real input lives here now — playback, mode, and the gameplay drivers that feed the
-    // state machine. The display toggles moved to the Lua HUD.
-    prev_space: bool,
+    // real input lives here now — playback and mode keys. The display toggles moved to
+    // the Lua HUD, and the state machine's gameplay drivers read the BUS (S9b): jump is
+    // the resolver's Jump edge, so the old `prev_space` latch is gone.
     prev_up: bool,
     prev_down: bool,
     prev_left: bool,
@@ -817,10 +841,19 @@ struct Viewer {
     preview_clip: usize,
     preview_time: f32,
     prev_p: bool,
-    /// Shell pause plumbing: bindings (Menu = Esc), a press-edge latch, and the
-    /// gothic theme built once for the pause overlay we push.
-    bindings: InputMap,
-    menu_prev: bool,
+    /// Shell pause plumbing: the per-context action maps (World only — the viewer has no
+    /// in-world text entry) and the gothic theme built once for the pause overlay we push.
+    bindings: ContextualBindings,
+    /// Gamepad config for the resolver + `signal_held` polls (default; no per-scene tuning).
+    gamepad_config: GamepadConfig,
+    /// The input seam (spec §9): a stateful edge [`Resolver`] (replaces the raw `menu_prev`
+    /// latch), a REUSED `Fired` scratch buffer (no per-frame alloc — RT-7), the router's
+    /// request queue, and a monotonic frame `tick` that is the `Resolver`'s `TickTime`
+    /// (NOT wall-clock — spec §3.2a).
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
     ui_theme: Option<Theme>,
 }
 
@@ -935,11 +968,15 @@ impl Viewer {
             sheaths,
             script: None,
             ui_tree: None,
+            ui_intents: UiIntents::default(),
+            fired_sigs: Vec::new(),
             ui_state: UiState::new(),
+            // The Screen declaration (S8): one managed surface, publishing under
+            // the tree's `fit_active` gate.
+            surfaces: Surfaces::new(vec![Surface::new("fit_gadget").key("fit_active")]),
             ui_styles: serde_json::Value::Null,
             hud_commands: Vec::new(),
             hud_white: None,
-            prev_space: false,
             prev_up: false,
             prev_down: false,
             prev_left: false,
@@ -952,8 +989,12 @@ impl Viewer {
             preview_clip: 0,
             preview_time: 0.0,
             prev_p: false,
-            bindings: InputMap::wasd_and_mouse(),
-            menu_prev: false,
+            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
             ui_theme: None,
         }
     }
@@ -971,9 +1012,10 @@ impl Viewer {
             .with("show_collision", self.show_collision)
             .with("animate", self.animate)
             .with("blend", self.blend_enabled)
-            // Fit gadget: `fit_active` gates the whole panel, so with nothing selected the
-            // script draws no gadget at all rather than editing a phantom slot.
-            .with("fit_active", self.editing.is_some())
+            // Fit gadget: the `fit_gadget` surface (published from the Screen
+            // declaration at the end of this fn) gates the whole panel, so with
+            // nothing selected the script draws no gadget at all rather than
+            // editing a phantom slot.
             .with(
                 "fit_name",
                 self.editing
@@ -1052,6 +1094,13 @@ impl Viewer {
             // write-back, so `apply_hud`'s unconditional read has the value every frame.
             m.set(format!("slot_{}", s.def.key), s.on);
         }
+        // The declared surface's gate (`fit_active`) — published from the Screen
+        // declaration, synced from the selection in `update`.
+        self.surfaces.publish(&mut m);
+        // The transient `sig_<name>` mirror (S9): intent names fired last frame
+        // ride exactly this ONE publish for scripts to observe (`update` clears
+        // them right after the walk).
+        UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
     }
 
@@ -1666,13 +1715,19 @@ impl Scene for Viewer {
         // The Prism-token-resolved styles the component walker resolves node `style`
         // paths against (the same tree Lua reads via the `UI` global).
         self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        self.script = match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+        self.script = match ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES)
+        {
             Ok(s) => {
                 load_ui_json(&s, HUD_UI_ELEMENTS); // layout constants (`UI.paperdoll`)
                 // Build the component tree ONCE (step 4 lazy build-once): the walker
                 // redraws this cached tree every frame with fresh Model bindings.
                 match s.ui_tree() {
-                    Ok(Some(tree)) => self.ui_tree = Some(tree),
+                    Ok(Some(tree)) => {
+                        // The screen's declarative bindings (S9), read off the
+                        // root once — cached exactly like the tree.
+                        self.ui_intents = UiIntents::of(&tree);
+                        self.ui_tree = Some(tree);
+                    }
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
@@ -1695,29 +1750,17 @@ impl Scene for Viewer {
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
-        // Esc / Menu → push the shell pause overlay (edge-detected). The scene
-        // manager freezes us while it's up.
-        let menu_down = self.bindings.action_pressed(Action::Menu, input);
-        let menu_pressed = menu_down && !self.menu_prev;
-        self.menu_prev = menu_down;
-        if menu_pressed {
-            let theme = self.ui_theme.expect("theme built in enter");
-            return Transition::Push(Box::new(PauseScene::new(
-                theme,
-                &self.bindings,
-                &AbstractControls::default(),
-                &GamepadConfig::default(),
-            )));
-        }
-        // NOTE the orbit camera is deliberately NOT updated here — it runs AFTER the HUD
-        // block below, gated on `hud_hit`, so dragging a slider cannot also spin the view.
+        // NOTE Esc/Menu → pause is no longer edge-detected here: the resolver owns the
+        // press edge and the `RootHandler` consumes `Menu` in the dispatch below, turning
+        // it into `Transition::Push(PauseScene)`. The orbit camera is likewise NOT updated
+        // here — it runs AFTER the HUD + dispatch below, gated on `over_hud` (the walker's
+        // canonical pointer-consume), so dragging a slider cannot also spin the view.
 
         // ── Edge-detect the one-shot keys once; some are reinterpreted per mode
         // (Space = play/pause in Manual, jump in Graph; R = reset play-head vs. reset
         // the state machine). ──
-        let space = input.key_down(Key::Space);
-        let space_edge = space && !self.prev_space;
-        self.prev_space = space;
+        // NOTE Space is NOT edge-detected here any more (S9b): the resolver owns the
+        // Jump press edge, recorded by the gameplay base in the dispatch below.
         let up = input.key_down(Key::Up);
         let mut up_edge = up && !self.prev_up;
         self.prev_up = up;
@@ -1763,11 +1806,13 @@ impl Scene for Viewer {
         self.record_note_t = (self.record_note_t - dt.as_secs_f32()).max(0.0);
         self.frame_dt = dt.as_secs_f32(); // carried into render, where the necklace is stepped
         let screen = _renderer.size();
-        let mut hud_owns_mouse = false;
+        let mut over_hud = false;
         if self.ui_tree.is_some() {
             // The component walker owns layout + draw + hit-test. Build the model, walk
             // the cached tree → this frame's draw commands + interaction results. No
             // per-frame Lua: the tree is the one parsed at load.
+            // Surface state derived from scene state, synced before the Model is built.
+            self.surfaces.set("fit_gadget", self.editing.is_some());
             let model = self.hud_model();
             let snap = UiInput {
                 mouse: input.mouse_position,
@@ -1776,52 +1821,116 @@ impl Scene for Viewer {
                 screen,
                 typed: String::new(),
                 backspace: false,
+                wheel: input.mouse_wheel_delta,
             };
             let frame = {
-                // Disjoint field borrows: `ui_tree`/`ui_styles` read, `ui_state` mutated.
+                // Disjoint field borrows: `ui_tree`/`ui_styles`/`script` read, `ui_state` mutated.
                 let tree = self.ui_tree.as_ref().unwrap();
-                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
+                let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
+                run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
             };
             // `hud_hit` = cursor over any UI region, OR a slider drag in progress
             // (captures until release). That click must not ALSO pick the scene behind
             // it, nor orbit the camera (user, 2026-07-16: dragging a slider spun the view).
-            let over_hud = frame.results.is_on("hud_hit");
-            hud_owns_mouse = over_hud;
+            over_hud = frame.results.is_on("hud_hit");
             self.apply_hud(&frame.results);
             self.hud_commands = frame.commands;
-            if input.mouse_left_pressed && !over_hud && !self.last_globals.is_empty() {
-                let world = self.last_world;
-                let globals = std::mem::take(&mut self.last_globals);
-                if self.show_skeleton {
-                    // Rig view: a click selects a BONE (the joint editor, Slice 2). The interactive
-                    // perspective is grid view 0, so map the click into that cell — the grid owns
-                    // the layout, so the pick ray matches exactly what that panel displays.
-                    let cell = self.grid.as_ref().map(|g| (g.local_cursor(0, input.mouse_position, screen), g.cell(0, screen).size));
-                    if let Some((Some(local), viewport)) = cell {
-                        self.selected_bone = self.pick_bone(local, viewport, world, &globals);
-                        match self.selected_bone {
-                            Some(i) => tracing::info!(
-                                "selected bone '{}' (local {:?})",
-                                self.model.bones[i].name,
-                                self.model.bones[i].local.w_axis.truncate(),
-                            ),
-                            None => tracing::info!("bone selection cleared"),
-                        }
-                    }
-                } else {
-                    // Normal view: a click selects a WORN piece for fitting (existing behaviour).
-                    self.editing = self.pick_slot(input.mouse_position, screen, world, &globals);
-                    match self.editing.and_then(|i| self.slot_at(i)) {
-                        Some(s) => tracing::info!("selected '{}' for fitting", s.def.key),
-                        None => tracing::info!("selection cleared"),
-                    }
-                }
-                self.last_globals = globals;
-            }
         }
 
-        // The camera gets the mouse only if the HUD didn't claim it.
-        if !hud_owns_mouse {
+        // ── The input seam (spec §9): ONE resolve + ONE dispatch replaces the raw
+        // `menu_prev` edge and the `mouse_left_pressed && !over_hud` ray-pick gate.
+        //   [ROOT]  RootHandler   — consumes Menu (Esc) → the scene pushes Pause
+        //   [1]     WalkerHandler — consumes the pointer while `over_hud` (HUD-owned)
+        //   [2]     GameplayBase  — a click that bubbled past the HUD → the ray-pick
+        // `ev` is the REUSED `Fired` buffer; the `InputEvent` list is a short-lived local
+        // (it borrows this frame's snapshot, so it cannot be a field — RT-7 holds because
+        // steady-state frames resolve zero edges and allocate nothing).
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
+        let mut root = RootHandler;
+        let mut walker =
+            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        let mut gameplay = GameplayBase::default();
+        {
+            let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
+            Router::dispatch(&events, &mut chain, &mut self.route);
+        }
+        // Surface context wiring (S9): declared-surface flips become Push/Pop
+        // context requests (no paperdoll surface carries a context today — the
+        // seam is standard, the call a live no-op), then the standard reconcile:
+        // context requests into the bindings, the focus decision THROUGH the
+        // walker (one id for mouse + gamepad, spec §4.2a).
+        self.surfaces.apply_surface_contexts(&mut self.route);
+        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
+        walker.apply_focus(focus_change);
+        // The screen's fired intents (S9), drained once: acted on below and queued
+        // for the one-frame `sig_<name>` Model mirror.
+        self.fired_sigs = walker.take_fired();
+        self.route.requests.clear();
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
+        // consumed the Menu press and fired the name; the scene maps it onto the
+        // shell pause push — the root's hardcoded Menu arm is gone. The scene
+        // manager freezes us while the overlay is up.
+        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+            let theme = self.ui_theme.expect("theme built in enter");
+            return Transition::Push(Box::new(PauseScene::new(
+                theme,
+                self.bindings.active_map(),
+                &AbstractControls::default(),
+                &self.gamepad_config,
+            )));
+        }
+
+        // Gameplay base (Pass-only): a `PrimaryAction` press that bubbled past the HUD
+        // walker runs the ray-pick — a bone in the rig view, a worn piece otherwise (the
+        // typed form of the old `mouse_left_pressed && !over_hud` gate). It picks against
+        // LAST frame's posed geometry, since `update` runs before `render`.
+        if gameplay.pick && !self.last_globals.is_empty() {
+            let world = self.last_world;
+            let globals = std::mem::take(&mut self.last_globals);
+            if self.show_skeleton {
+                // Rig view: a click selects a BONE (the joint editor, Slice 2). The interactive
+                // perspective is grid view 0, so map the click into that cell — the grid owns
+                // the layout, so the pick ray matches exactly what that panel displays.
+                let cell = self.grid.as_ref().map(|g| (g.local_cursor(0, input.mouse_position, screen), g.cell(0, screen).size));
+                if let Some((Some(local), viewport)) = cell {
+                    self.selected_bone = self.pick_bone(local, viewport, world, &globals);
+                    match self.selected_bone {
+                        Some(i) => tracing::info!(
+                            "selected bone '{}' (local {:?})",
+                            self.model.bones[i].name,
+                            self.model.bones[i].local.w_axis.truncate(),
+                        ),
+                        None => tracing::info!("bone selection cleared"),
+                    }
+                }
+            } else {
+                // Normal view: a click selects a WORN piece for fitting (existing behaviour).
+                self.editing = self.pick_slot(input.mouse_position, screen, world, &globals);
+                match self.editing.and_then(|i| self.slot_at(i)) {
+                    Some(s) => tracing::info!("selected '{}' for fitting", s.def.key),
+                    None => tracing::info!("selection cleared"),
+                }
+            }
+            self.last_globals = globals;
+        }
+
+        // The camera gets the mouse only if the HUD didn't claim it. `over_hud` is the
+        // walker's canonical "pointer consumed" verdict (the router mechanism, spec §9),
+        // reused to gate the POLLED left-drag orbit: the pick above is gated structurally
+        // by the walker, but a polled drag needs this explicit check so a slider drag
+        // never also spins the model (user, 2026-07-16).
+        if !over_hud {
             self.cam.update(input);
         }
 
@@ -1912,17 +2021,35 @@ impl Scene for Viewer {
             if down_edge {
                 self.cycle_state(1);
             }
-            // Basic locomotion drives the state machine, mirroring packeditor's hookup:
-            // WASD move (with strafe/back states), Shift run, C crouch, Space jump. Attack
-            // comes from the HUD button (set in apply_hud). No hit/death — not exposed here.
-            let (w, a, s, d) = (
-                input.key_down(Key::W),
-                input.key_down(Key::A),
-                input.key_down(Key::S),
-                input.key_down(Key::D),
-            );
+            // Basic locomotion drives the state machine, mirroring packeditor's hookup —
+            // and the whole `Inputs` feed reads the BUS now (S9b), not raw keys:
+            //  * WASD/d-pad move via `signal_held(Move*)` (as before);
+            //  * run = `signal_held(Sprint)` — the default preset binds LShift AND
+            //    RShift additively, so both physical keys sprint exactly as the old
+            //    raw read did (Shift also still doubles as the fit-nudge "coarse"
+            //    modifier above, unchanged);
+            //  * crouch = `signal_held(Crouch)` — C as before (bound additively in
+            //    the preset), plus the preset's Ctrl;
+            //  * jump = the resolver's `Jump` press edge (Space), recorded by the
+            //    gameplay base in the dispatch above — the raw `space_edge` latch died;
+            //  * attack = the HUD's ATTACK button OR an `AttackLight` press off the
+            //    bus — the FIRST souls-intent consumer (a souls profile's LMB/RB
+            //    lands here; the HUD button keeps working).
+            // Same physical keys, same feel; only the read path changed.
+            let (w, a, s, d, run, crouch) = {
+                let cfg = &self.gamepad_config;
+                (
+                    self.bindings.signal_held(ActionSignal::MoveForward, input, cfg),
+                    self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg),
+                    self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg),
+                    self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg),
+                    self.bindings.signal_held(ActionSignal::Sprint, input, cfg),
+                    self.bindings.signal_held(ActionSignal::Crouch, input, cfg),
+                )
+            };
+            let attack = self.attack_pending || gameplay.attack;
             // Any gameplay input returns from the ↑/↓ clip-preview cycle to the state machine.
-            if w || a || s || d || space_edge || input.key_down(Key::C) || self.attack_pending {
+            if w || a || s || d || gameplay.jump || crouch || attack {
                 self.preview = false;
             }
             let inputs = Inputs {
@@ -1930,10 +2057,10 @@ impl Scene for Viewer {
                 left: a,
                 right: d,
                 back: s,
-                run: input.key_down(Key::LeftShift) || input.key_down(Key::RightShift),
-                crouch: input.key_down(Key::C),
-                jump: space_edge,
-                attack: self.attack_pending,
+                run,
+                crouch,
+                jump: gameplay.jump,
+                attack,
                 hit: false,
                 die: false,
             };
@@ -2855,6 +2982,19 @@ mod tests {
         h: f32,
     ) -> flicker::ui::UiFrame {
         let tree = host.ui_tree().expect("ui_tree parses").expect("hud.lua exposes tree()");
+        // Vocabulary gate: an unknown component kind draws nothing at all, so a name left
+        // behind by a rename would only show up by eye in the window.
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "hud_paperdoll.lua names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        // The strings gate (S10): every display literal is a `$token`.
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "hud_paperdoll.lua ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
         let styles = load_styles(HUD_UI_ELEMENTS);
         let snap = UiInput {
             mouse: input.mouse_position,
@@ -2863,6 +3003,7 @@ mod tests {
             screen: Vec2::new(w, h),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
         run_ui(&tree, model, &styles, &snap, &mut UiState::new())
     }
@@ -3281,7 +3422,7 @@ mod tests {
         let model = fit_model(true);
         let mut state = UiState::new();
         let mut captures = |mx: f32, my: f32, clicked: bool, down: bool| {
-            let snap = UiInput { mouse: Vec2::new(mx, my), clicked, down, screen: Vec2::new(w, hgt), typed: String::new(), backspace: false };
+            let snap = UiInput { mouse: Vec2::new(mx, my), clicked, down, screen: Vec2::new(w, hgt), typed: String::new(), backspace: false, wheel: 0.0 };
             run_ui(&tree, &model, &styles, &snap, &mut state).results.is_on("hud_hit")
         };
 

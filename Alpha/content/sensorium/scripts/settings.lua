@@ -26,10 +26,9 @@ local M = {}
 local function tag(kind)
   return function(t) t.component = kind; return t end
 end
-local Page    = tag("page")
-local Column  = tag("column")
+local Screen  = tag("screen")
+local Cell = tag("cell")
 local Row     = tag("row")
-local Panel   = tag("panel")
 local Stack   = tag("stack")
 local Text    = tag("text")
 local Button  = tag("button")
@@ -120,14 +119,14 @@ local function ctrl_row(r)
 
   local right = { Stack { grow = 1 } }
   if not wired then
-    right[#right + 1] = Badge { size = 72, tone = "bronze", label = "PREVIEW", style = "badge" }
+    right[#right + 1] = Badge { size = 72, tone = "bronze", label = "$set_preview", style = "badge" }
   end
   right[#right + 1] = control_node(r, wired)
 
   return Row {
     size = S.row.h,
     children = {
-      Column { grow = 1, gap = 2, children = left },
+      Cell { grow = 1, gap = 2, children = left },
       Row { size = CTRL_W + 88, gap = 8, children = right },
     },
   }
@@ -154,7 +153,7 @@ end
 local function video_section()
   local kids = {}
   add_groups(kids, UI.settings.video.groups)
-  return Column { visible_bind = "sec_video", gap = 0, children = kids }
+  return Cell { visible_bind = "sec_video", gap = 0, children = kids }
 end
 
 -- ── section: AUDIO (a "not yet implemented" notice, then the preview groups) ──
@@ -166,14 +165,14 @@ local function audio_section()
     Stack { size = 12 },
   }
   add_groups(kids, UI.settings.audio.groups)
-  return Column { visible_bind = "sec_audio", gap = 0, children = kids }
+  return Cell { visible_bind = "sec_audio", gap = 0, children = kids }
 end
 
 -- ── input · keyboard: a rebind banner (while capturing) + one keycap button per action ──
 local function keyboard_tab()
   local S = UI.settings
   local kids = {
-    line("Press any key to bind  ·  Esc to cancel  ·  Backspace to unbind",
+    line("$set_press_any_key_to_bind_esc_to_cancel_back",
       24, 14, "settings.rebind_banner.text_color", "body", "left"),
   }
   kids[1].visible_bind = "rebinding"
@@ -183,7 +182,7 @@ local function keyboard_tab()
       kids[#kids + 1] = Row {
         size = 42,
         children = {
-          Column { grow = 1, children = { Stack { grow = 1 }, line(a.label, 18, 16, "settings.row.name_color", "body", "left"), Stack { grow = 1 } } },
+          Cell { grow = 1, children = { Stack { grow = 1 }, line(a.label, 18, 16, "settings.row.name_color", "body", "left"), Stack { grow = 1 } } },
           -- keycap: shows the current binding (`bind_<id>`), fires `rebind_<id>`; the
           -- scene owns the capture. Styled as a stone button (the walker button reads
           -- fill_top/fill_bot, which settings.controls.keycap does not carry).
@@ -195,31 +194,47 @@ local function keyboard_tab()
     end
     kids[#kids + 1] = Stack { size = 10 }
   end
-  return Column { visible_bind = "sub_keyboard", gap = 0, children = kids }
+  return Cell { visible_bind = "sub_keyboard", gap = 0, children = kids }
 end
 
 -- ── input · mouse: the pointer + commander groups (m_look / m_invert wired) ──
 local function mouse_tab()
   local kids = {}
   add_groups(kids, UI.settings.input.mouse.groups)
-  return Column { visible_bind = "sub_mouse", gap = 0, children = kids }
+  return Cell { visible_bind = "sub_mouse", gap = 0, children = kids }
 end
 
--- ── input · controller: a PROFILE selector (one "Default" today) + the info notes ──
+-- Controller-profile selector options, DATA-driven from the `PROFILES` global (the named
+-- InputProfiles the shell publishes, spec §7.3). Falls back to a single "Default" when
+-- unpublished (e.g. the build-time tree smoke test builds with no PROFILES global).
+local function profile_opts()
+  local opts = {}
+  if PROFILES then
+    for _, p in ipairs(PROFILES) do
+      opts[#opts + 1] = Opt { value = p.value, label = p.label }
+    end
+  end
+  if #opts == 0 then
+    opts[1] = Opt { value = "default", label = "$set_default" }
+  end
+  return opts
+end
+
+-- ── input · controller: a PROFILE selector (the named InputProfiles) + the info notes ──
 local function controller_tab()
   local c = UI.settings.input.controller
-  return Column {
+  return Cell {
     visible_bind = "sub_controller", gap = 0,
     children = {
-      group_head("CONTROLLER PROFILE"),
+      group_head("$set_controller_profile"),
       Row {
         size = 50,
         children = {
-          Column { grow = 1, children = { Stack { size = 8 }, line("Active Profile", 20, 16, "settings.row.name_color", "body", "left") } },
+          Cell { grow = 1, children = { Stack { size = 8 }, line("$set_active_profile", 20, 16, "settings.row.name_color", "body", "left") } },
           Row { size = CTRL_W + 88, gap = 8, children = {
             Stack { grow = 1 },
             Select { id = "ctrl_profile", bind = "ctrl_profile", size = CTRL_W, style = "settings.controls",
-                     children = { Opt { value = "default", label = "Default" } } },
+                     children = profile_opts() },
           } },
         },
       },
@@ -239,13 +254,13 @@ local function nav_rail()
     return Button { id = "nav_" .. id, action = "go_" .. id, label = label, size = nav.row_h,
                     label_size = nav.label_size, style_bind = "nav_" .. id .. "_style" }
   end
-  return Column {
+  return Cell {
     size = nav.w, pad = nav.pad, gap = nav.gap,
     children = {
       line(nav.header, 22, nav.header_size, "settings.nav.header_color", "label", "left"),
-      btn("video", "VIDEO"),
-      btn("audio", "AUDIO"),
-      btn("input", "INPUT"),
+      btn("video", "$set_video"),
+      btn("audio", "$set_audio"),
+      btn("input", "$set_input"),
       Stack { grow = 1 },
       line(nav.footer_title, 16, nav.header_size, "settings.nav.footer_title_color", "label", "left"),
       line(nav.footer_sub, 16, 12, "settings.nav.footer_sub_color", "body", "left"),
@@ -260,7 +275,7 @@ local function content_header()
   return Row {
     size = 72,
     children = {
-      Column { grow = 1, gap = 4, children = {
+      Cell { grow = 1, gap = 4, children = {
         Stack { size = 6 },
         bound("kicker", 16, S.content.kicker_size, "settings.content.title_color", "label", "left"),
         bound("sec_title", 40, S.content.title_size, "settings.content.title_color", "display", "left"),
@@ -271,9 +286,9 @@ local function content_header()
         id = "input_subtab", bind = "input_subtab", visible_bind = "sec_input",
         size = 330, style = "settings.controls.pill",
         children = {
-          Opt { value = "keyboard", label = "KEYBOARD" },
-          Opt { value = "mouse", label = "MOUSE" },
-          Opt { value = "controller", label = "CONTROLLER" },
+          Opt { value = "keyboard", label = "$set_keyboard" },
+          Opt { value = "mouse", label = "$set_mouse" },
+          Opt { value = "controller", label = "$set_controller" },
         },
       },
     },
@@ -283,20 +298,20 @@ end
 -- ── the scrolling content well: the active section's rows, gated by visible_bind ──
 local function content_scroll()
   return {
-    component = "scroll",
-    id = "settings_scroll", bind = "scroll_off", wheel = "wheel", scroll_speed = 46,
+    component = "list",
+    id = "settings_scroll", bind = "scroll_off", scroll_speed = 46,
     grow = 1, pad = 6,
     children = {
       video_section(),
       audio_section(),
-      Column { visible_bind = "sec_input", gap = 0, children = { keyboard_tab(), mouse_tab(), controller_tab() } },
+      Cell { visible_bind = "sec_input", gap = 0, children = { keyboard_tab(), mouse_tab(), controller_tab() } },
     },
   }
 end
 
--- ── footer controls (spliced into the window template's footer slot) ──
+-- ── footer controls (spliced into the frame's `s` / footer region) ──
 -- APPLY saves without closing (flash); SAVE AND CLOSE (primary) saves and pops. The
--- window's × fires `settings_close`, which confirms first when there are unsaved edits.
+-- titlebar × fires `settings_close`, which confirms first when there are unsaved edits.
 local function footer_children()
   local F = UI.settings.footer
   return {
@@ -341,18 +356,23 @@ end
 
 function M.tree()
   if not UI or not UI.settings then
-    return Page { id = "settings" }
+    -- Even the degenerate no-UI root keeps its declared input binding (S9):
+    -- the screen IS the declaration, so Esc→close must not depend on layout.
+    return Screen { id = "settings", on_cancel = "settings_close" }
   end
   local S = UI.settings
   local footer = footer_children()
   footer[2].visible_bind = "applied" -- the "SETTINGS APPLIED" flash
 
-  -- The `window` TEMPLATE owns the frame: title bar + content well + rune corners +
-  -- footer bar. Its `content` slot is the rail | body layout; its `footer` slot is the
-  -- Restore / Apply / Save-and-Close row. The × fires `settings_close` (confirm-if-dirty).
+  -- The `window` TEMPLATE (a `frame` wrapping a HEADER · CONTENT · FOOTER section) owns the chrome:
+  -- the title sits in the HEADER cell, the `content` slot is the rail | body layout, and the `footer`
+  -- slot is the Restore / Apply / Save-and-Close row. `has_close` turns the frame's top-right corner
+  -- into an × (fires `settings_close`, confirm-if-dirty). `title_h` / `footer_h` size the header /
+  -- footer cells; `title_pad` / `footer_pad` / `footer_gap` are their padding. One skeleton, one
+  -- container — every modal renders through this.
   local children = {
     -- Dim scrim behind the modal (translucent; reuses the pause overlay token).
-    Panel { anchor = "top_left", width_frac = 1.0, height_frac = 1.0, style = "screens.pause" },
+    Cell { anchor = "top_left", width_frac = 1.0, height_frac = 1.0, style = "screens.pause" },
     {
       template = "window",
       title = S.titlebar.title, title_size = S.titlebar.title_size,
@@ -366,7 +386,7 @@ function M.tree()
             grow = 1,
             children = {
               nav_rail(),
-              Column { grow = 1, pad = 24, gap = 12, children = { content_header(), content_scroll() } },
+              Cell { grow = 1, pad = 24, gap = 12, children = { content_header(), content_scroll() } },
             },
           },
         },
@@ -376,7 +396,10 @@ function M.tree()
   }
   -- Modal dialogs sit last so they overlay the window when their gate is set.
   for _, d in ipairs(dialogs()) do children[#children + 1] = d end
-  return Page { id = "settings", children = children }
+  -- The screen's input DECLARATION (S9): Cancel (Esc / pad B through the shell's
+  -- Menu-context bus) fires `settings_close` — the SAME result name the × close
+  -- button emits, so the scene's confirm-if-dirty ladder handles both alike.
+  return Screen { id = "settings", on_cancel = "settings_close", children = children }
 end
 
 return M

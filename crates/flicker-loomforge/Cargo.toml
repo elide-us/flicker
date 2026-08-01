@@ -25,8 +25,14 @@ path = "src/lib.rs"
 [dependencies]
 # Umbrella: re-exports flicker-app (App/InputState/Key), flicker-render (Renderer +
 # glam math), flicker-scene (Scene/Transition), flicker-script (UiNode/HudCommand/
-# Value), and flicker-ui (the component walker: run_ui/UiState/UiInput/render_hud).
+# Value), and flicker-widgets (the component walker: run_ui/UiState/UiInput/render_hud +
+# WalkerHandler, the walker's bus adapter).
 flicker = { path = "../flicker" }
+# The new input model (Resolver/Fired/ActionSignal) + the event bus
+# (Router/InputHandler/RouteCtx) this scene routes Menu + the HUD pointer-consume
+# through (spec §9); the bespoke node/timeline canvas tools stay scene-owned.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 # The reusable front-end shell (splash/menu/settings/pause) this editor runs inside.
 flicker-shell.workspace = true
 # The GPU-free skeletal-animation runtime — the pack types this crate authors.

@@ -148,6 +148,68 @@ pub fn frame_axis_segments(world: Mat4, parents: &[i32], globals: &[Mat4]) -> Ve
     segs
 }
 
+/// Parent→child OCTAHEDRAL "bone" wireframe: a diamond from each non-root bone's parent joint (head)
+/// to its own joint (tail) — widest at a waist near the head, tapering to a point at the tail, the
+/// DCC skeleton look. Replaces the flat parent→child [`joint_segments`] line. `waist_frac` sets both
+/// where the waist square sits along the bone (from the head) and its half-size, both as a fraction
+/// of the bone length, so short bones stay slim. Twelve segments per bone; root bones are skipped.
+pub fn bone_diamonds(world: Mat4, parents: &[i32], globals: &[Mat4], waist_frac: f32) -> Vec<(Vec3, Vec3)> {
+    let mut segs = Vec::with_capacity(parents.len() * 12);
+    for (i, &parent) in parents.iter().enumerate() {
+        if parent < 0 {
+            continue;
+        }
+        let head = globals[parent as usize].w_axis.truncate();
+        let tail = globals[i].w_axis.truncate();
+        let axis = tail - head;
+        let len = axis.length();
+        if len <= 1e-6 {
+            continue;
+        }
+        let dir = axis / len;
+        let (u, v) = perp_basis(dir);
+        let w = waist_frac * len;
+        let waist = head + dir * (waist_frac * len);
+        let ring = [
+            world.transform_point3(waist + u * w),
+            world.transform_point3(waist + v * w),
+            world.transform_point3(waist - u * w),
+            world.transform_point3(waist - v * w),
+        ];
+        let h = world.transform_point3(head);
+        let t = world.transform_point3(tail);
+        for k in 0..4 {
+            segs.push((h, ring[k])); // head → waist vertex
+            segs.push((ring[k], t)); // waist vertex → tail (point)
+            segs.push((ring[k], ring[(k + 1) % 4])); // waist square edge
+        }
+    }
+    segs
+}
+
+/// Per-joint ball radius for the rig view, scaled to the joint's bone LENGTH (distance to its first
+/// child, or to its parent for a leaf) so extremity joints read smaller than the hips/spine, then
+/// clamped to `[min_r, max_r]`. Lengths are in the rig's own units (a translation/axis-swap `world`
+/// preserves them, so the caller can draw the balls under the same `world`).
+pub fn joint_ball_radii(parents: &[i32], globals: &[Mat4], frac: f32, min_r: f32, max_r: f32) -> Vec<f32> {
+    (0..parents.len())
+        .map(|i| {
+            let here = globals[i].w_axis.truncate();
+            let len = parents
+                .iter()
+                .position(|&p| p == i as i32)
+                .map(|c| (globals[c].w_axis.truncate() - here).length())
+                .or_else(|| {
+                    (parents[i] >= 0).then(|| {
+                        (globals[parents[i] as usize].w_axis.truncate() - here).length()
+                    })
+                })
+                .unwrap_or(0.0);
+            (len * frac).clamp(min_r, max_r)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +268,35 @@ mod tests {
         let off = [Mat4::IDENTITY, rot, Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))];
         let b = frame_axis_segments(Mat4::IDENTITY, &parents, &off);
         assert!(b[0].1.y.abs() > 1.0, "off-limb axis points along y, crossing the x limb: {:?}", b[0].1);
+    }
+
+    #[test]
+    fn bone_diamonds_make_twelve_edges_per_bone_and_skip_the_root() {
+        let parents = [-1i32, 0, 1];
+        let globals = [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            Mat4::from_translation(Vec3::new(15.0, 0.0, 0.0)),
+        ];
+        let d = bone_diamonds(Mat4::IDENTITY, &parents, &globals, 0.1);
+        assert_eq!(d.len(), 2 * 12, "two non-root bones, twelve edges each");
+    }
+
+    #[test]
+    fn joint_ball_radii_scale_with_bone_length_and_clamp() {
+        // bone 0→1 has length 10, 1→2 has length 2; a leaf falls back to its parent bone.
+        let parents = [-1i32, 0, 1];
+        let globals = [
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+            Mat4::from_translation(Vec3::new(12.0, 0.0, 0.0)),
+        ];
+        let r = joint_ball_radii(&parents, &globals, 0.2, 0.1, 100.0);
+        assert!(r[0] > r[1], "joint 0 heads a length-10 bone, joint 1 a length-2 bone");
+        assert!((r[1] - 0.4).abs() < 1e-4, "joint 1: 2 × 0.2");
+        assert!((r[2] - 0.4).abs() < 1e-4, "leaf joint 2 falls back to its parent bone (2 × 0.2)");
+        // The clamp holds: a huge frac is capped at max_r.
+        let capped = joint_ball_radii(&parents, &globals, 100.0, 0.1, 5.0);
+        assert!(capped.iter().all(|&x| x <= 5.0));
     }
 }

@@ -10,13 +10,15 @@
 
 use std::time::Duration;
 
-use flicker::app::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
+use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker_input_core::{ActionSignal, Fired, Resolver};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_materials::Tables;
 use flicker_shell::{PauseScene, Theme};
 
@@ -24,6 +26,7 @@ use crate::camera::OrbitCam;
 use crate::celestial::CelestialState;
 use crate::color::ViewMode;
 use crate::globe;
+use crate::route::{RootHandler, ROOT};
 use flicker_worldgen::{FieldSampler, HexState};
 
 use crate::world::{
@@ -129,9 +132,21 @@ pub struct World {
     script: Option<ScriptHost>,
     white: Option<TextureHandle>,
     ui_capture: bool,
-    esc_prev: bool,
     /// The shared Prism UI theme (baked once in `enter`), handed to each pushed pause overlay.
     theme: Option<Theme>,
+
+    /// The new-input-model per-frame seam (spec §5/§9): per-context action maps +
+    /// the active-context stack (`World` base only — the viewer has no text entry),
+    /// its gamepad config, a stateful edge [`Resolver`] (replaces the `esc_prev`
+    /// bool), a REUSED `Fired` scratch buffer (no per-frame alloc — RT-7), and a
+    /// monotonic frame `tick` that is the resolver's `TickTime` (NOT wall-clock —
+    /// spec §3.2a). The `route` queue carries the router's per-frame intents.
+    bindings: ContextualBindings,
+    gamepad_config: GamepadConfig,
+    resolver: Resolver,
+    ev: Vec<Fired>,
+    route: RouteCtx,
+    tick: u64,
 }
 
 impl World {
@@ -158,8 +173,16 @@ impl World {
             script: None,
             white: None,
             ui_capture: false,
-            esc_prev: false,
             theme: None,
+            // World base map only (default = wasd_and_mouse: Menu -> Esc, the orbit
+            // rotate's PrimaryAction -> left mouse). No TextEntry — the viewer has no
+            // in-world text field, so `active()` is always `World`.
+            bindings: ContextualBindings::new(InputMap::default()),
+            gamepad_config: GamepadConfig::default(),
+            resolver: Resolver::new(),
+            ev: Vec::new(),
+            route: RouteCtx::new(),
+            tick: 0,
         }
     }
 
@@ -457,17 +480,41 @@ impl Scene for World {
     }
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
-        // Esc opens the pause overlay (the world freezes beneath it).
-        let esc = input.key_down(Key::Escape);
-        let esc_edge = esc && !self.esc_prev;
-        self.esc_prev = esc;
-        if esc_edge {
+        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the raw
+        // `esc_prev` Menu edge. `ev` is the REUSED Fired buffer (no per-frame alloc —
+        // RT-7); the InputEvent list is a short-lived local because it borrows THIS
+        // frame's snapshot, so it cannot be a persistent field. The orbit camera
+        // (continuous) + the bespoke view/epoch/freq keys (unmapped) are handled off
+        // the bus, further below. ──
+        self.tick = self.tick.wrapping_add(1);
+        self.ev.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        let ctx = self.bindings.active();
+        let events: Vec<InputEvent> = self
+            .ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, input))
+            .collect();
+        let mut root = RootHandler;
+        let report = {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut root];
+            Router::dispatch(&events, &mut chain, &mut self.route)
+        };
+        // No handler pushes/pops a context here (no TextEntry), so this reconciles an
+        // empty queue — kept for the standard per-frame shape (spec §4.2a).
+        let _ = apply_context_requests(&mut self.bindings, &self.route.requests);
+        self.route.requests.clear();
+
+        // Scene-root consumed Menu (Esc) → open the pause overlay (the world freezes
+        // beneath it). Replaces the raw `esc_prev` edge; the resolver owns the press.
+        if report.consumed_by(ROOT, ActionSignal::Menu) {
             if let Some(theme) = self.theme {
                 return Transition::Push(Box::new(PauseScene::new(
                     theme,
-                    &InputMap::default(),
+                    self.bindings.active_map(),
                     &AbstractControls::default(),
-                    &GamepadConfig::default(),
+                    &self.gamepad_config,
                 )));
             }
         }
@@ -492,7 +539,14 @@ impl Scene for World {
             self.params_dirty = false;
         }
 
-        self.cam.update(input, !self.ui_capture);
+        // Orbit-drag rotate is the mapped PrimaryAction (left mouse) polled off the
+        // bus (spec §9); wheel-zoom stays raw (unmapped). Gated by the HUD's capture
+        // flag so a widget click doesn't also spin the planet.
+        let rotate = !self.ui_capture
+            && self
+                .bindings
+                .signal_held(ActionSignal::PrimaryAction, input, &self.gamepad_config);
+        self.cam.update(input, rotate);
         self.celestial.update(dt); // sweep the sun → the day/night terminator moves
 
         // Evolution playback: advance *through* the current phase, then roll into the

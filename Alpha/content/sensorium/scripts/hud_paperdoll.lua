@@ -8,7 +8,7 @@
 --
 -- The two-way contract is unchanged and lives in the node data:
 --   * `bind`          — a Model key read for the current value + written back on edit
---                       (checkbox `show_mesh`, slider `fit_u`, cell `slot_<key>`).
+--                       (checkbox `show_mesh`, slider `fit_u`, tile `slot_<key>`).
 --   * `action`        — an event name emitted on click (`attack`, `fit_record`).
 --   * `visible_bind`  — a Model key gating a subtree (`fit_active`, `animate`).
 --   * `enabled_bind`  — a Model key gating a control (a slot with no piece loaded).
@@ -21,7 +21,7 @@
 local M = {}
 
 -- Ergonomic constructors: each tags a node table with its component kind, so a
--- screen reads as composition — `Button{...}` placed inside `Column{ children }`.
+-- screen reads as composition — `Button{...}` placed inside `Cell { children }`.
 -- (These will graduate to a shared `ui` module once a second screen needs them.)
 local function tag(kind)
   return function(t)
@@ -29,15 +29,15 @@ local function tag(kind)
     return t
   end
 end
-local Page = tag("page")
-local Column = tag("column")
+local Screen = tag("screen")
+local Cell = tag("cell")
 local Row = tag("row")
 local Stack = tag("stack")
 local Text = tag("text")
 local Button = tag("button")
 local Checkbox = tag("checkbox")
 local Slider = tag("slider")
-local Cell = tag("cell")
+local Tile = tag("tile")
 
 -- Per-fit-group display formatting (mirrors the old `fit_rects` fmt choice): the
 -- rotation rows read out signed degrees, offsets signed cm, scales a bare factor.
@@ -79,7 +79,7 @@ local function view_cluster()
     visible_bind = "animate",
     style = "paperdoll.view.attack.style",
   }
-  return Column {
+  return Cell {
     anchor = "top_left",
     offset = { v.margin, v.top },
     width = v.attack.w,
@@ -96,7 +96,7 @@ local function fit_cluster()
   -- Header names the piece being fitted (bone read-out omitted in this first pass).
   kids[#kids + 1] = Text {
     text_bind = "fit_name",
-    prefix = f.header .. " \u{00B7} ",
+    prefix = f.header,
     size = f.header_size + 6,
     text_size = f.header_size,
     color = "paperdoll.fit.header_color",
@@ -141,7 +141,7 @@ local function fit_cluster()
     color = "paperdoll.fit.status.ok",
   }
 
-  return Column {
+  return Cell {
     id = "fit",
     anchor = "top_right",
     offset = { -f.margin, f.margin },
@@ -159,7 +159,7 @@ local function inventory_cluster()
   local inv = UI.paperdoll.inventory
   local cells = {}
   for _, slot in ipairs(inv.slots) do
-    cells[#cells + 1] = Cell {
+    cells[#cells + 1] = Tile {
       id = slot.key,
       bind = "slot_" .. slot.key,
       enabled_bind = "slot_" .. slot.key .. "_loaded",
@@ -176,7 +176,7 @@ local function inventory_cluster()
     gap = inv.gap,
     children = cells,
   }
-  return Column {
+  return Cell {
     anchor = "bottom",
     offset = { 0, -inv.margin_b },
     gap = 4,
@@ -195,11 +195,15 @@ end
 
 function M.tree()
   if not UI or not UI.paperdoll then
-    return Page { id = "paperdoll" }
+    -- The degenerate no-UI root keeps the declared binding (S9).
+    return Screen { id = "paperdoll", on_menu = "pause_open" }
   end
   local s = UI.paperdoll.stats
-  return Page {
+  return Screen {
     id = "paperdoll",
+    -- The screen's input DECLARATION (S9): Menu (Esc / pad Start) fires
+    -- `pause_open`; the scene maps the fired name onto its pause push.
+    on_menu = "pause_open",
     children = {
       view_cluster(),
       fit_cluster(),

@@ -124,18 +124,17 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     ];
 
     // ── body: scrolling log (grow) | roster rail (fixed) ──
-    let mut scroll = elem("scroll");
+    let mut scroll = elem("list");
     scroll.bind = Some("chat_scroll".to_string());
-    set_txt(&mut scroll, "wheel", "chat_wheel");
     scroll.grow = Some(1.0);
     scroll.gap = 2.0;
     scroll.children = view.lines.iter().map(|l| line_node(l, &sty(l.kind.style_leaf()))).collect();
-    let mut logwell = styled("panel", &sty("log"));
+    let mut logwell = styled("cell", &sty("log"));
     logwell.grow = Some(1.0);
     logwell.pad = 8.0;
     logwell.children = vec![scroll];
 
-    let mut roster = styled("column", &sty("roster"));
+    let mut roster = styled("cell", &sty("roster"));
     roster.size = Some(ROSTER_W); // fixed width as a child of the body row
     roster.pad = 8.0;
     roster.gap = 2.0;
@@ -170,7 +169,7 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     inputrow.children = vec![speaker, field, button(&sty("btn"), "chat_send", "Send", SEND_W)];
 
     // ── chrome column (fills the frame) ──
-    let mut col = elem("column");
+    let mut col = elem("cell");
     col.anchor = Some(UiAnchor::TopLeft);
     set_num(&mut col, "width_frac", 1.0);
     set_num(&mut col, "height_frac", 1.0);
@@ -340,7 +339,7 @@ mod tests {
         // frame overlays the chrome column + the corner handle.
         assert_eq!(frame.children.len(), 2);
         let col = &frame.children[0];
-        assert_eq!(col.component, "column");
+        assert_eq!(col.component, "cell");
         assert_eq!(col.children.len(), 4); // titlebar, tabrow, body, input
 
         // The text field is focusable by a stable id and two-way bound.
@@ -353,8 +352,8 @@ mod tests {
         assert_eq!(tabs.children.len(), channels.len());
         assert_eq!(tabs.bind.as_deref(), Some("chat_tab"));
 
-        // The scroll holds one line per view line, and follows `chat_scroll`.
-        let scroll = find(&root, |n| n.component == "scroll").expect("a scroll");
+        // The list holds one line per view line, and follows `chat_scroll`.
+        let scroll = find(&root, |n| n.component == "list").expect("a list");
         assert_eq!(scroll.children.len(), lines.len());
         assert_eq!(scroll.bind.as_deref(), Some("chat_scroll"));
         // The emote line renders italic.
@@ -409,6 +408,7 @@ mod tests {
             screen: Vec2::new(1280.0, 720.0),
             typed: String::new(),
             backspace: false,
+            wheel: 0.0,
         };
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &input, &mut state);

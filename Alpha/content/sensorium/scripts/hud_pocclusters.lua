@@ -25,18 +25,17 @@
 local M = {}
 
 -- Ergonomic constructors: each tags a node table with its component kind, so a screen
--- reads as composition — `Checkbox{...}` inside `Column{ children }`.
+-- reads as composition — `Checkbox{...}` inside `Cell { children }`.
 local function tag(kind)
   return function(t)
     t.component = kind
     return t
   end
 end
-local Page = tag("page")
+local Screen = tag("screen")
 local Stack = tag("stack")
-local Column = tag("column")
+local Cell = tag("cell")
 local Row = tag("row")
-local Panel = tag("panel")
 local Text = tag("text")
 local Checkbox = tag("checkbox")
 local Slider = tag("slider")
@@ -70,7 +69,7 @@ local function corner_runes(P, glyphs)
     local anchor, ox, oy = corners[k][1], corners[k][2], corners[k][3]
     local top = k <= 2
     if top then
-      out[#out + 1] = Panel {
+      out[#out + 1] = Cell {
         anchor = anchor,
         offset = { ox, oy },
         width = u.cell,
@@ -100,7 +99,7 @@ local function header(P)
     size = h.row_h,
     children = {
       -- Lead/trail spacers clear the top corner runes; a bronze ✦ marks the panel.
-      Panel { size = h.lead },
+      Cell { size = h.lead },
       Text { size = h.icon_w, height = h.row_h, text = h.icon, text_size = h.icon_size, font = "display", color = "pocclusters.col.bronze", align = "center" },
       Text {
         grow = 1,
@@ -126,7 +125,7 @@ local function header(P)
           },
         },
       },
-      Panel { size = h.trail },
+      Cell { size = h.trail },
     },
   }
 end
@@ -154,13 +153,13 @@ local function readout(P)
     }
   end
   -- Divider rule, then the pick row (blue value when a face is selected, dim "none" otherwise).
-  kids[#kids + 1] = Panel { size = 1, style = "pocclusters.divider" }
+  kids[#kids + 1] = Cell { size = 1, style = "pocclusters.divider" }
   kids[#kids + 1] = Row {
     size = r.row_h,
     children = {
-      Text { size = r.label_w, height = r.row_h, text = "Pick", text_size = r.label_size, font = "label", color = "pocclusters.col.label" },
+      Text { size = r.label_w, height = r.row_h, text = "$pc_pick", text_size = r.label_size, font = "label", color = "pocclusters.col.label" },
       Text { grow = 1, height = r.row_h, text_bind = "pick_val", visible_bind = "has_pick", text_size = r.value_size, font = "label", tracking = 0, color = "pocclusters.col.accent" },
-      Text { grow = 1, height = r.row_h, text = "none", visible_bind = "no_pick", text_size = r.value_size, font = "label", color = "pocclusters.col.dim" },
+      Text { grow = 1, height = r.row_h, text = "$pc_none", visible_bind = "no_pick", text_size = r.value_size, font = "label", color = "pocclusters.col.dim" },
     },
   }
   -- Walk readout — the whole row is hidden outside surface-walk mode.
@@ -168,15 +167,15 @@ local function readout(P)
     size = r.row_h,
     visible_bind = "walk",
     children = {
-      Text { size = r.label_w, height = r.row_h, text = "Walk", text_size = r.label_size, font = "label", color = "pocclusters.col.amber" },
+      Text { size = r.label_w, height = r.row_h, text = "$pc_walk", text_size = r.label_size, font = "label", color = "pocclusters.col.amber" },
       Text { grow = 1, height = r.row_h, text_bind = "walk_val", text_size = r.value_size, font = "label", tracking = 0, color = "pocclusters.col.amber" },
     },
   }
-  return Column {
+  return Cell {
     gap = 0,
     children = {
       section(P, r.section),
-      Column { style = "pocclusters.box", pad = r.pad, gap = r.gap, children = kids },
+      Cell { style = "pocclusters.box", pad = r.pad, gap = r.gap, children = kids },
       -- "Press [Esc] for the menu" — Esc in a bordered keycap (mock flourish).
       Row {
         size = r.esc_h,
@@ -213,7 +212,7 @@ local function toggles(P)
     local col = (i <= 3) and left or right
     col[#col + 1] = cb(item)
   end
-  return Column {
+  return Cell {
     gap = 0,
     children = {
       section(P, t.section),
@@ -221,8 +220,8 @@ local function toggles(P)
         size = t.row_h * 3 + t.gap * 2,
         gap = 18,
         children = {
-          Column { grow = 1, gap = t.gap, children = left },
-          Column { grow = 1, gap = t.gap, children = right },
+          Cell { grow = 1, gap = t.gap, children = left },
+          Cell { grow = 1, gap = t.gap, children = right },
         },
       },
     },
@@ -232,7 +231,7 @@ end
 -- ── Controls: Move speed slider with a value readout + a min·unit·max scale ──
 local function controls(P)
   local c = P.controls
-  return Column {
+  return Cell {
     gap = 0,
     children = {
       section(P, c.section),
@@ -266,7 +265,7 @@ end
 -- ── Main (left) panel — content column overlaid with corner runes in a Stack ──
 local function main_panel(P)
   local L = P.layout
-  local content = Column {
+  local content = Cell {
     width = L.panel_w,
     pad = L.pad,
     gap = L.gap,
@@ -322,22 +321,22 @@ local function inspector(P)
     end
     rows[#rows + 1] = Row { size = n.row_h, children = cells }
   end
-  local content = Column {
+  local content = Cell {
     width = n.panel_w,
     pad = n.pad,
     gap = n.gap,
     children = {
       Row { size = n.title_h, children = {
-        Panel { size = n.lead },
+        Cell { size = n.lead },
         Text { size = n.icon_w, height = n.title_h, text = n.icon, text_size = n.icon_size, font = "display", color = "pocclusters.col.bronze", align = "center" },
         Text { grow = 1, height = n.title_h, text_bind = "insp_title", text_size = n.title_size, font = "display", color = "pocclusters.col.title" },
       } },
       Text { size = n.sub_h, text_bind = "insp_sub", text_size = n.sub_size, font = "label", color = "pocclusters.col.accent" },
-      Column { style = "pocclusters.box", pad = n.pad_box, gap = 0, children = rows },
+      Cell { style = "pocclusters.box", pad = n.pad_box, gap = 0, children = rows },
       -- Legend: ◆ local corner  |  wX/Y/Z world space (colour-coded like the columns).
       Row { size = n.legend_h, children = {
-        Text { grow = 1, height = n.legend_h, text = n.legend_mark .. " " .. n.legend_local, text_size = n.legend_size, font = "label", color = "pocclusters.col.bronze", align = "right" },
-        Panel { size = n.legend_gap },
+        Text { grow = 1, height = n.legend_h, text = n.legend_local, text_size = n.legend_size, font = "label", color = "pocclusters.col.bronze", align = "right" },
+        Cell { size = n.legend_gap },
         Text { grow = 1, height = n.legend_h, text = n.legend_world, text_size = n.legend_size, font = "label", color = "pocclusters.col.bronze_deep", align = "left" },
       } },
     },
@@ -368,7 +367,7 @@ local function celestial_panel(P)
   local tg = P.toggles
   -- label + right-aligned value readout, then the track.
   local function cc_row(spec)
-    return Column {
+    return Cell {
       gap = c.ctrl_gap,
       children = {
         Row {
@@ -386,34 +385,34 @@ local function celestial_panel(P)
     return Checkbox { id = key, bind = key, label = label, size = tg.row_h, box = tg.box, label_x = tg.label_x, label_size = tg.label_size, style = "pocclusters.checkbox" }
   end
   -- Sky group — Sun + Moon paired inside a "box" well.
-  local sky = Column {
+  local sky = Cell {
     gap = 0,
     children = {
       section(P, c.sky_section),
-      Column { style = "pocclusters.box", pad = c.well_pad, gap = c.group_gap, children = { cc_row(c.sun), cc_row(c.moon) } },
+      Cell { style = "pocclusters.box", pad = c.well_pad, gap = c.group_gap, children = { cc_row(c.sun), cc_row(c.moon) } },
     },
   }
-  local world = Column {
+  local world = Cell {
     gap = c.group_gap,
     children = {
       section(P, c.world_section),
       cc_row(c.year), cc_row(c.speed), cc_row(c.fog), cc_row(c.latitude), cc_row(c.epoch),
     },
   }
-  local views = Column {
+  local views = Cell {
     gap = 0,
     children = {
       section(P, c.views_section),
-      Column { gap = tg.gap, children = { cc_view("constellations", c.view_constellations), cc_view("planets", c.view_planets), cc_view("celestial_paths", c.view_paths) } },
+      Cell { gap = tg.gap, children = { cc_view("constellations", c.view_constellations), cc_view("planets", c.view_planets), cc_view("celestial_paths", c.view_paths) } },
     },
   }
-  local content = Column {
+  local content = Cell {
     width = c.panel_w,
     pad = c.pad,
     gap = c.gap,
     children = {
       Row { size = c.title_h, children = {
-        Panel { size = c.lead },
+        Cell { size = c.lead },
         Text { size = c.icon_w, height = c.title_h, text = c.icon, text_size = c.icon_size, font = "display", color = "pocclusters.col.bronze", align = "center" },
         Text { grow = 1, height = c.title_h, text = c.title, text_size = c.title_size, font = "display", color = "pocclusters.col.title" },
       } },
@@ -437,7 +436,9 @@ end
 
 function M.tree()
   if not UI or not UI.pocclusters then
-    return Page { id = "pocclusters" }
+    -- The degenerate no-UI root keeps the declared binding (S9): Esc→pause
+    -- must not depend on the layout constants loading.
+    return Screen { id = "pocclusters", on_menu = "pause_open" }
   end
   local P = UI.pocclusters
   local children = { main_panel(P), inspector(P) }
@@ -445,7 +446,11 @@ function M.tree()
   if cc then
     children[#children + 1] = cc
   end
-  return Page { id = "pocclusters", children = children }
+  -- The screen's input DECLARATION (S9): the Menu signal (Esc / pad Start)
+  -- fires `pause_open`; the scene maps the fired name onto its pause push.
+  -- While chat owns the keyboard the TextEntry capture layer still starves
+  -- this structurally — the declaration changes WHO consumes Menu, not when.
+  return Screen { id = "pocclusters", on_menu = "pause_open", children = children }
 end
 
 return M
