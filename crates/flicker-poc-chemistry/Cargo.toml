@@ -23,7 +23,7 @@ serde_json = { workspace = true }
 thiserror.workspace = true
 
 # App shell (used by the binary target only).
-flicker = { path = "../flicker" }
+flicker = { path = "../../Alpha/crates/core/flicker" }
 flicker-shell.workspace = true
 # Input event bus (spec §4/§9): the shared resolve → route seam the scene ports onto.
 flicker-input-core.workspace = true

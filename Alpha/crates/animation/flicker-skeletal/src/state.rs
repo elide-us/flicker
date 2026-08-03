@@ -965,18 +965,25 @@ pub fn load_pack(path: &Path) -> Result<StateMachineDef> {
 /// state machine. The editor holds the full [`PackFile`] so a save round-trips the
 /// header (notably the hand-authored `_note`), which `load_pack` drops.
 pub fn read_pack(path: &Path) -> Result<PackFile> {
-    let text = std::fs::read_to_string(path)
+    // Gz-transparent read (flicker-core::compression) — package content is gz
+    // at rest; loose dev files read the same way.
+    let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading pack {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("parsing pack {}", path.display()))
 }
 
 /// Write a `flicker.pack` JSON (pretty-printed, trailing newline) — the inverse of
-/// [`read_pack`] and the editor's save path.
+/// [`read_pack`] and the editor's save path. Emits the gz-at-rest form via the
+/// shared seam: a logical `<name>.pack.json` path lands as `<name>.pack.json.gz`
+/// (package content at rest is always gz), and [`read_pack`] reads it back by
+/// the same logical path.
 pub fn write_pack(path: &Path, pack: &PackFile) -> Result<()> {
     let mut text = serde_json::to_string_pretty(pack)
         .with_context(|| format!("serializing pack {}", path.display()))?;
     text.push('\n');
-    std::fs::write(path, text).with_context(|| format!("writing pack {}", path.display()))
+    flicker_core::compression::write_text(path, &text)
+        .map(|_| ())
+        .with_context(|| format!("writing pack {}", path.display()))
 }
 
 #[cfg(test)]
@@ -986,7 +993,7 @@ mod tests {
     /// Every real pack in the content tree.
     fn real_packs() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../Alpha/content/characters");
+            .join("../../../../Alpha/content/package/characters");
         let mut out = Vec::new();
         let Ok(dirs) = std::fs::read_dir(&root) else {
             return out;
@@ -995,7 +1002,9 @@ mod tests {
             let Ok(files) = std::fs::read_dir(d.path()) else { continue };
             for f in files.flatten() {
                 let p = f.path();
-                if p.to_str().is_some_and(|s| s.ends_with(".pack.json")) {
+                if p.to_str()
+                    .is_some_and(|s| s.ends_with(".pack.json") || s.ends_with(".pack.json.gz"))
+                {
                     out.push(p);
                 }
             }

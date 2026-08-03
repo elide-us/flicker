@@ -37,7 +37,7 @@ pub enum FontRole {
 
 impl FontRole {
     /// The font-family name this role selects — the internal family name the
-    /// matching `Alpha/content/sensorium/fonts` face is registered under.
+    /// matching `Alpha/content/package/sensorium/fonts` face is registered under.
     fn family(self) -> &'static str {
         match self {
             FontRole::Display => "Prism Display",

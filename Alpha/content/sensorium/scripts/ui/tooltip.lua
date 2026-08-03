@@ -1,6 +1,6 @@
 -- ui.tooltip — a small info card: an optional styled backdrop, then an optional element
 -- rune badge (top-left, Rune face) and a name headline (Display) with a dim meta line
--- (Body) below it, in the text column right of the rune. The Lua twin of draw_tooltip.
+-- (Body) below it, in the text column right of the rune.
 --
 -- props (rune/name/meta resolved by the walker from `<field>_bind` or literal props;
 -- absent when empty): rune, name, meta, rune_color (resolved rgba), layer,
@@ -52,6 +52,9 @@ function tooltip.draw(cmds, r, props)
   end
 end
 
+-- Never dispatched — `hit_shape` above answers the hit in Rust. The body stays
+-- because the library registers a COMPONENT by its draw + hit pair (see
+-- flicker-script's `probe_component_kinds`).
 function tooltip.hit(mx, my, r)
   return core.point_in(mx, my, r)
 end

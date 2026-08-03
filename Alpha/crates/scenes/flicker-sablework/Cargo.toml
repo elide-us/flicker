@@ -1,0 +1,43 @@
+[package]
+name = "flicker-sablework"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# Sablework Bench — the texture SYNTHESIZER console. A face on
+# `flicker-texture`: the 6-voice channel rack, the tiled swatch preview, and the
+# output stage, with every control an ActionSignal so the whole instrument is
+# drivable from a pad. Bakes run on a WORKER (the 2K baseline is ~360 ms and even
+# the preview is ~10 ms — neither belongs on the frame thread), newest result
+# wins. Its output lands in `staging/` for the Content Manager to promote, like
+# every other pipeline bench.
+
+[lib]
+name = "flicker_sablework"
+path = "src/lib.rs"
+
+[dependencies]
+# Umbrella: flicker-app (InputState), flicker-render (Renderer/Vec2),
+# flicker-scene (Scene/Transition), flicker-script (UiNode/Value), and
+# flicker-widgets (the walker + WalkerHandler + the gates).
+flicker = { path = "../../core/flicker" }
+# The input model + event bus: this bench declares its intents on the screen
+# root and routes them through the router like every other screen.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+# The reusable front-end shell (pause overlay + theme).
+flicker-shell.workspace = true
+# THE INSTRUMENT — recipes, the rack, the baker, the resolution ladder.
+flicker-texture.workspace = true
+# The material vocabulary a recipe binds to.
+flicker-materials.workspace = true
+# The content ROOTS service (staging/ + data/) and the gz write seam. The bench
+# asks where content lives; it never spells out a path.
+flicker-content.workspace = true
+# PNG encoding for the committed maps. flicker-texture stays format-free and
+# hands back raw pixel buffers; turning those into a file is the bench's job.
+image.workspace = true
+# Off-main-thread bakes.
+flicker-worker.workspace = true
+tracing.workspace = true
+serde_json.workspace = true

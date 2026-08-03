@@ -60,7 +60,7 @@ name. Bottom-up:
 - `flicker-net` — client-side transport / state-sync / auth stubs (servers are separate repos).
 - `flicker-app` — winit event loop, frame orchestration, the `App` trait + `run()`.
 - `flicker-scene` — stack-based scene manager (replace/push/pop/quit, overlays).
-- `flicker-ui` — UI helpers over render + script.
+- `flicker-widgets` — UI toolkit over render + script: component walker, `ui/*.lua` library, templates.
 - `flicker` — umbrella re-export; the one name games depend on.
 
 ### World-generation stack

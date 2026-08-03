@@ -1,0 +1,25 @@
+[package]
+name = "flicker-pocepochs"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The forward-regenerative epoch simulation as a scene PACKAGE (library only): the
+# `WorldScene` drives a `flicker_worldengine` simulation — Epoch-1 seed + Epoch-2
+# molten convection, icosphere globe, walker HUD. No standalone binary — the app
+# MOVED into the unified `prism-alpha` launcher (a Developer-mode roster entry),
+# which builds the scene via `flicker_pocepochs::scene`. Replaced the old
+# single-hex retained layer-map POC (its water-cycle nucleus is re-homed in
+# flicker-worldgen::water).
+[lib]
+name = "flicker_pocepochs"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { path = "../../core/flicker" }
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+flicker-shell.workspace = true
+flicker-worldengine.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

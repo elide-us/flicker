@@ -1,9 +1,9 @@
-//! The **template tier** — the middle of `Scene → Template → Element`.
+//! The **template tier** — the middle of `Scene → Template → Component`.
 //!
-//! A *piece* is one leaf `component` the walker draws (`button`, `slider`, …). A
-//! *template* composes pieces into a reusable arrangement (a Workbench, a
+//! A *component* is one leaf node the walker draws (`button`, `slider`, …). A
+//! *template* composes components into a reusable arrangement (a Workbench, a
 //! PopupMenu, a ChoiceDialog). A *scene* declares a tree of placed nodes — some
-//! plain pieces, some `template` references with `slots` filled — as DATA;
+//! plain components, some `template` references with `slots` filled — as DATA;
 //! [`expand`] turns every `template` node into the subtree its definition
 //! produces, once, before the tree is cached and walked.
 //!
@@ -43,7 +43,7 @@ pub struct BuildCtx {
     pub id_prefix: String,
 }
 
-/// A template builder: compose pieces into ONE subtree, consuming named slots.
+/// A template builder: compose components into ONE subtree, consuming named slots.
 /// Kept a plain `fn` (no captured state, no lifetimes) so the registry is a flat
 /// function table and builders stay unit-testable in isolation.
 pub type TemplateFn = fn(&BuildCtx, &HashMap<String, Value>, &mut Slots) -> UiNode;
@@ -135,7 +135,7 @@ fn expand_depth(mut node: UiNode, reg: &TemplateRegistry, depth: usize) -> UiNod
     }
 
     let Some(name) = node.template.take() else {
-        // An ordinary piece/container — returned verbatim.
+        // An ordinary component/container — returned verbatim.
         node.slots = slots;
         return node;
     };
@@ -735,7 +735,7 @@ fn frame(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNo
 fn card(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNode {
     let disabled = p_bool(p, "disabled");
 
-    // One header line: a `text` piece whose `color`/`font` ride as props (a colour
+    // One header line: a `text` node whose `color`/`font` ride as props (a colour
     // is a dotted path the walker resolves at draw, never an rgba baked in here).
     // `size` sets BOTH the line's layout height and its font size — a single line
     // is its own height — matching the walker's text measure/draw fallbacks.
@@ -1104,6 +1104,255 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v))
             .collect();
         n
+    }
+
+    #[test]
+    fn unit_frame_expands_medallion_name_and_gauges() {
+        let reg = builtin_templates();
+        let mut inst = template_node("unit_frame", vec![("gauges", vec![leaf("resource_gauge")])]);
+        inst.props.insert("name".to_string(), Value::Text("Ilvenya".to_string()));
+        inst.props.insert("rune".to_string(), Value::Text("ᛞ".to_string()));
+        let out = expand(inst, &reg);
+        assert_eq!(out.component, "row");
+        assert_eq!(out.children[0].component, "medallion");
+        let col = &out.children[1];
+        assert_eq!(col.children[0].component, "text");
+        // The `when: @subtitle` gate dropped the subtitle line; the gauges slot spliced.
+        assert_eq!(col.children.iter().filter(|c| c.component == "text").count(), 1);
+        assert!(col.children.iter().any(|c| c.component == "resource_gauge"));
+        assert_eq!(
+            out.props.get("style"),
+            Some(&Value::Text("unit_frame.card".to_string())),
+            "the tone default interpolates into the style path"
+        );
+    }
+
+    #[test]
+    fn game_hud_expands_five_anchored_regions_with_typed_offsets() {
+        let reg = builtin_templates();
+        let inst = template_node("game_hud", vec![("bottom", vec![leaf("action_slot")])]);
+        let out = expand(inst, &reg);
+        assert_eq!(out.component, "screen");
+        assert_eq!(out.children.len(), 5, "top_left · top_right · bottom · bottom_left · center");
+        assert_eq!(
+            out.children[1].offset,
+            [-18.0, 18.0],
+            "a negative typed default lands as a number, not a string"
+        );
+        assert!(out.children[2].children.iter().any(|c| c.component == "action_slot"));
+        // Absent intent params vanish rather than surviving as "@on_menu" literals.
+        assert!(out.props.get("on_menu").is_none());
+    }
+
+    #[test]
+    fn tabbed_window_splices_tabs_and_content_through_the_window() {
+        let reg = builtin_templates();
+        let inst = template_node(
+            "tabbed_window",
+            vec![("tabs", vec![leaf("option")]), ("content", vec![leaf("list")])],
+        );
+        let out = expand(inst, &reg);
+        fn find<'a>(n: &'a UiNode, k: &str, hits: &mut Vec<&'a UiNode>) {
+            if n.component == k {
+                hits.push(n);
+            }
+            for c in &n.children {
+                find(c, k, hits);
+            }
+        }
+        let mut tabs = vec![];
+        find(&out, "tabs", &mut tabs);
+        assert_eq!(tabs.len(), 1, "one tabs strip");
+        assert_eq!(tabs[0].bind.as_deref(), Some("tab"), "tab bind default");
+        assert_eq!(tabs[0].children[0].component, "option", "tabs slot spliced");
+        let mut lists = vec![];
+        find(&out, "list", &mut lists);
+        assert_eq!(lists.len(), 1, "content slot spliced through the window body");
+    }
+
+    /// The `item_context_menu` proto's contract: rows are children-as-data whose
+    /// `action`s are the consuming bench's own verb names, and a row's
+    /// `disabled` is a TEMPLATE PARAM — data-children props are copied verbatim
+    /// without model resolution, so a bind there would be inert. The per-frame
+    /// re-expansion is what makes the param live.
+    #[test]
+    fn item_context_menu_rows_are_verbs_and_disabled_rides_a_param() {
+        let reg = builtin_templates();
+
+        // Absent param: substituted away, so nothing is disabled.
+        let free = expand(template_node("item_context_menu", vec![]), &reg);
+        assert!(crate::unknown_kinds(&free).is_empty(), "{:?}", crate::unknown_kinds(&free));
+        let rows = &free.children;
+        assert!(rows.len() >= 5, "menu rows present: {}", rows.len());
+        let actions: Vec<_> = rows.iter().filter_map(|r| r.action.as_deref()).collect();
+        for v in ["confirm", "rename", "cut", "paste", "create_folder"] {
+            assert!(actions.contains(&v), "row action {v} missing: {actions:?}");
+        }
+        assert!(
+            rows.iter().any(|r| matches!(r.props.get("divider"), Some(Value::Bool(true)))),
+            "the divider row survives"
+        );
+        let paste = rows.iter().find(|r| r.action.as_deref() == Some("paste")).unwrap();
+        assert!(!paste.props.contains_key("disabled"), "absent param leaves the row enabled");
+
+        // Supplied param: the row really goes disabled, as a typed bool.
+        let mut inst = template_node("item_context_menu", vec![]);
+        inst.props.insert("paste_disabled".into(), Value::Bool(true));
+        let gated = expand(inst, &reg);
+        let paste = gated.children.iter().find(|r| r.action.as_deref() == Some("paste")).unwrap();
+        assert_eq!(
+            paste.props.get("disabled"),
+            Some(&Value::Bool(true)),
+            "the param lands as a typed bool the component can read"
+        );
+        assert!(
+            crate::raw_display_literals(&gated).is_empty(),
+            "{:?}",
+            crate::raw_display_literals(&gated)
+        );
+    }
+
+    /// The `toast_stack` proto's contract: a FIXED bank of rows (the walker has
+    /// no repeater), each self-gating on its own `toast_<i>_on` bind, each with
+    /// an inline Undo firing the SAME `undo` result the chord does — and the
+    /// composed-copy guarantee: the action rides a bind that resolves to a
+    /// `$token`, the subject rides a separate bind, so no row ever formats a
+    /// sentence.
+    #[test]
+    fn toast_stack_banks_self_gating_rows_with_inline_undo() {
+        let reg = builtin_templates();
+        let out = expand(template_node("toast_stack", vec![]), &reg);
+        assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+
+        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
+            if pred(n) {
+                hits.push(n);
+            }
+            for c in &n.children {
+                find(c, pred, hits);
+            }
+        }
+        // One self-gated row per slot, each on its OWN bind.
+        let mut rows = vec![];
+        find(
+            &out,
+            &|n| n.visible_bind.as_deref().is_some_and(|b| b.starts_with("toast_")),
+            &mut rows,
+        );
+        let gates: Vec<_> = rows.iter().filter_map(|r| r.visible_bind.as_deref()).collect();
+        assert_eq!(gates, vec!["toast_0_on", "toast_1_on", "toast_2_on"], "{gates:?}");
+
+        // Every row carries an inline Undo on the shared result name.
+        let mut undos = vec![];
+        find(&out, &|n| n.action.as_deref() == Some("undo"), &mut undos);
+        assert_eq!(undos.len(), 3, "one inline Undo per slot");
+
+        // Action and subject are SEPARATE binds — the no-composed-copy contract.
+        for i in 0..3 {
+            for suffix in ["label", "name"] {
+                let key = format!("toast_{i}_{suffix}");
+                let mut hit = vec![];
+                find(&out, &|n| matches!(n.props.get("text_bind"), Some(Value::Text(t)) if *t == key), &mut hit);
+                assert_eq!(hit.len(), 1, "missing bind {key}");
+            }
+        }
+        assert!(
+            crate::raw_display_literals(&out).is_empty(),
+            "{:?}",
+            crate::raw_display_literals(&out)
+        );
+    }
+
+    /// The `conflict_dialog` proto's contract: the fixed `conflict_*` vocabulary
+    /// (three resolution actions, the apply-to-rest checkbox gated on
+    /// `conflict_multi`, the fact binds) — and, critically for a Rust bench
+    /// instancing it, the INSTANCE node's own `visible_bind` surviving onto the
+    /// expanded root. This is the sanctioned modal path for benches that build
+    /// their trees in Rust; the Quartermaster is its first runtime consumer.
+    #[test]
+    fn conflict_dialog_carries_the_conflict_vocabulary_and_keeps_its_gate() {
+        let reg = builtin_templates();
+        let mut inst = template_node("conflict_dialog", vec![]);
+        inst.visible_bind = Some("has_prompt".to_string());
+        let out = expand(inst, &reg);
+
+        assert_eq!(
+            out.visible_bind.as_deref(),
+            Some("has_prompt"),
+            "the instance's gate survives expansion — a Rust bench relies on this"
+        );
+        assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+
+        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
+            if pred(n) {
+                hits.push(n);
+            }
+            for c in &n.children {
+                find(c, pred, hits);
+            }
+        }
+        // The three resolutions, in the fixed action vocabulary.
+        let mut buttons = vec![];
+        find(&out, &|n| n.component == "button", &mut buttons);
+        let actions: Vec<_> = buttons.iter().filter_map(|b| b.action.as_deref()).collect();
+        for a in ["conflict_skip", "conflict_keep_both", "conflict_replace"] {
+            assert!(actions.contains(&a), "missing action {a}: {actions:?}");
+        }
+        // The apply-to-rest checkbox: bound, and only shown while more than one
+        // collision is outstanding.
+        let mut checks = vec![];
+        find(&out, &|n| n.component == "checkbox", &mut checks);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].bind.as_deref(), Some("conflict_apply_rest"));
+        assert_eq!(checks[0].visible_bind.as_deref(), Some("conflict_multi"));
+        // Both fact cards ride binds, not baked text.
+        let mut facts = vec![];
+        find(&out, &|n| {
+            matches!(
+                n.props.get("text_bind"),
+                Some(Value::Text(t)) if t == "conflict_existing" || t == "conflict_incoming"
+            )
+        }, &mut facts);
+        assert_eq!(facts.len(), 2, "existing + incoming fact binds");
+        // And every caption in the proto is a `$token`.
+        assert!(
+            crate::raw_display_literals(&out).is_empty(),
+            "{:?}",
+            crate::raw_display_literals(&out)
+        );
+    }
+
+    #[test]
+    fn workflow_proto_wires_footer_rail_and_discard_dialog() {
+        let reg = builtin_templates();
+        let inst = template_node(
+            "workflow",
+            vec![("steps", vec![leaf("resource_gauge")]), ("rail", vec![leaf("badge")])],
+        );
+        let out = expand(inst, &reg);
+        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
+            if pred(n) {
+                hits.push(n);
+            }
+            for c in &n.children {
+                find(c, pred, hits);
+            }
+        }
+        // The Back/Next footer pair, wired to the runtime's result vocabulary.
+        let mut buttons = vec![];
+        find(&out, &|n| n.component == "button", &mut buttons);
+        let actions: Vec<_> = buttons.iter().filter_map(|b| b.action.as_deref()).collect();
+        assert!(actions.contains(&"wf_back") && actions.contains(&"wf_next"), "{actions:?}");
+        let next = buttons.iter().find(|b| b.action.as_deref() == Some("wf_next")).unwrap();
+        assert_eq!(next.enabled_bind.as_deref(), Some("wf_can_next"), "Next rides the gate");
+        // The discard confirmation is a choice_dialog gated by the runtime's surface.
+        let mut gated = vec![];
+        find(&out, &|n| n.visible_bind.as_deref() == Some("wf_discard"), &mut gated);
+        assert_eq!(gated.len(), 1, "one discard dialog, surface-gated");
+        // The step + rail slots spliced into the bench.
+        let mut spliced = vec![];
+        find(&out, &|n| n.component == "resource_gauge" || n.component == "badge", &mut spliced);
+        assert_eq!(spliced.len(), 2, "steps + rail content spliced through the workbench");
     }
 
     #[test]
@@ -1598,7 +1847,7 @@ mod tests {
     fn popup_menu_centers_and_omits_optional_pieces() {
         let reg = builtin_templates();
         // A confirm-style popup: centred, no subtitle, no divider, no muse — just a title
-        // and one button. The optional pieces must be absent and the popup centred, and the
+        // and one button. The optional nodes must be absent and the popup centred, and the
         // scrim must fall back to the default overlay style.
         let mut node = template_node("popup_menu", vec![("items", vec![leaf("button")])]);
         node.props.insert("title".into(), Value::Text("Keep Display?".into()));
@@ -1753,8 +2002,8 @@ mod tests {
         assert_eq!(p_text(&left.props, "source"), Some("inplace"));
         assert_eq!(p_text(&right.props, "source"), Some("rootmotion"));
         // Default framed-holder style on both (no `style` prop supplied).
-        assert_eq!(p_text(&left.props, "style"), Some("assetpipeline.holder"));
-        assert_eq!(p_text(&right.props, "style"), Some("assetpipeline.holder"));
+        assert_eq!(p_text(&left.props, "style"), Some("rtt_holder"));
+        assert_eq!(p_text(&right.props, "style"), Some("rtt_holder"));
         // Optional per-side `live_bind`: present on the left, absent on the right.
         assert_eq!(p_text(&left.props, "live_bind"), Some("left_live"));
         assert!(!right.props.contains_key("live_bind"));
@@ -1769,8 +2018,8 @@ mod tests {
         }
     }
 
-    /// A `quad_rtt_view` with only a `source` expands to ONE styled `rtt` piece
-    /// that grows to fill its slot, defaults to the shared `assetpipeline.holder`
+    /// A `quad_rtt_view` with only a `source` expands to ONE styled `rtt` node
+    /// that grows to fill its slot, defaults to the shared `rtt_holder`
     /// frame, defaults its slot id to the node's own id, and forwards `source` +
     /// the `live_bind` / `tint` pass-throughs for the walker's stage pass.
     #[test]
@@ -1788,12 +2037,12 @@ mod tests {
         );
         let out = expand(node, &reg);
 
-        // One `rtt` piece — a thin holder, no children and no leftover slots.
+        // One `rtt` node — a thin holder, no children and no leftover slots.
         assert_eq!(out.component, "rtt");
         assert!(out.children.is_empty());
         assert!(out.slots.is_empty());
         // Default frame style + forwarded source / liveness / tint props.
-        assert_eq!(text_prop(&out, "style"), Some("assetpipeline.holder"));
+        assert_eq!(text_prop(&out, "style"), Some("rtt_holder"));
         assert_eq!(text_prop(&out, "source"), Some("turntable"));
         assert_eq!(text_prop(&out, "live_bind"), Some("quad_live"));
         assert_eq!(text_prop(&out, "tint"), Some("assetpipeline.holder.tint"));

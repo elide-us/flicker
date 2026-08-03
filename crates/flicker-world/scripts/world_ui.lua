@@ -1,8 +1,9 @@
 -- flicker-world HUD: planet stats, view/grid/epoch controls, and a per-epoch
 -- knob panel — driven by Lua + `ui_elements.json` (the `UI.world` section) and the
 -- engine `Model` (live values published each frame). Layout/colours/labels live
--- in the JSON; this script owns behaviour. The reusable `Widgets` toolkit
--- (stepper / button / dropdown / slider) is from flicker-ui; widget values live
+-- in the JSON; this script owns behaviour. The LEGACY `Widgets` toolkit
+-- (stepper / button / dropdown / slider) is from flicker-widgets (`WIDGETS_LUA`,
+-- S10 residue — this HUD is its last consumer); widget values live
 -- in the engine Model (two-way, keyed by param id), only transient open/drag
 -- state is kept here.
 

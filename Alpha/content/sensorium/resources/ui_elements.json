@@ -69,6 +69,11 @@
       "danger_hi": [0.784, 0.439, 0.478, 1.0],
       "danger_bg": [0.165, 0.078, 0.094, 1.0],
       "danger_bg_lo": [0.102, 0.055, 0.063, 1.0],
+      "danger_base": [0.659, 0.216, 0.255, 1.0],
+      "danger_base_lo": [0.439, 0.102, 0.133, 1.0],
+      "danger_hover": [0.776, 0.255, 0.302, 1.0],
+      "danger_hover_lo": [0.518, 0.122, 0.157, 1.0],
+      "danger_glow": [0.659, 0.216, 0.255, 0.40],
       "shadow": [0.0, 0.0, 0.0, 0.55],
       "sheen": [0.900, 0.940, 1.0, 0.16],
       "scrim": [0.031, 0.035, 0.047, 0.64],
@@ -80,7 +85,29 @@
       "cell_hot": [0.125, 0.165, 0.255, 1.0],
       "sapphire": [0.227, 0.388, 0.812, 1.0],
       "grid_line": [0.549, 0.627, 0.765, 0.07],
-      "stage_void": [0.0, 0.0, 0.0, 0.0]
+      "stage_void": [0.0, 0.0, 0.0, 0.0],
+      "well_top": [0.043, 0.051, 0.071, 1.0],
+      "well_bot": [0.055, 0.067, 0.086, 1.0],
+      "cast_hi": [0.906, 0.784, 0.467, 1.0],
+      "cast_lo": [0.627, 0.490, 0.173, 1.0],
+      "sig_white_glow": [0.914, 0.906, 0.871, 0.55],
+      "sig_yellow_glow": [0.878, 0.698, 0.227, 0.55],
+      "sig_red_glow": [0.753, 0.165, 0.220, 0.55],
+      "sig_orange_glow": [0.851, 0.478, 0.169, 0.55],
+      "sig_black_glow": [0.353, 0.353, 0.400, 0.55],
+      "sig_blue_glow": [0.176, 0.373, 0.690, 0.55],
+      "sig_green_glow": [0.184, 0.616, 0.357, 0.55],
+      "danger_press_lo": [0.290, 0.067, 0.086, 1.0],
+      "hostile_bg": [0.141, 0.082, 0.098, 1.0],
+      "hostile_bg_lo": [0.071, 0.043, 0.051, 1.0],
+      "ghost_ring": [0.282, 0.345, 0.494, 1.0],
+      "ghost_ring_lo": [0.137, 0.176, 0.267, 1.0],
+      "gold_ring": [0.851, 0.643, 0.255, 1.0],
+      "med_bg": [0.141, 0.075, 0.094, 1.0],
+      "med_bg_lo": [0.055, 0.024, 0.031, 1.0],
+      "med_rim": [0.063, 0.024, 0.031, 1.0],
+      "slot_rim": [0.722, 0.592, 0.353, 0.14],
+      "cd_veil": [0.024, 0.031, 0.047, 0.72]
     }
   },
 
@@ -123,7 +150,7 @@
       "pad_x": 38,
       "pad_top": 34,
       "pad_bottom": 30,
-      "radius": 5,
+      "radius": 4,
       "border_w": 1,
       "fill_top": "$stone3",
       "fill_bot": "$stone1",
@@ -153,15 +180,23 @@
         "primary": {
           "fill_top": "$sap_base", "fill_bot": "$sap_base_lo", "border": "$sap_border", "label": "$ink_sapphire",
           "glow": "$sap_glow",
+          "press_top": "$sap_press", "press_bot": "$sap_press_lo", "press_border": "$sap_press_border",
           "hover_top": "$sap_hover", "hover_bot": "$sap_hover_lo", "hover_border": "$sap_hover_border", "hover_label": "$ink_sapphire"
         },
         "secondary": {
           "fill_top": "$stone_btn", "fill_bot": "$stone2", "border": "$edge4", "label": "$ink_button",
+          "press_top": "$stone2", "press_bot": "$stone1", "press_border": "$edge2",
           "hover_top": "$stone_btn_hi", "hover_bot": "$surface_top", "hover_border": "$bronze_dim", "hover_label": "$ink_bright"
         },
         "danger": {
-          "fill_top": "$stone_btn", "fill_bot": "$stone2", "border": "$danger_border", "label": "$danger_text",
-          "hover_top": "$danger_bg", "hover_bot": "$danger_bg_lo", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi"
+          "fill_top": "$danger_base", "fill_bot": "$danger_base_lo", "border": "$danger_hi", "label": "$danger_text_hi",
+          "glow": "$danger_glow",
+          "press_top": "$danger_base_lo", "press_bot": "$danger_press_lo", "press_border": "$danger_border",
+          "hover_top": "$danger_hover", "hover_bot": "$danger_hover_lo", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi"
+        },
+        "ghost": {
+          "fill_top": "$stage_void", "fill_bot": "$stage_void", "label": "$dim",
+          "hover_top": "$stage_void", "hover_bot": "$stage_void", "hover_border": "$edge2", "hover_label": "$ink"
         }
       }
     }
@@ -203,7 +238,7 @@
     "scrim_r": { "fill_top": [0.031,0.035,0.047,0.0], "fill_bot": [0.031,0.035,0.047,0.66], "grad": 2 },
     "thread": { "fill_top": "$sig_red", "fill_bot": "$sig_blue", "grad": 1 },
     "muse_alpha": 0.34,
-    "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "radius": 5 },
+    "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "radius": 4 },
     "caption": "$bronze_dim",
     "title": "$ink_bright",
     "note": "$bronze",
@@ -231,7 +266,7 @@
       "h": 52, "pad_x": 30, "wash": "$accent_wash", "seam": "$seam",
       "_fill_note": "fill_top/fill_bot = the declared `wash` so draw_panel_bg actually tints the bar (was falling back to the dark PANEL constant); `color` = `title_color` so the title text picks it up (draw_text reads `color`/`label_color`, not `title_color`).",
       "fill_top": "$accent_wash", "fill_bot": "$accent_wash", "color": "$ink_bright",
-      "mark": "$bronze", "title": "$set_settings", "title_size": 24, "title_color": "$ink_bright",
+      "mark": "$bronze", "title": "$set_settings", "title_size": 21, "title_color": "$ink_bright",
       "hint": "ESC TO CLOSE", "hint_size": 9, "hint_color": "$faint",
       "close": { "size": 26, "radius": 3, "bg": "$danger_bg", "border": "$danger_border", "label": "$danger_text", "hover_border": "$danger_hi", "hover_label": "$danger_text_hi" }
     },
@@ -360,7 +395,7 @@
       },
       "controller": {
         "ring": "$edge4", "ring_bg": "$stone0",
-        "title": "$set_choose_a_control_profile", "title_size": 24, "title_color": "$ink_label",
+        "title": "$set_choose_a_control_profile", "title_size": 21, "title_color": "$ink_label",
         "body": "$set_pick_a_starting_layout_above_rebind_indi", "body_color": "$dim_soft",
         "detect": "DETECT CONTROLLER", "enable": "Enable support"
       }
@@ -399,12 +434,70 @@
   "tooltip": {
     "bg": "$panel_bg",
     "border": "$edge2",
-    "radius": 5,
+    "radius": 4,
     "pad": 12,
     "name_color": "$ink_bright",
     "name_size": 16,
     "meta_color": "$dim",
     "meta_size": 12
+  },
+
+  "_hud_tier_comment": "GAME-HUD TIER (DS components/game realized as walker kinds). resource_gauge: one block, per-tone fill keys picked by the node's `tone` prop (badge precedent); track/border shared; `low` state swaps border + label. action_slot: 58px hotbar recess (DS --slot-size), rune glyph + keybind + charges + cooldown veil, `active` lights the sapphire ring. medallion: SDF-circle ring portrait — ring variants nested under `rings` (metal gradient pairs); rune fallback glyph over the dark gem well. stat_dot: septisigil gem-dot, hues nested under `hues` (fill + glow pairs from the sig_* ramp).",
+  "resource_gauge": {
+    "track": "$well", "border": "$edge2", "low_border": "$danger_border", "radius": 10, "pad": 2, "sheen": "$sheen",
+    "label_size": 10, "readout_size": 12, "readout_color": "$ink", "low_label": "$danger_hi",
+    "health_top": "$hp_hi", "health_bot": "$hp_lo", "health_label": "$hp_hi",
+    "mana_top": "$mana_hi", "mana_bot": "$mana_lo", "mana_label": "$mana_hi",
+    "stamina_top": "$stam_hi", "stamina_bot": "$stam_lo", "stamina_label": "$stam_hi",
+    "cast_top": "$cast_hi", "cast_bot": "$cast_lo", "cast_label": "$bronze", "cast_border": "$bronze_dim"
+  },
+  "action_slot": {
+    "bg_top": "$stone_btn", "bg_bot": "$well", "border": "$edge4", "rim": "$slot_rim", "radius": 4,
+    "active_border": "$sap_border", "active_glow": "$sap_glow",
+    "rune_color": "$bronze", "rune_halo": "$rune_halo",
+    "key_color": "$bronze", "key_size": 10,
+    "charge_color": "$rune_glow_hi", "charge_size": 11,
+    "cd_veil": "$cd_veil", "cd_color": "$ink_bright", "cd_size": 15
+  },
+  "medallion": {
+    "rim": "$med_rim", "bg_top": "$med_bg", "bg_bot": "$med_bg_lo",
+    "rune_color": "$rune_glow", "ring_w": 3,
+    "rings": {
+      "bronze": { "top": "$bronze", "bot": "$bronze_dim" },
+      "sapphire": { "top": "$sap_border", "bot": "$sap_hover_lo", "glow": "$sap_glow", "halo": "$rune_halo" },
+      "danger": { "top": "$danger_base", "bot": "$danger_border" },
+      "ghost": { "top": "$ghost_ring", "bot": "$ghost_ring_lo" },
+      "gold": { "top": "$gold_ring", "bot": "$bronze_deep" }
+    }
+  },
+  "unit_frame": {
+    "_comment": "The unit_frame TEMPLATE's chrome (ui_templates.json): `card` for friendly/self, `hostile` tints the slab blood. name_color/subtitle_color are text colour leaves; the block itself styles the row cell.",
+    "card": { "fill_top": "$surface_top", "fill_bot": "$surface_bot", "border": "$edge2", "radius": 6, "name_color": "$ink_bright", "subtitle_color": "$rune_glow_hi" },
+    "hostile": { "fill_top": "$hostile_bg", "fill_bot": "$hostile_bg_lo", "border": "$danger_border", "radius": 6, "name_color": "$danger_text", "subtitle_color": "$danger_hi" }
+  },
+  "workflow": {
+    "_comment": "The workflow proto's shared chrome (ui_templates.json `workflow` + the flicker-widgets runtime). `chip` styles are the rail states the runtime publishes as style_bind paths (workflow.chip.active/visited/todo) — one palette, every bench.",
+    "chip": {
+      "active": { "fill_top": "$sap_base", "fill_bot": "$sap_base_lo", "border": "$sap_border", "label": "$ink_sapphire", "radius": 3, "label_size": 12 },
+      "visited": { "fill_top": "$stone_btn", "fill_bot": "$stone2", "border": "$bronze_dim", "label": "$ink_button", "radius": 3, "label_size": 12 },
+      "todo": { "fill_top": "$stone2", "fill_bot": "$stone1", "border": "$edge2", "label": "$dim", "radius": 3, "label_size": 12 }
+    }
+  },
+  "rtt_holder": {
+    "_comment": "The framed RTT HOLDER the ui_templates.json rtt protos (quad_rtt_view / side_by_side_rtt) default to, and every bench's RTT slot styles against — the template-tier namespace for an offscreen-view slot's chrome (replaced the per-scene assetpipeline holder block, same values).",
+    "fill_top": "$well_top", "fill_bot": "$well_bot", "border": "$edge2", "border_w": 1, "radius": 4, "inset": 6
+  },
+  "stat_dot": {
+    "border": "$shadow",
+    "hues": {
+      "white": { "fill": "$sig_white", "glow": "$sig_white_glow" },
+      "yellow": { "fill": "$sig_yellow", "glow": "$sig_yellow_glow" },
+      "red": { "fill": "$sig_red", "glow": "$sig_red_glow" },
+      "orange": { "fill": "$sig_orange", "glow": "$sig_orange_glow" },
+      "black": { "fill": "$sig_black", "glow": "$sig_black_glow" },
+      "blue": { "fill": "$sig_blue", "glow": "$sig_blue_glow" },
+      "green": { "fill": "$sig_green", "glow": "$sig_green_glow" }
+    }
   },
 
   "_bucket_scenes": "══ SCENE HUDS ══  One namespaced section per live scene, read by that scene's crate plus Alpha/content/scripts/hud_<scene>.lua. Kept alphabetical: ADD A NEW SCENE AS A NEW KEY HERE — never a second file, which would fork the palette.",
@@ -423,7 +516,7 @@
     "_map_comment": "BONE-MAP / REQUIREMENT COLOUR KEY — the one place the conform provenance states get their colour. ok = a source bone renamed to canonical; review = placed by a derive pass (hip/shoulder/ankle) and worth a human's eye; auto = inferred from the reference rig; fail = a Review requirement that is not met. Bound per-row as a dotted path via `<row>_color`, so the key cannot drift between the list and the summary.",
     "map": { "ok": "$sig_green", "review": "$sig_yellow", "auto": "$sig_blue", "fail": "$hp_hi" },
     "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "border_w": 1, "radius": 4 },
-    "well": { "fill_top": "$well", "fill_bot": "$well", "border": "$edge1", "border_w": 1, "radius": 3 },
+    "well": { "fill_top": "$well_top", "fill_bot": "$well_bot", "border": "$edge1", "border_w": 1, "radius": 3 },
     "seam": { "fill_top": "$seam", "fill_bot": "$seam" },
     "checkbox": { "box": "$stone2", "check": "$sig_green", "border": "$edge4", "pad": 3 },
     "slider": { "track": "$stone1", "fill": "$sap_base", "knob": "$sap_border", "label": "$dim_soft", "value": "$ink", "track_h": 6, "knob_w": 9, "label_size": 11 },
@@ -431,7 +524,7 @@
     "choice": { "fill_top": "$stone2", "fill_bot": "$stone1", "hover_top": "$stone3", "hover_bot": "$stone2", "border": "$edge2", "border_w": 1, "radius": 2, "label": "$ink", "hover_label": "$ink_bright" },
     "rowsel": { "fill_top": "$accent_wash_2", "fill_bot": "$accent_wash", "hover_top": "$accent_wash_2", "hover_bot": "$accent_wash_2", "border": "$sapphire", "border_w": 1, "radius": 2, "label": "$ink" },
     "rowsel_off": { "fill_top": "$stage_void", "fill_bot": "$stage_void", "hover_top": "$accent_wash", "hover_bot": "$accent_wash", "radius": 2, "label": "$ink" },
-    "_import_comment": "IMPORT WORKFLOW SELECTOR (Step::Task) — the standard Prism `window` template (a PRESET over `frame`: chiseled `settings.window` border + automatic glowing CORNER RUNES + an 'Import' title bar), sized RESPONSIVELY at `win_frac` of the screen, its `content` slot holding the reusable `option_grid` selector field (heading · sunk well of a flowing card grid · hint), `cols`-per-row for an ARBITRARY workflow count. `card` is the transparent CLICK+HOVER overlay over each tile: idle shows the $edge3 resting edge; hover lights the Prism-DS 'selected ring' ($sapphire border + $sap_glow halo) plus a faint $accent_wash. `import.*` sizes: `win_frac` the window size, `head_size` the title glyph; `sec_/subtitle_/hint_size` the field's heading/subtitle/hint; `grid_*` the grid + well; `card_size`/`pad`/`gap`/`slot_h`/`rune_size`/`title_*`/`desc_*`/`tag_*` each square tile (the italic flavour WRAPS to the card width over its `desc_h`). Tiles carry NO Model label — copy/runes are static in hud_assetpipeline.lua.",
+    "_import_comment": "IMPORT WORKFLOW SELECTOR (Step::Task) — the standard Prism `window` template (a PRESET over `frame`: chiseled `settings.window` border + automatic glowing CORNER RUNES + an 'Import' title bar), sized RESPONSIVELY at `win_frac` of the screen, its `content` slot holding the reusable `option_grid` selector field (heading · sunk well of a flowing card grid · hint), `cols`-per-row for an ARBITRARY workflow count. `card` is the transparent CLICK+HOVER overlay over each tile: idle shows the $edge3 resting edge; hover lights the Prism-DS 'selected ring' ($sapphire border + $sap_glow halo) plus a faint $accent_wash. `import.*` sizes: `win_frac` the window size, `head_size` the title glyph; `sec_/subtitle_/hint_size` the field's heading/subtitle/hint; `grid_*` the grid + well; `card_size`/`pad`/`gap`/`slot_h`/`rune_size`/`title_*`/`desc_*`/`tag_*` each square tile (the italic flavour WRAPS to the card width over its `desc_h`). Tiles carry NO Model label \u2014 copy/runes are static instance params on the `clayworks_import_card` proto.",
     "card": { "fill_top": "$stage_void", "fill_bot": "$stage_void", "hover_top": "$accent_wash", "hover_bot": "$accent_wash", "border": "$edge3", "hover_border": "$sapphire", "border_w": 1, "radius": 3, "glow": "$sap_glow", "label": "$stage_void" },
     "import": { "cols": 4, "win_frac": 0.82, "head_size": 22, "win_gap": 14, "sec_size": 12, "subtitle_size": 13, "hint_size": 11, "grid_gap": 20, "grid_pad": 24, "card_size": 210, "pad": 16, "gap": 6, "slot_h": 60, "rune_size": 32, "title_size": 16, "title_h": 22, "desc_size": 12, "desc_h": 52, "tag_size": 10, "tag_h": 16 },
     "import_scrim": { "fill_top": "$scrim", "fill_bot": "$scrim" },
@@ -445,7 +538,6 @@
     "tab_bar": { "fill_top": "$stone1", "fill_bot": "$stone0", "border": "$edge1", "border_w": 1, "radius": 0, "h": 34, "pad": 6, "gap": 4, "tab_size": 13 },
     "tab_active": { "fill_top": "$sap_base", "fill_bot": "$sap_base_lo", "border": "$sap_border", "border_w": 1, "label": "$ink_bright", "radius": 3 },
     "tab_idle": { "fill_top": "$stone3", "fill_bot": "$stone2", "border": "$edge2", "border_w": 1, "label": "$dim", "radius": 3 },
-    "holder": { "fill_top": "$well", "fill_bot": "$well", "border": "$edge2", "border_w": 1, "radius": 4, "inset": 6 },
     "body": { "margin": 10, "gap": 10 },
     "inspector": { "top": 110, "width": 384, "pad": 18, "gap": 8, "title_size": 20, "title_w": 200, "line_h": 22, "line_size": 13, "badge_size": 10, "badge_w": 120, "head_size": 12, "sub_gap": 4 },
     "_stage_comment": "PER-STAGE INSPECTOR CONTROLS — one block per wizard step, each shown only while its `on_<step>` flag is set. `rig` = the inline piece picker (multi-mesh folders) + the paged bone map (`rows` must equal the crate's BONE_ROWS) + the four offset sliders, whose ±range lives HERE so Rust and Lua cannot disagree about it; `attach` = the six socket rows + three offset sliders; `review` = the requirement rows (`rows` must equal REQUIREMENT_ROWS) + the commit button.",
@@ -469,7 +561,7 @@
   "clicktrainer": {
     "_comment": "flicker-clicktrainer in-game HUD (hud_clicktrainer.lua): a DECLARATIVE walker tree — a vector stats panel over the 2D sprite target, the reference blend of VECTOR UI + a 2D SPRITE GAME + CLICK ROUTING. The walker reports `hud_hit` so a click on the panel is a UI click (RESET), never scored as a game miss. Stat values flow from the scene via Model as pre-formatted text.",
     "margin": 16,
-    "panel": { "w": 288, "pad": 16, "radius": 5, "border_w": 1, "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2" },
+    "panel": { "w": 288, "pad": 16, "radius": 4, "border_w": 1, "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2" },
     "title": { "text": "$ct_click_trainer", "size": 22, "color": "$ink_bright" },
     "subtitle": { "text": "$ct_click_the_targets", "size": 13, "color": "$dim_soft" },
     "divider": { "color": "$bronze" },
@@ -889,13 +981,13 @@
     },
     "chat": {
       "_comment": "Floating in-world comms window — the flicker-widgets `chat_panel` builder (a per-frame Rust UiNode tree the pocclusters scene runs as a SECOND run_ui pass over the HUD, so the window can move + resize; not a cached tree). Maps the DesignSync ChatPanel (MCP 36F7946B) onto the clay-chat v0.1 line protocol (MCP D9FE6CE0). Container leaves (window/titlebar/tabstrip/tab_*/log/roster/input_bar/btn*) are panel styles (fill_top/fill_bot/border/radius); *_color + line_* + roster_* are TEXT colours (a text node's dotted `color` path). `input` is the text_field style (top/bot/border/caret/placeholder/label). Single palette: every value is a $token from theme.tokens.",
-      "window": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge3", "border_w": 1, "radius": 5 },
+      "window": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge3", "border_w": 1, "radius": 4 },
       "titlebar": { "fill_top": "$accent_wash_2", "fill_bot": "$accent_wash", "border": "$edge2", "border_w": 1, "radius": 3 },
       "title_color": "$ink_bright",
       "tabstrip": { "fill_top": "$stone2", "fill_bot": "$stone1", "radius": 3 },
       "tab_active": { "fill_top": "$accent_wash_2", "fill_bot": "$accent_wash_2", "border": "$sap_border", "border_w": 1, "label": "$ink_bright", "active_label": "$ink_bright", "radius": 3, "label_size": 12 },
       "tab_idle": { "fill_top": "$stone2", "fill_bot": "$stone2", "border": "$edge2", "border_w": 1, "label": "$dim_soft", "radius": 3, "label_size": 12 },
-      "log": { "fill_top": "$well", "fill_bot": "$well", "border": "$edge1", "border_w": 1, "radius": 3 },
+      "log": { "fill_top": "$well_top", "fill_bot": "$well_bot", "border": "$edge1", "border_w": 1, "radius": 3 },
       "roster": { "fill_top": "$stone1", "fill_bot": "$stone0", "border": "$edge1", "border_w": 1, "radius": 3 },
       "roster_head": "$bronze",
       "roster_here": "$ink",
@@ -954,6 +1046,82 @@
       "verdict_count": "$ink",
       "observed": { "color": "$dim" },
       "air": { "color": "$dim" }
+    }
+  },
+
+  "sablework": {
+    "_comment": "flicker-sablework 'Sablework Bench' HUD (hud_sablework.lua) — the texture SYNTHESIZER console. Three columns: LEFT the 6-voice CHANNEL RACK (per row: on-toggle, source pill, scale/octaves/warp sliders, blend pill, amount), CENTRE the tiled swatch preview + map selector, RIGHT the OUTPUT STAGE (relief/roughness/metalness/AO) over the selected voice's fine knobs. The preview RECT lives here under `preview` and is read by BOTH the Lua (which frames it) and the Rust scene (which draws the swatch sprites into it) — one source of truth, so the frame and the image cannot drift apart. Every colour is a $token and every label a stringtable $token (the one palette + one string source).",
+    "col": {
+      "label": "$dim_soft",
+      "title": "$ink_bright",
+      "value": "$ink",
+      "dim": "$dim",
+      "accent": "$rune_glow_hi",
+      "bronze": "$bronze",
+      "bronze_deep": "$bronze_deep",
+      "off": "$faint"
+    },
+    "panel": { "fill_top": "$stone3", "fill_bot": "$stone1", "border": "$edge2", "border_w": 1, "radius": 4 },
+    "well": { "fill_top": "$stone0", "fill_bot": "$stone0", "border": "$edge3", "border_w": 1, "radius": 3 },
+    "frame": { "fill_top": [0, 0, 0, 0], "fill_bot": [0, 0, 0, 0], "border": "$bronze_deep", "border_w": 1, "radius": 3 },
+    "row": { "fill_top": "$stone2", "fill_bot": "$stone1", "border": "$edge1", "border_w": 1, "radius": 3 },
+    "row_sel": { "fill_top": "$stone4", "fill_bot": "$stone2", "border": "$sap_border", "border_w": 1, "radius": 3 },
+    "checkbox": { "box": "$stone2", "check": "$sig_green", "border": "$edge4", "pad": 3 },
+    "slider": { "track": "$well", "fill": "$sap_base", "fill_hi": "$sap_border", "handle": "$sap_border", "handle_w": 14 },
+    "button": { "fill_top": "$stone4", "fill_bot": "$stone2", "border": "$edge3", "border_w": 1, "radius": 3 },
+    "button_on": { "fill_top": "$sap_hover", "fill_bot": "$sap_base", "border": "$sap_border", "border_w": 1, "radius": 3 },
+    "layout": {
+      "_comment": "The bench rides the SHARED `workbench` template (ui_templates.json) like Clayworks and Loomforge — frame + header + tab bar + [viewport | rail] + footer. These are that template's slot dimensions; the frame's own chrome comes from the default `settings` style, which is why no window colours are redefined here.",
+      "margin": 20,
+      "gap": 12,
+      "pad": 14,
+      "rack_w": 620,
+      "out_w": 330,
+      "header_h": 46,
+      "header_pad": 12,
+      "header_gap": 8,
+      "tab_h": 34,
+      "tab_pad": 6,
+      "tab_gap": 4,
+      "body_pad": 12,
+      "body_gap": 12,
+      "footer_h": 52,
+      "footer_pad": 12,
+      "footer_gap": 8,
+      "footer_btn_h": 28,
+      "title_h": 30,
+      "title_size": 17,
+      "section_h": 20,
+      "section_size": 11,
+      "label_size": 12,
+      "value_size": 12,
+      "row_h": 22,
+      "slider_h": 7,
+      "track_h": 20
+    },
+    "rack": {
+      "section": "$sw_channel_rack",
+      "voice_h": 74,
+      "name_w": 42,
+      "pill_w": 84,
+      "knob_label_w": 44,
+      "knob_value_w": 38,
+      "knob_w": 176,
+      "amount_w": 176
+    },
+    "preview": {
+      "_comment": "The swatch. `tiles` is how many times the scene repeats the baked swatch per axis BEFORE uploading, so the seam is visible in one sprite node instead of nine. The Lua sizes the well; the scene reads `tiles` to build the image. w/h square, so the tiling reads honestly.",
+      "w": 600,
+      "h": 600,
+      "tiles": 3,
+      "map_bar_h": 28,
+      "map_btn_w": 92
+    },
+    "out": {
+      "section": "$sw_output_stage",
+      "voice_section": "$sw_voice",
+      "knob_label_w": 96,
+      "knob_value_w": 46
     }
   },
 
@@ -1248,6 +1416,166 @@
         "label": "$ink",
         "label_size": 13
       }
+    }
+  },
+
+  "quartermaster": {
+    "_comment": "Quartermaster Bench (flicker-quartermaster) — the content air-traffic controller: a two-tab file manager over the staging/ and package/ trees. Its tree is built in Rust (unbounded folder listings whose node ids encode positions), so this section is read by the crate directly rather than by a hud_*.lua.",
+    "_class_comment": "class.* are the DERIVED content classes (flicker_content::PackageClass::id) a row's name is coloured by — classification IS the colour, so a glance down the Name column reads as content types. A class with no entry here falls back to unknown.",
+
+    "top_bar": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 0
+    },
+    "title": { "color": "$ink_bright" },
+    "badge": { "color": "$dim" },
+    "tab_bar": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 0
+    },
+    "tab_active": {
+      "fill_top": "$sap_base",
+      "fill_bot": "$sap_base_lo",
+      "hover_top": "$sap_hover",
+      "hover_bot": "$sap_hover_lo",
+      "border": "$sap_border",
+      "hover_border": "$sap_hover_border",
+      "label": "$ink_bright",
+      "radius": 3
+    },
+    "tab_idle": {
+      "fill_top": "$stone_btn",
+      "fill_bot": "$stone1",
+      "hover_top": "$stone_btn_hi",
+      "hover_bot": "$stone2",
+      "border": "$edge4",
+      "label": "$ink_button",
+      "radius": 3
+    },
+    "crumb_bar": {
+      "fill_top": "$surface_top",
+      "fill_bot": "$surface_bot",
+      "border": "$seam",
+      "border_w": 1,
+      "radius": 0
+    },
+    "crumb": { "color": "$dim" },
+    "header": { "color": "$bronze" },
+    "meta": { "color": "$dim" },
+    "caret": { "color": "$faint" },
+    "tree": { "color": "$ink" },
+    "clip": { "color": "$sapphire" },
+    "error": { "color": "$danger_text" },
+    "rename": {
+      "_comment": "The inline rename field. `rename_bad` is the same box with a danger rim — a name that cannot be used BLOCKS the commit and says so, rather than discarding what was typed.",
+      "panel_bg": "$well",
+      "border": "$sap_border",
+      "border_w": 1,
+      "radius": 2,
+      "text": "$ink_bright",
+      "caret": "$rune_glow"
+    },
+    "rename_bad": {
+      "panel_bg": "$well",
+      "border": "$danger_border",
+      "border_w": 1,
+      "radius": 2,
+      "text": "$ink_bright",
+      "caret": "$danger_text"
+    },
+
+    "pane": {
+      "panel_bg": "$panel_bg",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 0
+    },
+    "pane_focused": {
+      "_comment": "The focused pane carries a sapphire rim — on a pad this ring IS the cursor's home, so it must read at a glance.",
+      "panel_bg": "$panel_bg",
+      "border": "$sap_border",
+      "border_w": 1,
+      "radius": 0
+    },
+    "list_header": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 0
+    },
+    "col_header": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone1",
+      "hover_top": "$stone2",
+      "hover_bot": "$stone2",
+      "border": "$stone1",
+      "label": "$faint",
+      "radius": 0
+    },
+    "rowsel": {
+      "_comment": "The selection wash. Sits UNDER the row's click target, which is never gated on selection — gating it would make every unselected row unclickable.",
+      "panel_bg": "$accent_wash",
+      "border": "$sapphire",
+      "border_w": 0,
+      "radius": 2
+    },
+    "scrim": {
+      "_comment": "The bench's modal dim — passed to the `conflict_dialog` proto as its `overlay_style` skin. The dialog chrome itself is the proto's (modal.panel).",
+      "panel_bg": "$scrim",
+      "radius": 0
+    },
+    "card": {
+      "_comment": "One side of a collision (existing / incoming) — passed to the `conflict_dialog` proto as its `card_style` skin.",
+      "panel_bg": "$stone0",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 3
+    },
+    "checkbox": { "box": "$stone2", "check": "$sig_green", "border": "$edge4", "pad": 3 },
+    "menu": {
+      "_comment": "The focused-item context menu — the `item_context_menu` proto's default skin. Same block shape as the settings dropdown popup, so it matches the `select` popup exactly.",
+      "top": "$stone3", "bot": "$stone0", "border": "$edge2", "radius": 3, "row_h": 30,
+      "label": "$ink_button", "label_size": 14, "sel_bg": "$accent_wash_2", "sel_label": "$ink_bright",
+      "hover_bg": "$accent_wash", "hint": "$faint", "disabled": "$faint", "divider": "$edge2"
+    },
+    "rowsel_off": {
+      "_comment": "The invisible full-width click/focus target over each row.",
+      "fill_top": "$stone_btn",
+      "fill_bot": "$stone_btn",
+      "hover_top": "$cell_hot",
+      "hover_bot": "$cell_hot",
+      "border": "$stone_btn",
+      "label": "$ink",
+      "radius": 0
+    },
+    "status_bar": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 0
+    },
+
+    "class": {
+      "folder": "$bronze",
+      "rig": "$sig_blue",
+      "clip": "$sig_yellow",
+      "pack": "$sig_orange",
+      "rbp": "$sig_orange",
+      "bake": "$sig_green",
+      "flight": "$sig_white",
+      "epoch": "$sig_green",
+      "texture": "$sig_green",
+      "font": "$muted",
+      "doc": "$faint",
+      "unknown": "$danger_text"
     }
   },
 

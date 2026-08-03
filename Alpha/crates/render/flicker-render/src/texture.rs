@@ -12,7 +12,9 @@ pub struct TextureHandle(pub(crate) u32);
 
 /// Internal record kept per loaded texture.
 pub(crate) struct LoadedTexture {
-    #[allow(dead_code)]
+    /// The GPU texture itself. Kept (not just its view) so
+    /// `Renderer::update_texture` can rewrite the pixels in place without
+    /// rebuilding the view or any bind group over it.
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
@@ -23,7 +25,8 @@ pub(crate) struct LoadedTexture {
     /// Bind group for the textured-mesh pipeline's texture layout (linear
     /// sampler), built by `Renderer::load_texture`. `None` until set.
     pub mesh_bind_group: Option<wgpu::BindGroup>,
-    #[allow(dead_code)]
+    /// Dimensions, so an in-place update can reject a mismatched buffer instead
+    /// of writing a torn image.
     pub size: (u32, u32),
 }
 

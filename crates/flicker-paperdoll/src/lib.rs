@@ -34,9 +34,10 @@ use flicker::ui::{
     load_styles, load_ui_json, render_hud, run_ui_with, Surface, Surfaces, UiInput, UiIntents,
     UiState, WalkerHandler, UI_COMPONENT_MODULES,
 };
-// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` is test-only.
+// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` and the
+// strings module (fixture tokens + the Model-channel gate scan) are test-only.
 #[cfg(test)]
-use flicker::ui::run_ui;
+use flicker::ui::{run_ui, strings};
 use glam::Mat4;
 
 use flicker_input_core::{ActionSignal, Fired, Resolver};
@@ -181,7 +182,7 @@ enum Fit {
 }
 
 /// One equip slot in the inventory bar. `file` resolves under the shared content tree
-/// (`Alpha/content/characters/<dir>/<file>`); a slot whose file is absent stays EMPTY —
+/// (`Alpha/content/package/characters/<dir>/<file>`); a slot whose file is absent stays EMPTY —
 /// its cell draws dim and inert — so the bar shows the full slot set before the art
 /// lands and each piece lights up as it arrives, with no code change.
 struct SlotDef {
@@ -399,20 +400,22 @@ impl RecordedFit {
 /// diff instead of pretty-printing the whole mesh. Factored out of `record_fits` so the mesh-
 /// preservation guarantee is unit-testable before the Record button mutates real content.
 fn write_inline_attach(path: &Path, attach: serde_json::Value) -> Result<()> {
-    let text = std::fs::read_to_string(path)
+    // Gz-transparent read-modify-write (flicker-core::compression): the piece is
+    // addressed by its LOGICAL path and re-emitted in its gz-at-rest form.
+    let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading piece {}", path.display()))?;
     let mut doc: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("parsing piece {}", path.display()))?;
     doc.as_object_mut()
         .with_context(|| format!("piece {} is not a JSON object", path.display()))?
         .insert("attach".to_string(), attach);
-    std::fs::write(path, serde_json::to_string(&doc)?)
+    flicker_core::compression::write_text(path, &serde_json::to_string(&doc)?)
         .with_context(|| format!("writing piece {}", path.display()))?;
     Ok(())
 }
 
 fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = flicker_core::compression::read_text(path) else {
         return HashMap::new();
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -510,7 +513,7 @@ impl Slot {
         let path = chars.join(def.dir).join(def.file);
         // Load the piece AND its inline `attach` mount (WS-C C-γ): a piece carries its own fit in
         // its one self-describing file, so we no longer depend on the shared `fits.json` sidecar.
-        let (content, attach) = if !path.exists() {
+        let (content, attach) = if !flicker_core::compression::file_exists(&path) {
             tracing::info!("slot '{}': no piece at {} — cell stays empty", def.key, path.display());
             (None, format::Attach::default())
         } else {
@@ -2545,7 +2548,7 @@ impl Scene for Viewer {
 /// *real* exported data.
 fn build_viewer(base_dir: &Path) -> Viewer {
     // The unified base (PrismHumanBaseA) + its retargeted Motifect LOCOMOTION library
-    // (Alpha/content/retarget/clips/locomotion — In-Place / RootMotion, e.g. `walk_forward`,
+    // (Alpha/content/package/retarget/clips/locomotion — In-Place / RootMotion, e.g. `walk_forward`,
     // cyclable with the up/down control). The retired Katanami clip library is NO LONGER loaded
     // (legacy strip, 2026-07-21): the base owns its own clips + pack, so the ↑/↓ preview and the SM
     // see only the current data. Only the locomotion library is loaded — the other per-library
@@ -2644,7 +2647,7 @@ fn build_viewer(base_dir: &Path) -> Viewer {
 /// Build the paperdoll rigging viewer as a boxed `Scene` for the shell's scene
 /// registry — it loads the base rig / clips / pack from the shared content tree.
 ///
-/// Content lives under `Alpha/content/characters/`. The BASE body is PrismHumanBaseA
+/// Content lives under `Alpha/content/package/characters/`. The BASE body is PrismHumanBaseA
 /// — a Meshy AUTO-rigged female whose 24-bone Mixamo rig was renamed to our canonical
 /// bone names (`tools/blender/rename_meshy_to_canonical.py`) and exported with
 /// retarget=true, so the shared clips drive HER proportions (rotation-only). It plays its OWN
@@ -2656,7 +2659,7 @@ pub fn scene() -> Box<dyn Scene> {
     // NOT the Blender tool. Lets the raised-groin pelvis be judged in-window against the shared
     // locomotion clips. Revert to `PrismHumanBaseA` (the Blender-baked reference) to compare.
     let base_dir =
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/HumanBaseA"));
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/HumanBaseA"));
     Box::new(build_viewer(&base_dir))
 }
 
@@ -2666,14 +2669,19 @@ mod tests {
     use flicker_skeletal::state::{self, StateMachine};
 
     fn assets_dir() -> PathBuf {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/katanami"))
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/katanami"))
     }
 
     fn has_fixtures(dir: &std::path::Path) -> bool {
         std::fs::read_dir(dir)
             .map(|rd| {
                 rd.filter_map(|e| e.ok())
-                    .any(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
+                    .any(|e| {
+                        e.path()
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.ends_with(".json") || n.ends_with(".json.gz"))
+                    })
             })
             .unwrap_or(false)
     }
@@ -2764,14 +2772,14 @@ mod tests {
     fn prism_pack_resolves_against_the_retargeted_library() {
         let base = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../Alpha/content/characters/PrismHumanBaseA"
+            "/../../Alpha/content/package/characters/PrismHumanBaseA"
         ));
         let retarget = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../Alpha/content/retarget/clips/locomotion"
+            "/../../Alpha/content/package/retarget/clips/locomotion"
         ));
         let pack_path = base.join("PrismHumanBaseA.pack.json");
-        if !pack_path.exists() || !retarget.join("In-Place").exists() {
+        if !flicker_core::compression::file_exists(&pack_path) || !retarget.join("In-Place").exists() {
             return; // no converted fixtures on this checkout
         }
         let model = format::load_dirs(&[base.as_path(), retarget.as_path()])
@@ -2908,12 +2916,12 @@ mod tests {
     #[test]
     fn skinned_garment_loads_and_binds_to_the_body() {
         let base_dir =
-            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/characters/PrismHumanBaseA"));
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/PrismHumanBaseA"));
         let garment = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../Alpha/content/characters/musefit/Corset-Duster.skinned.json"
+            "/../../Alpha/content/package/characters/musefit/Corset-Duster.skinned.json"
         ));
-        if !garment.exists() {
+        if !flicker_core::compression::file_exists(&garment) {
             eprintln!("skipping: {} not generated", garment.display());
             return;
         }
@@ -2958,7 +2966,12 @@ mod tests {
             .with("show_skeleton", false)
             .with("blend", true)
             .with("skin", 0_u32)
-            .with("stats", "63 bones · 115221 verts");
+            // Sample stats copy, composed around its tokens exactly as display
+            // words must be (Model-channel strings gate).
+            .with(
+                "stats",
+                format!("63 {} · 115221 {}", strings::resolve("$pd_bones"), strings::resolve("$pd_verts")),
+            );
         for d in SLOTS {
             m.set(format!("slot_{}_loaded", d.key), loaded);
             m.set(format!("slot_{}_on", d.key), on);
@@ -2995,6 +3008,12 @@ mod tests {
             "hud_paperdoll.lua ships raw display literals: {:?}",
             flicker::ui::raw_display_literals(&tree)
         );
+        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+        // from Rust into the Model bypasses the tree gate above, so the crate
+        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+        let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
+        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
         let styles = load_styles(HUD_UI_ELEMENTS);
         let snap = UiInput {
             mouse: input.mouse_position,
@@ -3039,14 +3058,15 @@ mod tests {
     fn record_folds_attach_inline_without_disturbing_the_mesh() {
         let src = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../Alpha/content/characters/musefit/Dagger.json"
+            "/../../Alpha/content/package/characters/musefit/Dagger.json"
         ));
-        if !src.exists() {
+        if !flicker_core::compression::file_exists(&src) {
             eprintln!("skipping: {} not present", src.display());
             return;
         }
         let tmp = std::env::temp_dir().join("flicker_paperdoll_ws_c_record_roundtrip.json");
-        std::fs::copy(&src, &tmp).expect("copy sample piece");
+        std::fs::write(&tmp, flicker_core::compression::read_bytes(&src).expect("read sample piece"))
+            .expect("copy sample piece");
 
         let before = format::load_mesh(&tmp).expect("baseline load").vertices.len();
         assert!(before > 0, "sample piece should have geometry");
@@ -3075,6 +3095,7 @@ mod tests {
         assert!((at2.uniform - 5.0).abs() < 1e-3, "re-record replaces the attach");
 
         let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(flicker_core::compression::gz_sibling(&tmp));
     }
 
     /// With nothing selected the gadget must not run at all — no phantom slot to edit.

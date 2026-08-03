@@ -37,7 +37,7 @@
 
 use std::time::Duration;
 
-use flicker_app::App;
+use flicker_app::{App, CursorImage};
 use flicker_input_core::InputState;
 use flicker_render::Renderer;
 
@@ -91,6 +91,7 @@ pub struct SceneManager {
     stack: Vec<Box<dyn Scene>>,
     pending: Transition,
     quit: bool,
+    cursor: Option<CursorImage>,
 }
 
 impl SceneManager {
@@ -102,7 +103,17 @@ impl SceneManager {
             stack: vec![initial],
             pending: Transition::None,
             quit: false,
+            cursor: None,
         }
+    }
+
+    /// Attach a custom hardware cursor for the runner to register at window
+    /// creation (e.g. the shell's themed pointer). Appearance only — cursor
+    /// visibility is owned by the input-modality wiring, not the manager.
+    #[must_use]
+    pub fn with_cursor(mut self, cursor: Option<CursorImage>) -> Self {
+        self.cursor = cursor;
+        self
     }
 
     /// Apply the transition stored by the last `update`. Runs in `render`
@@ -171,6 +182,10 @@ impl App for SceneManager {
         }
     }
 
+    fn cursor(&self) -> Option<CursorImage> {
+        self.cursor.clone()
+    }
+
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
         if let Some(top) = self.stack.last_mut() {
             let transition = top.update(dt, input, renderer);
@@ -207,6 +222,29 @@ impl App for SceneManager {
 #[cfg(test)]
 mod tests {
     use super::visible_start_in;
+
+    /// `with_cursor` feeds `App::cursor` verbatim; a bare manager keeps `None`
+    /// (the platform arrow).
+    #[test]
+    fn cursor_passthrough() {
+        use flicker_app::{App, CursorImage};
+        struct Stub;
+        impl super::Scene for Stub {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &flicker_render::Renderer,
+            ) -> super::Transition {
+                super::Transition::None
+            }
+            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+        }
+        let img = CursorImage { rgba: vec![0xff; 4], width: 1, height: 1, hotspot: (0, 0) };
+        let with = super::SceneManager::new(Box::new(Stub)).with_cursor(Some(img));
+        assert_eq!(with.cursor().map(|c| (c.width, c.height, c.hotspot)), Some((1, 1, (0, 0))));
+        assert!(super::SceneManager::new(Box::new(Stub)).cursor().is_none());
+    }
 
     #[test]
     fn visibility_slice() {

@@ -4,12 +4,12 @@
 -- definition — draw AND hit: the tight region is the box (the label row is inert),
 -- and a click inside it toggles the bound bool.
 --
--- The abstract COMPONENT interface (shared by every file in `content/scripts/ui/`):
+-- The abstract COMPONENT interface (shared by every file in `content/sensorium/scripts/ui/`):
 --   * `M.draw(cmds, rect, props)` — emit HudCommands to fill `rect`.
 --   * `M.hit(mx, my, rect, props, click, down)` — return a hit VERDICT: a bare
 --     boolean (just hover), or a table { hit, value, activate, capture, open,
---     group_focus } the walker applies generically. `click` is this frame's press
---     edge (pre-gated on enabled); `down` the held state.
+--     focus, group_focus, activate_child } the walker applies generically.
+--     `click` is this frame's press edge (pre-gated on enabled); `down` the held state.
 --
 -- `props` (assembled by the walker's `component_props`):
 --   bind_value  -- the bound bool (checked when == true); nil → unchecked

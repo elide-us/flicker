@@ -22,7 +22,7 @@ local gauge = {}
 -- this in Rust with zero Lua crossings; `hit` below is never called.
 gauge.hit_shape = "none"
 
-local TRACK = { 0.078, 0.09, 0.122, 0.95 }
+local TRACK = { 0.039, 0.047, 0.063, 1.0 }
 local BAND = { 0.184, 0.616, 0.357, 0.55 }
 local MARKER = { 0.941, 0.804, 0.416, 1.0 }
 
@@ -63,6 +63,9 @@ function gauge.draw(cmds, r, props)
   core.rect(cmds, { x = r.x + r.w * t - mw * 0.5, y = r.y - 3, w = mw, h = r.h + 6 }, mc, layer)
 end
 
+-- Never dispatched — `hit_shape` above answers the hit in Rust. The body stays
+-- because the library registers a COMPONENT by its draw + hit pair (see
+-- flicker-script's `probe_component_kinds`).
 function gauge.hit(mx, my, r)
   return core.point_in(mx, my, r)
 end

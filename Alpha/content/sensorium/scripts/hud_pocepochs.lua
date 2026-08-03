@@ -48,8 +48,8 @@ local function readout_block()
     children = {
       Text {
         text = "$poc_flicker_planet_simulation",
-        size = 36,
-        text_size = 26,
+        size = 38,
+        text_size = 28,
         color = "pocepochs.title.color",
       },
       Text { text_bind = "stats", size = 28, text_size = 17, color = "pocepochs.text.color" },

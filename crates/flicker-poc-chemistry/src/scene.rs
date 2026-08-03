@@ -27,8 +27,8 @@ use flicker::render::{
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
-    UI_COMPONENT_MODULES,
+    load_styles, load_ui_json, render_hud, run_ui_with, strings, UiInput, UiIntents, UiState,
+    WalkerHandler, UI_COMPONENT_MODULES,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -221,42 +221,51 @@ impl ChemScene {
             Some(snap) => {
                 let s = &snap.state;
                 m.set("loaded", true);
+                // Every English word below is a stringtable token (Model-channel
+                // strings gate); the numbers and unit symbols compose around them.
                 m.set(
                     "stats",
-                    format!("tick {}  ·  {:.0} My  ·  {} cells", snap.tick, snap.tick_myr, snap.swept_cells),
+                    format!(
+                        "{} {}  ·  {:.0} My  ·  {} {}",
+                        strings::resolve("$chem_tick"), snap.tick, snap.tick_myr,
+                        snap.swept_cells, strings::resolve("$chem_cells"),
+                    ),
                 );
                 let core_pct = s.core_mass_kg / s.planet_mass_kg.max(1.0) * 100.0;
                 m.set(
                     "interior",
                     format!(
-                        "core {core_pct:.1}%  ·  differentiated {:.0}%  ·  mantle {:.0} K  ·  {} plates  ·  radiogenic {:.0} TW",
-                        s.differentiation_frac * 100.0,
-                        s.mean_mantle_temp_k,
-                        snap.plate_count,
-                        s.radiogenic_power_tw,
+                        "{} {core_pct:.1}%  ·  {} {:.0}%  ·  {} {:.0} K  ·  {} {}  ·  {} {:.0} TW",
+                        strings::resolve("$chem_core"),
+                        strings::resolve("$chem_differentiated"), s.differentiation_frac * 100.0,
+                        strings::resolve("$chem_mantle"), s.mean_mantle_temp_k,
+                        snap.plate_count, strings::resolve("$chem_plates"),
+                        strings::resolve("$chem_radiogenic"), s.radiogenic_power_tw,
                     ),
                 );
                 let (word, color) = if snap.playing {
-                    ("PLAYING", "chemistry.playing.color")
+                    ("$chem_playing", "chemistry.playing.color")
                 } else {
-                    ("PAUSED", "chemistry.paused.color")
+                    ("$chem_paused", "chemistry.paused.color")
                 };
-                m.set("play_state", word);
+                m.set("play_state", strings::resolve(word).into_owned());
                 m.set("play_state_color", color);
                 m.set(
                     "hints",
                     format!(
-                        "·  Space play/pause  ·  R reseed  ·  Down reset  ·  V mantle: {}  ·  drag · wheel · Esc menu",
-                        self.mantle_view.label()
+                        "{}{}  {}",
+                        strings::resolve("$chem_hints_head"),
+                        self.mantle_view.label(),
+                        strings::resolve("$chem_hints_tail"),
                     ),
                 );
                 m.set(
                     "crust",
                     format!(
-                        "crust {:.3}%  ·  continental {:.0}%  ·  mean elevation {:.0} m",
-                        s.crust_frac * 100.0,
-                        s.continental_frac * 100.0,
-                        s.mean_elevation_m,
+                        "{} {:.3}%  ·  {} {:.0}%  ·  {} {:.0} m",
+                        strings::resolve("$chem_crust"), s.crust_frac * 100.0,
+                        strings::resolve("$chem_continental"), s.continental_frac * 100.0,
+                        strings::resolve("$chem_mean_elevation"), s.mean_elevation_m,
                     ),
                 );
 
@@ -272,22 +281,28 @@ impl ChemScene {
                 let total = expected.max(1.0);
                 let pct = |mass: f64| mass / total * 100.0;
                 let (status, color) = if balanced {
-                    ("balanced ✓", "chemistry.ok")
+                    ("$chem_balanced", "chemistry.ok")
                 } else {
-                    ("BROKEN ✗", "chemistry.bad")
+                    ("$chem_broken", "chemistry.bad")
                 };
-                m.set("ledger_status", format!("Σ {}  ·  {}", fmt_mass(expected), status));
+                m.set(
+                    "ledger_status",
+                    format!("Σ {}  ·  {}", fmt_mass(expected), strings::resolve(status)),
+                );
                 m.set("ledger_status_color", color);
                 let rows: [(&str, f64); 6] = [
-                    ("Mantle", s.mantle_mass_kg),
-                    ("Core", s.core_mass_kg),
-                    ("Crust", s.crust_mass_kg),
-                    ("Atmosphere", s.atmosphere_mass_kg),
-                    ("Ocean", s.ocean_mass_kg),
-                    ("Escaped", s.escaped_mass_kg),
+                    ("$chem_ledger_mantle", s.mantle_mass_kg),
+                    ("$chem_ledger_core", s.core_mass_kg),
+                    ("$chem_ledger_crust", s.crust_mass_kg),
+                    ("$chem_ledger_atmosphere", s.atmosphere_mass_kg),
+                    ("$chem_ledger_ocean", s.ocean_mass_kg),
+                    ("$chem_ledger_escaped", s.escaped_mass_kg),
                 ];
                 for (i, (label, mass)) in rows.iter().enumerate() {
-                    m.set(format!("ledger_{}", i + 1), format!("{label:<11}{:>6.2}%", pct(*mass)));
+                    m.set(
+                        format!("ledger_{}", i + 1),
+                        format!("{:<11}{:>6.2}%", strings::resolve(label), pct(*mass)),
+                    );
                 }
             }
         }
@@ -705,6 +720,12 @@ mod tests {
             "hud_chemistry.lua ships raw display literals: {:?}",
             flicker::ui::raw_display_literals(&tree)
         );
+        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+        // from Rust into the Model bypasses the tree gate above, so the crate
+        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+        let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
+        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
         let intents = UiIntents::of(&tree);
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
 
@@ -728,23 +749,27 @@ mod tests {
         assert!(has(&cmds, "GENERATING PLANET…"), "loading banner renders");
         assert!(!has(&cmds, "FLICKER · CHEMISTRY SIM (M2 · LAYER STACK)"), "readout gated off");
 
-        // Loaded state: readout + ledger lines ride their binds.
+        // Loaded state: readout + ledger lines ride their binds. The fixture's
+        // display words ride the SAME stringtable tokens `hud_model` resolves
+        // (Model-channel strings gate); the numbers compose around them.
+        let r = |t: &str| strings::resolve(t).into_owned();
+        let row = |t: &str, pct: f64| format!("{:<11}{pct:>6.2}%", r(t));
         let loaded = ValueMap::new()
             .with("loaded", true)
-            .with("stats", "tick 42  ·  84 My  ·  92162 cells")
-            .with("interior", "core 31.0%  ·  differentiated 88%")
-            .with("play_state", "PLAYING")
+            .with("stats", format!("{} 42  ·  84 My  ·  92162 {}", r("$chem_tick"), r("$chem_cells")))
+            .with("interior", format!("{} 31.0%  ·  {} 88%", r("$chem_core"), r("$chem_differentiated")))
+            .with("play_state", r("$chem_playing"))
             .with("play_state_color", "chemistry.playing.color")
-            .with("hints", "·  Space play/pause")
-            .with("crust", "crust 1.2%")
-            .with("ledger_status", "Σ 5.972e24 kg  ·  balanced ✓")
+            .with("hints", format!("{}{}  {}", r("$chem_hints_head"), "heat", r("$chem_hints_tail")))
+            .with("crust", format!("{} 1.2%", r("$chem_crust")))
+            .with("ledger_status", format!("Σ {}  ·  {}", "5.972e24 kg", r("$chem_balanced")))
             .with("ledger_status_color", "chemistry.ok")
-            .with("ledger_1", "Mantle      68.00%")
-            .with("ledger_2", "Core        31.00%")
-            .with("ledger_3", "Crust        0.50%")
-            .with("ledger_4", "Atmosphere   0.30%")
-            .with("ledger_5", "Ocean        0.10%")
-            .with("ledger_6", "Escaped      0.10%");
+            .with("ledger_1", row("$chem_ledger_mantle", 68.0))
+            .with("ledger_2", row("$chem_ledger_core", 31.0))
+            .with("ledger_3", row("$chem_ledger_crust", 0.5))
+            .with("ledger_4", row("$chem_ledger_atmosphere", 0.3))
+            .with("ledger_5", row("$chem_ledger_ocean", 0.1))
+            .with("ledger_6", row("$chem_ledger_escaped", 0.1));
         let cmds = run_ui(&tree, &loaded, &styles, &snap, &mut UiState::new()).commands;
         assert!(!has(&cmds, "GENERATING PLANET…"), "loading banner gated off");
         assert!(has(&cmds, "FLICKER · CHEMISTRY SIM (M2 · LAYER STACK)"), "title renders");

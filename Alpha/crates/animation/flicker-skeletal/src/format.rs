@@ -461,7 +461,8 @@ fn mat4_from_contract(m: &[f32; 16]) -> Mat4 {
     Mat4::from_cols_array(m)
 }
 
-/// Recursively collect every `*.json` path under `dir`.
+/// Recursively collect every `*.json` path under `dir` — loose or in its
+/// gz-at-rest form (`*.json.gz`, how package content ships).
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir)
         .with_context(|| format!("reading assets dir {}", dir.display()))?
@@ -469,11 +470,18 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry?.path();
         if path.is_dir() {
             collect_json_files(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+        } else if is_json_asset(&path) {
             out.push(path);
         }
     }
     Ok(())
+}
+
+/// A rig/clip asset file: `*.json`, loose or gz-at-rest (`*.json.gz`).
+fn is_json_asset(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".json") || n.ends_with(".json.gz"))
 }
 
 /// Whether any component of `path` equals `name` (e.g. `clips`, `RootMotion`).
@@ -508,7 +516,9 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
     }
     let mut parsed: Vec<(PathBuf, RigFile)> = Vec::new();
     for path in files {
-        let text = std::fs::read_to_string(&path)
+        // Gz-transparent read (flicker-core::compression) — package content is
+        // gz at rest; loose dev files read the same way.
+        let text = flicker_core::compression::read_text(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let file: RigFile = serde_json::from_str(&text)
             .with_context(|| format!("parsing {}", path.display()))?;
@@ -660,7 +670,7 @@ pub fn load_mesh(path: &Path) -> Result<Mesh> {
 /// the file carries none). The fit editor uses this to place a prop at its recorded socket/offset
 /// straight from the one self-describing file — no `fits.json` sidecar — without re-parsing it.
 pub fn load_mesh_with_attach(path: &Path) -> Result<(Mesh, Attach)> {
-    let text = std::fs::read_to_string(path)
+    let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading prop {}", path.display()))?;
     let file: RigFile = serde_json::from_str(&text)
         .with_context(|| format!("parsing prop {}", path.display()))?;
@@ -712,7 +722,7 @@ pub fn load_outfit(path: &Path, base: &[Bone]) -> Result<Mesh> {
 /// when the file carries none) — the fit editor reads a piece's placement from its one
 /// self-describing file instead of the shared `fits.json` sidecar.
 pub fn load_outfit_with_attach(path: &Path, base: &[Bone]) -> Result<(Mesh, Attach)> {
-    let text = std::fs::read_to_string(path)
+    let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading outfit {}", path.display()))?;
     let file: RigFile = serde_json::from_str(&text)
         .with_context(|| format!("parsing outfit {}", path.display()))?;
@@ -866,7 +876,7 @@ mod tests {
     #[ignore]
     fn loads_canonical_base_a_with_face_group() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/characters/PrismHumanBaseA");
+            .join("../../../content/package/characters/PrismHumanBaseA");
         if !dir.exists() {
             eprintln!("skipping: canonical content not present at {}", dir.display());
             return;

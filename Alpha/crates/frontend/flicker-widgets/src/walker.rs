@@ -1,4 +1,4 @@
-//! [`WalkerHandler`] — the adapter that makes the immediate-mode walker a **layer
+//! [`WalkerHandler`] — the adapter that makes the component walker a **layer
 //! of the input event bus** (spec §4.1 / task A).
 //!
 //! The walker already computes the one fact the router needs: `hud_hit`
@@ -34,9 +34,9 @@
 
 use flicker_input_core::{ActionSignal, EventKind};
 use flicker_input_router::{nav, tab, Flow, Focusable, FocusChange, InputEvent, InputHandler, NavDir, RouteCtx};
-use flicker_script::UiNode;
+use flicker_script::{UiNode, ValueMap};
 
-use crate::component::UiState;
+use crate::component::{visible, UiState};
 use crate::intents::UiIntents;
 
 /// The walker as one layer of the event bus. Borrows the retained
@@ -95,10 +95,12 @@ impl<'a> WalkerHandler<'a> {
 
     /// Make this walker layer **navigable**: flatten `tree`'s focusable nodes
     /// (those carrying a non-empty `tab_group`) so it consumes and routes the
-    /// directional-nav signals (spec §8). Pass the SAME tree this frame's `run_ui`
-    /// walked, so nav focus and pointer focus address the same nodes.
-    pub fn with_nav(mut self, tree: &UiNode) -> Self {
-        collect_nav(tree, &mut self.focusables, &mut self.actions);
+    /// directional-nav signals (spec §8). Pass the SAME tree AND model this
+    /// frame's `run_ui` walked, so nav focus and pointer focus address the same
+    /// nodes — and so a hidden overlay contributes nothing (see
+    /// [`focusables_of`]).
+    pub fn with_nav(mut self, tree: &UiNode, model: &ValueMap) -> Self {
+        collect_nav(tree, model, &mut self.focusables, &mut self.actions);
         self
     }
 
@@ -150,6 +152,9 @@ impl<'a> WalkerHandler<'a> {
     /// Route one directional-nav signal (on its press edge) into a focus write /
     /// activation / cancel. `current` is the retained focus id.
     fn act(&mut self, signal: ActionSignal, rc: &mut RouteCtx) {
+        // Every routed nav-family signal restores nav modality: the focused node
+        // lights again after the pointer had taken the highlight over.
+        self.ui.note_nav_input();
         let current = self.ui.focused().map(str::to_string);
         match signal {
             ActionSignal::NavUp => self.move_focus(current.as_deref(), NavDir::Up),
@@ -199,16 +204,32 @@ impl<'a> WalkerHandler<'a> {
 /// with a non-empty `tab_group` **and** a non-empty `id` becomes one focusable,
 /// carrying its Lua-authored `nav_ordinal` + `tab_group`. `rect` is a placeholder —
 /// this slice's nav is ordinal-primary and does not consult it (see [`nav`]).
-pub fn focusables_of(tree: &UiNode) -> Vec<Focusable> {
+///
+/// **A HIDDEN SUBTREE IS NOT NAVIGABLE.** `model` is consulted for every node's
+/// `visible_bind`, and an invisible node prunes itself AND its descendants: a
+/// closed modal, a gated overlay or an off-tab page must not put anything in the
+/// nav ring, or the pad walks into controls nobody can see. The model must be the
+/// SAME one this frame's `run_ui` walked, so nav and draw agree on what is on
+/// screen.
+pub fn focusables_of(tree: &UiNode, model: &ValueMap) -> Vec<Focusable> {
     let mut focusables = Vec::new();
     let mut actions = Vec::new();
-    collect_nav(tree, &mut focusables, &mut actions);
+    collect_nav(tree, model, &mut focusables, &mut actions);
     focusables
 }
 
 /// Recursively collect the focusables (+ their `action`s) of a tree — walking
 /// `children` and template `slots` so a slot-authored button is navigable too.
-fn collect_nav(node: &UiNode, focusables: &mut Vec<Focusable>, actions: &mut Vec<(String, String)>) {
+/// Invisible nodes prune their whole subtree (see [`focusables_of`]).
+fn collect_nav(
+    node: &UiNode,
+    model: &ValueMap,
+    focusables: &mut Vec<Focusable>,
+    actions: &mut Vec<(String, String)>,
+) {
+    if !visible(node, model) {
+        return;
+    }
     if !node.tab_group.is_empty() && !node.id.is_empty() {
         focusables.push(Focusable {
             id: node.id.clone(),
@@ -221,11 +242,11 @@ fn collect_nav(node: &UiNode, focusables: &mut Vec<Focusable>, actions: &mut Vec
         }
     }
     for child in &node.children {
-        collect_nav(child, focusables, actions);
+        collect_nav(child, model, focusables, actions);
     }
     for group in node.slots.values() {
         for child in group {
-            collect_nav(child, focusables, actions);
+            collect_nav(child, model, focusables, actions);
         }
     }
 }
@@ -294,6 +315,12 @@ mod tests {
     use flicker_input_router::RouteCtx;
 
     use super::*;
+
+    /// An empty model: nothing is gated, so every node is visible. Nav filters on
+    /// visibility now, so a test tree must be collected against some model.
+    fn shown() -> ValueMap {
+        ValueMap::new()
+    }
 
     fn press<'a>(signal: ActionSignal, raw: &'a InputState) -> InputEvent<'a> {
         InputEvent::new(signal, EventKind::Press, InputContext::World, raw)
@@ -366,13 +393,60 @@ mod tests {
         assert_eq!(ui.focused(), None);
     }
 
+    /// A HIDDEN SUBTREE IS NOT NAVIGABLE. Before this, focusables were collected
+    /// with no model at all, so a closed modal's buttons sat in the nav ring and
+    /// the pad could walk into controls nobody could see — the reason a bench
+    /// could not put `tab_group` on an overlay at all.
+    #[test]
+    fn a_hidden_subtree_contributes_no_focusables() {
+        // A visible screen, plus an overlay gated by `dialog_open`.
+        let mut screen = UiNode { component: "screen".into(), ..Default::default() };
+        let mut bench = UiNode { component: "button".into(), ..Default::default() };
+        bench.id = "bench_btn".into();
+        bench.tab_group = "bench".into();
+
+        let mut overlay = UiNode { component: "cell".into(), ..Default::default() };
+        overlay.visible_bind = Some("dialog_open".into());
+        let mut confirm = UiNode { component: "button".into(), ..Default::default() };
+        confirm.id = "dialog_confirm".into();
+        confirm.tab_group = "dialog".into();
+        overlay.children = vec![confirm];
+        screen.children = vec![bench, overlay];
+
+        // Closed: the overlay's button is NOT navigable.
+        let closed = focusables_of(&screen, &shown());
+        let ids: Vec<_> = closed.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, vec!["bench_btn"], "a closed overlay is out of the ring: {ids:?}");
+
+        // Open: it joins the ring, so a modal CAN carry focusable controls.
+        let mut open = ValueMap::new();
+        open.set("dialog_open", true);
+        let shown_ids: Vec<_> =
+            focusables_of(&screen, &open).iter().map(|f| f.id.clone()).collect();
+        assert_eq!(shown_ids, vec!["bench_btn", "dialog_confirm"], "{shown_ids:?}");
+    }
+
     #[test]
     fn focusables_of_flattens_only_tab_group_nodes() {
-        let items = focusables_of(&menu_tree());
+        let items = focusables_of(&menu_tree(), &shown());
         // 5 buttons carry a tab_group; the root column (no tab_group) is skipped.
         assert_eq!(items.len(), 5);
         assert!(items.iter().all(|f| f.group == "menu" || f.group == "scenes"));
         assert!(items.iter().any(|f| f.id == "start" && f.ordinal == 0));
+    }
+
+    #[test]
+    fn nav_signal_restores_nav_modality() {
+        // The pointer had taken the modality over; the first routed nav signal
+        // hands it back, so the focused node lights again.
+        let raw = InputState::new();
+        let tree = menu_tree();
+        let mut ui = UiState::new();
+        ui.pointer_mode = true;
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert!(h.ui.nav_mode(), "a routed nav press restores nav modality");
     }
 
     #[test]
@@ -381,7 +455,7 @@ mod tests {
         let tree = menu_tree();
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree);
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         // No current focus: NavDown enters the list at the lowest ordinal.
         assert_eq!(h.handle(&press(ActionSignal::NavDown, &raw), &mut rc), Flow::Consumed);
@@ -404,7 +478,7 @@ mod tests {
         let mut ui = UiState::new();
         ui.request_focus("settings"); // in group "menu"
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree);
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         // TabNext (RightBumper) cycles to the next group's lowest ordinal.
         assert_eq!(h.handle(&press(ActionSignal::TabNext, &raw), &mut rc), Flow::Consumed);
@@ -421,7 +495,7 @@ mod tests {
         let mut ui = UiState::new();
         ui.request_focus("quit");
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree);
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         assert_eq!(h.handle(&press(ActionSignal::Confirm, &raw), &mut rc), Flow::Consumed);
         // Same path a click uses: the scene fires this via results.set(action, true).
@@ -435,7 +509,7 @@ mod tests {
         let tree = menu_tree();
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree);
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
         assert!(h.cancelled());
@@ -487,7 +561,7 @@ mod tests {
         let intents = UiIntents::of(&tree);
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree).with_intents(&intents);
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown()).with_intents(&intents);
 
         assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
         assert_eq!(h.take_fired(), vec!["settings_close".to_string()]);

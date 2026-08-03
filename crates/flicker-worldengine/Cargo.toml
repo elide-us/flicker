@@ -19,4 +19,6 @@ glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-flate2.workspace = true
+# THE shared compression routine (gzip + the gz-at-rest file seam) — `.epoch`
+# load/save converged onto it (was a duplicate direct flate2 usage).
+flicker-core.workspace = true

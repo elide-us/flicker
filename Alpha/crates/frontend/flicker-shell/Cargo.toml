@@ -13,7 +13,7 @@ license.workspace = true
 # (`include_str!`/`include_bytes!`), so a new client inherits the front-end with
 # zero copied files.
 [dependencies]
-flicker = { path = "../../../../crates/flicker" }
+flicker = { path = "../../core/flicker" }
 # Directional-nav wiring for the menu (spec §8): the resolver + focus event bus.
 # Frontend → router → core (spec §2), the same edges pocclusters uses.
 flicker-input-core = { workspace = true }

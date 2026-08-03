@@ -16,7 +16,7 @@ use flicker::render::{
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ScriptHost, ValueMap};
-use flicker::ui::{load_ui_json, load_widgets, render_hud};
+use flicker::ui::{load_ui_json, load_widgets, render_hud, strings};
 use flicker_input_core::{ActionSignal, Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_materials::Tables;
@@ -263,7 +263,7 @@ impl World {
             .with("view_mode", self.mode.index())
             .with("view_label", self.mode.label())
             .with("epoch", (self.epoch + 1) as u32)
-            .with("epoch_label", EPOCH_LABELS[self.epoch])
+            .with("epoch_label", strings::resolve(EPOCH_LABELS[self.epoch]).into_owned())
             // Sun-for-heat cycle — published every frame so the sliders track the
             // auto-advancing clock; harvested back in `apply_ui`.
             .with("time_of_day", self.celestial.time_of_day as f64)
@@ -617,6 +617,19 @@ impl Scene for World {
 mod tests {
     use super::*;
 
+    /// The MODEL-CHANNEL strings gate: the world HUD is a sanctioned tree-gate
+    /// exception (immediate-mode `world_ui.lua`), but display copy published from
+    /// Rust into the Model still rides the stringtable — so the crate self-gates
+    /// its own source: every `.set`/`.with` value must be a resolved `$token`, a
+    /// data shape, or carry an explicit `strings-gate-exempt` reason.
+    #[test]
+    fn no_raw_display_copy_published_into_the_model() {
+        let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
+        assert!(flags.is_empty(), "scene.rs publishes raw display copy into the Model: {flags:?}");
+        let flags = strings::raw_model_publish_literals(include_str!("world.rs"));
+        assert!(flags.is_empty(), "world.rs publishes raw display copy into the Model: {flags:?}");
+    }
+
     /// The HUD script loads against the real layout JSON + widgets and runs an
     /// update/draw cycle for an epoch with knobs — catches Lua/contract breakage
     /// headlessly (no window needed).
@@ -633,7 +646,7 @@ mod tests {
             .with("view_mode", 1u32)
             .with("view_label", "elevation")
             .with("epoch", 3u32) // Tectonics — has four knobs
-            .with("epoch_label", "Tectonics");
+            .with("epoch_label", strings::resolve("$w_epoch_tectonics").into_owned());
         for (ep, id, def, _, _) in PARAM_DEFS {
             if *ep == 2 {
                 model = model.with(*id, *def);
@@ -666,7 +679,7 @@ mod tests {
             .with("view_mode", 5u32)
             .with("view_label", "composition")
             .with("epoch", 1u32)
-            .with("epoch_label", "Composition");
+            .with("epoch_label", strings::resolve("$w_epoch_composition").into_owned());
         for (sym, def) in ABUNDANCE_DEFS {
             model = model.with(format!("ab_{sym}"), *def);
         }
@@ -695,7 +708,7 @@ mod tests {
             .with("view_mode", 1u32)
             .with("view_label", "elevation")
             .with("epoch", 4u32)
-            .with("epoch_label", "Hydrosphere")
+            .with("epoch_label", strings::resolve("$w_epoch_hydrosphere").into_owned())
             .with("time_of_day", 8.0_f64)
             .with("play_speed", 1.0_f64)
             .with("moon_phase", 2.0_f64)

@@ -72,7 +72,15 @@ fn tok_a(name: &str, alpha: f32) -> [f32; 4] {
 }
 
 /// The Muse — the main-menu character, embedded so every shell app inherits her.
-const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/sensorium/assets/muse.png");
+const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/package/sensorium/assets/muse.png");
+
+/// The Prism pointer — the knotwork cursor, embedded so every shell app
+/// inherits it (source ico: `content/source/prism_ui_icons/`, un-tracked; this
+/// PNG is the checked-in game copy). Grayscale art, tinted at load by a token.
+const CURSOR_IMAGE: &[u8] = include_bytes!("../../../../content/package/sensorium/assets/cursor.png");
+
+/// The `theme.tokens` name the cursor's grayscale art is multiplied by.
+const CURSOR_TINT: &str = "gold_ring";
 
 // ===== loading-panel geometry (the one Rust-drawn widget) =====
 
@@ -108,6 +116,34 @@ fn load_muse(renderer: &mut Renderer) -> TextureHandle {
     }
 }
 
+/// Decode + tint the Prism cursor for [`flicker::app::App::cursor`]: the
+/// grayscale knot multiplied by [`CURSOR_TINT`], so the dark outline stays dark
+/// and the bright weave goes gold. Hotspot (0, 0) — the art's tip sits exactly
+/// in the corner. `None` (decode failure, logged) keeps the platform arrow.
+pub fn cursor_image() -> Option<flicker::app::CursorImage> {
+    let img = match image::load_from_memory(CURSOR_IMAGE) {
+        Ok(img) => img.to_rgba8(),
+        Err(e) => {
+            tracing::error!("failed to decode cursor.png — keeping the platform arrow: {e}");
+            return None;
+        }
+    };
+    let (w, h) = img.dimensions();
+    let tint = tok(CURSOR_TINT);
+    let mut rgba = img.into_raw();
+    for px in rgba.chunks_exact_mut(4) {
+        for (ch, t) in px[..3].iter_mut().zip(tint) {
+            *ch = (f32::from(*ch) * t).round() as u8;
+        }
+    }
+    Some(flicker::app::CursorImage {
+        rgba,
+        width: w as u16,
+        height: h as u16,
+        hotspot: (0, 0),
+    })
+}
+
 /// A geometry rect (px) for the loading layout.
 #[derive(Copy, Clone)]
 struct Rect {
@@ -131,27 +167,27 @@ impl Theme {
     /// Register the Prism UI faces + upload the shared textures: the 1×1 white
     /// pixel (rect fills / scrims) and the Muse.
     pub fn build(renderer: &mut Renderer) -> Self {
-        // The six Prism faces (Alpha/content/sensorium/fonts) registered under their role
+        // The six Prism faces (Alpha/content/package/sensorium/fonts) registered under their role
         // family names so `FontRole` + italic/bold select them: five instanced
         // text weights + the renamed `Prism Rune` (Noto Sans Runic) for glyphs.
         // Any glyph a face lacks falls back to a system font.
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/CormorantGaramond-SemiBold.ttf" // Prism Display 600
+            "../../../../content/package/sensorium/fonts/CormorantGaramond-SemiBold.ttf" // Prism Display 600
         ));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/CormorantGaramond-Bold.ttf" // Prism Display 700 (bold)
+            "../../../../content/package/sensorium/fonts/CormorantGaramond-Bold.ttf" // Prism Display 700 (bold)
         ));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/Cinzel-SemiBold.ttf" // Prism Label 600 (tracked caps)
+            "../../../../content/package/sensorium/fonts/Cinzel-SemiBold.ttf" // Prism Label 600 (tracked caps)
         ));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/EBGaramond-Regular.ttf" // Prism Body 400
+            "../../../../content/package/sensorium/fonts/EBGaramond-Regular.ttf" // Prism Body 400
         ));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/EBGaramond-Italic.ttf" // Prism Body italic (flavor)
+            "../../../../content/package/sensorium/fonts/EBGaramond-Italic.ttf" // Prism Body italic (flavor)
         ));
         renderer.register_ui_font(include_bytes!(
-            "../../../../content/sensorium/fonts/NotoSansRunic-Prism.ttf" // Prism Rune (corner glyphs)
+            "../../../../content/package/sensorium/fonts/NotoSansRunic-Prism.ttf" // Prism Rune (corner glyphs)
         ));
 
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
@@ -282,5 +318,23 @@ mod tests {
         // And the bronze rim keeps its authored alpha override.
         assert_eq!(tok_a("bronze", 0.95)[3], 0.95);
         assert_eq!(tok("stone0"), [0.031, 0.035, 0.047, 1.0], "tokens parse to their rgba");
+    }
+
+    /// The Prism cursor decodes, keeps its shape, and takes the palette tint:
+    /// 32×32 RGBA, opaque art at the (0,0) hotspot, gold channel ordering
+    /// (r > g > b) on the bright weave, transparency preserved around it.
+    #[test]
+    fn cursor_decodes_and_tints() {
+        let c = cursor_image().expect("embedded cursor.png decodes");
+        assert_eq!((c.width, c.height), (32, 32));
+        assert_eq!(c.rgba.len(), 32 * 32 * 4);
+        assert_eq!(c.hotspot, (0, 0), "the art's tip is the corner pixel");
+        assert!(c.rgba[3] > 64, "hotspot pixel must be opaque art");
+        let bright = c.rgba.chunks_exact(4).filter(|p| p[3] > 200).max_by_key(|p| p[0]).unwrap();
+        assert!(
+            bright[0] > bright[1] && bright[1] > bright[2],
+            "gold tint ordering r>g>b, got {bright:?}"
+        );
+        assert!(c.rgba.chunks_exact(4).any(|p| p[3] == 0), "a pointer keeps transparent surround");
     }
 }

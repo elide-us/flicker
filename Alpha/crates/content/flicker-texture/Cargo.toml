@@ -1,0 +1,24 @@
+[package]
+name = "flicker-texture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The texture SYNTHESIZER — data-model tier ③ of the material pipeline
+# (Elements → Compounds → **Materials**). A fixed rack of noise channels blended
+# into one field, projected through an output stage into a PBR map set. Pure CPU
+# and pure function: no graphics, no filesystem, no clock — a recipe plus a size
+# is the whole input, and identical input always produces identical bytes. That
+# is what lets the bench be a face on it and the tests run headless.
+[dependencies]
+# The shared seeded lattice (2D-tileable) — the one noise in the tree.
+flicker-primitive.workspace = true
+# The material vocabulary a recipe binds to (a recipe answers "what does material
+# 47 look like?"); this crate never classifies, it only names the binding.
+flicker-materials.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+# Examples only — the crate itself emits raw pixel buffers and never a file format.
+image.workspace = true

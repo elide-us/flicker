@@ -1,9 +1,9 @@
 -- ui.core — the shared draw + hit-test primitives every UI component builds on.
 --
--- Part of the composable vector-UI component library (`content/scripts/ui/`):
+-- Part of the composable vector-UI component library (`content/sensorium/scripts/ui/`):
 -- each component lives in its own file and `require("ui.core")`, so the panel /
 -- text / point_in logic lives HERE ONCE instead of being copy-pasted across
--- settings.lua / modal.lua / sim_ui.lua / … (the duplication this library ends).
+-- settings.lua / menu.lua / the hud_*.lua screens / … (the duplication this library ends).
 --
 -- Colours are Prism `$token` rgba tables (`{r,g,b,a}`, 0..1) resolved from
 -- ui_elements.json. Emitters append plain-data HudCommands to `cmds`.

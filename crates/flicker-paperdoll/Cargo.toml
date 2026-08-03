@@ -22,7 +22,7 @@ path = "src/lib.rs"
 [dependencies]
 # Umbrella: re-exports flicker-app (App/run/InputState/Key) + flicker-render
 # (Renderer/Camera/lines+mesh pipelines + glam math types).
-flicker = { path = "../flicker" }
+flicker = { path = "../../Alpha/crates/core/flicker" }
 # The reusable front-end shell (splash/menu/settings/pause) this viewer runs inside.
 flicker-shell.workspace = true
 # Input event bus (spec §9): the resolver's discrete edges (flicker-input-core) routed
@@ -32,6 +32,9 @@ flicker-input-core.workspace = true
 flicker-input-router.workspace = true
 # The GPU-free skeletal-animation runtime (format/pose/skin/state).
 flicker-skeletal.workspace = true
+# The gz-at-rest content seam (flicker-core::compression): pieces/fits are read by
+# LOGICAL path and the Record fold re-emits them in their gz form.
+flicker-core.workspace = true
 # The mechanics cluster: collision primitives + the auto-fit + the debug wireframe (WS-D).
 flicker-mechanics.workspace = true
 glam.workspace = true

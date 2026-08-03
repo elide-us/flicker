@@ -1,6 +1,6 @@
 -- ui.rune_corners — a decoration: four Elder-Futhark glyphs inset from the rect's four
 -- corners, the TOP pair in rune-light (`top`), the BOTTOM pair in dim bronze (`bot`). A
--- pure overlay (no bind). The Lua twin of the engine's draw_rune_corners.
+-- pure overlay (no bind).
 --
 -- props: tl, tr, bl, br (corner glyphs, with defaults), glyph_size, layer,
 --   style { inset, size, top, bot }.
@@ -37,6 +37,9 @@ function rune_corners.draw(cmds, r, props)
   core.text(cmds, r.x + r.w - inset, by, br, size, bronze, "right", "rune", layer)
 end
 
+-- Never dispatched — `hit_shape` above answers the hit in Rust. The body stays
+-- because the library registers a COMPONENT by its draw + hit pair (see
+-- flicker-script's `probe_component_kinds`).
 function rune_corners.hit(mx, my, r)
   return core.point_in(mx, my, r)
 end

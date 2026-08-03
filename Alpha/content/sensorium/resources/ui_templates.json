@@ -1,126 +1,2814 @@
 {
-  "_comment": "Data TEMPLATE protos for the flicker-widgets template tier: `templates.<name>` is the proto UiNode tree `expand` instantiates for a `{ template: <name> }` node. Instance props substitute into `@name` / `@name=default` (native JSON value) and `@{name}` / `@{name=default}` (string interpolation); `when`: `@name` / `!@name` gates a node on a prop; `{ component: slot, name: <slot> }` splices the instance's named slot (its children are the fallback); `when_filled: true` drops a node when no slot beneath it produced instance content. `$token` strings are stringtable refs resolved at draw — never substituted here. Structural pseudo-props: the instance's `anchor` and `id` are readable as `@anchor` / `@id`.",
+  "_comment": "Data TEMPLATE protos for the flicker-widgets template tier: `templates.<name>` is the proto UiNode tree `expand` instantiates for a `{ template: <name> }` node. Instance props substitute into `@name` / `@name=default` (native JSON value) and `@{name}` / `@{name=default}` (string interpolation); `when`: `@name` / `!@name` gates a node on a prop; `{ component: slot, name: <slot> }` splices the instance's named slot (its children are the fallback); `when_filled: true` drops a node when no slot beneath it produced instance content. `$token` strings are stringtable refs resolved at draw \u2014 never substituted here. Structural pseudo-props: the instance's `anchor` and `id` are readable as `@anchor` / `@id`.",
   "templates": {
     "quad_rtt_view": {
-      "component": "rtt", "id": "@quad_id", "style": "@style=assetpipeline.holder",
-      "source": "@source", "width": "@width", "height": "@height", "grow": 1.0,
-      "live": "@live", "live_bind": "@live_bind", "tint": "@tint"
+      "component": "rtt",
+      "id": "@quad_id",
+      "style": "@style=rtt_holder",
+      "source": "@source",
+      "width": "@width",
+      "height": "@height",
+      "grow": 1.0,
+      "live": "@live",
+      "live_bind": "@live_bind",
+      "tint": "@tint"
     },
     "side_by_side_rtt": {
-      "component": "row", "grow": 1.0, "gap": "@gap=0",
+      "component": "row",
+      "grow": 1.0,
+      "gap": "@gap=0",
       "children": [
-        { "component": "rtt", "id": "@{id}_left", "grow": 1.0, "style": "@style=assetpipeline.holder", "source": "@left_source", "live_bind": "@left_live_bind" },
-        { "component": "rtt", "id": "@{id}_right", "grow": 1.0, "style": "@style=assetpipeline.holder", "source": "@right_source", "live_bind": "@right_live_bind" }
+        {
+          "component": "rtt",
+          "id": "@{id}_left",
+          "grow": 1.0,
+          "style": "@style=rtt_holder",
+          "source": "@left_source",
+          "live_bind": "@left_live_bind"
+        },
+        {
+          "component": "rtt",
+          "id": "@{id}_right",
+          "grow": 1.0,
+          "style": "@style=rtt_holder",
+          "source": "@right_source",
+          "live_bind": "@right_live_bind"
+        }
       ]
     },
     "workbench": {
       "template": "frame",
       "style": "@style=settings",
-      "w_frac": "@w_frac=1", "h_frac": "@h_frac=1",
+      "w_frac": "@w_frac=1",
+      "h_frac": "@h_frac=1",
       "slots": {
         "center": [
-          { "component": "cell", "children": [
-            { "component": "row", "style": "@header_style", "height": "@header_h", "pad": "@header_pad", "gap": "@header_gap", "children": [
-              { "component": "slot", "name": "header" }
-            ] },
-            { "component": "row", "style": "@tab_style", "height": "@tab_h", "pad": "@tab_pad", "gap": "@tab_gap", "children": [
-              { "component": "slot", "name": "tabs" }
-            ] },
-            { "component": "row", "grow": 1.0, "pad": "@body_pad", "gap": "@body_gap", "children": [
-              { "component": "slot", "name": "viewport" },
-              { "component": "slot", "name": "rail" }
-            ] },
-            { "component": "cell", "style": "@footer_style", "height": "@footer_h", "pad": "@footer_pad", "gap": "@footer_gap", "children": [
-              { "component": "row", "gap": "@footer_gap", "height": "@footer_btn_h", "children": [
-                { "component": "slot", "name": "footer" }
-              ] }
-            ] }
-          ] }
+          {
+            "component": "cell",
+            "children": [
+              {
+                "component": "row",
+                "style": "@header_style",
+                "height": "@header_h",
+                "pad": "@header_pad",
+                "gap": "@header_gap",
+                "children": [
+                  {
+                    "component": "slot",
+                    "name": "header"
+                  }
+                ]
+              },
+              {
+                "component": "row",
+                "style": "@tab_style",
+                "height": "@tab_h",
+                "pad": "@tab_pad",
+                "gap": "@tab_gap",
+                "children": [
+                  {
+                    "component": "slot",
+                    "name": "tabs"
+                  }
+                ]
+              },
+              {
+                "component": "row",
+                "grow": 1.0,
+                "pad": "@body_pad",
+                "gap": "@body_gap",
+                "children": [
+                  {
+                    "component": "slot",
+                    "name": "viewport"
+                  },
+                  {
+                    "component": "slot",
+                    "name": "rail"
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "style": "@footer_style",
+                "height": "@footer_h",
+                "pad": "@footer_pad",
+                "gap": "@footer_gap",
+                "children": [
+                  {
+                    "component": "row",
+                    "gap": "@footer_gap",
+                    "height": "@footer_btn_h",
+                    "children": [
+                      {
+                        "component": "slot",
+                        "name": "footer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         ]
       }
     },
     "window": {
       "template": "frame",
       "style": "@style=settings",
-      "w": "@w", "h": "@h", "w_frac": "@w_frac", "h_frac": "@h_frac",
+      "w": "@w",
+      "h": "@h",
+      "w_frac": "@w_frac",
+      "h_frac": "@h_frac",
       "closable": "@has_close=true",
-      "close_action": "@close_action", "close_style": "@close_style", "close_label": "@close_label",
+      "close_action": "@close_action",
+      "close_style": "@close_style",
+      "close_label": "@close_label",
       "slots": {
         "center": [
-          { "component": "cell", "children": [
-            {
-              "component": "cell", "style": "@{style=settings}.titlebar",
-              "height": "@title_h", "pad_x": "@title_pad=16", "pad_y": "@title_pad_y=10", "gap": "@title_gap=4",
-              "align": "@title_align",
-              "children": [
-                { "component": "text", "style": "@{style=settings}.titlebar", "text": "@title", "text_size": "@title_size=22" },
-                { "component": "text", "when": "@subtitle", "style": "@{style=settings}.titlebar", "text": "@subtitle", "text_size": "@subtitle_size=13" }
-              ]
-            },
-            { "component": "cell", "style": "@body_style", "grow": 1.0, "pad": "@body_pad", "children": [
-              { "component": "slot", "name": "content" }
-            ] },
-            { "component": "cell", "when_filled": true, "height": "@footer_h", "align": "@footer_align", "children": [
-              { "component": "row", "when": "@footer_h", "grow": 1.0, "style": "@footer_style", "pad_x": "@footer_pad=16", "pad_y": "@footer_pad_y=10", "gap": "@footer_gap=12", "children": [
-                { "component": "slot", "name": "footer" }
-              ] },
-              { "component": "row", "when": "!@footer_h", "style": "@footer_style", "pad_x": "@footer_pad=16", "pad_y": "@footer_pad_y=10", "gap": "@footer_gap=12", "children": [
-                { "component": "slot", "name": "footer" }
-              ] }
-            ] }
-          ] }
+          {
+            "component": "cell",
+            "children": [
+              {
+                "component": "cell",
+                "style": "@{style=settings}.titlebar",
+                "height": "@title_h",
+                "pad_x": "@title_pad=16",
+                "pad_y": "@title_pad_y=10",
+                "gap": "@title_gap=4",
+                "align": "@title_align",
+                "children": [
+                  {
+                    "component": "text",
+                    "style": "@{style=settings}.titlebar",
+                    "text": "@title",
+                    "text_size": "@title_size=21"
+                  },
+                  {
+                    "component": "text",
+                    "when": "@subtitle",
+                    "style": "@{style=settings}.titlebar",
+                    "text": "@subtitle",
+                    "text_size": "@subtitle_size=13"
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "style": "@body_style",
+                "grow": 1.0,
+                "pad": "@body_pad",
+                "children": [
+                  {
+                    "component": "slot",
+                    "name": "content"
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "when_filled": true,
+                "height": "@footer_h",
+                "align": "@footer_align",
+                "children": [
+                  {
+                    "component": "row",
+                    "when": "@footer_h",
+                    "grow": 1.0,
+                    "style": "@footer_style",
+                    "pad_x": "@footer_pad=16",
+                    "pad_y": "@footer_pad_y=10",
+                    "gap": "@footer_gap=12",
+                    "children": [
+                      {
+                        "component": "slot",
+                        "name": "footer"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "when": "!@footer_h",
+                    "style": "@footer_style",
+                    "pad_x": "@footer_pad=16",
+                    "pad_y": "@footer_pad_y=10",
+                    "gap": "@footer_gap=12",
+                    "children": [
+                      {
+                        "component": "slot",
+                        "name": "footer"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
         ]
       }
     },
     "choice_dialog": {
-      "component": "screen", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0,
+      "component": "screen",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
       "children": [
-        { "component": "cell", "style": "@overlay_style", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0 },
         {
-          "component": "cell", "id": "popup", "style": "@panel_style=modal.panel", "anchor": "center",
-          "width": "@panel_w=404", "pad": "@panel_pad=38", "gap": "@gap=16", "layer": 1.0,
+          "component": "cell",
+          "style": "@overlay_style",
+          "anchor": "top_left",
+          "width_frac": 1.0,
+          "height_frac": 1.0
+        },
+        {
+          "component": "cell",
+          "id": "popup",
+          "style": "@panel_style=modal.panel",
+          "anchor": "center",
+          "width": "@panel_w=404",
+          "pad": "@panel_pad=38",
+          "gap": "@gap=16",
+          "layer": 1.0,
           "children": [
-            { "component": "text", "text": "@title=", "align": "center", "font": "display", "color": "@title_color=modal.title.color", "text_size": "@title_size=52" },
-            { "component": "text", "when": "@message", "text": "@message", "align": "center", "font": "label", "color": "@message_color=modal.subtitle.color", "text_size": "@message_size=11" },
-            { "component": "text", "when": "@subtitle_bind", "text_bind": "@subtitle_bind", "align": "center", "font": "body", "color": "@subtitle_color=modal.countdown.color", "text_size": "@subtitle_size=15" },
-            { "component": "cell", "style": "@divider_style=modal.divider", "size": 1.0 },
-            { "component": "cell", "gap": "@btn_gap=12", "children": [
-              { "component": "slot", "name": "buttons", "children": [
-                { "component": "button", "when": "@confirm_label", "id": "@confirm_action=confirm", "action": "@confirm_action=confirm", "size": "@btn_h=48", "label": "@confirm_label", "label_size": "@btn_label_size=15", "style": "modal.buttons.variants.@{confirm_variant=primary}" },
-                { "component": "button", "when": "@cancel_label", "id": "@cancel_action=cancel", "action": "@cancel_action=cancel", "size": "@btn_h=48", "label": "@cancel_label", "label_size": "@btn_label_size=15", "style": "modal.buttons.variants.@{cancel_variant=secondary}" }
-              ] }
-            ] }
+            {
+              "component": "text",
+              "text": "@title=",
+              "align": "center",
+              "font": "display",
+              "color": "@title_color=modal.title.color",
+              "text_size": "@title_size=52"
+            },
+            {
+              "component": "text",
+              "when": "@message",
+              "text": "@message",
+              "align": "center",
+              "font": "label",
+              "color": "@message_color=modal.subtitle.color",
+              "text_size": "@message_size=11"
+            },
+            {
+              "component": "text",
+              "when": "@subtitle_bind",
+              "text_bind": "@subtitle_bind",
+              "align": "center",
+              "font": "body",
+              "color": "@subtitle_color=modal.countdown.color",
+              "text_size": "@subtitle_size=15"
+            },
+            {
+              "component": "cell",
+              "style": "@divider_style=modal.divider",
+              "size": 1.0
+            },
+            {
+              "component": "cell",
+              "gap": "@btn_gap=12",
+              "children": [
+                {
+                  "component": "slot",
+                  "name": "buttons",
+                  "children": [
+                    {
+                      "component": "button",
+                      "when": "@confirm_label",
+                      "id": "@confirm_action=confirm",
+                      "action": "@confirm_action=confirm",
+                      "size": "@btn_h=48",
+                      "label": "@confirm_label",
+                      "label_size": "@btn_label_size=15",
+                      "style": "modal.buttons.variants.@{confirm_variant=primary}"
+                    },
+                    {
+                      "component": "button",
+                      "when": "@cancel_label",
+                      "id": "@cancel_action=cancel",
+                      "action": "@cancel_action=cancel",
+                      "size": "@btn_h=48",
+                      "label": "@cancel_label",
+                      "label_size": "@btn_label_size=15",
+                      "style": "modal.buttons.variants.@{cancel_variant=secondary}"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "item_context_menu": {
+      "_comment": "The focused-item context menu. Rows are children-as-data (the `context_menu` component's contract): each carries a $token label, an optional right-aligned $token hint, an `action` the walker fires, and `disabled`/`divider` flags. Data-children props are NOT model-resolved, so a row's disabled state rides a TEMPLATE PARAM \u2014 the bench re-expands every frame, which is what makes that dynamic. Actions are the bench's existing verb vocabulary, so a menu pick, a chord and a click are one event at the dispatcher.",
+      "component": "context_menu",
+      "id": "@id=item_menu",
+      "visible_bind": "@on_bind",
+      "anchor": "top_left",
+      "offset": [
+        "@x=0",
+        "@y=0"
+      ],
+      "width": "@w=250",
+      "layer": "@layer=25",
+      "style": "@style=quartermaster.menu",
+      "children": [
+        {
+          "component": "option",
+          "label": "$ctx_open",
+          "hint": "$ctx_hint_open",
+          "action": "confirm",
+          "active": "@active_0"
+        },
+        {
+          "component": "option",
+          "label": "$ctx_rename",
+          "hint": "$ctx_hint_rename",
+          "action": "rename",
+          "active": "@active_1"
+        },
+        {
+          "component": "option",
+          "label": "$ctx_cut",
+          "hint": "$ctx_hint_cut",
+          "action": "cut",
+          "active": "@active_2"
+        },
+        {
+          "component": "option",
+          "label": "$ctx_paste",
+          "hint": "$ctx_hint_paste",
+          "action": "paste",
+          "active": "@active_3",
+          "disabled": "@paste_disabled"
+        },
+        {
+          "component": "option",
+          "divider": true
+        },
+        {
+          "component": "option",
+          "label": "$ctx_new_folder",
+          "hint": "$ctx_hint_new_folder",
+          "action": "create_folder",
+          "active": "@active_5"
+        }
+      ]
+    },
+    "toast": {
+      "_comment": "ONE transient confirmation with an inline Undo. Composed copy is impossible by construction: the ACTION is a $token (`label_bind` resolves to one) and the SUBJECT is data (`name_bind`), rendered as two nodes rather than one formatted sentence. The undo button fires the SAME result name as the undo chord, so a click and a chord are indistinguishable at the dispatcher.",
+      "component": "row",
+      "visible_bind": "@on_bind",
+      "height": "@h=44",
+      "gap": "@gap=14",
+      "pad_x": "@pad_x=18",
+      "pad_y": "@pad_y=12",
+      "style": "@style=modal.panel",
+      "layer": "@layer=20",
+      "children": [
+        {
+          "component": "text",
+          "text_bind": "@label_bind",
+          "font": "label",
+          "text_size": "@label_size=11",
+          "color": "@label_color=modal.footer.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@name_bind",
+          "grow": 1.0,
+          "font": "body",
+          "text_size": "@name_size=14",
+          "color": "@name_color=modal.subtitle.color"
+        },
+        {
+          "component": "button",
+          "id": "@undo_id",
+          "action": "@undo_action=undo",
+          "size": "@btn_w=88",
+          "height": "@btn_h=26",
+          "label": "@undo_label=$toast_undo",
+          "label_size": "@btn_label_size=10",
+          "style": "modal.buttons.variants.@{undo_variant=secondary}"
+        }
+      ]
+    },
+    "toast_stack": {
+      "_comment": "The bottom-right toast bank: a FIXED capacity of three, newest last (lowest), each row gated by its own `toast_<i>_on` bind. Fixed-bank + indexed binds is the sanctioned dynamic-rows pattern \u2014 the walker has no repeater \u2014 so the bench pages its live toasts into these three slots.",
+      "component": "cell",
+      "id": "@id=toast_stack",
+      "anchor": "@anchor=bottom_right",
+      "offset": [
+        "@offset_x=-26",
+        "@offset_y=-26"
+      ],
+      "gap": "@gap=8",
+      "layer": "@layer=20",
+      "children": [
+        {
+          "template": "toast",
+          "on_bind": "toast_0_on",
+          "label_bind": "toast_0_label",
+          "name_bind": "toast_0_name",
+          "undo_id": "toast_0_undo",
+          "undo_action": "@undo_action=undo",
+          "style": "@style=modal.panel",
+          "layer": "@layer=20"
+        },
+        {
+          "template": "toast",
+          "on_bind": "toast_1_on",
+          "label_bind": "toast_1_label",
+          "name_bind": "toast_1_name",
+          "undo_id": "toast_1_undo",
+          "undo_action": "@undo_action=undo",
+          "style": "@style=modal.panel",
+          "layer": "@layer=20"
+        },
+        {
+          "template": "toast",
+          "on_bind": "toast_2_on",
+          "label_bind": "toast_2_label",
+          "name_bind": "toast_2_name",
+          "undo_id": "toast_2_undo",
+          "undo_action": "@undo_action=undo",
+          "style": "@style=modal.panel",
+          "layer": "@layer=20"
+        }
+      ]
+    },
+    "conflict_dialog": {
+      "_comment": "The file-collision prompt \u2014 choice_dialog's modal sibling, owning the fixed `conflict_*` vocabulary the way the workflow proto owns `wf_*`: binds conflict_name / conflict_where / conflict_existing / conflict_incoming / conflict_multi / conflict_apply_rest, actions conflict_skip / conflict_keep_both / conflict_replace, captions $conflict_*. A bench instances ONE node (template + its own visible_bind + skin params), publishes the binds, and consumes the three actions; the checkbox only shows while conflict_multi reports more than one collision outstanding.",
+      "component": "screen",
+      "id": "@id=conflict_dialog",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
+      "children": [
+        {
+          "component": "cell",
+          "style": "@overlay_style",
+          "anchor": "top_left",
+          "width_frac": 1.0,
+          "height_frac": 1.0
+        },
+        {
+          "component": "cell",
+          "id": "conflict_popup",
+          "style": "@panel_style=modal.panel",
+          "anchor": "center",
+          "width": "@panel_w=620",
+          "pad": "@panel_pad=24",
+          "gap": "@gap=14",
+          "layer": 1.0,
+          "children": [
+            {
+              "component": "text",
+              "text": "@title=$conflict_title",
+              "align": "center",
+              "font": "label",
+              "color": "@title_color=modal.title.color",
+              "text_size": "@title_size=15"
+            },
+            {
+              "component": "text",
+              "text_bind": "@name_bind=conflict_name",
+              "align": "center",
+              "font": "body",
+              "color": "@name_color=modal.subtitle.color",
+              "text_size": "@name_size=14"
+            },
+            {
+              "component": "text",
+              "text": "$conflict_exists_in",
+              "align": "center",
+              "font": "label",
+              "color": "@meta_color=modal.footer.color",
+              "text_size": "@meta_size=11"
+            },
+            {
+              "component": "text",
+              "text_bind": "@where_bind=conflict_where",
+              "align": "center",
+              "font": "body",
+              "color": "@meta_color=modal.footer.color",
+              "text_size": "@where_size=13"
+            },
+            {
+              "component": "row",
+              "height": "@card_h=64",
+              "gap": "@card_gap=12",
+              "children": [
+                {
+                  "component": "cell",
+                  "style": "@card_style",
+                  "grow": 1.0,
+                  "pad": "@card_pad=12",
+                  "gap": 6.0,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$conflict_existing",
+                      "font": "label",
+                      "color": "@meta_color=modal.footer.color",
+                      "text_size": 11.0
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "@existing_bind=conflict_existing",
+                      "font": "body",
+                      "color": "@fact_color=modal.subtitle.color",
+                      "text_size": 14.0
+                    }
+                  ]
+                },
+                {
+                  "component": "cell",
+                  "style": "@card_style",
+                  "grow": 1.0,
+                  "pad": "@card_pad=12",
+                  "gap": 6.0,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$conflict_incoming",
+                      "font": "label",
+                      "color": "@meta_color=modal.footer.color",
+                      "text_size": 11.0
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "@incoming_bind=conflict_incoming",
+                      "font": "body",
+                      "color": "@fact_color=modal.subtitle.color",
+                      "text_size": 14.0
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "component": "checkbox",
+              "id": "@apply_id=conflict_apply_rest",
+              "action": "@apply_id=conflict_apply_rest",
+              "bind": "@apply_id=conflict_apply_rest",
+              "visible_bind": "@multi_bind=conflict_multi",
+              "label": "$conflict_apply_rest",
+              "size": "@apply_h=20",
+              "style": "@check_style"
+            },
+            {
+              "component": "row",
+              "height": "@btn_h=40",
+              "gap": "@btn_gap=10",
+              "children": [
+                {
+                  "component": "slot",
+                  "name": "buttons",
+                  "children": [
+                    {
+                      "component": "button",
+                      "id": "@skip_action=conflict_skip",
+                      "action": "@skip_action=conflict_skip",
+                      "grow": 1.0,
+                      "height": "@btn_h=40",
+                      "label": "@skip_label=$conflict_skip",
+                      "label_size": "@btn_label_size=13",
+                      "style": "modal.buttons.variants.@{skip_variant=secondary}"
+                    },
+                    {
+                      "component": "button",
+                      "id": "@keep_action=conflict_keep_both",
+                      "action": "@keep_action=conflict_keep_both",
+                      "grow": 1.0,
+                      "height": "@btn_h=40",
+                      "label": "@keep_label=$conflict_keep_both",
+                      "label_size": "@btn_label_size=13",
+                      "style": "modal.buttons.variants.@{keep_variant=secondary}"
+                    },
+                    {
+                      "component": "button",
+                      "id": "@replace_action=conflict_replace",
+                      "action": "@replace_action=conflict_replace",
+                      "grow": 1.0,
+                      "height": "@btn_h=40",
+                      "label": "@replace_label=$conflict_replace",
+                      "label_size": "@btn_label_size=13",
+                      "style": "modal.buttons.variants.@{replace_variant=primary}"
+                    }
+                  ]
+                }
+              ]
+            }
           ]
         }
       ]
     },
     "popup_panel": {
-      "component": "cell", "id": "@id", "style": "@panel_style=modal.panel",
-      "width": "@panel_w=404", "pad": "@panel_pad=38", "gap": "@panel_gap=16", "layer": "@layer=1",
+      "component": "cell",
+      "id": "@id",
+      "style": "@panel_style=modal.panel",
+      "width": "@panel_w=404",
+      "pad": "@panel_pad=38",
+      "gap": "@panel_gap=16",
+      "layer": "@layer=1",
       "children": [
-        { "component": "text", "text": "@title=", "align": "center", "font": "display", "color": "@title_color=modal.title.color", "text_size": "@title_size=52" },
-        { "component": "text", "when": "@subtitle", "text": "@subtitle", "align": "center", "font": "label", "color": "@subtitle_color=modal.subtitle.color", "text_size": "@subtitle_size=11" },
-        { "component": "cell", "when": "@divider", "style": "@divider_style=modal.divider", "size": 1.0 },
-        { "component": "cell", "gap": "@items_gap=12", "children": [ { "component": "slot", "name": "items" } ] },
-        { "component": "text", "when": "@footer", "text": "@footer", "align": "center", "font": "label", "color": "@footer_color=modal.footer.color", "text_size": "@footer_size=10" }
+        {
+          "component": "text",
+          "text": "@title=",
+          "align": "center",
+          "font": "display",
+          "color": "@title_color=modal.title.color",
+          "text_size": "@title_size=52"
+        },
+        {
+          "component": "text",
+          "when": "@subtitle",
+          "text": "@subtitle",
+          "align": "center",
+          "font": "label",
+          "color": "@subtitle_color=modal.subtitle.color",
+          "text_size": "@subtitle_size=11"
+        },
+        {
+          "component": "cell",
+          "when": "@divider",
+          "style": "@divider_style=modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "cell",
+          "gap": "@items_gap=12",
+          "children": [
+            {
+              "component": "slot",
+              "name": "items"
+            }
+          ]
+        },
+        {
+          "component": "text",
+          "when": "@footer",
+          "text": "@footer",
+          "align": "center",
+          "font": "label",
+          "color": "@footer_color=modal.footer.color",
+          "text_size": "@footer_size=10"
+        }
       ]
     },
     "popup_menu": {
-      "component": "screen", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0,
+      "component": "screen",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
       "children": [
-        { "component": "cell", "style": "@overlay_style=screens.pause", "anchor": "top_left", "width_frac": 1.0, "height_frac": 1.0 },
-        { "component": "slot", "name": "muse" },
+        {
+          "component": "cell",
+          "style": "@overlay_style=screens.pause",
+          "anchor": "top_left",
+          "width_frac": 1.0,
+          "height_frac": 1.0
+        },
+        {
+          "component": "slot",
+          "name": "muse"
+        },
         {
           "template": "popup_panel",
           "panel_style": "@panel_style=modal.panel",
-          "panel_w": "@panel_w=404", "panel_pad": "@panel_pad=38", "panel_gap": "@panel_gap=16",
-          "anchor": "@anchor=center", "offset": ["@offset_x=0", "@offset_y=0"],
-          "title": "@title=", "title_size": "@title_size=52", "title_color": "@title_color=modal.title.color",
-          "subtitle": "@subtitle", "subtitle_size": "@subtitle_size=11", "subtitle_color": "@subtitle_color=modal.subtitle.color",
-          "divider": "@divider", "divider_style": "@divider_style=modal.divider",
+          "panel_w": "@panel_w=404",
+          "panel_pad": "@panel_pad=38",
+          "panel_gap": "@panel_gap=16",
+          "anchor": "@anchor=center",
+          "offset": [
+            "@offset_x=0",
+            "@offset_y=0"
+          ],
+          "title": "@title=",
+          "title_size": "@title_size=52",
+          "title_color": "@title_color=modal.title.color",
+          "subtitle": "@subtitle",
+          "subtitle_size": "@subtitle_size=11",
+          "subtitle_color": "@subtitle_color=modal.subtitle.color",
+          "divider": "@divider",
+          "divider_style": "@divider_style=modal.divider",
           "items_gap": "@items_gap=12",
-          "footer": "@footer", "footer_size": "@footer_size=10", "footer_color": "@footer_color=modal.footer.color",
-          "slots": { "items": [ { "component": "slot", "name": "items" } ] }
+          "footer": "@footer",
+          "footer_size": "@footer_size=10",
+          "footer_color": "@footer_color=modal.footer.color",
+          "slots": {
+            "items": [
+              {
+                "component": "slot",
+                "name": "items"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "unit_frame": {
+      "component": "row",
+      "style": "unit_frame.@{tone=card}",
+      "pad": "@pad=14",
+      "gap": "@gap=14",
+      "children": [
+        {
+          "component": "medallion",
+          "size": "@portrait=58",
+          "ring": "@ring=bronze",
+          "rune": "@rune",
+          "rune_bind": "@rune_bind"
+        },
+        {
+          "component": "cell",
+          "grow": 1.0,
+          "gap": 3.0,
+          "children": [
+            {
+              "component": "text",
+              "text": "@name",
+              "text_bind": "@name_bind",
+              "text_size": "@name_size=28",
+              "font": "display",
+              "color": "unit_frame.@{tone=card}.name_color"
+            },
+            {
+              "component": "text",
+              "when": "@subtitle",
+              "text": "@subtitle",
+              "text_size": 10,
+              "font": "label",
+              "tracking": 0.2,
+              "color": "unit_frame.@{tone=card}.subtitle_color"
+            },
+            {
+              "component": "slot",
+              "name": "gauges"
+            }
+          ]
+        }
+      ]
+    },
+    "command_card": {
+      "component": "cell",
+      "style": "@style=menu.panel",
+      "pad": "@pad=14",
+      "gap": "@gap=10",
+      "children": [
+        {
+          "component": "text",
+          "when": "@heading",
+          "text": "@heading",
+          "text_size": "@heading_size=10",
+          "font": "label",
+          "tracking": 0.2,
+          "color": "@heading_color=modal.footer.color"
+        },
+        {
+          "component": "grid",
+          "cols": "@cols=1fr 1fr 1fr 1fr",
+          "col_gap": "@slot_gap=8",
+          "row_gap": "@slot_gap=8",
+          "children": [
+            {
+              "component": "slot",
+              "name": "slots"
+            }
+          ]
+        }
+      ]
+    },
+    "resource_readout": {
+      "component": "row",
+      "style": "@style",
+      "height": "@h=34",
+      "pad_x": "@pad_x=14",
+      "gap": "@gap=18",
+      "align": "center",
+      "children": [
+        {
+          "component": "slot",
+          "name": "items"
+        }
+      ]
+    },
+    "tabbed_window": {
+      "template": "window",
+      "style": "@style=settings",
+      "title": "@title",
+      "subtitle": "@subtitle",
+      "w": "@w",
+      "h": "@h",
+      "w_frac": "@w_frac",
+      "h_frac": "@h_frac",
+      "has_close": "@has_close=true",
+      "close_action": "@close_action",
+      "footer_h": "@footer_h",
+      "body_pad": "@body_pad",
+      "slots": {
+        "content": [
+          {
+            "component": "cell",
+            "grow": 1.0,
+            "children": [
+              {
+                "component": "row",
+                "height": "@tab_h=44",
+                "pad": "@tab_pad=6",
+                "children": [
+                  {
+                    "component": "tabs",
+                    "bind": "@tab_bind=tab",
+                    "grow": 1.0,
+                    "tab_active": "@tab_active",
+                    "tab_idle": "@tab_idle",
+                    "children": [
+                      {
+                        "component": "slot",
+                        "name": "tabs"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "slot",
+                    "name": "content"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "footer": [
+          {
+            "component": "slot",
+            "name": "footer"
+          }
+        ]
+      }
+    },
+    "workflow": {
+      "component": "screen",
+      "id": "@id=workflow",
+      "on_menu": "@on_menu",
+      "on_cancel": "@on_cancel",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
+      "children": [
+        {
+          "template": "workbench",
+          "style": "@style=settings",
+          "header_h": "@header_h",
+          "header_pad": "@header_pad",
+          "header_gap": "@header_gap",
+          "header_style": "@header_style",
+          "tab_h": "@rail_h=44",
+          "tab_pad": "@rail_pad=6",
+          "tab_gap": "@rail_gap=6",
+          "tab_style": "@rail_style",
+          "body_pad": "@body_pad",
+          "body_gap": "@body_gap",
+          "footer_h": "@footer_h=58",
+          "footer_pad": "@footer_pad",
+          "footer_gap": "@footer_gap=12",
+          "footer_style": "@footer_style",
+          "footer_btn_h": "@footer_btn_h=46",
+          "slots": {
+            "header": [
+              {
+                "component": "slot",
+                "name": "header"
+              }
+            ],
+            "tabs": [
+              {
+                "component": "slot",
+                "name": "rail"
+              }
+            ],
+            "viewport": [
+              {
+                "component": "slot",
+                "name": "steps"
+              }
+            ],
+            "rail": [
+              {
+                "component": "slot",
+                "name": "inspector"
+              }
+            ],
+            "footer": [
+              {
+                "component": "button",
+                "id": "wf_back",
+                "action": "wf_back",
+                "label": "$wf_back",
+                "size": "@btn_w=140",
+                "label_size": 15,
+                "style": "modal.buttons.variants.secondary",
+                "enabled_bind": "@back_enabled",
+                "tab_group": "wf_footer",
+                "nav_ordinal": 0.0
+              },
+              {
+                "component": "stack",
+                "grow": 1.0
+              },
+              {
+                "component": "slot",
+                "name": "footer_extra"
+              },
+              {
+                "component": "button",
+                "id": "wf_next",
+                "action": "wf_next",
+                "label": "@next_label=$wf_next",
+                "text_bind": "@next_label_bind",
+                "size": "@btn_w=140",
+                "label_size": 15,
+                "style": "modal.buttons.variants.primary",
+                "enabled_bind": "@next_enabled=wf_can_next",
+                "tab_group": "wf_footer",
+                "nav_ordinal": 1.0
+              }
+            ]
+          }
+        },
+        {
+          "template": "choice_dialog",
+          "visible_bind": "wf_discard",
+          "title": "$wf_discard_title",
+          "title_size": "@discard_title_size=38",
+          "message": "$wf_discard_msg",
+          "confirm_label": "$wf_discard_confirm",
+          "confirm_action": "wf_discard_yes",
+          "confirm_variant": "danger",
+          "cancel_label": "$wf_discard_cancel",
+          "cancel_action": "wf_discard_no",
+          "overlay_style": "@overlay_style=screens.pause"
+        }
+      ]
+    },
+    "game_hud": {
+      "component": "screen",
+      "id": "@id=hud",
+      "on_menu": "@on_menu",
+      "on_cancel": "@on_cancel",
+      "children": [
+        {
+          "component": "cell",
+          "anchor": "top_left",
+          "offset": [
+            "@edge_pad=18",
+            "@edge_pad=18"
+          ],
+          "width": "@side_w=360",
+          "gap": "@stack_gap=10",
+          "children": [
+            {
+              "component": "slot",
+              "name": "top_left"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "anchor": "top_right",
+          "offset": [
+            "@edge_pad_neg=-18",
+            "@edge_pad=18"
+          ],
+          "width": "@side_w=360",
+          "gap": "@stack_gap=10",
+          "children": [
+            {
+              "component": "slot",
+              "name": "top_right"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "anchor": "bottom",
+          "offset": [
+            0,
+            "@edge_pad_neg=-18"
+          ],
+          "height": "@bar_h=64",
+          "gap": "@slot_gap=8",
+          "children": [
+            {
+              "component": "slot",
+              "name": "bottom"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "anchor": "bottom_left",
+          "offset": [
+            "@edge_pad=18",
+            "@edge_pad_neg=-18"
+          ],
+          "width": "@side_w=360",
+          "gap": "@stack_gap=10",
+          "children": [
+            {
+              "component": "slot",
+              "name": "bottom_left"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "anchor": "center",
+          "children": [
+            {
+              "component": "slot",
+              "name": "center"
+            }
+          ]
+        }
+      ]
+    },
+    "synth_voice": {
+      "_comment": "ONE voice of the Sablework channel rack, parameterized by `@i` (1-based). Every id interpolates that index, so the six instances the console banks share one vocabulary the dispatcher reads by number. `style_bind` lights the SELECTED voice \u2014 the proto never learns which one that is.",
+      "component": "stack",
+      "size": "@voice_h=74",
+      "style_bind": "ch@{i}_style",
+      "children": [
+        {
+          "component": "cell",
+          "pad": 6,
+          "gap": 4,
+          "children": [
+            {
+              "component": "row",
+              "size": "@row_h=22",
+              "children": [
+                {
+                  "component": "checkbox",
+                  "id": "ch@{i}_on",
+                  "bind": "ch@{i}_on",
+                  "size": 22,
+                  "height": "@row_h=22",
+                  "style": "@checkbox_style=sablework.checkbox"
+                },
+                {
+                  "component": "text",
+                  "size": "@name_w=42",
+                  "height": "@row_h=22",
+                  "text_bind": "ch@{i}_name",
+                  "text_size": "@label_size=12",
+                  "font": "label",
+                  "color": "@title_color=sablework.col.title"
+                },
+                {
+                  "component": "button",
+                  "id": "ch@{i}_source",
+                  "size": "@pill_w=84",
+                  "height": "@row_h=22",
+                  "label_bind": "ch@{i}_source",
+                  "text_size": "@label_size=12",
+                  "style": "@button_style=sablework.button"
+                },
+                {
+                  "component": "button",
+                  "id": "ch@{i}_blend",
+                  "size": "@pill_w=84",
+                  "height": "@row_h=22",
+                  "label_bind": "ch@{i}_blend",
+                  "text_size": "@label_size=12",
+                  "style": "@button_style=sablework.button"
+                },
+                {
+                  "component": "slider",
+                  "id": "ch@{i}_amount",
+                  "bind": "ch@{i}_amount",
+                  "label": "$sw_amt",
+                  "size": "@amount_w=176",
+                  "label_w": "@knob_label_w=44",
+                  "value_w": "@knob_value_w=38",
+                  "decimals": 2,
+                  "slider_h": "@slider_h=7",
+                  "label_size": "@label_size=12",
+                  "value_size": "@value_size=12",
+                  "min": 0,
+                  "max": 1,
+                  "style": "@slider_style=sablework.slider"
+                }
+              ]
+            },
+            {
+              "component": "row",
+              "size": "@row_h=22",
+              "children": [
+                {
+                  "component": "slider",
+                  "id": "ch@{i}_scale",
+                  "bind": "ch@{i}_scale",
+                  "label": "$sw_scale",
+                  "size": "@knob_w=176",
+                  "label_w": "@knob_label_w=44",
+                  "value_w": "@knob_value_w=38",
+                  "decimals": 0,
+                  "slider_h": "@slider_h=7",
+                  "label_size": "@label_size=12",
+                  "value_size": "@value_size=12",
+                  "min": 1,
+                  "max": 64,
+                  "style": "@slider_style=sablework.slider"
+                },
+                {
+                  "component": "slider",
+                  "id": "ch@{i}_octaves",
+                  "bind": "ch@{i}_octaves",
+                  "label": "$sw_oct",
+                  "size": "@knob_w=176",
+                  "label_w": "@knob_label_w=44",
+                  "value_w": "@knob_value_w=38",
+                  "decimals": 0,
+                  "slider_h": "@slider_h=7",
+                  "label_size": "@label_size=12",
+                  "value_size": "@value_size=12",
+                  "min": 1,
+                  "max": 8,
+                  "style": "@slider_style=sablework.slider"
+                },
+                {
+                  "component": "slider",
+                  "id": "ch@{i}_warp",
+                  "bind": "ch@{i}_warp",
+                  "label": "$sw_warp",
+                  "size": "@knob_w=176",
+                  "label_w": "@knob_label_w=44",
+                  "value_w": "@knob_value_w=38",
+                  "decimals": 2,
+                  "slider_h": "@slider_h=7",
+                  "label_size": "@label_size=12",
+                  "value_size": "@value_size=12",
+                  "min": 0,
+                  "max": 2,
+                  "style": "@slider_style=sablework.slider"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sablework_console": {
+      "_comment": "THE SABLEWORK CONSOLE \u2014 the texture synthesizer as one composed surface. Owns the `ch<i>_*` / `map_*` / output-stage vocabulary the way `conflict_dialog` owns `conflict_*`: the scene publishes those Model keys and reads back the same names as results. Six `synth_voice` instances are a FIXED BANK (the walker has no repeater; a fixed bank + indexed binds is the sanctioned pattern), which is honest here because the rack IS fixed at six. Rides `workbench` for its chrome, so the frame/runes/title come from the shared window and no scene colour is redefined.",
+      "template": "workbench",
+      "w_frac": 1.0,
+      "h_frac": 1.0,
+      "header_h": "@header_h=46",
+      "header_pad": "@header_pad=12",
+      "header_gap": "@header_gap=8",
+      "tab_h": "@tab_h=34",
+      "tab_pad": "@tab_pad=6",
+      "tab_gap": "@tab_gap=4",
+      "body_pad": "@body_pad=12",
+      "body_gap": "@body_gap=12",
+      "footer_h": "@footer_h=52",
+      "footer_pad": "@footer_pad=12",
+      "footer_gap": "@footer_gap=8",
+      "footer_btn_h": "@footer_btn_h=28",
+      "slots": {
+        "header": [
+          {
+            "component": "text",
+            "size": 190,
+            "height": "@header_btn_h=26",
+            "text": "$sw_title",
+            "text_size": "@title_size=17",
+            "font": "title",
+            "color": "@title_color=sablework.col.title"
+          },
+          {
+            "component": "text",
+            "grow": 1,
+            "height": "@header_btn_h=26",
+            "text_bind": "recipe_line",
+            "text_size": "@label_size=12",
+            "font": "label",
+            "color": "@value_color=sablework.col.value"
+          },
+          {
+            "component": "button",
+            "id": "material",
+            "size": 150,
+            "height": "@header_btn_h=26",
+            "label_bind": "material_label",
+            "text_size": "@label_size=12",
+            "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "button",
+            "id": "bake_size",
+            "size": 52,
+            "height": "@header_btn_h=26",
+            "label_bind": "size_label",
+            "text_size": "@label_size=12",
+            "style": "@button_style=sablework.button"
+          }
+        ],
+        "tabs": [
+          {
+            "component": "button",
+            "id": "map_base",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_base",
+            "text_size": "@label_size=12",
+            "style_bind": "map_base_style"
+          },
+          {
+            "component": "button",
+            "id": "map_normal",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_normal",
+            "text_size": "@label_size=12",
+            "style_bind": "map_normal_style"
+          },
+          {
+            "component": "button",
+            "id": "map_rough",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_rough",
+            "text_size": "@label_size=12",
+            "style_bind": "map_rough_style"
+          },
+          {
+            "component": "button",
+            "id": "map_metal",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_metal",
+            "text_size": "@label_size=12",
+            "style_bind": "map_metal_style"
+          },
+          {
+            "component": "button",
+            "id": "map_ao",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_ao",
+            "text_size": "@label_size=12",
+            "style_bind": "map_ao_style"
+          },
+          {
+            "component": "button",
+            "id": "map_height",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_height",
+            "text_size": "@label_size=12",
+            "style_bind": "map_height_style"
+          }
+        ],
+        "viewport": [
+          {
+            "component": "cell",
+            "width": "@rack_w=620",
+            "pad": "@pad=14",
+            "gap": 6,
+            "style": "@panel_style=sablework.panel",
+            "children": [
+              {
+                "component": "text",
+                "text": "$sw_channel_rack",
+                "size": "@section_h=20",
+                "text_size": "@section_size=11",
+                "font": "label",
+                "color": "@label_color=sablework.col.label"
+              },
+              {
+                "template": "synth_voice",
+                "i": 1
+              },
+              {
+                "template": "synth_voice",
+                "i": 2
+              },
+              {
+                "template": "synth_voice",
+                "i": 3
+              },
+              {
+                "template": "synth_voice",
+                "i": 4
+              },
+              {
+                "template": "synth_voice",
+                "i": 5
+              },
+              {
+                "template": "synth_voice",
+                "i": 6
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "size": "@preview_w=600",
+            "children": [
+              {
+                "component": "stack",
+                "size": "@preview_h=600",
+                "children": [
+                  {
+                    "component": "sprite",
+                    "tex": 0,
+                    "visible_bind": "map_base_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "sprite",
+                    "tex": 1,
+                    "visible_bind": "map_normal_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "sprite",
+                    "tex": 2,
+                    "visible_bind": "map_rough_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "sprite",
+                    "tex": 3,
+                    "visible_bind": "map_metal_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "sprite",
+                    "tex": 4,
+                    "visible_bind": "map_ao_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "sprite",
+                    "tex": 5,
+                    "visible_bind": "map_height_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "stack",
+                    "style": "@frame_style=sablework.frame",
+                    "children": [],
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  }
+                ],
+                "_comment": "The swatch well. A `stack` overlays children at their own size rather than stretching them, so every child fills EXPLICITLY via width_frac/height_frac \u2014 a sprite without that resolves to 0x0 and the preview is silently blank."
+              }
+            ]
+          }
+        ],
+        "rail": [
+          {
+            "component": "cell",
+            "width": "@out_w=330",
+            "pad": "@pad=14",
+            "gap": 8,
+            "style": "@panel_style=sablework.panel",
+            "children": [
+              {
+                "component": "text",
+                "text": "$sw_output_stage",
+                "size": "@section_h=20",
+                "text_size": "@section_size=11",
+                "font": "label",
+                "color": "@label_color=sablework.col.label"
+              },
+              {
+                "component": "slider",
+                "id": "relief",
+                "bind": "relief",
+                "label": "$sw_relief",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "roughness",
+                "bind": "roughness",
+                "label": "$sw_roughness",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "roughness_mod",
+                "bind": "roughness_mod",
+                "label": "$sw_rough_mod",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": true,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": -1,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "metalness",
+                "bind": "metalness",
+                "label": "$sw_metalness",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "metalness_mod",
+                "bind": "metalness_mod",
+                "label": "$sw_metal_mod",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": true,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": -1,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "ao",
+                "bind": "ao",
+                "label": "$sw_ao",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "text",
+                "text": "$sw_voice",
+                "size": "@section_h=20",
+                "text_size": "@section_size=11",
+                "font": "label",
+                "color": "@label_color=sablework.col.label"
+              },
+              {
+                "component": "text",
+                "size": "@row_h=22",
+                "text_bind": "sel_voice",
+                "text_size": "@label_size=12",
+                "font": "label",
+                "color": "@title_color=sablework.col.title"
+              },
+              {
+                "component": "slider",
+                "id": "sel_lacunarity",
+                "bind": "sel_lacunarity",
+                "label": "$sw_lacunarity",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 1,
+                "max": 4,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "sel_gain",
+                "bind": "sel_gain",
+                "label": "$sw_gain",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "sel_contrast",
+                "bind": "sel_contrast",
+                "label": "$sw_contrast",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 4,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "row",
+                "size": "@row_h=22",
+                "children": [
+                  {
+                    "component": "checkbox",
+                    "id": "sel_invert",
+                    "bind": "sel_invert",
+                    "size": 22,
+                    "height": "@row_h=22",
+                    "style": "@checkbox_style=sablework.checkbox"
+                  },
+                  {
+                    "component": "text",
+                    "grow": 1,
+                    "height": "@row_h=22",
+                    "text": "$sw_invert",
+                    "text_size": "@label_size=12",
+                    "font": "label",
+                    "color": "@label_color=sablework.col.label"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "footer": [
+          {
+            "component": "button",
+            "id": "patch_prev",
+            "size": 34,
+            "height": "@footer_btn_h=28",
+            "label": "$sw_prev",
+            "text_size": "@label_size=12",
+            "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "button",
+            "id": "patch_next",
+            "size": 34,
+            "height": "@footer_btn_h=28",
+            "label": "$sw_next",
+            "text_size": "@label_size=12",
+            "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "button",
+            "id": "reseed",
+            "size": 84,
+            "height": "@footer_btn_h=28",
+            "label": "$sw_reseed",
+            "text_size": "@label_size=12",
+            "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "text",
+            "grow": 1,
+            "height": "@footer_btn_h=28",
+            "text_bind": "commit_status",
+            "text_size": "@label_size=12",
+            "font": "label",
+            "tracking": 0,
+            "color": "@dim_color=sablework.col.dim"
+          },
+          {
+            "component": "text",
+            "size": 200,
+            "height": "@footer_btn_h=28",
+            "text_bind": "bake_info",
+            "text_size": "@label_size=12",
+            "font": "label",
+            "tracking": 0,
+            "color": "@bronze_color=sablework.col.bronze",
+            "align": "right"
+          },
+          {
+            "component": "button",
+            "id": "commit",
+            "size": 110,
+            "height": "@footer_btn_h=28",
+            "label": "$sw_commit",
+            "text_size": "@label_size=12",
+            "style": "@commit_style=sablework.button_on"
+          }
+        ]
+      }
+    },
+    "clayworks_row": {
+      "_comment": "ONE selectable list row of a Clayworks paged bank, parameterized by `@stem` + `@i` (0-based). The bone map, the attach points, the mount sockets and the piece picker are the SAME row with different vocabularies, so they share this proto: the caption rides `@{stem}_@{i}`, the selection wash `@{stem}_@{i}_on`, and the click fires `@{stem}_sel_@{i}`. `color_bind` is OPTIONAL \u2014 the bone map carries conform provenance per row, the other three banks do not, and an absent prop removes the key rather than binding to nothing. The wash and the click target both span `width_frac: 1` inside the stack: without it each measures to its own content and the highlight collapses to a row-height sliver at the left edge (the defect BFFB47DE pinned).",
+      "component": "stack",
+      "height": "@row_h=22",
+      "children": [
+        {
+          "component": "cell",
+          "visible_bind": "@{stem}_@{i}_on",
+          "width_frac": 1.0,
+          "style": "@sel_style=assetpipeline.rowsel"
+        },
+        {
+          "component": "button",
+          "id": "@{stem}_sel_@{i}",
+          "action": "@{stem}_sel_@{i}",
+          "width_frac": 1.0,
+          "size": "@row_h=22",
+          "style": "@off_style=assetpipeline.rowsel_off",
+          "tab_group": "@tab_group",
+          "nav_ordinal": "@i"
+        },
+        {
+          "component": "text",
+          "text_bind": "@{stem}_@{i}",
+          "size": "@row_h=22",
+          "text_size": "@row_size=12",
+          "font": "body",
+          "color": "@color=assetpipeline.col.ink_dim",
+          "color_bind": "@color_bind"
+        }
+      ]
+    },
+    "clayworks_bank": {
+      "_comment": "A paged bank of `clayworks_row`s in a sunk well, plus its \u25b2/\u25bc pager and range readout. The bone map, socket list and piece picker are all six-row windows over a longer list; the attach list is six rows with no pager (`has_pager: false` drops it). Rows are a FIXED bank of six \u2014 the walker has no repeater, and the window is Rust-side state, so six instances with indexed binds is the sanctioned shape. `@rows` is NOT a count the proto loops over; it is documentation that the bench's BONE_ROWS / SOCKET_ROWS / PICK_ROWS all equal six, asserted by the crate's drift gate.",
+      "component": "cell",
+      "gap": "@sub_gap=4",
+      "children": [
+        {
+          "component": "cell",
+          "style": "@well_style=assetpipeline.well",
+          "pad": 4,
+          "children": [
+            {
+              "component": "cell",
+              "gap": 0,
+              "children": [
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 0,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_0",
+                  "tab_group": "@tab_group"
+                },
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 1,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_1",
+                  "tab_group": "@tab_group"
+                },
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 2,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_2",
+                  "tab_group": "@tab_group"
+                },
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 3,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_3",
+                  "tab_group": "@tab_group"
+                },
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 4,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_4",
+                  "tab_group": "@tab_group"
+                },
+                {
+                  "template": "clayworks_row",
+                  "stem": "@stem",
+                  "i": 5,
+                  "row_h": "@row_h=22",
+                  "row_size": "@row_size=12",
+                  "color_bind": "@color_bind_5",
+                  "tab_group": "@tab_group"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "when": "@has_pager=true",
+          "gap": 6,
+          "height": "@page_h=20",
+          "children": [
+            {
+              "component": "button",
+              "id": "@{stem}_prev",
+              "action": "@{stem}_prev",
+              "label": "\u25b2",
+              "size": "@page_h=20",
+              "label_size": "@page_size=11",
+              "enabled_bind": "@{stem}_prev_enabled",
+              "style": "@choice_style=assetpipeline.choice",
+              "tab_group": "@tab_group",
+              "nav_ordinal": 6
+            },
+            {
+              "component": "button",
+              "id": "@{stem}_next",
+              "action": "@{stem}_next",
+              "label": "\u25bc",
+              "size": "@page_h=20",
+              "label_size": "@page_size=11",
+              "enabled_bind": "@{stem}_next_enabled",
+              "style": "@choice_style=assetpipeline.choice",
+              "tab_group": "@tab_group",
+              "nav_ordinal": 7
+            },
+            {
+              "component": "text",
+              "text_bind": "@{stem}_page",
+              "size": "@page_w=110",
+              "text_size": "@page_size=11",
+              "font": "body",
+              "color": "@faint_color=assetpipeline.col.faint"
+            }
+          ]
+        }
+      ]
+    },
+    "clayworks_offset": {
+      "_comment": "One authored-offset slider of the Clayworks inspector \u2014 translate/roll on the bone map, offset/rotate on the mount. `min`/`max` are instance params so the \u00b1range lives in ONE place (the bench passes the range it also clamps against), and the id doubles as the two-way `bind`.",
+      "component": "slider",
+      "id": "@id",
+      "bind": "@id",
+      "label": "@label",
+      "size": "@slider_h=26",
+      "slider_h": "@track_h=6",
+      "label_w": 96,
+      "value_w": 52,
+      "decimals": "@decimals=1",
+      "plus": "@plus=true",
+      "min": "@min",
+      "max": "@max",
+      "style": "@slider_style=assetpipeline.slider",
+      "tab_group": "@tab_group",
+      "nav_ordinal": "@nav_ordinal=0"
+    },
+    "clayworks_import_card": {
+      "_comment": "ONE workflow tile of the Import selector. A square card: the panel surface, a content column (rune in an inset well \u2192 title \u2192 italic flavour that WRAPS \u2192 format tag), and a transparent click+hover layer on top whose hover style supplies the design-system selected ring. The catalogue is arbitrary and growing \u2014 adding a workflow is one more instance here plus its class mapping in the bench's dispatcher, and the `option_grid` field flows however many there are.",
+      "component": "stack",
+      "width": "@card_size=210",
+      "height": "@card_size=210",
+      "children": [
+        {
+          "component": "cell",
+          "width_frac": 1.0,
+          "height_frac": 1.0,
+          "style": "@panel_style=assetpipeline.panel"
+        },
+        {
+          "component": "cell",
+          "width_frac": 1.0,
+          "height_frac": 1.0,
+          "pad": "@pad=16",
+          "gap": "@gap=6",
+          "children": [
+            {
+              "component": "stack",
+              "height": "@slot_h=60",
+              "width_frac": 1.0,
+              "children": [
+                {
+                  "component": "cell",
+                  "width_frac": 1.0,
+                  "height_frac": 1.0,
+                  "style": "@well_style=assetpipeline.well"
+                },
+                {
+                  "component": "text",
+                  "text": "@rune",
+                  "font": "rune",
+                  "align": "center",
+                  "anchor": "center",
+                  "width_frac": 1.0,
+                  "height": "@rune_size=32",
+                  "text_size": "@rune_size=32",
+                  "color": "@rune_color=assetpipeline.col.sapphire"
+                }
+              ]
+            },
+            {
+              "component": "text",
+              "text": "@title",
+              "font": "display",
+              "size": "@title_h=22",
+              "text_size": "@title_size=16",
+              "color": "@ink_color=assetpipeline.col.ink"
+            },
+            {
+              "component": "text",
+              "text": "@desc",
+              "font": "body",
+              "italic": true,
+              "wrap": true,
+              "size": "@desc_h=52",
+              "text_size": "@desc_size=12",
+              "color": "@dim_color=assetpipeline.col.dim"
+            },
+            {
+              "component": "stack",
+              "grow": 1.0
+            },
+            {
+              "component": "text",
+              "text": "@tag",
+              "font": "label",
+              "tracking": 0.16,
+              "size": "@tag_h=16",
+              "text_size": "@tag_size=10",
+              "color": "@faint_color=assetpipeline.col.faint"
+            }
+          ]
+        },
+        {
+          "component": "button",
+          "id": "@id",
+          "action": "@id",
+          "width_frac": 1.0,
+          "height_frac": 1.0,
+          "style": "@card_style=assetpipeline.card",
+          "tab_group": "cw_import",
+          "nav_ordinal": "@nav_ordinal=0"
+        }
+      ]
+    },
+    "clayworks_bench": {
+      "_comment": "THE CLAYWORKS BENCH \u2014 the asset-pipeline wizard as ONE composed surface, the way `sablework_console` composes the synthesizer. Owns the bench's whole Model vocabulary (`insp_*` / `bone_*` / `att_*` / `sock_*` / `pick_*` / `req_*` / `fit_*` / `off_*` / the `on_conform_*` role gates); flicker-assetpipeline publishes those keys and reads the same names back as results. Rides the `workflow` proto for its chrome and its spine \u2014 header \u00b7 rail \u00b7 work area \u00b7 footer Back/Next \u00b7 the discard dialog \u2014 so the step machinery is the shared runtime's and nothing here re-implements it. The Import selector is a SIBLING of the workflow instance, not a slot: its scrim must cover the whole bench, and anchors place within the parent.",
+      "component": "stack",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
+      "children": [
+        {
+          "template": "workflow",
+          "header_h": "@header_h=40",
+          "header_pad": "@header_pad=16",
+          "header_gap": "@header_gap=12",
+          "header_style": "assetpipeline.header",
+          "rail_h": "@rail_h=34",
+          "rail_pad": "@rail_pad=6",
+          "rail_gap": "@rail_gap=4",
+          "rail_style": "assetpipeline.tab_bar",
+          "body_pad": "@body_pad=10",
+          "body_gap": "@body_gap=10",
+          "footer_h": "@footer_h=76",
+          "footer_pad": "@footer_pad=16",
+          "footer_gap": "@footer_gap=14",
+          "footer_btn_h": "@footer_btn_h=40",
+          "footer_style": "assetpipeline.header",
+          "btn_w": "@footer_btn_w=96",
+          "back_enabled": "back_enabled",
+          "next_enabled": "next_enabled",
+          "next_label_bind": "next_label",
+          "slots": {
+            "header": [
+              {
+                "component": "text",
+                "text": "$ap_clayworks_bench",
+                "size": "@title_w=210",
+                "text_size": "@title_size=21",
+                "font": "body",
+                "color": "assetpipeline.col.ink"
+              },
+              {
+                "component": "text",
+                "text_bind": "asset_name",
+                "size": "@name_w=240",
+                "text_size": "@name_size=18",
+                "font": "display",
+                "color": "assetpipeline.col.ink"
+              },
+              {
+                "component": "stack",
+                "grow": 1.0
+              },
+              {
+                "component": "text",
+                "text": "$ap_clay_engine",
+                "size": "@meta_w=110",
+                "text_size": "@meta_size=10",
+                "font": "label",
+                "color": "assetpipeline.col.faint",
+                "align": "right"
+              }
+            ],
+            "rail": [
+              {
+                "component": "button",
+                "grow": 1.0,
+                "text_bind": "wf_task_title",
+                "style_bind": "wf_task_style",
+                "visible_bind": "wf_task_show",
+                "label_size": "@tab_size=13"
+              },
+              {
+                "component": "button",
+                "grow": 1.0,
+                "text_bind": "wf_conform_title",
+                "style_bind": "wf_conform_style",
+                "visible_bind": "wf_conform_show",
+                "label_size": "@tab_size=13"
+              },
+              {
+                "component": "button",
+                "grow": 1.0,
+                "text_bind": "wf_attach_title",
+                "style_bind": "wf_attach_style",
+                "visible_bind": "wf_attach_show",
+                "label_size": "@tab_size=13"
+              },
+              {
+                "component": "button",
+                "grow": 1.0,
+                "text_bind": "wf_review_title",
+                "style_bind": "wf_review_style",
+                "visible_bind": "wf_review_show",
+                "label_size": "@tab_size=13"
+              }
+            ],
+            "steps": [
+              {
+                "component": "rtt",
+                "id": "editor_quad",
+                "source": "editor_quad",
+                "grow": 1.0,
+                "style": "rtt_holder"
+              }
+            ],
+            "inspector": [
+              {
+                "component": "cell",
+                "width": "@inspector_w=384",
+                "pad": "@inspector_pad=18",
+                "gap": "@inspector_gap=8",
+                "style": "assetpipeline.panel",
+                "children": [
+                  {
+                    "component": "row",
+                    "gap": 8,
+                    "height": "@insp_title_size=20",
+                    "children": [
+                      {
+                        "component": "text",
+                        "text_bind": "insp_title",
+                        "size": "@insp_title_w=200",
+                        "text_size": "@insp_title_size=20",
+                        "font": "display",
+                        "color": "assetpipeline.col.ink"
+                      },
+                      {
+                        "component": "stack",
+                        "grow": 1.0
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_badge",
+                        "size": "@insp_badge_w=120",
+                        "text_size": "@insp_badge_size=10",
+                        "font": "label",
+                        "color": "assetpipeline.col.bronze",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "checkbox",
+                    "id": "show_skeleton",
+                    "bind": "show_skeleton",
+                    "label": "$ap_skeleton",
+                    "size": "@line_h=22",
+                    "label_size": "@line_size=13",
+                    "style": "assetpipeline.checkbox",
+                    "tab_group": "cw_view",
+                    "nav_ordinal": 0
+                  },
+                  {
+                    "component": "checkbox",
+                    "id": "show_base",
+                    "bind": "show_base",
+                    "label": "$ap_reference_body",
+                    "size": "@line_h=22",
+                    "label_size": "@line_size=13",
+                    "style": "assetpipeline.checkbox",
+                    "tab_group": "cw_view",
+                    "nav_ordinal": 1
+                  },
+                  {
+                    "component": "checkbox",
+                    "id": "show_collision",
+                    "bind": "show_collision",
+                    "label": "$ap_collision",
+                    "size": "@line_h=22",
+                    "label_size": "@line_size=13",
+                    "style": "assetpipeline.checkbox",
+                    "tab_group": "cw_view",
+                    "nav_ordinal": 2
+                  },
+                  {
+                    "component": "cell",
+                    "visible_bind": "wf_step_conform",
+                    "gap": "@inspector_gap=8",
+                    "children": [
+                      {
+                        "component": "cell",
+                        "visible_bind": "on_pick",
+                        "gap": "@sub_gap=4",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$ap_meshes_in_this_folder",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_bank",
+                            "stem": "pick",
+                            "tab_group": "cw_pick",
+                            "row_h": "@att_row_h=24",
+                            "row_size": "@att_row_size=12",
+                            "page_h": "@page_h=20",
+                            "page_size": "@page_size=11",
+                            "page_w": "@page_w=110"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "on_conform_skeleton",
+                        "gap": "@sub_gap=4",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text_bind": "rig_headline",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "body",
+                            "color": "assetpipeline.col.ink"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rig_legend",
+                            "size": "@page_size=11",
+                            "text_size": "@page_size=11",
+                            "font": "body",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_bone_map",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_bank",
+                            "stem": "bone",
+                            "tab_group": "cw_bone",
+                            "row_h": "@rig_row_h=22",
+                            "row_size": "@rig_row_size=12",
+                            "page_h": "@page_h=20",
+                            "page_size": "@page_size=11",
+                            "page_w": "@page_w=110",
+                            "color_bind_0": "bone_0_color",
+                            "color_bind_1": "bone_1_color",
+                            "color_bind_2": "bone_2_color",
+                            "color_bind_3": "bone_3_color",
+                            "color_bind_4": "bone_4_color",
+                            "color_bind_5": "bone_5_color"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rig_sel",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "body",
+                            "color": "assetpipeline.col.ink"
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_gizmo_mode",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "component": "cell",
+                            "gap": 2,
+                            "children": [
+                              {
+                                "component": "button",
+                                "id": "mode_translate",
+                                "action": "mode_translate",
+                                "text_bind": "mode_translate",
+                                "size": "@btn_h=26",
+                                "label_size": "@btn_size=10",
+                                "style": "assetpipeline.choice",
+                                "tab_group": "cw_gizmo",
+                                "nav_ordinal": 0
+                              },
+                              {
+                                "component": "button",
+                                "id": "mode_rotate",
+                                "action": "mode_rotate",
+                                "text_bind": "mode_rotate",
+                                "size": "@btn_h=26",
+                                "label_size": "@btn_size=10",
+                                "style": "assetpipeline.choice",
+                                "tab_group": "cw_gizmo",
+                                "nav_ordinal": 1
+                              },
+                              {
+                                "component": "button",
+                                "id": "mode_scale",
+                                "action": "mode_scale",
+                                "text_bind": "mode_scale",
+                                "size": "@btn_h=26",
+                                "label_size": "@btn_size=10",
+                                "style": "assetpipeline.choice",
+                                "tab_group": "cw_gizmo",
+                                "nav_ordinal": 2
+                              }
+                            ]
+                          },
+                          {
+                            "component": "checkbox",
+                            "id": "mirror",
+                            "bind": "mirror",
+                            "label": "$ap_mirror_joints",
+                            "size": "@btn_h=26",
+                            "label_size": "@btn_size=10",
+                            "style": "assetpipeline.checkbox",
+                            "tab_group": "cw_gizmo",
+                            "nav_ordinal": 3
+                          },
+                          {
+                            "component": "button",
+                            "id": "bake_skin",
+                            "action": "bake_skin",
+                            "label": "$ap_bake_skin",
+                            "size": "@btn_h=26",
+                            "label_size": "@btn_size=10",
+                            "style": "modal.buttons.variants.primary",
+                            "tab_group": "cw_gizmo",
+                            "nav_ordinal": 4
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "off_x",
+                            "label": "$ap_translate_x",
+                            "min": -20,
+                            "max": 20,
+                            "slider_h": "@rig_slider_h=26",
+                            "tab_group": "cw_offset",
+                            "nav_ordinal": 0
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "off_y",
+                            "label": "$ap_translate_y",
+                            "min": -20,
+                            "max": 20,
+                            "slider_h": "@rig_slider_h=26",
+                            "tab_group": "cw_offset",
+                            "nav_ordinal": 1
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "off_z",
+                            "label": "$ap_translate_z",
+                            "min": -20,
+                            "max": 20,
+                            "slider_h": "@rig_slider_h=26",
+                            "tab_group": "cw_offset",
+                            "nav_ordinal": 2
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "off_roll",
+                            "label": "$ap_roll",
+                            "min": -90,
+                            "max": 90,
+                            "slider_h": "@rig_slider_h=26",
+                            "tab_group": "cw_offset",
+                            "nav_ordinal": 3
+                          },
+                          {
+                            "component": "row",
+                            "gap": 6,
+                            "height": "@btn_h=26",
+                            "children": [
+                              {
+                                "component": "button",
+                                "id": "bone_reset",
+                                "action": "bone_reset",
+                                "label": "$ap_reset_bone",
+                                "size": "@btn_w=120",
+                                "label_size": "@btn_size=10",
+                                "style": "modal.buttons.variants.secondary",
+                                "tab_group": "cw_offset",
+                                "nav_ordinal": 4
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "on_conform_mount",
+                        "gap": "@sub_gap=4",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$ap_mount_socket",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_bank",
+                            "stem": "sock",
+                            "tab_group": "cw_sock",
+                            "row_h": "@att_row_h=24",
+                            "row_size": "@att_row_size=12",
+                            "page_h": "@page_h=20",
+                            "page_size": "@page_size=11",
+                            "page_w": "@page_w=110"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "fit_socket",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "body",
+                            "color": "assetpipeline.col.ink"
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_offset_cm",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_ox",
+                            "label": "$ap_offset_x",
+                            "min": -30,
+                            "max": 30,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 0
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_oy",
+                            "label": "$ap_offset_y",
+                            "min": -30,
+                            "max": 30,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 1
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_oz",
+                            "label": "$ap_offset_z",
+                            "min": -30,
+                            "max": 30,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 2
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_rotate_deg",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_rx",
+                            "label": "$ap_rotate_x",
+                            "min": -180,
+                            "max": 180,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 3
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_ry",
+                            "label": "$ap_rotate_y",
+                            "min": -180,
+                            "max": 180,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 4
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_rz",
+                            "label": "$ap_rotate_z",
+                            "min": -180,
+                            "max": 180,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 5
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_scale",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_sx",
+                            "label": "$ap_scale_x",
+                            "min": 0.1,
+                            "max": 3.0,
+                            "decimals": 2,
+                            "plus": false,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 6
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_sy",
+                            "label": "$ap_scale_y",
+                            "min": 0.1,
+                            "max": 3.0,
+                            "decimals": 2,
+                            "plus": false,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 7
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_sz",
+                            "label": "$ap_scale_z",
+                            "min": 0.1,
+                            "max": 3.0,
+                            "decimals": 2,
+                            "plus": false,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 8
+                          },
+                          {
+                            "template": "clayworks_offset",
+                            "id": "fit_scale",
+                            "label": "$ap_all",
+                            "min": 0.1,
+                            "max": 3.0,
+                            "decimals": 2,
+                            "plus": false,
+                            "slider_h": "@att_slider_h=26",
+                            "tab_group": "cw_fit",
+                            "nav_ordinal": 9
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "on_conform_clip",
+                        "gap": "@sub_gap=4",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$ap_clips",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "label",
+                            "color": "assetpipeline.col.dim"
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_clip_import_is_not_wired_into_the_editor",
+                            "size": "@head_size=12",
+                            "text_size": "@head_size=12",
+                            "font": "body",
+                            "color": "assetpipeline.col.ink"
+                          },
+                          {
+                            "component": "text",
+                            "text": "$ap_an_animation_set_cannot_be_baked_from_he",
+                            "size": "@page_size=11",
+                            "text_size": "@page_size=11",
+                            "font": "body",
+                            "color": "assetpipeline.col.dim"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "visible_bind": "wf_step_attach",
+                    "gap": "@sub_gap=4",
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$ap_rig_attach_points",
+                        "size": "@head_size=12",
+                        "text_size": "@head_size=12",
+                        "font": "label",
+                        "color": "assetpipeline.col.dim"
+                      },
+                      {
+                        "template": "clayworks_bank",
+                        "stem": "att",
+                        "tab_group": "cw_att",
+                        "has_pager": false,
+                        "row_h": "@att_row_h=24",
+                        "row_size": "@att_row_size=12"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "att_sel",
+                        "size": "@head_size=12",
+                        "text_size": "@head_size=12",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink"
+                      },
+                      {
+                        "template": "clayworks_offset",
+                        "id": "att_x",
+                        "label": "$ap_off_x",
+                        "min": -30,
+                        "max": 30,
+                        "slider_h": "@att_slider_h=26",
+                        "tab_group": "cw_att_off",
+                        "nav_ordinal": 0
+                      },
+                      {
+                        "template": "clayworks_offset",
+                        "id": "att_y",
+                        "label": "$ap_off_y",
+                        "min": -30,
+                        "max": 30,
+                        "slider_h": "@att_slider_h=26",
+                        "tab_group": "cw_att_off",
+                        "nav_ordinal": 1
+                      },
+                      {
+                        "template": "clayworks_offset",
+                        "id": "att_z",
+                        "label": "$ap_off_z",
+                        "min": -30,
+                        "max": 30,
+                        "slider_h": "@att_slider_h=26",
+                        "tab_group": "cw_att_off",
+                        "nav_ordinal": 2
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "visible_bind": "wf_step_review",
+                    "gap": "@sub_gap=4",
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$ap_engine_requirements",
+                        "size": "@head_size=12",
+                        "text_size": "@head_size=12",
+                        "font": "label",
+                        "color": "assetpipeline.col.dim"
+                      },
+                      {
+                        "component": "cell",
+                        "gap": 0,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text_bind": "req_0",
+                            "color_bind": "req_0_color",
+                            "size": "@rev_row_h=22",
+                            "text_size": "@rev_row_size=12",
+                            "font": "body"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "req_1",
+                            "color_bind": "req_1_color",
+                            "size": "@rev_row_h=22",
+                            "text_size": "@rev_row_size=12",
+                            "font": "body"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "req_2",
+                            "color_bind": "req_2_color",
+                            "size": "@rev_row_h=22",
+                            "text_size": "@rev_row_size=12",
+                            "font": "body"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "req_3",
+                            "color_bind": "req_3_color",
+                            "size": "@rev_row_h=22",
+                            "text_size": "@rev_row_size=12",
+                            "font": "body"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "button",
+                        "id": "commit",
+                        "action": "commit",
+                        "text_bind": "commit_label",
+                        "size": "@commit_h=40",
+                        "label_size": "@commit_size=12",
+                        "enabled_bind": "commit_enabled",
+                        "style": "modal.buttons.variants.primary",
+                        "tab_group": "cw_review",
+                        "nav_ordinal": 0
+                      },
+                      {
+                        "component": "button",
+                        "id": "next_piece",
+                        "action": "next_piece",
+                        "label": "$ap_import_next_piece",
+                        "size": "@commit_h=40",
+                        "label_size": "@commit_size=12",
+                        "visible_bind": "has_committed",
+                        "style": "modal.buttons.variants.secondary",
+                        "tab_group": "cw_review",
+                        "nav_ordinal": 1
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "gap": "@inspector_gap=8",
+                    "children": [
+                      {
+                        "component": "text",
+                        "text_bind": "insp_0",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_1",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_2",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_3",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_4",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_5",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_6",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "insp_7",
+                        "size": "@line_h=22",
+                        "text_size": "@line_size=13",
+                        "font": "body",
+                        "color": "assetpipeline.col.ink_dim"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "footer_extra": [
+              {
+                "component": "cell",
+                "grow": 1.0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text_bind": "step_title",
+                    "size": "@step_title_size=18",
+                    "text_size": "@step_title_size=18",
+                    "font": "display",
+                    "color": "assetpipeline.col.ink"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "step_hint",
+                    "size": "@step_hint_size=13",
+                    "text_size": "@step_hint_size=13",
+                    "font": "body",
+                    "color": "assetpipeline.col.ink_dim"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "component": "stack",
+          "visible_bind": "wf_step_task",
+          "anchor": "top_left",
+          "width_frac": 1.0,
+          "height_frac": 1.0,
+          "layer": 9,
+          "children": [
+            {
+              "component": "cell",
+              "anchor": "top_left",
+              "width_frac": 1.0,
+              "height_frac": 1.0,
+              "style": "assetpipeline.import_scrim"
+            },
+            {
+              "template": "window",
+              "title": "$ap_import",
+              "title_size": "@import_head_size=22",
+              "w_frac": "@import_win_frac=0.82",
+              "h_frac": "@import_win_frac=0.82",
+              "has_close": false,
+              "slots": {
+                "content": [
+                  {
+                    "template": "option_grid",
+                    "cols": "@import_cols=4",
+                    "gap": "@import_win_gap=14",
+                    "grid_gap": "@import_grid_gap=20",
+                    "well_pad": "@import_grid_pad=24",
+                    "well_style": "assetpipeline.well",
+                    "heading": "$ap_choose_a_workflow",
+                    "heading_size": "@import_sec_size=12",
+                    "heading_color": "assetpipeline.col.bronze",
+                    "subtitle": "$ap_what_manner_of_thing_will_you_weave_into",
+                    "subtitle_size": "@import_subtitle_size=13",
+                    "subtitle_color": "assetpipeline.col.dim",
+                    "hint": "$ap_select_a_workflow_to_begin",
+                    "hint_size": "@import_hint_size=11",
+                    "hint_color": "assetpipeline.col.dim",
+                    "slots": {
+                      "cards": [
+                        {
+                          "template": "clayworks_import_card",
+                          "id": "import_character",
+                          "rune": "\u16d7",
+                          "title": "$ap_character",
+                          "desc": "$ap_a_soul_given_form_mesh_skeleton_and_stat",
+                          "tag": "$ap_fbx_glb_rigged",
+                          "nav_ordinal": 0
+                        },
+                        {
+                          "template": "clayworks_import_card",
+                          "id": "import_accessory",
+                          "rune": "\u16b7",
+                          "title": "$ap_accessory",
+                          "desc": "$ap_worn_things_blades_circlets_loomsilk_bou",
+                          "tag": "$ap_fbx_glb_attach_point",
+                          "nav_ordinal": 1
+                        },
+                        {
+                          "template": "clayworks_import_card",
+                          "id": "import_prop",
+                          "rune": "\u16a6",
+                          "title": "$ap_prop",
+                          "desc": "$ap_objects_of_the_world_answering_to_no_bea",
+                          "tag": "$ap_fbx_glb_static",
+                          "nav_ordinal": 2
+                        },
+                        {
+                          "template": "clayworks_import_card",
+                          "id": "import_animation",
+                          "rune": "\u16d6",
+                          "title": "$ap_animation",
+                          "desc": "$ap_motion_inscribed_upon_a_skeleton_already",
+                          "tag": "$ap_fbx_bvh_clip",
+                          "nav_ordinal": 3
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         }
       ]
     }

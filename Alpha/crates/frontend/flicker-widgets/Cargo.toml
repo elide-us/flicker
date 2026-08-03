@@ -18,5 +18,6 @@ flicker-script.workspace = true
 # One-way edge: widgets → router → core; the router never depends on widgets (no cycle).
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

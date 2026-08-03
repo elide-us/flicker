@@ -17,3 +17,6 @@ glam.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The gz-at-rest content seam (flicker-core::compression): rig/clip/pack files are
+# read by LOGICAL path (`.gz`-first, raw fallback) and packs are saved as gz.
+flicker-core.workspace = true

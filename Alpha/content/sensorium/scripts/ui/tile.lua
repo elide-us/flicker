@@ -1,8 +1,9 @@
 -- ui.tile — a slot cell: LIT (style) when its enabled binding is loaded, EMPTY
 -- (style_off) otherwise. Its fill is `hot` when loaded AND its bound value is true, else
--- `cell`; a centred label sits on top. The Lua twin of the engine's draw_tile.
+-- `cell`; a centred label sits on top.
 --
--- The COMPONENT interface: M.draw(cmds, rect, props) + M.hit(mx, my, rect).
+-- The COMPONENT interface: M.draw(cmds, rect, props) (see ui.button's header);
+-- full-rect (`hit_shape = "rect"`), so the walker answers hits in Rust.
 -- props: enabled (loaded), bind_value (bool), label, layer,
 --   style (loaded block), style_off (empty block) — each { hot, cell, label, label_size }.
 
@@ -26,12 +27,15 @@ function tile.draw(cmds, r, props)
   local fill = on and core.first_color(s, { "hot" }, SAP) or core.first_color(s, { "cell" }, PANEL)
   core.panel(cmds, r, { fill = fill, layer = props.layer })
 
-  -- The label always draws (an empty label is an empty text command, like draw_tile).
+  -- The label always draws (an empty label is an empty text command).
   local lsz = core.jnum(s, "label_size", 12)
   core.text(cmds, r.x + r.w * 0.5, r.y + (r.h - lsz) * 0.5, props.label or "", lsz,
     core.first_color(s, { "label" }, INK), "center", "label", props.layer)
 end
 
+-- Never dispatched — `hit_shape` above answers the hit in Rust. The body stays
+-- because the library registers a COMPONENT by its draw + hit pair (see
+-- flicker-script's `probe_component_kinds`).
 function tile.hit(mx, my, r)
   return core.point_in(mx, my, r)
 end

@@ -43,7 +43,7 @@ function M.tree()
   col[#col + 1] = Text {
     text = "$sb_flicker_solarbirth",
     size = 34,
-    text_size = 24,
+    text_size = 28,
     color = "solarbirth.title.color",
   }
   col[#col + 1] = Text {

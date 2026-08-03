@@ -132,10 +132,11 @@ impl Flight {
         Ok(flight)
     }
 
-    /// Read and parse a `.flight` file.
+    /// Read and parse a `.flight` file. Gz-transparent (flicker-core::compression):
+    /// the at-rest `<path>.gz` twin is tried first, the raw path is the dev fallback.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path)
+        let text = flicker_core::compression::read_text(path)
             .with_context(|| format!("reading .flight {}", path.display()))?;
         Self::from_json(&text).with_context(|| format!("in {}", path.display()))
     }

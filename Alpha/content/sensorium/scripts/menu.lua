@@ -116,7 +116,7 @@ local function scene_row(sc, ord)
     grow = 1, gap = 3,
     children = {
       Text { text = sc.mode or "", size = 14, text_size = 10, color = "menu.mode", font = "label" },
-      Text { text = sc.name or "", size = 30, text_size = 25, color = "menu.name", font = "display" },
+      Text { text = sc.name or "", size = 32, text_size = 28, color = "menu.name", font = "display" },
       Text { text = sc.desc or "", size = 34, text_size = 14, color = "menu.row_desc", font = "body" },
       Text { text = meta, size = 14, text_size = 9, color = "menu.meta", font = "label" },
     },
@@ -148,7 +148,7 @@ local function scene_panel(m)
     gap = 4, pad = 26,
     children = {
       Text { text = "$menu_demo_caption", size = 14, text_size = 10, color = "menu.caption", font = "label" },
-      Text { text = "$menu_select_a_scene", size = 40, text_size = 34, color = "menu.title", font = "display" },
+      Text { text = "$menu_select_a_scene", size = 48, text_size = 42, color = "menu.title", font = "display" },
       -- STRINGS-GATE EXEMPT (S10): a composed-dynamic string — the live count is
       -- concatenated with the caption at build, and the stringtable deliberately
       -- has no format language. Localise by splitting count/caption nodes when a

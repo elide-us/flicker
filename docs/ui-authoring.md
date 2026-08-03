@@ -28,11 +28,14 @@ without opening the walker.
 9. [Templates are data](#templates-are-data) — `ui_templates.json`
 10. [Surfaces](#surfaces) — declaring what a screen shows
 11. [Intents](#intents) — the UI *is* the input declaration
-12. [Strings](#strings) — `$token`
-13. [The drift gates](#the-drift-gates) — what a new screen must pass
-14. [The mode launcher](#the-mode-launcher)
-15. [Sanctioned exceptions](#sanctioned-exceptions)
-16. [Sharp edges & guardrails](#sharp-edges--guardrails)
+12. [Orchestrations](#orchestrations) — signal → surface, as data
+13. [Workflows](#workflows) — an Orchestration with an ordinal
+14. [Strings](#strings) — `$token`
+15. [Where data lives](#where-data-lives)
+16. [The drift gates](#the-drift-gates) — what a new screen must pass
+17. [The mode launcher](#the-mode-launcher)
+18. [Sanctioned exceptions](#sanctioned-exceptions)
+19. [Sharp edges & guardrails](#sharp-edges--guardrails)
 
 ---
 
@@ -82,6 +85,10 @@ One name per concept. These are locked; a synonym in new code is a defect.
 | **Screen** | the root full-screen container a Scene shows — composes RTTs + the UI layer. The `screen` component kind. |
 | **RTT** | an offscreen viewport with its own camera/lighting, driven by the FrameGraph. The `rtt` component kind; the walker *reserves* its rect (`UiFrame.rtts`) and the scene's frame graph fills it. |
 | **Scene** | the `flicker-scene` lifecycle unit — `enter`/`update`/`render`/`exit` + `Transition`. Owns the Model and reads the results. |
+| **Surface** | any subtree of a screen gated by a `visible_bind`, declared in the scene's `Surfaces` list. |
+| **Orchestration** | *"a layout that changes based on signals"* — the `fired name → surface op` table, as data. `OrchestrationRule` over a `Surfaces`. |
+| **Workflow** | an Orchestration **with an ordinal**: ordered step surfaces + needs/yields gates + the document contract. Definitions are data (`ui_workflows.json`). |
+| **Step** | one stop of a Workflow: an id, a `$token` rail title, its surface, and its `needs`/`yields` document contract. |
 | **Template** | a whole surface as pure DATA: a parameterised tree in `ui_templates.json`. |
 | **Component** | the logic owner, a configurable black box. *Interactive* components live in `ui/<kind>.lua`; *structural* ones (`frame`, `card`, `option_grid`) are Rust composition builders. |
 | **Primitive** | no logic: the layout resolver, the HudCommand renderers (panel SDF / rect / sprite / **text** / caret / clip), point-in-rect, measure_text. |
@@ -220,10 +227,18 @@ if self.fired_sigs.iter().any(|n| n == "pause_open") {
    the cache. Commands are lifted onto the node's sub-layer.
 6. `rtt` pass — each `rtt` node reserves an `RttSlot` for the scene's frame graph.
 
-Reference screens to copy from, smallest first:
-`hud_solarbirth.lua` (97 L, text only) · `hud_clicktrainer.lua` (126 L, + one
-button) · `hud_pocepochs.lua` (202 L, + gauges) · `settings.lua` (405 L, every
-control) · `menu.lua` (284 L, templates + launcher).
+Reference screens to copy from, smallest first: `flicker-sablework`
+(`sablework_console` — one proto, one `build_tree`, the smallest complete
+example) · `flicker-assetpipeline` (`clayworks_bench` — the whole bench:
+protos, surfaces, a [Workflow](#workflows)) · `flicker-quartermaster` (the
+canonical reference, and the largest).
+
+> **Do NOT copy the `hud_<scene>.lua` screens still in
+> `content/sensorium/scripts/`.** They hand-compose their surface out of
+> `Cell`/`Row`/`Stack` builders — the pre-convergence idiom. Composition is
+> DATA: a scene configures a proto in `ui_templates.json` and emits one
+> instance. The remaining legacy screens are tracked for migration, not for
+> imitation.
 
 ---
 
@@ -389,7 +404,7 @@ so a typo never shifts every later column.
 Every kind a tree may legally name. Anything else is a typo the
 [`unknown_kinds` gate](#the-drift-gates) turns into a test failure.
 
-### Structural (Rust primitives — the walker lays out *and* draws these)
+### Structural — 8 kinds (Rust primitives: the walker lays out *and* draws these)
 
 | Kind | Purpose | Common props |
 |---|---|---|
@@ -402,7 +417,7 @@ Every kind a tree may legally name. Anything else is a typo the
 | `text` | one line | `text` \| `text_bind`, `prefix`, `text_size`, `color`/`color_bind`, `font` (`body`/`display`/`label`/`rune`), `align`, `italic`, `bold`, `tracking`, `wrap` |
 | `option` | **data only**, never drawn — a child entry of `select`/`pill_toggle`/`tabs` | `value`, `label` |
 
-### Interactive (each is `ui/<kind>.lua`)
+### Interactive — 22 kinds (each is one `ui/<kind>.lua`)
 
 | Kind | Purpose | Common props |
 |---|---|---|
@@ -420,6 +435,10 @@ Every kind a tree may legally name. Anything else is a typo the
 | `list` | clipped, wheel-scrollable column | `bind` (offset), `scroll_speed`, `gutter`, `pad`, `grow` |
 | `text_field` | single-line editable text | `id` (focus is held by id), `bind`, `placeholder`, `text_pad`, `style` |
 | `gauge` | read-only band gauge with a marker (`hit_shape = "none"`) | `bind`, `lo`, `hi`, `style` |
+| `resource_gauge` | filled-fraction bar — health/mana/stamina/cast (`hit_shape = "none"`) | `bind` (0..1), `tone`, `label`, `readout`/`_bind`, `low`/`_bind`, `style` |
+| `action_slot` | hotbar recess: rune, keybind tag, charges, cooldown veil (`hit_shape = "rect"`) | `action`, `rune`/`_bind`, `key`, `charges`/`_bind`, `cd`/`_bind`, `active`/`_bind`, `style` |
+| `medallion` | circular portrait well in a named metal ring (`hit_shape = "none"`) | `size`, `ring`/`_bind`, `rune`/`_bind`, `rune_color`, `style` |
+| `stat_dot` | one Septisigil gem-dot keyed by prism hue (`hit_shape = "none"`) | `hue`/`_bind`, `glow`, `style` |
 | `badge` | small status chip | `label`, `tone`, `solid`, `label_size`, `style` |
 | `tooltip` | hover/info bubble (`hit_shape = "none"`) | `rune`/`rune_bind`, `name`/`name_bind`, `meta`/`meta_bind`, `rune_color` |
 | `sprite` | textured quad (`hit_shape = "none"`) | `tex`, `alpha`, `aspect` |
@@ -568,16 +587,35 @@ unchanged.
 
 ### The protos
 
-Six live in `Alpha/content/sensorium/resources/ui_templates.json`:
+Thirteen live in `Alpha/content/sensorium/resources/ui_templates.json`:
 
 | Template | Shape | Slots | Key props |
 |---|---|---|---|
 | `window` | framed window: title bar (+ close ✕) · body well · optional footer | `content`, `footer` | `title`, `subtitle`, `w`/`h` or `w_frac`/`h_frac`, `style` (path prefix), `title_h`, `title_pad`/`_pad_y`, `title_size`, `has_close`, `close_action`/`_style`/`_label`, `body_style`, `body_pad`, `footer_h`, `footer_pad`/`_pad_y`, `footer_gap`, `footer_style` |
-| `workbench` | full-screen bench: header · tab strip · body (viewport + rail) · footer | `header`, `tabs`, `viewport`, `rail`, `footer` | `style`, `w_frac`/`h_frac`, `header_h`/`_pad`/`_gap`/`_style`, `tab_*`, `body_pad`/`_gap`, `footer_*`, `footer_btn_h` |
+| `tabbed_window` | `window` + a tab strip over the body well | `tabs` (`option` children), `content`, `footer` | everything `window` takes, plus `tab_bind` (default `tab`), `tab_h`, `tab_pad`, `tab_active`, `tab_idle` |
+| `workbench` | full-screen bench: header · tab strip · body (viewport + rail) · footer | `header`, `tabs`, `viewport`, `rail`, `footer` | `style`, `w_frac`/`h_frac` (default `1`), `header_h`/`_pad`/`_gap`/`_style`, `tab_*`, `body_pad`/`_gap`, `footer_*`, `footer_btn_h` |
+| `workflow` | `workbench` wired to the Workflow runtime + the discard dialog — see [Workflows](#workflows) | `header`, `rail`, `steps`, `inspector`, `footer_extra` | `id`, `on_menu`/`on_cancel`, `style`, `rail_h`/`_pad`/`_gap`/`_style`, `header_*`, `body_*`, `footer_*`, `btn_w`, `next_label`, `discard_title_size`, `overlay_style` |
 | `popup_panel` | the gothic popup slab: title · subtitle · divider · items · footer | `items` | `id`, `panel_style`, `panel_w`/`_pad`/`_gap`, `layer`, `title`/`_size`/`_color`, `subtitle*`, `divider`, `items_gap`, `footer*` |
 | `popup_menu` | scrim + `popup_panel`, anchorable | `items`, `muse` | everything `popup_panel` takes, plus `overlay_style`, `anchor`, `offset_x`/`offset_y` |
 | `choice_dialog` | centred question modal with confirm/cancel built from props | `buttons` (replaces the prop-built stack) | `title`/`_size`/`_color`, `message*`, `subtitle_bind*`, `confirm_label`/`_action`/`_variant`, `cancel_label`/`_action`/`_variant`, `panel_w`/`_pad`, `btn_h`/`_gap`/`_label_size`, `overlay_style`, `divider_style` |
-| `side_by_side_rtt` / `quad_rtt_view` | one or two framed RTT viewports | — | `source`/`left_source`/`right_source`, `style`, `gap`, `live`/`live_bind`, `tint`, `width`/`height`, `quad_id` |
+| `game_hud` | screen root with the five anchored HUD regions | `top_left`, `top_right`, `bottom`, `bottom_left`, `center` | `id`, `on_menu`/`on_cancel`, `edge_pad`/`edge_pad_neg`, `side_w`, `bar_h`, `stack_gap`, `slot_gap` |
+| `unit_frame` | portrait medallion + name/subtitle + a gauge stack | `gauges` | `tone` (style variant), `pad`, `gap`, `portrait` (medallion size), `ring`, `rune`/`_bind`, `name`/`_bind`, `name_size`, `subtitle` |
+| `command_card` | heading + a grid of `action_slot`s | `slots` | `style`, `pad`, `gap`, `heading`/`_size`/`_color`, `cols` (track string), `slot_gap` |
+| `resource_readout` | one horizontal strip of readout items | `items` | `style`, `h`, `pad_x`, `gap` |
+| `side_by_side_rtt` | two framed RTT viewports in a row | — | `id` (→ `<id>_left`/`_right`), `left_source`/`right_source`, `left_live_bind`/`right_live_bind`, `style`, `gap` |
+| `quad_rtt_view` | one framed RTT viewport | — | `quad_id`, `source`, `style`, `width`/`height`, `live`/`live_bind`, `tint` |
+
+Both RTT protos default `style` to **`rtt_holder`** — the neutral template-tier
+namespace for an offscreen-view slot's chrome. Do not point them back at a
+per-bench block; that forks the palette.
+
+Instanced by a shipped screen today: `window` (settings, assetpipeline) ·
+`workbench` (assetpipeline) · `choice_dialog` (settings, menu, assetpipeline) ·
+`popup_panel` / `popup_menu` (menu). The other eight — `workflow`,
+`tabbed_window`, `game_hud`, `unit_frame`, `command_card`, `resource_readout`,
+`quad_rtt_view`, and `side_by_side_rtt` (test-only) — are authored library with
+no screen instancing them yet, so there is no worked example to copy: read the
+proto in `ui_templates.json` and check its props against the table above.
 
 Three stay **Rust builders** (their output is computed, not templatable — the
 `frame` grid needs generated track strings, `option_grid` chunks rows):
@@ -588,8 +626,10 @@ Three stay **Rust builders** (their output is computed, not templatable — the
 | `card` | `content` | `title`, `subtitle`, `disabled`, `style` (default `menu.panel`), `pad`, `gap`, `header_gap`, `title_size`, `subtitle_size` |
 | `option_grid` | `cards` | `cols` (default 4), `heading`/`_size`/`_color`, `subtitle*`, `hint*`, `gap`, `grid_gap`, `well_pad`, `well_style` |
 
-`window` and `workbench` are themselves `{"template": "frame"}` nodes — protos
-compose protos, up to `MAX_TEMPLATE_DEPTH = 8`.
+`window` and `workbench` are themselves `{"template": "frame"}` nodes;
+`tabbed_window` is a `window`, `workflow` is a `workbench` — protos compose
+protos, up to `MAX_TEMPLATE_DEPTH = 8`. Only a template resolving *from within*
+another template's output counts toward the bound; ordinary tree depth is free.
 
 ### The proto schema
 
@@ -646,6 +686,7 @@ fn hello_surfaces() -> Surfaces {
 |---|---|
 | `set(id, on)` / `show` / `hide` / `toggle` | state |
 | `set_exclusive(id)` | show `id`, hide every other member of **its group** (other groups untouched) |
+| `orchestrate(&rules, &results)` | apply an [Orchestration](#orchestrations)'s `signal → op` table for this frame |
 | `is_on(id)` | read |
 | `publish(&mut model)` | **the one visibility write per frame** — writes exactly the Model keys the tree's `visible_bind`s read |
 | `apply_surface_contexts(&mut route)` | fold this frame's flips into router `PushContext` / `PopContext` |
@@ -722,6 +763,293 @@ TextEntry's one-way hand-off stays deliberately outside the intent map.
 
 ---
 
+## Orchestrations
+
+**An Orchestration is a layout that changes based on signals.** That is the
+whole construct, and the third leg of a stool you have already met: `Surfaces`
+declares *what a screen can show*, intents and actions produce *what fired*, and
+an Orchestration is the `fired name → surface op` table between them, as data.
+`OnSignal(OpenInventory) → Show(inventory)` is a value, not a branch.
+
+```rust
+let rules = vec![
+    OrchestrationRule::show("inventory_open",  "inventory"),
+    OrchestrationRule::hide("inventory_close", "inventory"),
+    OrchestrationRule::toggle("map_toggle",    "map"),
+    OrchestrationRule::exclusive("pick_audio", "sec_audio"),
+];
+
+// per frame — after the scene folds its results, before publish:
+self.surfaces.orchestrate(&rules, &results);
+self.surfaces.publish(&mut model);
+```
+
+| Field | Is |
+|---|---|
+| `on` | any name truthy in this frame's results — a button `action`, a fired intent name, a `sig_*` mirror key |
+| `op` | `SurfaceOp::Show` / `Hide` / `Toggle` / `Exclusive` (`Exclusive` = `set_exclusive`: show the target, hide its radio group) |
+| `target` | a declared surface **id** — not its published Model key. An unknown id warns and no-ops |
+
+Rules are applied in list order, so two rules driving one surface in the same
+frame resolve last-one-wins. An unfired rule touches nothing; a fired rule that
+lands on the state it already had costs nothing downstream — same Model value,
+same fingerprint, same cached replay.
+
+### The boundary (deliberate, banked)
+
+An Orchestration owns **stateless** signal→surface reactions. A flow entangled
+with scene state stays scene logic — settings' modal ladder resets scroll,
+clears dirty flags and returns a `ModalFlow` value on the same flips, so
+expressing it as rules would *add* code to preserve behaviour. The test is one
+line: **if the reaction is "…and also do X to the scene", it is not a rule.**
+
+Two things to know before you reach for it. Rules are Rust values — there is no
+`ui_orchestrations.json`; the data-driven case of the family is the Workflow
+below, whose definitions *are* content. And no shipped screen declares rules
+yet: the Workflow runtime is the live proof, and the first greenfield consumer
+is the adventurer inventory panel when it lands.
+
+---
+
+## Workflows
+
+**A Workflow is an Orchestration with an ordinal.** The same signal→surface
+machinery, plus a position in a line, a document contract, and two gates. It is
+the spine of a bench: the asset pipeline runs on it, and a new bench gets its
+step order, its rail, its Back guard and its forward gating from data.
+
+Four pieces. The first is usually the only one you write.
+
+| # | Piece | Lives in |
+|---|---|---|
+| 1 | the **definition** — the ordered steps | `Alpha/content/sensorium/resources/ui_workflows.json` |
+| 2 | the **runtime** — ordinal, gates, publishing | `flicker-widgets` `workflow.rs` |
+| 3 | the **document** — a `ValueMap` the scene rebuilds each frame | scene state |
+| 4 | the **screen** — one subtree per step, gated by its surface key | your `hud_*.lua` |
+
+### 1 — the definition
+
+```json
+"import_prop": {
+  "title": "$ap_prop",
+  "steps": [
+    { "id": "task",    "title": "$wf_step_task",   "yields": ["source", "class"] },
+    { "id": "conform", "title": "$wf_step_mount",  "needs": ["source"], "yields": ["fit"] },
+    { "id": "review",  "title": "$wf_step_review", "needs": ["fit"],    "yields": ["committed"] }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `title` (definition) | the dispatch-card / breadcrumb name, a `$token` |
+| `id` | stable step identity — the stem of every key the runtime publishes for it |
+| `title` (step) | the rail-chip label, a `$token`, published already resolved |
+| `needs` | document keys that must be **present** to ENTER this step |
+| `yields` | document keys this step produces — **enforced**, twice over (below) |
+| `surface` | the `visible_bind` key gating the step's subtree (default: the NAMESPACED `wf_step_<id>`, *not* the bare id) |
+| `context` | an `InputContext` name held while the step is shown, routed by `apply_contexts` |
+
+**The surface key is namespaced.** A step's subtree gates on `wf_step_<id>` — not
+on the bare `id`. Bare ids collided with sibling Model namespaces and with the
+document keys they shadow (a step `attach` against a document key `attach`), so
+the default is prefixed like every other workflow key. Write
+`visible_bind = "wf_step_review"`, never `"review"`. The `surface` field still
+overrides it verbatim, prefix and all — but reach for it only to point two steps
+at one subtree, not to shorten the name.
+
+**Branching is a second definition.** There is no conditional step, by ruling:
+a required branch is another entry in this file, chosen up front at dispatch.
+The asset pipeline's Task cards pick `import_character` or `import_prop`, and
+"skip Attach for a non-character" is simply a definition without that step.
+
+### 2 — the document is the pipe
+
+Steps never talk to each other. Each reads and writes the bench's one document,
+and `needs`/`yields` are its contract. The runtime probes **presence only** —
+values are incidental, so a document is cheap to rebuild every frame:
+
+```rust
+fn wf_doc(&self) -> ValueMap {
+    let mut d = ValueMap::new();
+    let Some(src) = self.source.as_ref() else { return d };
+    d.set("source", true);
+    if src.rig.is_some()      { d.set("rig", true); }
+    if !src.attach.is_empty() { d.set("attach", true); }
+    d
+}
+```
+
+`Next` into a step whose `needs` are unmet **warns with the missing keys and
+refuses** — the author sees a log line naming the gap, never a blank page.
+
+**Both halves of the contract are checked, and neither waits for a click.**
+
+- **At construction**, `Workflow::new` warns for every `needs` key that no
+  *earlier* step `yields`. That is not always a bug — a key the scene seeds
+  before the workflow runs is legitimate — but it is always worth reading, because
+  the other cause is a contract that can never be satisfied. You find out at
+  startup, not at the hundredth click of a `Next` that refuses.
+- **On leaving a step**, `handle` warns when the step you are walking off declared
+  `yields` the document does not contain. The step that *lied* is named, at the
+  moment it lies — not one step later as a mystery refusal against the step that
+  merely believed it.
+
+So a broken pipe surfaces at its source. Keep `yields` honest: it is load-bearing
+now, and a stale entry is a warning on every run.
+
+### 3 — driving it
+
+```rust
+// enter
+let defs = workflows_from_json(UI_WORKFLOWS);        // include_str! the resource
+let mut wf = Workflow::from_def(defs.get("import_character").expect("definition ships"));
+
+// update, per frame
+wf.handle(&results, &self.wf_doc());        // consume this frame's wf_* results
+wf.publish(&self.wf_doc(), &mut model);     // surfaces + rail + footer keys
+wf.apply_contexts(&mut self.route);         // step contexts (LIFO, exactly like Surfaces)
+if authored_value_changed { wf.set_dirty(true); }   // arms the Back guard
+```
+
+The result vocabulary is fixed — these four names, no aliases:
+
+| Result | Does |
+|---|---|
+| `wf_next` | advance through the needs gate. On the **last** step it is the bench's own finish action: the runtime warns and ignores it |
+| `wf_back` | step back — **or**, when the step is dirty, raise the `wf_discard` dialog and hold the step |
+| `wf_discard_yes` | close the dialog, clear dirty, step back |
+| `wf_discard_no` | close the dialog, keep editing |
+
+`set_dirty` is stage logic's to call, and so is undoing the document edits on
+`wf_discard_yes` — the scene reacts to the same result. The runtime owns
+progression and nothing else: **no IO**. File dialogs and content writes stay
+in stage logic, which is what keeps the construct thin.
+
+### 4 — what it publishes
+
+| Key | Value |
+|---|---|
+| `wf_step_<id>` *(each step's surface key)* | one exclusive group (`wf_steps`); exactly the current step is `true` |
+| `wf_discard` | the discard dialog's surface |
+| `wf_step` | the current step id |
+| `wf_step_i` / `wf_step_n` | 1-based position / total |
+| `wf_can_next` | the next step's `needs` are all met — **`false` on the last step, by definition** |
+| `wf_<id>_title` | that step's rail label, **already stringtable-resolved** — ride it with `text_bind` |
+| `wf_<id>_style` | `workflow.chip.active` / `.visited` / `.todo` — ride it with `style_bind` |
+| `wf_<id>_show` | rail **membership** — `true` for every step of the running definition; ride it with `visible_bind` |
+
+`wf_<id>_*` is published only for the steps of the **running** definition, so
+switching definitions stops publishing the dropped step's keys entirely. That is
+what makes `wf_<id>_show` do real work: the character definition publishes
+`wf_attach_show`, the prop definition never does, and the Attach chip leaves the
+rail on its own. **The rail derives from `ui_workflows.json`** — there is no
+hand-kept id list in any scene, and adding a step grows the rail without touching
+Rust.
+
+### 5 — the screen
+
+Gate each step's subtree by its surface key, and give each one a chip:
+
+```lua
+-- one subtree per step, gated by the NAMESPACED surface key
+Cell { visible_bind = "wf_step_review", children = { --[[ … ]] } }
+
+-- the rail: one chip per step id, entirely on the runtime's published binds
+local WF_STEPS = { "task", "conform", "attach", "review" }
+for _, id in ipairs(WF_STEPS) do
+  tabs[#tabs + 1] = Button {
+    grow = 1,
+    text_bind    = "wf_" .. id .. "_title",   -- pre-localized label
+    style_bind   = "wf_" .. id .. "_style",   -- active / visited / todo
+    visible_bind = "wf_" .. id .. "_show",    -- membership in the RUNNING definition
+  }
+end
+```
+
+All three binds come from the runtime; the scene publishes none of them. What the
+scene still owns is the **chip roster** — `WF_STEPS` above. The tree is built
+once, so there is no "repeat over the steps" channel: a rail is authored per step
+id, over the union of ids across every definition that bench can dispatch. A
+chip whose step is not in the running definition simply never gets its
+`wf_<id>_show` key and stays hidden.
+
+So adding a step to `ui_workflows.json` gates its subtree the moment you author
+the matching `wf_step_<id>` subtree, and joins the rail as soon as its id is in
+that union list. Chips carry no `action` by convention: the footer moves you.
+
+**Wire the gate test.** `Workflow::ungated_steps(&tree)` returns every step whose
+surface key no node in the tree gates on — a step that would flip its surface and
+render nothing. It is the workflow half of the [drift gates](#the-drift-gates),
+and a new bench wires it the same way:
+
+```rust
+let mut wf = AssetPipeline::new();
+assert!(wf.wf.ungated_steps(&tree).is_empty(),
+        "character workflow steps with no visible_bind: {:?}", wf.wf.ungated_steps(&tree));
+wf.dispatch_workflow(Some(AssetClass::Prop));      // and again per dispatched definition
+assert!(wf.wf.ungated_steps(&tree).is_empty(),
+        "prop workflow steps with no visible_bind: {:?}", wf.wf.ungated_steps(&tree));
+```
+
+Assert it once **per definition the bench can dispatch** — the steps differ, so
+one pass proves only one branch. That turns a definition/tree mismatch into a
+build failure instead of a blank page. `flicker-assetpipeline`'s screen test is
+the precedent to copy.
+
+### The `workflow` proto
+
+`{ template = "workflow" }` builds the standard shape — a `workbench` plus a
+Back/Next footer wired to the runtime vocabulary, plus a `choice_dialog` already
+gated on `wf_discard`:
+
+| Slot | Lands in |
+|---|---|
+| `header` | the workbench header bar |
+| `rail` | the workbench **tab strip** — your step chips |
+| `steps` | the workbench **viewport** — your per-step subtrees |
+| `inspector` | the workbench **rail** column |
+| `footer_extra` | between the spacer and Next |
+
+> Read that table twice: the proto's `rail` slot is the workbench's `tabs`, and
+> the proto's `inspector` slot is the workbench's `rail`. The word means the
+> chip strip one level up and the side column one level down.
+
+The footer pair ships as `id`/`action` `wf_back` and `wf_next`, both in
+`tab_group = "wf_footer"` for the controller floor, with Next on
+`enabled_bind = "wf_can_next"`.
+
+Three limits of the proto as it stands, because they decide whether you can use
+it. Back carries no `enabled_bind`, so on step 1 — where `wf_back` is inert — the
+button still looks live. Next's enable is the literal `wf_can_next`, not a
+prop, and that key is `false` on the last step, so the proto's Next is disabled
+exactly where a bench's finish action sits. And Next's caption is the
+substitution prop `@next_label` (a static string). A bench that needs a live
+finish button — the asset pipeline does, its last-step Next reads RESTART —
+passes `next_label_bind` instead, and the proto's Next button reads that Model
+key through `text_bind`.
+
+---
+
+## Where data lives
+
+Three destinations, and the choice is not stylistic — it is the data-placement
+law:
+
+| Kind of data | Goes | Example |
+|---|---|---|
+| **Durable content** — assets, semi-permanent configuration, definitions | `Alpha/content/sensorium/resources/` | `ui_elements.json`, `ui_templates.json`, `ui_workflows.json` |
+| **Ephemeral / transient / mutable** | `Alpha/content/data/`, shaped as **database-candidate records** (assume a DB backend is coming: row-shaped, keyed, no free-form blobs) | a bench's saved state, per-user picks |
+| **Every display string** | `Alpha/content/data/stringtable.json` as a `$token` | `"wf_step_task": { "en-us": "Workflow" }` |
+
+A workflow definition is durable content: it describes the shape of a flow, not
+a run of it. The *document* a run produces is scene state and never lands in
+`resources/`. And a `title` in a definition is a `$token`, never English — the
+runtime resolves it at publish, so the rail is localized without the screen
+knowing.
+
+---
+
 ## Strings
 
 Every UI display string is a token in `Alpha/content/data/stringtable.json`:
@@ -793,6 +1121,11 @@ with no alphabetic character, and pure `%`-format strings (`"%d"`, `"%.2f%%"`).
 Build the tree the test walks **the same way the scene does** — same globals, same
 `expand`. A gate that walks a fixture instead of the real tree proves nothing
 about what ships.
+
+**A workflow bench wires a third:** `wf.ungated_steps(&tree)`, once per definition
+it can dispatch — every step whose surface key nothing in the tree gates on. It
+is a method rather than a free function because it needs the running definition's
+steps, not just the tree. See [Workflows §5](#5--the-screen).
 
 ---
 
@@ -880,6 +1213,18 @@ below is still silent. When a control "does nothing", check these in order:
 - **A typo'd `template` name expands to an empty `screen`** (warn-only), and
   `unknown_kinds` cannot see it — the node is gone by then. (Forgetting `expand`
   entirely *is* caught: the gate reports `template:<name>`.)
+- **A rail chip the scene never authored never appears.** The runtime publishes
+  `wf_<id>_show` for every step of the running definition, so membership follows
+  the data — but nothing cross-checks a tree's chip roster against the
+  definitions' step ids. Add a step to `ui_workflows.json` and its chip is still
+  missing until you add the id to the rail's list. (Its *subtree* is covered:
+  that mismatch is a build failure via `ungated_steps` — wire that gate.)
+- **A `component = "core"` node passes `unknown_kinds`.** The gate's known-kind
+  set is derived from the module registry, which carries the shared `ui.core`
+  library alongside the real kinds; `core` has no `draw`, so it renders nothing.
+- **A workflow name that no definition matches keeps the running workflow**
+  (warn), and a `ui_workflows.json` that fails to parse yields an **empty map**
+  (warn) — every lookup misses at once rather than one loudly.
 
 ### Guardrails
 
@@ -896,17 +1241,25 @@ below is still silent. When a control "does nothing", check these in order:
   new *primitive* touches the walker.
 - **Geometry lives once.** A component's `draw` and `hit` share one geometry
   function. Two copies is the duplication the whole per-control migration removed.
+- **A flow is data before it is code.** Ordered stages ⇒ a definition in
+  `ui_workflows.json`, not a `Step` enum and a `match`. A branch ⇒ a second
+  definition, not a conditional. A signal that shows a panel ⇒ an
+  `OrchestrationRule`, not an `if` in `update()`.
 - **Enhance in place.** One walker (`flicker-widgets`), one parser
   (`flicker-script`), one style source (`ui_elements.json`), one template file
-  (`ui_templates.json`), one stringtable. Extend them; never fork a parallel path.
+  (`ui_templates.json`), one workflow-definition file (`ui_workflows.json`), one
+  stringtable. Extend them; never fork a parallel path.
 
 ---
 
 *Walker: `Alpha/crates/frontend/flicker-widgets/src/component.rs` · templates:
 `…/template.rs` + `Alpha/content/sensorium/resources/ui_templates.json` ·
-surfaces: `…/surfaces.rs` · intents: `…/intents.rs` · strings: `…/strings.rs` +
-`Alpha/content/data/stringtable.json` · node schema + the Lua seam:
-`Alpha/crates/scripting/flicker-script/src/lib.rs` · components:
+surfaces + orchestration: `…/surfaces.rs` · workflows: `…/workflow.rs` +
+`Alpha/content/sensorium/resources/ui_workflows.json` · intents: `…/intents.rs` ·
+strings: `…/strings.rs` + `Alpha/content/data/stringtable.json` · node schema +
+the Lua seam: `Alpha/crates/scripting/flicker-script/src/lib.rs` · components:
 `Alpha/content/sensorium/scripts/ui/*.lua` · styles + palette:
-`Alpha/content/sensorium/resources/ui_elements.json` · screens:
-`Alpha/content/sensorium/scripts/*.lua`.*
+`Alpha/content/sensorium/resources/ui_elements.json` · surface protos:
+`Alpha/content/sensorium/resources/ui_templates.json` · a live workflow bench:
+`Alpha/crates/scenes/flicker-assetpipeline/src/lib.rs` (`build_tree`) + its
+`clayworks_bench` proto.*

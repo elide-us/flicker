@@ -20,12 +20,9 @@
 //! forward-tolerant: an older `.epoch` missing a field the schema has since grown
 //! still loads.
 
-use std::io::{Read, Write};
 use std::path::Path;
 
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use flicker_core::compression;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{WorldConfig, WORLD_EPOCHS};
@@ -100,26 +97,16 @@ impl EpochFile {
         serde_json::to_string_pretty(self).map_err(EpochFileError::Serialize)
     }
 
-    /// Read and parse a `.epoch` file. A `.gz` extension is transparently
-    /// gunzipped (worlds are large; the gzipped form follows the `bakes/*.json.gz`
-    /// convention).
+    /// Read and parse a `.epoch` file through the shared gz-at-rest seam
+    /// (`flicker_core::compression`): a `.gz` path is transparently gunzipped,
+    /// a logical `.epoch` path resolves its `.gz` twin first (the package
+    /// convention, same as `bakes/*.json.gz`), and a loose file still reads.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, EpochFileError> {
         let path = path.as_ref();
-        let raw = std::fs::read(path).map_err(|source| EpochFileError::Io {
+        let text = compression::read_text(path).map_err(|source| EpochFileError::Io {
             path: path.display().to_string(),
             source,
         })?;
-        let text = if is_gzip(path) {
-            let mut s = String::new();
-            GzDecoder::new(&raw[..]).read_to_string(&mut s).map_err(|source| EpochFileError::Io {
-                path: path.display().to_string(),
-                source,
-            })?;
-            s
-        } else {
-            String::from_utf8(raw)
-                .map_err(|e| EpochFileError::Invalid(format!("{}: not UTF-8: {e}", path.display())))?
-        };
         let file: EpochFile = serde_json::from_str(&text).map_err(|source| EpochFileError::Parse {
             path: path.display().to_string(),
             source,
@@ -139,11 +126,8 @@ impl EpochFile {
             })?;
         }
         let json = self.to_json()?;
-        let bytes = if is_gzip(path) {
-            let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-            enc.write_all(json.as_bytes())
-                .and_then(|_| enc.finish())
-                .map_err(|source| EpochFileError::Io { path: path.display().to_string(), source })?
+        let bytes = if compression::names_gz(path) {
+            compression::compress_gzip(json.as_bytes())
         } else {
             json.into_bytes()
         };
@@ -179,11 +163,6 @@ impl EpochFile {
         }
         Ok(())
     }
-}
-
-/// Whether a path names a gzipped capture (`*.gz`).
-fn is_gzip(path: &Path) -> bool {
-    path.extension().map(|e| e.eq_ignore_ascii_case("gz")).unwrap_or(false)
 }
 
 #[cfg(test)]

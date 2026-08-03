@@ -10,7 +10,7 @@ license.workspace = true
 # by world-gen epoch fields with an orbit camera. The Lua UI and logo art are
 # brought in next (still rough); this slice is the runnable viewer. Name not final.
 [dependencies]
-flicker = { path = "../flicker" }
+flicker = { path = "../../Alpha/crates/core/flicker" }
 # Shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The app
 # routes through `flicker_shell::run`; no per-app shell/UI copy.
 flicker-shell.workspace = true

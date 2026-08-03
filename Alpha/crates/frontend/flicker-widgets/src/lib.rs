@@ -36,15 +36,16 @@ use std::path::Path;
 use flicker_render::{Renderer, TextureHandle, Vec2};
 use flicker_script::{HudCommand, ScriptHost, TextAlign, UiNode};
 
-/// The Rust **component walker** — the target UI path (Lua declares a [`UiNode`]
-/// tree; Rust owns draw / layout / hit-test). Runs alongside the legacy
-/// immediate [`render_hud`] path during the migration.
-///
-/// [`UiNode`]: flicker_script::UiNode
 /// The one shared prop-reader surface (`config::text` / `num` / `flag`) the walker and
 /// the template builders both read their inputs through — no duplicate reader impls.
 mod config;
 
+/// The Rust **component walker** — Lua declares a [`UiNode`] tree and owns each
+/// control's draw/hit in `ui/<kind>.lua`; Rust owns layout, the retained draw
+/// cache + bounded dispatch, generic hit plumbing, and results routing. See
+/// [`component`].
+///
+/// [`UiNode`]: flicker_script::UiNode
 pub mod component;
 pub use component::{run_ui, run_ui_with, DragPayload, RttSlot, UiFrame, UiInput, UiState};
 
@@ -61,9 +62,10 @@ pub use walker::{focusables_of, WalkerHandler};
 pub mod intents;
 pub use intents::UiIntents;
 
-/// The **template tier** — named Rust builders that compose walker pieces into a
-/// [`UiNode`] subtree, invoked by name from per-scene arrangement DATA. See
-/// [`template`].
+/// The **template tier** — data protos (the embedded `ui_templates.json`) plus
+/// the three surviving structural Rust builders (`frame` / `card` /
+/// `option_grid`), each composing components into a [`UiNode`] subtree, invoked
+/// by name from per-scene arrangement DATA. See [`template`].
 ///
 /// [`UiNode`]: flicker_script::UiNode
 pub mod template;
@@ -81,7 +83,17 @@ pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEnt
 /// data and drives their `visible_bind` keys through one [`Surfaces`] helper
 /// instead of hand-rolled show/hide chains. See [`surfaces`].
 pub mod surfaces;
-pub use surfaces::{Surface, SurfaceChange, Surfaces};
+
+/// The Workflow — an Orchestration with an ordinal: linear step surfaces +
+/// fail-loud document gates over one `Surfaces` exclusive group (Aaron 2026-08-01).
+pub mod workflow;
+
+/// The spine's REVERSIBLE half — undo/redo over commands a bench can apply and
+/// take back. Domain-free: the commands live with the data they mutate.
+pub mod history;
+pub use history::{Command, CommandHistory, DEFAULT_DEPTH};
+pub use surfaces::{OrchestrationRule, Surface, SurfaceChange, SurfaceOp, Surfaces};
+pub use workflow::{workflows_from_json, Step, Workflow, WorkflowDef};
 
 pub mod strings;
 
@@ -115,6 +127,10 @@ pub const UI_COMPONENT_MODULES: &[(&str, &str)] = &[
     ("ui.text_field", include_str!("../../../../content/sensorium/scripts/ui/text_field.lua")),
     ("ui.sprite", include_str!("../../../../content/sensorium/scripts/ui/sprite.lua")),
     ("ui.gauge", include_str!("../../../../content/sensorium/scripts/ui/gauge.lua")),
+    ("ui.resource_gauge", include_str!("../../../../content/sensorium/scripts/ui/resource_gauge.lua")),
+    ("ui.action_slot", include_str!("../../../../content/sensorium/scripts/ui/action_slot.lua")),
+    ("ui.medallion", include_str!("../../../../content/sensorium/scripts/ui/medallion.lua")),
+    ("ui.stat_dot", include_str!("../../../../content/sensorium/scripts/ui/stat_dot.lua")),
     ("ui.badge", include_str!("../../../../content/sensorium/scripts/ui/badge.lua")),
     ("ui.tooltip", include_str!("../../../../content/sensorium/scripts/ui/tooltip.lua")),
     ("ui.rune_corners", include_str!("../../../../content/sensorium/scripts/ui/rune_corners.lua")),
@@ -134,12 +150,14 @@ const STRUCTURAL_KINDS: &[&str] =
     &["screen", "cell", "row", "stack", "grid", "rtt", "text", "option"];
 
 /// Every component kind a tree may legally name — [`STRUCTURAL_KINDS`] plus one per
-/// Lua component module.
+/// Lua component module. `ui.core` is the shared emitter LIBRARY, not a component:
+/// a `core` node would pass the gate and draw nothing, so it is excluded here.
 pub fn is_known_kind(kind: &str) -> bool {
-    STRUCTURAL_KINDS.contains(&kind)
-        || UI_COMPONENT_MODULES
-            .iter()
-            .any(|(name, _)| name.strip_prefix("ui.") == Some(kind))
+    kind != "core"
+        && (STRUCTURAL_KINDS.contains(&kind)
+            || UI_COMPONENT_MODULES
+                .iter()
+                .any(|(name, _)| name.strip_prefix("ui.") == Some(kind)))
 }
 
 /// Every kind in `tree` the engine does not know, deduped — empty for a well-formed
@@ -503,6 +521,74 @@ fn resolve_tokens(root: &mut serde_json::Value) {
 mod tests {
     use super::*;
     use flicker_script::ScriptHost;
+
+    /// The draw-side fallback consts in the `ui/*.lua` components (`local INK =
+    /// {…}` etc.) are BYTE COPIES of `theme.tokens` values — a second source of
+    /// truth by the fallback-is-a-fork law. This gate converts every copy into a
+    /// CHECKED mirror: each uppercase 4-float local in every registered module
+    /// must equal some canonical token value exactly, so a token retune that
+    /// forgets a fallback (or a fallback typo) is a build failure, not a silent
+    /// colour drift on the one frame a style block goes missing.
+    #[test]
+    fn lua_fallback_consts_mirror_theme_tokens_exactly() {
+        let elements: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../content/sensorium/resources/ui_elements.json"
+        ))
+        .expect("ui_elements.json parses");
+        let tokens: Vec<(String, [f64; 4])> = elements["theme"]["tokens"]
+            .as_object()
+            .expect("theme.tokens present")
+            .iter()
+            .map(|(k, v)| {
+                let c: Vec<f64> = v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+                (k.clone(), [c[0], c[1], c[2], c[3]])
+            })
+            .collect();
+
+        let mut checked = 0;
+        let mut bad = Vec::new();
+        for (module, src) in UI_COMPONENT_MODULES {
+            for line in src.lines() {
+                let t = line.trim_start();
+                let Some(rest) = t.strip_prefix("local ") else { continue };
+                let Some((name, value)) = rest.split_once('=') else { continue };
+                let name = name.trim();
+                if name.is_empty() || !name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                    continue;
+                }
+                let value = value.trim();
+                let Some(inner) = value.strip_prefix('{').and_then(|v| v.split_once('}')) else {
+                    continue;
+                };
+                let parts: Vec<f64> = inner
+                    .0
+                    .split(',')
+                    .filter_map(|p| p.trim().parse::<f64>().ok())
+                    .collect();
+                if parts.len() != 4 {
+                    continue;
+                }
+                checked += 1;
+                let hit = tokens
+                    .iter()
+                    .any(|(_, tv)| tv.iter().zip(&parts).all(|(a, b)| (a - b).abs() < 1e-6));
+                if !hit {
+                    let nearest = tokens
+                        .iter()
+                        .min_by(|(_, a), (_, b)| {
+                            let da: f64 = a.iter().zip(&parts).map(|(x, y)| (x - y).abs()).sum();
+                            let db: f64 = b.iter().zip(&parts).map(|(x, y)| (x - y).abs()).sum();
+                            da.partial_cmp(&db).unwrap()
+                        })
+                        .map(|(k, _)| k.as_str())
+                        .unwrap_or("?");
+                    bad.push(format!("{module} `{name}` = {parts:?} (nearest token: ${nearest})"));
+                }
+            }
+        }
+        assert!(checked > 20, "the gate must actually find the fallback consts ({checked})");
+        assert!(bad.is_empty(), "fallback consts drifted from theme.tokens:\n{}", bad.join("\n"));
+    }
 
     /// The vocabulary gate has to be able to FAIL, or the screens it guards prove
     /// nothing. Also pins that every Lua component module is a legal kind — the two

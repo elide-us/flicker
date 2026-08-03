@@ -6,27 +6,62 @@ logos and shell Lua scripts used to be duplicated into every client).
 
 ## Layout — by type, then by subject
 
-Top-level folders are the **data kinds** (mirroring the engine's internal data
-structures *and* the eventual database tables / blob buckets). Within a
+The top level splits by **how the data ships**: `package/` is everything the game
+reads from disk at runtime on a player's machine (the future package-file
+payload, each file individually gz-compressed at rest); `staging/` is processed
+content awaiting promotion into it; `data/` is the RPC-tier tables;
+`sensorium/resources` + `sensorium/scripts` are compile-/host-loaded UI
+content; `source/` is authoring input that never ships. Within a
 character-scoped kind, a **subject subfolder** (e.g. `katanami/`) keeps one
 subject's assets together and avoids collisions.
 
 ```
 Alpha/content/
-├─ data/       periodic_table.json, materials.json          # element / material tables (was repo-root data/materials)
-├─ rigs/       <char>/…                                      # skeleton + bind (flicker.rig)
-├─ packs/      <char>/<name>.pack.json                       # animation / combat state graphs
-├─ clips/      <char>/{In-Place,RootMotion,…}/*.json         # animation clip library
-├─ flights/    <name>.flight                                 # camera cinematics (flicker-flight)
-├─ meshes/     <char>/*.json                                 # mesh / morph definitions
-├─ textures/   <char>/*.png                                  # texture maps
-├─ sensorium/  scripts/ resources/ fonts/ assets/            # "Sensorium" — the UI + input content (shell + HUD Lua, ui_elements.json, Prism fonts, logos)
-├─ bakes/      cluster_X_Y_Z.json.gz                         # baked voxel clusters (see below)
-└─ characters/ <char>/…                                      # RAW export bundles (see below)
+├─ data/       periodic_table.json, materials.json, …        # element / material / string tables (RPC-tier, stays loose)
+├─ package/                                                   # ═ THE RUNTIME PACKAGE ═ (text content gz at rest: <name>.<ext>.gz)
+│  ├─ characters/ <char>/…                                    # rig/pack/clip/garment bundles + PNG textures (see below)
+│  ├─ retarget/   clips/<lib>/{In-Place,RootMotion}/*.json.gz # retargeted clip libraries
+│  ├─ flights/    <name>.flight.gz                            # camera cinematics (flicker-flight)
+│  ├─ epochs/     <name>.epoch.gz                             # captured worlds (flicker-worldengine)
+│  ├─ bakes/      cluster_X_Y_Z.json.gz                       # baked voxel clusters (see below)
+│  └─ sensorium/  fonts/ assets/                              # Prism faces + logos/cursor (raw binaries, compile-embedded)
+├─ staging/    <mirrors package/>                             # processed output awaiting PROMOTION (see below); never shipped
+├─ sensorium/  scripts/ resources/                            # UI + input content (shell + HUD Lua, ui_elements.json)
+└─ source/     <Set>/…                                        # RAW vendor exports + manifests (authoring input, never shipped)
 ```
 
 (Runtime user-state like a client's `settings.json` is **not** content and stays
 out of this tree.)
+
+### The root is declared per executable, not hardcoded
+
+An app names its content tree in a committed `content.json` beside its crate
+manifest (`{ "content_root": "../content" }`); every sub-root above is
+**derived** from that one knob, so `staging/` and `package/` can never point at
+different trees. `flicker_content::roots()` is the accessor — a module asks it
+where content is instead of spelling out a `CARGO_MANIFEST_DIR` climb. The app
+installs the root once at startup (`init_from_app_dir`), and the library falls
+back to this repo's own tree when no executable has declared one, so the
+offline `content-tool` and the library tests still work.
+
+## `staging/` — the promotion gate
+
+The ingest benches (Clayworks, Loomforge, the retargeter) **write into
+`staging/`, never into `package/`.** Content reaches the runtime package only
+by an explicit **promotion** performed in the Content Manager bench, which also
+records it in the package manifest. This splits two events that used to be one:
+"I imported an asset" and "the asset ships."
+
+Consequence worth knowing: **a freshly imported asset is not visible to the
+running game until it is promoted.** Pressing *Commit* at the end of a Clayworks
+import writes the baked rig into `staging/`, and the game only ever loads from
+`package/` — so the asset appears in-game at PROMOTION time, not at import time.
+That is the point of the tier, not a bug. (The bench's "Commit" step is its own
+final wizard action — it has nothing to do with git.)
+
+Staging is gz-at-rest exactly like `package/`, so a promotion is a plain byte
+move through the shared seam — no transcoding, and never a second gz path.
+See `Alpha/content/staging/README.md`.
 
 ### `ui_elements.json` is a shared library (one file)
 
@@ -109,7 +144,7 @@ the authored files staying the source of truth. This is the content cluster's
 planned "resource manager + loaders" (see `docs/crate-clusters.md`). Recorded so it
 isn't lost — do not build it yet.
 
-## Raw export bundles (`characters/`)
+## Raw export bundles (`package/characters/`)
 
 Some content arrives as an **entangled raw export** that isn't cleanly typed yet.
 The Katanami animation set is the first example: each of its `fbximport` JSON files
@@ -117,14 +152,14 @@ redundantly embeds the full skeleton + mesh, so there is no standalone rig or
 clip-only file, and the loader (`flicker_skeletal::format::load_dir`) picks the rig
 heuristically by mesh-vertex count.
 
-These live **intact** under `characters/<name>/` — the **authored source of truth**.
+These live **intact** under `package/characters/<name>/` — the **authored source of truth**.
 Splitting one into clean `rigs/` + `clips/` + `textures/` + `meshes/` by-type assets
 is a job for the content-processing pipeline (above), not a plain file move. Until
 then a client loads the raw bundle directly (e.g. `flicker-paperdoll` and
 `flicker-packeditor` both load `characters/katanami/`). Think of `characters/` as
 *source*, the by-type folders as *processed / canonical* assets.
 
-## Baked voxel clusters (`bakes/`)
+## Baked voxel clusters (`package/bakes/`)
 
 The nine `cluster_X_0_Z.json.gz` files (a 3×3 cluster field) are **baked voxel
 clusters** — the LOD-0 compressed cluster data (gzipped JSON), which *is* the durable
@@ -134,8 +169,8 @@ the `examples/voxel-cluster` app (`src/{main,display}.rs::save_to_disk`) and by
 `flicker-csg`'s `--bake` mode. Already a compressed format, so the closest thing to the
 future binary-bake objective.
 
-**`flicker-csg` now loads them from here** (`bakes/`, via its `bake_dir_path()` →
-`../content/bakes`). The `examples/voxel-cluster` app still keeps its **own copy** in
+**`flicker-pocclusters` loads them from here** (`package/bakes/`, via its `bake_dir_path()` →
+`../content/package/bakes`). The `examples/voxel-cluster` app still keeps its **own copy** in
 `examples/voxel-cluster/bake/` — point it here too when voxel-cluster is next touched
 (dedup).
 

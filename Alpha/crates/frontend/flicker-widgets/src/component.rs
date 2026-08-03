@@ -1,23 +1,31 @@
 //! The **Rust component walker** — the engine half of the component-UI model.
 //!
 //! A screen declares a tree of [`UiNode`]s (via its Lua `tree()` builder, parsed
-//! by `flicker-script`); this module OWNS the rest: it lays the tree out into
-//! rects, hit-tests the pointer against it, and draws each node with its Rust
-//! **template**. `HudCommand` is the templates' internal output (fed to the
-//! existing [`render_hud`](crate::render_hud)); it no longer crosses the Lua
-//! boundary. Interaction rides the same two-way name channels the immediate HUD
-//! used: a node's `bind` ↔ a `Model` key (values), its `action` → an event name,
-//! both returned in the [`UiFrame::results`] `ValueMap`. So an app swaps
-//! `script.update`+`script.draw`+`render_hud` for [`run_ui`] + `render_hud` and
-//! keeps applying the very same result keys.
+//! by `flicker-script`); each control's BEHAVIOUR — draw, hit, geometry — lives
+//! in its `ui/<kind>.lua` component module (registered through
+//! [`UI_COMPONENT_MODULES`](crate::UI_COMPONENT_MODULES)). This module owns the
+//! generic machinery in between: it lays the tree out into rects, keeps the
+//! RETAINED draw cache (structural fingerprints — an unchanged node replays its
+//! cached commands) and uses it to BOUND the Lua dispatch (draw crosses only for
+//! invalidated nodes; hit only on input-active frames × candidate nodes, and a
+//! module-declared trivial `hit_shape` is answered here with zero crossings),
+//! applies each returned [`HitVerdict`] generically (claims / captures / focus /
+//! popups), routes results, and itself draws only the STRUCTURAL primitives —
+//! `text`, styled-container backgrounds, `list` layout + clip. A component's
+//! draw emits plain [`HudCommand`]s; the walker collects them into
+//! [`UiFrame::commands`] for the existing [`render_hud`](crate::render_hud).
+//! Interaction rides two-way name channels: a node's `bind` ↔ a `Model` key
+//! (values), its `action` → an event name, both returned in the
+//! [`UiFrame::results`] `ValueMap`.
 //!
-//! Templates read their colours/sizes from the resolved `ui_elements.json` by a
+//! Components read their colours/sizes from the resolved `ui_elements.json` by a
 //! dotted `style` path (`"paperdoll.fit.slider"`) — so the palette stays in one
 //! place (Prism `theme.tokens`) and a node carries only its truly-local data.
 //!
-//! This is a match-based template registry today (one arm per component kind);
-//! the arms are the "component definitions" (ContentForge `ComponentEntry`s) and
-//! new kinds are added here in one place.
+//! Adding a kind is Lua + data, never a Rust arm: a new `ui/<kind>.lua` module
+//! (`M.draw` + `M.hit` — the contract is documented in `ui/button.lua`'s header)
+//! plus its line in [`UI_COMPONENT_MODULES`](crate::UI_COMPONENT_MODULES). The
+//! per-control Rust draw/hit arms are gone (S4/S7); do not add one back.
 
 use std::collections::{HashMap, HashSet};
 
@@ -236,6 +244,14 @@ pub struct UiState {
     /// text_field re-establishes it through the module's `focus` verdict
     /// (`ui/text_field.lua` → [`apply_hit_verdict`]) — `Default` starts `None`.
     focus: Option<String>,
+    /// The pointer has taken over the input modality: REAL mouse activity
+    /// (movement / click / wheel — not the first frame, not a resize) sets it;
+    /// any routed nav-family signal (d-pad, arrows, tab, confirm — see the
+    /// walker's `note_nav_input`) clears it. While `false` (nav mode — the
+    /// entry state, so a scene's seeded default focus lights immediately) the
+    /// focused node draws hot; while `true` only the pointer does. `pub(crate)`
+    /// so the walker layer flips it without a second state home.
+    pub(crate) pointer_mode: bool,
     /// Previous frame's `(mouse, screen)` — the "did input actually change" test the
     /// bounded HIT dispatch gates on. Screen rides along so a resize re-tests hover
     /// under a stationary cursor. `None` (first frame) counts as changed.
@@ -286,6 +302,21 @@ impl UiState {
     /// Drop keyboard focus (e.g. Escape leaves the chat input).
     pub fn clear_focus(&mut self) {
         self.focus = None;
+    }
+
+    /// Whether the LAST input was nav-family (d-pad / arrows / tab / confirm)
+    /// rather than the pointer. This is the modality that decides whether the
+    /// focused node lights as hot — and the value a scene publishes into its
+    /// Model (e.g. `pad_mode`) so screens can swap key-hint labels per device.
+    pub fn nav_mode(&self) -> bool {
+        !self.pointer_mode
+    }
+
+    /// Record a routed nav-family signal: nav modality resumes, so the focused
+    /// node lights again. Called by the walker's nav handler on every signal it
+    /// routes.
+    pub(crate) fn note_nav_input(&mut self) {
+        self.pointer_mode = false;
     }
 }
 
@@ -501,6 +532,18 @@ fn run_ui_impl(
     // button is down). A still frame replays each node's memoized `hit` instead
     // (see `dispatch_component_hit`).
     let pointer_moved = state.last_mouse != Some((input.mouse, input.screen));
+    // Pointer takeover: REAL pointer activity — movement, a click, a wheel tick,
+    // but not the first frame and not a resize — flips the modality so the
+    // nav-focus highlight yields to hover. A nav signal flips it back
+    // (`note_nav_input`), which is what makes the seeded first button light on
+    // entry, stop hijacking hover the moment the mouse moves, and relight the
+    // instant the d-pad speaks again.
+    if input.clicked
+        || input.wheel != 0.0
+        || matches!(state.last_mouse, Some((m, _)) if m != input.mouse)
+    {
+        state.pointer_mode = true;
+    }
     state.last_mouse = Some((input.mouse, input.screen));
     let released = state.last_down && !input.down;
     state.last_down = input.down;
@@ -1346,7 +1389,7 @@ fn no_descend(kind: &str) -> bool {
     matches!(kind, "tabs" | "pill_toggle" | "select" | "context_menu")
 }
 
-fn visible(node: &UiNode, model: &ValueMap) -> bool {
+pub(crate) fn visible(node: &UiNode, model: &ValueMap) -> bool {
     match &node.visible_bind {
         Some(k) => model.is_on(k),
         None => true,
@@ -1896,8 +1939,12 @@ fn node_fingerprint(
     // hovered control contains the cursor too; folding hover in unconditionally would
     // redraw that whole ancestor chain on every mouse move.
     let focused = !node.id.is_empty() && state.focused() == Some(node.id.as_str());
-    let hot = hot_matters && (r.contains(input.mouse) || focused);
+    let hot = hot_matters && (r.contains(input.mouse) || (state.nav_mode() && focused));
     h.bool(hot);
+    // Pressed (hot + primary held) as its own bit: the press nudge/stops must
+    // redraw on BOTH edges of the click, and the release frame has the same
+    // pointer position as the held frame — `hot` alone would replay it.
+    h.bool(hot && input.down);
     // Keyboard focus as its OWN bit, not only OR-ed into `hot`: with the pointer
     // parked INSIDE the rect `hot` is true either way, so a focus change there
     // (request_focus / clear_focus / Escape) would otherwise replay a stale
@@ -1985,7 +2032,7 @@ fn component_props(
     r: Rect,
 ) -> Json {
     let hovered = r.contains(input.mouse)
-        || (!node.id.is_empty() && state.focused() == Some(node.id.as_str()));
+        || (state.nav_mode() && !node.id.is_empty() && state.focused() == Some(node.id.as_str()));
     // Start from the node's own scalar props (box / label_x / label_size / value / … —
     // each component reads whichever it needs), then overlay the walker-resolved fields.
     // Display-text props resolve through the stringtable here, so a Lua component only
@@ -1994,8 +2041,46 @@ fn component_props(
     for (k, v) in &node.props {
         props.insert(k.clone(), display_prop_json(k, v));
     }
+    // Generic bound-prop channel: any authored `<name>_bind` delivers the effective
+    // Model/results value as `<name>` (a bound value overrides a literal `<name>`
+    // prop, matching text_bind→label). The cache needs no new wiring — every
+    // `*_bind` key is already in the fingerprint's read set. Binds the walker
+    // consumes itself stay out so their stems keep walker semantics.
+    const WALKER_BINDS: [&str; 10] = [
+        "text_bind", "label_bind", "visible_bind", "enabled_bind", "style_bind",
+        "color_bind", "live_bind", "rune_bind", "name_bind", "meta_bind",
+    ];
+    // Stems the walker itself inserts below — an authored `<stem>_bind` here
+    // would be silently overwritten, so it is a warned authoring error, not a
+    // quiet no-op (the fail-loud law for authored names).
+    const WALKER_STEMS: [&str; 11] = [
+        "hot", "pressed", "enabled", "focused", "open", "captured", "wheel", "label", "style",
+        "layer", "content_h",
+    ];
+    for (k, v) in &node.props {
+        let Some(stem) = k.strip_suffix("_bind") else { continue };
+        if WALKER_BINDS.contains(&k.as_str()) {
+            continue;
+        }
+        if WALKER_STEMS.contains(&stem) {
+            tracing::warn!(
+                "ui: `{k}` names a walker-owned prop — the bound value would be \
+                 overwritten; rename the prop"
+            );
+            continue;
+        }
+        if let Value::Text(key) = v {
+            if let Some(val) = eff_value(results, model, key) {
+                props.insert(stem.to_string(), value_to_json(val));
+            }
+        }
+    }
     props.insert("label".to_string(), Json::String(node_text(node, model, results)));
     props.insert("hot".to_string(), Json::Bool(hovered));
+    // Pressed = hot + primary held; the fingerprint folds the same bit, so a
+    // component drawing its press state (nudge + press_* stops) invalidates on
+    // both click edges.
+    props.insert("pressed".to_string(), Json::Bool(hovered && input.down));
     props.insert("enabled".to_string(), Json::Bool(enabled(node, model)));
     // A component emits at layer 0; the walker offsets the whole node's commands by its
     // accumulated sub-layer afterwards (see run_ui's draw loop), so 0 always overrides
@@ -5209,7 +5294,210 @@ mod tests {
         );
     }
 
-    // Add inside `mod tests`, alongside the other piece tests. Uses inline style json.
+    // Uses inline style json rather than the shared `styles()` fixture.
+    #[test]
+    fn nav_focus_lights_until_the_pointer_takes_over() {
+        // The launcher bug (Aaron 2026-08-01): the seeded nav focus drew `hot`
+        // permanently, so pointer hover on the first button changed nothing.
+        // Modality arbitration: nav mode (the entry state) lights the focused
+        // node; REAL pointer movement takes the highlight over; hover then works
+        // on the same node. A nav signal hands it back (walker test).
+        let mut b = node("button");
+        b.id = "go".into();
+        b.width = Some(120.0);
+        b.height = Some(40.0);
+        b.anchor = Some(UiAnchor::TopLeft);
+        b = prop(b, "style", Value::Text("btn".into()));
+        let mut page = node("screen");
+        page.children = vec![b];
+        let st = serde_json::json!({ "btn": {
+            "fill_top": [0.1, 0.1, 0.1, 1.0], "hover_top": [0.9, 0.9, 0.9, 1.0] } });
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        state.request_focus("go");
+        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
+            .expect("component library");
+        let first_fill = |frame: &UiFrame| {
+            frame
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Panel { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .expect("button drew")
+        };
+
+        // Frame 1: pointer parked far away, never moved — nav mode, the seed lights.
+        let f1 =
+            run_ui_with(&page, &model, &st, &input_at(500.0, 400.0, false), &mut state, Some(&lib));
+        assert!(state.nav_mode(), "entry state is nav modality");
+        assert_eq!(first_fill(&f1)[0], 0.9, "seeded nav focus draws the hover state");
+
+        // Frame 2: the pointer MOVES (still outside the rect) — takeover, highlight yields.
+        let f2 =
+            run_ui_with(&page, &model, &st, &input_at(510.0, 400.0, false), &mut state, Some(&lib));
+        assert!(!state.nav_mode(), "real pointer movement takes the modality over");
+        assert_eq!(first_fill(&f2)[0], 0.1, "the focused button unlights under pointer modality");
+
+        // Frame 3: hover the button — pointer hover works on the very same node.
+        let f3 =
+            run_ui_with(&page, &model, &st, &input_at(60.0, 20.0, false), &mut state, Some(&lib));
+        assert_eq!(first_fill(&f3)[0], 0.9, "pointer hover lights it in pointer modality");
+    }
+
+    #[test]
+    fn resource_gauge_fills_by_fraction_and_stays_passive() {
+        // A half-full mana bar, 200×20 at the origin: a track panel spanning the
+        // node and a fill spanning half the padded width, claiming nothing.
+        let mut g = node("resource_gauge");
+        g.id = "g".into();
+        g.width = Some(200.0);
+        g.height = Some(20.0);
+        g.anchor = Some(UiAnchor::TopLeft);
+        g.bind = Some("mp".into());
+        g = prop(g, "tone", Value::Text("mana".into()));
+        g = prop(g, "style", Value::Text("resource_gauge".into()));
+        let mut page = node("screen");
+        page.children = vec![g];
+
+        let st = serde_json::json!({
+            "resource_gauge": {
+                "track": [0.04, 0.05, 0.06, 1.0], "border": [0.17, 0.19, 0.24, 1.0],
+                "radius": 10, "pad": 2, "sheen": [0.9, 0.94, 1.0, 0.16],
+                "mana_top": [0.35, 0.53, 0.95, 1.0], "mana_bot": [0.12, 0.25, 0.61, 1.0]
+            }
+        });
+        let model = ValueMap::new().with("mp", 0.5);
+        let mut state = UiState::new();
+        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
+            .expect("component library");
+
+        let frame =
+            run_ui_with(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state, Some(&lib));
+        assert!(!frame.results.is_on("hud_hit"), "a read-only gauge never claims the pointer");
+        let panels: Vec<_> = frame
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Panel { x, w, .. } => Some((*x, *w)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(panels.len(), 2, "track + fill: {panels:?}");
+        assert!((panels[0].1 - 200.0).abs() < 0.01, "track spans the node");
+        assert!(
+            (panels[1].1 - (200.0 - 4.0) * 0.5).abs() < 0.6,
+            "fill = the bind fraction of the padded track: {}",
+            panels[1].1
+        );
+    }
+
+    #[test]
+    fn action_slot_receives_generic_binds_and_claims_clicks() {
+        // The generic `<name>_bind` channel: cd_bind/charges_bind values arrive as
+        // `cd`/`charges`, sizing the cooldown veil and the charge count; the slot
+        // itself is a rect control that fires its action on click.
+        let mut a = node("action_slot");
+        a.id = "slot1".into();
+        a.width = Some(58.0);
+        a.height = Some(58.0);
+        a.anchor = Some(UiAnchor::TopLeft);
+        a.action = Some("cast_1".into());
+        a = prop(a, "rune", Value::Text("ᚱ".into()));
+        a = prop(a, "cd_bind", Value::Text("cd1".into()));
+        a = prop(a, "charges_bind", Value::Text("ch1".into()));
+        a = prop(a, "style", Value::Text("action_slot".into()));
+        let mut page = node("screen");
+        page.children = vec![a];
+
+        let st = serde_json::json!({
+            "action_slot": {
+                "bg_top": [0.13, 0.14, 0.18, 1.0], "bg_bot": [0.04, 0.05, 0.06, 1.0],
+                "border": [0.23, 0.25, 0.31, 1.0], "rim": [0.72, 0.59, 0.35, 0.14],
+                "radius": 4, "rune_color": [0.72, 0.59, 0.35, 1.0],
+                "rune_halo": [0.44, 0.59, 1.0, 0.38],
+                "charge_color": [0.62, 0.72, 1.0, 1.0], "charge_size": 11,
+                "cd_veil": [0.02, 0.03, 0.05, 0.72]
+            }
+        });
+        let model = ValueMap::new().with("cd1", 0.25).with("ch1", 3.0);
+        let mut state = UiState::new();
+        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
+            .expect("component library");
+
+        let frame =
+            run_ui_with(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state, Some(&lib));
+        assert!(frame.results.is_on("hud_hit"), "the slot claims the pointer");
+        assert!(frame.results.is_on("cast_1"), "click fires the slot's action");
+        let veil = frame
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Panel { h, color, .. } if color[3] > 0.7 && color[3] < 0.74 => Some(*h),
+                _ => None,
+            })
+            .next_back()
+            .expect("cooldown veil drawn");
+        assert!((veil - 56.0 * 0.25).abs() < 0.6, "veil covers the cd fraction: {veil}");
+        assert!(
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "3")),
+            "bound charge count renders as an integer"
+        );
+    }
+
+    #[test]
+    fn medallion_and_stat_dot_draw_passively() {
+        // Presentational pair: a sapphire-ring medallion (halo + ring + well) and a
+        // green stat dot (glow + gem). Neither may claim the pointer.
+        let mut m = node("medallion");
+        m.width = Some(58.0);
+        m.height = Some(58.0);
+        m.anchor = Some(UiAnchor::TopLeft);
+        m = prop(m, "ring", Value::Text("sapphire".into()));
+        m = prop(m, "rune", Value::Text("ᛞ".into()));
+        m = prop(m, "style", Value::Text("medallion".into()));
+        let mut d = node("stat_dot");
+        d.width = Some(16.0);
+        d.height = Some(16.0);
+        d.anchor = Some(UiAnchor::TopRight);
+        d = prop(d, "hue", Value::Text("green".into()));
+        d = prop(d, "style", Value::Text("stat_dot".into()));
+        let mut page = node("screen");
+        page.children = vec![m, d];
+
+        let st = serde_json::json!({
+            "medallion": {
+                "rim": [0.06, 0.02, 0.03, 1.0], "bg_top": [0.14, 0.08, 0.09, 1.0],
+                "bg_bot": [0.06, 0.02, 0.03, 1.0], "rune_color": [0.44, 0.59, 1.0, 1.0],
+                "ring_w": 3,
+                "rings": {
+                    "sapphire": { "top": [0.23, 0.35, 0.63, 1.0], "bot": [0.1, 0.19, 0.34, 1.0],
+                                   "glow": [0.09, 0.19, 0.38, 0.45], "halo": [0.44, 0.59, 1.0, 0.38] }
+                }
+            },
+            "stat_dot": {
+                "border": [0.0, 0.0, 0.0, 0.55],
+                "hues": { "green": { "fill": [0.18, 0.62, 0.36, 1.0], "glow": [0.18, 0.62, 0.36, 0.55] } }
+            }
+        });
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
+            .expect("component library");
+
+        let frame =
+            run_ui_with(&page, &model, &st, &input_at(29.0, 29.0, true), &mut state, Some(&lib));
+        assert!(!frame.results.is_on("hud_hit"), "presentational kinds never claim");
+        let panels =
+            frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count();
+        assert!(panels >= 5, "halo + ring + well + glow + gem drew: {panels}");
+        assert!(
+            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
+            "the medallion rune renders in the Rune face"
+        );
+    }
+
     #[test]
     fn badge_draws_toned_pill_and_claims_pointer() {
         // A presentational badge: an accent-tone chip labelled "NEW", 60×20 at the origin.

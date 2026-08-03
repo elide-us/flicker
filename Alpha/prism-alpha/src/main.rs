@@ -44,11 +44,13 @@ fn roster() -> Vec<SceneEntry> {
         SceneEntry::new("clicktrainer", "CLICK TRAINER", "primary", || {
             Box::new(ClickTrainer::new())
         }),
-        // Developer mode: the tool/bench scenes of the two-column launcher.
+        // Adventurer mode is the ROOT of the eventual main player experience, so the
+        // scenes a player actually stands in live here rather than in the tool
+        // launcher: the voxel world they move through, and the pad they move with.
         SceneEntry::new("controllertester", "Controller Tester", "primary", || {
             Box::new(ControllerTester::new())
         })
-        .with_realm(REALM_DEVELOPER)
+        .with_realm(REALM_ADVENTURER)
         .with_info(SceneInfo::new(
             "Controller Tester",
             "Diagnostic",
@@ -56,6 +58,7 @@ fn roster() -> Vec<SceneEntry> {
             "Live gamepad / keyboard / mouse readout — buttons, sticks and triggers light up as you press them.",
             "Clay 0.1 · Tool · gilrs",
         )),
+        // Developer mode: the tool/bench scenes of the two-column launcher.
         SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
@@ -75,7 +78,7 @@ fn roster() -> Vec<SceneEntry> {
                 "Clay 0.1 · Editor · flicker.rig",
             )),
         SceneEntry::new("pocclusters", "Cluster Editor", "primary", flicker_pocclusters::scene)
-            .with_realm(REALM_DEVELOPER)
+            .with_realm(REALM_ADVENTURER)
             .with_info(SceneInfo::new(
                 "Cluster Editor",
                 "Tool",
@@ -93,6 +96,28 @@ fn roster() -> Vec<SceneEntry> {
                 "Seed a hex planet and run the epoch sim — reseed, resize, slice the layer stack, watch convection.",
                 "Clay 0.1 · Sim · worldengine",
             )),
+        // The texture synthesizer: a channel rack of noise voices blended into one
+        // field, projected into the PBR map set a surface actually needs.
+        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Sablework Bench",
+                "Authoring",
+                "Materials",
+                "Dial a surface on a six-voice channel rack — blend noise, shape the relief, and watch the swatch tile live.",
+                "Clay 0.1 · Editor · texture recipe",
+            )),
+        // The content air-traffic controller: what the ingest benches drop into
+        // staging/ reaches the tree the game reads only by being promoted here.
+        SceneEntry::new("quartermaster", "Quartermaster Bench", "primary", flicker_quartermaster::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Quartermaster Bench",
+                "Content",
+                "Package",
+                "Review what the pipelines staged, then promote it into the runtime package — the manager of the package manifest.",
+                "Clay 0.1 · Editor · staging → package",
+            )),
     ]
 }
 
@@ -104,6 +129,12 @@ fn main() -> Result<()> {
             }),
         )
         .init();
+
+    // Declare where THIS executable's content lives (committed `content.json`,
+    // beside the per-user `settings.json` but versioned) BEFORE any scene loads:
+    // benches ask `flicker_content::roots()` for the staging/package trees rather
+    // than hardcoding a climb out of their own crate directory.
+    flicker_content::init_from_app_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
 
     // The shell owns the whole front-end + the winit run loop. `scene_select` makes
     // the menu the MODE LAUNCHER (root mode buttons → tier-2 scene pages). Tier-3
@@ -120,10 +151,14 @@ mod tests {
     use super::*;
     use flicker_shell::REALM_DM;
 
-    /// The Aaron-ratified mode map, pinned: Adventurer = exactly Solar Birth; DM =
-    /// nothing (its page is the coming-soon note); Developer = the dev tools
-    /// INCLUDING the re-homed pocepochs and EXCLUDING solarbirth/clicktrainer;
-    /// Click Trainer stays a realm-less root-level launch button.
+    /// The Aaron-ratified mode map, pinned.
+    ///
+    /// **Adventurer is the root of the eventual main player experience**, not a
+    /// showcase shelf — so the scenes a player STANDS IN live there: the Solar
+    /// Birth cinematic, the voxel world of the Cluster Editor, and the Controller
+    /// Tester they learn the pad on. Developer keeps the authoring BENCHES, which
+    /// had grown too crowded to read (Aaron, 2026-08-02). DM is still the
+    /// coming-soon note, and Click Trainer stays a realm-less root-level button.
     #[test]
     fn roster_realms_follow_the_ratified_mode_map() {
         let scenes = roster();
@@ -135,13 +170,19 @@ mod tests {
                 .collect()
         };
 
-        assert_eq!(realm_ids(REALM_ADVENTURER), ["solarbirth"], "Adventurer = exactly Solar Birth");
+        let adventurer = realm_ids(REALM_ADVENTURER);
+        for id in ["solarbirth", "pocclusters", "controllertester"] {
+            assert!(adventurer.contains(&id), "'{id}' belongs to the Adventurer root");
+        }
         assert!(realm_ids(REALM_DM).is_empty(), "DM mode is under construction");
 
         let dev = realm_ids(REALM_DEVELOPER);
         assert!(dev.contains(&"pocepochs"), "pocepochs moved into the Developer launcher");
-        assert!(!dev.contains(&"solarbirth"), "Solar Birth moved OUT to Adventurer");
-        assert!(!dev.contains(&"clicktrainer"), "Click Trainer stays on the root menu");
+        assert!(dev.contains(&"sablework"), "the texture synthesizer is an authoring bench");
+        // Developer is the BENCH launcher: nothing a player stands in belongs there.
+        for id in ["solarbirth", "pocclusters", "controllertester", "clicktrainer"] {
+            assert!(!dev.contains(&id), "'{id}' is not a Developer bench");
+        }
 
         // Click Trainer: realm-less AND info-less ⇒ a plain root popup button.
         let ct = scenes.iter().find(|e| e.id == "clicktrainer").expect("click trainer registered");

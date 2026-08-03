@@ -297,11 +297,12 @@ pub struct UiNode {
     pub visible_bind: Option<String>,
     /// `Model` key gating interactivity — the node draws dim / inert when false.
     pub enabled_bind: Option<String>,
-    /// Names a **template** builder (a Rust fn that composes pieces) instead of a
-    /// leaf `component`; expanded by `flicker-widgets::expand` before the tree is
-    /// cached. A node carries `component` OR `template`.
+    /// Names a **template** (a data proto or registered builder that composes
+    /// components) instead of a leaf `component`; expanded by
+    /// `flicker-widgets::expand` before the tree is cached. A node carries
+    /// `component` OR `template`.
     pub template: Option<String>,
-    /// Named child groups a template builder splices into place (`header` / `body`
+    /// Named child groups a template splices into place (`header` / `body`
     /// / …). Empty for every non-template node.
     pub slots: HashMap<String, Vec<UiNode>>,
     /// Directional-nav order **within** [`tab_group`](Self::tab_group): a d-pad /

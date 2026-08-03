@@ -1,5 +1,5 @@
 -- ui.sprite — an image node: blit the texture named by the `tex` prop into the rect,
--- tinted white × `alpha`. The Lua twin of the engine's draw_sprite. No `tex` → nothing.
+-- tinted white × `alpha`. No `tex` → nothing.
 --
 -- props: tex (engine texture id), alpha (default 1), layer.
 
@@ -18,6 +18,9 @@ function sprite.draw(cmds, r, props)
   core.sprite(cmds, r, math.floor(props.tex), core.jnum(props, "alpha", 1), props.layer)
 end
 
+-- Never dispatched — `hit_shape` above answers the hit in Rust. The body stays
+-- because the library registers a COMPONENT by its draw + hit pair (see
+-- flicker-script's `probe_component_kinds`).
 function sprite.hit(mx, my, r)
   return core.point_in(mx, my, r)
 end

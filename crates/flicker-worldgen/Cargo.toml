@@ -13,6 +13,8 @@ license.workspace = true
 [dependencies]
 flicker-materials.workspace = true
 flicker-worldstate.workspace = true
+# The shared lattice noise (`noise.rs` here is only its Vec3 face).
+flicker-primitive.workspace = true
 glam.workspace = true
 serde.workspace = true
 

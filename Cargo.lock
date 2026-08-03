@@ -999,9 +999,12 @@ name = "flicker-content"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flicker-core",
  "flicker-skeletal",
  "glam",
+ "serde",
  "serde_json",
+ "tracing",
  "ufbx",
 ]
 
@@ -1033,6 +1036,7 @@ name = "flicker-flight"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flicker-core",
  "serde",
  "serde_json",
 ]
@@ -1081,6 +1085,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-core",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
@@ -1135,6 +1140,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-core",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-mechanics",
@@ -1172,6 +1178,7 @@ name = "flicker-pocclusters"
 version = "0.1.0"
 dependencies = [
  "flicker",
+ "flicker-core",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-orrery",
@@ -1204,6 +1211,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-quartermaster"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-content",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-shell",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "flicker-render"
 version = "0.1.0"
 dependencies = [
@@ -1218,6 +1238,23 @@ dependencies = [
  "tracing",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "flicker-sablework"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-content",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-materials",
+ "flicker-shell",
+ "flicker-texture",
+ "flicker-worker",
+ "image",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1261,6 +1298,7 @@ name = "flicker-skeletal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flicker-core",
  "glam",
  "serde",
  "serde_json",
@@ -1290,6 +1328,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-texture"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "flicker-primitive",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flicker-voxel"
 version = "0.1.0"
 dependencies = [
@@ -1309,6 +1358,7 @@ dependencies = [
  "flicker-input-router",
  "flicker-render",
  "flicker-script",
+ "serde",
  "serde_json",
  "tracing",
 ]
@@ -1338,7 +1388,7 @@ dependencies = [
 name = "flicker-worldengine"
 version = "0.1.0"
 dependencies = [
- "flate2",
+ "flicker-core",
  "flicker-materials",
  "flicker-worldgen",
  "flicker-worldgrid",
@@ -1354,6 +1404,7 @@ name = "flicker-worldgen"
 version = "0.1.0"
 dependencies = [
  "flicker-materials",
+ "flicker-primitive",
  "flicker-worldgrid",
  "flicker-worldstate",
  "glam",
@@ -2965,10 +3016,13 @@ dependencies = [
  "anyhow",
  "flicker-assetpipeline",
  "flicker-clicktrainer",
+ "flicker-content",
  "flicker-controllertester",
  "flicker-loomforge",
  "flicker-pocclusters",
  "flicker-pocepochs",
+ "flicker-quartermaster",
+ "flicker-sablework",
  "flicker-shell",
  "flicker-solarbirth",
  "tracing",

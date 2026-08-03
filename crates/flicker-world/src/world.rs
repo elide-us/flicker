@@ -26,14 +26,16 @@ pub const DEFAULT_SEED: u64 = 0x0EC0_DE01;
 pub const MIN_FREQ: u32 = 6;
 pub const MAX_FREQ: u32 = 48;
 
-/// Display names for the six epoch layers (index 0 = Epoch 1).
+/// Display names for the six epoch layers (index 0 = Epoch 1), as stringtable
+/// tokens — resolved at the Model publish boundary (`scene::hud_model`), per the
+/// Model-channel strings gate.
 pub const EPOCH_LABELS: [&str; 6] = [
-    "Composition",
-    "Differentiation",
-    "Tectonics",
-    "Hydrosphere",
-    "Mineralization",
-    "Erosion",
+    "$w_epoch_composition",
+    "$w_epoch_differentiation",
+    "$w_epoch_tectonics",
+    "$w_epoch_hydrosphere",
+    "$w_epoch_mineralization",
+    "$w_epoch_erosion",
 ];
 
 /// The tunable epoch knobs: `(epoch index 0..6, param id, default, min, max)`. The

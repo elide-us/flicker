@@ -21,8 +21,16 @@ import os
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 
-FONTS = os.path.join(os.path.dirname(__file__), "..", "Alpha", "content", "fonts")
-SRC = os.path.join(FONTS, "source")
+# The generated faces live in the SHIP tree. The upstream variable fonts they are
+# instanced from are NOT project content — they are archived in `Prism/Licenses`
+# alongside the OSS licences, pending hand-off to the content project. Nothing in
+# the engine reads them; only this script does, and only when a face is
+# regenerated. (Both paths moved with the package restructure — this script
+# pointed at the retired `Alpha/content/fonts` and could not have run.)
+FONTS = os.path.join(
+    os.path.dirname(__file__), "..", "Alpha", "content", "package", "sensorium", "fonts"
+)
+SRC = os.path.join(os.path.dirname(__file__), "..", "Prism", "Licenses")
 
 # (source file, wght, family, RIBBI style, output file)
 FACES = [

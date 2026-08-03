@@ -1,0 +1,22 @@
+[package]
+name = "flicker-voxel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# `bytemuck` is used to mark `Vertex` as `Pod`/`Zeroable` so a downstream
+# graphics crate can cast a slice of vertices into its own GPU vertex
+# type without copying. `serde` + `serde_json` drive the cluster bake
+# format (see `bake.rs`): one JSON file per cluster, byte-exact corner /
+# material encoding, deterministic voxel ordering. `flicker-core` brings
+# in the workspace-wide gzip helpers — bake files are written compact-
+# JSON-then-gzipped, which collapses the dense state field's many-bytes-
+# the-same payload by 5–10× on disk. Storage and contouring proper stay
+# standard-library only.
+[dependencies]
+clayengine.workspace = true
+flicker-primitive = { path = "../../content/flicker-primitive" }
+bytemuck.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+flicker-core = { path = "../../core/flicker-core" }

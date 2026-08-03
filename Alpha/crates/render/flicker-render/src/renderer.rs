@@ -442,6 +442,52 @@ impl Renderer {
         self.register_texture(tex)
     }
 
+    /// Overwrite an already-uploaded texture's pixels **in place**, keeping its handle,
+    /// view and every bind group built over it.
+    ///
+    /// For content that is regenerated repeatedly at a fixed size — a procedural texture
+    /// under a live slider, a CPU-composited overlay — this is the difference between a
+    /// write and an allocation: re-uploading through [`Self::load_texture`] would create a
+    /// new GPU texture plus three bind groups every time, orphan the old slot, and hand
+    /// back a new handle that every holder would have to be told about. Here the handle is
+    /// stable, so a UI tree can name the texture once and keep naming it.
+    ///
+    /// `pixels` must be `width * height * 4` bytes for the texture's ORIGINAL size, and
+    /// its interpretation still follows the format the texture was created with (an sRGB
+    /// texture stays sRGB). Returns `false` — writing nothing — if the handle is unknown
+    /// or the buffer does not match the texture's size, so a caller that resized has a
+    /// signal to re-upload rather than a silently torn image.
+    #[must_use]
+    pub fn update_texture(&mut self, handle: TextureHandle, pixels: &[u8]) -> bool {
+        let Some(Some(tex)) = self.textures.get(handle.0 as usize) else {
+            return false;
+        };
+        let (w, h) = tex.size;
+        if pixels.len() as u32 != w * h * 4 {
+            return false;
+        }
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        true
+    }
+
     /// Build the auxiliary billboard + textured-mesh bind groups for a freshly uploaded
     /// texture and push it into the store, returning its handle. Shared by the sRGB and
     /// linear upload paths.

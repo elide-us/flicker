@@ -1,0 +1,4 @@
+{
+  "_comment": "Where THIS executable's content tree lives, relative to this crate directory (an absolute path is taken as-is). The sub-roots are DERIVED from it -- package/ staging/ data/ sensorium/ source/ -- so there is ONE knob and staging can never drift onto a different tree than package. Read by flicker_content::roots::init_from_app_dir at startup. Committed (unlike the per-user, gitignored settings.json) because it describes the app's shape, not a player's preferences.",
+  "content_root": "../content"
+}

@@ -214,7 +214,12 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     }
     SCENE_SELECT.with(|s| s.set(config.scene_select));
     set_scenes(config.scenes);
-    let result = run_app(SceneManager::new(Box::new(LogoScene::new())));
+    // Every shell client inherits the Prism pointer (theme-tinted hardware
+    // cursor); when the pointer is hidden/captured elsewhere it simply isn't
+    // shown — no visibility wiring here.
+    let result = run_app(
+        SceneManager::new(Box::new(LogoScene::new())).with_cursor(crate::theme::cursor_image()),
+    );
     // The window is gone now; persist its final windowed size + position so the next
     // launch reopens the same way.
     persist_window_geometry();
@@ -457,11 +462,11 @@ const LOGO_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/lo
 const LOGO_IMAGES: [(&str, &[u8]); 2] = [
     (
         "elideus",
-        include_bytes!("../../../../content/sensorium/assets/elideus_productions_yellow.png"),
+        include_bytes!("../../../../content/package/sensorium/assets/elideus_productions_yellow.png"),
     ),
     (
         "clay",
-        include_bytes!("../../../../content/sensorium/assets/clay_engine_infinity_grey.png"),
+        include_bytes!("../../../../content/package/sensorium/assets/clay_engine_infinity_grey.png"),
     ),
 ];
 
@@ -659,7 +664,8 @@ impl ConfirmDisplayScene {
 
     /// The countdown subtitle the modal renders under the title.
     fn subtitle(&self) -> String {
-        format!("Reverting in {}s", self.remaining.ceil().max(0.0) as i32)
+        let secs = self.remaining.ceil().max(0.0) as i32;
+        format!("{} {secs}s", flicker::ui::strings::resolve("$menu_reverting_in"))
     }
 }
 
@@ -1039,6 +1045,13 @@ mod menu_template_tests {
             "settings.lua ships raw display literals: {:?}",
             flicker::ui::raw_display_literals(&tree)
         );
+
+        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
+        // from Rust into the Model bypasses the tree gates above, so the crate
+        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
+        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+        let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("shell.rs"));
+        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
     }
 }
 
@@ -1125,7 +1138,7 @@ impl MenuView {
                 publish_menu(&s, screen, page, items, scenes); // the `MENU` data global
                 let tree = match s.ui_tree() {
                     // Expand any `template` nodes (pause→popup_menu, confirm→choice_dialog)
-                    // into their piece subtree once, before the tree is cached — identity for a
+                    // into their component subtree once, before the tree is cached — identity for a
                     // template-free tree (the launcher menu is unaffected).
                     Ok(Some(t)) => Some(expand(t, &builtin_templates())),
                     Ok(None) => {
@@ -1191,7 +1204,7 @@ impl MenuView {
         // highlight — a per-frame re-focus would fight both. Runs before `run_ui` so the
         // very first rendered frame already draws the top button highlighted.
         if !self.nav_initialized {
-            if let Some(first) = focusables_of(tree).into_iter().next() {
+            if let Some(first) = focusables_of(tree, model).into_iter().next() {
                 if self.ui_state.focused().is_none() {
                     self.ui_state.request_focus(first.id);
                 }
@@ -1247,7 +1260,7 @@ impl MenuView {
             .map(|f| InputEvent::from_fired(f, ctx, input))
             .collect();
         let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree).with_intents(&self.intents);
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree, model).with_intents(&self.intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut self.route);
@@ -1403,7 +1416,7 @@ impl UnifiedSettingsScene {
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = load_styles_str(SHELL_UI_JSON);
         // Build the declarative tree ONCE, then expand its `window` template into
-        // pieces — the same cache point MenuView uses. The host is RETAINED past
+        // components — the same cache point MenuView uses. The host is RETAINED past
         // tree-build to also serve as the Lua component library (`ui.*` modules).
         let (host, tree) = match ScriptHost::new_with_modules(
             SETTINGS_SCRIPT,
@@ -1422,7 +1435,7 @@ impl UnifiedSettingsScene {
                 expose_ui_elements(&s); // the `UI` global (chrome config + styles)
                 publish_profiles(&s); // the `PROFILES` global (controller-tab selector, §7.3)
                 let tree = match s.ui_tree() {
-                    // Expand the `window` template into its piece subtree once, before caching.
+                    // Expand the `window` template into its component subtree once, before caching.
                     Ok(Some(t)) => Some(expand(t, &builtin_templates())),
                     Ok(None) => {
                         tracing::error!("settings.lua exposes no tree()");
@@ -1512,12 +1525,12 @@ impl UnifiedSettingsScene {
             m.set(format!("nav_{id}_style"), style);
         }
         let (kicker, title, color) = match section {
-            "audio" => ("MIXING & OUTPUT", "Audio", "theme.tokens.sig_yellow"),
-            "input" => ("BINDINGS & DEVICES", "Input", "theme.tokens.sig_red"),
-            _ => ("DISPLAY & RENDERING", "Video", "theme.tokens.sig_blue"),
+            "audio" => ("$set_kicker_audio", "$set_title_audio", "theme.tokens.sig_yellow"),
+            "input" => ("$set_kicker_input", "$set_title_input", "theme.tokens.sig_red"),
+            _ => ("$set_kicker_video", "$set_title_video", "theme.tokens.sig_blue"),
         };
-        m.set("kicker", kicker);
-        m.set("sec_title", title);
+        m.set("kicker", flicker::ui::strings::resolve(kicker).into_owned());
+        m.set("sec_title", flicker::ui::strings::resolve(title).into_owned());
         m.set("kicker_color_path", color);
         m.set("input_subtab", self.input_subtab.as_str());
         m.set("ctrl_profile", self.ctrl_profile.as_str());
@@ -1715,7 +1728,7 @@ impl Scene for UnifiedSettingsScene {
             .map(|f| InputEvent::from_fired(f, ctx, input))
             .collect();
         let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree).with_intents(&self.intents);
+            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree, &model).with_intents(&self.intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut self.route);
@@ -2334,7 +2347,9 @@ mod script_smoke {
                 .expect("menu.lua exposes tree()");
             // Pause/confirm now return `template` nodes — expand them exactly as MenuView does.
             let tree = expand(tree, &builtin_templates());
-            let model = ValueMap::new().with("subtitle", "Reverting in 9s");
+            // The countdown subtitle, composed around its token exactly as the scene does.
+            let model = ValueMap::new()
+                .with("subtitle", format!("{} 9s", flicker::ui::strings::resolve("$menu_reverting_in")));
             let snap = UiInput {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
@@ -2576,13 +2591,13 @@ mod script_smoke {
             for id in ["keyboard", "mouse", "controller"] {
                 m.set(format!("sub_{id}"), subtab == id);
             }
-            let title = match section {
-                "audio" => "Audio",
-                "input" => "Input",
-                _ => "Video",
+            let (kicker, title) = match section {
+                "audio" => ("$set_kicker_audio", "$set_title_audio"),
+                "input" => ("$set_kicker_input", "$set_title_input"),
+                _ => ("$set_kicker_video", "$set_title_video"),
             };
-            m.set("kicker", "SECTION");
-            m.set("sec_title", title);
+            m.set("kicker", flicker::ui::strings::resolve(kicker).into_owned());
+            m.set("sec_title", flicker::ui::strings::resolve(title).into_owned());
             m.set("kicker_color_path", "theme.tokens.sig_blue");
             m.set("input_subtab", subtab);
             m.set("ctrl_profile", "default");
@@ -2692,7 +2707,9 @@ mod script_smoke {
             .collect();
         let mut ui = UiState::new();
         let mut route = RouteCtx::new();
-        let mut walker = WalkerHandler::hud(&mut ui, false).with_nav(&tree).with_intents(&intents);
+        let model = ValueMap::new();
+        let mut walker =
+            WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model).with_intents(&intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut route);
