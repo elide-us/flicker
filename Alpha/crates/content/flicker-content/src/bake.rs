@@ -96,6 +96,7 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
         mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
         clips: Vec::new(),
         attach: Default::default(),
+        attach_points: Vec::new(),
         collision: Default::default(),
         retarget: true,
     }
@@ -222,6 +223,7 @@ pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
         mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
         clips: Vec::new(),
         attach: Default::default(),
+        attach_points: Vec::new(),
         collision: Default::default(),
         retarget: false,
     }
@@ -306,6 +308,7 @@ pub fn bake_garment(
         mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
         clips: Vec::new(),
         attach: Default::default(),
+        attach_points: Vec::new(),
         collision: Default::default(),
         retarget: false,
     })
@@ -449,10 +452,39 @@ fn cell_key(p: Vec3, cell: f32) -> (i32, i32, i32) {
 /// [`write_garment`] do. Without it a character committed through the EDITOR shipped untextured
 /// while the CLI [`import_folder`](crate::pipeline::import_folder) path wired its maps — the same
 /// gap props carried until they were routed through here.
-pub fn write_rig(model: &RawModel, source_fbx: &Path, source_name: &str, out: &Path) -> Result<()> {
+/// `mounts` are the character's authored attach POINTS (the editor's Attach stage) —
+/// folded into the rig's `attach_points` block so the six placements the user tuned
+/// actually ship instead of being discarded at export.
+pub fn write_rig(
+    model: &RawModel,
+    source_fbx: &Path,
+    source_name: &str,
+    out: &Path,
+    mounts: &[MountPoint],
+) -> Result<()> {
     let mut rig = bake_rig(model, source_name);
+    rig.attach_points = mounts
+        .iter()
+        .map(|m| flicker_skeletal::format::AttachPoint {
+            id: m.id.clone(),
+            bone: m.bone.clone(),
+            offset: m.offset,
+        })
+        .collect();
     wire_source_textures(source_fbx, source_name, out, &mut rig)?;
     write_rig_file(&rig, out)
+}
+
+/// One authored CHARACTER attach point the editor hands the bake — where a prop will
+/// mount on this rig (grip, holster, scabbard, belt …). Editor-facing, like [`Fit`]:
+/// the bench never touches the `flicker-skeletal` types.
+#[derive(Debug, Clone)]
+pub struct MountPoint {
+    /// Stable id (`hand_r`, `belt`, …) — what gameplay binds to.
+    pub id: String,
+    /// Canonical bone name the point rides (the Attach stage's parent).
+    pub bone: String,
+    pub offset: [f32; 3],
 }
 
 /// Serialize an already-baked [`RigFile`] to `out` — the shared writer the character, prop and
@@ -883,6 +915,7 @@ mod tests {
             },
             clips: Vec::new(),
             attach: Default::default(),
+            attach_points: Vec::new(),
             collision: Default::default(),
         };
         let garment = RawModel {
@@ -1072,7 +1105,7 @@ mod tests {
         let dir = std::env::temp_dir().join("flicker_content_bake_e2e");
         let _ = std::fs::create_dir_all(&dir);
         let out = dir.join("PrismHumanBaseA.json");
-        write_rig(&model, &fbx, "PrismHumanBaseA", &out).unwrap();
+        write_rig(&model, &fbx, "PrismHumanBaseA", &out, &[]).unwrap();
         let bytes = std::fs::metadata(&out).unwrap().len();
         eprintln!("wrote {} ({:.1} MB)", out.display(), bytes as f64 / 1.0e6);
 

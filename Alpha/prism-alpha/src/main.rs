@@ -58,54 +58,29 @@ fn roster() -> Vec<SceneEntry> {
             "Live gamepad / keyboard / mouse readout — buttons, sticks and triggers light up as you press them.",
             "Clay 0.1 · Tool · gilrs",
         )),
-        // Developer mode: the tool/bench scenes of the two-column launcher.
-        SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
-            .with_realm(REALM_DEVELOPER)
+        // A minigame rather than Prism fiction — like the Click Trainer it is a
+        // TECH DEMO, here of a scene-painted 2D scope under a fully data-composed
+        // console driven by dropdowns and a Dispatch button.
+        SceneEntry::new("atc", "Air Traffic Control", "primary", flicker_atc::scene)
+            .with_realm(REALM_ADVENTURER)
             .with_info(SceneInfo::new(
-                "Loomforge Bench",
-                "Rigging",
-                "Animation",
-                "Author a state machine, packs, creatures, and TAE windows — and save the pack back.",
-                "Clay 0.1 · Editor · flicker.pack",
+                "Air Traffic Control",
+                "Minigame",
+                "Radar",
+                "Sequence 26 aircraft through the scope — vector, climb, hold and land them without a close encounter.",
+                "Clay 0.1 · Game · command panel",
             )),
+        // Developer mode: the tool/bench scenes of the two-column launcher. Ordered by
+        // pipeline position (Aaron, QA pass 2026-08-03): asset IMPORT first, the file
+        // manager that promotes its output second, then the downstream benches.
         SceneEntry::new("assetpipeline", "Clayworks Bench", "primary", flicker_assetpipeline::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
                 "Clayworks Bench",
                 "Rigging",
                 "Content",
-                "Choose a workflow, then rig the asset, set attach points, and export to the pack editor.",
+                "Choose a workflow, then rig the asset, set attach points, and export to staging for the Quartermaster.",
                 "Clay 0.1 · Editor · flicker.rig",
-            )),
-        SceneEntry::new("pocclusters", "Cluster Editor", "primary", flicker_pocclusters::scene)
-            .with_realm(REALM_ADVENTURER)
-            .with_info(SceneInfo::new(
-                "Cluster Editor",
-                "Tool",
-                "CSG / Voxel",
-                "3×3 voxel-cluster field — dual-contour + mesh, LOD, navmesh, and the virtual-voxel inspector.",
-                "Clay 0.1 · Tool · dual-contour",
-            )),
-        // MOVED from the standalone flicker-pocepochs app (now a library package).
-        SceneEntry::new("pocepochs", "Planet Simulation", "primary", flicker_pocepochs::scene)
-            .with_realm(REALM_DEVELOPER)
-            .with_info(SceneInfo::new(
-                "Planet Simulation",
-                "Simulation",
-                "World-Gen",
-                "Seed a hex planet and run the epoch sim — reseed, resize, slice the layer stack, watch convection.",
-                "Clay 0.1 · Sim · worldengine",
-            )),
-        // The texture synthesizer: a channel rack of noise voices blended into one
-        // field, projected into the PBR map set a surface actually needs.
-        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
-            .with_realm(REALM_DEVELOPER)
-            .with_info(SceneInfo::new(
-                "Sablework Bench",
-                "Authoring",
-                "Materials",
-                "Dial a surface on a six-voice channel rack — blend noise, shape the relief, and watch the swatch tile live.",
-                "Clay 0.1 · Editor · texture recipe",
             )),
         // The content air-traffic controller: what the ingest benches drop into
         // staging/ reaches the tree the game reads only by being promoted here.
@@ -117,6 +92,46 @@ fn roster() -> Vec<SceneEntry> {
                 "Package",
                 "Review what the pipelines staged, then promote it into the runtime package — the manager of the package manifest.",
                 "Clay 0.1 · Editor · staging → package",
+            )),
+        SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Loomforge Bench",
+                "Rigging",
+                "Animation",
+                "Author a state machine, packs, creatures, and TAE windows — and save the pack back.",
+                "Clay 0.1 · Editor · flicker.pack",
+            )),
+        SceneEntry::new("pocclusters", "Cluster Editor", "primary", flicker_pocclusters::scene)
+            .with_realm(REALM_ADVENTURER)
+            .with_info(SceneInfo::new(
+                "Cluster Editor",
+                "Tool",
+                "CSG / Voxel",
+                "3×3 voxel-cluster field — dual-contour + mesh, LOD, navmesh, and the virtual-voxel inspector.",
+                "Clay 0.1 · Tool · dual-contour",
+            )),
+        // God Mode: the world-simulation console. MOVED from the standalone
+        // flicker-poc-chemistry app (that crate is now the GPU-free sim library).
+        SceneEntry::new("godmode", "God Mode", "primary", flicker_godmode::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "God Mode",
+                "Simulation",
+                "World-Gen",
+                "Watch a planet evolve from a molten ball — orbit the layer stack, recolour it by any field, and drive the run.",
+                "Clay 0.1 · Sim · chemistry-first",
+            )),
+        // The texture synthesizer: a channel rack of noise voices blended into one
+        // field, projected into the PBR map set a surface actually needs.
+        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Sablework Bench",
+                "Authoring",
+                "Materials",
+                "Dial a surface on a six-voice channel rack — blend noise, shape the relief, and watch the swatch tile live.",
+                "Clay 0.1 · Editor · texture recipe",
             )),
     ]
 }
@@ -177,8 +192,12 @@ mod tests {
         assert!(realm_ids(REALM_DM).is_empty(), "DM mode is under construction");
 
         let dev = realm_ids(REALM_DEVELOPER);
-        assert!(dev.contains(&"pocepochs"), "pocepochs moved into the Developer launcher");
         assert!(dev.contains(&"sablework"), "the texture synthesizer is an authoring bench");
+        // The old "Planet Simulation" tile is GONE — God Mode is the planet
+        // simulation, and two launcher entries for one thing is how a
+        // maintainer ends up in the wrong one.
+        assert!(!dev.contains(&"pocepochs"), "the superseded Planet Simulation tile is retired");
+        assert!(dev.contains(&"godmode"), "the world-simulation console is a Developer bench");
         // Developer is the BENCH launcher: nothing a player stands in belongs there.
         for id in ["solarbirth", "pocclusters", "controllertester", "clicktrainer"] {
             assert!(!dev.contains(&id), "'{id}' is not a Developer bench");

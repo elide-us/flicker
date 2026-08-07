@@ -1,7 +1,8 @@
 //! Conform a parsed body to our canonical skeleton — the in-app port of
-//! `rename_meshy_to_canonical.py::reorient_to_canonical`, referencing **PrismHumanBaseA, NOT
-//! Katanami** (memory 719001A2: the Katanami reference was the animation bug — the live Motifect
-//! clips are retarget-baked against PrismHumanBaseA's bind, so bodies must conform to it).
+//! `rename_meshy_to_canonical.py::reorient_to_canonical`, referencing the AUTHORED
+//! **GolemBaseSkeleton** baseline (2026-08-04; see [`crate::baseline`] — the Katanami-derived
+//! reference lineage is retired, and the live Motifect clips are retarget-baked against the
+//! same authored bind bodies conform to).
 //!
 //! `reorient` rebuilds each bone's rest frame in two steps: (1) base frame = the REFERENCE's world
 //! orientation + THIS body's positions (fixes the Mixamo Y-down-bone vs UE X-down-bone convention);
@@ -518,10 +519,15 @@ pub fn conform_to_canonical(model: &mut RawModel, reference: &Path) -> Result<Co
     Ok(ConformOutput { hip, shoulder, ankle, reorient, infer })
 }
 
-/// The canonical reference rig — our base, what the Motifect clips are baked against.
+/// The canonical reference rig — **GolemBaseSkeleton**, the AUTHORED baseline
+/// (Aaron's ruling, 2026-08-04): a generated, skeleton-only A-pose at 170 cm — see
+/// [`crate::baseline`]. The reference is nobody's body: characters (the golem
+/// included) are conformed ONTO it, which retires the Katanami-derived bind lineage
+/// for good. "Canonical" = the 66 names + parent topology + conventions (Z-up, cm,
+/// root at feet) + THIS authored rest bind; body proportions stay per-rig by design.
 pub fn default_reference() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../content/package/characters/PrismHumanBaseA/PrismHumanBaseA.json")
+        .join("../../../content/package/characters/GolemBaseSkeleton/GolemBaseSkeleton.json")
 }
 
 #[cfg(test)]
@@ -677,7 +683,7 @@ mod tests {
     }
 
     /// Infer adds the reference's missing bones: 24→65 (fingers/twists/sockets/face; `root` is a bake
-    /// concern, added later → the oracle's 66). Because we infer FROM the oracle with scale≈1, each
+    /// concern, added later → the oracle's 67). Because we infer FROM the oracle with scale≈1, each
     /// inferred bone's world position reproduces the oracle within a small tolerance.
     #[test]
     fn infer_adds_canonical_bones_matching_oracle() {
@@ -696,7 +702,7 @@ mod tests {
             report.added.len(), model.bones.len(), report.hand_scale_l, report.hand_scale_r
         );
 
-        assert_eq!(model.bones.len(), 65, "22 canonical + 43 inferred (root added at bake → 66)");
+        assert_eq!(model.bones.len(), 66, "22 canonical + 44 inferred (root added at bake → 67)");
         let names: HashSet<&str> = model.bones.iter().map(|b| b.name.as_str()).collect();
         for n in ["index_01_l", "thumb_03_r", "pinky_02_l", "Weapon_L", "Weapon_R",
                   "upperarm_twist_01_l", "calf_twist_01_r", "jaw", "eye_l", "eye_r"] {
@@ -798,7 +804,7 @@ mod tests {
         }
 
         // A NEW body need not match the old oracle; it must conform to a SANE upright canonical rig.
-        assert_eq!(model.bones.len(), 65, "conforms to the 65-bone canonical set (+root at bake → 66)");
+        assert_eq!(model.bones.len(), 66, "conforms to the 66-bone canonical set (+root at bake → 67)");
         let gz = |n: &str| ridx.get(n).map(|_| pos_of(g[model.bones.iter().position(|b| b.name == n).unwrap()]).z);
         let (pelvis, head, foot) = (gz("pelvis").unwrap(), gz("head").unwrap(), gz("foot_l").unwrap());
         assert!((60.0..120.0).contains(&pelvis), "pelvis at hip height, got {pelvis}");
@@ -988,7 +994,7 @@ mod tests {
             };
             let tag = frac.map_or("baseline".to_string(), |f| format!("frac {f:.2}"));
             let skel = tmp.join("skel.json");
-            crate::bake::write_rig(&model, &fbx, "HumanBaseA", &skel).unwrap();
+            crate::bake::write_rig(&model, &fbx, "HumanBaseA", &skel, &[]).unwrap();
             let (inplace, _) = crate::retarget::emit_variants(&idle_bvh, &skel, &tmp.join("c")).unwrap();
             let (g, idx) = posed_world(&inplace);
             let p = |n: &str| pos_of(g[idx[n]]);

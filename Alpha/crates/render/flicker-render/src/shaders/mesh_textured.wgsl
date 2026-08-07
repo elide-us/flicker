@@ -5,7 +5,7 @@
 // Fragment stage: samples albedo (sRGB) for base colour and the PBR map set (LINEAR) —
 // all in one combined material bind group (group 1): a tangent-space normal map
 // (perturbs the world normal via a TBN built from the interpolated normal + tangent),
-// roughness, metalness, and AO.
+// roughness, metalness, AO, and self-illumination (`Emit`).
 // Lighting keeps the SAME sun/moon/point Lambertian diffuse as mesh.wgsl, then:
 //   * diffuse is scaled by (1 - metalness) and by AO (metal has no diffuse; AO darkens);
 //   * a pragmatic GGX-lite specular is added per light — its lobe sharpens with
@@ -50,7 +50,11 @@ struct Scene {
 @group(1) @binding(2) var rough_tex: texture_2d<f32>;
 @group(1) @binding(3) var metal_tex: texture_2d<f32>;
 @group(1) @binding(4) var ao_tex: texture_2d<f32>;
-@group(1) @binding(5) var mat_sampler: sampler;
+// Self-illumination. sRGB colour data per the content standard's `Emit` map, so it
+// is a COLOUR (a rune glows blue while the metal beside it stays dark), not a
+// scalar mask. Default 1x1 BLACK ⇒ a draw that omits it emits nothing.
+@group(1) @binding(5) var emit_tex: texture_2d<f32>;
+@group(1) @binding(6) var mat_sampler: sampler;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -122,6 +126,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let rough = clamp(textureSample(rough_tex, mat_sampler, in.uv).r, 0.04, 1.0);
     let metal = clamp(textureSample(metal_tex, mat_sampler, in.uv).r, 0.0, 1.0);
     let ao = textureSample(ao_tex, mat_sampler, in.uv).r;
+    let emit = textureSample(emit_tex, mat_sampler, in.uv).rgb;
 
     // --- Build the perturbed world normal from the tangent-space normal map. ---
     var geo_n = normalize(in.world_normal);
@@ -177,7 +182,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     let shaded = diffuse + spec + sheen;
-    let lit = vec4<f32>(shaded, 1.0) * per_draw.tint;
+    // EMISSION is added AFTER the tint and BEFORE fog. After the tint because a
+    // glow is the surface's own light — dimming the object must not dim what it
+    // emits — and before fog because distance still swallows a glow like any other
+    // radiance. Never multiplied by AO or a light term: nothing shadows a light.
+    let lit = vec4<f32>(shaded, 1.0) * per_draw.tint + vec4<f32>(emit, 0.0);
 
     let dist = length(in.world_position - scene.camera_pos.xyz);
     let fog = 1.0 - exp(-scene.fog_color.w * dist);

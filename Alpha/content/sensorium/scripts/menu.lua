@@ -183,10 +183,13 @@ local function backdrop(screen)
     anchor = "top_left", width_frac = 1.0, height_frac = 1.0, layer = L_BG,
     style = "screens." .. MENU.screen,
   }
-  -- The Muse — aspect-locked SQUARE (no stretch), viewport-tall, dimmed, centred.
+  -- The Muse — aspect-locked SQUARE pinned to the RIGHT edge, vertically centred,
+  -- spanning the full width so she fills leftward (her BAKED left-edge dissolve —
+  -- theme.rs authored it for a right-margin draw — fades her into the menu) and
+  -- spills past top/bottom as the window widens: cover, never letterbox.
   if screen.muse and Textures and Textures.muse then
     kids[#kids + 1] = Sprite {
-      anchor = "bottom", height_frac = 1.04, aspect = 1.0,
+      anchor = "right", width_frac = 1.0, aspect = 1.0,
       tex = Textures.muse, alpha = (UI.menu and UI.menu.muse_alpha) or 0.34, layer = L_BG,
     }
     -- Fade overlay: two horizontal scrims (dark edges → clear centre) so the Muse reads

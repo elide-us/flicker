@@ -1,5 +1,5 @@
 {
-  "_comment": "Data TEMPLATE protos for the flicker-widgets template tier: `templates.<name>` is the proto UiNode tree `expand` instantiates for a `{ template: <name> }` node. Instance props substitute into `@name` / `@name=default` (native JSON value) and `@{name}` / `@{name=default}` (string interpolation); `when`: `@name` / `!@name` gates a node on a prop; `{ component: slot, name: <slot> }` splices the instance's named slot (its children are the fallback); `when_filled: true` drops a node when no slot beneath it produced instance content. `$token` strings are stringtable refs resolved at draw \u2014 never substituted here. Structural pseudo-props: the instance's `anchor` and `id` are readable as `@anchor` / `@id`.",
+  "_comment": "Data TEMPLATE protos for the flicker-widgets template tier: `templates.<name>` is the proto UiNode tree `expand` instantiates for a `{ template: <name> }` node. Instance props substitute into `@name` / `@name=default` (native JSON value) and `@{name}` / `@{name=default}` (string interpolation); `when`: `@name` / `!@name` gates a node on a prop; `{ component: slot, name: <slot> }` splices the instance's named slot (its children are the fallback); `when_filled: true` drops a node when no slot beneath it produced instance content. `$token` strings are stringtable refs resolved at draw — never substituted here. Structural pseudo-props: the instance's `anchor` and `id` are readable as `@anchor` / `@id`.",
   "templates": {
     "quad_rtt_view": {
       "component": "rtt",
@@ -298,7 +298,7 @@
       ]
     },
     "item_context_menu": {
-      "_comment": "The focused-item context menu. Rows are children-as-data (the `context_menu` component's contract): each carries a $token label, an optional right-aligned $token hint, an `action` the walker fires, and `disabled`/`divider` flags. Data-children props are NOT model-resolved, so a row's disabled state rides a TEMPLATE PARAM \u2014 the bench re-expands every frame, which is what makes that dynamic. Actions are the bench's existing verb vocabulary, so a menu pick, a chord and a click are one event at the dispatcher.",
+      "_comment": "The focused-item context menu. Rows are children-as-data (the `context_menu` component's contract): each carries a $token label, an optional right-aligned $token hint, an `action` the walker fires, and `disabled`/`divider` flags. Data-children props are NOT model-resolved, so a row's disabled state rides a TEMPLATE PARAM — the bench re-expands every frame, which is what makes that dynamic. Actions are the bench's existing verb vocabulary, so a menu pick, a chord and a click are one event at the dispatcher.",
       "component": "context_menu",
       "id": "@id=item_menu",
       "visible_bind": "@on_bind",
@@ -392,7 +392,7 @@
       ]
     },
     "toast_stack": {
-      "_comment": "The bottom-right toast bank: a FIXED capacity of three, newest last (lowest), each row gated by its own `toast_<i>_on` bind. Fixed-bank + indexed binds is the sanctioned dynamic-rows pattern \u2014 the walker has no repeater \u2014 so the bench pages its live toasts into these three slots.",
+      "_comment": "The bottom-right toast bank: a FIXED capacity of three, newest last (lowest), each row gated by its own `toast_<i>_on` bind. Fixed-bank + indexed binds is the sanctioned dynamic-rows pattern — the walker has no repeater — so the bench pages its live toasts into these three slots.",
       "component": "cell",
       "id": "@id=toast_stack",
       "anchor": "@anchor=bottom_right",
@@ -436,7 +436,7 @@
       ]
     },
     "conflict_dialog": {
-      "_comment": "The file-collision prompt \u2014 choice_dialog's modal sibling, owning the fixed `conflict_*` vocabulary the way the workflow proto owns `wf_*`: binds conflict_name / conflict_where / conflict_existing / conflict_incoming / conflict_multi / conflict_apply_rest, actions conflict_skip / conflict_keep_both / conflict_replace, captions $conflict_*. A bench instances ONE node (template + its own visible_bind + skin params), publishes the binds, and consumes the three actions; the checkbox only shows while conflict_multi reports more than one collision outstanding.",
+      "_comment": "The file-collision prompt — choice_dialog's modal sibling, owning the fixed `conflict_*` vocabulary the way the workflow proto owns `wf_*`: binds conflict_name / conflict_where / conflict_existing / conflict_incoming / conflict_multi / conflict_apply_rest, actions conflict_skip / conflict_keep_both / conflict_replace, captions $conflict_*. A bench instances ONE node (template + its own visible_bind + skin params), publishes the binds, and consumes the three actions; the checkbox only shows while conflict_multi reports more than one collision outstanding.",
       "component": "screen",
       "id": "@id=conflict_dialog",
       "anchor": "top_left",
@@ -1039,7 +1039,7 @@
       ]
     },
     "synth_voice": {
-      "_comment": "ONE voice of the Sablework channel rack, parameterized by `@i` (1-based). Every id interpolates that index, so the six instances the console banks share one vocabulary the dispatcher reads by number. `style_bind` lights the SELECTED voice \u2014 the proto never learns which one that is.",
+      "_comment": "ONE voice of the Sablework channel rack, parameterized by `@i` (1-based). Every id interpolates that index, so the six instances the console banks share one vocabulary the dispatcher reads by number. `style_bind` lights the SELECTED voice — the proto never learns which one that is.",
       "component": "stack",
       "size": "@voice_h=74",
       "style_bind": "ch@{i}_style",
@@ -1073,6 +1073,7 @@
                 {
                   "component": "button",
                   "id": "ch@{i}_source",
+                  "action": "ch@{i}_source",
                   "size": "@pill_w=84",
                   "height": "@row_h=22",
                   "label_bind": "ch@{i}_source",
@@ -1082,6 +1083,7 @@
                 {
                   "component": "button",
                   "id": "ch@{i}_blend",
+                  "action": "ch@{i}_blend",
                   "size": "@pill_w=84",
                   "height": "@row_h=22",
                   "label_bind": "ch@{i}_blend",
@@ -1165,7 +1167,7 @@
       ]
     },
     "sablework_console": {
-      "_comment": "THE SABLEWORK CONSOLE \u2014 the texture synthesizer as one composed surface. Owns the `ch<i>_*` / `map_*` / output-stage vocabulary the way `conflict_dialog` owns `conflict_*`: the scene publishes those Model keys and reads back the same names as results. Six `synth_voice` instances are a FIXED BANK (the walker has no repeater; a fixed bank + indexed binds is the sanctioned pattern), which is honest here because the rack IS fixed at six. Rides `workbench` for its chrome, so the frame/runes/title come from the shared window and no scene colour is redefined.",
+      "_comment": "THE SABLEWORK CONSOLE — the texture synthesizer as one composed surface. Owns the `ch<i>_*` / `map_*` / output-stage vocabulary the way `conflict_dialog` owns `conflict_*`: the scene publishes those Model keys and reads back the same names as results. Six `synth_voice` instances are a FIXED BANK (the walker has no repeater; a fixed bank + indexed binds is the sanctioned pattern), which is honest here because the rack IS fixed at six. Rides `workbench` for its chrome, so the frame/runes/title come from the shared window and no scene colour is redefined. Every button carries an `action` as well as an `id`: the walker fires `action` on activation and the `id` is only the focus id, so a button with an id alone is a dead control that still looks alive.",
       "template": "workbench",
       "w_frac": 1.0,
       "h_frac": 1.0,
@@ -1204,6 +1206,7 @@
           {
             "component": "button",
             "id": "material",
+            "action": "material",
             "size": 150,
             "height": "@header_btn_h=26",
             "label_bind": "material_label",
@@ -1213,6 +1216,7 @@
           {
             "component": "button",
             "id": "bake_size",
+            "action": "bake_size",
             "size": 52,
             "height": "@header_btn_h=26",
             "label_bind": "size_label",
@@ -1224,6 +1228,7 @@
           {
             "component": "button",
             "id": "map_base",
+            "action": "map_base",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_base",
@@ -1233,6 +1238,7 @@
           {
             "component": "button",
             "id": "map_normal",
+            "action": "map_normal",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_normal",
@@ -1242,6 +1248,7 @@
           {
             "component": "button",
             "id": "map_rough",
+            "action": "map_rough",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_rough",
@@ -1251,6 +1258,7 @@
           {
             "component": "button",
             "id": "map_metal",
+            "action": "map_metal",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_metal",
@@ -1260,6 +1268,7 @@
           {
             "component": "button",
             "id": "map_ao",
+            "action": "map_ao",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_ao",
@@ -1269,11 +1278,32 @@
           {
             "component": "button",
             "id": "map_height",
+            "action": "map_height",
             "size": "@map_btn_w=92",
             "height": "@tab_btn_h=22",
             "label": "$sw_map_height",
             "text_size": "@label_size=12",
             "style_bind": "map_height_style"
+          },
+          {
+            "component": "button",
+            "id": "map_emit",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_emit",
+            "text_size": "@label_size=12",
+            "style_bind": "map_emit_style",
+            "action": "map_emit"
+          },
+          {
+            "component": "button",
+            "id": "map_lit",
+            "action": "map_lit",
+            "size": "@map_btn_w=92",
+            "height": "@tab_btn_h=22",
+            "label": "$sw_map_lit",
+            "text_size": "@label_size=12",
+            "style_bind": "map_lit_style"
           }
         ],
         "viewport": [
@@ -1369,6 +1399,22 @@
                     "height_frac": 1.0
                   },
                   {
+                    "component": "sprite",
+                    "tex": 6,
+                    "visible_bind": "map_emit_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0
+                  },
+                  {
+                    "component": "rtt",
+                    "id": "sw_lit",
+                    "source": "sablework_lit",
+                    "visible_bind": "map_lit_shown",
+                    "width_frac": 1.0,
+                    "height_frac": 1.0,
+                    "style": "@well_style=sablework.well"
+                  },
+                  {
                     "component": "stack",
                     "style": "@frame_style=sablework.frame",
                     "children": [],
@@ -1376,7 +1422,7 @@
                     "height_frac": 1.0
                   }
                 ],
-                "_comment": "The swatch well. A `stack` overlays children at their own size rather than stretching them, so every child fills EXPLICITLY via width_frac/height_frac \u2014 a sprite without that resolves to 0x0 and the preview is silently blank."
+                "_comment": "The swatch well. A `stack` overlays children at their own size rather than stretching them, so every child fills EXPLICITLY via width_frac/height_frac — a sprite without that resolves to 0x0 and the preview is silently blank."
               }
             ]
           }
@@ -1500,6 +1546,40 @@
                 "style": "@slider_style=sablework.slider"
               },
               {
+                "component": "slider",
+                "id": "emissive_strength",
+                "bind": "emissive_strength",
+                "label": "$sw_glow",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
+                "component": "slider",
+                "id": "emissive_band",
+                "bind": "emissive_band",
+                "label": "$sw_glow_band",
+                "size": "@track_h=20",
+                "label_w": "@out_label_w=96",
+                "value_w": "@out_value_w=46",
+                "decimals": 2,
+                "plus": false,
+                "slider_h": "@slider_h=7",
+                "label_size": "@label_size=12",
+                "value_size": "@value_size=12",
+                "min": 0,
+                "max": 1,
+                "style": "@slider_style=sablework.slider"
+              },
+              {
                 "component": "text",
                 "text": "$sw_voice",
                 "size": "@section_h=20",
@@ -1595,7 +1675,18 @@
         "footer": [
           {
             "component": "button",
+            "id": "roll",
+            "size": 70,
+            "height": "@footer_btn_h=28",
+            "label": "$sw_roll",
+            "text_size": "@label_size=12",
+            "style": "@commit_style=sablework.button_on",
+            "action": "roll"
+          },
+          {
+            "component": "button",
             "id": "patch_prev",
+            "action": "patch_prev",
             "size": 34,
             "height": "@footer_btn_h=28",
             "label": "$sw_prev",
@@ -1605,6 +1696,7 @@
           {
             "component": "button",
             "id": "patch_next",
+            "action": "patch_next",
             "size": 34,
             "height": "@footer_btn_h=28",
             "label": "$sw_next",
@@ -1614,11 +1706,42 @@
           {
             "component": "button",
             "id": "reseed",
+            "action": "reseed",
             "size": 84,
             "height": "@footer_btn_h=28",
             "label": "$sw_reseed",
             "text_size": "@label_size=12",
             "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "button",
+            "id": "lit_body",
+            "action": "lit_body",
+            "size": 90,
+            "height": "@footer_btn_h=28",
+            "label_bind": "lit_body_label",
+            "text_size": "@label_size=12",
+            "visible_bind": "map_lit_shown",
+            "style": "@button_style=sablework.button"
+          },
+          {
+            "component": "checkbox",
+            "id": "lit_spin",
+            "bind": "lit_spin",
+            "size": 22,
+            "height": "@footer_btn_h=28",
+            "visible_bind": "map_lit_shown",
+            "style": "@checkbox_style=sablework.checkbox"
+          },
+          {
+            "component": "text",
+            "size": 44,
+            "height": "@footer_btn_h=28",
+            "text": "$sw_spin",
+            "text_size": "@label_size=12",
+            "font": "label",
+            "visible_bind": "map_lit_shown",
+            "color": "@label_color=sablework.col.label"
           },
           {
             "component": "text",
@@ -1644,6 +1767,7 @@
           {
             "component": "button",
             "id": "commit",
+            "action": "commit",
             "size": 110,
             "height": "@footer_btn_h=28",
             "label": "$sw_commit",
@@ -1654,7 +1778,7 @@
       }
     },
     "clayworks_row": {
-      "_comment": "ONE selectable list row of a Clayworks paged bank, parameterized by `@stem` + `@i` (0-based). The bone map, the attach points, the mount sockets and the piece picker are the SAME row with different vocabularies, so they share this proto: the caption rides `@{stem}_@{i}`, the selection wash `@{stem}_@{i}_on`, and the click fires `@{stem}_sel_@{i}`. `color_bind` is OPTIONAL \u2014 the bone map carries conform provenance per row, the other three banks do not, and an absent prop removes the key rather than binding to nothing. The wash and the click target both span `width_frac: 1` inside the stack: without it each measures to its own content and the highlight collapses to a row-height sliver at the left edge (the defect BFFB47DE pinned).",
+      "_comment": "ONE selectable list row of a Clayworks paged bank, parameterized by `@stem` + `@i` (0-based). The bone map, the attach points, the mount sockets and the piece picker are the SAME row with different vocabularies, so they share this proto: the caption rides `@{stem}_@{i}`, the selection wash `@{stem}_@{i}_on`, and the click fires `@{stem}_sel_@{i}`. `color_bind` is OPTIONAL — the bone map carries conform provenance per row, the other three banks do not, and an absent prop removes the key rather than binding to nothing. The wash and the click target both span `width_frac: 1` inside the stack: without it each measures to its own content and the highlight collapses to a row-height sliver at the left edge (the defect BFFB47DE pinned).",
       "component": "stack",
       "height": "@row_h=22",
       "children": [
@@ -1686,7 +1810,7 @@
       ]
     },
     "clayworks_bank": {
-      "_comment": "A paged bank of `clayworks_row`s in a sunk well, plus its \u25b2/\u25bc pager and range readout. The bone map, socket list and piece picker are all six-row windows over a longer list; the attach list is six rows with no pager (`has_pager: false` drops it). Rows are a FIXED bank of six \u2014 the walker has no repeater, and the window is Rust-side state, so six instances with indexed binds is the sanctioned shape. `@rows` is NOT a count the proto loops over; it is documentation that the bench's BONE_ROWS / SOCKET_ROWS / PICK_ROWS all equal six, asserted by the crate's drift gate.",
+      "_comment": "A paged bank of `clayworks_row`s in a sunk well, plus its ▲/▼ pager and range readout. The bone map, socket list and piece picker are all six-row windows over a longer list; the attach list is six rows with no pager (`has_pager: false` drops it). Rows are a FIXED bank of six — the walker has no repeater, and the window is Rust-side state, so six instances with indexed binds is the sanctioned shape. `@rows` is NOT a count the proto loops over; it is documentation that the bench's BONE_ROWS / SOCKET_ROWS / PICK_ROWS all equal six, asserted by the crate's drift gate.",
       "component": "cell",
       "gap": "@sub_gap=4",
       "children": [
@@ -1767,7 +1891,7 @@
               "component": "button",
               "id": "@{stem}_prev",
               "action": "@{stem}_prev",
-              "label": "\u25b2",
+              "label": "▲",
               "size": "@page_h=20",
               "label_size": "@page_size=11",
               "enabled_bind": "@{stem}_prev_enabled",
@@ -1779,7 +1903,7 @@
               "component": "button",
               "id": "@{stem}_next",
               "action": "@{stem}_next",
-              "label": "\u25bc",
+              "label": "▼",
               "size": "@page_h=20",
               "label_size": "@page_size=11",
               "enabled_bind": "@{stem}_next_enabled",
@@ -1800,7 +1924,7 @@
       ]
     },
     "clayworks_offset": {
-      "_comment": "One authored-offset slider of the Clayworks inspector \u2014 translate/roll on the bone map, offset/rotate on the mount. `min`/`max` are instance params so the \u00b1range lives in ONE place (the bench passes the range it also clamps against), and the id doubles as the two-way `bind`.",
+      "_comment": "One authored-offset slider of the Clayworks inspector — translate/roll on the bone map, offset/rotate on the mount. `min`/`max` are instance params so the ±range lives in ONE place (the bench passes the range it also clamps against), and the id doubles as the two-way `bind`.",
       "component": "slider",
       "id": "@id",
       "bind": "@id",
@@ -1818,7 +1942,7 @@
       "nav_ordinal": "@nav_ordinal=0"
     },
     "clayworks_import_card": {
-      "_comment": "ONE workflow tile of the Import selector. A square card: the panel surface, a content column (rune in an inset well \u2192 title \u2192 italic flavour that WRAPS \u2192 format tag), and a transparent click+hover layer on top whose hover style supplies the design-system selected ring. The catalogue is arbitrary and growing \u2014 adding a workflow is one more instance here plus its class mapping in the bench's dispatcher, and the `option_grid` field flows however many there are.",
+      "_comment": "ONE workflow tile of the Import selector. A square card: the panel surface, a content column (rune in an inset well → title → italic flavour that WRAPS → format tag), and a transparent click+hover layer on top whose hover style supplies the design-system selected ring. The catalogue is arbitrary and growing — adding a workflow is one more instance here plus its class mapping in the bench's dispatcher, and the `option_grid` field flows however many there are.",
       "component": "stack",
       "width": "@card_size=210",
       "height": "@card_size=210",
@@ -1906,7 +2030,7 @@
       ]
     },
     "clayworks_bench": {
-      "_comment": "THE CLAYWORKS BENCH \u2014 the asset-pipeline wizard as ONE composed surface, the way `sablework_console` composes the synthesizer. Owns the bench's whole Model vocabulary (`insp_*` / `bone_*` / `att_*` / `sock_*` / `pick_*` / `req_*` / `fit_*` / `off_*` / the `on_conform_*` role gates); flicker-assetpipeline publishes those keys and reads the same names back as results. Rides the `workflow` proto for its chrome and its spine \u2014 header \u00b7 rail \u00b7 work area \u00b7 footer Back/Next \u00b7 the discard dialog \u2014 so the step machinery is the shared runtime's and nothing here re-implements it. The Import selector is a SIBLING of the workflow instance, not a slot: its scrim must cover the whole bench, and anchors place within the parent.",
+      "_comment": "THE CLAYWORKS BENCH — the asset-pipeline wizard as ONE composed surface, the way `sablework_console` composes the synthesizer. Owns the bench's whole Model vocabulary (`insp_*` / `bone_*` / `att_*` / `sock_*` / `pick_*` / `req_*` / `fit_*` / `off_*` / the `on_conform_*` role gates); flicker-assetpipeline publishes those keys and reads the same names back as results. Rides the `workflow` proto for its chrome and its spine — header · rail · work area · footer Back/Next · the discard dialog — so the step machinery is the shared runtime's and nothing here re-implements it. The Import selector is a SIBLING of the workflow instance, not a slot: its scrim must cover the whole bench, and anchors place within the parent.",
       "component": "stack",
       "anchor": "top_left",
       "width_frac": 1.0,
@@ -2089,7 +2213,7 @@
                         "children": [
                           {
                             "component": "text",
-                            "text": "$ap_meshes_in_this_folder",
+                            "text_bind": "pick_head",
                             "size": "@head_size=12",
                             "text_size": "@head_size=12",
                             "font": "label",
@@ -2468,20 +2592,26 @@
                             "color": "assetpipeline.col.dim"
                           },
                           {
-                            "component": "text",
-                            "text": "$ap_clip_import_is_not_wired_into_the_editor",
-                            "size": "@head_size=12",
-                            "text_size": "@head_size=12",
-                            "font": "body",
-                            "color": "assetpipeline.col.ink"
+                            "component": "checkbox",
+                            "id": "variant_rm",
+                            "bind": "variant_rm",
+                            "label": "$ap_root_motion",
+                            "size": "@line_h=22",
+                            "label_size": "@line_size=13",
+                            "style": "assetpipeline.checkbox",
+                            "tab_group": "cw_clip",
+                            "nav_ordinal": 0
                           },
                           {
-                            "component": "text",
-                            "text": "$ap_an_animation_set_cannot_be_baked_from_he",
-                            "size": "@page_size=11",
-                            "text_size": "@page_size=11",
-                            "font": "body",
-                            "color": "assetpipeline.col.dim"
+                            "component": "checkbox",
+                            "id": "variant_ip",
+                            "bind": "variant_ip",
+                            "label": "$ap_in_place",
+                            "size": "@line_h=22",
+                            "label_size": "@line_size=13",
+                            "style": "assetpipeline.checkbox",
+                            "tab_group": "cw_clip",
+                            "nav_ordinal": 1
                           }
                         ]
                       }
@@ -2769,7 +2899,7 @@
                         {
                           "template": "clayworks_import_card",
                           "id": "import_character",
-                          "rune": "\u16d7",
+                          "rune": "ᛗ",
                           "title": "$ap_character",
                           "desc": "$ap_a_soul_given_form_mesh_skeleton_and_stat",
                           "tag": "$ap_fbx_glb_rigged",
@@ -2778,7 +2908,7 @@
                         {
                           "template": "clayworks_import_card",
                           "id": "import_accessory",
-                          "rune": "\u16b7",
+                          "rune": "ᚷ",
                           "title": "$ap_accessory",
                           "desc": "$ap_worn_things_blades_circlets_loomsilk_bou",
                           "tag": "$ap_fbx_glb_attach_point",
@@ -2787,7 +2917,7 @@
                         {
                           "template": "clayworks_import_card",
                           "id": "import_prop",
-                          "rune": "\u16a6",
+                          "rune": "ᚦ",
                           "title": "$ap_prop",
                           "desc": "$ap_objects_of_the_world_answering_to_no_bea",
                           "tag": "$ap_fbx_glb_static",
@@ -2796,7 +2926,7 @@
                         {
                           "template": "clayworks_import_card",
                           "id": "import_animation",
-                          "rune": "\u16d6",
+                          "rune": "ᛖ",
                           "title": "$ap_animation",
                           "desc": "$ap_motion_inscribed_upon_a_skeleton_already",
                           "tag": "$ap_fbx_bvh_clip",
@@ -2807,6 +2937,3537 @@
                   }
                 ]
               }
+            }
+          ]
+        }
+      ]
+    },
+    "atc_console": {
+      "_comment": "THE ATC CONSOLE — the whole Air Traffic Control surface as data. The scene emits ONE instance of this and composes nothing itself: the radar picture is PAINTED by the scene into the `atc_scope` bezel below, and everything else is here. It owns the `strip_<i>_*` strip-bay vocabulary (a FIXED BANK of 12 — the walker has no repeater, so a fixed bank + indexed binds is the sanctioned pattern) and the `cmd_*` / `log_<i>` command-panel vocabulary; the scene publishes exactly those Model keys and reads back the same names as results. The COMMAND CARD sits above the strip bay so a select's popup — which always drops downward — has the bay to open over. The command VERBS are fixed vocabulary and live here as the value slot's fallback children; the flight and value option lists are per-frame data and arrive through the `flights` / `values` slots. Every button carries an `action` as well as an `id`: the walker fires `action` on activation and the `id` is only the focus id.",
+      "component": "screen",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
+      "children": [
+        {
+          "component": "cell",
+          "id": "atc_scope",
+          "anchor": "top_left",
+          "offset": [
+            "@scope_x=18",
+            "@scope_y=18"
+          ],
+          "width": "@scope_w=940",
+          "height": "@scope_h=700",
+          "style": "@scope_style=atc.scope"
+        },
+        {
+          "component": "cell",
+          "id": "atc_rail",
+          "anchor": "top_right",
+          "offset": [
+            "@margin_neg=-18",
+            "@margin=18"
+          ],
+          "width": "@rail_w=348",
+          "height": "@body_h=700",
+          "gap": "@gap=12",
+          "children": [
+            {
+              "component": "cell",
+              "id": "atc_cmd",
+              "style": "@panel_style=atc.panel",
+              "height": "@cmd_h=388",
+              "pad": "@pad=12",
+              "gap": 6,
+              "children": [
+                {
+                  "component": "text",
+                  "text": "$atc_cmd_title",
+                  "text_size": 10,
+                  "font": "label",
+                  "color": "atc.col.header",
+                  "tracking": 0.2
+                },
+                {
+                  "component": "row",
+                  "height": "@ctrl_h=28",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_field_flight",
+                      "text_size": 10,
+                      "font": "label",
+                      "color": "atc.col.label",
+                      "width": 68,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "select",
+                      "id": "cmd_flight",
+                      "bind": "cmd_flight",
+                      "grow": 1.0,
+                      "height": "@ctrl_h=28",
+                      "placeholder": "$atc_pick_flight",
+                      "style": "atc.select",
+                      "tab_group": "cmd",
+                      "nav_ordinal": 0,
+                      "children": [
+                        {
+                          "component": "slot",
+                          "name": "flights"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "height": "@ctrl_h=28",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_field_cmd",
+                      "text_size": 10,
+                      "font": "label",
+                      "color": "atc.col.label",
+                      "width": 68,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "select",
+                      "id": "cmd_verb",
+                      "bind": "cmd_verb",
+                      "grow": 1.0,
+                      "height": "@ctrl_h=28",
+                      "placeholder": "$atc_pick_cmd",
+                      "style": "atc.select",
+                      "tab_group": "cmd",
+                      "nav_ordinal": 1,
+                      "children": [
+                        {
+                          "component": "option",
+                          "value": "tl",
+                          "label": "$atc_verb_tl"
+                        },
+                        {
+                          "component": "option",
+                          "value": "tr",
+                          "label": "$atc_verb_tr"
+                        },
+                        {
+                          "component": "option",
+                          "value": "dh",
+                          "label": "$atc_verb_dh"
+                        },
+                        {
+                          "component": "option",
+                          "value": "ah",
+                          "label": "$atc_verb_ah"
+                        },
+                        {
+                          "component": "option",
+                          "value": "ha",
+                          "label": "$atc_verb_ha"
+                        },
+                        {
+                          "component": "option",
+                          "value": "hb",
+                          "label": "$atc_verb_hb"
+                        },
+                        {
+                          "component": "option",
+                          "value": "ct",
+                          "label": "$atc_verb_ct"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "height": "@ctrl_h=28",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_field_value",
+                      "text_size": 10,
+                      "font": "label",
+                      "color": "atc.col.label",
+                      "width": 68,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "select",
+                      "id": "cmd_value",
+                      "bind": "cmd_value",
+                      "grow": 1.0,
+                      "height": "@ctrl_h=28",
+                      "placeholder": "$atc_pick_value",
+                      "style": "atc.select",
+                      "tab_group": "cmd",
+                      "nav_ordinal": 2,
+                      "children": [
+                        {
+                          "component": "slot",
+                          "name": "values"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "component": "button",
+                  "id": "dispatch",
+                  "action": "dispatch",
+                  "height": 32,
+                  "label": "$atc_dispatch",
+                  "text_size": 13,
+                  "style": "atc.dispatch",
+                  "tab_group": "cmd",
+                  "nav_ordinal": 3
+                },
+                {
+                  "component": "text",
+                  "text_bind": "cmd_preview",
+                  "text_size": 13,
+                  "font": "title",
+                  "color": "atc.col.title",
+                  "align": "center"
+                },
+                {
+                  "component": "cell",
+                  "style": "modal.divider",
+                  "size": 1.0
+                },
+                {
+                  "component": "text",
+                  "text": "$atc_log_title",
+                  "text_size": 9,
+                  "font": "label",
+                  "color": "atc.col.header",
+                  "tracking": 0.2
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_0",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_1",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_2",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_3",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_4",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "log_5",
+                  "text_size": 12,
+                  "font": "body",
+                  "color": "atc.col.value",
+                  "height": "@log_h=15"
+                }
+              ]
+            },
+            {
+              "component": "cell",
+              "id": "atc_bay",
+              "style": "@panel_style=atc.panel",
+              "grow": 1.0,
+              "pad": "@pad=12",
+              "gap": 3,
+              "children": [
+                {
+                  "component": "row",
+                  "height": 14,
+                  "gap": 10,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_status_title",
+                      "text_size": 10,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 118,
+                      "tracking": 0.2
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_stat_sweep",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 44,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "stat_sweep",
+                      "text_size": 11,
+                      "font": "title",
+                      "color": "atc.col.title",
+                      "width": 40
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "height": 14,
+                  "gap": 10,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_stat_down",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 48,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "stat_landed",
+                      "text_size": 11,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_stat_out",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 42,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "stat_departed",
+                      "text_size": 11,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_stat_left",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 44,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "stat_pending",
+                      "text_size": 11,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 26
+                    }
+                  ]
+                },
+                {
+                  "component": "cell",
+                  "style": "modal.divider",
+                  "size": 1.0
+                },
+                {
+                  "component": "row",
+                  "height": 16,
+                  "pad_x": 6,
+                  "gap": 5,
+                  "children": [
+                    {
+                      "component": "text",
+                      "text": "$atc_col_id",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 16,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_col_kind",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 12,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_col_alt",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 26,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_col_hdg",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 32,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_col_route",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 96,
+                      "tracking": 0.15
+                    },
+                    {
+                      "component": "text",
+                      "text": "$atc_col_fuel",
+                      "text_size": 9,
+                      "font": "label",
+                      "color": "atc.col.header",
+                      "width": 28,
+                      "tracking": 0.15
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_0",
+                  "visible_bind": "strip_0_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_0_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_0_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_1",
+                  "visible_bind": "strip_1_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_1_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_1_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_2",
+                  "visible_bind": "strip_2_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_2_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_2_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_3",
+                  "visible_bind": "strip_3_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_3_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_3_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_4",
+                  "visible_bind": "strip_4_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_4_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_4_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_5",
+                  "visible_bind": "strip_5_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_5_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_5_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_6",
+                  "visible_bind": "strip_6_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_6_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_6_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_7",
+                  "visible_bind": "strip_7_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_7_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_7_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_8",
+                  "visible_bind": "strip_8_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_8_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_8_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_9",
+                  "visible_bind": "strip_9_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_9_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_9_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_10",
+                  "visible_bind": "strip_10_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_10_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_10_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                },
+                {
+                  "component": "row",
+                  "id": "strip_11",
+                  "visible_bind": "strip_11_on",
+                  "height": "@strip_h=22",
+                  "pad_x": 6,
+                  "gap": 5,
+                  "style_bind": "strip_11_style",
+                  "children": [
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_id",
+                      "text_size": 12,
+                      "font": "title",
+                      "color": "atc.col.value",
+                      "width": 16
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_kind",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 12
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_alt",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 26
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_hdg",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 32
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_route",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 96
+                    },
+                    {
+                      "component": "text",
+                      "text_bind": "strip_11_fuel",
+                      "text_size": 12,
+                      "font": "body",
+                      "color": "atc.col.value",
+                      "width": 28
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "template": "popup_menu",
+          "id": "atc_verdict",
+          "visible_bind": "has_verdict",
+          "title": "$atc_over_title",
+          "title_size": 34,
+          "subtitle": "$atc_over_sub",
+          "divider": true,
+          "panel_w": 460,
+          "slots": {
+            "items": [
+              {
+                "component": "text",
+                "text_bind": "verdict_kind",
+                "text_size": 19,
+                "font": "title",
+                "color": "atc.col.title",
+                "align": "center"
+              },
+              {
+                "component": "text",
+                "text_bind": "verdict_line",
+                "text_size": 15,
+                "font": "body",
+                "color": "atc.col.value",
+                "align": "center"
+              },
+              {
+                "component": "text",
+                "text_bind": "verdict_score",
+                "text_size": 12,
+                "font": "label",
+                "color": "atc.col.label",
+                "align": "center"
+              },
+              {
+                "component": "button",
+                "id": "restart",
+                "action": "restart",
+                "height": 36,
+                "label": "$atc_new_game",
+                "text_size": 13,
+                "style": "atc.dispatch",
+                "tab_group": "verdict",
+                "nav_ordinal": 0
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "godmode_readout": {
+      "_comment": "THE GOD MODE READOUT - the sim's own account of itself, top-left, IN A PANEL (the bare floating text read as 'old hacky UI' the moment Aaron saw it - chrome is not decoration, it is what tells the eye where one instrument ends). Every live line rides a `text_bind` the scene publishes pre-formatted. The `gate` line appears ONLY once the world has crossed one of its own thresholds.",
+      "component": "cell",
+      "anchor": "top_left",
+      "offset": [
+        "@x=24",
+        "@y=24"
+      ],
+      "width": "@w=620",
+      "gap": 0,
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text_bind": "play_state",
+          "size": 22,
+          "text_size": 14,
+          "color_bind": "play_state_color"
+        },
+        {
+          "component": "text",
+          "text_bind": "interior",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.interior.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "interior2",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.interior.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "crust",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.crust.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "crust2",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.crust.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "air_line",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.interior.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "life",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.crust.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "life2",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.crust.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "water",
+          "size": 19,
+          "text_size": 14,
+          "color": "chemistry.crust.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "gate",
+          "size": 24,
+          "text_size": 15,
+          "color_bind": "gate_color",
+          "visible_bind": "gate_shown"
+        }
+      ],
+      "pad": "@pad=12",
+      "style": "@style=chemistry.ledger.panel"
+    },
+    "godmode_loading": {
+      "_comment": "The pre-sim banner. Its own proto rather than a `when` on the readout, because the two are mutually exclusive STATES of the screen and each gets its own visible_bind.",
+      "component": "cell",
+      "anchor": "top_left",
+      "offset": [
+        "@x=40",
+        "@y=60"
+      ],
+      "width": "@w=900",
+      "gap": 0,
+      "visible_bind": "@on_bind=loading",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_generating_planet",
+          "size": 44,
+          "text_size": 30,
+          "color": "chemistry.title.color"
+        },
+        {
+          "component": "text",
+          "text": "$chem_freq_96_92_162_cells_bulk_accretion_seed",
+          "size": 20,
+          "text_size": 16,
+          "color": "chemistry.dim.color"
+        }
+      ]
+    },
+    "godmode_ledger": {
+      "_comment": "The conservation ledger: the six reservoirs as a percentage of the planet, and the balance verdict. A FIXED bank of six because the reservoir list is fixed - the walker has no repeater, and a fixed bank with indexed binds is the sanctioned pattern.",
+      "component": "cell",
+      "anchor": "top_right",
+      "offset": [
+        "@x=-16",
+        "@y=20"
+      ],
+      "width": "@w=260",
+      "pad": "@pad=12",
+      "gap": 0,
+      "style": "@style=chemistry.ledger.panel",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_conservation_ledger",
+          "size": 22,
+          "text_size": 14,
+          "color": "chemistry.title.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_status",
+          "size": 24,
+          "text_size": 13,
+          "color_bind": "ledger_status_color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_1",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_2",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_3",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_4",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_5",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "ledger_6",
+          "size": "@row_h=18",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        }
+      ]
+    },
+    "godmode_axis": {
+      "_comment": "One condition-axis row: name + status, the gauge bar, then the low/high end captions. The band (lo/hi) is STATIC observer data and arrives as a template PARAM; everything that moves rides a bind whose NAME is also a param, so the same proto serves all five axes.",
+      "component": "cell",
+      "size": "@row_h=42",
+      "gap": 0,
+      "children": [
+        {
+          "component": "row",
+          "size": 17,
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "@name_bind",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "@name_color_bind"
+            },
+            {
+              "component": "text",
+              "text_bind": "@status_bind",
+              "grow": 1,
+              "align": "right",
+              "text_size": 11,
+              "color_bind": "@status_color_bind"
+            }
+          ]
+        },
+        {
+          "component": "gauge",
+          "size": "@bar_h=12",
+          "bind": "@value_bind",
+          "lo": "@lo=0.0",
+          "hi": "@hi=1.0",
+          "style": "@gauge_style=pocepochs.hab.gauge"
+        },
+        {
+          "component": "stack",
+          "size": 2
+        },
+        {
+          "component": "row",
+          "size": 11,
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "@lolab_bind",
+              "grow": 1,
+              "text_size": 10,
+              "color": "pocepochs.hab.caption.color"
+            },
+            {
+              "component": "text",
+              "text_bind": "@hilab_bind",
+              "grow": 1,
+              "align": "right",
+              "text_size": 10,
+              "color": "pocepochs.hab.caption.color"
+            }
+          ]
+        }
+      ]
+    },
+    "godmode_habitability": {
+      "_comment": "THE LIFE-SUPPORTING CONDITIONS panel - the five earth-likeness gauges and the verdict light that tells the maintainer the planet is ready for the pixel tier. A FIXED BANK of five `godmode_axis` instances, because the detection model is LOCKED at five axes (unification rulings R8/R9). The light INDICATES; arming the truth migration stays a human act, so nothing here is a control.",
+      "component": "cell",
+      "anchor": "top_right",
+      "offset": [
+        "@x=-16",
+        "@y=400"
+      ],
+      "width": "@w=330",
+      "pad": "@pad=12",
+      "gap": 0,
+      "style": "@style=pocepochs.hab.panel",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text": "$poc_life_supporting_conditions",
+          "size": "@head_h=28",
+          "text_size": 15,
+          "color": "pocepochs.hab.header.color"
+        },
+        {
+          "template": "godmode_axis",
+          "name_bind": "a1_name",
+          "name_color_bind": "a1_name_color",
+          "status_bind": "a1_status",
+          "status_color_bind": "a1_status_color",
+          "value_bind": "a1_v",
+          "lolab_bind": "a1_lolab",
+          "hilab_bind": "a1_hilab",
+          "lo": "@a1_lo=0.0",
+          "hi": "@a1_hi=1.0"
+        },
+        {
+          "template": "godmode_axis",
+          "name_bind": "a2_name",
+          "name_color_bind": "a2_name_color",
+          "status_bind": "a2_status",
+          "status_color_bind": "a2_status_color",
+          "value_bind": "a2_v",
+          "lolab_bind": "a2_lolab",
+          "hilab_bind": "a2_hilab",
+          "lo": "@a2_lo=0.0",
+          "hi": "@a2_hi=1.0"
+        },
+        {
+          "template": "godmode_axis",
+          "name_bind": "a3_name",
+          "name_color_bind": "a3_name_color",
+          "status_bind": "a3_status",
+          "status_color_bind": "a3_status_color",
+          "value_bind": "a3_v",
+          "lolab_bind": "a3_lolab",
+          "hilab_bind": "a3_hilab",
+          "lo": "@a3_lo=0.0",
+          "hi": "@a3_hi=1.0"
+        },
+        {
+          "template": "godmode_axis",
+          "name_bind": "a4_name",
+          "name_color_bind": "a4_name_color",
+          "status_bind": "a4_status",
+          "status_color_bind": "a4_status_color",
+          "value_bind": "a4_v",
+          "lolab_bind": "a4_lolab",
+          "hilab_bind": "a4_hilab",
+          "lo": "@a4_lo=0.0",
+          "hi": "@a4_hi=1.0"
+        },
+        {
+          "template": "godmode_axis",
+          "name_bind": "a5_name",
+          "name_color_bind": "a5_name_color",
+          "status_bind": "a5_status",
+          "status_color_bind": "a5_status_color",
+          "value_bind": "a5_v",
+          "lolab_bind": "a5_lolab",
+          "hilab_bind": "a5_hilab",
+          "lo": "@a5_lo=0.0",
+          "hi": "@a5_hi=1.0"
+        },
+        {
+          "component": "cell",
+          "size": "@foot_h=50",
+          "gap": 0,
+          "children": [
+            {
+              "component": "stack",
+              "size": 6
+            },
+            {
+              "component": "row",
+              "size": 14,
+              "children": [
+                {
+                  "component": "cell",
+                  "size": 14,
+                  "style": "pocepochs.hab.light_on",
+                  "visible_bind": "life_light"
+                },
+                {
+                  "component": "cell",
+                  "size": 14,
+                  "style": "pocepochs.hab.light_off",
+                  "visible_bind": "no_life"
+                },
+                {
+                  "component": "stack",
+                  "size": 10
+                },
+                {
+                  "component": "text",
+                  "text_bind": "verdict",
+                  "grow": 1,
+                  "text_size": 14,
+                  "color_bind": "verdict_color"
+                },
+                {
+                  "component": "text",
+                  "text_bind": "observed",
+                  "grow": 1,
+                  "align": "right",
+                  "text_size": 11,
+                  "color": "pocepochs.hab.observed.color"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "godmode_pause_summary": {
+      "_comment": "WHY THE RUN STOPPED. A gate opening or shutting is the world crossing one of its own thresholds - an epoch boundary in embryo - so the sim stops there and says so. Deliberately NOT a scrim modal: the planet stays visible behind it, because the whole point is to look at the world at the moment it changed character. Content rides binds whose NAMES are params, so the scene publishes plain Model keys and this proto owns the composition.",
+      "component": "cell",
+      "id": "@id=godmode_pause",
+      "anchor": "center",
+      "width": "@w=520",
+      "pad": "@pad=26",
+      "gap": "@gap=10",
+      "layer": "@layer=10",
+      "style": "@style=modal.panel",
+      "visible_bind": "@on_bind=gate_pause_shown",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_gate_paused_title",
+          "align": "center",
+          "font": "display",
+          "text_size": "@title_size=30",
+          "color": "chemistry.title.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@headline_bind=gate_headline",
+          "align": "center",
+          "font": "label",
+          "text_size": 16,
+          "color_bind": "@headline_color_bind=gate_color"
+        },
+        {
+          "component": "cell",
+          "style": "@divider_style=modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "text",
+          "text_bind": "@why_bind=gate_why",
+          "text_size": 13,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@what_bind=gate_what",
+          "text_size": 12,
+          "wrap": true,
+          "color": "chemistry.text.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@watch_bind=gate_watch",
+          "text_size": 12,
+          "wrap": true,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@progress_bind=gate_progress",
+          "text_size": 12,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@cause_bind=gate_cause",
+          "text_size": 13,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "text",
+          "text_bind": "@effect_bind=gate_effect",
+          "text_size": 13,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "stack",
+          "size": 6
+        },
+        {
+          "component": "row",
+          "size": "@btn_h=32",
+          "gap": 10,
+          "children": [
+            {
+              "component": "button",
+              "id": "@resume_action=gate_resume",
+              "action": "@resume_action=gate_resume",
+              "size": 196,
+              "label": "$chem_gate_resume",
+              "label_size": 14,
+              "style": "modal.buttons.variants.primary"
+            },
+            {
+              "component": "button",
+              "id": "gate_view",
+              "action": "gate_view",
+              "size": 134,
+              "label_bind": "gate_view_label",
+              "label_size": 14,
+              "visible_bind": "gate_view_shown",
+              "style": "modal.buttons.variants.secondary"
+            },
+            {
+              "component": "button",
+              "id": "gates_open",
+              "action": "gates_open",
+              "size": 118,
+              "label": "$chem_gates_btn",
+              "label_size": 14,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        }
+      ]
+    },
+    "godmode_lever": {
+      "_comment": "ONE LEVER - a labelled slider, stated once as data and instanced by the rack. `bind` is the `id`, so a lever has exactly ONE name across the proto, the Model echo and the dispatcher. Every rate lever rides a MULTIPLE of the physics-as-written default (1.0 = as written), which is why they can share a range; the two water levers are absolute because a budget and a coverage fraction are not multiples of anything.",
+      "component": "slider",
+      "id": "@id",
+      "bind": "@id",
+      "height": "@h=26",
+      "min": "@min=0.0",
+      "max": "@max=4.0",
+      "decimals": "@decimals=2",
+      "label": "@label",
+      "label_w": "@label_w=124",
+      "style": "sablework.slider"
+    },
+    "godmode_lever_rack": {
+      "_comment": "THE LEVER RACK - every condition the maintainer may set, in the two groups the control-surface ruling names: BOUNDARY INPUTS (what the system gets from outside) and RATES (how fast a process runs). They are different KINDS of thing and must not read as one list. Nothing here writes a result into the world: there is no lever that raises a mountain or floods a basin, because a control that could paint a continent would make every observation afterwards unfalsifiable.",
+      "component": "cell",
+      "width": "@w=332",
+      "pad": "@pad=10",
+      "gap": 2,
+      "style": "@style=chemistry.ledger.panel",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_boundary",
+          "size": 22,
+          "text_size": 13,
+          "color": "chemistry.heading.color"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "water_infall",
+          "label": "$chem_infall",
+          "max": 10.0,
+          "decimals": 1
+        },
+        {
+          "template": "godmode_lever",
+          "id": "water_coverage",
+          "label": "$chem_water",
+          "max": 1.0
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_veneer",
+          "label": "$chem_lv_veneer"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_core_heat",
+          "label": "$chem_lv_core_heat"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_stellar",
+          "label": "$chem_lv_stellar"
+        },
+        {
+          "component": "text",
+          "text": "$chem_rates",
+          "size": 26,
+          "text_size": 13,
+          "color": "chemistry.heading.color"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_crust_gen",
+          "label": "$chem_lv_crust_gen"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_arc",
+          "label": "$chem_lv_arc"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_outgas",
+          "label": "$chem_lv_outgas"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_eruption",
+          "label": "$chem_lv_eruption"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_production",
+          "label": "$chem_lv_production"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_decomposer",
+          "label": "$chem_lv_decomposer"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_yield",
+          "label": "$chem_lv_yield"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_erosion",
+          "label": "$chem_lv_erosion"
+        },
+        {
+          "template": "godmode_lever",
+          "id": "lv_leach",
+          "label": "$chem_lv_leach"
+        }
+      ]
+    },
+    "godmode_events": {
+      "_comment": "THE EVENT LOG - plate life-events and gate transitions on one clock, newest first. A FIXED BANK of 8 rows (the walker has no repeater; a fixed bank + indexed binds is the sanctioned pattern), each gated by `ev_<n>_shown`. This is the panel that used to be scene-drawn: its per-row colour is by event KIND, a finite set, so it rides dotted style paths like everything else. The element-seed swatches stay scene-drawn because THEIR colour is genuinely per-datum.",
+      "component": "cell",
+      "width": "@w=332",
+      "pad": "@pad=10",
+      "gap": 0,
+      "style": "@style=chemistry.ledger.panel",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_events_head",
+          "size": 22,
+          "text_size": 13,
+          "color": "chemistry.heading.color"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_1",
+          "color_bind": "ev_1_color",
+          "visible_bind": "ev_1_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_2",
+          "color_bind": "ev_2_color",
+          "visible_bind": "ev_2_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_3",
+          "color_bind": "ev_3_color",
+          "visible_bind": "ev_3_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_4",
+          "color_bind": "ev_4_color",
+          "visible_bind": "ev_4_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_5",
+          "color_bind": "ev_5_color",
+          "visible_bind": "ev_5_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_6",
+          "color_bind": "ev_6_color",
+          "visible_bind": "ev_6_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_7",
+          "color_bind": "ev_7_color",
+          "visible_bind": "ev_7_shown"
+        },
+        {
+          "component": "text",
+          "size": 17,
+          "text_size": 12,
+          "text_bind": "ev_8",
+          "color_bind": "ev_8_color",
+          "visible_bind": "ev_8_shown"
+        }
+      ]
+    },
+    "godmode_tile_inspector": {
+      "_comment": "THE TILE INSPECTOR - one cell's aggregate materialised into per-pixel ground, and the two controls that act ON it. INSPECT looks inside whatever cell the camera faces; ERODE runs rain over the result on its own background thread. They live here rather than in the tab strip because this panel IS their referent. The preview rides texture slot 0 (`render_hud`'s texture slice), so it is a sprite in the tree like any other picture.",
+      "component": "cell",
+      "width": "@w=332",
+      "pad": "@pad=10",
+      "gap": 6,
+      "style": "@style=chemistry.ledger.panel",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_tile_head",
+          "size": 22,
+          "text_size": 13,
+          "color": "chemistry.heading.color"
+        },
+        {
+          "component": "row",
+          "size": 26,
+          "gap": 6,
+          "children": [
+            {
+              "component": "button",
+              "id": "inspect",
+              "action": "inspect",
+              "grow": 1,
+              "label": "$chem_inspect",
+              "style": "modal.buttons.variants.secondary"
+            },
+            {
+              "component": "button",
+              "id": "erode",
+              "action": "erode",
+              "grow": 1,
+              "label_bind": "erode_label",
+              "enabled_bind": "rain_allowed",
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "text",
+          "size": 18,
+          "text_size": 12,
+          "text_bind": "tile_caption",
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "sprite",
+          "size": 300,
+          "tex": 0,
+          "visible_bind": "has_tile"
+        }
+      ]
+    },
+    "godmode_console": {
+      "_comment": "THE GOD MODE CONSOLE - the bench proper. Rides `workbench` for its chrome, so the frame, runes and window come from the shared surface and no scene colour is redefined. The planet is an `rtt` in the CENTRE (source `godmode_globe`, look authored at `stages.godmode_globe`): the walker reserves its rect and the scene fills it from the FrameGraph, which is what makes the globe an instrument on the bench rather than a backdrop the panels float over. Instruments read down the left, controls down the right, transport across the top, and the field views are TABS because that is what they are. Both columns are `list`s so a short screen scrolls instead of overflowing.",
+      "template": "workbench",
+      "w_frac": 1.0,
+      "h_frac": 1.0,
+      "header_h": "@header_h=46",
+      "header_pad": "@header_pad=12",
+      "header_gap": "@header_gap=8",
+      "tab_h": "@tab_h=34",
+      "tab_pad": "@tab_pad=6",
+      "tab_gap": "@tab_gap=4",
+      "body_pad": "@body_pad=12",
+      "body_gap": "@body_gap=12",
+      "footer_h": "@footer_h=52",
+      "footer_pad": "@footer_pad=12",
+      "footer_gap": "@footer_gap=8",
+      "footer_btn_h": "@footer_btn_h=28",
+      "slots": {
+        "header": [
+          {
+            "component": "text",
+            "size": 200,
+            "height": 26,
+            "text": "$chem_bench_title",
+            "text_size": 17,
+            "font": "title",
+            "color": "chemistry.title.color"
+          },
+          {
+            "component": "button",
+            "id": "toggle_play",
+            "action": "toggle_play",
+            "size": 92,
+            "height": 26,
+            "label_bind": "play_label",
+            "style": "modal.buttons.variants.primary"
+          },
+          {
+            "component": "button",
+            "id": "reset",
+            "action": "reset",
+            "size": 78,
+            "height": 26,
+            "label": "$chem_reset",
+            "style": "modal.buttons.variants.secondary"
+          },
+          {
+            "component": "button",
+            "id": "reseed",
+            "action": "reseed",
+            "size": 78,
+            "height": 26,
+            "label": "$chem_reseed",
+            "style": "modal.buttons.variants.secondary"
+          },
+          {
+            "component": "slider",
+            "id": "rate",
+            "bind": "rate",
+            "size": 186,
+            "height": 26,
+            "min": 1.0,
+            "max": 120.0,
+            "decimals": 0,
+            "label": "$chem_rate",
+            "label_w": 46,
+            "style": "sablework.slider"
+          },
+          {
+            "component": "text",
+            "grow": 1,
+            "height": 26,
+            "text_bind": "stats",
+            "text_size": 14,
+            "color": "chemistry.text.color"
+          },
+          {
+            "component": "button",
+            "id": "starter_open",
+            "action": "starter_open",
+            "size": 108,
+            "height": 26,
+            "label": "$chem_starter_btn",
+            "style": "modal.buttons.variants.secondary"
+          }
+        ],
+        "tabs": [
+          {
+            "component": "button",
+            "id": "field_temperature",
+            "action": "field_temperature",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_heat",
+            "style_bind": "field_temperature_style"
+          },
+          {
+            "component": "button",
+            "id": "field_differentiation",
+            "action": "field_differentiation",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_core",
+            "style_bind": "field_differentiation_style"
+          },
+          {
+            "component": "button",
+            "id": "field_plates",
+            "action": "field_plates",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_plates",
+            "style_bind": "field_plates_style"
+          },
+          {
+            "component": "button",
+            "id": "field_seams",
+            "action": "field_seams",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_seams",
+            "style_bind": "field_seams_style"
+          },
+          {
+            "component": "button",
+            "id": "field_elevation",
+            "action": "field_elevation",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_relief",
+            "style_bind": "field_elevation_style"
+          },
+          {
+            "component": "button",
+            "id": "field_coast",
+            "action": "field_coast",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_coast",
+            "style_bind": "field_coast_style"
+          },
+          {
+            "component": "button",
+            "id": "field_motion",
+            "action": "field_motion",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_motion",
+            "style_bind": "field_motion_style"
+          },
+          {
+            "component": "button",
+            "id": "field_rain",
+            "action": "field_rain",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_rain",
+            "style_bind": "field_rain_style"
+          },
+          {
+            "component": "button",
+            "id": "field_strata",
+            "action": "field_strata",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_strata",
+            "style_bind": "field_strata_style"
+          },
+          {
+            "component": "button",
+            "id": "field_ore",
+            "action": "field_ore",
+            "size": 76,
+            "height": 24,
+            "label": "$chem_field_ore",
+            "style_bind": "field_ore_style"
+          },
+          {
+            "component": "stack",
+            "grow": 1
+          },
+          {
+            "component": "checkbox",
+            "id": "cut",
+            "bind": "cut",
+            "size": 96,
+            "label": "$chem_cutaway"
+          },
+          {
+            "component": "checkbox",
+            "id": "air",
+            "bind": "air",
+            "size": 96,
+            "label": "$chem_air_veils"
+          },
+          {
+            "component": "checkbox",
+            "id": "grid",
+            "bind": "grid",
+            "size": 96,
+            "label": "$chem_grid"
+          }
+        ],
+        "viewport": [
+          {
+            "component": "list",
+            "id": "left_col",
+            "bind": "left_scroll",
+            "size": 340,
+            "gap": 10,
+            "children": [
+              {
+                "template": "godmode_readout",
+                "w": 332,
+                "x": 0,
+                "y": 0
+              },
+              {
+                "template": "godmode_ledger",
+                "w": 332,
+                "x": 0,
+                "y": 0
+              },
+              {
+                "template": "godmode_habitability",
+                "w": 332,
+                "x": 0,
+                "y": 0,
+                "a1_lo": "@a1_lo=0.0",
+                "a1_hi": "@a1_hi=1.0",
+                "a2_lo": "@a2_lo=0.0",
+                "a2_hi": "@a2_hi=1.0",
+                "a3_lo": "@a3_lo=0.0",
+                "a3_hi": "@a3_hi=1.0",
+                "a4_lo": "@a4_lo=0.0",
+                "a4_hi": "@a4_hi=1.0",
+                "a5_lo": "@a5_lo=0.0",
+                "a5_hi": "@a5_hi=1.0"
+              },
+              {
+                "template": "godmode_events",
+                "w": 332
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "grow": 1,
+            "children": [
+              {
+                "component": "rtt",
+                "id": "gm_globe",
+                "source": "godmode_globe",
+                "grow": 1,
+                "style": "rtt_holder",
+                "children": [
+                  {
+                    "template": "godmode_legend"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rail": [
+          {
+            "component": "list",
+            "id": "right_col",
+            "bind": "right_scroll",
+            "size": 340,
+            "gap": 10,
+            "children": [
+              {
+                "template": "godmode_lever_rack",
+                "w": 332
+              },
+              {
+                "component": "button",
+                "id": "seed_toggle",
+                "action": "seed_toggle",
+                "size": 26,
+                "label": "$chem_bulk_seed_btn",
+                "style": "modal.buttons.variants.secondary"
+              },
+              {
+                "template": "godmode_tile_inspector",
+                "w": 332
+              }
+            ]
+          }
+        ],
+        "footer": [
+          {
+            "template": "godmode_proc_chip",
+            "w": 300,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "component": "text",
+            "grow": 1,
+            "text_bind": "gate",
+            "text_size": 14,
+            "color_bind": "gate_color",
+            "visible_bind": "gate_shown"
+          }
+        ]
+      }
+    },
+    "godmode_bench": {
+      "_comment": "THE GOD MODE BENCH - the whole surface as one composed proto. The scene CONFIGURES this; it does not compose it. Component is `stack`, NOT `cell`, and the difference is load-bearing: a `cell` FLOWS its children (walker `component.rs`: \"cell\" => flow), which silently discards their `anchor` and stacks every layer down the top-left corner. This level is now only the OVERLAY stack: the console is the bench, and the loading banner and the three popups float over it in layer order. The element-seed swatch panel is still scene-drawn by design - its per-row colour is genuinely per-datum, which the walker's dotted-path colour channel cannot carry.",
+      "component": "stack",
+      "anchor": "top_left",
+      "width_frac": 1.0,
+      "height_frac": 1.0,
+      "children": [
+        {
+          "template": "godmode_console",
+          "a1_lo": "@a1_lo=0.0",
+          "a1_hi": "@a1_hi=1.0",
+          "a2_lo": "@a2_lo=0.0",
+          "a2_hi": "@a2_hi=1.0",
+          "a3_lo": "@a3_lo=0.0",
+          "a3_hi": "@a3_hi=1.0",
+          "a4_lo": "@a4_lo=0.0",
+          "a4_hi": "@a4_hi=1.0",
+          "a5_lo": "@a5_lo=0.0",
+          "a5_hi": "@a5_hi=1.0"
+        },
+        {
+          "template": "godmode_loading"
+        },
+        {
+          "template": "godmode_pause_summary"
+        },
+        {
+          "template": "godmode_gate_console"
+        },
+        {
+          "template": "godmode_starter"
+        }
+      ]
+    },
+    "godmode_proc_chip": {
+      "_comment": "The processes CHIP - the one-line stand-in for the 20-row list (Aaron: 'you don't have to put everything on the screen all at once'). The counts say what the world is doing; clicking the chip (action `gates_open`, same as G) opens the gate console. A button, not a label - the summary is the door to the controls.",
+      "component": "cell",
+      "anchor": "bottom_left",
+      "offset": [
+        "@x=16",
+        "@y=-20"
+      ],
+      "width": "@w=340",
+      "visible_bind": "@on_bind=loaded",
+      "children": [
+        {
+          "component": "button",
+          "id": "gates_open",
+          "action": "gates_open",
+          "size": "@h=30",
+          "label_bind": "proc_summary",
+          "label_size": 13,
+          "style": "modal.buttons.variants.secondary"
+        }
+      ]
+    },
+    "godmode_gate_console": {
+      "_comment": "THE GATE CONSOLE - the popup with the simulation's gate controls. One row per pipeline stage (fixed bank of 20, the sanctioned dynamic-rows pattern; unfilled rows ride `proc_<n>_shown=false`), each reusing the SAME `proc_<n>` state line the old always-on panel showed, plus the per-stage HOLD/RELEASE button - the one lever the GM control surface ruling allows per process: hold it shut or let the chemistry decide. No button here ever writes a result into the world. Above the pause summary (layer 12 vs 10) so GATES... opens on top of it. The water levers moved to the bench's LEVER RACK, where every condition lives together: a lever with two homes is a lever that disagrees with itself.",
+      "component": "cell",
+      "id": "godmode_gates",
+      "anchor": "center",
+      "width": "@w=560",
+      "pad": "@pad=24",
+      "gap": "@gap=6",
+      "layer": "@layer=12",
+      "style": "@style=modal.panel",
+      "visible_bind": "@on_bind=gates_open",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_gate_console",
+          "align": "center",
+          "font": "display",
+          "text_size": 22,
+          "color": "chemistry.title.color"
+        },
+        {
+          "component": "text",
+          "text": "$chem_gate_console_sub",
+          "align": "center",
+          "font": "label",
+          "text_size": 11,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "cell",
+          "style": "modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_1_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_1",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_1_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_1",
+              "action": "hold_1",
+              "size": 96,
+              "label_bind": "hold_1_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_2_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_2",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_2_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_2",
+              "action": "hold_2",
+              "size": 96,
+              "label_bind": "hold_2_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_3_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_3",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_3_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_3",
+              "action": "hold_3",
+              "size": 96,
+              "label_bind": "hold_3_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_4_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_4",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_4_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_4",
+              "action": "hold_4",
+              "size": 96,
+              "label_bind": "hold_4_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_5_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_5",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_5_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_5",
+              "action": "hold_5",
+              "size": 96,
+              "label_bind": "hold_5_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_6_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_6",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_6_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_6",
+              "action": "hold_6",
+              "size": 96,
+              "label_bind": "hold_6_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_7_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_7",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_7_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_7",
+              "action": "hold_7",
+              "size": 96,
+              "label_bind": "hold_7_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_8_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_8",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_8_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_8",
+              "action": "hold_8",
+              "size": 96,
+              "label_bind": "hold_8_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_9_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_9",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_9_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_9",
+              "action": "hold_9",
+              "size": 96,
+              "label_bind": "hold_9_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_10_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_10",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_10_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_10",
+              "action": "hold_10",
+              "size": 96,
+              "label_bind": "hold_10_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_11_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_11",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_11_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_11",
+              "action": "hold_11",
+              "size": 96,
+              "label_bind": "hold_11_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_12_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_12",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_12_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_12",
+              "action": "hold_12",
+              "size": 96,
+              "label_bind": "hold_12_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_13_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_13",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_13_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_13",
+              "action": "hold_13",
+              "size": 96,
+              "label_bind": "hold_13_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_14_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_14",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_14_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_14",
+              "action": "hold_14",
+              "size": 96,
+              "label_bind": "hold_14_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_15_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_15",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_15_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_15",
+              "action": "hold_15",
+              "size": 96,
+              "label_bind": "hold_15_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_16_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_16",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_16_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_16",
+              "action": "hold_16",
+              "size": 96,
+              "label_bind": "hold_16_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_17_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_17",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_17_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_17",
+              "action": "hold_17",
+              "size": 96,
+              "label_bind": "hold_17_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_18_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_18",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_18_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_18",
+              "action": "hold_18",
+              "size": 96,
+              "label_bind": "hold_18_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_19_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_19",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_19_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_19",
+              "action": "hold_19",
+              "size": 96,
+              "label_bind": "hold_19_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 22,
+          "gap": 10,
+          "visible_bind": "proc_20_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "proc_20",
+              "grow": 1,
+              "text_size": 13,
+              "color_bind": "proc_20_color"
+            },
+            {
+              "component": "button",
+              "id": "hold_20",
+              "action": "hold_20",
+              "size": 96,
+              "label_bind": "hold_20_label",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "style": "modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "stack",
+          "size": 6
+        },
+        {
+          "component": "button",
+          "id": "gates_close",
+          "action": "gates_close",
+          "size": 32,
+          "label": "$chem_gate_close",
+          "label_size": 14,
+          "style": "modal.buttons.variants.primary"
+        }
+      ]
+    },
+    "godmode_starter": {
+      "_comment": "THE STARTER - the NEW-WORLD console. Every knob here is a t=0 boundary condition: the per-element accretion endowment (the volatiles that make sky and sea, the rock-formers that make everything else - dialing these is where Mars and Mercury come from) and the planet's SIZE in icosphere frequency (the control the original pocepochs bench had as [ ] and God Mode lost). NOTHING acts on the running world: FORGE births a fresh planet from the pending knobs, which is what keeps every one of them an input and none of them an intervention. Element symbols ride label BINDS because they are catalog data, not display copy. The preset row stages INPUT BUNDLES - endowment, size and the water levers as the namesake world suggests them - and nothing more: the user still FORGEs, and what forms is the simulation's business.",
+      "component": "cell",
+      "id": "godmode_starter",
+      "anchor": "center",
+      "width": "@w=560",
+      "pad": "@pad=24",
+      "gap": "@gap=6",
+      "layer": "@layer=12",
+      "style": "@style=modal.panel",
+      "visible_bind": "@on_bind=starter_open",
+      "children": [
+        {
+          "component": "text",
+          "text": "$chem_seed_console",
+          "align": "center",
+          "font": "display",
+          "text_size": 22,
+          "color": "chemistry.title.color"
+        },
+        {
+          "component": "text",
+          "text": "$chem_seed_note",
+          "align": "center",
+          "font": "label",
+          "text_size": 11,
+          "color": "chemistry.dim.color"
+        },
+        {
+          "component": "row",
+          "size": 26,
+          "gap": 8,
+          "children": [
+            {
+              "component": "button",
+              "id": "preset_mercury",
+              "action": "preset_mercury",
+              "size": 120,
+              "label": "$chem_preset_mercury",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            },
+            {
+              "component": "button",
+              "id": "preset_mars",
+              "action": "preset_mars",
+              "size": 120,
+              "label": "$chem_preset_mars",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            },
+            {
+              "component": "button",
+              "id": "preset_earth",
+              "action": "preset_earth",
+              "size": 120,
+              "label": "$chem_preset_earth",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            },
+            {
+              "component": "button",
+              "id": "preset_europa",
+              "action": "preset_europa",
+              "size": 120,
+              "label": "$chem_preset_europa",
+              "label_size": 11,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "style": "modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_1_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_1_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_1",
+              "bind": "seed_el_1",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_2_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_2_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_2",
+              "bind": "seed_el_2",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_3_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_3_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_3",
+              "bind": "seed_el_3",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_4_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_4_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_4",
+              "bind": "seed_el_4",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_5_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_5_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_5",
+              "bind": "seed_el_5",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_6_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_6_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_6",
+              "bind": "seed_el_6",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_7_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_7_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_7",
+              "bind": "seed_el_7",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_8_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_8_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_8",
+              "bind": "seed_el_8",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_9_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_9_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_9",
+              "bind": "seed_el_9",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_10_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_10_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_10",
+              "bind": "seed_el_10",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_11_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_11_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_11",
+              "bind": "seed_el_11",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "visible_bind": "seed_el_12_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "seed_el_12_label",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_el_12",
+              "bind": "seed_el_12",
+              "size": 440,
+              "value_w": 40,
+              "decimals": 2,
+              "min": 0,
+              "max": 3,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            }
+          ]
+        },
+        {
+          "component": "cell",
+          "style": "modal.divider",
+          "size": 1.0
+        },
+        {
+          "component": "row",
+          "size": 24,
+          "gap": 10,
+          "children": [
+            {
+              "component": "text",
+              "text": "$chem_size",
+              "size": 36,
+              "text_size": 13,
+              "color": "chemistry.text.color"
+            },
+            {
+              "component": "slider",
+              "id": "seed_freq",
+              "bind": "seed_freq",
+              "size": 380,
+              "value_w": 40,
+              "decimals": 0,
+              "min": 6,
+              "max": 96,
+              "slider_h": 7,
+              "style": "sablework.slider"
+            },
+            {
+              "component": "text",
+              "text_bind": "seed_cells",
+              "grow": 1,
+              "align": "right",
+              "text_size": 11,
+              "color": "chemistry.dim.color"
+            }
+          ]
+        },
+        {
+          "component": "stack",
+          "size": 6
+        },
+        {
+          "component": "row",
+          "size": 32,
+          "gap": 10,
+          "children": [
+            {
+              "component": "button",
+              "id": "forge",
+              "action": "forge",
+              "size": 300,
+              "label": "$chem_forge",
+              "label_size": 14,
+              "style": "modal.buttons.variants.primary"
+            },
+            {
+              "component": "button",
+              "id": "starter_close",
+              "action": "starter_close",
+              "size": 158,
+              "label": "$chem_gate_close",
+              "label_size": 14,
+              "style": "modal.buttons.variants.secondary"
+            }
+          ]
+        }
+      ]
+    },
+    "godmode_legend": {
+      "_comment": "THE MAP LEGEND - small, tucked into the TOP RIGHT of the globe panel, the way a legend has sat on a map for centuries. It is a CHILD of the rtt node, so it floats inside the viewport rather than being pinned to the screen. No headline: the lit tab already says which view you are in, and a legend that announces itself is a title card. Categorical views draw swatch rows; continuous views draw a colour bar with its two ends labelled. Swatches ride color_bind paths into the legend.* block the scene GENERATES from the same functions that paint the globe.",
+      "component": "cell",
+      "id": "legend",
+      "anchor": "top_right",
+      "offset": [
+        -10,
+        10
+      ],
+      "width": 156,
+      "pad": 7,
+      "gap": 2,
+      "layer": 6.0,
+      "style": "modal.panel",
+      "visible_bind": "legend_shown",
+      "children": [
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r1_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r1_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r1",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r2_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r2_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r2",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r3_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r3_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r3",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r4_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r4_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r4",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r5_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r5_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r5",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 13,
+          "gap": 5,
+          "visible_bind": "legend_r6_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "■",
+              "size": 11,
+              "text_size": 11,
+              "color_bind": "legend_r6_c"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_r6",
+              "size": 126,
+              "text_size": 10,
+              "color": "chemistry.text.color"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 14,
+          "visible_bind": "legend_strip_shown",
+          "children": [
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g0"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g1"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g2"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g3"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g4"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g5"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g6"
+            },
+            {
+              "component": "text",
+              "text": "██",
+              "size": 17,
+              "text_size": 13,
+              "color_bind": "legend_g7"
+            }
+          ]
+        },
+        {
+          "component": "row",
+          "size": 12,
+          "visible_bind": "legend_strip_shown",
+          "children": [
+            {
+              "component": "text",
+              "text_bind": "legend_lo",
+              "size": 71,
+              "text_size": 9,
+              "color": "chemistry.dim.color"
+            },
+            {
+              "component": "text",
+              "text_bind": "legend_hi",
+              "size": 71,
+              "text_size": 9,
+              "align": "right",
+              "color": "chemistry.dim.color"
             }
           ]
         }

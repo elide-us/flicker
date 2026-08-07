@@ -4,16 +4,16 @@ version = "0.1.0"
 edition.workspace = true
 publish = false
 
-# The chemistry-first world sim (M0 foundation). The library (`src/lib.rs`) is the
-# GPU-free simulation — bulk-accretion budget, two conserved ledgers, reservoirs,
-# columns, the steppable scheduler, and the conservation harness. The binary is a
-# thin flicker-shell client that views a run.
-[[bin]]
-name = "flicker-poc-chemistry"
-path = "src/main.rs"
+# The chemistry-first world sim — bulk-accretion budget, two conserved ledgers,
+# reservoirs, columns, the steppable scheduler, and the conservation harness.
+# **GPU-free and library-only**: the viewer MOVED into the `flicker-godmode` scene
+# package hosted by the `prism-alpha` launcher (the same promotion
+# `flicker-pocepochs` took), so nothing here knows a renderer exists.
+[lib]
+name = "flicker_poc_chemistry"
+path = "src/lib.rs"
 
 [dependencies]
-# Simulation core (GPU-free).
 flicker-worldgrid.workspace = true
 flicker-worldstate.workspace = true
 flicker-materials.workspace = true
@@ -21,14 +21,4 @@ flicker-worker.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror.workspace = true
-
-# App shell (used by the binary target only).
-flicker = { path = "../../Alpha/crates/core/flicker" }
-flicker-shell.workspace = true
-# Input event bus (spec §4/§9): the shared resolve → route seam the scene ports onto.
-flicker-input-core.workspace = true
-flicker-input-router.workspace = true
 glam.workspace = true
-anyhow.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true

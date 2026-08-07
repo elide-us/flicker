@@ -18,7 +18,8 @@
 //! - [`device`] — `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis`,
 //!   `AxisDirection`, `DeadzoneShape` (+`Display`).
 //! - [`snapshot`] — `GamepadConfig`, `GamepadState`, `apply_deadzone`,
-//!   `InputState` (with the analog latch).
+//!   `InputState` (with the analog latch), and [`InputEdge`] — the ordered
+//!   per-frame transition log that keeps a press from being lost on a long frame.
 //! - [`signal`] — [`ActionSignal`] (+`Display`, +`label`).
 //! - [`binding`] — [`InputBinding`] (+`is_down`), [`InputMap`], and the §3.5
 //!   descriptors.
@@ -55,4 +56,4 @@ pub use rebind::{
 };
 pub use resolve::{EventKind, Fired, Resolver, TickTime};
 pub use signal::ActionSignal;
-pub use snapshot::{apply_deadzone, GamepadConfig, GamepadState, InputState};
+pub use snapshot::{apply_deadzone, GamepadConfig, GamepadState, InputEdge, InputState};

@@ -5,11 +5,12 @@
 //! mesh-smoke, flicker-world) is untouched. It shares the flat pipeline's depth
 //! attachment, camera/scene uniform *shape*, and lighting model, and adds a UV +
 //! tangent vertex attribute plus a per-draw albedo texture (bind group 1) and an
-//! optional PBR map set (normal / roughness / metalness / AO, bind groups 2–5).
+//! optional PBR map set (normal / roughness / metalness / AO / emit, bindings 1–5).
 //! Designed for reuse — a skinned character today, voxel-cluster surface textures later.
 //!
 //! **PBR maps.** The pipeline is one pipeline with **default 1×1 textures** for any
-//! map a draw omits: a flat normal `(128,128,255)`, white roughness/AO, black metalness.
+//! map a draw omits: a flat normal `(128,128,255)`, white roughness/AO, black
+//! metalness, black emit.
 //! So an albedo-only draw (the katana) reads as a matte dielectric (flat normal, rough,
 //! non-metal, unoccluded), while a full-map draw (the character) gets surface relief +
 //! a metal/rough specular response + AO. The albedo is sampled sRGB; the map textures
@@ -19,7 +20,7 @@
 //! * group 0 — camera(@0) + per-draw(@1, dynamic offset) + scene(@2), same as the flat
 //!   mesh pipeline;
 //! * group 1 — albedo `texture_2d`(@0) + `sampler`(@1);
-//! * groups 2–5 — normal / roughness / metalness / AO, each the same texture+sampler
+//! * groups 2–6 — normal / roughness / metalness / AO / emit, each the same texture+sampler
 //!   layout. The per-texture bind group is built by `Renderer::load_texture[_linear]`
 //!   against this pipeline's layout, so any loaded texture can drop into any slot.
 //!
@@ -136,6 +137,11 @@ pub struct PbrMaps {
     pub roughness: Option<TextureHandle>,
     pub metalness: Option<TextureHandle>,
     pub ao: Option<TextureHandle>,
+    /// Self-illumination — the content standard's `Emit` map, sRGB COLOUR data.
+    /// `None` ⇒ the 1×1 black default, i.e. the surface emits nothing. A colour
+    /// rather than a scalar because a glow has its own hue independent of the
+    /// albedo under it (a blue rune cut into dark iron).
+    pub emit: Option<TextureHandle>,
 }
 
 /// Opaque handle to a mesh uploaded to the textured pipeline. Distinct from
@@ -316,8 +322,9 @@ impl TexturedMeshPipeline {
                 material_entry(2), // roughness
                 material_entry(3), // metalness
                 material_entry(4), // ao
+                material_entry(5), // emit
                 wgpu::BindGroupLayoutEntry {
-                    binding: 5,
+                    binding: 6,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -609,6 +616,7 @@ impl TexturedMeshPipeline {
                     &self.default_white_view,
                     &self.default_black_view,
                     &self.default_white_view,
+                    &self.default_black_view,
                 ));
                 continue;
             };
@@ -632,6 +640,12 @@ impl TexturedMeshPipeline {
                 .ao
                 .and_then(|h| view_for(textures, h))
                 .unwrap_or(&self.default_white_view);
+            // Black default: a draw that names no emit map glows nowhere.
+            let emit_view = draw
+                .maps
+                .emit
+                .and_then(|h| view_for(textures, h))
+                .unwrap_or(&self.default_black_view);
             let bg = self.make_material_bg(
                 device,
                 albedo_view,
@@ -639,12 +653,13 @@ impl TexturedMeshPipeline {
                 rough_view,
                 metal_view,
                 ao_view,
+                emit_view,
             );
             self.frame_material_bgs.push(bg);
         }
     }
 
-    /// Build one combined material bind group (5 texture views + the shared sampler).
+    /// Build one combined material bind group (6 texture views + the shared sampler).
     #[allow(clippy::too_many_arguments)]
     fn make_material_bg(
         &self,
@@ -654,6 +669,7 @@ impl TexturedMeshPipeline {
         roughness: &wgpu::TextureView,
         metalness: &wgpu::TextureView,
         ao: &wgpu::TextureView,
+        emit: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("flicker.mesh_textured.material_bind_group"),
@@ -681,6 +697,10 @@ impl TexturedMeshPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
+                    resource: wgpu::BindingResource::TextureView(emit),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],

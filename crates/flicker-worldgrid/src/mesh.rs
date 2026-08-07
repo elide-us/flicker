@@ -6,6 +6,8 @@
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
 
+use crate::isea::{edge_point, lattice_point, FaceFrame};
+
 /// Quantisation scale for welding coincident subdivision points (shared edges,
 /// shared vertices). Points live on the unit sphere; 1e-6 resolution welds
 /// genuine duplicates without merging distinct cells at our frequencies.
@@ -61,9 +63,16 @@ impl Weld {
 }
 
 /// Geodesic subdivision of triangle `(a, b, c)` to frequency `m`, tagged with
-/// `face` for provenance: barycentric lattice points projected to the sphere
-/// (via the weld table), `m²` small triangles. Point `(i, j)` has barycentric
-/// `(i, j, m-i-j)`.
+/// `face` for provenance: `m²` small triangles over the barycentric lattice,
+/// each site placed by the **equal-area map** ([`crate::isea`]) and interned in
+/// the weld table. Point `(i, j)` has barycentric `(i, j, m-i-j)`.
+///
+/// Sites are routed three ways, because a site's owner decides how it may be
+/// placed: a **corner** is the face vertex itself, an **edge** site is shared
+/// with the neighbouring face and so is placed from the edge alone
+/// ([`crate::isea::edge_point`] — bit-identical from both sides, which is what
+/// lets the weld fuse them), and only an **interior** site may use this face's
+/// own frame.
 pub(crate) fn subdivide(
     a: Vec3,
     b: Vec3,
@@ -73,12 +82,21 @@ pub(crate) fn subdivide(
     weld: &mut Weld,
     tris: &mut Vec<[u32; 3]>,
 ) {
-    let mf = m as f32;
+    let frame = FaceFrame::new(a, b, c);
     let mut local: HashMap<(u32, u32), u32> = HashMap::new();
     for i in 0..=m {
         for j in 0..=(m - i) {
             let k = m - i - j;
-            let p = (a * i as f32 + b * j as f32 + c * k as f32) / mf;
+            let p = match (i == 0, j == 0, k == 0) {
+                (false, true, true) => a,
+                (true, false, true) => b,
+                (true, true, false) => c,
+                // `j` sites walk a→b, `k` sites walk a→c and b→c.
+                (_, _, true) => edge_point(a, b, j, m),
+                (_, true, _) => edge_point(a, c, k, m),
+                (true, _, _) => edge_point(b, c, k, m),
+                _ => lattice_point(&frame, i, j, k, m),
+            };
             local.insert((i, j), weld.intern(p, (face, i, j)));
         }
     }

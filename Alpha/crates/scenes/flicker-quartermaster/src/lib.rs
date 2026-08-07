@@ -74,6 +74,20 @@ struct ConflictPrompt {
     ops: Vec<FileOp>,
     /// Answer the rest of the queue the same way as the next choice.
     apply_rest: bool,
+    /// Set when this prompt belongs to a PROMOTE: the manifest row to append and
+    /// the exact move plan the answers must reconstruct — an asset's files travel
+    /// together or not at all.
+    promote: Option<PromotePlan>,
+}
+
+/// A promote waiting on its collision answers.
+#[derive(Clone, Debug)]
+struct PromotePlan {
+    row: flicker_content::manifest::ManifestEntry,
+    /// Every planned destination. The prompt's resolved ops must cover EXACTLY
+    /// this set — a Skip (fewer) or a Keep-both (renamed dst) makes the promote
+    /// partial, and a partial asset never ships.
+    dsts: Vec<PathBuf>,
 }
 
 /// An open in-place rename.
@@ -104,13 +118,31 @@ struct Rename {
 struct FileCommand {
     batch: BatchFileOp,
     label: String,
+    /// A PROMOTE's manifest rider: the row this command appends on apply and
+    /// removes on revert — so undo-of-promote returns the FILES to staging and
+    /// takes the LEDGER row back in the same single history entry.
+    manifest: Option<(PathBuf, flicker_content::manifest::ManifestEntry)>,
 }
 
 impl Command for FileCommand {
     fn apply(&mut self) -> Result<(), String> {
-        self.batch.apply().map_err(|e| e.to_string())
+        self.batch.apply().map_err(|e| e.to_string())?;
+        if let Some((path, row)) = &self.manifest {
+            // The files moved but the ledger refused: roll the files back so the
+            // two can never disagree, and surface the manifest's own error.
+            if let Err(e) = flicker_content::manifest::append(path, row.clone()) {
+                let _ = self.batch.revert();
+                return Err(e.to_string());
+            }
+        }
+        Ok(())
     }
     fn revert(&mut self) -> Result<(), String> {
+        if let Some((path, row)) = &self.manifest {
+            // Ledger first: an undo that cannot take its row back must not move
+            // files either, or the manifest would claim a promotion staging holds.
+            flicker_content::manifest::remove(path, row).map_err(|e| e.to_string())?;
+        }
         self.batch.revert().map_err(|e| e.to_string())
     }
     fn label(&self) -> &str {
@@ -136,7 +168,7 @@ use flicker_input_core::{
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
-use fs_model::{Roots, Row, SortKey, TreeRow};
+use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
 const HUD_UI_ELEMENTS: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
@@ -149,6 +181,8 @@ const TREE_W: f32 = 340.0;
 const ROW_H: f32 = 32.0;
 const LIST_ROW_H: f32 = 34.0;
 const HEADER_H: f32 = 32.0;
+/// The Review facts rail width.
+const REVIEW_RAIL_W: f32 = 360.0;
 
 /// The bench's two pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -295,6 +329,15 @@ pub struct Quartermaster {
     ev: Vec<Fired>,
     tick: u64,
     fired_sigs: Vec<String>,
+
+    // ── CM5: the Review tab ──
+    /// The staging queue — one entry per promotable asset FOLDER, tier-ordered.
+    queue: Vec<QueueItem>,
+    /// The queue cursor (single focus: every Review verb acts on this item).
+    review_sel: usize,
+    /// Facts + warnings for the selected item, parsed ONCE per selection — a
+    /// rig parse is a per-click cost, never a per-frame one.
+    facts: Option<ReviewFacts>,
 }
 
 impl Default for Quartermaster {
@@ -355,6 +398,9 @@ impl Quartermaster {
             ev: Vec::new(),
             tick: 0,
             fired_sigs: Vec::new(),
+            queue: Vec::new(),
+            review_sel: 0,
+            facts: None,
         };
         // Both roots open from the first frame — the design shows them that way.
         me.expanded = vec![me.roots.package.clone(), me.roots.staging.clone()];
@@ -374,6 +420,7 @@ impl Quartermaster {
             .min(self.rows.len().saturating_sub(1));
         self.tree = fs_model::tree_rows(&self.roots, &self.expanded);
         self.tree_sel = self.tree_sel.min(self.tree.len().saturating_sub(1));
+        self.refresh_queue();
     }
 
     // ── read-only accessors, for tests and for the model ──
@@ -577,8 +624,12 @@ impl Quartermaster {
         // whole queue is answered, and the answers ride out as ONE batch.
         let conflicts = flicker_content::probe_conflicts(&[(src.clone(), dst.clone())]);
         if !conflicts.is_empty() {
-            self.prompt =
-                Some(ConflictPrompt { pending: conflicts, ops: Vec::new(), apply_rest: false });
+            self.prompt = Some(ConflictPrompt {
+                pending: conflicts,
+                ops: Vec::new(),
+                apply_rest: false,
+                promote: None,
+            });
             self.last_error = None;
             return;
         }
@@ -691,13 +742,34 @@ impl Quartermaster {
             self.prompt = Some(p);
             return;
         }
-        if p.ops.is_empty() {
-            // Everything was skipped — nothing ran, so the move stays pending
-            // and the clipboard is still loaded, ready to retry elsewhere.
-            return;
-        }
-        if self.run(p.ops, "$qm_did_move") {
-            self.clipboard = None;
+        match p.promote.take() {
+            Some(plan) => {
+                // A promote is ALL-OR-NOTHING: the asset's files are dependencies
+                // that travel together. Every answered op must land on exactly its
+                // planned destination — a Skip strands part of the asset, a
+                // Keep-both forks a filename out from under its rig — so anything
+                // short of a full Replace set refuses the promote out loud.
+                let complete = p.ops.len() == plan.dsts.len()
+                    && p.ops.iter().all(|op| match op {
+                        FileOp::Move { dst, .. } => plan.dsts.contains(dst),
+                        _ => false,
+                    });
+                if complete {
+                    self.run_promote(p.ops, plan.row);
+                } else {
+                    self.last_error = Some("$qm_err_promote_partial".into());
+                }
+            }
+            None => {
+                if p.ops.is_empty() {
+                    // Everything was skipped — nothing ran, so the move stays
+                    // pending and the clipboard is still loaded, ready to retry.
+                    return;
+                }
+                if self.run(p.ops, "$qm_did_move") {
+                    self.clipboard = None;
+                }
+            }
         }
     }
 
@@ -706,6 +778,138 @@ impl Quartermaster {
     pub fn cancel_conflict(&mut self) {
         self.prompt = None;
         self.last_error = None;
+    }
+
+    // ── CM5: the Review tab — queue, facts, promote ──
+
+    /// Re-scan the staging queue, keeping the selection on the same asset where
+    /// it still exists (a refresh must not move the cursor under the user).
+    pub fn refresh_queue(&mut self) {
+        let focused = self.queue.get(self.review_sel).map(|q| q.dir.clone());
+        self.queue = fs_model::staging_queue(&self.roots);
+        self.review_sel = focused
+            .and_then(|d| self.queue.iter().position(|q| q.dir == d))
+            .unwrap_or(0)
+            .min(self.queue.len().saturating_sub(1));
+        self.ensure_facts();
+    }
+
+    /// The asset every Review verb acts on.
+    pub fn selected_queue_item(&self) -> Option<&QueueItem> {
+        self.queue.get(self.review_sel)
+    }
+
+    /// The selected asset's warning `$token`s (tests + the model read the same).
+    pub fn facts_warning_tokens(&self) -> Vec<&'static str> {
+        self.facts.as_ref().map(|f| f.warnings.clone()).unwrap_or_default()
+    }
+
+    /// The current error token/text, if any (test accessor).
+    pub fn last_error_token(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    fn review_nav(&mut self, delta: isize) {
+        if self.queue.is_empty() {
+            return;
+        }
+        let n = self.queue.len() as isize;
+        self.review_sel = ((self.review_sel as isize + delta).rem_euclid(n)) as usize;
+        self.ensure_facts();
+    }
+
+    fn review_pick(&mut self, i: usize) {
+        if i < self.queue.len() {
+            self.review_sel = i;
+            self.ensure_facts();
+        }
+    }
+
+    /// Parse the selected asset's facts if the selection changed (or vanished).
+    fn ensure_facts(&mut self) {
+        let Some(item) = self.queue.get(self.review_sel) else {
+            self.facts = None;
+            return;
+        };
+        if self.facts.as_ref().is_some_and(|f| f.dir == item.dir) {
+            return;
+        }
+        self.facts = Some(ReviewFacts::of(item, &self.roots));
+    }
+
+    /// PROMOTE the selected asset: move its whole folder (the dependencies travel
+    /// together) from staging to the mirrored package path, and append the
+    /// manifest row — ONE history entry, so one undo returns files AND ledger.
+    /// A collision raises the same prompt every other mutation uses.
+    pub fn promote_selected(&mut self) {
+        let Some(item) = self.queue.get(self.review_sel).cloned() else { return };
+        let files = fs_model::files_under(&item.dir);
+        if files.is_empty() {
+            return;
+        }
+        let target_dir = self.roots.package.join(&item.rel);
+        let pairs: Vec<(PathBuf, PathBuf)> = files
+            .iter()
+            .map(|src| {
+                let rel = src.strip_prefix(&item.dir).expect("file under its own dir");
+                (src.clone(), target_dir.join(rel))
+            })
+            .collect();
+        let row = flicker_content::manifest::ManifestEntry {
+            name: item.name.clone(),
+            class: item.class.id().to_string(),
+            path: PathBuf::from("package").join(&item.rel).to_string_lossy().into_owned(),
+            promoted_from: PathBuf::from("staging")
+                .join(&item.rel)
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let conflicts = flicker_content::probe_conflicts(&pairs);
+        if conflicts.is_empty() {
+            let ops = pairs.into_iter().map(|(s, d)| FileOp::mv(s, d)).collect();
+            self.run_promote(ops, row);
+            return;
+        }
+        // Seed the prompt with the clean moves; the dialog answers the rest. The
+        // plan records EVERY destination — resolution must reconstruct it whole.
+        let conflicted: Vec<&PathBuf> = conflicts.iter().map(|c| &c.src).collect();
+        let ops = pairs
+            .iter()
+            .filter(|(s, _)| !conflicted.contains(&s))
+            .map(|(s, d)| FileOp::mv(s.clone(), d.clone()))
+            .collect();
+        let dsts = pairs.iter().map(|(_, d)| d.clone()).collect();
+        self.prompt = Some(ConflictPrompt {
+            pending: conflicts,
+            ops,
+            apply_rest: false,
+            promote: Some(PromotePlan { row, dsts }),
+        });
+        self.last_error = None;
+    }
+
+    /// Apply a promote as ONE history entry: the batch plus its manifest rider.
+    fn run_promote(&mut self, ops: Vec<FileOp>, row: flicker_content::manifest::ManifestEntry) {
+        let subject = row.name.clone();
+        self.batch_seq += 1;
+        let cmd = FileCommand {
+            batch: BatchFileOp::new(
+                ops,
+                self.roots.staging.clone(),
+                format!("b{}", self.batch_seq),
+            ),
+            label: "$qm_did_promote".to_string(),
+            manifest: Some((self.roots.package.join("manifest.json"), row)),
+        };
+        match self.history.apply(cmd) {
+            Ok(()) => {
+                self.last_error = None;
+                self.toast("$qm_did_promote", subject);
+                self.facts = None; // the target's occupancy just changed
+                self.refresh();
+            }
+            Err(e) => self.last_error = Some(e),
+        }
     }
 
     /// Create a folder in the current directory.
@@ -874,6 +1078,7 @@ impl Quartermaster {
                 format!("b{}", self.batch_seq),
             ),
             label: label.to_string(),
+            manifest: None,
         };
         match self.history.apply(cmd) {
             Ok(()) => {
@@ -1118,7 +1323,7 @@ impl Quartermaster {
         let h = (screen.y - top - STATUS_H).max(0.0);
         match self.tab {
             Tab::Files => self.files_body(screen, top, h),
-            Tab::Review => self.review_placeholder(screen, top, h),
+            Tab::Review => self.review_body(screen, top, h),
         }
     }
 
@@ -1394,17 +1599,190 @@ impl Quartermaster {
         stack
     }
 
-    fn review_placeholder(&self, screen: Vec2, top: f32, h: f32) -> UiNode {
-        let mut cell = node("cell");
-        cell.id = "review_body".into();
-        cell.anchor = Some(UiAnchor::TopLeft);
-        cell.offset = [0.0, top];
-        cell.width = Some(screen.x);
-        cell.height = Some(h);
-        cell.pad = 40.0;
-        cell = prop(cell, "style", text_val("quartermaster.pane"));
-        cell.children = vec![label("$qm_review_soon", 15.0, "quartermaster.meta.color", None)];
-        cell
+    /// CM5 — the Review page: the staging QUEUE (left), the selected asset's
+    /// summary, warnings and the Promote control (centre), its FACTS (right).
+    /// Rebuilt per frame from live data, exactly like the Files listing — node
+    /// ids encode positions in the CURRENT queue (the sanctioned Rust-tree case).
+    fn review_body(&self, screen: Vec2, top: f32, h: f32) -> UiNode {
+        let mut row = node("row");
+        row.id = "review_body".into();
+        row.anchor = Some(UiAnchor::TopLeft);
+        row.offset = [0.0, top];
+        row.width = Some(screen.x);
+        row.height = Some(h);
+        row.children = vec![
+            self.review_queue_pane(h),
+            self.review_center_pane((screen.x - TREE_W - REVIEW_RAIL_W).max(220.0), h),
+            self.review_facts_pane(h),
+        ];
+        row
+    }
+
+    /// The staging queue — every promotable asset folder, cursor-lit.
+    fn review_queue_pane(&self, h: f32) -> UiNode {
+        let mut pane = node("cell");
+        pane.id = "review_queue".into();
+        pane.width = Some(TREE_W);
+        pane.height = Some(h);
+        pane = prop(pane, "style", text_val(pane_style(true)));
+
+        let mut scroll = node("list");
+        scroll.id = "review_queue_list".into();
+        scroll.grow = Some(1.0);
+        scroll.pad = 8.0;
+        scroll.children = self
+            .queue
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let mut b = node("button");
+                b.id = format!("rv_row_{i}");
+                b.action = Some(format!("rv_pick_{i}"));
+                b.height = Some(LIST_ROW_H);
+                // Name and bulk are DATA; the class rides its own token label
+                // in the centre pane.
+                b = prop(
+                    b,
+                    "label",
+                    text_val(format!(
+                        "{}  \u{00b7}  {}  \u{00b7}  {}",
+                        q.name,
+                        q.files,
+                        human_bytes(q.bytes)
+                    )),
+                );
+                let style = if i == self.review_sel {
+                    "quartermaster.tab_active"
+                } else {
+                    "quartermaster.tab_idle"
+                };
+                prop(b, "style", text_val(style))
+            })
+            .collect();
+
+        pane.children =
+            vec![label("$qm_review_queue", 11.0, "quartermaster.header.color", None), scroll];
+        pane
+    }
+
+    /// The selected asset: what it is, where Promote lands it, what is wrong
+    /// with it — and the Promote control itself (pad-focusable).
+    fn review_center_pane(&self, w: f32, h: f32) -> UiNode {
+        let mut pane = node("cell");
+        pane.id = "review_center".into();
+        pane.width = Some(w);
+        pane.height = Some(h);
+        pane.pad = 20.0;
+        pane.gap = 10.0;
+        pane = prop(pane, "style", text_val(pane_style(false)));
+
+        let Some(f) = self.facts.as_ref() else {
+            pane.children =
+                vec![label("$qm_review_empty", 14.0, "quartermaster.meta.color", None)];
+            return pane;
+        };
+        let name = self.queue.get(self.review_sel).map(|q| q.name.clone()).unwrap_or_default();
+        let mut kids = Vec::new();
+        let mut title = node("text");
+        title.id = "rv_name".into();
+        title = prop(title, "text", text_val(name));
+        title = prop(title, "size", Value::Number(20.0));
+        title = prop(title, "color", text_val("quartermaster.title.color"));
+        kids.push(title);
+        kids.push(label(&f.class_token, 12.0, "quartermaster.badge.color", None));
+
+        // "Promote to" + the mirrored target path (data, never composed copy).
+        let mut target_row = node("row");
+        target_row.gap = 8.0;
+        let mut tpath = node("text");
+        tpath.id = "rv_target".into();
+        tpath = prop(tpath, "text", text_val(f.target_display.clone()));
+        tpath = prop(tpath, "size", Value::Number(12.0));
+        tpath = prop(tpath, "color", text_val("quartermaster.meta.color"));
+        target_row.children = vec![
+            label("$qm_review_target", 12.0, "quartermaster.header.color", Some(110.0)),
+            tpath,
+        ];
+        kids.push(target_row);
+
+        // Warnings — real facts, worst first; silence when there are none.
+        for (i, wtok) in f.warnings.iter().enumerate() {
+            let mut wl = label(wtok, 13.0, "quartermaster.error.color", None);
+            wl.id = format!("rv_warn_{i}");
+            kids.push(wl);
+        }
+
+        let mut spacer = node("cell");
+        spacer.grow = Some(1.0);
+        kids.push(spacer);
+
+        // The Promote control — a declared action, pad-reachable (tab_group).
+        let mut go = node("button");
+        go.id = "promote".into();
+        go.action = Some("promote".into());
+        go.size = Some(220.0);
+        go.height = Some(40.0);
+        go = prop(go, "label", text_val("$qm_review_promote"));
+        go = prop(go, "style", text_val("quartermaster.tab_active"));
+        go = prop(go, "tab_group", text_val("review"));
+        go = prop(go, "nav_ordinal", Value::Number(0.0));
+        kids.push(go);
+
+        pane.children = kids;
+        pane
+    }
+
+    /// The facts rail: parsed counts as aligned label+value lines (the labels
+    /// are resolved tokens, the values are data — the sanctioned shape).
+    fn review_facts_pane(&self, h: f32) -> UiNode {
+        let mut pane = node("cell");
+        pane.id = "review_facts".into();
+        pane.width = Some(REVIEW_RAIL_W);
+        pane.height = Some(h);
+        pane.pad = 16.0;
+        pane.gap = 6.0;
+        pane = prop(pane, "style", text_val(pane_style(false)));
+
+        let mut kids =
+            vec![label("$qm_review_facts", 11.0, "quartermaster.header.color", None)];
+        if let Some(f) = self.facts.as_ref() {
+            let r = |t: &str| flicker::ui::strings::resolve(t).into_owned();
+            let mut line = |id: &str, text: String| {
+                let mut n = node("text");
+                n.id = id.into();
+                n = prop(n, "text", text_val(text));
+                n = prop(n, "size", Value::Number(13.0));
+                n = prop(n, "color", text_val("quartermaster.meta.color"));
+                kids.push(n);
+            };
+            line("rv_fact_files", format!("{:<10}{}", r("$qm_fact_files"), f.files));
+            line("rv_fact_size", format!("{:<10}{}", r("$qm_fact_size"), human_bytes(f.bytes)));
+            if let Some(b) = f.bones {
+                line("rv_fact_bones", format!("{:<10}{}", r("$qm_fact_bones"), b));
+            }
+            if let Some(v) = f.verts {
+                line("rv_fact_verts", format!("{:<10}{}", r("$qm_fact_verts"), v));
+            }
+            if let Some(c) = f.clips {
+                line("rv_fact_clips", format!("{:<10}{}", r("$qm_fact_clips"), c));
+            }
+            if let Some(a) = f.attach_points {
+                line("rv_fact_points", format!("{:<10}{}", r("$qm_fact_points"), a));
+            }
+            if f.textures_listed > 0 {
+                line(
+                    "rv_fact_textures",
+                    format!(
+                        "{:<10}{} \u{00b7} {}",
+                        r("$qm_fact_textures"),
+                        f.textures_listed - f.textures_missing,
+                        f.textures_listed
+                    ),
+                );
+            }
+        }
+        pane.children = kids;
+        pane
     }
 
     fn status_bar(&self, screen: Vec2) -> UiNode {
@@ -1512,9 +1890,21 @@ impl Quartermaster {
                 }
                 return;
             }
-            // Anything else is a POINTER pick on a row (the component fires the
-            // row's action): close, then let the ordinary verb arms run it.
-            self.close_menu();
+            // A POINTER pick fires BOTH the row's action and the click edge (folded
+            // in by `update` as `menu_dismiss`); a click on dead space fires the edge
+            // alone; a chord verb fires its action alone. Ambient state — `hud_hit`,
+            // bind republishes — fires none of them. So: close on the click edge or
+            // on a fired verb, then let the verb arms below run the pick. Closing on
+            // "anything else" closed the menu on the first idle frame after the
+            // edge-resolved open signal — a one-frame lifetime (QA 2026-08-03:
+            // "appears then disappears immediately").
+            let verb_fired =
+                ["rename", "cut", "paste", "create_folder"].iter().any(|v| results.is_on(v));
+            if results.is_on("menu_dismiss") || verb_fired {
+                self.close_menu();
+            } else {
+                return;
+            }
         } else if results.is_on("menu_open") {
             self.open_menu();
             return;
@@ -1537,6 +1927,9 @@ impl Quartermaster {
         for t in Tab::ALL {
             if results.is_on(t.id()) {
                 self.tab = t;
+                if t == Tab::Review {
+                    self.refresh_queue();
+                }
             }
         }
         if results.is_on("tab_next") || results.is_on("tab_prev") {
@@ -1549,10 +1942,18 @@ impl Quartermaster {
             self.focus_pane(false);
         }
         if results.is_on("nav_up") {
-            self.nav(-1);
+            // The active TAB owns the d-pad: Files walks the listing, Review
+            // walks the staging queue — one cursor per page, single focus.
+            match self.tab {
+                Tab::Files => self.nav(-1),
+                Tab::Review => self.review_nav(-1),
+            }
         }
         if results.is_on("nav_down") {
-            self.nav(1);
+            match self.tab {
+                Tab::Files => self.nav(1),
+                Tab::Review => self.review_nav(1),
+            }
         }
         // Left/right cross panes, so a d-pad alone reaches everything.
         if results.is_on("nav_left") {
@@ -1562,7 +1963,23 @@ impl Quartermaster {
             self.focus_pane(true);
         }
         if results.is_on("confirm") {
-            self.confirm();
+            match self.tab {
+                Tab::Files => self.confirm(),
+                // Single focus: the queue cursor IS the selection, Confirm acts
+                // on it. A risky landing raises the prompt; a clean one is one
+                // undoable entry with its toast — the bench's mutation contract.
+                Tab::Review => self.promote_selected(),
+            }
+        }
+        if results.is_on("promote") && self.tab == Tab::Review {
+            self.promote_selected();
+        }
+        if self.tab == Tab::Review {
+            for i in 0..self.queue.len() {
+                if results.is_on(&format!("rv_pick_{i}")) {
+                    self.review_pick(i);
+                }
+            }
         }
         if results.is_on("cancel") {
             // Cancel drops a pending move before it navigates — the clipboard is
@@ -1677,6 +2094,11 @@ impl Scene for Quartermaster {
         // ONE resolve, ONE dispatch — the walker layer consumes the screen's
         // declared intents, so navigation never reads a raw key.
         self.tick = self.tick.wrapping_add(1);
+        // CM5: the staging queue follows the disk — a light 1 s poll (a few
+        // dozen dirents); the selection survives by path.
+        if self.tab == Tab::Review && self.tick % 60 == 0 {
+            self.refresh_queue();
+        }
         self.ev.clear();
         self.resolver.resolve_frame(
             &self.bindings,
@@ -1712,6 +2134,16 @@ impl Scene for Quartermaster {
         let mut results = frame.results.clone();
         for name in &self.fired_sigs {
             results.set(name.clone(), true);
+        }
+
+        // The open menu's dismissal edge, folded in beside the click results the
+        // same way the raw rename keys are below: a left-click while the menu is
+        // open means "the user picked somewhere" — on a row (its action fires in
+        // the same frame and runs after the close) or on dead space (dismiss
+        // alone). Without this edge the menu block cannot tell a pick from the
+        // ambient per-frame results (`hud_hit` is republished every frame).
+        if self.is_menu_open() && input.mouse_left_pressed {
+            results.set("menu_dismiss", true);
         }
 
         // Enter/Esc while renaming are read RAW — the ruled exception. The
@@ -1786,6 +2218,92 @@ fn pane_style(focused: bool) -> &'static str {
         "quartermaster.pane_focused"
     } else {
         "quartermaster.pane"
+    }
+}
+
+/// What the Review tab knows about the SELECTED staged asset — parsed once per
+/// selection. Counts come from the primary rig json; warnings are `$token`s the
+/// tree resolves at publish, worst first.
+struct ReviewFacts {
+    dir: PathBuf,
+    /// `package/<rel>` — where Promote will land it, shown as data.
+    target_display: String,
+    files: usize,
+    bytes: u64,
+    class_token: String,
+    bones: Option<usize>,
+    verts: Option<usize>,
+    clips: Option<usize>,
+    attach_points: Option<usize>,
+    textures_listed: usize,
+    textures_missing: usize,
+    warnings: Vec<&'static str>,
+}
+
+impl ReviewFacts {
+    fn of(item: &QueueItem, roots: &Roots) -> Self {
+        let files = fs_model::files_under(&item.dir);
+        let bytes: u64 =
+            files.iter().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum();
+        // The primary json: the asset's own file where present, else the first.
+        let primary = files
+            .iter()
+            .find(|f| {
+                let s = f.to_string_lossy();
+                s.contains(&item.name) && s.contains(".json")
+            })
+            .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
+        let (mut bones, mut verts, mut clips, mut attach_points) = (None, None, None, None);
+        let (mut textures_listed, mut textures_missing) = (0usize, 0usize);
+        if let Some(p) = primary {
+            let logical = fs_model::logical(p);
+            if let Ok(text) = flicker_content::package::read_text(&logical) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let count = |x: &serde_json::Value| x.as_array().map(|a| a.len());
+                    bones = count(&v["skeleton"]["bones"]);
+                    verts = count(&v["mesh"]["vertices"]);
+                    clips = count(&v["clips"]);
+                    attach_points = count(&v["attach_points"]);
+                    if let Some(texs) = v["source"]["textures"].as_array() {
+                        textures_listed = texs.len();
+                        textures_missing = texs
+                            .iter()
+                            .filter_map(|t| t.as_str())
+                            .filter(|t| !item.dir.join(t).exists())
+                            .count();
+                    }
+                }
+            }
+        }
+        let target_dir = roots.package.join(&item.rel);
+        // Warnings, worst first — each a real fact, never a placeholder.
+        let mut warnings: Vec<&'static str> = Vec::new();
+        if bones.is_some_and(|b| b > 1 && b != flicker_content::baseline::CANON_BONES) {
+            warnings.push("$qm_warn_off_canon");
+        }
+        if textures_missing > 0 {
+            warnings.push("$qm_warn_missing_textures");
+        }
+        if target_dir.exists() {
+            warnings.push("$qm_warn_target_occupied");
+        }
+        Self {
+            dir: item.dir.clone(),
+            target_display: PathBuf::from("package")
+                .join(&item.rel)
+                .to_string_lossy()
+                .into_owned(),
+            files: files.len(),
+            bytes,
+            class_token: format!("$qm_class_{}", item.class.id()),
+            bones,
+            verts,
+            clips,
+            attach_points,
+            textures_listed,
+            textures_missing,
+            warnings,
+        }
     }
 }
 
@@ -1878,9 +2396,14 @@ fn human_size(row: &Row) -> String {
     if row.is_dir {
         return "$qm_dash".into();
     }
+    human_bytes(row.size)
+}
+
+/// `1.4 MB` / `230 KB` / `87 B` — the ONE byte formatter both tabs read.
+fn human_bytes(b: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
-    match row.size {
+    match b {
         b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
         b if b >= KB => format!("{:.0} KB", b as f64 / KB as f64),
         b => format!("{b} B"),
@@ -2437,6 +2960,223 @@ mod tests {
         qm.apply_results(&on("confirm"));
         assert!(!qm.is_menu_open(), "the pick closed the menu");
         assert!(qm.can_undo(), "and New folder ran");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// THE ONE-FRAME-LIFETIME REGRESSION (QA 2026-08-03). `menu_open` rides an
+    /// edge-resolved signal, so the frame after opening carries only AMBIENT
+    /// results (`hud_hit` is republished every frame) — the menu must survive
+    /// those. It closes only on the click edge (`menu_dismiss`, folded in by
+    /// `update`) or on a fired verb.
+    #[test]
+    fn the_menu_survives_idle_frames_and_closes_on_a_real_pick() {
+        let (mut qm, d) = scratch("menuidle");
+        qm.apply_results(&on("menu_open"));
+        assert!(qm.is_menu_open());
+
+        // The live loop's idle frame: no action fired, hud_hit republished.
+        for over_hud in [true, false, true] {
+            qm.apply_results(&ValueMap::new().with("hud_hit", over_hud));
+            assert!(qm.is_menu_open(), "an idle frame must not dismiss the menu");
+        }
+
+        // A click on dead space: the edge alone — dismiss, and nothing runs.
+        assert!(!qm.can_undo());
+        qm.apply_results(&ValueMap::new().with("hud_hit", true).with("menu_dismiss", true));
+        assert!(!qm.is_menu_open(), "a dead-space click dismisses");
+        assert!(!qm.can_undo(), "and no verb ran");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    // ── CM5: the Review tab ──
+
+    /// A minimal staged ASSET: a folder holding a 2-bone rig json + one texture
+    /// the json lists (present or not, per `with_tex`).
+    fn stage_asset(root: &std::path::Path, name: &str, with_tex: bool) {
+        let dir = root.join("staging/characters").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let id16 = "[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]";
+        flicker_content::package::write_text(
+            &dir.join(format!("{name}.json")),
+            &format!(
+                r#"{{"format":"flicker.rig","version":1,
+                    "skeleton":{{"bones":[
+                      {{"name":"root","parent":-1,"local":{id16},"inverse_bind":{id16}}},
+                      {{"name":"pelvis","parent":0,"local":{id16},"inverse_bind":{id16}}}]}},
+                    "mesh":{{"vertices":[],"indices":[]}},
+                    "source":{{"textures":["{name}_BaseColor.png"]}}}}"#
+            ),
+        )
+        .unwrap();
+        if with_tex {
+            std::fs::write(dir.join(format!("{name}_BaseColor.png")), b"png").unwrap();
+        }
+    }
+
+    /// THE CM5 CONTRACT: Promote moves the WHOLE asset folder into the mirrored
+    /// package path, appends the manifest row — and ONE undo returns the files
+    /// to staging AND takes the ledger row back (the banked spec's named test).
+    #[test]
+    fn promote_moves_the_asset_appends_the_manifest_and_one_undo_returns_both() {
+        let (mut qm, d) = scratch("promote");
+        stage_asset(&d, "NewThing", true);
+        qm.refresh_queue();
+        assert_eq!(qm.selected_queue_item().map(|q| q.name.as_str()), Some("NewThing"));
+
+        qm.promote_selected();
+        assert!(!qm.is_prompting(), "a clean target asks no questions");
+        let target = d.join("package/characters/NewThing");
+        assert!(
+            flicker_content::package::file_exists(&target.join("NewThing.json")),
+            "the rig landed in the package"
+        );
+        assert!(target.join("NewThing_BaseColor.png").exists(), "its texture travelled WITH it");
+        let manifest = d.join("package/manifest.json");
+        let rows = flicker_content::manifest::read(&manifest).unwrap();
+        assert_eq!(rows.len(), 1, "one promote, one ledger row");
+        assert_eq!(rows[0].name, "NewThing");
+        assert_eq!(rows[0].path, "package/characters/NewThing");
+        assert_eq!(rows[0].promoted_from, "staging/characters/NewThing");
+        assert!(qm.toast_count() >= 1, "the mutation confirmed itself");
+        qm.refresh_queue();
+        assert!(qm.selected_queue_item().is_none(), "staging emptied");
+
+        // ONE undo: files home again, ledger row gone.
+        qm.undo();
+        assert!(
+            flicker_content::package::file_exists(
+                &d.join("staging/characters/NewThing/NewThing.json")
+            ),
+            "undo returned the asset to staging"
+        );
+        assert!(!flicker_content::package::file_exists(&target.join("NewThing.json")));
+        assert!(flicker_content::manifest::read(&manifest).unwrap().is_empty(), "row removed");
+        qm.refresh_queue();
+        assert_eq!(qm.selected_queue_item().map(|q| q.name.as_str()), Some("NewThing"));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// Promoting onto an occupant raises the SAME prompt every mutation uses;
+    /// Replace (applied to the rest) parks the occupants and ships the asset.
+    #[test]
+    fn a_promote_onto_an_occupant_prompts_and_replace_ships_the_whole_asset() {
+        let (mut qm, d) = scratch("promoteclash");
+        stage_asset(&d, "Golem", true);
+        // The occupant — an OLD version already living at the exact target.
+        let old = d.join("package/characters/Golem");
+        std::fs::create_dir_all(&old).unwrap();
+        flicker_content::package::write_text(&old.join("Golem.json"), r#"{"old":true}"#).unwrap();
+        qm.refresh_queue();
+        assert!(
+            qm.facts_warning_tokens().contains(&"$qm_warn_target_occupied"),
+            "the occupied target is a WARNING before it is a surprise"
+        );
+
+        qm.promote_selected();
+        assert!(qm.is_prompting(), "the occupant raises the question");
+        qm.toggle_apply_rest();
+        qm.resolve_conflict(flicker_content::Resolution::Replace);
+        assert!(!qm.is_prompting());
+        assert!(qm.last_error_token().is_none(), "replace completes the promote");
+        let text =
+            flicker_content::package::read_text(&old.join("Golem.json")).unwrap();
+        assert!(text.contains("flicker.rig"), "the NEW rig sits at the target");
+        assert_eq!(
+            flicker_content::manifest::read(&d.join("package/manifest.json")).unwrap().len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A Skip answer would strand part of the asset — the promote REFUSES out
+    /// loud instead of shipping a partial folder, and nothing moves.
+    #[test]
+    fn a_partial_conflict_answer_refuses_the_promote() {
+        let (mut qm, d) = scratch("promotepartial");
+        stage_asset(&d, "Golem", true);
+        let old = d.join("package/characters/Golem");
+        std::fs::create_dir_all(&old).unwrap();
+        flicker_content::package::write_text(&old.join("Golem.json"), r#"{"old":true}"#).unwrap();
+        qm.refresh_queue();
+        qm.promote_selected();
+        assert!(qm.is_prompting());
+        qm.toggle_apply_rest();
+        qm.resolve_conflict(flicker_content::Resolution::Skip);
+        assert_eq!(qm.last_error_token(), Some("$qm_err_promote_partial"));
+        assert!(
+            flicker_content::package::file_exists(
+                &d.join("staging/characters/Golem/Golem.json")
+            ),
+            "nothing moved"
+        );
+        assert!(
+            flicker_content::manifest::read(&d.join("package/manifest.json")).unwrap().is_empty(),
+            "and nothing was recorded"
+        );
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// The queue scans every ingest tier, the facts read the rig, the off-canon
+    /// and missing-texture warnings are REAL, and the cursor survives a refresh.
+    #[test]
+    fn the_queue_reads_facts_warns_honestly_and_selection_survives_refresh() {
+        let (mut qm, d) = scratch("queue");
+        stage_asset(&d, "Alpha2", true);
+        stage_asset(&d, "Beta2", false); // its listed texture is MISSING
+        qm.refresh_queue();
+        assert_eq!(qm.queue.len(), 2);
+
+        qm.review_nav(1); // → Beta2
+        assert_eq!(qm.selected_queue_item().unwrap().name, "Beta2");
+        let warns = qm.facts_warning_tokens();
+        assert!(warns.contains(&"$qm_warn_off_canon"), "2 bones ≠ the canon: {warns:?}");
+        assert!(warns.contains(&"$qm_warn_missing_textures"), "{warns:?}");
+
+        qm.refresh_queue();
+        assert_eq!(qm.selected_queue_item().unwrap().name, "Beta2", "cursor survived");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// The Review page is a real, gated tree: fully expanded, promote declared
+    /// as an action, the queue rows pickable, and every string a token or data.
+    #[test]
+    fn the_review_page_tree_is_expanded_and_carries_the_promote_control() {
+        let (mut qm, d) = scratch("reviewtree");
+        stage_asset(&d, "NewThing", true);
+        qm.tab = Tab::Review;
+        qm.refresh_queue();
+        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
+        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
+            if pred(n) {
+                hits.push(n);
+            }
+            for c in &n.children {
+                find(c, pred, hits);
+            }
+        }
+        let mut raw = vec![];
+        find(&tree, &|n| n.template.is_some(), &mut raw);
+        assert!(raw.is_empty(), "unexpanded template nodes");
+        let mut promote = vec![];
+        find(&tree, &|n| n.id == "promote", &mut promote);
+        assert_eq!(promote.len(), 1, "the Promote control is in the tree");
+        assert_eq!(promote[0].action.as_deref(), Some("promote"));
+        let mut rows = vec![];
+        find(&tree, &|n| n.action.as_deref() == Some("rv_pick_0"), &mut rows);
+        assert_eq!(rows.len(), 1, "the queue row is pickable");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    /// A chord verb fired while the menu is up closes it AND runs — one event,
+    /// one dispatcher, whether it came from a row click or the keyboard.
+    #[test]
+    fn a_chord_verb_closes_the_open_menu_and_runs() {
+        let (mut qm, d) = scratch("menuchord");
+        qm.apply_results(&on("menu_open"));
+        assert!(qm.is_menu_open() && !qm.can_undo());
+        qm.apply_results(&on("create_folder"));
+        assert!(!qm.is_menu_open(), "the verb closed the menu");
+        assert!(qm.can_undo(), "and it ran");
         let _ = std::fs::remove_dir_all(d);
     }
 

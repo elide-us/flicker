@@ -9,7 +9,9 @@
 //! 1. Flushes the platform sources ([`WindowSource`] KBM + [`GamepadSource`]
 //!    buttons) into the [`InputState`] snapshot and fills the 120 Hz analog cache
 //!    — all in `flicker-input-device`; the runner only forwards `&WindowEvent`s
-//!    and drives the per-frame flush.
+//!    and drives the per-frame flush. The flush records ordered key/mouse
+//!    transitions, so a press that begins and ends while a frame runs long still
+//!    reaches `update` — late by at most one frame, never dropped.
 //! 2. Computes `dt` since the previous frame.
 //! 3. Calls `App::update(dt, &input)`.
 //! 4. Calls `App::render(renderer)` between `begin_frame` and `end_frame`.
@@ -152,10 +154,9 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.last_update = Some(now);
 
                 self.app.update(dt, &self.input, renderer);
-                // Reset per-frame edges.
-                self.input.mouse_wheel_delta = 0.0;
-                self.input.mouse_left_pressed = false;
-                self.input.clear_frame_text();
+                // Reset every per-frame edge (ordered transition log, text entry,
+                // mouse) in one call; held state survives.
+                self.input.clear_frame_edges();
 
                 if self.app.should_quit() {
                     tracing::info!("app requested quit");

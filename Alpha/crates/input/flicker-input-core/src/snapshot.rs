@@ -171,6 +171,30 @@ fn apply_single_axis_deadzone(value: f32, deadzone: f32) -> f32 {
 }
 
 // ───────────────────────────────────────────────────────────────────
+// Frame edges (ordered discrete transitions)
+// ───────────────────────────────────────────────────────────────────
+
+/// One discrete up→down or down→up transition, recorded in the order the platform
+/// delivered it.
+///
+/// Held-state alone cannot represent a control pressed **and** released inside a
+/// single frame: both writes land on the same snapshot and cancel, so the press
+/// is destroyed rather than delayed. That is exactly what happens whenever a frame
+/// runs long — the platform queues the whole press/release pair and the drain
+/// applies both before anyone reads the snapshot.
+///
+/// Keeping the transitions in arrival order makes a press survive any frame
+/// duration. Only evented controls appear here: keyboard and mouse come from
+/// window events, while gamepad buttons are **polled** each frame and so carry no
+/// ordering to preserve (their edges stay level-derived; the sampler thread that
+/// would give them one is the deferred RT-11 work).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum InputEdge {
+    Key { key: Key, down: bool },
+    Mouse { button: MouseButton, down: bool },
+}
+
+// ───────────────────────────────────────────────────────────────────
 // Input State (polled snapshot)
 // ───────────────────────────────────────────────────────────────────
 
@@ -213,6 +237,11 @@ pub struct InputState {
     /// auto-repeat yet). Driver-set; reset after each `App::update`.
     backspace_edge: bool,
 
+    /// This frame's discrete transitions in arrival order (see [`InputEdge`]).
+    /// Driver-filled during the drain; reset with the other per-frame edges after
+    /// `App::update`. This is what makes a press survive a long frame.
+    edges: Vec<InputEdge>,
+
     // ── Gamepad ──
     gamepads: HashMap<usize, GamepadState>,
 
@@ -238,6 +267,7 @@ impl Default for InputState {
             keys_held: HashSet::new(),
             typed_text: String::new(),
             backspace_edge: false,
+            edges: Vec::new(),
             gamepads: HashMap::new(),
             analog_latch: None,
         }
@@ -265,6 +295,42 @@ impl InputState {
     /// Did Backspace transition up→down this frame? An edge, reset each frame.
     pub fn backspace(&self) -> bool {
         self.backspace_edge
+    }
+
+    // ── Frame edges ──
+
+    /// This frame's discrete transitions, in the order the platform delivered them.
+    ///
+    /// The `Resolver` walks these to classify Press/Release; scenes that poll raw
+    /// keys should prefer [`pressed`](Self::pressed) over comparing
+    /// [`key_down`](Self::key_down) against a previous-frame bool, which cannot
+    /// see a key that was pressed and released inside one frame.
+    pub fn edges(&self) -> &[InputEdge] {
+        &self.edges
+    }
+
+    /// Did `key` transition up→down at least once this frame?
+    ///
+    /// True even if it was also released before the frame ended — the case a
+    /// `key_down` + `*_prev` bool comparison silently drops on a long frame.
+    pub fn pressed(&self, key: Key) -> bool {
+        self.edges
+            .iter()
+            .any(|e| matches!(e, InputEdge::Key { key: k, down: true } if *k == key))
+    }
+
+    /// Did `key` transition down→up at least once this frame?
+    pub fn released(&self, key: Key) -> bool {
+        self.edges
+            .iter()
+            .any(|e| matches!(e, InputEdge::Key { key: k, down: false } if *k == key))
+    }
+
+    /// Did `button` transition up→down at least once this frame?
+    pub fn mouse_pressed(&self, button: MouseButton) -> bool {
+        self.edges
+            .iter()
+            .any(|e| matches!(e, InputEdge::Mouse { button: b, down: true } if *b == button))
     }
 
     /// Is any input (keyboard, mouse, or gamepad) bound to `action`
@@ -397,11 +463,23 @@ impl InputState {
         self.backspace_edge = true;
     }
 
-    /// Clear this frame's text-entry edges. The driver calls this after
-    /// `App::update`, alongside the mouse-edge resets.
-    pub fn clear_frame_text(&mut self) {
+    /// Record a discrete transition (driver hook).
+    ///
+    /// Push **only on an actual state change** — the platform re-delivers a held
+    /// key as auto-repeat, and a repeat must not read as a fresh press.
+    pub fn push_edge(&mut self, edge: InputEdge) {
+        self.edges.push(edge);
+    }
+
+    /// Clear every per-frame edge: the ordered transition log, the text-entry
+    /// edges, and the mouse edges. The driver calls this once after `App::update`,
+    /// so held state survives and only the this-frame-only signals reset.
+    pub fn clear_frame_edges(&mut self) {
+        self.edges.clear();
         self.typed_text.clear();
         self.backspace_edge = false;
+        self.mouse_left_pressed = false;
+        self.mouse_wheel_delta = 0.0;
     }
 
     /// Update a mouse button's held state.

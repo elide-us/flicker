@@ -12,9 +12,9 @@
 //! bake.
 
 use flicker::script::{Value, ValueMap};
-use flicker_texture::{BlendMode, MapKind, NoiseKind, CHANNEL_COUNT};
+use flicker_texture::{BlendMode, NoiseKind, CHANNEL_COUNT};
 
-use crate::{Sablework, MAP_IDS};
+use crate::{Sablework, LIT_ID, MAP_IDS, VIEW_COUNT};
 
 /// Read a slider's written-back value, if the walker published one this frame.
 fn slid(results: &ValueMap, key: &str) -> Option<f64> {
@@ -110,6 +110,8 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
         ("metalness", 3),
         ("metalness_mod", 4),
         ("ao", 5),
+        ("emissive_strength", 6),
+        ("emissive_band", 7),
     ] {
         if let Some(v) = slid(results, key) {
             let v = v as f32;
@@ -119,7 +121,9 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
                 2 => &mut out.roughness_mod,
                 3 => &mut out.metalness,
                 4 => &mut out.metalness_mod,
-                _ => &mut out.ao,
+                5 => &mut out.ao,
+                6 => &mut out.emissive_strength,
+                _ => &mut out.emissive_band,
             };
             // Signed knobs run -1..1; the rest 0..1. The Lua's `min` already says
             // so, but the recipe is the thing that must stay valid whatever a
@@ -156,17 +160,26 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     // ── view-only: which map the swatch shows ──
     // Clicking a tab picks it outright; the bumpers step. Both arrive here as
     // result NAMES, so the pad and the pointer are the same event.
-    for (i, id) in MAP_IDS.iter().enumerate() {
+    // The LIT view rides the same tab vocabulary as the six flat maps, so the
+    // bumpers walk all seven and a click picks any of them outright.
+    for (i, id) in MAP_IDS.iter().chain([&LIT_ID]).enumerate() {
         if results.is_on(id) {
-            bench.sel_map = i.min(MapKind::ALL.len() - 1);
+            bench.sel_map = i.min(VIEW_COUNT - 1);
         }
     }
-    let maps = MAP_IDS.len();
     if results.is_on("map_next") {
-        bench.sel_map = (bench.sel_map + 1) % maps;
+        bench.sel_map = (bench.sel_map + 1) % VIEW_COUNT;
     }
     if results.is_on("map_prev") {
-        bench.sel_map = (bench.sel_map + maps - 1) % maps;
+        bench.sel_map = (bench.sel_map + VIEW_COUNT - 1) % VIEW_COUNT;
+    }
+    // The lit sample's own two controls. Neither touches the recipe — they change
+    // how you are LOOKING at the surface, not what it is.
+    if results.is_on("lit_body") {
+        bench.lit.body = bench.lit.body.toggled();
+    }
+    if let Some(v) = toggled(results, "lit_spin") {
+        bench.lit.spinning = v;
     }
 
     // ── the title bar ──
@@ -181,6 +194,14 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     }
     if results.is_on("commit") {
         bench.start_commit();
+    }
+    // ROLL — a whole new instrument in one press: rack, blends, ramp, finish and
+    // glow together. Seeded off the current seed so the sequence is reproducible
+    // rather than clock-driven, which keeps a roll you liked saveable.
+    if results.is_on("roll") {
+        let seed = bench.recipe.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        bench.recipe = flicker_texture::random(seed);
+        edited = true;
     }
     if results.is_on("reseed") {
         // A new seed re-rolls every field at once while keeping the whole rack —

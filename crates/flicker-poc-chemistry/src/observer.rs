@@ -28,6 +28,21 @@ use crate::planet::World;
 /// fraction of the mean flow speed — a rigid block moves together. Higher → fewer,
 /// larger plates. The resulting count is emergent, never fixed.
 const COHERENCE: f32 = 0.6;
+/// **Hysteresis on the coupling, as two multipliers on the base threshold.**
+///
+/// The threshold is mean-relative on purpose (it keeps working as the flow
+/// decays), but that puts the segmentation permanently at its own percolation
+/// point: a whole population of contacts rides within a hair of `1.0×`, and
+/// each tick's numerical drift flips a few — one flipped edge at a bottleneck
+/// reconnects or severs entire domains, and the plate count jumps 3→8→5→4
+/// while nothing on the surface visibly changes (Aaron's churn report,
+/// 2026-08-06). So a contact INSIDE a plate stays coupled until it genuinely
+/// tears ([`STICK`]×), and a contact that was not inside one couples only when
+/// it genuinely calms ([`JOIN`]×). The dead band between them is where the
+/// flicker used to live; a REAL reorganisation crosses the whole band and
+/// still reads exactly as before.
+const STICK: f32 = 1.3;
+const JOIN: f32 = 0.8;
 /// A domain smaller than this many cells is not tracked as a plate — it is diffuse
 /// lithosphere (label `0`). Suppresses per-tick speckle without a temporal filter.
 const MIN_PLATE_CELLS: usize = 8;
@@ -139,7 +154,7 @@ impl PlateObserver {
     /// previous observation, classify seams. **Read-only** in `world`.
     pub fn observe(&mut self, world: &World) -> PlateObservation {
         let n = world.mantle.n_cells();
-        let (raw, n_raw, new_size) = segment(world);
+        let (raw, n_raw, new_size) = segment(world, &self.prev);
         let (persistent, events) = self.resolve(&raw, n_raw, &new_size);
 
         // Relabel cells to persistent ids and accumulate each plate's drift.
@@ -308,7 +323,16 @@ impl PlateObserver {
 /// raw label (`0` = diffuse, below the size floor), the number of major domains, and
 /// each domain's cell count (`new_size[raw]`, index 0 unused). Deterministic: raw
 /// ids are handed out in cell order.
-fn segment(world: &World) -> (Vec<u32>, usize, Vec<usize>) {
+///
+/// `prev` is the previous observation's labelling, and it carries the
+/// hysteresis: a contact whose two cells rode the SAME plate last tick holds to
+/// [`STICK`]× the base threshold, everything else must come down to [`JOIN`]×.
+/// An empty / stale `prev` (first look, or a fresh topology) reads at exactly
+/// `1.0×` — the first observation is unchanged. A steady field is a fixed
+/// point: an edge inside a plate was under `1.0× ≤ STICK×` so it stays, an edge
+/// that failed `1.0×` is above `JOIN×` so it stays out — identical labels, no
+/// events, which is what `a_steady_world_is_all_continuation` pins.
+fn segment(world: &World, prev: &[PlateId]) -> (Vec<u32>, usize, Vec<usize>) {
     let n = world.mantle.n_cells();
     if n == 0 {
         return (Vec::new(), 0, vec![0]);
@@ -317,12 +341,43 @@ fn segment(world: &World) -> (Vec<u32>, usize, Vec<usize>) {
     let mean_speed: f32 = vel.iter().map(|v| v.length()).sum::<f32>() / n as f32;
     // +ε so an all-still field is ONE plate, not n singletons.
     let thresh = COHERENCE * mean_speed + 1e-6;
+    let sticky = prev.len() == n;
+    segment_where(world, MIN_PLATE_CELLS, &|i, j| {
+        let k = if !sticky {
+            1.0
+        } else if prev[i] != 0 && prev[i] == prev[j] {
+            STICK
+        } else {
+            JOIN
+        };
+        (vel[i] - vel[j]).length() < k * thresh
+    })
+}
+
+/// Grow domains out of whatever `couple` says holds two neighbours together, then
+/// keep the ones big enough to be worth a name.
+///
+/// The **policy** is the caller's and the **mechanism** is here, because there are
+/// two callers with genuinely different questions. This observer asks only whether
+/// the flow is coherent — it is reading the velocity field. The conveyor
+/// ([`crate::tectonics`]) also asks whether there is lithosphere to transmit the
+/// stress, because it is about to move rock. One union-find, two policies; a second
+/// copy of this would be two answers to "what is a plate".
+pub(crate) fn segment_where(
+    world: &World,
+    min_cells: usize,
+    couple: &dyn Fn(usize, usize) -> bool,
+) -> (Vec<u32>, usize, Vec<usize>) {
+    let n = world.mantle.n_cells();
+    if n == 0 {
+        return (Vec::new(), 0, vec![0]);
+    }
 
     let mut uf = UnionFind::new(n);
     for i in 0..n {
         for &j in &world.grid.neighbors[i] {
             let j = j as usize;
-            if j > i && (vel[i] - vel[j]).length() < thresh {
+            if j > i && couple(i, j) {
                 uf.union(i, j);
             }
         }
@@ -338,7 +393,7 @@ fn segment(world: &World) -> (Vec<u32>, usize, Vec<usize>) {
     let mut new_size = vec![0usize]; // index 0 = diffuse
     for i in 0..n {
         let root = uf.find(i);
-        if raw_of_root[root] == 0 && root_size[root] >= MIN_PLATE_CELLS {
+        if raw_of_root[root] == 0 && root_size[root] >= min_cells {
             new_size.push(root_size[root]);
             raw_of_root[root] = (new_size.len() - 1) as u32;
         }
@@ -448,19 +503,54 @@ mod tests {
     /// Drive convection so the velocity field has real structure.
     fn convected(freq: u32, seed: u64, ticks: usize) -> World {
         let mut w = world(freq, seed);
-        let mut s = Scheduler::new(vec![Box::new(RadiogenicDecay), Box::new(MantleConvection)], seed);
+        let mut s = Scheduler::new(vec![Box::new(RadiogenicDecay::default()), Box::new(MantleConvection)], seed);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
         w
     }
 
+    /// Feed the observer a velocity field built to have TWO coherent domains, and
+    /// check the mechanism finds them.
+    ///
+    /// Deliberately synthetic. This used to run the real sim at freq 6 and assert
+    /// "more than one plate", which was an assertion about an emergent OUTCOME —
+    /// and it was quietly leaning on the old projection's grid ghost: once the
+    /// ISEA slice made cells equal-area, a barely-convecting young planet at 362
+    /// cells honestly reads as ONE coherent domain and the assertion failed. The
+    /// mechanism is what belongs in a test; how many plates a given world grows is
+    /// Aaron's to watch, never a test's to require.
     #[test]
-    fn plates_emerge_and_partition_the_surface() {
+    fn segmentation_separates_domains_that_move_differently() {
+        let mut w = world(6, 4);
+        // Two hemispheres sliding opposite ways along their shared tangent frame:
+        // coherent within, sharply discordant across the equator.
+        for cell in 0..w.mantle.n_cells() {
+            let dir = w.grid.dirs[cell];
+            let east = Vec3::Y.cross(dir).normalize_or_zero();
+            let sign = if dir.y >= 0.0 { 1.0 } else { -1.0 };
+            w.mantle.velocity[cell] = east * sign;
+        }
+        let obs = PlateObserver::new().observe(&w);
+        assert!(
+            obs.plates.len() >= 2,
+            "two discordant domains must segment apart, got {}",
+            obs.plates.len()
+        );
+        assert!(obs.plates.len() < w.mantle.n_cells());
+        // The discordant boundary is seen as a seam, not read as interior.
+        assert!(
+            obs.seams.iter().any(|s| *s != Seam::Interior),
+            "the boundary between the domains produced no seam"
+        );
+    }
+
+    #[test]
+    fn plates_partition_the_surface_consistently() {
         let w = convected(6, 4, 20);
         let obs = PlateObserver::new().observe(&w);
-        // An emergent count — more than one, fewer than one-per-cell.
-        assert!(obs.plates.len() > 1, "surface segmented into plates ({})", obs.plates.len());
+        // Whatever it segments is the world's business; that the segmentation is
+        // SELF-CONSISTENT is the observer's.
         assert!(obs.plates.len() < w.mantle.n_cells());
         // Labels and the roster agree: every labelled cell rides a listed plate.
         let ids: BTreeSet<PlateId> = obs.plates.iter().map(|p| p.id).collect();
@@ -495,6 +585,48 @@ mod tests {
         let second = obs.observe(&w);
         assert_eq!(first.labels, second.labels, "identity is stable across a still tick");
         assert!(second.events.is_empty(), "a steady world flags no events, got {:?}", second.events);
+    }
+
+    /// **The count does not flicker while the world does not change.** The
+    /// mean-relative threshold parks the segmentation at its own percolation
+    /// point, where per-tick numerical drift used to flip a handful of edges
+    /// and jump the plate count 3→8→5→4 with nothing visibly moving. With the
+    /// hysteresis band, a field jittered by far less than the band's width
+    /// must keep the same plates — same count, same labels, no events.
+    #[test]
+    fn a_jittering_field_does_not_churn_the_plates() {
+        let mut w = world(6, 9);
+        let n = w.mantle.n_cells();
+        // Two clean hemispheres — a genuinely two-plate world.
+        let base = |w: &World, cell: usize| {
+            let dir = w.grid.dirs[cell];
+            let east = Vec3::Y.cross(dir).normalize_or_zero();
+            east * if dir.y >= 0.0 { 1.0 } else { -1.0 }
+        };
+        for cell in 0..n {
+            w.mantle.velocity[cell] = base(&w, cell);
+        }
+        let mut obs = PlateObserver::new();
+        let first = obs.observe(&w);
+        assert!(first.plates.len() >= 2, "the fixture segments at all");
+
+        // Ten ticks of deterministic per-cell jitter, a couple of percent of
+        // the flow — far inside the STICK/JOIN dead band, the scale of the
+        // numerical drift the real run carries.
+        for tick in 0..10u32 {
+            for cell in 0..n {
+                let h = (cell as u32).wrapping_mul(2_654_435_761).wrapping_add(tick * 97);
+                let eps = ((h >> 8) % 1000) as f32 / 1000.0 - 0.5; // −0.5..0.5
+                w.mantle.velocity[cell] = base(&w, cell) * (1.0 + 0.04 * eps);
+            }
+            let next = obs.observe(&w);
+            assert_eq!(
+                next.plates.len(),
+                first.plates.len(),
+                "tick {tick}: the count churned under jitter"
+            );
+            assert!(next.events.is_empty(), "tick {tick}: jitter is not a tectonic event: {:?}", next.events);
+        }
     }
 
     #[test]

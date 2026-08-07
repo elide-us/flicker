@@ -185,11 +185,12 @@ fn every_declared_intent_reaches_the_dispatcher() {
     fire(&mut bench, "map_prev", true);
     assert_eq!(bench.selected_map(), before, "stepping back does not return");
 
-    // The tabs wrap both ways, so a pad can reach every map without a dead end.
-    for _ in 0..MAP_IDS.len() {
+    // The tabs wrap both ways, so a pad can reach every view without a dead end.
+    // VIEW_COUNT, not MAP_IDS.len(): the LIT view is a seventh tab.
+    for _ in 0..VIEW_COUNT {
         fire(&mut bench, "map_prev", true);
     }
-    assert_eq!(bench.selected_map(), before, "the map tabs do not wrap");
+    assert_eq!(bench.selected_map(), before, "the view tabs do not wrap");
 }
 
 /// Every workbench SLOT the bench fills must actually reach the screen. A slot
@@ -570,5 +571,185 @@ fn switching_maps_switches_the_drawn_texture() {
             })
             .collect();
         assert_eq!(drawn, [want as u32], "selecting {id} drew {drawn:?}");
+    }
+}
+
+// ── the lit preview ────────────────────────────────────────────────────────────
+
+/// The LIT view is the seventh tab, and selecting it swaps the flat swatch for the
+/// rendered sample: the `rtt` node is reserved and NO sprite draws.
+///
+/// Both halves matter. A reserved rect with a sprite still drawing would paint the
+/// flat map over the lit one; a sprite gone with no rect reserved would be a blank
+/// panel, which is exactly how the swatch shipped invisible the first time.
+#[test]
+fn the_lit_tab_reserves_a_sub_scene_instead_of_a_sprite() {
+    load_strings();
+    let styles = load_styles(HUD_UI_ELEMENTS);
+    let mut bench = Sablework::new();
+    fire(&mut bench, LIT_ID, true);
+    assert!(bench.showing_lit(), "the lit tab did not select");
+
+    let tree = tree_of(&bench);
+    let host = bench.ui_host.as_ref().expect("component library");
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let frame =
+        run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host));
+
+    let slot = frame
+        .rtts
+        .iter()
+        .find(|s| s.id == "sw_lit")
+        .expect("the lit view reserved no sub-scene slot");
+    assert_eq!(slot.source, "sablework_lit", "the slot names no stage source");
+    assert!(slot.w > 100.0 && slot.h > 100.0, "the lit slot is {}x{}", slot.w, slot.h);
+
+    let sprites = frame
+        .commands
+        .iter()
+        .filter(|c| matches!(c, HudCommand::Sprite { w, .. } if *w > 1.0))
+        .count();
+    assert_eq!(sprites, 0, "a flat map still draws over the lit sample");
+}
+
+/// A flat tab reserves NO sub-scene — otherwise the offscreen pass would render
+/// every frame to composite behind an opaque swatch, for nothing.
+#[test]
+fn a_flat_tab_costs_no_sub_scene() {
+    load_strings();
+    let styles = load_styles(HUD_UI_ELEMENTS);
+    let mut bench = Sablework::new();
+    fire(&mut bench, "map_normal", true);
+    let tree = tree_of(&bench);
+    let host = bench.ui_host.as_ref().expect("component library");
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let frame =
+        run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host));
+    assert!(
+        frame.rtts.iter().all(|s| s.id != "sw_lit"),
+        "the lit sub-scene renders while a flat map is showing"
+    );
+}
+
+/// The lit view's own controls change how you LOOK at the surface, never what it
+/// is — so neither may trigger a re-bake.
+#[test]
+fn the_lit_controls_are_not_recipe_edits() {
+    let mut bench = Sablework::new();
+    let body = bench.lit.body;
+    assert!(!fire(&mut bench, "lit_body", true), "swapping the body is not an edit");
+    assert_ne!(bench.lit.body, body, "the body did not swap");
+    assert!(!fire(&mut bench, "lit_spin", false), "stopping the spin is not an edit");
+    assert!(!bench.lit.spinning);
+}
+
+/// NO CONTROL DRAWS AN EMPTY LABEL.
+///
+/// The gate that would have caught 14 blank boxes shipping. `label_bind` was
+/// listed among the walker's binds but never actually READ, so every button
+/// carrying one drew `""` — and the token gate passed straight over it, because
+/// an empty string does not start with `$`. Presence-of-text was asserted;
+/// non-emptiness was not.
+#[test]
+fn no_control_draws_an_empty_label() {
+    load_strings();
+    let blank = draw()
+        .iter()
+        .filter(|c| matches!(c, HudCommand::Text { text, .. } if text.trim().is_empty()))
+        .count();
+    assert_eq!(blank, 0, "{blank} controls drew an empty label — a bound label that resolved to nothing");
+}
+
+/// EVERY BUTTON CAN FIRE.
+///
+/// The walker fires a node's `action`; its `id` is only the FOCUS id. A button
+/// carrying an id alone is a dead control that still draws, highlights and
+/// hovers — which is exactly how every button on this bench shipped inert while
+/// the sliders worked.
+#[test]
+fn every_button_can_fire() {
+    fn walk<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
+        if n.component == "button" {
+            out.push(n);
+        }
+        for c in n.children.iter().chain(n.slots.values().flatten()) {
+            walk(c, out);
+        }
+    }
+    let tree = tree_of(&Sablework::new());
+    let mut buttons = Vec::new();
+    walk(&tree, &mut buttons);
+    assert!(buttons.len() >= 20, "only {} buttons found — the tree did not expand", buttons.len());
+
+    let dead: Vec<String> = buttons
+        .iter()
+        .filter(|b| b.action.as_deref().unwrap_or("").is_empty())
+        .map(|b| b.id.clone())
+        .collect();
+    assert!(dead.is_empty(), "buttons that fire nothing: {dead:?}");
+}
+
+/// Every action a button fires must reach the dispatcher and DO something — the
+/// other half of the same failure. A button wired to a name nothing handles is
+/// just as dead as one with no action at all.
+#[test]
+fn every_button_action_is_handled() {
+    fn walk<'a>(n: &'a UiNode, out: &mut Vec<String>) {
+        if n.component == "button" {
+            if let Some(a) = n.action.as_deref() {
+                out.push(a.to_string());
+            }
+        }
+        for c in n.children.iter().chain(n.slots.values().flatten()) {
+            walk(c, out);
+        }
+    }
+    let mut actions = Vec::new();
+    walk(&tree_of(&Sablework::new()), &mut actions);
+    actions.sort();
+    actions.dedup();
+
+    // Every piece of state a button is allowed to move. Incomplete here means a
+    // WORKING control reads as dead — which this list already did once, for the
+    // bake rung.
+    let observe = |b: &Sablework| {
+        (
+            b.recipe().clone(),
+            b.selected_map(),
+            b.selected_voice(),
+            b.lit.body,
+            b.lit.spinning,
+            b.commit_state.clone(),
+            b.bake_rung().px,
+        )
+    };
+    for action in actions {
+        // Fired from TWO starting views, because a selection is idempotent: picking
+        // the tab already showing changes nothing and is correct. The action has to
+        // move something from at least one reachable state.
+        let moved = ["map_base", "map_metal"].iter().any(|from| {
+            let mut bench = Sablework::new();
+            fire(&mut bench, from, true);
+            let before = observe(&bench);
+            let edited = fire(&mut bench, &action, true);
+            edited || observe(&bench) != before
+        });
+        assert!(moved, "`{action}` fires but changes nothing from any starting state");
     }
 }

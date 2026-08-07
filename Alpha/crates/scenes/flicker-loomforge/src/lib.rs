@@ -49,15 +49,19 @@ use stage::{StageReq, StageRig};
 const HUD_UI_ELEMENTS: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
 
-/// The pack the bench opens with — Katanami is the rich one (23 states, full TAE:
-/// hitbox/cancel windows, footsteps, any-state hit/death edges).
-const PACK_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters/katanami/Katanami.pack.json");
-/// The base body rig, and the clip library the pack's state clips resolve against
-/// (same pairing `flicker-packeditor` used).
+/// The pack the bench opens with — the GOLEM baseline pack (seeded 2026-08-04 from the
+/// retired PrismHumanBaseA exemplar): locomotion states over the shared retarget clips.
+const PACK_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../content/package/characters/GolemBase_Low/GolemBase_Low.pack.json"
+);
+/// The base body rig, and the clip library the pack's state clips resolve against —
+/// THE REFERENCE (GolemBase_Low) since the 2026-08-04 content sweep.
 const BASE_DIR: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters/PrismHumanBaseA");
-const CLIPS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters/katanami");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters/GolemBase_Low");
+// The shared retarget library — the katanami-era per-character clip bundle was deleted
+// with the example content (2026-08-04 audit); clips resolve by canonical bone name.
+const CLIPS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/retarget/clips/locomotion");
 /// Root the Pack Browser scans for `*.pack.json` — the character tree.
 const CONTENT_CHARACTERS: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters");

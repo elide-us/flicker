@@ -12,9 +12,16 @@
 //! mouse buttons, position) lives in the persistent snapshot and survives across
 //! frames; the per-frame edges (`mouse_left_pressed`, `mouse_wheel_delta`,
 //! typed-text, backspace) are accumulated here and reset by the runner after
-//! `App::update`, exactly as before — a pure relocation.
+//! `App::update`.
+//!
+//! The drain also records each state change as an ordered
+//! [`InputEdge`](flicker_input_core::InputEdge). Replaying into held-state alone
+//! is lossy: a key pressed *and* released while a frame ran long applies both
+//! writes to the same snapshot, and the press disappears instead of arriving late.
+//! Keeping the transitions in arrival order is what lets the core `Resolver` fire
+//! that press no matter how long the frame took.
 
-use flicker_input_core::{InputState, Key, MouseButton};
+use flicker_input_core::{InputEdge, InputState, Key, MouseButton};
 use glam::Vec2;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseScrollDelta, WindowEvent};
@@ -115,6 +122,9 @@ fn apply_op(op: &KbmOp, out: &mut InputState) {
     match op {
         KbmOp::CursorMoved(pos) => out.mouse_position = *pos,
         KbmOp::MouseButton { button, down } => {
+            if out.mouse_button_down(*button) != *down {
+                out.push_edge(InputEdge::Mouse { button: *button, down: *down });
+            }
             if *button == MouseButton::Left && *down && !out.mouse_left {
                 out.mouse_left_pressed = true;
             }
@@ -122,6 +132,11 @@ fn apply_op(op: &KbmOp, out: &mut InputState) {
         }
         KbmOp::Wheel(scroll) => out.mouse_wheel_delta += *scroll,
         KbmOp::Key { key, down } => {
+            // Only an actual state change is an edge: winit re-delivers a held key
+            // as auto-repeat, which must not read as a fresh press.
+            if out.key_down(*key) != *down {
+                out.push_edge(InputEdge::Key { key: *key, down: *down });
+            }
             if *down && *key == Key::Backspace {
                 out.flag_backspace();
             }
@@ -362,6 +377,85 @@ mod tests {
         apply_op(&KbmOp::Typed("ab".to_string()), &mut input);
         apply_op(&KbmOp::Typed("c".to_string()), &mut input);
         assert_eq!(input.typed(), "abc");
+    }
+
+    /// THE long-frame case: a key pressed AND released while one frame ran long
+    /// arrives as two ordered edges, even though the held-state it leaves behind is
+    /// identical to never having touched the key.
+    #[test]
+    fn press_and_release_in_one_drain_survives_as_edges() {
+        let mut src = WindowSource::new();
+        src.buffer.push(KbmOp::Key { key: Key::Space, down: true });
+        src.buffer.push(KbmOp::Key { key: Key::Space, down: false });
+
+        let mut input = InputState::new();
+        src.drain_into(&mut input);
+
+        // Held-state alone says nothing happened — this is the lossy view.
+        assert!(!input.key_down(Key::Space));
+        // The ordered log still carries the press, in order.
+        assert_eq!(
+            input.edges(),
+            &[
+                InputEdge::Key { key: Key::Space, down: true },
+                InputEdge::Key { key: Key::Space, down: false },
+            ]
+        );
+        assert!(input.pressed(Key::Space));
+        assert!(input.released(Key::Space));
+    }
+
+    /// Auto-repeat re-delivers a held key as further `Pressed` events. Those are not
+    /// transitions and must not read as fresh presses.
+    #[test]
+    fn auto_repeat_does_not_push_duplicate_edges() {
+        let mut src = WindowSource::new();
+        src.buffer.push(KbmOp::Key { key: Key::A, down: true });
+        src.buffer.push(KbmOp::Key { key: Key::A, down: true });
+        src.buffer.push(KbmOp::Key { key: Key::A, down: true });
+
+        let mut input = InputState::new();
+        src.drain_into(&mut input);
+
+        assert!(input.key_down(Key::A));
+        assert_eq!(input.edges(), &[InputEdge::Key { key: Key::A, down: true }]);
+    }
+
+    /// Two full taps inside one stalled frame stay two presses, in order.
+    #[test]
+    fn repeated_taps_in_one_drain_all_survive() {
+        let mut src = WindowSource::new();
+        for _ in 0..2 {
+            src.buffer.push(KbmOp::Key { key: Key::V, down: true });
+            src.buffer.push(KbmOp::Key { key: Key::V, down: false });
+        }
+
+        let mut input = InputState::new();
+        src.drain_into(&mut input);
+
+        let presses = input
+            .edges()
+            .iter()
+            .filter(|e| matches!(e, InputEdge::Key { key: Key::V, down: true }))
+            .count();
+        assert_eq!(presses, 2);
+        assert_eq!(input.edges().len(), 4);
+    }
+
+    /// Mouse buttons take the same path as keys.
+    #[test]
+    fn mouse_click_in_one_drain_survives_as_edges() {
+        let mut src = WindowSource::new();
+        src.buffer.push(KbmOp::MouseButton { button: MouseButton::Left, down: true });
+        src.buffer.push(KbmOp::MouseButton { button: MouseButton::Left, down: false });
+
+        let mut input = InputState::new();
+        src.drain_into(&mut input);
+
+        assert!(!input.mouse_left);
+        assert!(input.mouse_pressed(MouseButton::Left));
+        // The pre-existing one-shot edge flag keeps its old meaning.
+        assert!(input.mouse_left_pressed);
     }
 
     #[test]

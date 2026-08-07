@@ -125,14 +125,18 @@ pub fn commit(
 /// shipped.
 ///
 /// So: the scalar maps go out as **L8** (their red channel, which is the value),
-/// and the two colour maps as **RGB8** (the bake guarantees an opaque alpha, and
+/// and the three-channel maps as **RGB8** (the bake guarantees an opaque alpha, and
 /// `every_baked_map_is_opaque` in `flicker-texture` is what lets this drop it).
 /// A decoder widens back to RGBA8 on load; PNG carries its own channel count, so
 /// nothing has to be told which form a file is in.
 fn encode_png(kind: MapKind, rgba: &[u8], size: u32) -> Result<Vec<u8>, image::ImageError> {
+    // Three-channel maps are the COLOURS (`is_color`) plus `Normal`, which is a
+    // vector rather than a colour but still needs all three components. Everything
+    // else is one number replicated, and shipping THOSE as RGB8 wastes two thirds
+    // of the file — while shipping a colour as L8 destroys its hue, which is how
+    // an `Emit` map would have lost the whole point of being a colour.
     let (color, pixels) = match kind {
-        // Colour: keep three channels, drop the constant alpha.
-        MapKind::BaseColor | MapKind::Normal => (
+        _ if kind.is_color() || kind == MapKind::Normal => (
             image::ColorType::Rgb8,
             rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>(),
         ),
@@ -276,9 +280,12 @@ mod tests {
         for kind in MapKind::ALL {
             let path = out.dir.join(format!("Granite_{}.png", kind.role()));
             let img = image::open(&path).expect("map decodes");
-            let expect_color = match kind {
-                MapKind::BaseColor | MapKind::Normal => image::ColorType::Rgb8,
-                _ => image::ColorType::L8,
+            // COLOUR maps (base colour, emit) and `Normal` keep three channels; a
+            // colour shipped as L8 would lose its hue entirely.
+            let expect_color = if kind.is_color() || kind == MapKind::Normal {
+                image::ColorType::Rgb8
+            } else {
+                image::ColorType::L8
             };
             assert_eq!(img.color(), expect_color, "{kind:?} shipped in the wrong form");
 

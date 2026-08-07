@@ -971,6 +971,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-atc"
+version = "0.1.0"
+dependencies = [
+ "fastrand",
+ "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-shell",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "flicker-celestial"
 version = "0.1.0"
 dependencies = [
@@ -1016,6 +1029,8 @@ dependencies = [
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
+ "flicker-skeletal",
+ "tracing",
 ]
 
 [[package]]
@@ -1039,6 +1054,23 @@ dependencies = [
  "flicker-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flicker-godmode"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-materials",
+ "flicker-poc-chemistry",
+ "flicker-shell",
+ "flicker-worldgrid",
+ "flicker-worldtile",
+ "glam",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1156,12 +1188,7 @@ dependencies = [
 name = "flicker-poc-chemistry"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "flicker",
- "flicker-input-core",
- "flicker-input-router",
  "flicker-materials",
- "flicker-shell",
  "flicker-worker",
  "flicker-worldgrid",
  "flicker-worldstate",
@@ -1169,8 +1196,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1426,6 +1451,16 @@ dependencies = [
  "flicker-materials",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "flicker-worldtile"
+version = "0.1.0"
+dependencies = [
+ "flicker-materials",
+ "flicker-poc-chemistry",
+ "flicker-worldgrid",
+ "glam",
 ]
 
 [[package]]
@@ -3015,12 +3050,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker-assetpipeline",
+ "flicker-atc",
  "flicker-clicktrainer",
  "flicker-content",
  "flicker-controllertester",
+ "flicker-godmode",
  "flicker-loomforge",
  "flicker-pocclusters",
- "flicker-pocepochs",
  "flicker-quartermaster",
  "flicker-sablework",
  "flicker-shell",

@@ -5,8 +5,9 @@
 //! **dual** ([`crate::mesh`]). An interior vertex has six incident triangles, so
 //! its dual cell is a hexagon — except the apex, where only five faces meet,
 //! which dualises to the lone **pentagon**. Adjacency is correct by construction
-//! and independent of where the points sit, so a later slice can swap the cheap
-//! projection here for true ISEA without touching the graph.
+//! and independent of where the points sit — which is why the equal-area ISEA map
+//! ([`crate::isea`]) could later replace the placement rule without touching the
+//! graph this slice built.
 
 use glam::Vec3;
 use std::collections::VecDeque;
@@ -25,9 +26,9 @@ pub struct Patch {
     /// Adjacency (feeds `EpochCtx.neighbors`): length 5 for the centre pentagon,
     /// 6 for every interior hex, fewer for the construction-boundary fringe.
     pub neighbors: Vec<Vec<u32>>,
-    /// Per-cell area on the unit sphere (≈ equal among interior hexes; the
-    /// pentagon is smaller). The cheap projection here leaves real variance that
-    /// the ISEA slice removes — see the area test's tolerance.
+    /// Per-cell area on the unit sphere — equal among interior hexes under the
+    /// equal-area map ([`crate::isea`]); the pentagon is genuinely smaller,
+    /// because it fans five triangles rather than six.
     pub area: Vec<f32>,
     /// `true` only for the centre cell (the one degree-5 defect).
     pub is_pentagon: Vec<bool>,
@@ -216,8 +217,9 @@ mod tests {
         let mean = sum / hex_areas.len() as f32;
         // The pentagon is genuinely smaller than a hex (five wedges, not six).
         assert!(p.area[0] > 0.0 && p.area[0] < mean, "pentagon should be smaller");
-        // Cheap projection ⇒ loose bound; the ISEA slice tightens this toward 1.0.
-        assert!(hi / lo < 2.0, "interior hex area spread too wide: {}", hi / lo);
+        // The equal-area map holds these together; the residual is Snyder's
+        // vertex-ray crease (see `crate::isea`), not the projection drifting.
+        assert!(hi / lo < 1.10, "interior hex area spread too wide: {}", hi / lo);
     }
 
     #[test]

@@ -1,0 +1,290 @@
+{
+  "_meta": {
+    "what": "THE WORLD PIPELINE — one entry per transformation, in run order. This file is the authority on WHICH processes run, in WHAT order, and behind WHAT gate. Remove an entry and that process leaves the pipeline; reorder entries and the pipeline reorders; retune a gate and the process waits for the new condition. Adding NEW physics still means writing the named transformation in Rust (crates/flicker-poc-chemistry) — this file composes and gates what exists.",
+    "gates": "A gate is a condition the scheduler measures against the planet's own solved state EVERY tick; the process runs only while it holds. Gates read STATE, never the clock — there is deliberately no way to reference the tick number or the date here, because nothing in this world is scheduled (a process that should start 'later' must name the chemistry that makes it later). `true` means always-on (the boundary inputs and the interior's own heat).",
+    "grammar": "A gate is: true | false | {\"read\", \"op\", \"value\"} | {\"all\": [...]} | {\"any\": [...]}. `read` is a planet-state field, or `lever:<name>` for a live lever. `op` is one of < <= > >=. `value` is a number, or `lever:<name>` to compare against a lever.",
+    "reads": "Planet-state fields a gate may read: mean_mantle_temp_k · min_mantle_temp_k · max_mantle_temp_k · differentiation_frac · crust_frac · continental_frac · lid_frac · mean_elevation_m · sea_level_m · submerged_frac · ocean_mass_kg · atmosphere_mass_kg · water_vapour_kg · delivered_water_kg · p_co2 · greenhouse_k · mean_strata · compounds_kg. Levers: any numeric field of Levers, e.g. lever:water_budget_kg.",
+    "discipline": "Extreme-not-mean: a gate summarising a per-cell threshold reads the EXTREME that admits work (max_mantle_temp_k for 'anywhere still hot enough', min_mantle_temp_k for 'anywhere cold enough'), never the mean — the mean silently switches a working stage off while its anomalies still work. Where a gate's number is coupled to a constant inside the transformation's own tick (so the stage would no-op if they drifted), a drift test in Rust pins them equal.",
+    "views": "Each process may name the VIEW that shows it working (the bench's field buttons: heat - core - plates - seams - relief - coast - motion - rain - strata - ore). The surface uses it to light the instruments worth looking at during the era a process is live, and the gate-pause card offers it as a one-click switch. Leave it EMPTY when a process genuinely has nothing to show on the globe - that is an honest answer, and better than sending someone to stare at a view where nothing is happening. An unknown name is a loud failure at load."
+  },
+  "processes": [
+    {
+      "runs": "RadiogenicDecay",
+      "summary": "The heat from inside: U and K decay on their real half-lives warms the mantle. A young planet is hotter; the decline is the planet's own clock winding down.",
+      "gate": true,
+      "watch": "The mantle view stays bright while the fuel lasts; every era after this one is paced by how fast this heat leaks away.",
+      "view": "heat"
+    },
+    {
+      "runs": "CoreFormation",
+      "summary": "The iron catastrophe: while any region is still hot enough for iron to segregate, the siderophiles (Fe, Ni, Co, Au, Pt, …) drain from the mantle to the core. This is why the crust has almost no gold of its own.",
+      "gate": {
+        "all": [
+          {
+            "read": "max_mantle_temp_k",
+            "op": ">",
+            "value": 1800.0
+          },
+          {
+            "read": "differentiation_frac",
+            "op": "<",
+            "value": 0.999
+          }
+        ]
+      },
+      "watch": "The differentiation view sweeps outward from the hot upwellings as the core percentage climbs; the readout's core line rises toward ~30%.",
+      "view": "core"
+    },
+    {
+      "runs": "MantleConvection",
+      "summary": "The mantle overturns down its own temperature gradient — the flow the plates ride. Never stops while the planet lives.",
+      "gate": true,
+      "watch": "The heat view churns — bright upwellings and dark downwellings. Plates will later ride exactly this pattern, so its shape is tomorrow's map.",
+      "view": "heat"
+    },
+    {
+      "runs": "Outgassing",
+      "summary": "The hot rock exhales its volatiles as real gas compounds — fierce in the magma era, tapering as the interior cools past each gas's release floor. Shuts for good once the hottest cell is colder than the most willing gas (nitrogen, 600 K).",
+      "gate": {
+        "read": "max_mantle_temp_k",
+        "op": ">",
+        "value": 600.0
+      },
+      "watch": "Air shells build over the bare ball — steam, CO₂ and sulfur first. The veil thickens through the magma era and the greenhouse line climbs.",
+      "view": ""
+    },
+    {
+      "runs": "CrustGeneration",
+      "summary": "The surface freezes over: a cell whose mantle has cooled below the solidus grows a mafic rind toward saturation thickness — sea floor blanketing the world as it cools. The COLDEST cell opens this gate: the first floor freezes over the coldest spot.",
+      "gate": {
+        "read": "min_mantle_temp_k",
+        "op": "<=",
+        "value": 3700.0
+      },
+      "watch": "The first dark sea-floor speckles appear over the coldest spots and spread until the lid closes. Continents come LATER, from collisions — this is only the floor.",
+      "view": "coast"
+    },
+    {
+      "runs": "Volcanism",
+      "summary": "Hot plumes erupt THROUGH the lid, piling lava and venting dissolved gas. Needs a lid to come through and melt to come through with; shuts forever once no cell stands above the melt floor — the volcanically-dead old age of a world.",
+      "gate": {
+        "all": [
+          {
+            "read": "lid_frac",
+            "op": ">",
+            "value": 0.0
+          },
+          {
+            "read": "max_mantle_temp_k",
+            "op": ">",
+            "value": 1200.0
+          }
+        ]
+      },
+      "watch": "Bright eruption points pierce the young lid over the hottest plumes, piling relief and venting gas. When this shuts, the world's mountain-building loses one of its engines.",
+      "view": "heat"
+    },
+    {
+      "runs": "WaterDelivery",
+      "summary": "The volatile infall — comets raining the ocean's budget in over a ~1 BY tail (63% by 1 BY, 95% by 3 BY). What it lands ON decides what it arrives AS: the molten share flashes to steam, only solid ground receives standing water. Goes dark when the budget has arrived, or while the sea already covers the target fraction (the coverage lever; >= 1 disables the cutoff). The cutoff only measures once a lid exists: before any ground stands, the first puddle is a film over a world with no relief, submerged reads 100%, and a coverage number on that world means nothing.",
+      "gate": {
+        "all": [
+          {
+            "read": "delivered_water_kg",
+            "op": "<",
+            "value": "lever:water_budget_kg"
+          },
+          {
+            "any": [
+              {
+                "read": "lever:water_coverage_target",
+                "op": ">=",
+                "value": 1.0
+              },
+              {
+                "read": "lid_frac",
+                "op": "<=",
+                "value": 0.0
+              },
+              {
+                "read": "submerged_frac",
+                "op": "<",
+                "value": "lever:water_coverage_target"
+              }
+            ]
+          }
+        ]
+      },
+      "watch": "The delivered fraction climbs tick by tick — steam over magma at first, standing water once ground exists. Watch the progress line, not the globe: the sea appears only when the rain can land.",
+      "view": ""
+    },
+    {
+      "runs": "WaterCycle",
+      "summary": "The conserved sea ↔ sky exchange: the boil (no sea stands on magma), the rain (vapour above saturation falls — but only where solid ground can receive it), and the draw (a dry warming air pulls the sea back up). Opens when there is a sea to move, or steam aloft AND ground to rain on.",
+      "gate": {
+        "any": [
+          {
+            "read": "ocean_mass_kg",
+            "op": ">",
+            "value": 0.0
+          },
+          {
+            "all": [
+              {
+                "read": "water_vapour_kg",
+                "op": ">",
+                "value": 0.0
+              },
+              {
+                "read": "lid_frac",
+                "op": ">",
+                "value": 0.0
+              }
+            ]
+          }
+        ]
+      },
+      "watch": "Sea level starts answering the sky: rain fills basins, evaporation dries the margins. The submerged fraction becomes a living number.",
+      "view": "coast"
+    },
+    {
+      "runs": "CarbonSink",
+      "summary": "A standing sea eats the carbon hotbox: dissolved CO₂ tracks Henry's law against the sky, and the excess precipitates as calcite onto submerged calcium-bearing beds — the abiotic reason an old wet world trends toward a nitrogen sky. No sea, no sink.",
+      "gate": {
+        "read": "ocean_mass_kg",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "The CO₂ line starts falling as the sea drinks it and the floor turns it to stone; the greenhouse loosens and the surface cools toward temperate.",
+      "view": ""
+    },
+    {
+      "runs": "Biosphere",
+      "summary": "Life fixes the air's carbon into tissue and exhales oxygen; decomposers rot what dies, and what gets buried first escapes them (the coal window). Needs a PLACE, not just ingredients: a solid surface over most of the world and a sea genuinely standing on it.",
+      "gate": {
+        "all": [
+          {
+            "read": "lid_frac",
+            "op": ">=",
+            "value": 0.5
+          },
+          {
+            "read": "submerged_frac",
+            "op": ">",
+            "value": 0.01
+          }
+        ]
+      },
+      "watch": "The life line leaves Barren: tissue mass appears, free oxygen begins its slow climb, and buried carbon starts the coal ledger.",
+      "view": ""
+    },
+    {
+      "runs": "Maturation",
+      "summary": "Burial cooks what it buries: pressure and heat mature buried organics along the coal/oil ladder and lithify sediment. Nothing to cook until stacks are deep enough to bury anything.",
+      "gate": {
+        "read": "mean_strata",
+        "op": ">",
+        "value": 1.0
+      },
+      "watch": "Buried beds cook: sediment lithifies, organics walk the coal/oil ladder. The strata view shows histories hardening in place.",
+      "view": "strata"
+    },
+    {
+      "runs": "LateVeneer",
+      "summary": "Accretion's metal-rich tail, arriving AFTER the core has separated — so its gold and platinum stay in the mantle where fluids can reach them. This is where every accessible precious metal comes from; a planet without a veneer is not worth digging.",
+      "gate": {
+        "read": "differentiation_frac",
+        "op": ">=",
+        "value": 0.6
+      },
+      "watch": "A thin metal-rich rain lands in the mantle — invisible on the globe now, but it is the gold the hydrothermal system will spend the next eons concentrating.",
+      "view": ""
+    },
+    {
+      "runs": "CrustDensification",
+      "summary": "Rock left alone gets heavier: cooling igneous crust takes on the tight, garnet-bearing assemblage geology calls eclogite — the same elements, packed denser. Only mafic rock feels it (a felsic continental pile gains nothing, ever), and it is what gives the world OCEAN BASINS: sea floor is born lighter than the mantle and ends up heavier than it, so old floor rides BELOW the datum and the sea has somewhere to sit instead of spreading over everything. It also decides who subducts — the oldest floor is the densest thing on the planet, so it founders first.",
+      "gate": {
+        "read": "crust_frac",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "The relief view deepens: young ridge crust stands pale and high, old floor darkens and sinks away from it. Watch the coast view for the sea draining off the continents into the basins as they open.",
+      "view": "relief"
+    },
+    {
+      "runs": "Conveyor",
+      "summary": "The tectonic conveyor: rigid crust breaks into plates that ride the mantle flow as Euler-pole rafts; columns physically step cell to cell; collisions subduct or thicken, vacancies freeze ridge crust. A magma ocean has nothing rigid to break into plates.",
+      "gate": {
+        "read": "crust_frac",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "THE map-maker: plates drift as rafts — the motion view shows each column's heading and how far along its next step it has come, the plate view shows who belongs to whom. Ranges thicken where they collide, trenches swallow floor, ridges open behind. Continents with mountain chains, plains and valleys assemble here — this is the view to eyeball for a keeper world.",
+      "view": "motion"
+    },
+    {
+      "runs": "Delamination",
+      "summary": "A mountain root that grows too deep falls off. Past ~70 km of overburden the base of a thickened pile is no longer stable as crust: it changes phase, outweighs the mantle it rests on, and founders — taking the pile's height with it and returning, eventually, as refined arc melt. This is the ceiling on how high ground can stand; without it collisions stack onto stacks forever and a single column can end up taller than the planet is wide.",
+      "gate": {
+        "read": "mean_elevation_m",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "The relief view stops running away: the brightest piles stop climbing and settle back toward the range everything else occupies. Ranges still rise where plates collide — they just stop being able to rise without limit.",
+      "view": "relief"
+    },
+    {
+      "runs": "Hydrothermal",
+      "summary": "The distillation column: hot water circulating through fractured crust leaches trace metal from a great deal of rock and drops it where the fluid dies — the volume ratio that turns grams-per-tonne into ore. Needs rock to leach and fractures to move through.",
+      "gate": {
+        "read": "crust_frac",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "The ore view begins banding: metal leaches from broad hot rock and concentrates along the torn seams. Old seams keep their veins as the plates carry them away.",
+      "view": "ore"
+    },
+    {
+      "runs": "Erosion",
+      "summary": "Weather carves the land: evaporated sea falls as rain, gathers by flow and slope, and moves sediment from the resistant heights to the basins — differential resistance (rocks.json) is the whole mechanism. Rain is evaporated sea, so no ocean means no weather; no crust means nothing to carve.",
+      "gate": {
+        "all": [
+          {
+            "read": "ocean_mass_kg",
+            "op": ">",
+            "value": 0.0
+          },
+          {
+            "read": "crust_frac",
+            "op": ">",
+            "value": 0.0
+          }
+        ]
+      },
+      "watch": "Relief starts softening: peaks shed into basins, coasts grow shelves. Hard beds stand as ridges while soft ones lower — the shapes that survive are the interesting ones. The rain view shows the weather doing it: wet windward slopes, dry ground in their shadow.",
+      "view": "rain"
+    },
+    {
+      "runs": "Crystallization",
+      "summary": "Minerals organise inside beds as they cool and load — the assemblages the rock classifier and the prospector later read. No bed, no assemblage.",
+      "gate": {
+        "read": "crust_frac",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "Beds organise into mineral assemblages — the rock the classifier names and the prospector reads. Quiet on the globe, loud in the ledger.",
+      "view": ""
+    },
+    {
+      "runs": "StrataReconcile",
+      "summary": "The stack's own housekeeping: overburden lithifies and welds alike loaded beds, and past the 20-bed ruled range the guardrail squeezes the most-alike pair regardless — a data-volume cap paid by physics, never a quota.",
+      "gate": {
+        "read": "crust_frac",
+        "op": ">",
+        "value": 0.0
+      },
+      "watch": "Stack depths settle: burial welds alike beds and the 20-bed range holds. The mean-strata line breathes instead of climbing forever.",
+      "view": "strata"
+    }
+  ]
+}

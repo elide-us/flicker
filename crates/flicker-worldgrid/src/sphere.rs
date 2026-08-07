@@ -10,10 +10,11 @@
 //! [`CellId`] packing that face with the cell's Morton key within it; cells are
 //! emitted in `(shard, Morton)` order for cache locality on the per-key scan.
 //!
-//! Positions here use the cheap normalised-barycentric (gnomonic-ish)
-//! projection. The graph, shards and ids are final; the **equal-area ISEA
-//! positioning is a later slice** (3b) — it moves points and tightens the area
-//! variance this slice merely reports, without touching adjacency.
+//! Positions come from the **equal-area ISEA map** ([`crate::isea`], Slice 3b),
+//! so cells carry the same area wherever they sit — which is what lets the
+//! ledgers store absolute mass and the tectonic conveyor treat one hex step as
+//! one distance. Adjacency, shards and ids are independent of the projection and
+//! were settled in Slice 3.
 
 use glam::Vec3;
 
@@ -42,8 +43,9 @@ pub struct Sphere {
     /// Adjacency (feeds `EpochCtx.neighbors`): 5 for the twelve pentagons, 6 for
     /// every hex. The sphere is closed, so there are no boundary cells.
     pub neighbors: Vec<Vec<u32>>,
-    /// Per-cell area on the unit sphere (total ≈ 4π). Variance is the cheap
-    /// projection's; the ISEA slice flattens it.
+    /// Per-cell area on the unit sphere (total ≈ 4π). Equal across hexes to
+    /// within a few percent under the equal-area map — pentagons are genuinely
+    /// smaller, fanning five triangles rather than six.
     pub area: Vec<f32>,
     /// `true` for exactly the twelve pentagon defects.
     pub is_pentagon: Vec<bool>,
@@ -248,18 +250,24 @@ mod tests {
     }
 
     #[test]
-    fn area_variance_is_bounded_for_now() {
-        // The cheap projection's spread (the ISEA slice flattens this toward 1).
-        let s = icosphere(8);
-        let (mut lo, mut hi) = (f32::MAX, 0.0f32);
-        for (i, &a) in s.area.iter().enumerate() {
-            if s.is_pentagon[i] {
-                continue; // pentagons are intrinsically smaller
+    fn hexes_are_equal_area() {
+        // The point of the ISEA slice, measured on the real grid. The cheap
+        // projection this replaced spread hex areas ~1.8× and worsened with
+        // resolution; the equal-area map holds them within a few percent. What
+        // remains is Snyder's own vertex-ray crease (see `crate::isea`), which
+        // makes the cells sitting on a crease slightly small.
+        for freq in [8, 16] {
+            let s = icosphere(freq);
+            let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+            for (i, &a) in s.area.iter().enumerate() {
+                if s.is_pentagon[i] {
+                    continue; // a pentagon is intrinsically smaller — 5 fans, not 6
+                }
+                lo = lo.min(a);
+                hi = hi.max(a);
             }
-            lo = lo.min(a);
-            hi = hi.max(a);
+            assert!(hi / lo < 1.06, "freq {freq}: hex area spread {}", hi / lo);
         }
-        assert!(hi / lo < 2.5, "hex area spread {} too wide", hi / lo);
     }
 
     #[test]
@@ -275,3 +283,4 @@ mod tests {
         }
     }
 }
+

@@ -39,6 +39,13 @@ pub struct RigFile {
     /// garments; empty for a character. serde-default keeps older files loading.
     #[serde(default)]
     pub attach: Attach,
+    /// The CHARACTER's authored attach POINTS — where props mount onto THIS rig (grip /
+    /// holster / scabbard / belt …), the Clayworks Attach stage's output. The inverse of
+    /// [`RigFile::attach`]: that is how a piece hangs on a body, these are where a body
+    /// offers to hang pieces. Empty for props / garments / clips; serde-default keeps
+    /// older files loading.
+    #[serde(default)]
+    pub attach_points: Vec<AttachPoint>,
     /// Collision volumes (physics / hitbox / attach roles) carried by this asset. Schema-only
     /// today (the `mechanics` cluster consumes it later). serde-default keeps older files loading.
     #[serde(default)]
@@ -281,6 +288,20 @@ pub struct Attach {
     pub uniform: f32,
 }
 
+/// One authored attach POINT on a character rig — see [`RigFile::attach_points`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AttachPoint {
+    /// The point's stable id (`hand_r`, `holster_l`, `belt`, …) — what gameplay binds to.
+    #[serde(default)]
+    pub id: String,
+    /// The CANONICAL bone the point rides.
+    #[serde(default)]
+    pub bone: String,
+    /// Authored offset from that bone's frame, in model units.
+    #[serde(default)]
+    pub offset: [f32; 3],
+}
+
 // Hand-written so an ABSENT `attach` block (RigFile's `#[serde(default)]`) yields the SAME
 // sensible values as a present-but-partial one — identity rotation, unit scale — instead of the
 // derived all-zeros (which would give a zero quaternion and zero scale). Mirrors `ClothParams`.
@@ -504,6 +525,66 @@ pub fn load_dir(dir: &Path) -> Result<Model> {
     load_dirs(&[dir])
 }
 
+/// One rig file's embedded skeleton decoded to the runtime [`Bone`] set (contract-space
+/// matrices converted). The shared seam between [`load_dirs`] and in-memory consumers —
+/// the Clayworks clip preview builds a playable rig straight from the retargeter's
+/// output value, no disk round-trip.
+pub fn rig_bones(file: &RigFile) -> Vec<Bone> {
+    file.skeleton
+        .bones
+        .iter()
+        .map(|b| Bone {
+            name: b.name.clone(),
+            parent: b.parent,
+            local: mat4_from_contract(&b.local),
+            inverse_bind: mat4_from_contract(&b.inverse_bind),
+        })
+        .collect()
+}
+
+/// Resolve one file's clips against `bones`: each track's bone NAME becomes a skeleton
+/// index, carrying the SOURCE skeleton's rest translation (the space the clip's
+/// translations were authored in) for the retarget rebase — see
+/// [`ResolvedTrack::source_rest`]. `rm_namespace` prefixes clip names `RM/…`, the
+/// structured clip library's RootMotion convention; an in-memory consumer whose
+/// variant identity lives elsewhere passes `false`.
+pub fn resolve_clips(file: &RigFile, bones: &[Bone], rm_namespace: bool) -> Vec<ResolvedClip> {
+    let name_to_index: HashMap<&str, usize> =
+        bones.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let src_rest: HashMap<&str, [f32; 3]> = file
+        .skeleton
+        .bones
+        .iter()
+        .map(|b| (b.name.as_str(), [b.local[12], b.local[13], b.local[14]]))
+        .collect();
+    let mut out = Vec::new();
+    for clip in &file.clips {
+        let mut tracks = Vec::new();
+        let mut unresolved = Vec::new();
+        for tr in &clip.tracks {
+            match name_to_index.get(tr.bone.as_str()) {
+                Some(&bi) => {
+                    // Fall back to the target bone's own rest translation → delta 0.
+                    let w = bones[bi].local.w_axis;
+                    let source_rest =
+                        src_rest.get(tr.bone.as_str()).copied().unwrap_or([w.x, w.y, w.z]);
+                    tracks.push(ResolvedTrack { bone: bi, keys: tr.keys.clone(), source_rest });
+                }
+                None => unresolved.push(tr.bone.clone()),
+            }
+        }
+        let name = if rm_namespace { format!("RM/{}", clip.name) } else { clip.name.clone() };
+        out.push(ResolvedClip {
+            name,
+            tick_rate_hz: clip.tick_rate_hz,
+            duration_ticks: clip.duration_ticks,
+            tracks,
+            unresolved,
+        });
+    }
+    out
+}
+
 /// Like [`load_dir`] but gathers rig/clip JSON from SEVERAL directories — for a base
 /// body that borrows another character's clip library (e.g. `base_human_female` playing
 /// the Katanami animation set, which resolves by shared bone names). The rig authority is
@@ -541,26 +622,10 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
         .expect("parsed is non-empty");
     let (_rig_name, rig_file) = parsed.remove(rig_idx);
 
-    let bones: Vec<Bone> = rig_file
-        .skeleton
-        .bones
-        .iter()
-        .map(|b| Bone {
-            name: b.name.clone(),
-            parent: b.parent,
-            local: mat4_from_contract(&b.local),
-            inverse_bind: mat4_from_contract(&b.inverse_bind),
-        })
-        .collect();
+    let bones = rig_bones(&rig_file);
     if bones.is_empty() {
         anyhow::bail!("rig skeleton has no bones");
     }
-
-    let name_to_index: HashMap<&str, usize> = bones
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (b.name.as_str(), i))
-        .collect();
 
     // Clips come from the structured `clips/` library; resolve each track's bone NAME
     // to a skeleton index against the rig. When that tree exists, skip the flat
@@ -572,49 +637,7 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
             continue;
         }
         let root_motion = path_has_component(path, "RootMotion");
-        // Rest translations from THIS clip file's OWN skeleton — the space the clip's
-        // translations were authored in. Retarget rebases each bone's animated translation off
-        // this onto the target rig's rest (see `ResolvedTrack::source_rest`).
-        let src_rest: HashMap<&str, [f32; 3]> = f
-            .skeleton
-            .bones
-            .iter()
-            .map(|b| (b.name.as_str(), [b.local[12], b.local[13], b.local[14]]))
-            .collect();
-        for clip in &f.clips {
-            let mut tracks = Vec::new();
-            let mut unresolved = Vec::new();
-            for tr in &clip.tracks {
-                match name_to_index.get(tr.bone.as_str()) {
-                    Some(&bi) => {
-                        // Fall back to the target bone's own rest translation → delta 0.
-                        let w = bones[bi].local.w_axis;
-                        let source_rest = src_rest
-                            .get(tr.bone.as_str())
-                            .copied()
-                            .unwrap_or([w.x, w.y, w.z]);
-                        tracks.push(ResolvedTrack {
-                            bone: bi,
-                            keys: tr.keys.clone(),
-                            source_rest,
-                        });
-                    }
-                    None => unresolved.push(tr.bone.clone()),
-                }
-            }
-            let name = if root_motion {
-                format!("RM/{}", clip.name)
-            } else {
-                clip.name.clone()
-            };
-            clips.push(ResolvedClip {
-                name,
-                tick_rate_hz: clip.tick_rate_hz,
-                duration_ticks: clip.duration_ticks,
-                tracks,
-                unresolved,
-            });
-        }
+        clips.extend(resolve_clips(f, &bones, root_motion));
     }
     // Stable, predictable clip order for the cycle control.
     clips.sort_by(|a, b| a.name.cmp(&b.name));
@@ -868,21 +891,21 @@ mod tests {
     }
 
     /// D.1 regression: the canonical base-A rig loads through the real loader with the
-    /// added face group (`jaw`, `eye_l`, `eye_r` under `head`) → 66 bones, and no stray
-    /// asset under the character dir breaks the recursive rig parse. `#[ignore]`d because
-    /// it reads the ~33 MB canonical rig; run explicitly with
-    /// `cargo test -p flicker-skeletal -- --ignored`.
+    /// added face group (`jaw`, `eye_l`, `eye_r` under `head`) → the 67-bone canon, and no stray
+    /// asset under the character dir breaks the recursive rig parse. `#[ignore]`d as a
+    /// real-content read; run explicitly with `cargo test -p flicker-skeletal -- --ignored`.
+    /// (Repointed 2026-08-04: the reference is the GOLEM — PrismHumanBaseA was swept.)
     #[test]
     #[ignore]
     fn loads_canonical_base_a_with_face_group() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/package/characters/PrismHumanBaseA");
+            .join("../../../content/package/characters/GolemBase_Low");
         if !dir.exists() {
             eprintln!("skipping: canonical content not present at {}", dir.display());
             return;
         }
-        let model = load_dir(&dir).expect("canonical base-A rig should load");
-        assert_eq!(model.bones.len(), 66, "base-A + face group must be 66 bones");
+        let model = load_dir(&dir).expect("canonical reference rig should load");
+        assert_eq!(model.bones.len(), 67, "the reference must carry the 67-bone canon (source: baseline::TOPOLOGY)");
         let head = model
             .bones
             .iter()

@@ -47,11 +47,13 @@ pub mod bake;
 pub mod channel;
 pub mod output;
 pub mod presets;
+pub mod random;
 pub mod recipe;
 pub mod size;
 
 pub use bake::{bake, field, Map, MapKind, MapSet};
 pub use channel::{mix, BlendMode, Channel, NoiseKind, CHANNEL_COUNT};
 pub use output::{ColorRamp, OutputStage, RampStop};
+pub use random::random;
 pub use recipe::TextureRecipe;
 pub use size::{offered, rung, BakeSize, BAKE_DEFAULT, BAKE_SIZES, PREVIEW_SIZE};

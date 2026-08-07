@@ -59,6 +59,7 @@ use flicker_texture::{
 use flicker_worker::WorkerPool;
 
 pub mod commit;
+pub mod lit;
 pub mod route;
 
 /// The console's COMPOSITION lives in `ui_templates.json` as this proto; the scene
@@ -90,8 +91,24 @@ const BTN_STYLE_ON: &str = "sablework.button_on";
 /// The preview map buttons, in [`MapKind::ALL`] order. The id is BOTH the node id
 /// (so the button fires it) and the Model-key stem for its `_style` / `_shown`
 /// binds — one vocabulary shared with `hud_sablework.lua`'s `MAPS`.
-const MAP_IDS: [&str; 6] =
-    ["map_base", "map_normal", "map_rough", "map_metal", "map_ao", "map_height"];
+const MAP_IDS: [&str; 7] = [
+    "map_base",
+    "map_normal",
+    "map_rough",
+    "map_metal",
+    "map_ao",
+    "map_height",
+    "map_emit",
+];
+
+/// The LIT view's tab id. Deliberately not a seventh `MAP_IDS` entry: the six are
+/// each one `MapKind` the swatch blits, while this one is a rendered sub-scene of
+/// all of them at once. Sharing the `map_*` naming keeps ONE tab vocabulary; the
+/// index `MAP_IDS.len()` is its slot in the selection.
+const LIT_ID: &str = "map_lit";
+
+/// How many tabs the view selector has — the six flat maps plus the lit view.
+pub const VIEW_COUNT: usize = MAP_IDS.len() + 1;
 
 /// One baked preview, tagged with the edit that asked for it.
 struct BakeResult {
@@ -136,7 +153,7 @@ pub struct Sablework {
     tex: Vec<TextureHandle>,
     /// The newest baked set, and which of its maps have not reached the GPU yet.
     latest: Option<MapSet>,
-    dirty: [bool; 6],
+    dirty: [bool; MapKind::ALL.len()],
 
     // ── the bake worker ──
     pool: WorkerPool,
@@ -153,6 +170,13 @@ pub struct Sablework {
     commit_rx: Receiver<CommitState>,
 
     // ── engine plumbing ──
+    /// The lit sample — the material on a turning body under a fixed light.
+    pub(crate) lit: lit::LitPreview,
+    /// The rect the walker RESERVED for the lit view this frame, if it is showing.
+    /// The tree owns the layout, so the sub-scene is placed by the same walk that
+    /// draws everything else rather than by a second set of constants.
+    lit_rect: Option<flicker::render::Rect>,
+
     ui_host: Option<ScriptHost>,
     /// The proto registry `build_tree` expands against — built once.
     templates: TemplateRegistry,
@@ -234,7 +258,7 @@ impl Sablework {
             tiles,
             tex: Vec::new(),
             latest: None,
-            dirty: [false; 6],
+            dirty: [false; MapKind::ALL.len()],
             pool: WorkerPool::with_default_size(),
             tx,
             rx,
@@ -244,6 +268,8 @@ impl Sablework {
             commit_state: CommitState::Idle,
             commit_tx,
             commit_rx,
+            lit: lit::LitPreview::default(),
+            lit_rect: None,
             ui_host,
             templates: builtin_templates(),
             ui_intents: UiIntents::default(),
@@ -294,7 +320,7 @@ impl Sablework {
             self.shown = r.generation;
             self.latest = Some(r.maps);
             // Every map is now stale on the GPU; they upload as they are looked at.
-            self.dirty = [true; 6];
+            self.dirty = [true; MapKind::ALL.len()];
             self.last_bake_ms = dt.as_secs_f64() * 1000.0;
         }
     }
@@ -340,6 +366,25 @@ impl Sablework {
         }
     }
 
+    /// Push EVERY stale map. The flat swatch shows one at a time, but the lit
+    /// sample binds all six simultaneously — a map left stale there would shade
+    /// the surface with the previous recipe's roughness.
+    fn upload_all(&mut self, renderer: &mut Renderer) {
+        for i in 0..MapKind::ALL.len() {
+            if !self.dirty[i] {
+                continue;
+            }
+            let (Some(handle), Some(set)) = (self.tex.get(i).copied(), self.latest.as_ref()) else {
+                continue;
+            };
+            let Some(map) = set.get(MapKind::ALL[i]) else { continue };
+            let pixels = self.tiled(map);
+            if renderer.update_texture(handle, &pixels) {
+                self.dirty[i] = false;
+            }
+        }
+    }
+
     // ── the Model ──────────────────────────────────────────────────────────────
 
     /// Everything `hud_sablework.lua` binds. Display copy is published as
@@ -364,11 +409,13 @@ impl Sablework {
             );
         }
 
-        for (i, id) in MAP_IDS.iter().enumerate() {
+        for (i, id) in MAP_IDS.iter().chain([&LIT_ID]).enumerate() {
             let on = i == self.sel_map;
             m.set(format!("{id}_shown"), on);
             m.set(format!("{id}_style"), if on { BTN_STYLE_ON } else { BTN_STYLE });
         }
+        m.set("lit_body_label", format!("$sw_body_{}", self.lit.body.id()));
+        m.set("lit_spin", self.lit.spinning);
 
         let out = &self.recipe.out;
         for (key, value) in [
@@ -378,6 +425,8 @@ impl Sablework {
             ("metalness", out.metalness),
             ("metalness_mod", out.metalness_mod),
             ("ao", out.ao),
+            ("emissive_strength", out.emissive_strength),
+            ("emissive_band", out.emissive_band),
         ] {
             m.set(key, value as f64);
         }
@@ -549,8 +598,16 @@ impl Sablework {
     pub fn recipe(&self) -> &TextureRecipe {
         &self.recipe
     }
+    /// The map the swatch shows. On the LIT tab there is no single map — the
+    /// sample wears all of them — so this reports the base colour, which is what
+    /// the lit view's albedo is.
     pub fn selected_map(&self) -> MapKind {
-        MapKind::ALL[self.sel_map]
+        MapKind::ALL[self.sel_map.min(MapKind::ALL.len() - 1)]
+    }
+
+    /// Whether the LIT view is the one showing.
+    pub fn showing_lit(&self) -> bool {
+        self.sel_map == MAP_IDS.len()
     }
     pub fn selected_voice(&self) -> usize {
         self.sel_ch
@@ -584,7 +641,7 @@ impl Scene for Sablework {
                 }
             })
             .collect();
-        self.dirty = [true; 6];
+        self.dirty = [true; MapKind::ALL.len()];
 
         renderer.window().set_title("Sablework Bench");
     }
@@ -618,7 +675,17 @@ impl Scene for Sablework {
         let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
         let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
         let over_hud = frame.results.is_on("hud_hit");
+        // The `rtt` node reserved a rect for the lit sub-scene; `render` draws into
+        // it. `None` when the Lit tab is not showing, which is also what stops the
+        // offscreen pass from costing anything.
+        self.lit_rect = frame.rtts.iter().find(|s| s.id == "sw_lit").map(|s| {
+            flicker::render::Rect {
+                pos: Vec2::new(s.x, s.y),
+                size: Vec2::new(s.w, s.h),
+            }
+        });
         self.hud_commands = frame.commands;
+        self.lit.tick(dt);
 
         // ONE resolve, ONE dispatch — the walker layer consumes the screen's
         // declared intents, so navigation never reads a raw key.
@@ -674,6 +741,24 @@ impl Scene for Sablework {
 
     fn render(&mut self, renderer: &mut Renderer) {
         self.upload_shown(renderer);
+        // The lit sample is an offscreen pass, so it runs BEFORE the 2D HUD — the
+        // FrameGraph composites its result into the rect the walk reserved, under
+        // the chrome the HUD then draws over.
+        if let Some(rect) = self.lit_rect {
+            // The lit view wears every map at once, so all six must be current —
+            // not just the one a flat swatch would be showing.
+            self.upload_all(renderer);
+            let mut fg = flicker::render::FrameGraph::new();
+            self.lit.render(
+                renderer,
+                &mut fg,
+                rect,
+                renderer.layer(),
+                &self.tex,
+                lit::Stage::from_styles(&self.ui_styles, lit::STAGE_SOURCE),
+            );
+            fg.execute(renderer);
+        }
         if let Some(white) = self.white {
             let tex = self.tex.clone();
             render_hud(renderer, &self.hud_commands, white, &tex);

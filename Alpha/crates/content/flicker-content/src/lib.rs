@@ -11,8 +11,10 @@
 //!   4. Bake — emit `flicker.rig` JSON + role-named textures, ready to load + display.
 
 pub mod bake;
+pub mod baseline;
 pub mod bvh;
 pub mod conform;
+pub mod manifest;
 pub mod fbx;
 pub mod ops;
 pub mod package;
@@ -24,7 +26,7 @@ pub mod scan;
 
 pub use bake::{
     attach_world, bake_garment, bake_prop, bake_rig, bake_skin, fitting_base, garment_socket,
-    write_garment, write_prop, write_rig, write_rig_file, Fit,
+    write_garment, write_prop, write_rig, write_rig_file, Fit, MountPoint,
 };
 pub use pipeline::{import_folder, source_maps, ImportSummary, SourceMaps};
 pub use conform::{

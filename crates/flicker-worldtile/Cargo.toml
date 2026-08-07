@@ -1,0 +1,20 @@
+[package]
+name = "flicker-worldtile"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The PIXEL TIER. Turns a cell's aggregate — one column of strata — into the
+# 2048² maps that are the world's truth from the migration onward, one pixel per
+# voxel cluster. Reads the aggregate; owns no simulation of its own.
+[lib]
+name = "flicker_worldtile"
+path = "src/lib.rs"
+
+[dependencies]
+flicker-poc-chemistry.workspace = true
+flicker-worldgrid.workspace = true
+glam.workspace = true
+
+[dev-dependencies]
+flicker-materials.workspace = true

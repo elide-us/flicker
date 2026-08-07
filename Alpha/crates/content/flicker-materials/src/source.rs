@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::compound::CompoundDef;
+use crate::rock::RockDef;
 use crate::element::Element;
 use crate::material::MaterialDef;
 
@@ -19,6 +20,8 @@ pub const PERIODIC_TABLE_FILE: &str = "periodic_table.json";
 pub const MATERIALS_FILE: &str = "materials.json";
 /// Filename of the compound catalog within a [`JsonTableSource`] directory.
 pub const COMPOUNDS_FILE: &str = "compounds.json";
+/// Filename of the rock catalog within a [`JsonTableSource`] directory.
+pub const ROCKS_FILE: &str = "rocks.json";
 
 /// An error loading the vocabulary. Both variants name the offending file so a
 /// missing or malformed table is diagnosable without guessing which one failed.
@@ -50,6 +53,11 @@ pub trait TableSource {
     /// The compound-catalog rows. Defaults to empty so a source that predates the
     /// catalog (or a content dir without `compounds.json`) still loads.
     fn load_compounds(&self) -> Result<Vec<CompoundDef>, MaterialError> {
+        Ok(Vec::new())
+    }
+    /// The rock-catalog rows. Defaults to empty for the same reason as compounds:
+    /// a source that predates the tier still loads, it just has no rocks to offer.
+    fn load_rocks(&self) -> Result<Vec<RockDef>, MaterialError> {
         Ok(Vec::new())
     }
 }
@@ -102,6 +110,12 @@ struct CompoundsFile {
     compounds: Vec<CompoundDef>,
 }
 
+/// Top-level shape of `rocks.json` — `_meta` is ignored; only `rocks` is read.
+#[derive(Deserialize)]
+struct RocksFile {
+    rocks: Vec<RockDef>,
+}
+
 impl TableSource for JsonTableSource {
     fn load_elements(&self) -> Result<Vec<Element>, MaterialError> {
         let file: PeriodicTableFile = read_json(&self.dir.join(PERIODIC_TABLE_FILE))?;
@@ -121,5 +135,15 @@ impl TableSource for JsonTableSource {
         }
         let file: CompoundsFile = read_json(&path)?;
         Ok(file.compounds)
+    }
+
+    fn load_rocks(&self) -> Result<Vec<RockDef>, MaterialError> {
+        // Tolerant of a content dir that has no rock catalog yet.
+        let path = self.dir.join(ROCKS_FILE);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let file: RocksFile = read_json(&path)?;
+        Ok(file.rocks)
     }
 }

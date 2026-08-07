@@ -27,8 +27,10 @@ members = [
     "Alpha/crates/mechanics/flicker-mechanics",
     "Alpha/crates/world/flicker-voxel",
     # Game-package libraries (reusable client scenes hosted by prism-alpha).
+    "Alpha/crates/scenes/flicker-atc",
     "Alpha/crates/scenes/flicker-clicktrainer",
     "Alpha/crates/scenes/flicker-controllertester",
+    "Alpha/crates/scenes/flicker-godmode",
     "Alpha/crates/scenes/flicker-solarbirth",
     "Alpha/crates/scenes/flicker-loomforge",
     "Alpha/crates/scenes/flicker-assetpipeline",
@@ -43,6 +45,7 @@ members = [
     "crates/flicker-worldgen",
     "crates/flicker-worldengine",
     "crates/flicker-worldgrid",
+    "crates/flicker-worldtile",
     "crates/flicker-poc-chemistry",
     "crates/flicker-celestial",
     "crates/flicker-system",
@@ -116,6 +119,8 @@ flicker-worldstate = { version = "0.1.0", path = "crates/flicker-worldstate" }
 flicker-worldgen = { version = "0.1.0", path = "crates/flicker-worldgen" }
 flicker-worldengine = { version = "0.1.0", path = "crates/flicker-worldengine" }
 flicker-worldgrid = { version = "0.1.0", path = "crates/flicker-worldgrid" }
+flicker-poc-chemistry = { version = "0.1.0", path = "crates/flicker-poc-chemistry" }
+flicker-worldtile = { version = "0.1.0", path = "crates/flicker-worldtile" }
 flicker-celestial = { version = "0.1.0", path = "crates/flicker-celestial" }
 flicker-system = { version = "0.1.0", path = "crates/flicker-system" }
 flicker-primitive = { version = "0.1.0", path = "Alpha/crates/content/flicker-primitive" }

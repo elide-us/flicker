@@ -49,6 +49,22 @@ impl fmt::Display for InputBinding {
 }
 
 impl InputBinding {
+    /// The new down-state `edge` gives this control, or `None` if the edge belongs
+    /// to a different control.
+    ///
+    /// Gamepad bindings never match: they are polled per frame rather than evented,
+    /// so they carry no intra-frame ordering and stay level-resolved.
+    pub fn edge_down(self, edge: crate::snapshot::InputEdge) -> Option<bool> {
+        use crate::snapshot::InputEdge;
+        match (self, edge) {
+            (InputBinding::Key(k), InputEdge::Key { key, down }) if k == key => Some(down),
+            (InputBinding::MouseButton(b), InputEdge::Mouse { button, down }) if b == button => {
+                Some(down)
+            }
+            _ => None,
+        }
+    }
+
     /// THE single "is this control active" query — deadzone/threshold-aware,
     /// player 0. Consolidates `InputMap::action_pressed`, `InputState::input_active`,
     /// and the tester's `Control::down` into one (spec §3.2). Stick/trigger axes

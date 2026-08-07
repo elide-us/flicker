@@ -74,7 +74,17 @@ const U_Z: ElementId = 92;
 /// **RadiogenicDecay** — isotope decay heats each mantle cell; a cold surface cools
 /// it. `dT = radiogenic − cooling`. Changes temperature only, never mass, so it is
 /// trivially conservation-safe. Always live.
-pub struct RadiogenicDecay;
+pub struct RadiogenicDecay {
+    /// Multiplier on radiogenic heating — the heat from inside, as a dial.
+    pub heat: f64,
+}
+
+impl Default for RadiogenicDecay {
+    /// The physics as written.
+    fn default() -> Self {
+        Self { heat: 1.0 }
+    }
+}
 
 impl Stage for RadiogenicDecay {
     fn name(&self) -> &'static str {
@@ -91,7 +101,10 @@ impl Stage for RadiogenicDecay {
                 continue;
             }
             let power = radiogenic_power_w(m.mass(c, U_Z), m.mass(c, K_Z), t);
-            let d_radio = power / (cell_mass * SPECIFIC_HEAT) * dt_sec;
+            // The heat dial scales the source, not the result: a hotter world stays
+            // molten longer and differentiates sooner, and everything downstream of
+            // that follows on its own.
+            let d_radio = self.heat * power / (cell_mass * SPECIFIC_HEAT) * dt_sec;
             let d_cool = COOLING_PER_MYR * (m.temp_k[c] - SURFACE_K) * dt_myr;
             m.temp_k[c] = (m.temp_k[c] + d_radio - d_cool).max(SURFACE_K);
         }
@@ -102,7 +115,7 @@ impl Stage for RadiogenicDecay {
 
 /// Temperature above which metal can percolate and settle — differentiation only
 /// proceeds while the cell is this molten (a **chemistry gate**, not a clock).
-const FE_SEGREGATION_K: f64 = 1800.0;
+pub(crate) const FE_SEGREGATION_K: f64 = 1800.0;
 /// Fraction of a molten cell's remaining core-destined metal that drains per Myr —
 /// a molten cell fully differentiates in ~50 Myr (core formation is geologically
 /// fast).
@@ -110,7 +123,7 @@ const DIFFERENTIATION_RATE: f64 = 0.02;
 
 /// Siderophile partition: `(atomic number, fraction that ends in the core once
 /// fully differentiated)`. These are **metal–silicate partition coefficients**,
-/// not a target: the resulting core mass (~31% of the planet, iron-dominated)
+/// not a target: the resulting core mass (~32% of the planet, iron-dominated)
 /// *emerges* from them — nobody wrote "the core is a third of the planet". Iron
 /// keeps ~15% behind as mantle FeO; the lithophiles (O, Si, Mg, Ca, Al, K, U…) are
 /// absent here and stay in the mantle entirely.
@@ -118,7 +131,13 @@ const SIDEROPHILES: &[(ElementId, f64)] = &[
     (26, 0.85), // Fe
     (28, 0.92), // Ni
     (27, 0.90), // Co
-    (16, 0.55), // S  — the core's light element
+    (16, 0.97), // S — the core's light element. Metal–silicate D_S runs ~50–100
+    //             at magma-ocean conditions, and a third-of-a-planet of metal at
+    //             that D dissolves ~97% of the sulfur and carries it down —
+    //             Earth's core holds ≳95% of the planet's S while the mantle
+    //             keeps a few hundred ppm. At the old 0.55, half the S inventory
+    //             (S is ~97% of the whole volatile budget) reached the sky as
+    //             SO₂ instead (defect 7E01115B).
     (29, 0.50), // Cu
     (15, 0.40), // P
     (24, 0.10), // Cr — mildly siderophile
@@ -127,26 +146,56 @@ const SIDEROPHILES: &[(ElementId, f64)] = &[
     (47, 0.85), // Ag
 ];
 
+/// Core-partition fraction of `element` — the φ of its [`SIDEROPHILES`] row, 0
+/// for the lithophiles.
+fn partition_frac(element: ElementId) -> f64 {
+    SIDEROPHILES.iter().find(|&&(e, _)| e == element).map_or(0.0, |&(_, phi)| phi)
+}
+
+/// Mass of `element` in `cell` that is **dissolved in the cell's not-yet-sunk
+/// metal**: `φ · seed-share · (1 − d)` — the load the remaining metal will carry
+/// down as it drains. Metal–silicate partition equilibrium is fast (melt and
+/// metal rain touch everywhere); the *sinking* is what takes tens of Myr. So
+/// this mass is spoken for by the core from the moment the cell is molten, and
+/// only the rest is anyone else's to take.
+///
+/// [`Outgassing`](crate::atmosphere::Outgassing) subtracts it from a driver's
+/// availability, which is what makes core formation and degassing genuinely
+/// **compete** for sulfur — the one element that is both a major volatile and
+/// the core's light element — the way they do on a real planet, where most
+/// sulfur sinks with the iron long before it can degas (defect 7E01115B). Zero
+/// for lithophiles and for a fully differentiated cell (d = 1): the residue is
+/// free.
+pub fn metal_bound_mass(world: &World, cell: usize, element: ElementId) -> f64 {
+    let phi = partition_frac(element);
+    if phi <= 0.0 {
+        return 0.0;
+    }
+    let seed_share = world.budget.accreted(element) / world.mantle.n_cells().max(1) as f64;
+    phi * seed_share * (1.0 - world.mantle.differentiation[cell])
+}
+
 /// **CoreFormation** — while a cell is molten, siderophile metals sink out of the
 /// mantle into the (global, well-mixed) core, toward their partition targets. Mass
 /// moves mantle → core, conserved. Gated on temperature, never the tick number.
 ///
-/// The per-cell reference is the homogeneous seed mass `budget/N`; this is valid
-/// because M1 does **not** advect composition laterally (only temperature), so a
-/// cell's element mass changes only by this drain. Deterministic: cells and
-/// elements are visited in a fixed order (float addition into the core is not
-/// associative, §11).
+/// The drain is an **incremental claim**: the metal that actually sinks this tick
+/// (`Δd` of the cell's core-destined share) carries `budget/N · φ · Δd` of every
+/// siderophile down with it, clamped by what the cell still holds. The claim is
+/// sized to the homogeneous seed share and **never re-derived from the cell's
+/// current inventory** — so a competitor that removes mantle mass (outgassing
+/// stripping sulfur, crust freezing, an eruption's melt) spends its *own* pool,
+/// not the core's. The old drain-to-a-target formula re-baselined against what
+/// was left and silently yielded the core's share to whoever moved first; sulfur
+/// was the case that mattered (defect 7E01115B — see [`metal_bound_mass`], the
+/// degassing side of the same competition). Deterministic: cells and elements are
+/// visited in a fixed order (float addition into the core is not associative,
+/// §11).
 pub struct CoreFormation;
 
 impl Stage for CoreFormation {
     fn name(&self) -> &'static str {
         "CoreFormation"
-    }
-
-    fn is_live(&self, state: &crate::planet::PlanetState) -> bool {
-        // Nothing to differentiate once the mantle is cold everywhere or fully
-        // drained — a chemistry gate, cheap to skip.
-        state.mean_mantle_temp_k > SURFACE_K + 1.0 && state.differentiation_frac < 0.999
     }
 
     fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
@@ -163,14 +212,20 @@ impl Stage for CoreFormation {
             // cell still reaches d=1; only the rate varies, so conservation and the
             // partition targets are unchanged.
             let hot = ((t - FE_SEGREGATION_K) / (MAGMA_OCEAN_K - FE_SEGREGATION_K)).clamp(0.05, 1.5);
-            let d = (world.mantle.differentiation[c] + DIFFERENTIATION_RATE * hot * dt_myr).min(1.0);
+            let d0 = world.mantle.differentiation[c];
+            let d = (d0 + DIFFERENTIATION_RATE * hot * dt_myr).min(1.0);
             world.mantle.differentiation[c] = d;
+            // The metal share that actually sank this tick claims its dissolved
+            // load — and only that. What another process already took is that
+            // process's win, not a head start on the core's target.
+            let sunk = d - d0;
+            if sunk <= 0.0 {
+                continue;
+            }
             for &(e, phi) in SIDEROPHILES {
-                let m0 = world.budget.accreted(e) / n_f;
-                let target = m0 * (1.0 - d * phi);
-                let drain = world.mantle.mass(c, e) - target;
-                if drain > 0.0 {
-                    let taken = world.mantle.remove(c, e, drain);
+                let claim = world.budget.accreted(e) / n_f * phi * sunk;
+                let taken = world.mantle.remove(c, e, claim);
+                if taken > 0.0 {
                     world.reservoirs.core.add(e, taken);
                 }
             }
@@ -189,13 +244,24 @@ const CONVECTION_GAIN: f32 = 3.0e-5;
 /// per tick, so the departure point stays inside the 1-ring and the resample is a
 /// convex blend of a cell and its neighbours — **bounded, never piling** (§6.1).
 const CFL_FRACTION: f32 = 0.5;
+/// How much of a **flat-weighted** ring mean is blended into each resampled
+/// value — the stabilising numerical diffusion, made explicit. The old
+/// inverse-distance kernel supplied diffusion implicitly, but its weights took
+/// the ring's geometry, so the diffusion was anisotropic along the lattice axes
+/// and etched the shard edges into the field. Equal weights carry no geometry —
+/// a pentagon averages its five exactly as a hex averages its six — so this
+/// kills cell-scale roughness (the §6.1 guarantee) without preferring any
+/// lattice direction.
+const RESAMPLE_DIFFUSION: f64 = 0.1;
 
 /// **MantleConvection** — derive a surface velocity field from the temperature
 /// gradient (hot upwellings spread, cold downwellings converge), then advect the
 /// temperature field by the **semi-Lagrangian resample** of §6.1: every cell looks
-/// *upstream* and takes a distance-weighted average of the temperature it drifted
-/// from. A convex blend neither scatters nor piles, so the field stays smooth — no
-/// noise-field blow-up (the bug that cost the old code four sessions). Changes
+/// *upstream* and evaluates the temperature it drifted from by the least-squares
+/// linear fit, clamped to its ring's own range. Ring-bounded values neither
+/// scatter nor pile, so the field stays smooth — no noise-field blow-up (the bug
+/// that cost the old code four sessions) — and a fit has no kernel shape to
+/// print the lattice through (see [`Self::advect_temperature`]). Changes
 /// temperature + velocity only; mass is untouched.
 pub struct MantleConvection;
 
@@ -225,21 +291,35 @@ impl MantleConvection {
     /// `velocity · dt`, so transport scales with the tick length (stays consistent
     /// when the adaptive controller of §7.3 varies `dt`); the CFL clamp then keeps
     /// the departure point inside the 1-ring.
+    ///
+    /// The departure value is evaluated by the **least-squares linear fit**
+    /// ([`tangent_gradient`]) — the same frame-consistent operator the velocity
+    /// derivation trusts — and then clamped to the ring's own value range. The
+    /// clamp preserves the property the old inverse-distance kernel was chosen
+    /// for (a resample bounded by what the ring holds neither scatters nor
+    /// piles, the §6.1 no-blow-up guarantee). What the kernel could NOT do is
+    /// stay blind to the ring's shape: its weights took the lattice's geometry,
+    /// so its numerical diffusion was anisotropic along the lattice axes, and
+    /// over hundreds of ticks it ETCHED the shard edges into the temperature
+    /// field — measured as a shard-edge ΔT excess growing to ~7% and a 1.6×
+    /// strain excess in the derived flow, which is what locked the conveyor's
+    /// first plate boundaries onto the pentagon-to-pentagon lines (the R5b
+    /// grid-ghost class, returned through the resample; see
+    /// `convection_strain_ignores_the_shard_edges`). A fit evaluation has no
+    /// kernel shape to imprint: exact for linear fields from any ring, seams
+    /// and pentagons included.
     fn advect_temperature(world: &mut World, dt_myr: f64) {
         let old = world.mantle.temp_k.clone();
         let dirs = &world.grid.dirs;
         let neighbors = &world.grid.neighbors;
         for i in 0..old.len() {
             let pi = dirs[i];
-            // Local spacing → the CFL clamp AND the resample regulariser (scaled to
-            // spacing² so the self-weight is grid-resolution-independent, not a fixed
-            // absolute constant that would over-pin coarse grids).
+            // Local spacing → the CFL clamp.
             let mut spacing = 0.0f32;
             for &j in &neighbors[i] {
                 spacing += (dirs[j as usize] - pi).length();
             }
             spacing /= neighbors[i].len().max(1) as f32;
-            let eps = (spacing * spacing * 1e-3).max(1e-12);
             let mut disp = world.mantle.velocity[i] * dt_myr as f32;
             let max_disp = CFL_FRACTION * spacing;
             if disp.length() > max_disp {
@@ -247,21 +327,29 @@ impl MantleConvection {
             }
             // Departure point: where this parcel drifted FROM (upstream).
             let departure = (pi - disp).normalize_or_zero();
-            // Convex resample of the old field over {i} ∪ neighbours by inverse
-            // squared chord-distance to the departure point.
-            let mut wsum = 0.0f32;
-            let mut tsum = 0.0f64;
-            let mut accumulate = |c: usize| {
-                let d2 = (dirs[c] - departure).length_squared() + eps;
-                let w = 1.0 / d2;
-                wsum += w;
-                tsum += w as f64 * old[c];
-            };
-            accumulate(i);
+            // Linear-fit evaluation of the old field at the departure point,
+            // bounded by the ring's own range.
+            let ti = old[i];
+            let grad = tangent_gradient(
+                pi,
+                neighbors[i].iter().map(|&j| (dirs[j as usize], (old[j as usize] - ti) as f32)),
+            );
+            let (mut lo, mut hi) = (ti, ti);
+            let mut ring_mean = ti;
             for &j in &neighbors[i] {
-                accumulate(j as usize);
+                let t = old[j as usize];
+                lo = lo.min(t);
+                hi = hi.max(t);
+                ring_mean += t;
             }
-            world.mantle.temp_k[i] = tsum / wsum as f64;
+            ring_mean /= (neighbors[i].len() + 1) as f64;
+            // Bound the fit HARD by the ring's own range — the bound is what
+            // keeps compounding overshoot from becoming the §6.1 noise-field
+            // blow-up (measured: even a 0.5-range slack roughens exactly like
+            // no clamp at all) — then blend in the flat-mean diffusion that
+            // keeps the field SMOOTHING over time rather than sharpening.
+            let value = (ti + grad.dot(departure - pi) as f64).clamp(lo, hi);
+            world.mantle.temp_k[i] = value + RESAMPLE_DIFFUSION * (ring_mean - value);
         }
     }
 }
@@ -354,7 +442,7 @@ mod tests {
         let mut w = world(6, 3);
         let mut sched = Scheduler::new(
             vec![
-                Box::new(RadiogenicDecay),
+                Box::new(RadiogenicDecay::default()),
                 Box::new(CoreFormation),
                 Box::new(MantleConvection),
             ],
@@ -379,6 +467,59 @@ mod tests {
         let mantle_fe_frac = w.mantle.element_mass(26) / w.mantle.total_mass();
         let bulk_fe_frac = w.budget.accreted(26) / planet;
         assert!(mantle_fe_frac < bulk_fe_frac, "the mantle lost iron to the core");
+    }
+
+    /// **The sulfur competition (defect 7E01115B).** Run core formation and
+    /// outgassing TOGETHER on the magma-ocean seed: the metal must carry the
+    /// sulfur down, not watch the sky strip it. Before the fix this world vented
+    /// ~half its S inventory as SO₂ (3.4e8 kg/m² of it — Earth's whole
+    /// atmosphere is ~1e4) while the core, formula re-baselining against the
+    /// loss, kept less than half its own partition share.
+    #[test]
+    fn sulfur_sinks_with_the_iron_not_into_the_sky() {
+        let mut w = world(4, 7);
+        let dir = content_data_dir();
+        let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
+        let mut sched = Scheduler::new(
+            vec![
+                Box::new(RadiogenicDecay::default()),
+                Box::new(CoreFormation),
+                Box::new(MantleConvection),
+                Box::new(crate::atmosphere::Outgassing::new(
+                    &t,
+                    crate::atmosphere::DEFAULT_OUTGAS_RATE,
+                )),
+            ],
+            7,
+        );
+        // Through the whole full-rate degassing era (the mean mantle cools past
+        // the 3400 K SO₂ floor well inside this window) — audited every tick.
+        for _ in 0..200 {
+            sched.step(&mut w, 1.0, None);
+        }
+        let s_total = w.budget.accreted(16);
+        let s_core = w.reservoirs.core.amount(16);
+        let s_air = w.reservoirs.atmosphere.contents.amount(16);
+        assert!(
+            s_core / s_total > 0.90,
+            "the core carries its sulfur share down: got {:.1}%",
+            100.0 * s_core / s_total,
+        );
+        assert!(
+            s_air / s_total < 0.05,
+            "the sky gets the residue, not the inventory: got {:.1}%",
+            100.0 * s_air / s_total,
+        );
+        // And the exhale is a real distillation burst, not a sulfur flood: the
+        // carbon sky outweighs the sulfur one.
+        let air = &w.reservoirs.atmosphere.species;
+        assert!(
+            air.amount(crate::atmosphere::SULFUR_DIOXIDE)
+                < air.amount(crate::atmosphere::CARBON_DIOXIDE),
+            "SO₂ ({:.2e} kg) must not dominate CO₂ ({:.2e} kg)",
+            air.amount(crate::atmosphere::SULFUR_DIOXIDE),
+            air.amount(crate::atmosphere::CARBON_DIOXIDE),
+        );
     }
 
     /// A hash of the ENTIRE simulated state — the temperature field, every core
@@ -417,6 +558,57 @@ mod tests {
         };
         assert_eq!(run(11), run(11), "same seed → identical world hash");
         assert_ne!(run(11), run(12), "different seed → a different world");
+    }
+
+
+    /// Grid-ghost regression at the FIELD level (the pentagon-seam incident):
+    /// evolve temperature by convection alone and compare the raw link strain
+    /// `|Δv|/gap` across shard edges against interior links. The old
+    /// inverse-distance resample kernel took its weights from the ring's
+    /// geometry, so its numerical diffusion was anisotropic along the lattice
+    /// axes — the shard-edge strain excess grew to ~1.6× by 120 Myr, the
+    /// conveyor's yield gate broke along the pentagon-to-pentagon lines, and
+    /// the early arc record traced the icosahedron (Aaron's eyeball, 2026-08-05).
+    /// The fit-evaluated, ring-clamped, flat-diffused resample holds this near
+    /// one; the analytic floor for an honestly sheared smooth field is ~1.15
+    /// (link directions cluster at the seams, and real shear is anisotropic).
+    /// The lattice must stay invisible in the flow — R5b: no physical field may
+    /// correlate with the grid.
+    #[test]
+    fn convection_strain_ignores_the_shard_edges() {
+        let mut w = world(48, 42);
+        let mut sched = Scheduler::new(
+            vec![Box::new(RadiogenicDecay::default()), Box::new(MantleConvection)],
+            42,
+        );
+        for _ in 0..120 {
+            sched.step(&mut w, 1.0, None);
+        }
+        let vel = &w.mantle.velocity;
+        let (mut sx, mut nx, mut si, mut ni) = (0.0f64, 0u64, 0.0f64, 0u64);
+        for i in 0..w.mantle.n_cells() {
+            for &j in &w.grid.neighbors[i] {
+                let j = j as usize;
+                if j <= i {
+                    continue;
+                }
+                let gap = (w.grid.dirs[i] - w.grid.dirs[j]).length().max(1e-9);
+                let s = ((vel[i] - vel[j]).length() / gap) as f64;
+                if w.grid.shard[i] != w.grid.shard[j] {
+                    sx += s;
+                    nx += 1;
+                } else {
+                    si += s;
+                    ni += 1;
+                }
+            }
+        }
+        let ratio = (sx / nx.max(1) as f64) / (si / ni.max(1) as f64).max(1e-300);
+        assert!(
+            ratio < 1.35,
+            "shard-edge strain excess regressed: {ratio:.3} — the resample (or the \
+             velocity derivation) is printing the lattice into the flow again",
+        );
     }
 
     #[test]

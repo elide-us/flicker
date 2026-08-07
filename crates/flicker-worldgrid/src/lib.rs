@@ -16,10 +16,15 @@
 //! **Slice 3** ([`icosphere`]) builds the whole planet: all twenty faces
 //! subdivided into one closed grid with the twelve pentagons spread over the
 //! icosahedron vertices, each cell carrying its shard and a stable [`CellId`].
-//! Positions still use the cheap projection; the equal-area ISEA pass and the
-//! ledger-key id layout are later slices. Adjacency is independent of the
-//! projection, so those refine it without re-deriving it.
+//!
+//! **Slice 3b** (`isea`) places every point by the **Snyder equal-area map**, so
+//! a cell covers the same area wherever it sits. That is what makes the ledgers'
+//! absolute element masses comparable across the planet, and what makes "one hex
+//! step" a single distance for the tectonic conveyor. Adjacency is independent of
+//! the projection, so this moved points without re-deriving the graph — and the
+//! ledger-key id layout is still a later slice for the same reason.
 
+mod isea;
 mod mesh;
 mod patch;
 mod sphere;

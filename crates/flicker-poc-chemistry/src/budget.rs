@@ -121,6 +121,26 @@ impl Budget {
         })
     }
 
+    /// A re-endowed copy: the same seed with per-element multipliers applied —
+    /// the Starter's knobs. Built BEFORE a world is born from it, so "immutable
+    /// once built" still means what it says: this is a different budget for a
+    /// different planet, never an edit to a running one's right-hand side.
+    ///
+    /// The planet's mass FOLLOWS the elements — triple the iron and the world
+    /// is simply heavier — because a budget whose parts no longer summed to its
+    /// whole would break the conservation invariant on the first audit. Scales
+    /// clamp at zero; an element the seed never held stays absent.
+    pub fn rescaled(&self, scales: &[(ElementId, f64)]) -> Self {
+        let mut accreted_kg = self.accreted_kg.clone();
+        for &(element, factor) in scales {
+            if let Some(mass) = accreted_kg.get_mut(&element) {
+                *mass *= factor.max(0.0);
+            }
+        }
+        let planet_mass_kg = accreted_kg.values().sum();
+        Self { accreted_kg, planet_mass_kg }
+    }
+
     /// Accreted mass of one element (0 if absent — but every element is explicit).
     pub fn accreted(&self, element: ElementId) -> f64 {
         self.accreted_kg.get(&element).copied().unwrap_or(0.0)
@@ -153,6 +173,25 @@ impl Budget {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_rescaled_budget_is_a_different_planet_whose_parts_still_sum() {
+        let b = Budget::from_repo().expect("seed loads");
+        let fe = 26u8;
+        let h = 1u8;
+        let heavy = b.rescaled(&[(fe, 3.0), (h, 0.1)]);
+        assert!((heavy.accreted(fe) - 3.0 * b.accreted(fe)).abs() < 1.0, "iron tripled");
+        assert!((heavy.accreted(h) - 0.1 * b.accreted(h)).abs() < 1.0, "hydrogen decimated");
+        // The whole follows the parts — conservation's right-hand side is
+        // internally consistent, not pinned to the old mass.
+        assert!(
+            (heavy.total() - heavy.planet_mass_kg()).abs() < 1e-3 * heavy.total(),
+            "total and planet mass agree after the re-endowment"
+        );
+        assert!(heavy.total() > b.total(), "more iron than lost hydrogen: heavier world");
+        // And the untouched elements are untouched.
+        assert_eq!(heavy.accreted(14), b.accreted(14), "silicon unchanged");
+    }
     use super::*;
     use crate::config::PLANET_MASS_KG;
 

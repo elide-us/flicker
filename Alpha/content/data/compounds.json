@@ -598,7 +598,8 @@
       "brittleness": 0.8,
       "extracted_element": "C",
       "harvestable": true,
-      "uses": "Fuel source for smelting and heating, processable into graphite, and essential to steel production with iron."
+      "uses": "Fuel source for smelting and heating, processable into graphite, and essential to steel production with iron.",
+      "note": ""
     },
     {
       "id": 26,
@@ -1143,52 +1144,54 @@
     {
       "id": 53,
       "name": "Lignin",
-      "formula": "",
+      "formula": "C9H10O2",
       "category": "biological",
       "elements": [
         {
           "symbol": "C",
-          "count": 1
+          "count": 9
         },
         {
           "symbol": "H",
-          "count": 1
+          "count": 10
         },
         {
           "symbol": "O",
-          "count": 1
+          "count": 2
         }
       ],
       "natural": true,
       "hardness_mohs": 0.5,
       "density_g_cm3": 1.35,
       "brittleness": 0.3,
-      "uses": "Provides rigidity and decay resistance in plants and can be processed into crafting/construction materials affecting wooden-structure durability."
+      "uses": "Provides rigidity and decay resistance in plants and can be processed into crafting/construction materials affecting wooden-structure durability.",
+      "sim_required": true
     },
     {
       "id": 54,
       "name": "Cellulose",
-      "formula": "",
+      "formula": "C6H10O5",
       "category": "biological",
       "elements": [
         {
           "symbol": "C",
-          "count": 1
+          "count": 6
         },
         {
           "symbol": "H",
-          "count": 1
+          "count": 10
         },
         {
           "symbol": "O",
-          "count": 1
+          "count": 5
         }
       ],
       "natural": true,
       "hardness_mohs": 0.5,
       "density_g_cm3": 1.5,
       "brittleness": 0.2,
-      "uses": "Gives plants structural support and can be made into paper, textiles, ropes, and fabrics."
+      "uses": "Gives plants structural support and can be made into paper, textiles, ropes, and fabrics.",
+      "sim_required": true
     },
     {
       "id": 55,
@@ -1326,27 +1329,28 @@
     {
       "id": 61,
       "name": "Oils",
-      "formula": "",
+      "formula": "C57H104O6",
       "category": "biological",
       "elements": [
         {
           "symbol": "C",
-          "count": 1
+          "count": 57
         },
         {
           "symbol": "H",
-          "count": 1
+          "count": 104
         },
         {
           "symbol": "O",
-          "count": 1
+          "count": 6
         }
       ],
       "natural": true,
       "hardness_mohs": 0.0,
       "density_g_cm3": 0.92,
       "brittleness": 0.0,
-      "uses": "Used for cooking, crafting, and lamp fuel, and in soaps, lotions, medicines, and alchemy recipes."
+      "uses": "Used for cooking, crafting, and lamp fuel, and in soaps, lotions, medicines, and alchemy recipes.",
+      "sim_required": true
     },
     {
       "id": 62,
@@ -2170,6 +2174,25 @@
       "brittleness": 0.0,
       "sim_required": true,
       "note": "Reducing-atmosphere nitrogen gas; the reduced counterpart to N2 in an O-starved world."
+    },
+    {
+      "id": 96,
+      "name": "Oxygen",
+      "formula": "O2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.001429,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Free molecular oxygen. Not primordial - a BIOSIGNATURE: it accumulates only where photosynthesis buries carbon faster than decay and weathering return it."
     }
+
   ]
 }

@@ -154,6 +154,10 @@ fn resolve_maps_in(textures: &HashMap<String, TextureHandle>, mat: &format::Mate
         roughness: get(&mat.roughness),
         metalness: get(&mat.metalness),
         ao: get(&mat.ao),
+        // Self-illumination. `format::Material` has carried `emit` since the
+        // content standard added it; the renderer only gained the binding now, so
+        // this is the last link — a character material naming an Emit map glows.
+        emit: get(&mat.emit),
     }
 }
 
@@ -2125,7 +2129,9 @@ impl Scene for Viewer {
             let joints = self.bone_segments(world, &globals);
             let axes = self.bone_axis_segments(world, &globals);
             let sel = self.selected_bone_seg(world, &globals);
-            const JOINT: [f32; 4] = [0.35, 0.9, 1.0, 1.0];
+            // Violet for the bone SEGMENTS — matching the Clayworks rig view's bone/joint
+            // hue split (bones violet, joint balls cyan) so the two tools read alike.
+            const BONE: [f32; 4] = [0.62, 0.50, 0.95, 1.0];
             const AXIS: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
             const SELECTED: [f32; 4] = [1.0, 0.8, 0.15, 1.0];
 
@@ -2204,7 +2210,7 @@ impl Scene for Viewer {
                         }
                     }
                     if draw_bones {
-                        r.draw_lines_overlay(jref, JOINT);
+                        r.draw_lines_overlay(jref, BONE);
                         r.draw_lines_overlay(aref, AXIS);
                         if let Some(seg) = sel {
                             r.draw_lines_overlay(&[seg], SELECTED);
@@ -2471,13 +2477,15 @@ impl Scene for Viewer {
         if self.show_skeleton || !mesh_drawn {
             let joints = self.bone_segments(world, &globals);
             let axes = self.bone_axis_segments(world, &globals);
-            const JOINT: [f32; 4] = [0.35, 0.9, 1.0, 1.0]; // cyan
+            // Violet bone segments — the Clayworks rig-view hue split (bones violet,
+            // joint balls cyan), kept in step so the two tools read alike.
+            const BONE: [f32; 4] = [0.62, 0.50, 0.95, 1.0]; // violet
             const AXIS: [f32; 4] = [1.0, 0.55, 0.1, 1.0]; // orange
             if mesh_drawn {
-                renderer.draw_lines_overlay(&joints, JOINT);
+                renderer.draw_lines_overlay(&joints, BONE);
                 renderer.draw_lines_overlay(&axes, AXIS);
             } else {
-                renderer.draw_lines(&joints, JOINT);
+                renderer.draw_lines(&joints, BONE);
                 renderer.draw_lines(&axes, AXIS);
             }
             // Highlight the SELECTED bone's segment (Slice 2) in amber, always over the top.
@@ -2590,9 +2598,9 @@ fn build_viewer(base_dir: &Path) -> Viewer {
     // The pack's runtime state machine drives the Animate view. States reference clips by
     // NAME, resolved against the model's clip list (same as the rig loader resolves tracks).
     // Missing pack → Animate simply shows bind; only a bad `initial` is fatal at build.
-    // Base A owns its locomotion pack (`<base>/PrismHumanBaseA.pack.json`, driving the Motifect
-    // clips). No Katanami fallback (legacy strip): a base with no pack of its own falls through to
-    // `load_pack` erroring → Animate shows bind.
+    // The base owns its pack by naming convention (`<base>/<Base>.pack.json` — the golem
+    // baseline pack drives the shared Motifect clips). A base with no pack of its own falls
+    // through to `load_pack` erroring → Animate shows bind.
     let pack_path = base_dir
         .file_name()
         .map(|n| base_dir.join(format!("{}.pack.json", n.to_string_lossy())))
@@ -2647,19 +2655,19 @@ fn build_viewer(base_dir: &Path) -> Viewer {
 /// Build the paperdoll rigging viewer as a boxed `Scene` for the shell's scene
 /// registry — it loads the base rig / clips / pack from the shared content tree.
 ///
-/// Content lives under `Alpha/content/package/characters/`. The BASE body is PrismHumanBaseA
-/// — a Meshy AUTO-rigged female whose 24-bone Mixamo rig was renamed to our canonical
-/// bone names (`tools/blender/rename_meshy_to_canonical.py`) and exported with
-/// retarget=true, so the shared clips drive HER proportions (rotation-only). It plays its OWN
-/// retargeted Motifect locomotion clips + `PrismHumanBaseA.pack.json`; the retired Katanami
-/// library is no longer loaded (legacy strip). Finger/twist tracks stay unresolved (no source).
+/// Content lives under `Alpha/content/package/characters/`. The BASE body is the
+/// REFERENCE — GolemBase_Low (canon 66 names + topology, retarget=true), playing the
+/// shared retarget clip library rotation-only with its own seeded baseline pack.
+/// Finger/twist tracks stay unresolved (no source in the Motifect sets).
 pub fn scene() -> Box<dyn Scene> {
-    // SMOKE TEST (WS-F, 2026-07-21): pointed at `HumanBaseA` — the first roster base run end-to-end
-    // through the in-app Rust pipeline (`flicker-content::import_folder`: scan→parse→conform→bake),
-    // NOT the Blender tool. Lets the raised-groin pelvis be judged in-window against the shared
-    // locomotion clips. Revert to `PrismHumanBaseA` (the Blender-baked reference) to compare.
-    let base_dir =
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/HumanBaseA"));
+    // THE REFERENCE BODY (Aaron, 2026-08-04): the golem IS the reference skeleton —
+    // canon 66 names + topology, near-flat foot bind. It ships no clips or pack of its
+    // own; the loader falls through to the shared `retarget/clips/locomotion` library,
+    // which resolves on it by canonical bone name.
+    let base_dir = PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../Alpha/content/package/characters/GolemBase_Low"
+    ));
     Box::new(build_viewer(&base_dir))
 }
 

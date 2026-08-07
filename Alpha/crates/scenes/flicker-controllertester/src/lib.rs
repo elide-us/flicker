@@ -25,10 +25,13 @@
 //! (`draw_ui_panel` + `draw_text`, no Lua, no `ui_elements.json`); `prism-alpha`
 //! hosts it. Esc / Start open the pause menu.
 
+mod golem;
+
 use std::time::{Duration, Instant};
 
-use flicker::render::{Renderer, Vec2};
+use flicker::render::{Rect, Renderer, Vec2};
 use flicker::scene::{Scene, Transition};
+use golem::GolemStage;
 use flicker_input_core::{
     AbstractControls, ActionSignal, AnalogFrame, ContextualBindings, EventKind, Fired, GamepadAxis,
     GamepadButton, GamepadConfig, InputBinding, InputContext, InputMap, InputState, Key, Resolver,
@@ -412,6 +415,10 @@ pub struct ControllerTester {
     /// Edge state for the context-cycle control (Tab / pad Back).
     cycle_prev: bool,
 
+    /// The centre stage: the reference body playing locomotion off the SAME
+    /// dispatched signals the right-hand panels print.
+    stage: GolemStage,
+
     gamepad_config: GamepadConfig,
     controls: AbstractControls,
     ui_theme: Option<Theme>,
@@ -430,6 +437,7 @@ impl ControllerTester {
             tick: 0,
             bus: BusFrame::default(),
             cycle_prev: false,
+            stage: GolemStage::new(),
             gamepad_config: GamepadConfig::default(),
             controls: AbstractControls::default(),
             ui_theme: None,
@@ -507,10 +515,11 @@ fn panel(r: &mut Renderer, x: f32, y: f32, w: f32, h: f32, title: &str) -> f32 {
 impl Scene for ControllerTester {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.ui_theme = Some(Theme::build(renderer));
+        self.stage.load();
         renderer.window().set_title("Flicker Controller Tester \u{00b7} Bus Inspector");
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         self.tick = self.tick.wrapping_add(1);
         self.snap = Some(input.clone());
         // Remember last frame's latch so render can show the current-vs-previous delta.
@@ -569,6 +578,11 @@ impl Scene for ControllerTester {
         // Distil the routing outcome for render (panels 2 + 3).
         self.bus = build_bus_frame(active, &self.ev, &report);
 
+        // The stage folds the SAME outcome into motion: only signals the gameplay
+        // layer consumed animate the golem, so a pushed modal context visibly stops
+        // it — the routing, made physical.
+        self.stage.drive(dt, &events, &report, self.latch.as_ref());
+
         // Scene-root consumed the Menu press → open the pause overlay. Under a modal
         // context Menu never resolves, so pausing is a World-context action (Tab back
         // to World, or press Start / Esc there).
@@ -587,14 +601,64 @@ impl Scene for ControllerTester {
     fn render(&mut self, renderer: &mut Renderer) {
         let size = renderer.size();
         let margin = 18.0;
-        renderer.draw_ui_panel(Vec2::ZERO, size, BG, BG, 0.0, 0.0, 0.0, BG, 0.0);
+
+        // ── layout: physical column LEFT · the GOLEM STAGE centre · the bus RIGHT —
+        // the Sablework arrangement: side rails framing a centre viewport. ──
+        let panel_w = (size.x * 0.30).clamp(240.0, 400.0);
+        let panel_x = size.x - panel_w - margin;
+        let content_top = TAB_Y + TAB_H + 12.0;
+        let content_bottom = size.y - 34.0;
+        let content_h = (content_bottom - content_top).max(140.0);
+        let left_x0 = margin;
+        let left_w = (size.x * 0.27).clamp(250.0, 380.0).min((panel_x - margin - 120.0).max(220.0));
+        let view_x0 = left_x0 + left_w + 10.0;
+        let view_x1 = panel_x - 10.0;
+        let view = Rect {
+            pos: Vec2::new(view_x0, content_top),
+            size: Vec2::new((view_x1 - view_x0).max(80.0), content_h),
+        };
+
+        // The 3D stage FIRST — meshes draw under the UI pass, so the chrome below
+        // frames the centre hole rather than covering the body.
+        self.stage.render(renderer, view);
+
+        // Hole-punch background: four opaque bands around the stage viewport (the
+        // old full-screen backdrop would sit OVER the 3D and hide the golem).
+        let mut band = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            if x1 > x0 && y1 > y0 {
+                renderer.draw_ui_panel(Vec2::new(x0, y0), Vec2::new(x1 - x0, y1 - y0), BG, BG, 0.0, 0.0, 0.0, BG, 0.0);
+            }
+        };
+        band(0.0, 0.0, size.x, content_top);
+        band(0.0, content_bottom, size.x, size.y);
+        band(0.0, content_top, view_x0, content_bottom);
+        band(view_x1, content_top, size.x, content_bottom);
+
+        // The stage's frame + live caption (state · clip · tick), or the load error.
+        renderer.draw_ui_panel(view.pos, view.size, [0.0; 4], [0.0; 4], 0.0, 8.0, 1.5, PANEL_BORDER, 0.0);
+        renderer.draw_text(
+            "GOLEM STAGE  \u{00b7}  signals \u{2192} motion",
+            Vec2::new(view.pos.x + 12.0, view.pos.y + 8.0),
+            12.0,
+            ACCENT,
+        );
+        match (self.stage.error.clone(), self.stage.caption()) {
+            (Some(e), _) => {
+                renderer.draw_text("reference body failed to load:", Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0), 12.0, AMBER);
+                renderer.draw_text(&e, Vec2::new(view.pos.x + 12.0, view.pos.y + 48.0), 11.0, AMBER);
+            }
+            (None, Some(c)) => {
+                renderer.draw_text(&c, Vec2::new(view.pos.x + 12.0, view.pos.y + view.size.y - 22.0), 12.0, GREENV);
+            }
+            _ => {}
+        }
 
         let snap = self.snap.as_ref();
 
         // ── header ──
         renderer.draw_text("CONTROLLER TESTER \u{00b7} LIVE BUS INSPECTOR", Vec2::new(margin, 16.0), 20.0, ACCENT);
         renderer.draw_text(
-            "click a tab \u{00b7} Tab / Back cycles context \u{00b7} Esc / Start = menu \u{00b7} Q / Guide = quit",
+            "WASD / left stick move the golem \u{00b7} Shift run \u{00b7} Ctrl crouch \u{00b7} Space jump \u{00b7} Tab / Back cycles context \u{00b7} Esc / Start = menu",
             Vec2::new(margin, 44.0),
             12.0,
             DIM,
@@ -648,23 +712,15 @@ impl Scene for ControllerTester {
             text_centered(renderer, x + w * 0.5, TAB_Y + TAB_H * 0.5, ctx_label(*ctx), 14.0, col);
         }
 
-        // ── layout: left column = physical (diagram + analog), right = the bus ──
-        let panel_w = (size.x * 0.34).clamp(240.0, 420.0);
-        let panel_x = size.x - panel_w - margin;
-        let content_top = TAB_Y + TAB_H + 12.0;
-        let content_bottom = size.y - 34.0;
-        let content_h = (content_bottom - content_top).max(140.0);
-        let left_x0 = margin;
-        let left_w = (panel_x - margin - left_x0).max(220.0);
-
-        // Diagram occupies the top ~58% of the left column; the analog panel the rest.
-        // Scale so it always fits both the left width and its vertical share.
+        // (Columns were laid out above — the stage owns the centre.) The diagram
+        // occupies the top ~58% of the LEFT column; the analog panel the rest. Scale
+        // so it always fits the narrower side column and its vertical share.
         const DIAG_HALF_W: f32 = 320.0;
         const DIAG_HALF_H: f32 = 170.0;
         let diagram_h = content_h * 0.58;
         let s = (left_w / (2.0 * DIAG_HALF_W))
             .min(diagram_h / (2.0 * DIAG_HALF_H))
-            .clamp(0.5, 1.2);
+            .clamp(0.38, 1.2);
         let dcx = left_x0 + left_w * 0.5;
         let dcy = content_top + diagram_h * 0.5;
 

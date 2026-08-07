@@ -253,8 +253,9 @@ mod tests {
             assert!(p.states > 0, "{} parsed to zero states", p.name);
             assert!(p.path.exists());
         }
-        // Katanami is the rich pack the bench opens on.
-        assert!(packs.iter().any(|p| p.name == "Katanami"));
+        // The pack the bench opens on is really in the scan — the GOLEM baseline pack,
+        // the only pack the swept content tree ships (2026-08-04).
+        assert!(packs.iter().any(|p| p.name == "GolemBase_Low"));
     }
 
     #[test]

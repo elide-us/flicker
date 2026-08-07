@@ -3,7 +3,7 @@
 //!
 //! The realized workflow (golden spec 4916D78B, node A3A3259C): open a folder of raw
 //! sources → a step wizard classifies what is in it → matches it to the canonical
-//! 66-bone skeleton → bakes the one self-describing `flicker.rig` → hot-reloads in-app.
+//! canonical skeleton → bakes the one self-describing `flicker.rig` → hot-reloads in-app.
 //! Design of record: DesignSync "Asset Processing Pipeline UI" (project
 //! `2fc44682-9c08-41a6-bb9f-c415471b15e9`, `Asset Pipeline.dc.html`).
 //!
@@ -51,8 +51,8 @@ use flicker_input_core::{
 };
 use flicker::render::{
     build_textured_verts, grid_segments_xy, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
-    MeshVertex, PbrMaps, QuadGrid, Rect, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle,
-    Vec2, Vec3,
+    MeshVertex, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting, TextureHandle,
+    TexturedMeshHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, Transition};
 use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
@@ -77,6 +77,10 @@ use flicker_mechanics::{
     autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
     Shape, Volume,
 };
+// The clip preview's playable form: the retargeter's in-memory output decoded through the
+// SAME resolve path `load_dirs` uses, then sampled per frame — no disk round-trip.
+use flicker_skeletal::format::{resolve_clips, rig_bones, Bone as SkelBone, ResolvedClip, RigFile};
+use flicker_skeletal::pose::{global_transforms, sample_local_poses};
 
 mod route;
 use route::RootHandler;
@@ -103,7 +107,11 @@ const HUD_UI_ELEMENTS: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
 
 /// Skeleton overlay colours, matching the paperdoll's rig view so the two tools read alike.
+/// JOINTS (the selectable balls) stay cyan; BONES (the octahedral diamonds between them) read
+/// violet — distinct hues so the chain structure and the grab points never blur together in the
+/// rig view (QA request, 2026-08-03).
 const JOINT: [f32; 4] = [0.35, 0.9, 1.0, 1.0];
+const BONE: [f32; 4] = [0.62, 0.50, 0.95, 1.0];
 /// The SELECTED joint ball — amber, the same "this one is being edited" role the paperdoll uses,
 /// so a clicked joint reads apart from the cyan of the rest.
 const GIZMO_SEL: [f32; 4] = [1.0, 0.8, 0.15, 1.0];
@@ -173,6 +181,16 @@ const BASE_MESH_BUDGET: usize = 150_000;
 /// through a stage that asks nothing of them.
 const WF_CHARACTER: &str = "import_character";
 const WF_PROP: &str = "import_prop";
+const WF_ANIMATION: &str = "import_animation";
+
+/// The Clip page's side-by-side pair — ROOT MOTION travels its authored path, IN PLACE
+/// treadmills at the origin, both sampled at the same shared tick so the comparison is
+/// honest (the ruled Clip-role UX: pick one, the other, or both). Corner labels ride
+/// the same composite path as [`EDITOR_QUADS`]' PERSP/TOP/… tags.
+const CLIP_VIEWS: [QuadView; 2] = [
+    QuadView { label: "ROOT MOTION", label_flipped: "ROOT MOTION", ortho: None },
+    QuadView { label: "IN PLACE", label_flipped: "IN PLACE", ortho: None },
+];
 
 /// The workflow DEFINITIONS — durable content beside `ui_templates.json`, embedded like
 /// the walker's own component modules so the wizard cannot ship without its spine.
@@ -184,7 +202,7 @@ const UI_WORKFLOWS: &str = include_str!(concat!(
 /// What the Conform stage IS for the loaded asset.
 ///
 /// Conform is ONE step in the rail carrying SEVERAL ROLES, because "rig this" means something
-/// different per class: a character maps its skeleton onto the canonical 66 bones, a prop/garment
+/// different per class: a character maps its skeleton onto the canonical bone set, a prop/garment
 /// binds to a mount socket, an animation adjusts its clips. Before this the page was the character
 /// path only, so a prop reached it and found an empty bone map with four sliders addressing
 /// nothing — a dead page it had to walk past.
@@ -199,8 +217,8 @@ enum ConformRole {
     Skeleton,
     /// Prop / garment: mount socket + placement (offset / rotation / per-axis scale).
     Mount,
-    /// Animation: clip adjustment. NOT wired — the page says so rather than showing controls
-    /// that address nothing, which is the trap this whole type exists to close.
+    /// Animation: the active BVH retargeted onto the reference skeleton, previewed as the
+    /// side-by-side RootMotion / In-Place pair; the user picks what Commit keeps.
     Clip,
 }
 
@@ -232,7 +250,7 @@ impl ConformRole {
         match self {
             Self::Skeleton => "$ap_map_the_source_skeleton_to_the_internal",
             Self::Mount => "$ap_bind_the_piece_to_a_socket_then_place_it",
-            Self::Clip => "$ap_clip_adjustment_is_not_wired_yet_this_as",
+            Self::Clip => "$ap_preview_both_variants_pick_what_commit_k",
         }
     }
 }
@@ -368,7 +386,7 @@ struct Rig {
     /// Whether a joint is FOCUSED — has the gizmo and receives ortho nudges. Click a joint (Perspective,
     /// or Ctrl-click an ortho view) or a bone-map row to focus; click empty space to deselect.
     focused: bool,
-    /// First visible row — the bone list is 66 rows in a 150px box, so it pages.
+    /// First visible row — the bone list is the full canon in a 150px box, so it pages.
     window: usize,
 }
 
@@ -462,6 +480,94 @@ impl PropFit {
 }
 
 /// The loaded source folder — what Load produced, plus what each later stage added.
+/// The Animation workflow's WORKING STATE — the active BVH retargeted onto the reference
+/// skeleton IN MEMORY, both variants resolved and playable, plus the exact emitted JSON so
+/// Commit writes precisely what the preview showed. Built by `prepare_clip` (idempotent,
+/// the sibling of `analyze`/`conform`); a pick clears it to re-run.
+struct ClipPreview {
+    /// The reference skeleton the clips were baked onto (decoded from the emitted clip).
+    bones: Vec<SkelBone>,
+    /// Per-bone parent indices, in `bones` order — the overlay helpers' shape.
+    parents: Vec<i32>,
+    ip: ResolvedClip,
+    rm: ResolvedClip,
+    /// Ticks — both variants share it (same source frames, same 60 Hz canon).
+    duration: u32,
+    /// Rest-pose framing: half-extent, ground height, and centre.
+    radius: f32,
+    floor: f32,
+    ip_center: Vec3,
+    /// RootMotion framing widened to the pelvis's planar TRAVEL, so the walk stays in shot.
+    rm_center: Vec3,
+    rm_radius: f32,
+    /// The retargeter's verbatim output — what Commit writes (no re-run, no drift).
+    variants: flicker_content::retarget::ClipVariants,
+}
+
+impl ClipPreview {
+    /// Decode the retargeter's in-memory output into a playable preview: parse both clip
+    /// JSONs, take the embedded reference skeleton, resolve the tracks through the SAME
+    /// path `load_dirs` uses, and derive the two panels' framing.
+    fn resolve(variants: flicker_content::retarget::ClipVariants) -> Result<Self, String> {
+        let ip_file: RigFile = serde_json::from_value(variants.in_place.clone())
+            .map_err(|e| format!("in-place clip: {e}"))?;
+        let rm_file: RigFile = serde_json::from_value(variants.root_motion.clone())
+            .map_err(|e| format!("root-motion clip: {e}"))?;
+        let bones = rig_bones(&ip_file);
+        if bones.is_empty() {
+            return Err("clip carries no skeleton".into());
+        }
+        let parents: Vec<i32> = bones.iter().map(|b| b.parent).collect();
+        let ip = resolve_clips(&ip_file, &bones, false)
+            .pop()
+            .ok_or("in-place clip resolved empty")?;
+        let rm = resolve_clips(&rm_file, &bones, false)
+            .pop()
+            .ok_or("root-motion clip resolved empty")?;
+        let duration = ip.duration_ticks.max(rm.duration_ticks).max(1);
+
+        // Rest framing from the skeleton's own joint extent — a clip has no mesh.
+        let rest_locals: Vec<Mat4> = bones.iter().map(|b| b.local).collect();
+        let rest = global_transforms(&bones, &rest_locals);
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(f32::MIN);
+        for g in &rest {
+            let p = g.w_axis.truncate();
+            min = min.min(p);
+            max = max.max(p);
+        }
+        let radius = ((max - min).length() * 0.5).max(1.0);
+        let ip_center = (min + max) * 0.5;
+
+        // The RootMotion panel frames the TRAVEL: the pelvis carries the planar
+        // translation (In-Place pins exactly that), so its key extent widens the shot.
+        let (mut tmin, mut tmax) = (Vec2::ZERO, Vec2::ZERO);
+        if let Some(pi) = bones.iter().position(|b| b.name == "pelvis") {
+            if let Some(tr) = rm.tracks.iter().find(|t| t.bone == pi) {
+                for k in &tr.keys {
+                    let p = Vec2::new(k.translation[0], k.translation[1]);
+                    tmin = tmin.min(p);
+                    tmax = tmax.max(p);
+                }
+            }
+        }
+        let travel = (tmax + tmin) * 0.5;
+        Ok(Self {
+            rm_center: ip_center + Vec3::new(travel.x, travel.y, 0.0),
+            rm_radius: radius + (tmax - tmin).length() * 0.5,
+            bones,
+            parents,
+            ip,
+            rm,
+            duration,
+            radius,
+            floor: min.z,
+            ip_center,
+            variants,
+        })
+    }
+}
+
 struct Source {
     dir: PathBuf,
     scan: Scan,
@@ -496,6 +602,9 @@ struct Source {
     committed: Option<PathBuf>,
     /// Set when a stage failed, shown in the inspector instead of a fabricated result.
     error: Option<String>,
+    /// The Animation workflow's retargeted, playable preview — `None` until
+    /// `prepare_clip` runs (and for every other class, always).
+    clip: Option<ClipPreview>,
 }
 
 impl Source {
@@ -666,6 +775,18 @@ pub struct AssetPipeline {
     /// zooms independently — a viewport control acts only on the panel under the cursor. Only view 0
     /// (PERSP) uses yaw/pitch; the ortho views are fixed axes and read only `pan` + `zoom`.
     orbits: [Orbit; 4],
+    /// The Clip page's side-by-side pair, tiled in the SAME holder rect as the 2×2 —
+    /// exactly one of the two grids renders per frame (the frame graph's offscreen
+    /// passes reset the draw queues, so they must never both run).
+    clip_grid: Option<QuadGrid>,
+    /// One camera per clip panel (`CLIP_VIEWS` order: ROOT MOTION, IN PLACE).
+    clip_orbits: [Orbit; 2],
+    /// The shared playback clock, in CLIP TICKS (fractional between samples); both
+    /// panels read it so the variants stay in lockstep. Wraps at the clip duration.
+    clip_tick: f32,
+    /// The side-by-side pick — what Commit keeps (ruled: one, the other, or both).
+    variant_ip: bool,
+    variant_rm: bool,
     show_skeleton: bool,
     /// Cached last cursor, for orbit dragging.
     last_mouse: Vec2,
@@ -875,7 +996,12 @@ fn upload_preview(
     Uploaded::Textured {
         mesh,
         albedo,
-        maps: PbrMaps { normal, roughness, metalness, ao: None },
+        // `emit: None` — the ingest classifier (`flicker_content::SourceMaps`) has no
+        // emissive slot yet, so nothing here has a map to bind even though
+        // `flicker_skeletal::format::Material` already carries an `emit` field and
+        // the content standard mandates the map. TRACKED GAP, not an omission:
+        // closing it means teaching `source_maps` the `_Emit` suffix.
+        maps: PbrMaps { normal, roughness, metalness, ao: None, emit: None },
     }
 }
 
@@ -1065,6 +1191,11 @@ impl AssetPipeline {
             grid: None,
             quad_rect: None,
             orbits: [Orbit::default(); 4],
+            clip_grid: None,
+            clip_orbits: [Orbit::default(); 2],
+            clip_tick: 0.0,
+            variant_ip: true,
+            variant_rm: true,
             show_skeleton: true,
             last_mouse: Vec2::ZERO,
             bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
@@ -1155,11 +1286,20 @@ impl AssetPipeline {
                 // EVERY riggable mesh, not only an unambiguous one: a weapon set holds four or five
                 // pieces and an outfit folder holds tops/pants/gloves/shoes, so the editor OFFERS
                 // the choice (the Load picker) instead of refusing the folder. The first is
-                // pre-selected so the wizard is never stuck.
-                let candidates: Vec<PathBuf> = scan.candidates().map(|e| e.path.clone()).collect();
-                let error = candidates
-                    .is_empty()
-                    .then(|| format!("No riggable mesh in {}", dir.display()));
+                // pre-selected so the wizard is never stuck. The ANIMATION workflow's candidates
+                // are the folder's BVH clips instead — same picker, different kind.
+                let (candidates, error): (Vec<PathBuf>, Option<String>) =
+                    if self.pending_class == Some(AssetClass::Animation) {
+                        let c: Vec<PathBuf> =
+                            scan.of_kind(Kind::Bvh).map(|e| e.path.clone()).collect();
+                        let e = c.is_empty().then(|| format!("No BVH clips in {}", dir.display()));
+                        (c, e)
+                    } else {
+                        let c: Vec<PathBuf> = scan.candidates().map(|e| e.path.clone()).collect();
+                        let e =
+                            c.is_empty().then(|| format!("No riggable mesh in {}", dir.display()));
+                        (c, e)
+                    };
                 let fbx = candidates.first().cloned().unwrap_or_default();
                 tracing::info!(
                     "scanned {}: {} entries, {} riggable, {textures} textures",
@@ -1191,6 +1331,7 @@ impl AssetPipeline {
                     fit_window: 0,
                     committed: None,
                     error,
+                    clip: None,
                 });
                 // The DISPATCH: the class declared on the Task page picks WHICH linear
                 // workflow definition runs (character rail vs the attach-less prop rail) —
@@ -1220,6 +1361,11 @@ impl AssetPipeline {
     /// FDD Layer B and deliberately not started here.
     fn analyze(&mut self) {
         let Some(src) = self.source.as_mut() else { return };
+        // An Animation source's candidates are BVH files, not FBX meshes — its stage
+        // runner is `prepare_clip`, the sibling of this one, so there is nothing to parse.
+        if src.class() == Some(AssetClass::Animation) {
+            return;
+        }
         if src.parsed.is_some() || src.fbx.as_os_str().is_empty() {
             return;
         }
@@ -1262,7 +1408,7 @@ impl AssetPipeline {
         if src.rig.is_some() {
             return;
         }
-        // Conform is the CHARACTER path — it maps a biped skeleton onto the 66-bone
+        // Conform is the CHARACTER path — it maps a biped skeleton onto the canonical
         // reference. A Prop or Animation has no such skeleton, so the wizard routes by the
         // confirmed class rather than forcing every asset through it: running it on a
         // skeleton-less mesh is exactly the misleading "no skeleton" failure. Their bake
@@ -1303,6 +1449,37 @@ impl AssetPipeline {
         }
     }
 
+    /// CLIP — the Animation workflow's stage runner, the sibling of `analyze`/`conform`:
+    /// retarget the ACTIVE BVH onto the reference skeleton IN MEMORY and resolve both
+    /// variants for playback. Nothing touches disk until Commit. Idempotent (a pick
+    /// clears `clip` to re-run); a failure surfaces in the inspector, never invents.
+    fn prepare_clip(&mut self) {
+        let Some(src) = self.source.as_mut() else { return };
+        if src.clip.is_some()
+            || src.class() != Some(AssetClass::Animation)
+            || src.fbx.as_os_str().is_empty()
+        {
+            return;
+        }
+        let built = flicker_content::retarget::build_variants(&src.fbx, &default_reference())
+            .map_err(|e| e.to_string())
+            .and_then(ClipPreview::resolve);
+        match built {
+            Ok(cp) => {
+                tracing::info!(
+                    "retargeted {}: {} ticks, {} bones",
+                    src.fbx.display(),
+                    cp.duration,
+                    cp.bones.len()
+                );
+                src.clip = Some(cp);
+                src.error = None;
+                self.clip_tick = 0.0;
+            }
+            Err(e) => src.error = Some(format!("Clip retarget failed: {e}")),
+        }
+    }
+
     /// COMMIT — bake the conformed model and write `flicker.rig` into STAGING. The authored bone
     /// offsets are baked in by re-deriving the model first, so what eventually ships is exactly
     /// what the viewport showed.
@@ -1310,7 +1487,23 @@ impl AssetPipeline {
     /// This writes the bench's OUTPUT; it does not publish. The asset reaches the tree the game
     /// loads from only when the Content Manager promotes it out of staging.
     fn commit(&mut self) {
-        self.commit_to(&characters_dir());
+        let root = self.commit_root();
+        self.commit_to(&root);
+    }
+
+    /// Where THIS source's commit lands, by what it is: clip variants → the shared
+    /// retarget library; ENVIRONMENT props → their own `staging/props/` tier (a tree is
+    /// not a character); characters, garments and worn accessories → `staging/characters/`.
+    /// Every root is STAGING — the Quartermaster's promote pass is the only door into
+    /// `package/`, the one tree the engine loads content from.
+    fn commit_root(&self) -> PathBuf {
+        let class = self.source.as_ref().and_then(|s| s.class());
+        let prop = self.source.as_ref().map(|s| s.prop);
+        match (class, prop) {
+            (Some(AssetClass::Animation), _) => clips_dir(),
+            (Some(AssetClass::Prop), Some(PropKind::Environment)) => props_dir(),
+            _ => characters_dir(),
+        }
     }
 
     /// The commit itself, against an explicit root — so the write path is exercisable against a
@@ -1319,9 +1512,29 @@ impl AssetPipeline {
     /// bakes a garment SKINNED onto the base body. `flicker-content` owns every bake; this only
     /// routes and records the outcome.
     fn commit_to(&mut self, root: &Path) {
+        // The ANIMATION path first: it has no parsed FBX — its input is the retargeted
+        // preview, its output the PICKED clip variants (ruled: one, the other, or both).
+        if self.source.as_ref().and_then(|s| s.class()) == Some(AssetClass::Animation) {
+            self.commit_clip_to(root);
+            return;
+        }
+        // Export must never be a SILENT no-op (QA 2026-08-03: "doesn't always end up
+        // producing an object in the staging folder" — this early-return was why): with
+        // nothing parsed there is nothing to bake, and the refusal lands where every
+        // other stage failure does, in the inspector.
+        {
+            let Some(src) = self.source.as_mut() else { return };
+            if src.parsed.is_none() {
+                src.error = Some(
+                    "Nothing is parsed — the source never loaded, so there is nothing to commit."
+                        .to_string(),
+                );
+                return;
+            }
+        }
         // Read everything under a shared borrow, then drop it before the write + the mutable
         // outcome record (so the borrow checker stays happy across the class dispatch).
-        let (class, prop, name, model, has_rig, fit, fbx) = {
+        let (class, prop, name, model, has_rig, fit, fbx, mounts) = {
             let Some(src) = self.source.as_ref() else { return };
             let Some(parsed) = src.parsed.as_ref() else { return };
             let mut model = parsed.model.clone();
@@ -1339,9 +1552,21 @@ impl AssetPipeline {
                 scale: src.fit.scale,
                 uniform: src.fit.uniform,
             };
+            // The character's authored attach POINTS (the Attach stage's output) — handed
+            // to the bake so the six tuned placements SHIP in the rig's `attach_points`
+            // block instead of being discarded at export (the audited third-step gap).
+            let mounts: Vec<flicker_content::MountPoint> = src
+                .attach
+                .iter()
+                .map(|p| flicker_content::MountPoint {
+                    id: p.id.to_string(),
+                    bone: p.parent.to_string(),
+                    offset: p.offset,
+                })
+                .collect();
             // The mesh file this came from — the prop/garment bakes read its FOLDER for the vendor's
             // texture maps, and its NAME tells one set piece's maps from another's.
-            (src.class(), src.prop, src.asset_name().to_string(), model, src.rig.is_some(), fit, src.fbx.clone())
+            (src.class(), src.prop, src.asset_name().to_string(), model, src.rig.is_some(), fit, src.fbx.clone(), mounts)
         };
 
         let dir = root.join(&name);
@@ -1357,13 +1582,12 @@ impl AssetPipeline {
                 Some(AssetClass::Prop) => {
                     write_prop(&model, &fbx, &name, &out, &fit).map_err(|e| e.to_string())
                 }
-                Some(AssetClass::Animation) => {
-                    Err("Animation bake (clip retarget) is not wired into the editor yet.".to_string())
-                }
+                // Animation never reaches this dispatch — routed to `commit_clip_to` above.
+                Some(AssetClass::Animation) => unreachable!("animation commits via commit_clip_to"),
                 // Character: requires the conform to have produced a rig.
                 _ => {
                     if has_rig {
-                        write_rig(&model, &fbx, &name, &out).map_err(|e| e.to_string())
+                        write_rig(&model, &fbx, &name, &out, &mounts).map_err(|e| e.to_string())
                     } else {
                         Err("Conform has not run — nothing to commit.".to_string())
                     }
@@ -1379,6 +1603,97 @@ impl AssetPipeline {
             }
             Err(e) => src.error = Some(e),
         }
+    }
+
+    /// The Animation commit: write the PICKED variants of the previewed clip under
+    /// `<root>/<Set>/{In-Place,RootMotion}/<stem>.json` — the retargeter's VERBATIM
+    /// output, so what lands in staging is exactly what the side-by-side showed.
+    /// Root-parameterized for scratch-dir tests, like the character path.
+    fn commit_clip_to(&mut self, root: &Path) {
+        let (ip, rm) = (self.variant_ip, self.variant_rm);
+        let outcome = {
+            let Some(src) = self.source.as_ref() else { return };
+            match src.clip.as_ref() {
+                None => Err("Clip retarget has not run — nothing to commit.".to_string()),
+                Some(_) if !ip && !rm => {
+                    Err("Pick at least one variant (Root Motion / In-Place) to commit.".to_string())
+                }
+                Some(cp) => flicker_content::retarget::write_variants(
+                    &cp.variants,
+                    &root.join(src.asset_name()),
+                    ip,
+                    rm,
+                )
+                .map_err(|e| e.to_string()),
+            }
+        };
+        let Some(src) = self.source.as_mut() else { return };
+        match outcome {
+            Ok(paths) => {
+                tracing::info!(
+                    "committed {} clip variant(s) for {}",
+                    paths.len(),
+                    src.asset_name()
+                );
+                src.committed = paths.into_iter().next();
+                src.error = None;
+            }
+            Err(e) => src.error = Some(e),
+        }
+    }
+
+    /// The Clip page's draw: both variants sampled at the SHARED tick, each into its
+    /// own panel — ROOT MOTION through a frame widened to its planar travel, IN PLACE
+    /// at rest framing. Same conventions as the 2×2 (recentre to origin, violet bones
+    /// under cyan joint balls, depth-tested ground lattice).
+    fn render_clip(&mut self, renderer: &mut Renderer, base_layer: f32) {
+        let Some(grid) = self.clip_grid.as_ref() else { return };
+        let Some(cp) = self.source.as_ref().and_then(|s| s.clip.as_ref()) else { return };
+        let tick = (self.clip_tick as u32).min(cp.duration.saturating_sub(1));
+        let pose = |clip: &ResolvedClip| {
+            let locals = sample_local_poses(&cp.bones, clip, tick, false);
+            global_transforms(&cp.bones, &locals)
+        };
+        let min_r = (cp.radius * BALL_MIN_FRAC).max(0.2);
+        let max_r = (cp.radius * BALL_MAX_FRAC).max(min_r);
+        // One panel's overlay set: diamonds + balls recentred on its framing, plus the
+        // ground lattice at the skeleton's feet (sized to the panel's own extent).
+        let panel = |globals: &[Mat4], centre: Vec3, extent: f32| {
+            let recentre = Mat4::from_translation(-centre);
+            let radii = debug::joint_ball_radii(&cp.parents, globals, BALL_LEN_FRAC, min_r, max_r);
+            let bones = debug::bone_diamonds(recentre, &cp.parents, globals, BONE_WAIST_FRAC);
+            let mut balls = Segments::new();
+            for (i, g) in globals.iter().enumerate() {
+                let c = recentre.transform_point3(g.w_axis.truncate());
+                balls.extend(debug::wireframe(&Shape::Sphere { center: c, radius: radii[i] }));
+            }
+            let ground = grid_segments_xy(extent * 0.25, extent * 2.5, cp.floor - centre.z);
+            (bones, balls, ground)
+        };
+        let panels = [
+            panel(&pose(&cp.rm), cp.rm_center, cp.rm_radius),
+            panel(&pose(&cp.ip), cp.ip_center, cp.radius),
+        ];
+        let cameras: Vec<Camera> = [cp.rm_radius, cp.radius]
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| {
+                grid.camera(i, self.clip_orbits[i].ortho_radius(r), &self.clip_orbits[i].camera(r))
+            })
+            .collect();
+        grid.render_with(renderer, base_layer + 2.0, &cameras, |r, view| {
+            r.set_scene(SceneLighting::default());
+            let (bones, balls, ground) = &panels[view];
+            if !ground.is_empty() {
+                r.draw_lines(ground, GROUND);
+            }
+            if !bones.is_empty() {
+                r.draw_lines_overlay(bones, BONE);
+            }
+            if !balls.is_empty() {
+                r.draw_lines_overlay(balls, JOINT);
+            }
+        });
     }
 
     /// The engine-requirement checks the Review stage reports — each computed from real state, so
@@ -1411,7 +1726,13 @@ impl AssetPipeline {
                 ];
             }
             Some(AssetClass::Animation) => {
-                return vec![(false, r("$ap_req_animation_bake_is_not_wired_yet"))];
+                return vec![
+                    (src.clip.is_some(), r("$ap_req_clip_retargets_onto_the_reference")),
+                    (
+                        self.variant_ip || self.variant_rm,
+                        r("$ap_req_at_least_one_variant_selected"),
+                    ),
+                ];
             }
             _ => {}
         }
@@ -1965,7 +2286,7 @@ impl AssetPipeline {
         let (title, hint) = match step.as_str() {
             "conform" => (role.title(), role.hint()),
             "attach" => ("$ap_attach_points", "$ap_position_hold_holster_and_belt_attach_po"),
-            "review" => ("$ap_review_export", "$ap_verify_engine_requirements_then_hand_off"),
+            "review" => ("$ap_review_export", "$ap_verify_engine_requirements_then_export"),
             // "task" — and the unreachable arm a bad definition would land in.
             _ => ("$ap_select_workflow", "$ap_choose_the_kind_of_asset_you_are_importi"),
         };
@@ -1975,6 +2296,9 @@ impl AssetPipeline {
         m.set("show_base", self.show_base);
         m.set("show_collision", self.show_collision);
         m.set("mirror", self.mirror_joints);
+        // The Clip page's variant pick — checkbox state, mirrored like the toggles above.
+        m.set("variant_rm", self.variant_rm);
+        m.set("variant_ip", self.variant_ip);
 
         // Rail chips are ENTIRELY the workflow runtime's: `publish` below writes each
         // step's `wf_<id>_title` (pre-localized), `wf_<id>_style` (workflow.chip.active /
@@ -2022,6 +2346,17 @@ impl AssetPipeline {
         // (a weapon set, an outfit) — a single-mesh folder never shows it.
         let several = self.source.as_ref().map(|s| s.candidates.len() > 1).unwrap_or(false);
         m.set("on_pick", step == "conform" && several);
+        // The picker's header names what it lists — meshes for the rig path, BVH
+        // clips for the animation path (the rows themselves are class-agnostic).
+        m.set(
+            "pick_head",
+            strings::resolve(if role == ConformRole::Clip {
+                "$ap_clips_in_this_folder"
+            } else {
+                "$ap_meshes_in_this_folder"
+            })
+            .into_owned(),
+        );
         self.pick_model(&mut m);
 
         // Per-step content gates by the step's SURFACE key ("task" / "attach" / "review"),
@@ -2091,7 +2426,7 @@ impl AssetPipeline {
         );
         m.set("rig_progress", if total > 0 { ok as f64 / total as f64 } else { 0.0 });
 
-        // The visible window of the bone map — six rows of a 66-row list.
+        // The visible window of the bone map — six rows of the full canon list.
         for i in 0..BONE_ROWS {
             let idx = rig.window + i;
             match (parsed.model.bones.get(idx), rig.map.get(idx)) {
@@ -2298,7 +2633,7 @@ impl AssetPipeline {
         let committed = self.source.as_ref().and_then(|s| s.committed.as_ref());
         m.set(
             "commit_label",
-            strings::resolve(if committed.is_some() { "$ap_exported" } else { "$ap_export_to_pack_editor" })
+            strings::resolve(if committed.is_some() { "$ap_exported" } else { "$ap_export_to_staging" })
                 .into_owned(),
         );
         m.set("commit_enabled", reqs.iter().all(|(ok, _)| *ok));
@@ -2345,21 +2680,43 @@ impl AssetPipeline {
                 let is_clothing = cls == Some(AssetClass::Prop) && src.prop == PropKind::Clothing;
                 out.push(format!("{} {}.", r("$ap_class"), class_label(cls)));
                 out.push(String::new());
-                out.push(r("$ap_rigging_maps_a_biped_skeleton_onto_the"));
-                out.push(r("$ap_66_bone_reference_this_asset_has_none"));
-                out.push(r("$ap_so_it_is_skipped"));
-                out.push(String::new());
                 match cls {
-                    Some(AssetClass::Animation) => {
-                        out.push(r("$ap_animation_clip_retarget_is_not_wired_yet"));
-                    }
-                    _ if is_clothing => {
-                        out.push(r("$ap_export_skins_this_garment_onto_the_base"));
-                        out.push(r("$ap_nearest_vertex_weight_transfer_fit_baked"));
-                    }
+                    // The Clip page reports the RETARGETED preview's real facts — file,
+                    // length, and the variant pick Commit will honour.
+                    Some(AssetClass::Animation) => match src.clip.as_ref() {
+                        None => out.push(r("$ap_retarget_runs_when_this_stage_is_reached")),
+                        Some(cp) => {
+                            let secs = cp.duration as f32 / cp.ip.tick_rate_hz.max(1) as f32;
+                            out.push(format!("{:<11}{}", r("$ap_clip"), src.file_name()));
+                            out.push(format!(
+                                "{:<11}{} · {:.1}s",
+                                r("$ap_duration"),
+                                cp.duration,
+                                secs
+                            ));
+                            let mark = |on: bool| if on { "[x]" } else { "[ ]" };
+                            out.push(format!(
+                                "{:<11}{} {} · {} {}",
+                                r("$ap_variants"),
+                                mark(self.variant_rm),
+                                r("$ap_root_motion"),
+                                mark(self.variant_ip),
+                                r("$ap_in_place"),
+                            ));
+                        }
+                    },
                     _ => {
-                        out.push(r("$ap_export_bakes_the_static_prop_mesh_its_so"));
-                        out.push(r("$ap_and_fit_are_authored_in_the_paperdoll"));
+                        out.push(r("$ap_rigging_maps_a_biped_skeleton_onto_the"));
+                        out.push(r("$ap_67_bone_reference_this_asset_has_none"));
+                        out.push(r("$ap_so_it_is_skipped"));
+                        out.push(String::new());
+                        if is_clothing {
+                            out.push(r("$ap_export_skins_this_garment_onto_the_base"));
+                            out.push(r("$ap_nearest_vertex_weight_transfer_fit_baked"));
+                        } else {
+                            out.push(r("$ap_export_bakes_the_static_prop_mesh_its_so"));
+                            out.push(r("$ap_and_fit_are_authored_in_the_paperdoll"));
+                        }
                     }
                 }
             }
@@ -2457,7 +2814,7 @@ impl AssetPipeline {
         match self.wf.step() {
             "conform" if matches!(src.class(), Some(AssetClass::Prop | AssetClass::Animation)) => {
                 match src.class() {
-                    Some(AssetClass::Animation) => r("$ap_badge_not_wired"),
+                    Some(AssetClass::Animation) => r("$ap_badge_clip"),
                     _ if src.prop == PropKind::Clothing => r("$ap_badge_garment"),
                     _ => r("$ap_badge_static"),
                 }
@@ -2497,6 +2854,7 @@ impl AssetPipeline {
         src.committed = None;
         src.error = None;
         src.fit = PropFit::default();
+        src.clip = None;
         // Restart the SAME definition and land back on its rig view — the open folder
         // still satisfies the Task gate, so the fresh instance advances immediately.
         self.wf = Workflow::from_def(&self.wf_def);
@@ -2515,7 +2873,8 @@ impl AssetPipeline {
     /// character-only Attach step (the old `step_applies` skip, now a definition in data).
     fn dispatch_workflow(&mut self, class: Option<AssetClass>) {
         let name = match class {
-            Some(AssetClass::Prop | AssetClass::Animation) => WF_PROP,
+            Some(AssetClass::Prop) => WF_PROP,
+            Some(AssetClass::Animation) => WF_ANIMATION,
             Some(AssetClass::Skin) | None => WF_CHARACTER,
         };
         match self.workflows.get(name) {
@@ -2545,11 +2904,17 @@ impl AssetPipeline {
         if !src.attach.is_empty() {
             d.set("attach", true);
         }
-        // The mount binding applies to (and is always authorable for) a Prop — a socket is
-        // always selected and its placement defaults are valid. A Clip-role animation lacks
-        // the key, which is what stops the wizard at its honestly-unwired page.
-        if src.class() == Some(AssetClass::Prop) {
+        // The mount binding applies to a Prop — but only once its MESH actually parsed.
+        // Unconditional, this let a folder with nothing loadable walk to Review and
+        // "export" nothing (the silent-commit repro from the QA pass).
+        if src.class() == Some(AssetClass::Prop) && src.parsed.is_some() {
             d.set("fit", true);
+        }
+        // The Animation gate: the active BVH retargeted and previewable. Present exactly
+        // when `prepare_clip` succeeded — a failed retarget leaves the wizard at the Clip
+        // page with the error in the inspector, fail-loud.
+        if src.clip.is_some() {
+            d.set("clip", true);
         }
         if src.committed.is_some() {
             d.set("committed", true);
@@ -2620,6 +2985,9 @@ impl AssetPipeline {
                     src.rig = None;
                     src.committed = None;
                     src.error = None;
+                    // The clip preview derives from the ACTIVE pick; the conform-step
+                    // runner (`prepare_clip`) rebuilds it next frame, like analyze/conform.
+                    src.clip = None;
                 }
             }
         }
@@ -2810,7 +3178,8 @@ const TRI_BUDGET: usize = 4_000;
 /// what every other part of the engine quotes. Canon value; the
 /// `reference_rig_still_has_the_canonical_bone_count` test asserts it against the reference file
 /// itself, so this cannot drift away from the content it describes.
-const REFERENCE_BONES: usize = 66;
+// THE canon count — read from the authored baseline table, never restated.
+const REFERENCE_BONES: usize = flicker_content::baseline::CANON_BONES;
 
 /// What a CONFORMED model carries, one short of the canonical count: `root` is synthesized at
 /// bone 0 by `bake_rig`, not by conform, so a 65-bone conform result is complete. Deriving it
@@ -3055,6 +3424,20 @@ fn characters_dir() -> PathBuf {
     flicker_content::roots().staging().join("characters")
 }
 
+/// Where committed CLIP VARIANTS land — the shared retarget library's STAGING tier,
+/// mirroring the package layout the paperdoll reads (`retarget/clips/<set>/…`), reached
+/// by promotion exactly like [`characters_dir`]'s rigs.
+fn clips_dir() -> PathBuf {
+    flicker_content::roots().staging().join("retarget").join("clips")
+}
+
+/// Where committed ENVIRONMENT props land — their own staging tier (`staging/props/`):
+/// a tree filed under `characters/` would read as classified nonsense in the
+/// Quartermaster. Promoted into the package like everything else.
+fn props_dir() -> PathBuf {
+    flicker_content::roots().staging().join("props")
+}
+
 /// The asset's bounding CENTRE and half-extent — the framing the viewport needs.
 ///
 /// Measured from the MESH when there is one (a prop carries no skeleton at all) and from the bone
@@ -3100,6 +3483,7 @@ impl Scene for AssetPipeline {
         // The shared 2×2 editor viewport (Perspective TL, Top TR, Side BL, Front BR) —
         // the same grid the paperdoll uses, owned by flicker-render.
         self.grid = Some(QuadGrid::editor(renderer));
+        self.clip_grid = Some(QuadGrid::new(renderer, &CLIP_VIEWS, 2));
         // Built once and handed to each PauseScene we push, so pausing never re-uploads.
         self.ui_theme = Some(Theme::build(renderer));
         // PRE-LOAD the fitting body (the clay Golem) WITH the scene — mesh and all — so turning
@@ -3120,7 +3504,7 @@ impl Scene for AssetPipeline {
         }
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
         // The HUD walks first: it lays out the framed holder, and the rect it reserves for the 2×2 is
         // what the viewport controls below pick against — a cursor outside the holder (over the editor
         // rail or a bar) lands on no view, so the chrome no longer has to "claim" the pointer. Its
@@ -3168,6 +3552,11 @@ impl Scene for AssetPipeline {
             if let Some(g) = self.grid.as_mut() {
                 g.set_viewport(viewport);
             }
+            // The clip pair tiles in the SAME holder rect — whichever grid renders
+            // this frame, the panels land inside the frame the HUD reserved.
+            if let Some(g) = self.clip_grid.as_mut() {
+                g.set_viewport(viewport);
+            }
             let results = frame.results;
             // The walker's canonical "pointer over UI" verdict — handed to the WalkerHandler
             // layer in the dispatch below so the event bus, not a hand-rolled gate, owns
@@ -3181,6 +3570,12 @@ impl Scene for AssetPipeline {
             // reads false and would clear it). Bake Skin re-weights the mesh to the repositioned rig.
             if self.wf.step() == "conform" {
                 self.mirror_joints = results.is_on("mirror");
+            }
+            // The variant pick — read only on the Clip page, where its checkboxes live
+            // (off the stage `is_on` reads false and would clear the choice).
+            if self.wf.step() == "conform" && self.conform_role() == ConformRole::Clip {
+                self.variant_rm = results.is_on("variant_rm");
+                self.variant_ip = results.is_on("variant_ip");
             }
             if results.is_on("bake_skin") {
                 self.bake_skin_now();
@@ -3293,6 +3688,13 @@ impl Scene for AssetPipeline {
         if self.wf.step() == "conform" {
             self.analyze();
             self.conform();
+            // The Animation sibling: retarget the active BVH once, then let the shared
+            // clock run — both panels sample the same tick, wrapped at the clip length.
+            self.prepare_clip();
+        }
+        if let Some(cp) = self.source.as_ref().and_then(|s| s.clip.as_ref()) {
+            let hz = cp.ip.tick_rate_hz.max(1) as f32;
+            self.clip_tick = (self.clip_tick + dt.as_secs_f32() * hz) % cp.duration as f32;
         }
 
         // A left-click on an ORTHO panel's corner label flips that view to its opposite side
@@ -3358,6 +3760,16 @@ impl Scene for AssetPipeline {
     fn render(&mut self, renderer: &mut Renderer) {
         let base_layer = renderer.layer();
 
+        // THE CLIP PAGE swaps the 2×2 rig grid for the side-by-side variant pair.
+        // Exactly ONE grid drives the frame graph per frame — its offscreen passes
+        // reset the per-frame draw queues, so both running would discard each other.
+        let clip_active = self.wf.step() == "conform"
+            && self.conform_role() == ConformRole::Clip
+            && self.source.as_ref().map(|s| s.clip.is_some()).unwrap_or(false);
+        if clip_active {
+            self.render_clip(renderer, base_layer);
+        }
+
         // The four views FIRST. `QuadGrid::render` drives the shared `FrameGraph`, whose
         // offscreen passes RESET the per-frame draw queues (the centralized "render RTTs
         // before the main view" rule) — so anything queued before this is discarded, and
@@ -3365,7 +3777,7 @@ impl Scene for AssetPipeline {
         // The skeleton is drawn as an overlay so it reads through anything in front of it.
         // Prop/garment fit preview (the base rig + the imported mesh at socket·fit). Built FIRST —
         // its mesh upload needs `&mut Renderer` before grid.render borrows it for the RTT passes.
-        let preview = self.ensure_preview(renderer);
+        let preview = if clip_active { None } else { self.ensure_preview(renderer) };
         // A CHARACTER is its OWN subject: `ensure_preview` returned `None` for it, so its own mesh is
         // uploaded here and drawn at the same recentre as its skeleton. Same upload path as the prop
         // piece — the class only decides placement, so any conformable folder shows its mesh, with
@@ -3404,7 +3816,7 @@ impl Scene for AssetPipeline {
         // at the same rate the camera does. Set before the `grid` borrow below.
         self.view_radius = radius;
 
-        if let Some(grid) = self.grid.as_ref() {
+        if let (false, Some(grid)) = (clip_active, self.grid.as_ref()) {
             // The stage floor: a faint lattice on the XY ground plane at the asset's FEET, so the
             // perspective view reads as a stage instead of empty space. Everything is drawn
             // recentred, which puts the origin at the asset's WAIST — without this the eye has no
@@ -3516,9 +3928,10 @@ impl Scene for AssetPipeline {
                 if let Some(cm) = char_mesh {
                     cm.draw(r, recentre, SUBJECT_TINT);
                 }
-                // Skeleton rig-view: octahedral diamond bones + per-joint scaled balls, both cyan.
+                // Skeleton rig-view: violet octahedral diamond bones under cyan per-joint scaled
+                // balls — two hues, so structure and grab points read apart at a glance.
                 if !bones.is_empty() {
-                    r.draw_lines_overlay(&bones, JOINT);
+                    r.draw_lines_overlay(&bones, BONE);
                 }
                 if !balls.is_empty() {
                     r.draw_lines_overlay(&balls, JOINT);
@@ -3557,7 +3970,7 @@ impl Scene for AssetPipeline {
                         body.draw(r, pv.base_world, BODY_TINT);
                     }
                     if !pv.base_joints.is_empty() {
-                        r.draw_lines_overlay(&pv.base_joints, JOINT);
+                        r.draw_lines_overlay(&pv.base_joints, BONE);
                     }
                     pv.mesh.draw(r, pv.world, PIECE_TINT);
                 }
@@ -4341,6 +4754,15 @@ mod tests {
         assert_eq!(bones.len(), REFERENCE_BONES, "the bake synthesized the root");
         assert_eq!(bones[0]["name"], "root", "root is bone 0");
 
+        // The Attach stage's six authored points SHIP (the audited third-step gap: they
+        // used to be discarded at export). Each carries its id and canonical parent bone.
+        let points = json["attach_points"].as_array().expect("attach_points");
+        assert_eq!(points.len(), ATTACH_POINTS.len(), "all six authored points ship");
+        for ((id, _, parent), p) in ATTACH_POINTS.iter().zip(points) {
+            assert_eq!(p["id"], *id, "point id ships");
+            assert_eq!(p["bone"], *parent, "and rides its canonical bone");
+        }
+
         // The authored offset is IN the file: the working model is untouched, the bake carries it.
         assert_eq!(
             ed.source.as_ref().unwrap().parsed.as_ref().unwrap().model.bones[sel].translation[2],
@@ -4769,7 +5191,12 @@ mod tests {
     #[test]
     fn restart_on_review_returns_to_task_with_the_default_definition() {
         let mut ed = AssetPipeline::new();
-        assert!(ed.workflows.contains_key(WF_CHARACTER) && ed.workflows.contains_key(WF_PROP));
+        assert!(
+            ed.workflows.contains_key(WF_CHARACTER)
+                && ed.workflows.contains_key(WF_PROP)
+                && ed.workflows.contains_key(WF_ANIMATION),
+            "ui_workflows.json ships all three dispatch targets"
+        );
         ed.dispatch_workflow(Some(AssetClass::Prop));
         ed.pending_class = Some(AssetClass::Prop);
         park(&mut ed, "review");
@@ -4777,6 +5204,176 @@ mod tests {
         assert_eq!(ed.wf.step(), "task", "the wizard is back on the entry page");
         assert!(ed.source.is_none() && ed.pending_class.is_none(), "the per-asset state dropped");
         assert_eq!(ed.wf_def.steps.len(), 4, "…and the default (character) definition is restored");
+    }
+
+    /// The real Motifect BVH library — the animation workflow's genuine input. Skips
+    /// when the content tree (the clips or the reference rig) is absent, like every
+    /// other real-data test here.
+    fn real_bvh_source() -> Option<PathBuf> {
+        let dir = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/source/characters/Motifect/Motifect_combat_complete_v1_0/BVH"
+        ));
+        let reference = default_reference();
+        let have_ref = reference.exists() || reference.with_extension("json.gz").exists();
+        (dir.exists() && have_ref).then_some(dir)
+    }
+
+    /// ANIMATION IMPORT, end to end on the real library: the Task card's class routes to
+    /// `import_animation`, the folder's BVH files fill the SAME picker meshes use, the
+    /// stage runner retargets the active clip IN MEMORY, the `clip` doc gate opens, and
+    /// Commit honours the side-by-side pick — writing exactly the chosen variants.
+    #[test]
+    fn an_animation_walks_retarget_preview_and_commits_the_picked_variants() {
+        let Some(dir) = real_bvh_source() else {
+            eprintln!("skipping: no content tree");
+            return;
+        };
+        let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Animation);
+        ed.open(dir);
+        assert_eq!(ed.wf.step(), "conform", "an animation lands on its Clip page");
+        {
+            let src = ed.source.as_ref().unwrap();
+            assert!(src.candidates.len() > 1, "the combat library offers a clip choice");
+            assert!(
+                src.candidates.iter().all(|p| p.extension().is_some_and(|e| e == "bvh")),
+                "candidates are the folder's BVH clips"
+            );
+            assert!(src.error.is_none(), "no invented 'no riggable mesh': {:?}", src.error);
+            assert!(src.clip.is_none(), "retarget waits for the stage runner");
+        }
+
+        // The conform-step runner (`update` calls this beside analyze/conform).
+        ed.prepare_clip();
+        let doc = ed.wf_doc();
+        {
+            let src = ed.source.as_ref().unwrap();
+            let cp = src.clip.as_ref().unwrap_or_else(|| panic!("retarget: {:?}", src.error));
+            assert!(cp.duration > 0, "a real clip has length");
+            assert!(!cp.ip.tracks.is_empty() && !cp.rm.tracks.is_empty(), "both variants resolve");
+            assert_eq!(cp.bones.len(), cp.parents.len());
+            assert!(cp.rm_radius >= cp.radius, "the RootMotion frame is never tighter than rest");
+        }
+        assert!(doc.is_on("clip"), "the doc gate opens on the built preview");
+        assert!(ed.wf.can_next(&doc), "Next reaches Review");
+
+        // Nothing picked → an honest refusal, no files.
+        let scratch = std::env::temp_dir().join("flicker_assetpipeline_clip_commit");
+        let _ = std::fs::remove_dir_all(&scratch);
+        ed.variant_ip = false;
+        ed.variant_rm = false;
+        ed.commit_to(&scratch);
+        {
+            let src = ed.source.as_ref().unwrap();
+            assert!(
+                src.error.as_deref().unwrap_or("").contains("at least one variant"),
+                "an empty pick refuses: {:?}",
+                src.error
+            );
+            assert!(src.committed.is_none());
+        }
+
+        // Root Motion alone → exactly that variant lands, In-Place does not.
+        ed.variant_rm = true;
+        ed.commit_to(&scratch);
+        let src = ed.source.as_ref().unwrap();
+        assert!(src.error.is_none(), "the picked commit succeeds: {:?}", src.error);
+        let set = scratch.join(src.asset_name());
+        assert!(set.join("RootMotion").is_dir(), "the picked variant is written");
+        assert!(!set.join("In-Place").exists(), "the unpicked one is NOT");
+        let out = src.committed.clone().expect("a committed path is recorded");
+        let text = flicker_content::package::read_text(&out).expect("the emitted clip reads back");
+        assert!(text.contains("\"retarget\":true"), "a clip ships retarget:true");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// THE SILENT-COMMIT REGRESSION (QA 2026-08-03: "doesn't always end up producing an
+    /// object in the staging folder"). A prop folder whose mesh never parsed must (a) be
+    /// STOPPED at the Mount page — `fit` no longer publishes without a parse — and (b)
+    /// refuse Export OUT LOUD if commit is ever reached, instead of returning silently
+    /// with no file and no message.
+    #[test]
+    fn an_unparsed_prop_cannot_reach_review_and_export_refuses_loudly() {
+        let scratch = std::env::temp_dir().join("flicker_assetpipeline_unparsed_prop");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Prop);
+        ed.pending_prop = Some(PropKind::Environment);
+        ed.open(scratch.clone());
+        assert_eq!(ed.wf.step(), "conform", "the empty folder still lands on the Mount page");
+
+        let doc = ed.wf_doc();
+        assert!(!doc.is_on("fit"), "no parse → no mount binding → no fit key");
+        assert!(!ed.wf.can_next(&doc), "Review is gated off — nothing walks to a dead Export");
+
+        let out = std::env::temp_dir().join("flicker_assetpipeline_unparsed_prop_out");
+        let _ = std::fs::remove_dir_all(&out);
+        ed.commit_to(&out);
+        let src = ed.source.as_ref().unwrap();
+        assert!(
+            src.error.as_deref().unwrap_or("").contains("nothing to commit"),
+            "the refusal is SAID, not silent: {:?}",
+            src.error
+        );
+        assert!(src.committed.is_none() && !out.exists(), "and nothing was written");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Every workflow's commit lands in a STAGING tier, routed by what the asset IS:
+    /// clips → the shared retarget library, environment props → props/, characters and
+    /// worn things → characters/. The Quartermaster's promote pass is the only door
+    /// into package/ — the one tree the engine loads content from.
+    #[test]
+    fn commit_roots_route_by_class_and_all_land_in_staging() {
+        let case = |class: Option<AssetClass>, prop: Option<PropKind>, suffix: &str| {
+            let scratch = std::env::temp_dir().join(format!(
+                "flicker_assetpipeline_root_{}",
+                suffix.replace('/', "_")
+            ));
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let mut ed = AssetPipeline::new();
+            ed.pending_class = class;
+            ed.pending_prop = prop;
+            ed.open(scratch.clone());
+            let root = ed.commit_root();
+            assert!(
+                root.ends_with(suffix),
+                "{class:?}/{prop:?} routes to …/{suffix}, got {}",
+                root.display()
+            );
+            assert!(
+                root.strip_prefix(flicker_content::roots().staging()).is_ok(),
+                "every commit root is inside staging/: {}",
+                root.display()
+            );
+            let _ = std::fs::remove_dir_all(&scratch);
+        };
+        case(Some(AssetClass::Animation), None, "staging/retarget/clips");
+        case(Some(AssetClass::Prop), Some(PropKind::Environment), "staging/props");
+        case(Some(AssetClass::Prop), Some(PropKind::Clothing), "staging/characters");
+        case(Some(AssetClass::Skin), None, "staging/characters");
+    }
+
+    /// An animation folder WITHOUT clips reports the real absence — never the mesh
+    /// path's "no riggable mesh", which would send the user hunting the wrong problem.
+    #[test]
+    fn an_animation_folder_without_bvh_reports_the_real_absence() {
+        let scratch = std::env::temp_dir().join("flicker_assetpipeline_no_bvh");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let mut ed = AssetPipeline::new();
+        ed.pending_class = Some(AssetClass::Animation);
+        ed.open(scratch.clone());
+        let src = ed.source.as_ref().unwrap();
+        assert!(
+            src.error.as_deref().unwrap_or("").contains("No BVH"),
+            "the error names the real absence: {:?}",
+            src.error
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A conform edit arms the Back DISCARD GUARD: Back holds the page and raises the

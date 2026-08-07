@@ -1,0 +1,33 @@
+[package]
+name = "flicker-godmode"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# God Mode — the world-simulation console, as a scene PACKAGE (library only). The
+# maintainer watches the planet evolve here and decides when to snapshot it: the
+# layer-stack globe, the per-field views, and the process controls over a
+# `flicker-poc-chemistry` world running on its OWN thread (`sim_thread`). No
+# standalone binary — the app MOVED into the unified `prism-alpha` launcher, which
+# builds the scene via `flicker_godmode::scene` (the same promotion
+# `flicker-pocepochs` took). The simulation itself stays GPU-free in
+# `crates/flicker-poc-chemistry`; this crate is only its window.
+[lib]
+name = "flicker_godmode"
+path = "src/lib.rs"
+
+[dependencies]
+# The GPU-free world simulation this scene views and drives.
+flicker-poc-chemistry.workspace = true
+flicker-worldtile.workspace = true
+flicker-worldgrid.workspace = true
+flicker-materials.workspace = true
+
+flicker = { path = "../../core/flicker" }
+flicker-shell.workspace = true
+# Input event bus (spec §4/§9): the shared resolve → route seam.
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+glam.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

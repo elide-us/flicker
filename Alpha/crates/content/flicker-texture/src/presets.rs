@@ -96,6 +96,7 @@ pub fn granite() -> TextureRecipe {
             metalness: 0.0,
             metalness_mod: 0.0,
             ao: 0.45,
+            ..OutputStage::default()
         },
     )
 }
@@ -154,6 +155,7 @@ pub fn sandstone() -> TextureRecipe {
             metalness: 0.0,
             metalness_mod: 0.0,
             ao: 0.6,
+            ..OutputStage::default()
         },
     )
 }
@@ -212,6 +214,7 @@ pub fn basalt() -> TextureRecipe {
             metalness: 0.0,
             metalness_mod: 0.0,
             ao: 0.85,
+            ..OutputStage::default()
         },
     )
 }
@@ -265,6 +268,7 @@ pub fn hematite() -> TextureRecipe {
             metalness: 0.15,
             metalness_mod: 0.7,
             ao: 0.55,
+            ..OutputStage::default()
         },
     )
 }

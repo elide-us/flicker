@@ -106,6 +106,22 @@ pub struct OutputStage {
     /// Ambient-occlusion strength: how much a texel darkens for sitting below its
     /// neighbourhood. `0` writes a fully-open map.
     pub ao: f32,
+
+    /// The glow's COLOUR, linear RGB. A colour rather than a scalar because
+    /// emission has its own hue independent of the albedo under it — a blue rune
+    /// cut into dark iron, lava in black basalt.
+    #[serde(default)]
+    pub emissive: [f32; 3],
+    /// How brightly it glows. `0` (the default) writes a black map, and the shader
+    /// then adds nothing — so an ordinary material costs emission nothing.
+    #[serde(default)]
+    pub emissive_strength: f32,
+    /// WHERE it glows: the field value above which emission starts. `0.75` lights
+    /// only the crests; `0` lights everything above the midpoint. This is what
+    /// makes emission follow the STRUCTURE — lava in the cracks between plates
+    /// rather than a uniform wash over the whole surface.
+    #[serde(default)]
+    pub emissive_band: f32,
 }
 
 impl Default for OutputStage {
@@ -120,6 +136,11 @@ impl Default for OutputStage {
             metalness: 0.0,
             metalness_mod: 0.0,
             ao: 0.5,
+            // Unlit by default: emission is opt-in, so an ordinary surface writes a
+            // black map and the shader's unconditional add contributes nothing.
+            emissive: [1.0, 0.55, 0.15],
+            emissive_strength: 0.0,
+            emissive_band: 0.7,
         }
     }
 }
@@ -133,6 +154,20 @@ impl OutputStage {
     /// Metalness at a texel whose field value is `h`.
     pub fn metalness_at(&self, h: f32) -> f32 {
         (self.metalness + (h - 0.5) * 2.0 * self.metalness_mod).clamp(0.0, 1.0)
+    }
+
+    /// How strongly a texel at field value `h` emits, `0..=1`.
+    ///
+    /// Ramps from the band edge to the top of the field rather than switching, so
+    /// a glow fades into the surface instead of stamping a hard-edged shape — the
+    /// difference between lava cooling into rock and a decal.
+    pub fn emissive_at(&self, h: f32) -> f32 {
+        if self.emissive_strength <= 0.0 {
+            return 0.0;
+        }
+        let band = self.emissive_band.clamp(0.0, 0.999);
+        let t = ((h - band) / (1.0 - band)).clamp(0.0, 1.0);
+        t * self.emissive_strength.clamp(0.0, 1.0)
     }
 }
 
@@ -200,5 +235,44 @@ mod tests {
         let extreme = OutputStage { roughness: 0.9, roughness_mod: 5.0, ..OutputStage::default() };
         assert_eq!(extreme.roughness_at(1.0), 1.0);
         assert_eq!(extreme.roughness_at(0.0), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod emissive_tests {
+    use super::*;
+
+    /// Emission is OPT-IN. A default output stage must emit nothing, because the
+    /// shader adds the map unconditionally — a non-zero default would make every
+    /// material in the game self-lit.
+    #[test]
+    fn emission_is_off_by_default() {
+        let out = OutputStage::default();
+        for h in [0.0, 0.5, 0.9, 1.0] {
+            assert_eq!(out.emissive_at(h), 0.0, "unlit default emits at {h}");
+        }
+    }
+
+    /// The band selects WHERE it glows and ramps rather than switching — a hard
+    /// edge reads as a decal stuck on the surface, not as light coming out of it.
+    #[test]
+    fn the_band_ramps_from_its_edge_upward() {
+        let out = OutputStage { emissive_strength: 1.0, emissive_band: 0.6, ..Default::default() };
+        assert_eq!(out.emissive_at(0.0), 0.0, "below the band must be dark");
+        assert_eq!(out.emissive_at(0.6), 0.0, "the band edge is where it starts");
+        assert!(out.emissive_at(0.8) > 0.0 && out.emissive_at(0.8) < 1.0, "mid-band ramps");
+        assert!((out.emissive_at(1.0) - 1.0).abs() < 1e-6, "the crest is full strength");
+        // Monotonic: brighter as the field rises.
+        assert!(out.emissive_at(0.9) > out.emissive_at(0.7));
+    }
+
+    /// A degenerate band must not divide by zero — it is reachable from an edited
+    /// recipe.
+    #[test]
+    fn a_degenerate_band_is_survivable() {
+        let out = OutputStage { emissive_strength: 1.0, emissive_band: 1.0, ..Default::default() };
+        assert!(out.emissive_at(1.0).is_finite());
+        let wild = OutputStage { emissive_strength: 9.0, emissive_band: -3.0, ..Default::default() };
+        assert!((0.0..=1.0).contains(&wild.emissive_at(0.5)));
     }
 }

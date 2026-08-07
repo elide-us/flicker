@@ -352,3 +352,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
 }
+
+// ─── the CM5 staging queue ───────────────────────────────────────────────────
+
+/// Where staged ASSETS live, relative to the staging root — one entry per ingest
+/// tier, mirroring exactly what the benches' commit roots write: an item is a
+/// DIRECT CHILD DIRECTORY of one of these (the asset FOLDER; its files are the
+/// dependencies that travel with it on promote).
+pub const ITEM_ROOTS: [&str; 4] = ["characters", "props", "materials", "retarget/clips"];
+
+/// One promotable asset sitting in staging: its folder, what it is, and its bulk.
+#[derive(Debug, Clone)]
+pub struct QueueItem {
+    /// The asset directory (physical).
+    pub dir: PathBuf,
+    /// The folder name — the asset's name.
+    pub name: String,
+    /// Path relative to the staging root (`characters/GolemBase_Low`) — mirrored
+    /// under `package/` by promote.
+    pub rel: PathBuf,
+    /// Derived from the asset's primary json, never authored.
+    pub class: PackageClass,
+    /// Files inside (the dependencies that travel), and their total bytes.
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// The LOGICAL path for a physical one — the at-rest `.gz` dropped, so callers
+/// speak the same names as the loaders (the public twin of `Row::logical_path`).
+pub fn logical(physical: &Path) -> PathBuf {
+    Row::logical_path(physical)
+}
+
+/// Every file under `dir`, recursively (sorted for stable batches).
+pub fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Scan the staging tiers for promotable assets, stable-ordered by tier then name.
+pub fn staging_queue(roots: &Roots) -> Vec<QueueItem> {
+    let mut out = Vec::new();
+    for tier in ITEM_ROOTS {
+        let root = roots.staging.join(tier);
+        let Ok(rd) = std::fs::read_dir(&root) else { continue };
+        let mut dirs: Vec<PathBuf> =
+            rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        dirs.sort();
+        for dir in dirs {
+            let files = files_under(&dir);
+            if files.is_empty() {
+                continue; // an empty folder is not an asset
+            }
+            let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            // Classify off the primary json (the asset's own file where present).
+            let primary = files
+                .iter()
+                .find(|f| f.to_string_lossy().contains(&name) && f.to_string_lossy().contains(".json"))
+                .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
+            let class = primary.map(|p| classify_package(p)).unwrap_or(PackageClass::Unknown);
+            out.push(QueueItem {
+                rel: PathBuf::from(tier).join(&name),
+                name,
+                class,
+                files: files.len(),
+                bytes: files.iter().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum(),
+                dir,
+            });
+        }
+    }
+    out
+}

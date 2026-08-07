@@ -4,7 +4,7 @@
 //! producing a canonically-NAMED, displayable rig — enough for the bake/display slice. The
 //! conform-QUALITY steps from the Blender script are follow-on slices, each reference-rig-dependent:
 //!   * limb-align `reorient` (needs the Katanami reference orientation),
-//!   * infer 30 fingers + 8 twists + 2 weapon sockets + face (BaseHumanFemale template, 24→66),
+//!   * infer 30 fingers + 8 twists + 2 weapon sockets + face + neck_02 (24→67 canon),
 //!   * mesh-derived hip WIDTH, and mesh decimation.
 
 use std::collections::HashMap;

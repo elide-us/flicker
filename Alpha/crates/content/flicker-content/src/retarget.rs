@@ -329,10 +329,21 @@ fn build_clip_json(target: &Target, name: &str, tick_rate_hz: u32, duration_tick
     })
 }
 
-/// Retarget one BVH onto the `skeleton` rig and write BOTH variants under
-/// `out_dir/{In-Place,RootMotion}/<stem>.json` at the 60 Hz canon. `In-Place` pins the pelvis planar
-/// (X/Y) translation to rest (treadmill); `RootMotion` keeps full planar travel.
-pub fn emit_variants(bvh_path: &Path, skeleton: &Path, out_dir: &Path) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+/// One BVH retargeted onto a skeleton, BOTH variants built in memory — the seam the
+/// Clayworks clip preview samples before anything is committed to disk. Each value is
+/// a complete `flicker.rig` clip JSON (target skeleton embedded, 60 Hz canon).
+pub struct ClipVariants {
+    /// The BVH stem — the clip's name, and the emitted file stem.
+    pub stem: String,
+    /// Pelvis planar (X/Y) translation pinned to rest (treadmill); vertical bob kept.
+    pub in_place: Value,
+    /// Full planar travel kept.
+    pub root_motion: Value,
+}
+
+/// Retarget one BVH onto the `skeleton` rig at the 60 Hz canon and return both
+/// variants in memory. [`write_variants`] / [`emit_variants`] are the disk halves.
+pub fn build_variants(bvh_path: &Path, skeleton: &Path) -> Result<ClipVariants> {
     let bvh = parse_bvh(bvh_path)?;
     if bvh.frames.is_empty() {
         bail!("BVH {} has no motion frames", bvh_path.display());
@@ -364,18 +375,50 @@ pub fn emit_variants(bvh_path: &Path, skeleton: &Path, out_dir: &Path) -> Result
 
     let stem = bvh_path.file_stem().and_then(|s| s.to_str()).unwrap_or("clip");
     let src_file = bvh_path.file_name().and_then(|s| s.to_str()).unwrap_or("clip.bvh");
-    let rm = build_clip_json(&target, stem, CANON_FPS, duration, &rm_tracks, src_file);
-    let ip = build_clip_json(&target, stem, CANON_FPS, duration, &ip_tracks, src_file);
+    Ok(ClipVariants {
+        stem: stem.to_string(),
+        in_place: build_clip_json(&target, stem, CANON_FPS, duration, &ip_tracks, src_file),
+        root_motion: build_clip_json(&target, stem, CANON_FPS, duration, &rm_tracks, src_file),
+    })
+}
 
-    let (ip_dir, rm_dir) = (out_dir.join("In-Place"), out_dir.join("RootMotion"));
-    std::fs::create_dir_all(&ip_dir)?;
-    std::fs::create_dir_all(&rm_dir)?;
-    let (ip_path, rm_path) = (ip_dir.join(format!("{stem}.json")), rm_dir.join(format!("{stem}.json")));
-    // Emit the gz-at-rest form via the shared seam; the returned paths stay
-    // LOGICAL (`<stem>.json`) — that is how loaders and callers address clips.
-    crate::package::write_text(&ip_path, &serde_json::to_string(&ip)?)?;
-    crate::package::write_text(&rm_path, &serde_json::to_string(&rm)?)?;
-    Ok((ip_path, rm_path))
+/// Write the PICKED variants under `out_dir/{In-Place,RootMotion}/<stem>.json` — the
+/// bench's Commit passes the user's side-by-side choice (one, the other, or both, per
+/// the ruled Clip-role UX). Emits the gz-at-rest form via the shared seam; the returned
+/// paths stay LOGICAL (`<stem>.json`) — that is how loaders and callers address clips.
+pub fn write_variants(
+    v: &ClipVariants,
+    out_dir: &Path,
+    in_place: bool,
+    root_motion: bool,
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut out = Vec::new();
+    for (on, sub, value) in
+        [(in_place, "In-Place", &v.in_place), (root_motion, "RootMotion", &v.root_motion)]
+    {
+        if !on {
+            continue;
+        }
+        let dir = out_dir.join(sub);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{}.json", v.stem));
+        crate::package::write_text(&path, &serde_json::to_string(value)?)?;
+        out.push(path);
+    }
+    Ok(out)
+}
+
+/// Retarget one BVH onto the `skeleton` rig and write BOTH variants under
+/// `out_dir/{In-Place,RootMotion}/<stem>.json` at the 60 Hz canon — the CLI/library
+/// write-both form of [`build_variants`] + [`write_variants`].
+pub fn emit_variants(bvh_path: &Path, skeleton: &Path, out_dir: &Path) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let v = build_variants(bvh_path, skeleton)?;
+    let paths = write_variants(&v, out_dir, true, true)?;
+    let mut it = paths.into_iter();
+    match (it.next(), it.next()) {
+        (Some(ip), Some(rm)) => Ok((ip, rm)),
+        _ => bail!("write_variants(true, true) must emit both paths"),
+    }
 }
 
 fn round1(v: f32, dp: i32) -> f32 {
@@ -399,7 +442,9 @@ mod tests {
     /// VALIDATION (the oracle discipline): retargeting `walk_forward.bvh` onto PrismHumanBaseA's bind
     /// must reproduce the existing Python-baked clip (`retarget/clips/locomotion/RootMotion/…`). If my
     /// Rust port matches the Blender/Python tool per-key, re-baking onto HumanBaseA is trustworthy.
-    /// `#[ignore]`d (reads source + oracle). Run:
+    /// `#[ignore]`d (reads source + oracle). HISTORICAL since the 2026-08-04 content sweep: the
+    /// PrismHumanBaseA skeleton fixture was retired with the example content, so this skips — the
+    /// port-parity validation it existed for passed (0.08° vs the Python oracle) and is banked. Run:
     ///   `cargo test -p flicker-content -- --ignored retarget_reproduces_python --nocapture`
     #[test]
     #[ignore]

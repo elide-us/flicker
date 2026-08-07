@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use crate::compound::CompoundDef;
+use crate::rock::RockDef;
 use crate::element::{Element, ElementId};
 use crate::material::MaterialDef;
 use crate::source::{MaterialError, TableSource};
@@ -60,12 +61,14 @@ pub struct Tables {
     elements: Vec<Element>,
     materials: Vec<MaterialDef>,
     compounds: Vec<CompoundDef>,
+    rocks: Vec<RockDef>,
     by_symbol: HashMap<String, usize>,
     by_number: HashMap<u8, usize>,
     material_by_id: HashMap<u8, usize>,
     material_by_name: HashMap<String, usize>,
     compound_by_name: HashMap<String, usize>,
     compound_by_id: HashMap<u16, usize>,
+    rock_by_id: HashMap<String, usize>,
 }
 
 impl Tables {
@@ -76,7 +79,8 @@ impl Tables {
         let elements = source.load_elements()?;
         let materials = source.load_materials()?;
         let compounds = source.load_compounds()?;
-        Ok(Self::build(elements, materials, compounds))
+        let rocks = source.load_rocks()?;
+        Ok(Self::build_all(elements, materials, compounds, rocks))
     }
 
     /// Index already-loaded element + material rows (no compounds). Exposed for
@@ -100,6 +104,20 @@ impl Tables {
         materials: Vec<MaterialDef>,
         compounds: Vec<CompoundDef>,
     ) -> Self {
+        Self::build_all(elements, materials, compounds, Vec::new())
+    }
+
+    fn build_all(
+        elements: Vec<Element>,
+        materials: Vec<MaterialDef>,
+        compounds: Vec<CompoundDef>,
+        rocks: Vec<RockDef>,
+    ) -> Self {
+        let rock_by_id = rocks
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.id.clone(), i))
+            .collect();
         let by_symbol = elements
             .iter()
             .enumerate()
@@ -140,6 +158,8 @@ impl Tables {
             material_by_name,
             compound_by_name,
             compound_by_id,
+            rocks,
+            rock_by_id,
         }
     }
 
@@ -174,6 +194,61 @@ impl Tables {
     }
 
     /// All compound rows, in load order (empty if the catalog isn't present).
+    /// Every rock in the catalog.
+    pub fn rocks(&self) -> &[RockDef] {
+        &self.rocks
+    }
+
+    /// One rock by its slug.
+    pub fn rock(&self, id: &str) -> Option<&RockDef> {
+        self.rock_by_id.get(id).map(|&i| &self.rocks[i])
+    }
+
+    /// **How well a mineral assemblage resists being worn away and carried off**,
+    /// `0` (strips instantly) .. `1` (stands as a ridge forever) — the
+    /// modal-weighted average of the resistances of the rocks those minerals make.
+    ///
+    /// This is the read the outcrop model runs on, and the reason differential
+    /// erosion is possible at all: a landscape of one uniform material erodes
+    /// evenly and, once normalised, has not changed shape. The contrast between a
+    /// resistant intrusion and the soft ground around it is what leaves a ridge
+    /// standing after the plain has worn down.
+    ///
+    /// A rock is matched by how much of its own modal recipe the assemblage
+    /// supplies, so a mixture is scored by the rocks it most resembles rather than
+    /// being forced into one bin. An assemblage matching nothing in the catalog
+    /// gets `default_resistance` — loud enough to notice in a view, and not
+    /// silently zero (which would make unknown rock erode like salt).
+    pub fn erosional_resistance(
+        &self,
+        minerals: impl Iterator<Item = (String, f64)>,
+        default_resistance: f32,
+    ) -> f32 {
+        let assemblage: HashMap<String, f64> = minerals.collect();
+        let total: f64 = assemblage.values().sum();
+        if total <= 0.0 || self.rocks.is_empty() {
+            return default_resistance;
+        }
+        let (mut weighted, mut weight) = (0.0f64, 0.0f64);
+        for rock in &self.rocks {
+            // How much of this rock's recipe the assemblage actually supplies.
+            let mut match_frac = 0.0f64;
+            for (mineral, &modal) in &rock.modal {
+                let have = assemblage.get(mineral).copied().unwrap_or(0.0) / total;
+                match_frac += have.min(modal as f64);
+            }
+            if match_frac > 0.0 {
+                weighted += match_frac * rock.erosional_resistance as f64;
+                weight += match_frac;
+            }
+        }
+        if weight <= 0.0 {
+            default_resistance
+        } else {
+            (weighted / weight) as f32
+        }
+    }
+
     pub fn compounds(&self) -> &[CompoundDef] {
         &self.compounds
     }
@@ -201,6 +276,19 @@ impl Tables {
     /// Elements not in the periodic table are skipped (so the remaining fractions
     /// renormalise over the known elements); an empty/all-unknown compound yields
     /// an empty vec.
+    /// Formula-unit mass of a compound, u — the sum of its constituents' atomic
+    /// masses (elements the periodic table does not know contribute nothing,
+    /// mirroring [`compound_mass_fractions`]). Zero for an unknown formula.
+    pub fn compound_molar_mass(&self, compound: &CompoundDef) -> f64 {
+        compound
+            .elements
+            .iter()
+            .filter_map(|e| {
+                self.element(&e.symbol).map(|el| e.count as f64 * el.atomic_mass as f64)
+            })
+            .sum()
+    }
+
     pub fn compound_mass_fractions(&self, compound: &CompoundDef) -> Vec<(ElementId, f64)> {
         let mut weights: Vec<(ElementId, f64)> = Vec::with_capacity(compound.elements.len());
         let mut total = 0.0;
@@ -341,9 +429,22 @@ mod tests {
         // feldspars — retired ids are never reused) + the 12 sim-required minerals
         // merged in from the rock tier (Unification Ruling R6b — ONE mineral registry) = 89,
         // + the 5 sim-required atmospheric gas species (ids 91-95: N₂, SO₂, HCl, CH₄, NH₃)
-        // added for the outgassing/atmosphere sim (2026-07-14) = 94.
-        assert_eq!(t.compounds().len(), 94);
+        // added for the outgassing/atmosphere sim (2026-07-14) = 94,
+        // + Oxygen (id 96) added for the biosphere (2026-08-05): free O₂ is a
+        // BIOSIGNATURE — photosynthesis is the only thing in the sim that makes
+        // it, and there was nothing in the catalog to credit = 95.
+        assert_eq!(t.compounds().len(), 95);
         assert!(t.compound("Feldspar").is_none(), "Feldspar (42) is retired");
+        // The organic vocabulary the biosphere books its tissue in. These three
+        // shipped a placeholder C₁H₁O₁ until 2026-08-05, which made them
+        // chemically IDENTICAL to the conserved ledger — a bed of wood and a bed
+        // of sugar weighed the same and carried the same elements.
+        for (name, formula) in
+            [("Cellulose", "C6H10O5"), ("Lignin", "C9H10O2"), ("Oils", "C57H104O6")]
+        {
+            let c = t.compound(name).unwrap_or_else(|| panic!("{name} present"));
+            assert_eq!(c.formula, formula, "{name} carries real stoichiometry");
+        }
         assert!(t.compound_by_id(42).is_none(), "id 42 must stay retired");
         // A known mineral resolves with its formula, elements, and extraction target.
         let hem = t.compound("Hematite").expect("Hematite present");

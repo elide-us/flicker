@@ -30,17 +30,22 @@ pub enum MapKind {
     Ao,
     /// Linear scalar in R — the raw field, for terrain displacement.
     Height,
+    /// Self-illumination. sRGB COLOUR — a glow has its own hue independent of the
+    /// albedo under it (a blue rune cut into dark iron), so this is not a mask.
+    /// Black ⇒ that texel emits nothing.
+    Emit,
 }
 
 impl MapKind {
     /// Every map a bake produces, in the order the bench's selector steps.
-    pub const ALL: [MapKind; 6] = [
+    pub const ALL: [MapKind; 7] = [
         MapKind::BaseColor,
         MapKind::Normal,
         MapKind::Roughness,
         MapKind::Metallic,
         MapKind::Ao,
         MapKind::Height,
+        MapKind::Emit,
     ];
 
     /// The content standard's map-role name — the `<Asset>_<Map>` filename
@@ -55,6 +60,7 @@ impl MapKind {
             MapKind::Metallic => "Metallic",
             MapKind::Ao => "AO",
             MapKind::Height => "Height",
+            MapKind::Emit => "Emit",
         }
     }
 
@@ -66,7 +72,7 @@ impl MapKind {
     /// (`load_texture` vs `load_texture_linear`), and this is what tells a caller
     /// which to use.
     pub fn is_color(self) -> bool {
-        matches!(self, MapKind::BaseColor)
+        matches!(self, MapKind::BaseColor | MapKind::Emit)
     }
 }
 
@@ -165,6 +171,7 @@ pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
     let mut metal = Vec::with_capacity(count * 4);
     let mut ao = Vec::with_capacity(count * 4);
     let mut height = Vec::with_capacity(count * 4);
+    let mut emit = Vec::with_capacity(count * 4);
 
     // The gradient's run: one texel, in tile units. Scaling relief by `n` would
     // make a 2048² bake eight times as bumpy as its 256² preview for the same
@@ -225,6 +232,17 @@ pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
 
             let hv = q(v);
             height.extend_from_slice(&[hv, hv, hv, 255]);
+
+            // Emission: the authored glow colour, gated by where in the field it
+            // sits. `emissive_at` returns 0 outside the band, so a material with no
+            // glow writes a black map and the shader adds nothing.
+            let e = out.emissive_at(v);
+            emit.extend_from_slice(&[
+                q(out.emissive[0] * e),
+                q(out.emissive[1] * e),
+                q(out.emissive[2] * e),
+                255,
+            ]);
         }
     }
 
@@ -238,6 +256,7 @@ pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
             map(MapKind::Metallic, metal),
             map(MapKind::Ao, ao),
             map(MapKind::Height, height),
+            map(MapKind::Emit, emit),
         ],
     }
 }
@@ -352,12 +371,42 @@ mod tests {
         }
     }
 
-    /// Only base colour is sRGB. Getting this backwards silently gamma-corrects
-    /// data that is not a colour.
+    /// Exactly the COLOUR maps are sRGB. Getting this backwards silently
+    /// gamma-corrects data that is not a colour — or fails to correct one that is.
     #[test]
-    fn exactly_one_map_is_a_colour() {
+    fn only_the_colour_maps_are_srgb() {
         let colour: Vec<_> = MapKind::ALL.iter().filter(|k| k.is_color()).collect();
-        assert_eq!(colour, [&MapKind::BaseColor]);
+        assert_eq!(colour, [&MapKind::BaseColor, &MapKind::Emit]);
+    }
+
+    /// A material with no authored glow must write a BLACK emit map — the shader
+    /// adds it unconditionally, so a non-black default would make every surface
+    /// self-lit.
+    #[test]
+    fn no_glow_bakes_a_black_emit_map() {
+        let set = bake(&TextureRecipe::default(), 16);
+        let e = set.get(MapKind::Emit).unwrap();
+        assert!(e.pixels.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0), "unlit is not black");
+    }
+
+    /// An authored glow must actually reach the map, in its own colour.
+    #[test]
+    fn an_authored_glow_bakes_coloured_light() {
+        let mut r = TextureRecipe::default();
+        r.channels[0] = Channel { enabled: true, source: NoiseKind::Fbm, ..Channel::default() };
+        r.out.emissive = [0.2, 0.6, 1.0];
+        r.out.emissive_strength = 1.0;
+        r.out.emissive_band = 0.0; // everything above the midpoint glows
+        let set = bake(&r, 32);
+        let e = set.get(MapKind::Emit).unwrap();
+        let lit = e.pixels.chunks(4).filter(|p| p[2] > 8).count();
+        assert!(lit > 0, "the authored glow never reached the map");
+        // Blue-dominant, because that is the colour that was authored.
+        let (r_sum, b_sum): (u32, u32) = e
+            .pixels
+            .chunks(4)
+            .fold((0, 0), |(a, b), p| (a + p[0] as u32, b + p[2] as u32));
+        assert!(b_sum > r_sum * 2, "the glow lost its hue");
     }
 
     /// Relief must describe the surface, not the sampling rate: the same recipe

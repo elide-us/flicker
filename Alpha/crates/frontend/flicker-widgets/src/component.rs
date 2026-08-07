@@ -230,6 +230,13 @@ pub struct DragPayload {
 pub struct UiState {
     dragging: HashSet<String>,
     drag: Option<DragPayload>,
+    /// A captured drag's value-in-flight — the **commit-on-release** contract
+    /// (Aaron, 2026-08-06): while a slider drag holds the pointer, the live value
+    /// feeds only the DRAW (the knob tracks the hand); `frame.results` keeps
+    /// reporting the resting model value, and the single results write happens on
+    /// the release frame. `(bind, live value, the control's min — the echo
+    /// default the resting report falls back to)`.
+    drag_value: Option<(String, Value, f64)>,
     /// Retained draw cache — the bounded-dispatch mechanism. Lives here because this
     /// is the walker's one across-frames object, and because a scene running two
     /// walker passes (a HUD and a floating chat panel) holds two `UiState`s and so
@@ -522,7 +529,14 @@ fn run_ui_impl(
     // Capture release is a GENERIC rule: everything captured (slider drags) lets go
     // the frame the button is up, before any hit runs — so the release frame already
     // reports the echo value, exactly as the old per-arm `dragging.remove` did.
+    // Commit-on-release rides the same edge: the value the captured drag was holding
+    // back lands in `results` exactly once, here — before the hit pass, so
+    // `echo_binds` sees the key as written and the scene folds the one real change
+    // this frame.
     if !input.down {
+        if let Some((bind, val, _)) = state.drag_value.take() {
+            results.set(bind, val);
+        }
         state.dragging.clear();
     }
     // The bounded-dispatch gate for component HIT calls: Lua is entered only when the
@@ -723,6 +737,16 @@ fn run_ui_impl(
         });
     }
 
+    // Commit-on-release, the held half: the draw above consumed the live in-flight
+    // value (the knob follows the hand), but the SCENE must keep seeing the resting
+    // value until the button releases — so the live write is replaced by the model
+    // echo (the same default `echo_binds` uses) before `results` leave the walker.
+    if input.down {
+        if let Some((bind, _, min)) = state.drag_value.as_ref() {
+            results.set(bind.clone(), model.number(bind).unwrap_or(*min));
+        }
+    }
+
     UiFrame { commands, results, rtts, stats }
 }
 
@@ -900,20 +924,26 @@ fn scroll_content_h(node: &UiNode, model: &ValueMap) -> f32 {
 /// A `width_frac`/`height_frac` prop sizes the box as a fraction of the parent
 /// rect — the flex-style constraint a full-screen backdrop or a viewport-tall Muse
 /// needs, so the tree stays built-once and adapts to any window size at layout time.
-/// An `aspect` (width÷height) prop instead LOCKS width to the resolved height, so an
-/// image keeps its proportions (the square Muse) instead of stretching with the window.
+/// An `aspect` (width÷height) prop LOCKS the ratio and derives the MISSING side
+/// from the given one: a height-sized node keeps its width in step (the historical
+/// contract), while a width-sized node derives its height — so a full-bleed plate
+/// (`width_frac: 1.0`, the Muse) keeps its proportions and spills past the top and
+/// bottom instead of stretching with the window. Height wins when both are given.
 fn anchored(node: &UiNode, parent: Rect, model: &ValueMap) -> Rect {
     let m = measure(node, model);
-    let h = node
+    let h_given = node
         .height
-        .or_else(|| pnum(node, "height_frac").map(|f| parent.h * f as f32))
-        .unwrap_or(m.y);
-    let w = match pnum(node, "aspect") {
-        Some(aspect) => h * aspect as f32,
-        None => node
-            .width
-            .or_else(|| pnum(node, "width_frac").map(|f| parent.w * f as f32))
-            .unwrap_or(m.x),
+        .or_else(|| pnum(node, "height_frac").map(|f| parent.h * f as f32));
+    let w_given = node
+        .width
+        .or_else(|| pnum(node, "width_frac").map(|f| parent.w * f as f32));
+    let (w, h) = match pnum(node, "aspect") {
+        Some(aspect) => match (h_given, w_given) {
+            (Some(h), _) => (h * aspect as f32, h),
+            (None, Some(w)) => (w, w / (aspect as f32).max(1e-6)),
+            (None, None) => (m.y * aspect as f32, m.y),
+        },
+        None => (w_given.unwrap_or(m.x), h_given.unwrap_or(m.y)),
     };
     let a = node.anchor.unwrap_or(UiAnchor::TopLeft);
     let x = match a {
@@ -1659,11 +1689,23 @@ fn apply_hit_verdict(
     hud_hit: &mut bool,
 ) {
     let node = p.node;
+    let ident = node_ident(node);
     state.hit_memo.insert(p.key, verdict.hit);
     if verdict.hit {
         *hud_hit = true;
     }
     if let (Some(val), Some(bind)) = (verdict.value, node.bind.as_deref()) {
+        // Commit-on-release: a CAPTURED write (a slider drag, including the press
+        // frame that takes the capture) is a value-in-flight, not an emission.
+        // The live value still lands in `results` so this frame's draw follows
+        // the hand; the frame tail puts the resting model value back before the
+        // scene reads `results`, and the release edge at the top of
+        // [`run_ui_impl`] performs the one real write. Uncaptured value writes
+        // (a stepper click, a tab pick, a list wheel tick) stay immediate —
+        // each is already a discrete, committed gesture.
+        if state.dragging.contains(ident) || verdict.capture == Some(true) {
+            state.drag_value = Some((bind.to_string(), val.clone(), slider_range(node).0 as f64));
+        }
         results.set(bind.to_string(), val);
     }
     if verdict.activate {
@@ -1690,7 +1732,6 @@ fn apply_hit_verdict(
             results.set(fg.to_string(), bind.to_string());
         }
     }
-    let ident = node_ident(node);
     match verdict.capture {
         Some(true) => {
             state.dragging.insert(ident.to_string());
@@ -2359,7 +2400,16 @@ fn focus_group(node: &UiNode) -> Option<&str> {
 
 fn node_text(node: &UiNode, model: &ValueMap, results: &ValueMap) -> String {
     let prefix = ptext(node, "prefix").unwrap_or("");
-    let body = match ptext(node, "text_bind") {
+    // `label_bind` is the bound twin of `label`, exactly as `text_bind` is of
+    // `text` — the pairs fall back in the same order on both sides, so a node
+    // whose display copy is a LABEL can bind it without renaming the prop.
+    //
+    // It was listed in `WALKER_BINDS` (so the generic bind loop skips it, leaving
+    // it to this function) but never read here, which made it a bind that resolved
+    // to NOTHING: an authored `label_bind` drew an empty box, silently. Every
+    // existing use funnelled through a template param into `text_bind` instead,
+    // which is why nothing had caught it.
+    let body = match ptext(node, "text_bind").or_else(|| ptext(node, "label_bind")) {
         Some(key) => eff_text(results, model, key).unwrap_or_default(),
         None => ptext(node, "text").or(ptext(node, "label")).unwrap_or_default(),
     };
@@ -2842,6 +2892,45 @@ mod tests {
         assert!(!f.results.is_on("a2"));
     }
 
+    /// `label_bind` resolves like `text_bind` — the bound twin of `label`.
+    ///
+    /// It was declared in `WALKER_BINDS` (so the generic bind loop skips it) but
+    /// never read by `node_text`, which made it a bind that resolved to NOTHING:
+    /// an authored `label_bind` drew an empty box, silently, and no gate saw it
+    /// because an empty string trips neither the token check nor the raw-literal
+    /// check. Every prior use funnelled through a template param into `text_bind`,
+    /// which is why it survived unnoticed.
+    #[test]
+    fn label_bind_resolves_like_text_bind() {
+        let model = ValueMap::new().with("pill", "Worley").with("cap", "Granite");
+
+        let bound = prop(node("button"), "label_bind", Value::Text("pill".into()));
+        assert_eq!(node_text(&bound, &model, &ValueMap::new()), "Worley");
+
+        // A literal `label` still wins when there is no bind, and the bind wins
+        // when both are present — the same precedence `text`/`text_bind` has.
+        let literal = prop(node("button"), "label", Value::Text("Fallback".into()));
+        assert_eq!(node_text(&literal, &model, &ValueMap::new()), "Fallback");
+        let both = prop(
+            prop(node("button"), "label", Value::Text("Fallback".into())),
+            "label_bind",
+            Value::Text("cap".into()),
+        );
+        assert_eq!(node_text(&both, &model, &ValueMap::new()), "Granite");
+
+        // `text_bind` still takes precedence, so nothing that worked before moves.
+        let pair = prop(
+            prop(node("text"), "text_bind", Value::Text("cap".into())),
+            "label_bind",
+            Value::Text("pill".into()),
+        );
+        assert_eq!(node_text(&pair, &model, &ValueMap::new()), "Granite");
+
+        // A bind naming a key the Model does not publish is empty, not a panic.
+        let missing = prop(node("button"), "label_bind", Value::Text("absent".into()));
+        assert_eq!(node_text(&missing, &model, &ValueMap::new()), "");
+    }
+
     /// A focus-claiming component: a click inside asks for keyboard focus — the
     /// verdict channel a Lua `text_field` claims focus through.
     const FOCUS_COMPONENT: &str = r#"
@@ -2928,26 +3017,31 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        // Press inside → capture + same-frame value.
+        // Press inside → capture; the value goes IN FLIGHT (commit-on-release),
+        // and results report the resting default (no model value, min defaults 0).
         let press = UiInput { mouse: Vec2::new(30.0, 10.0), clicked: true, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
         let f = run_ui_with(&page, &model, &serde_json::json!({}), &press, &mut state, Some(&lib));
-        assert_eq!(f.results.number("gx"), Some(30.0), "press writes the value");
+        assert_eq!(f.results.number("gx"), Some(0.0), "press holds the value back");
         assert!(f.results.is_on("hud_hit"));
 
         // Held, pointer far off the rect: the capture keeps it a candidate, so the
-        // value keeps flowing (the select-popup/slider-drag escape from the rect
-        // pre-filter).
+        // verdict keeps flowing into the in-flight slot (the select-popup/
+        // slider-drag escape from the rect pre-filter).
         let held = UiInput { mouse: Vec2::new(500.0, 300.0), clicked: false, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
         let f = run_ui_with(&page, &model, &serde_json::json!({}), &held, &mut state, Some(&lib));
         assert_eq!(f.stats.lua_hits, 1, "the captured node still dispatches");
-        assert_eq!(f.results.number("gx"), Some(500.0), "drag keeps writing off-rect");
+        assert_eq!(f.results.number("gx"), Some(0.0), "still no emission while held");
+        let live = state.drag_value.as_ref().expect("the drag tracks off-rect");
+        assert_eq!(live.1, Value::Number(500.0), "the in-flight value follows the hand");
         assert!(f.results.is_on("hud_hit"), "a live capture claims the pointer");
 
-        // Release (pointer unmoved): capture clears generically; no dispatch, no write.
+        // Release (pointer unmoved): capture clears generically; no dispatch — and
+        // the withheld value commits, exactly once, on this edge.
         let release = UiInput { mouse: Vec2::new(500.0, 300.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
         let f = run_ui_with(&page, &model, &serde_json::json!({}), &release, &mut state, Some(&lib));
         assert_eq!(f.stats.lua_hits, 0, "release frame is idle — no crossing");
-        assert!(f.results.get("gx").is_none(), "no interaction, no echo for a probe kind");
+        assert_eq!(f.results.number("gx"), Some(500.0), "release commits the dragged value");
+        assert!(state.drag_value.is_none(), "the in-flight value is spent");
         assert!(!f.results.is_on("hud_hit"), "claim dropped with the capture");
     }
 
@@ -4901,8 +4995,12 @@ mod tests {
         assert!(plain.drag().is_none());
     }
 
+    /// The **commit-on-release** contract (Aaron, 2026-08-06): a captured drag
+    /// tracks the hand visually, but `frame.results` keeps reporting the RESTING
+    /// model value the whole drag — the one real write happens on the release
+    /// frame. A scene folding results therefore sees exactly one update per drag.
     #[test]
-    fn slider_drag_writes_bound_value_and_captures() {
+    fn slider_drag_captures_and_commits_on_release() {
         let mut sl = node("slider");
         sl.id = "s".into();
         sl.bind = Some("v".into());
@@ -4918,16 +5016,30 @@ mod tests {
         let st = serde_json::json!({});
         let model = ValueMap::new().with("v", 0.0);
         let mut state = UiState::new();
-        // Track spans the full 200px width from x=0; press at the midpoint.
+        // Track spans the full 200px width from x=0; press at the midpoint. The
+        // press CAPTURES, but the emission is held back: results still echo the
+        // resting model value.
         let frame = run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
-        let v = frame.results.number("v").expect("slider wrote its bind");
-        assert!((v - 50.0).abs() < 2.0, "midpoint press ≈ 50, got {v}");
         assert!(frame.results.is_on("hud_hit"));
+        assert!(state.dragging.contains("s"), "grab-band press captures");
+        assert_eq!(frame.results.number("v"), Some(0.0), "mid-drag results stay at rest");
 
-        // Still held, cursor moved right → keeps updating even off-track.
+        // Still held, cursor moved right → the drag keeps TRACKING (even
+        // off-track), but still emits nothing.
         let held = UiInput { mouse: Vec2::new(180.0, 10.0), clicked: false, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
         let frame = run_ui(&page, &model, &st, &held, &mut state);
-        assert!(frame.results.number("v").unwrap() > 80.0, "drag keeps writing");
+        assert_eq!(frame.results.number("v"), Some(0.0), "still no emission while held");
+        let live = state.drag_value.as_ref().expect("the drag holds its value in flight");
+        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
+        assert!(n > 80.0, "the in-flight value follows the hand: {n}");
+
+        // Release: the ONE real write, at the last dragged position.
+        let up = UiInput { mouse: Vec2::new(180.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let frame = run_ui(&page, &model, &st, &up, &mut state);
+        let v = frame.results.number("v").expect("release commits the bind");
+        assert!(v > 80.0, "release commits the dragged value: {v}");
+        assert!(state.drag_value.is_none(), "the in-flight value is spent");
+        assert!(state.dragging.is_empty(), "capture released");
     }
 
     /// A labelled slider row (label column + track + value column, like the fit
@@ -4974,12 +5086,20 @@ mod tests {
         assert_eq!(f.results.text("fit_focus"), Some("v"));
         assert_eq!(f.results.number("v"), Some(25.0), "outside the grab band nothing captures");
 
-        // Click in the ±6px slop ABOVE the track (y=10, inside 8..14): captures and
-        // writes the mapped value ((170-80)/180 = 50).
+        // Click in the ±6px slop ABOVE the track (y=10, inside 8..14): captures,
+        // maps the pointer over the track ((170-80)/180 = 50) into the in-flight
+        // value — and commits it on release (commit-on-release: mid-drag results
+        // keep echoing the resting 25).
         let mut state = UiState::new();
         let f = run_ui(&page, &model, &st, &input_at(170.0, 10.0, true), &mut state);
-        let v = f.results.number("v").expect("grab-band press writes");
-        assert!((v - 50.0).abs() < 2.0, "press maps the pointer over the track: {v}");
+        assert_eq!(f.results.number("v"), Some(25.0), "the press frame emits nothing yet");
+        let live = state.drag_value.as_ref().expect("grab-band press captures the value");
+        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
+        assert!((n - 50.0).abs() < 2.0, "press maps the pointer over the track: {n}");
+        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let f = run_ui(&page, &model, &st, &up, &mut state);
+        let v = f.results.number("v").expect("release commits");
+        assert!((v - 50.0).abs() < 2.0, "release commits the mapped value: {v}");
 
         // Idle frame with the pointer off the row: the group-focus key echoes the
         // model's persisted focus.
@@ -5007,6 +5127,39 @@ mod tests {
         let model = ValueMap::new().with("shown", true);
         let frame = run_ui(&page, &model, &serde_json::json!({}), &input_at(5.0, 5.0, true), &mut state);
         assert!(frame.results.is_on("nope"), "shown → clickable");
+    }
+
+    /// A width-sized node with an `aspect` derives its HEIGHT (the cover-fit Muse:
+    /// full viewport width, square, right-anchored) — so on a 800×600 screen the
+    /// plate is 800×800, flush right, vertically centred, spilling 100px past the
+    /// top AND the bottom instead of letterboxing.
+    #[test]
+    fn aspect_derives_height_from_a_given_width_and_right_anchor_centres_it() {
+        let mut muse = node("sprite");
+        muse.anchor = Some(UiAnchor::Right);
+        muse = prop(muse, "tex", Value::Number(4.0));
+        muse = prop(muse, "width_frac", Value::Number(1.0));
+        muse = prop(muse, "aspect", Value::Number(1.0)); // square → height follows width
+
+        let mut page = node("screen");
+        page.children = vec![muse];
+
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let frame =
+            run_ui(&page, &model, &serde_json::json!({}), &input_at(0.0, 0.0, false), &mut state);
+        let (x, y, w, h) = frame
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Sprite { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .expect("sprite drawn");
+        assert!((w - 800.0).abs() < 0.5, "full viewport width, got {w}");
+        assert!((h - 800.0).abs() < 0.5, "aspect=1 derives height from width, got {h}");
+        assert!((x - 0.0).abs() < 0.5, "full-width plate reaches the right edge, got x={x}");
+        assert!((y - (-100.0)).abs() < 0.5, "vertically centred → equal 100px spill, got y={y}");
     }
 
     #[test]
