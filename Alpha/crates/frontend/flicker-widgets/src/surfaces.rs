@@ -377,7 +377,7 @@ impl Surfaces {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::component::{run_ui, run_ui_with, UiInput, UiState};
+    use crate::component::{run_ui, UiInput, UiState};
     use crate::template::builtin_templates;
     use flicker_render::Vec2;
     use flicker_script::{UiNode, Value};
@@ -634,14 +634,21 @@ mod tests {
     /// A Screen declaration naming an rtt-view TEMPLATE surface round-trips
     /// visibility like any other surface: hidden, the walker never places the
     /// subtree, so its `RttSlot`s are not reserved; shown, both stages come
-    /// back. This is the S8 Screen▸RTTs story document-by-test — the kept
-    /// `side_by_side_rtt` data template, gated by a declared surface, driven
-    /// through the helper (no current scene ships one, per the S3 ruling).
+    /// back. This is the S8 Screen▸RTTs story document-by-test.
+    ///
+    /// The vehicle is the ONE N-panel arrangement — a `multi_view` of two
+    /// `rtt_panel`s — which is what the fixed two-/three-/four-up protos were
+    /// replaced by. The subject of the gate is the SURFACE round trip, not the
+    /// proto: any declaration reserving two stages would do, and this one is
+    /// the arrangement the benches actually ship.
     #[test]
     fn an_rtt_view_template_surface_round_trips_visibility() {
         let json = r#"{ "component": "screen", "children": [
-            { "template": "side_by_side_rtt", "id": "pair", "visible_bind": "workbench_on",
-              "left_source": "cam_a", "right_source": "cam_b", "gap": 4 }
+            { "template": "multi_view", "id": "pair", "visible_bind": "workbench_on", "gap": 4,
+              "slots": { "panes": [
+                { "template": "rtt_panel", "id": "pair_left",  "tab_group": "l", "source": "cam_a" },
+                { "template": "rtt_panel", "id": "pair_right", "tab_group": "r", "source": "cam_b" }
+              ] } }
         ] }"#;
         // The surviving data path: the ONE arrangement reader + the registry.
         let value: serde_json::Value = serde_json::from_str(json).expect("json parses");
@@ -662,7 +669,7 @@ mod tests {
 
         let shown = run(&surfaces, &mut state);
         let ids: Vec<&str> = shown.rtts.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec!["pair_left", "pair_right"], "both stages reserve slots");
+        assert_eq!(ids, vec!["pair_left_rtt", "pair_right_rtt"], "both stages reserve slots");
         assert_eq!(shown.rtts[0].source, "cam_a");
         assert_eq!(shown.rtts[1].source, "cam_b");
 
@@ -683,15 +690,13 @@ mod tests {
 
     /// Publishing the surface keys every frame must not defeat the draw cache:
     /// unchanged states are unchanged Model values, so a still frame replays
-    /// byte-identical commands with zero Lua crossings; flipping one surface
+    /// byte-identical commands and redraws nothing; flipping one surface
     /// redraws only what appeared.
     #[test]
     fn republishing_unchanged_surfaces_keeps_the_draw_cache_still() {
         // Fingerprints fold `strings::generation()`; hold the guard so a
         // concurrent test's stringtable load can't force spurious redraws.
         let _g = crate::strings::test_guard();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         // A screen with an always-on button and a surface-gated panel.
         let btn = {
@@ -726,23 +731,23 @@ mod tests {
         let run = |surfaces: &Surfaces, state: &mut UiState| {
             let mut m = ValueMap::new();
             surfaces.publish(&mut m);
-            run_ui_with(&page, &m, &styles, &input_still(), state, Some(&lib))
+            run_ui(&page, &m, &styles, &input_still(), state)
         };
 
         let first = run(&surfaces, &mut state);
-        assert!(first.stats.lua_draws >= 1, "cold frame draws the button via Lua");
+        // What this test is about is the CACHE: a cold frame draws, a
+        // republished-but-unchanged frame does not.
+        assert!(first.stats.redraw_nodes > 0, "cold frame draws the button");
 
         let second = run(&surfaces, &mut state);
         assert_eq!(second.stats.redraw_nodes, 0, "republished, unchanged: nothing redraws");
-        assert_eq!(second.stats.lua_draws, 0, "…and Lua is never entered");
         assert_eq!(second.commands, first.commands, "the replay is byte-identical");
 
         surfaces.show("tools");
         let third = run(&surfaces, &mut state);
         // The appearing panel is a cache miss, and its auto-height parent re-measures
-        // (its rect grew) — but the button REPLAYS: no Lua crossing on a surface flip
-        // that leaves its inputs alone.
+        // (its rect grew) — but the button REPLAYS: a surface flip that leaves its
+        // inputs alone must not redraw it.
         assert_eq!(third.stats.redraw_nodes, 2, "the appearing panel + its resized parent");
-        assert_eq!(third.stats.lua_draws, 0, "the button replays — Lua is never re-entered");
     }
 }

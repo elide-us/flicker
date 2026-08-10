@@ -7,4 +7,6 @@ license.workspace = true
 [dependencies]
 flicker-app.workspace = true
 flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 flicker-render.workspace = true
+tracing.workspace = true

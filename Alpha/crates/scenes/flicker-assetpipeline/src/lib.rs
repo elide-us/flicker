@@ -27,8 +27,7 @@
 //! shared `workflow` spine, with `clayworks_bank` / `clayworks_row` / `clayworks_offset` /
 //! `clayworks_import_card` beneath it. [`AssetPipeline::build_tree`] emits ONE instance
 //! node, declares the screen's input as `on_<signal>` props, and calls `expand` at the
-//! end — the single seam, so the scene and every gate walk the same tree. The script host
-//! is here purely as the COMPONENT LIBRARY.
+//! end — the single seam, so the scene and every gate walk the same tree.
 //!
 //! **Controller is the floor.** A/B are the wizard's forward/back; the bumpers walk the
 //! same rail, because the step strip IS this screen's tab bar; L2/R2 cycle the gizmo mode
@@ -54,16 +53,12 @@ use flicker::render::{
     MeshVertex, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting, TextureHandle,
     TexturedMeshHandle, Vec2, Vec3,
 };
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, UiNode, Value, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui_with, strings, workflows_from_json,
+    builtin_templates, expand, load_styles, render_hud, run_ui, strings, workflows_from_json,
     TemplateRegistry, UiInput, UiIntents, UiState, WalkerHandler, Workflow, WorkflowDef,
-    UI_COMPONENT_MODULES,
 };
-// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` is test-only.
-#[cfg(test)]
-use flicker::ui::run_ui;
 use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
@@ -808,11 +803,6 @@ pub struct AssetPipeline {
     tick: u64,
     ui_theme: Option<Theme>,
     // ── HUD (component walker) ──
-    /// The HUD script host, RETAINED so the walker can dispatch each control's draw/hit
-    /// to its `ui/<kind>.lua` component module (`run_ui_with`). `None` when the script
-    /// failed to load — component nodes then draw only their structural box (or
-    /// nothing): a visible failure, not an alternate render path.
-    ui_host: Option<ScriptHost>,
     /// The template registry, built ONCE and held — `build_tree` expands against it
     /// every frame, which is what keeps template params live (CM4 7A1F32C5).
     templates: TemplateRegistry,
@@ -1159,17 +1149,6 @@ impl AssetPipeline {
     /// one instance of it every frame.
     pub fn new() -> Self {
         let ui_styles = load_styles(HUD_UI_ELEMENTS);
-        // The script host is the COMPONENT LIBRARY — the `ui/<kind>.lua` modules the
-        // walker calls to draw and hit each control. It is NOT a place this scene keeps
-        // a tree. `None` on load failure → component nodes draw only their structural
-        // box: a visible failure, not an alternate render path.
-        let ui_host = match ScriptHost::library(UI_COMPONENT_MODULES) {
-            Ok(host) => Some(host),
-            Err(e) => {
-                tracing::error!("component library load failed: {e} — no HUD");
-                None
-            }
-        };
         // The workflow spine. The definitions are EMBEDDED content, so a parse failure is
         // a build bug the suite catches, not a runtime state — expect() over limping on
         // with no wizard. The character definition is also the pre-dispatch default:
@@ -1206,7 +1185,6 @@ impl AssetPipeline {
             route: RouteCtx::new(),
             tick: 0,
             ui_theme: None,
-            ui_host,
             templates: builtin_templates(),
             // Refreshed from the built tree's root each frame in `update`.
             ui_intents: UiIntents::default(),
@@ -3504,7 +3482,7 @@ impl Scene for AssetPipeline {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // The HUD walks first: it lays out the framed holder, and the rect it reserves for the 2×2 is
         // what the viewport controls below pick against — a cursor outside the holder (over the editor
         // rail or a bar) lands on no view, so the chrome no longer has to "claim" the pointer. Its
@@ -3532,22 +3510,14 @@ impl Scene for AssetPipeline {
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
             };
-            let frame = {
-                // Disjoint field borrows: `ui_styles` / `ui_host` read, `ui_state` mutated.
-                // `lib` routes a node's draw to its Lua component twin when the host
-                // `handles` its kind (buttons today); `None` would be today's all-Rust path.
-                let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
-                run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
-            };
-            self.hud_commands = frame.commands;
+            // Disjoint field borrows: `ui_styles` read, `ui_state` mutated.
+            let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             // The framed holder the HUD reserved for the 2×2 (the `editor_quad` stage node): the grid
             // tiles inside exactly this rect, so the four views land in the frame and the rail sits
             // beside them. Setting it on the grid keeps the composite and the pointer-picking in step.
-            let viewport = frame
-                .rtts
-                .iter()
-                .find(|s| s.id == "editor_quad")
-                .map(|s| Rect { pos: Vec2::new(s.x, s.y), size: Vec2::new(s.w, s.h) });
+            // (Read before `commands` is moved out of the frame.)
+            let viewport = frame.rtt_rect("editor_quad");
+            self.hud_commands = frame.commands;
             self.quad_rect = viewport;
             if let Some(g) = self.grid.as_mut() {
                 g.set_viewport(viewport);

@@ -154,13 +154,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use flicker::render::{Renderer, Vec2};
-use flicker::scene::{Scene, Transition};
+use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{
-    ComponentLibrary, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap,
+    HudCommand, UiAnchor, UiNode, Value, ValueMap,
 };
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui_with, TemplateRegistry, UiInput,
-    UiIntents, UiState, WalkerHandler, UI_COMPONENT_MODULES,
+    builtin_templates, expand, load_styles, render_hud, run_ui, TemplateRegistry, UiInput,
+    UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Key, Resolver,
@@ -286,7 +286,6 @@ pub struct Quartermaster {
     ui_intents: UiIntents,
     ui_state: UiState,
     ui_styles: serde_json::Value,
-    script: Option<ScriptHost>,
     hud_commands: Vec<HudCommand>,
     ui_theme: Option<Theme>,
     white: Option<flicker::render::TextureHandle>,
@@ -377,7 +376,6 @@ impl Quartermaster {
             ui_intents: UiIntents::default(),
             ui_state: UiState::default(),
             ui_styles: serde_json::Value::Null,
-            script: None,
             hud_commands: Vec::new(),
             ui_theme: None,
             white: None,
@@ -2043,17 +2041,11 @@ impl Scene for Quartermaster {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
         self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        // The tree is built in Rust, so the script host is here purely as the
-        // COMPONENT LIBRARY (the Lua draw/hit modules the walker calls).
-        match ScriptHost::library(UI_COMPONENT_MODULES) {
-            Ok(host) => self.script = Some(host),
-            Err(e) => tracing::warn!("component library load failed: {e} — no HUD"),
-        }
         self.refresh();
         renderer.window().set_title("Quartermaster Bench");
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, _dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let screen = renderer.size();
         self.list_view_h =
             (screen.y - (TOP_BAR_H + TAB_BAR_H + CRUMB_H + STATUS_H + HEADER_H)).max(120.0);
@@ -2086,8 +2078,7 @@ impl Scene for Quartermaster {
             backspace,
             wheel: input.mouse_wheel_delta,
         };
-        let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-        let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         self.hud_commands = frame.commands;
 
@@ -2632,7 +2623,6 @@ mod tests {
 
         let tree = qm.build_tree(screen);
         let styles = load_styles(HUD_UI_ELEMENTS);
-        let host = ScriptHost::library(UI_COMPONENT_MODULES).expect("component library");
         let mut state = UiState::default();
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
@@ -2643,14 +2633,7 @@ mod tests {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui_with(
-            &tree,
-            &qm.hud_model(),
-            &styles,
-            &snap,
-            &mut state,
-            Some(&host as &dyn ComponentLibrary),
-        );
+        let frame = run_ui(&tree, &qm.hud_model(), &styles, &snap, &mut state);
         frame
             .commands
             .iter()
@@ -3420,7 +3403,6 @@ mod tests {
         let screen = Vec2::new(1920.0, 1080.0);
         let tree = qm.build_tree(screen);
         let styles = load_styles(HUD_UI_ELEMENTS);
-        let host = ScriptHost::library(UI_COMPONENT_MODULES).expect("component library");
         let mut state = UiState::default();
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
@@ -3431,14 +3413,7 @@ mod tests {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui_with(
-            &tree,
-            &qm.hud_model(),
-            &styles,
-            &snap,
-            &mut state,
-            Some(&host as &dyn ComponentLibrary),
-        );
+        let frame = run_ui(&tree, &qm.hud_model(), &styles, &snap, &mut state);
         // $accent_wash — the one colour only `quartermaster.rowsel` carries.
         let washes: Vec<(f32, f32, f32, f32)> = frame
             .commands

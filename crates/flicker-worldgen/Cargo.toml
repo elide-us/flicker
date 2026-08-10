@@ -13,6 +13,9 @@ license.workspace = true
 [dependencies]
 flicker-materials.workspace = true
 flicker-worldstate.workspace = true
+# The world-constant canon (tile span → tick derivation) — one source, per the
+# canon-unanimity law; this crate must not carry its own typing of the span.
+flicker-poc-chemistry.workspace = true
 # The shared lattice noise (`noise.rs` here is only its Vec3 face).
 flicker-primitive.workspace = true
 glam.workspace = true

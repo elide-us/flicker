@@ -30,7 +30,7 @@ mod golem;
 use std::time::{Duration, Instant};
 
 use flicker::render::{Rect, Renderer, Vec2};
-use flicker::scene::{Scene, Transition};
+use flicker::scene::{Scene, SceneInput, Transition};
 use golem::GolemStage;
 use flicker_input_core::{
     AbstractControls, ActionSignal, AnalogFrame, ContextualBindings, EventKind, Fired, GamepadAxis,
@@ -519,7 +519,7 @@ impl Scene for ControllerTester {
         renderer.window().set_title("Flicker Controller Tester \u{00b7} Bus Inspector");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         self.tick = self.tick.wrapping_add(1);
         self.snap = Some(input.clone());
         // Remember last frame's latch so render can show the current-vs-previous delta.

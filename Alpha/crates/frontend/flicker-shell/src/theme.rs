@@ -82,6 +82,15 @@ const CURSOR_IMAGE: &[u8] = include_bytes!("../../../../content/package/sensoriu
 /// The `theme.tokens` name the cursor's grayscale art is multiplied by.
 const CURSOR_TINT: &str = "gold_ring";
 
+/// The CONTROLLER GLYPH ATLAS — one sheet of input-hint icons (LT/RT/LB/RB, the
+/// face buttons, menu/view, the d-pad and the stick), baked white-on-transparent so
+/// a style tints each one. Embedded like the Muse so every shell app inherits it,
+/// and ONE texture so a whole footer legend draws in a single bind. Regenerate from
+/// the source SVGs with `tools/gen_prism_pad_glyphs.py`; the name → cell map lives in
+/// `ui_elements.json` under `pad_glyphs`.
+const PAD_GLYPHS_IMAGE: &[u8] =
+    include_bytes!("../../../../content/package/sensorium/assets/prism_pad_glyphs.png");
+
 // ===== loading-panel geometry (the one Rust-drawn widget) =====
 
 const PANEL_W: u32 = 520;
@@ -96,6 +105,25 @@ const FRAME: u32 = 38;
 /// width — so the sprite dissolves toward screen-centre when the menu draws her at
 /// the right margin. Falls back to a 1×1 white pixel if decoding fails (the menu
 /// guards on the texture, so a failure just drops the character).
+/// Upload the controller-glyph atlas verbatim — the sheet is already white with the
+/// glyph shape in alpha, so unlike the Muse there is nothing to bake in at load. A
+/// decode failure falls back to a FULLY TRANSPARENT pixel rather than a white one:
+/// a missing atlas should leave a hint blank, never stamp an opaque square over the
+/// chrome.
+fn load_pad_glyphs(renderer: &mut Renderer) -> TextureHandle {
+    match image::load_from_memory(PAD_GLYPHS_IMAGE) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            renderer.load_texture(&rgba, w, h)
+        }
+        Err(e) => {
+            tracing::error!("failed to decode prism_pad_glyphs.png: {e}");
+            renderer.load_texture(&[0x00, 0x00, 0x00, 0x00], 1, 1)
+        }
+    }
+}
+
 fn load_muse(renderer: &mut Renderer) -> TextureHandle {
     match image::load_from_memory(MUSE_IMAGE) {
         Ok(img) => {
@@ -161,6 +189,10 @@ pub struct Theme {
     /// The main-menu character (left-edge alpha fade baked in). Exposed to Lua as
     /// `Textures.muse`; only the menu screen draws it.
     muse: TextureHandle,
+    /// The controller-glyph atlas. Exposed to Lua as `Textures.pad_glyphs`; a
+    /// glyph-faced `button` picks one cell out of it with a sprite `uv` sub-rect
+    /// (the atlas description is the `pad_glyphs` style block).
+    pad_glyphs: TextureHandle,
 }
 
 impl Theme {
@@ -192,7 +224,8 @@ impl Theme {
 
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
         let muse = load_muse(renderer);
-        Self { white, muse }
+        let pad_glyphs = load_pad_glyphs(renderer);
+        Self { white, muse, pad_glyphs }
     }
 
     /// The engine textures this theme exposes to a Lua screen, as
@@ -201,8 +234,8 @@ impl Theme {
     /// consumer's `render_hud`). `white` is id 0 so it doubles as the rect fill.
     ///
     /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
-    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 2] {
-        [("white", self.white), ("muse", self.muse)]
+    pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 3] {
+        [("white", self.white), ("muse", self.muse), ("pad_glyphs", self.pad_glyphs)]
     }
 
     /// Draw the loading screen: opaque backdrop, the flat Prism panel titled

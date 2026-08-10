@@ -25,11 +25,10 @@ use std::time::Duration;
 
 use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
 use flicker::render::{Renderer, TextureHandle, Vec2};
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
-    UI_COMPONENT_MODULES,
+    load_styles, load_ui_json, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -72,10 +71,6 @@ pub struct ClickTrainer {
     /// 1×1 white pixel — the sprite shader tints it, so one texture draws the
     /// target box and its lifetime bar in any colour.
     white: Option<TextureHandle>,
-    /// The HUD script host, RETAINED past tree-build as the Lua component library
-    /// (`ui.*` modules) the walker dispatches per-node DRAW to. `None` if it
-    /// failed to load — the game still runs, just without the panel.
-    script: Option<ScriptHost>,
     /// The HUD's component tree, parsed ONCE from the script's `tree()` at load;
     /// the walker redraws this cached tree every frame with fresh Model bindings.
     ui_tree: Option<UiNode>,
@@ -138,7 +133,6 @@ impl ClickTrainer {
     pub fn new() -> Self {
         Self {
             white: None,
-            script: None,
             ui_tree: None,
             ui_intents: UiIntents::default(),
             ui_styles: serde_json::Value::Object(Default::default()),
@@ -256,7 +250,7 @@ impl Scene for ClickTrainer {
         // no HUD (the game still plays) if the script can't load. The styles are
         // the token-resolved layout JSON (the same tree Lua reads via `UI`).
         self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
+        match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.clicktrainer`)
                 match script.ui_tree() {
@@ -269,7 +263,8 @@ impl Scene for ClickTrainer {
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
-                self.script = Some(script);
+                // The host is dropped here: the parsed `UiNode` is fully owned data
+                // and every control draws in the engine, so nothing reads the VM again.
             }
             Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
         }
@@ -277,7 +272,7 @@ impl Scene for ClickTrainer {
         renderer.window().set_title("Flicker Click Trainer");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let dt_s = dt.as_secs_f32();
         let screen = renderer.size();
 
@@ -308,8 +303,7 @@ impl Scene for ClickTrainer {
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
             };
-            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
             if frame.results.is_on("reset") {
                 self.reset();
@@ -445,7 +439,7 @@ mod tests {
     use flicker_input_core::ActionSignal;
 
     fn tree_and_styles() -> (UiNode, serde_json::Value) {
-        let h = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+        let h = ScriptHost::from_file(HUD_SCRIPT)
             .expect("load hud_clicktrainer.lua");
         load_ui_json(&h, HUD_UI_ELEMENTS);
         let tree = h.ui_tree().expect("tree builds").expect("script exposes tree()");

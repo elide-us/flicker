@@ -20,7 +20,9 @@ use anyhow::Result;
 
 use flicker_clicktrainer::ClickTrainer;
 use flicker_controllertester::ControllerTester;
-use flicker_shell::{SceneEntry, SceneInfo, ShellConfig, REALM_ADVENTURER, REALM_DEVELOPER};
+use flicker_shell::{
+    SceneEntry, SceneInfo, ShellConfig, REALM_ADVENTURER, REALM_DEVELOPER, REALM_GAMEMASTER,
+};
 
 /// The launcher roster: one `SceneEntry` per scene — its realm tags decide which
 /// mode's tier-2 page lists it, and its `SceneInfo` fills that page's panel row
@@ -58,18 +60,6 @@ fn roster() -> Vec<SceneEntry> {
             "Live gamepad / keyboard / mouse readout — buttons, sticks and triggers light up as you press them.",
             "Clay 0.1 · Tool · gilrs",
         )),
-        // A minigame rather than Prism fiction — like the Click Trainer it is a
-        // TECH DEMO, here of a scene-painted 2D scope under a fully data-composed
-        // console driven by dropdowns and a Dispatch button.
-        SceneEntry::new("atc", "Air Traffic Control", "primary", flicker_atc::scene)
-            .with_realm(REALM_ADVENTURER)
-            .with_info(SceneInfo::new(
-                "Air Traffic Control",
-                "Minigame",
-                "Radar",
-                "Sequence 26 aircraft through the scope — vector, climb, hold and land them without a close encounter.",
-                "Clay 0.1 · Game · command panel",
-            )),
         // Developer mode: the tool/bench scenes of the two-column launcher. Ordered by
         // pipeline position (Aaron, QA pass 2026-08-03): asset IMPORT first, the file
         // manager that promotes its output second, then the downstream benches.
@@ -111,16 +101,29 @@ fn roster() -> Vec<SceneEntry> {
                 "3×3 voxel-cluster field — dual-contour + mesh, LOD, navmesh, and the virtual-voxel inspector.",
                 "Clay 0.1 · Tool · dual-contour",
             )),
-        // God Mode: the world-simulation console. MOVED from the standalone
-        // flicker-poc-chemistry app (that crate is now the GPU-free sim library).
+        // GAME MASTER: the realm the WORLD is authored in — a new segment beside
+        // Dungeon Maker, not a rename of it (Aaron, 2026-08-08). God Mode moved
+        // here from Developer: running a planet is not a content bench.
         SceneEntry::new("godmode", "God Mode", "primary", flicker_godmode::scene)
-            .with_realm(REALM_DEVELOPER)
+            .with_realm(REALM_GAMEMASTER)
             .with_info(SceneInfo::new(
                 "God Mode",
                 "Simulation",
                 "World-Gen",
                 "Watch a planet evolve from a molten ball — orbit the layer stack, recolour it by any field, and drive the run.",
                 "Clay 0.1 · Sim · chemistry-first",
+            )),
+        // The world as a MAP rather than a simulation: one hex tiling, every tile
+        // identified by its own index and carrying nothing else yet. Built up a
+        // layer at a time, each one earning its place.
+        SceneEntry::new("populous", "Populous Bench", "primary", flicker_populous::scene)
+            .with_realm(REALM_GAMEMASTER)
+            .with_info(SceneInfo::new(
+                "Populous Bench",
+                "Authoring",
+                "World Map",
+                "A hex map of a world — every tile its own index, and a dial from 23k to 144k tiles. Nothing else, yet.",
+                "Clay 0.1 · Bench · hex map",
             )),
         // The texture synthesizer: a channel rack of noise voices blended into one
         // field, projected into the PBR map set a surface actually needs.
@@ -164,7 +167,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicker_shell::REALM_DM;
+    use flicker_shell::{REALM_DM, REALM_GAMEMASTER};
 
     /// The Aaron-ratified mode map, pinned.
     ///
@@ -172,8 +175,11 @@ mod tests {
     /// showcase shelf — so the scenes a player STANDS IN live there: the Solar
     /// Birth cinematic, the voxel world of the Cluster Editor, and the Controller
     /// Tester they learn the pad on. Developer keeps the authoring BENCHES, which
-    /// had grown too crowded to read (Aaron, 2026-08-02). DM is still the
-    /// coming-soon note, and Click Trainer stays a realm-less root-level button.
+    /// had grown too crowded to read (Aaron, 2026-08-02). **GAME MASTER (the DM
+    /// realm) is where the world itself is authored** — God Mode moved there from
+    /// Developer (Aaron, 2026-08-08), because running a planet is not a content
+    /// bench. **Dungeon Maker (DM) is untouched** — Game Master was ADDED beside
+    /// it, not a rename. Click Trainer stays a realm-less root-level button.
     #[test]
     fn roster_realms_follow_the_ratified_mode_map() {
         let scenes = roster();
@@ -189,7 +195,11 @@ mod tests {
         for id in ["solarbirth", "pocclusters", "controllertester"] {
             assert!(adventurer.contains(&id), "'{id}' belongs to the Adventurer root");
         }
-        assert!(realm_ids(REALM_DM).is_empty(), "DM mode is under construction");
+        // GAME MASTER is a NEW realm; Dungeon Maker survives it, still empty.
+        let gm = realm_ids(REALM_GAMEMASTER);
+        assert!(gm.contains(&"godmode"), "the planet simulation is a Game Master instrument");
+        assert!(gm.contains(&"populous"), "the world map bench is a Game Master instrument");
+        assert!(realm_ids(REALM_DM).is_empty(), "Dungeon Maker is still under construction");
 
         let dev = realm_ids(REALM_DEVELOPER);
         assert!(dev.contains(&"sablework"), "the texture synthesizer is an authoring bench");
@@ -197,7 +207,7 @@ mod tests {
         // simulation, and two launcher entries for one thing is how a
         // maintainer ends up in the wrong one.
         assert!(!dev.contains(&"pocepochs"), "the superseded Planet Simulation tile is retired");
-        assert!(dev.contains(&"godmode"), "the world-simulation console is a Developer bench");
+        assert!(!dev.contains(&"godmode"), "the planet simulation left Developer for GAME MASTER");
         // Developer is the BENCH launcher: nothing a player stands in belongs there.
         for id in ["solarbirth", "pocclusters", "controllertester", "clicktrainer"] {
             assert!(!dev.contains(&id), "'{id}' is not a Developer bench");

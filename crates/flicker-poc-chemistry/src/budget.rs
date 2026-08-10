@@ -141,6 +141,17 @@ impl Budget {
         Self { accreted_kg, planet_mass_kg }
     }
 
+    /// A size-honest copy: every element `× factor`, so a reference-composition
+    /// seed becomes the accretion inventory of a smaller (or larger) planet —
+    /// the same composition, less of it. [`World::seed`](crate::planet::World::seed)
+    /// applies `size_scale³` through this; `× 1.0` is bit-exact, which is what
+    /// keeps the reference freq-96 world untouched by the size model.
+    pub fn sized(&self, factor: f64) -> Self {
+        let accreted_kg =
+            self.accreted_kg.iter().map(|(&e, &m)| (e, m * factor)).collect();
+        Self { accreted_kg, planet_mass_kg: self.planet_mass_kg * factor }
+    }
+
     /// Accreted mass of one element (0 if absent — but every element is explicit).
     pub fn accreted(&self, element: ElementId) -> f64 {
         self.accreted_kg.get(&element).copied().unwrap_or(0.0)

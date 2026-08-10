@@ -16,8 +16,6 @@
 //! same promotion `flicker-pocepochs` took): the launcher builds it via [`scene`]
 //! and registers it as a roster entry.
 
-mod camera;
-mod globe;
 mod globe_view;
 mod route;
 mod scene;

@@ -21,7 +21,6 @@ path = "src/main.rs"
 flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
-flicker-atc = { path = "../crates/scenes/flicker-atc" }
 flicker-clicktrainer = { path = "../crates/scenes/flicker-clicktrainer" }
 flicker-controllertester = { path = "../crates/scenes/flicker-controllertester" }
 flicker-solarbirth = { path = "../crates/scenes/flicker-solarbirth" }
@@ -29,6 +28,7 @@ flicker-loomforge = { path = "../crates/scenes/flicker-loomforge" }
 flicker-pocclusters = { path = "../crates/scenes/flicker-pocclusters" }
 flicker-assetpipeline = { path = "../crates/scenes/flicker-assetpipeline" }
 flicker-godmode = { path = "../crates/scenes/flicker-godmode" }
+flicker-populous = { path = "../crates/scenes/flicker-populous" }
 flicker-sablework = { path = "../crates/scenes/flicker-sablework" }
 flicker-quartermaster = { path = "../crates/scenes/flicker-quartermaster" }
 # Declares this executable's content roots (content.json) before any scene loads.

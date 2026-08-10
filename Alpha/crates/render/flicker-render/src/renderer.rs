@@ -38,6 +38,12 @@ use crate::pipeline_ui::UiPipeline;
 use crate::pipeline_volumetric::{VolumetricDisk, VolumetricDiskUniform, VolumetricPipeline};
 use crate::texture::{LoadedTexture, TextureHandle};
 
+/// The whole texture, as a [`Renderer::draw_sprite_uv`] source rect: `[u0, v0, u1, v1]`
+/// in normalized texture space, origin top-left. This is what [`Renderer::draw_sprite`]
+/// passes, and the identity an atlas lookup falls back to when a name resolves to no
+/// sub-rect.
+pub const FULL_TEXTURE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
 /// Opaque handle to an offscreen render target created by
 /// [`Renderer::create_render_target`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -145,6 +151,13 @@ pub struct Renderer {
     /// (`draw_ui_panel`/`draw_sprite`/`draw_text`) until changed — the clip a
     /// scroll region sets so its content is masked to its rect. `None` = full frame.
     current_clip: Option<[f32; 4]>,
+    /// How many draw calls have been queued since the last [`Renderer::begin_frame`].
+    /// Every `draw_*` entry point bumps it (via [`Renderer::note_draw`] — a new
+    /// entry point MUST call it too). Exists for exactly one diagnosis: an
+    /// offscreen pass ([`Renderer::render_to_texture`]) resets the shared queues,
+    /// so main-frame draws queued BEFORE it are silently destroyed — this counter
+    /// is what lets that destruction be LOUD instead.
+    frame_draws: u32,
 
     /// Offscreen render targets, indexed by [`RenderTargetHandle`] (slot pool).
     render_targets: Vec<Option<RenderTarget>>,
@@ -301,6 +314,7 @@ impl Renderer {
             draw_sky: false,
             current_layer: 0.0,
             current_clip: None,
+            frame_draws: 0,
             render_targets: Vec::new(),
             free_target_slots: Vec::new(),
             sky_this_frame: false,
@@ -607,6 +621,14 @@ impl Renderer {
         self.ground_fog_params = None;
         self.current_layer = 0.0;
         self.current_clip = None;
+        self.frame_draws = 0;
+    }
+
+    /// Count one queued draw. Called by every `draw_*` entry point — see
+    /// [`Self::frame_draws`] for why a new entry point must call it too.
+    #[inline]
+    fn note_draw(&mut self) {
+        self.frame_draws += 1;
     }
 
     /// Set the ambient 2D layer for subsequent `draw_sprite`/`draw_text`/
@@ -642,6 +664,7 @@ impl Renderer {
     /// Submit a solid-colored triangle. Vertices are pixel coordinates with the
     /// origin at the top-left.
     pub fn draw_triangle(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
+        self.note_draw();
         self.triangle
             .push(self.screen, a, b, c, color, self.current_layer);
     }
@@ -656,6 +679,25 @@ impl Renderer {
         size: Vec2,
         color: [f32; 4],
     ) {
+        self.draw_sprite_uv(texture, position, size, color, FULL_TEXTURE);
+    }
+
+    /// Submit a textured quad drawn from a SUB-RECTANGLE of its texture — the atlas
+    /// draw. `uv` is `[u0, v0, u1, v1]` in normalized texture space with the origin
+    /// top-left; [`FULL_TEXTURE`] is the whole image, which is exactly what
+    /// [`Renderer::draw_sprite`] passes.
+    ///
+    /// Many small images in one texture cost one bind rather than one each, because
+    /// the sprite batch groups its quads by texture handle.
+    pub fn draw_sprite_uv(
+        &mut self,
+        texture: TextureHandle,
+        position: Vec2,
+        size: Vec2,
+        color: [f32; 4],
+        uv: [f32; 4],
+    ) {
+        self.note_draw();
         self.sprite.push(
             self.screen,
             texture,
@@ -664,6 +706,7 @@ impl Renderer {
             color,
             self.current_layer,
             self.current_clip,
+            uv,
         );
     }
 
@@ -690,6 +733,7 @@ impl Renderer {
         border_color: [f32; 4],
         feather: f32,
     ) {
+        self.note_draw();
         self.ui.push(
             self.screen,
             position,
@@ -738,6 +782,7 @@ impl Renderer {
         tracking: f32,
         wrap: Option<f32>,
     ) {
+        self.note_draw();
         self.text.push(
             text,
             position.x,
@@ -803,6 +848,7 @@ impl Renderer {
     /// you want a sky; omit it (menus/loading) to keep the flat `clear_color`.
     /// A no-op unless a camera is also set this frame (it needs the view ray).
     pub fn draw_sky(&mut self) {
+        self.note_draw();
         self.draw_sky = true;
     }
 
@@ -830,6 +876,7 @@ impl Renderer {
     /// via [`Renderer::set_camera`]) supplies the view and projection.
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
+        self.note_draw();
         self.mesh.push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
 
@@ -865,6 +912,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
+        self.note_draw();
         self.mesh_textured.push(
             mesh,
             texture,
@@ -887,6 +935,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
+        self.note_draw();
         self.mesh_textured.push(
             mesh,
             texture,
@@ -913,6 +962,7 @@ impl Renderer {
         model: Mat4,
         options: MeshDrawOptions,
     ) {
+        self.note_draw();
         self.mesh_textured
             .push(mesh, texture, maps, model, options.tint, options.gloss, false);
     }
@@ -955,6 +1005,7 @@ impl Renderer {
         palettes: &[Mat4],
         bone_count: u32,
     ) {
+        self.note_draw();
         self.skinned
             .draw_instanced(&self.device, &self.queue, mesh, models, palettes, bone_count);
     }
@@ -970,6 +1021,7 @@ impl Renderer {
     /// persistence. Cheap (12 segments → 24 vertices). Multiple boxes
     /// per frame are fine.
     pub fn draw_bounding_box(&mut self, min: Vec3, max: Vec3, color: [f32; 4]) {
+        self.note_draw();
         self.lines.push_box(min, max, color);
     }
 
@@ -984,6 +1036,7 @@ impl Renderer {
     /// vertex buffer growth strategy; tens of thousands of segments
     /// per frame are comfortable on modern hardware.
     pub fn draw_lines(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
+        self.note_draw();
         for &(a, b) in segments {
             self.lines.push_segment(a, b, color);
         }
@@ -993,6 +1046,7 @@ impl Renderer {
     /// so the segments show through opaque geometry — for a skeleton overlay laid over the
     /// mesh, or other debug gizmos you want visible regardless of occlusion.
     pub fn draw_lines_overlay(&mut self, segments: &[(Vec3, Vec3)], color: [f32; 4]) {
+        self.note_draw();
         for &(a, b) in segments {
             self.lines_overlay.push_segment(a, b, color);
         }
@@ -1015,6 +1069,7 @@ impl Renderer {
         uv_max: Vec2,
         color: [f32; 4],
     ) {
+        self.note_draw();
         self.billboard
             .push(texture, world_position, world_size, uv_min, uv_max, color);
     }
@@ -1033,6 +1088,7 @@ impl Renderer {
         uv_max: Vec2,
         color: [f32; 4],
     ) {
+        self.note_draw();
         self.billboard
             .push_additive(texture, world_position, world_size, uv_min, uv_max, color);
     }
@@ -1162,6 +1218,24 @@ impl Renderer {
             return;
         };
         let (size, color) = (rt.size, rt.color);
+
+        // ── THE ORDERING CONTRACT, ENFORCED LOUDLY ──
+        // An offscreen pass is a PRE-pass: it borrows the shared per-frame queues,
+        // so everything queued for the main frame before this point is about to be
+        // destroyed by the `begin_frame` below. That used to happen SILENTLY — a
+        // scene that declared its RTT pass after its main draws simply lost them
+        // and shipped a part-blank frame with no explanation. The draws are still
+        // lost (preserving them means stashing every pipeline's queue AND the
+        // camera/scene state — a real redesign, tracked in MCP), but now the frame
+        // says why, and names the fix.
+        if self.frame_draws > 0 {
+            tracing::warn!(
+                "render_to_texture: {} main-frame draw(s) were queued before this \
+                 offscreen pass and are being DROPPED — declare offscreen passes \
+                 (FrameGraph::execute) before any main-frame draw",
+                self.frame_draws
+            );
+        }
 
         self.begin_frame(); // fresh sub-frame queues
         f(self); // the caller queues the sub-scene

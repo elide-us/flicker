@@ -14,7 +14,7 @@ use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, In
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2,
 };
-use flicker::scene::{Scene, Transition};
+use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_ui_json, load_widgets, render_hud, strings};
 use flicker_input_core::{ActionSignal, Fired, Resolver};
@@ -71,7 +71,7 @@ impl Loading {
 }
 
 impl Scene for Loading {
-    fn update(&mut self, _dt: Duration, _input: &InputState, _renderer: &Renderer) -> Transition {
+    fn update(&mut self, _dt: Duration, _input: &InputState, _signals: &mut SceneInput, _renderer: &Renderer) -> Transition {
         if !self.shown {
             self.shown = true; // let the splash render once before the (blocking) gen
             return Transition::None;
@@ -479,7 +479,7 @@ impl Scene for World {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the raw
         // `esc_prev` Menu edge. `ev` is the REUSED Fired buffer (no per-frame alloc —
         // RT-7); the InputEvent list is a short-lived local because it borrows THIS

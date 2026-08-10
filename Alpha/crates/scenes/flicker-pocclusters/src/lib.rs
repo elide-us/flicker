@@ -63,14 +63,13 @@ use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
     Vec2, Vec3,
 };
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    chat_panel, load_styles, load_ui_json, render_hud, run_ui_with, strings, ChatLineKind,
+    chat_panel, load_styles, load_ui_json, render_hud, run_ui, strings, ChatLineKind,
     ChatLineView, ChatView, RosterEntry, Surface, Surfaces, UiInput, UiIntents, UiState,
-    WalkerHandler, UI_COMPONENT_MODULES,
+    WalkerHandler,
 };
-// The HUD + chat panels render through `run_ui_with` (Lua component dispatch).
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -187,11 +186,6 @@ struct GameScene {
     /// cached tree every frame with fresh Model bindings). `None` if the script
     /// failed to load — the scene still runs without a HUD.
     ui_tree: Option<UiNode>,
-    /// Retained HUD script host: its Lua component library (`ui.*` modules) services the
-    /// walker's per-frame button-draw dispatch via `run_ui_with`. `None` if the script
-    /// failed to load — the walker then falls back to the all-Rust draw path. Kept
-    /// alongside `ui_tree` (both shared-borrowed each frame while `ui_state` is mutated).
-    ui_host: Option<ScriptHost>,
     /// The screen's declarative signal bindings (S9), collected from the cached
     /// tree's ROOT `on_<signal>` props at the same build point (`on_menu =
     /// "pause_open"`). The walker layer consumes a declared signal; `update`
@@ -363,7 +357,6 @@ impl Default for GameScene {
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
             ui_tree: None,
-            ui_host: None,
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
             ui_state: UiState::new(),
@@ -445,8 +438,7 @@ impl GameScene {
     fn new() -> Self {
         let ui_styles = load_styles(HUD_UI_ELEMENTS);
         let mut ui_tree = None;
-        let mut ui_host = None;
-        match ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES) {
+        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
                 load_ui_json(&s, HUD_UI_ELEMENTS); // HUD layout constants (`UI.pocclusters`)
                 match s.ui_tree() {
@@ -455,9 +447,6 @@ impl GameScene {
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
                 tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
-                // Retain the host so its Lua component library (`ui.*`) can service the
-                // walker's per-frame button-draw dispatch via `run_ui_with`.
-                ui_host = Some(s);
             }
             Err(e) => tracing::error!("HUD script load failed (continuing without it): {e}"),
         }
@@ -466,7 +455,6 @@ impl GameScene {
         let ui_intents = ui_tree.as_ref().map(UiIntents::of).unwrap_or_default();
         Self {
             ui_tree,
-            ui_host,
             ui_intents,
             ui_styles,
             ..Self::default()
@@ -1831,7 +1819,7 @@ impl Scene for GameScene {
         self.chat_rect = (x, y, w, h);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let dt_s = dt.as_secs_f32();
 
         // Booting: the world is still cooking — ignore input and just poll for
@@ -1948,13 +1936,10 @@ impl Scene for GameScene {
                 wheel: input.mouse_wheel_delta,
             };
             let frame = {
-                // Disjoint field borrows: `ui_tree` / `ui_styles` / `ui_host` read,
-                // `ui_state` mutated. `lib` routes each control's draw/hit to its
-                // `ui/<kind>.lua` module; with `None`, component nodes would draw only
-                // their structural box — a visible failure, not an alternate path.
+                // Disjoint field borrows: `ui_tree` / `ui_styles` read, `ui_state`
+                // mutated.
                 let tree = self.ui_tree.as_ref().unwrap();
-                let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
-                run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
+                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
             };
             let results = frame.results;
             self.hud_commands = frame.commands;
@@ -2085,7 +2070,11 @@ impl Scene for GameScene {
 
             let mut cmodel = ValueMap::new();
             self.surfaces.publish(&mut cmodel);
-            cmodel.set("chat_tab", self.chat_active.as_str());
+            // The tab strip selects by INDEX (an index is a number, everywhere), so the
+            // scene publishes the active channel's position in `chat_channels`.
+            let active_idx =
+                self.chat_channels.iter().position(|c| c == &self.chat_active).unwrap_or(0);
+            cmodel.set("chat_tab", active_idx as f64);
             cmodel.set("chat_scroll", self.chat_scroll as f64);
             cmodel.set("chat_input", self.chat_input.as_str());
 
@@ -2107,11 +2096,8 @@ impl Scene for GameScene {
                 backspace: focused && !guard && input.backspace(),
                 wheel: input.mouse_wheel_delta,
             };
-            // Same Lua component library as the HUD pass (services the chat panel's
-            // buttons, e.g. close); disjoint from the `&mut self.chat_ui_state` borrow.
-            let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
             let cframe =
-                run_ui_with(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state, lib);
+                run_ui(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state);
             let chat_hit = cframe.results.is_on("hud_hit");
             self.chat_commands = cframe.commands;
 
@@ -2121,10 +2107,12 @@ impl Scene for GameScene {
             if let Some(s) = cframe.results.number("chat_scroll") {
                 self.chat_scroll = s as f32;
             }
-            if let Some(sel) = cframe.results.text("chat_tab") {
-                if sel != self.chat_active && self.chat_channels.iter().any(|c| c == sel) {
-                    self.chat_active = sel.to_string();
-                    self.chat_scroll = f32::MAX;
+            if let Some(sel) = cframe.results.number("chat_tab") {
+                if let Some(channel) = self.chat_channels.get(sel as usize) {
+                    if channel != &self.chat_active {
+                        self.chat_active = channel.clone();
+                        self.chat_scroll = f32::MAX;
+                    }
                 }
             }
 
@@ -2601,7 +2589,7 @@ mod script_smoke {
         ))
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
-        let host = ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES)
+        let host = ScriptHost::from_file(HUD_SCRIPT_PATH)
             .expect("load hud_pocclusters.lua");
         load_ui_json(&host, HUD_UI_ELEMENTS); // HUD layout (`UI.pocclusters`)
         let tree = host
@@ -2641,8 +2629,7 @@ mod script_smoke {
             backspace: false,
             wheel: 0.0,
         };
-        let frame =
-            run_ui_with(&tree, &model(), &styles, &snap, &mut UiState::new(), Some(&host));
+        let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
         assert!(!frame.commands.is_empty(), "the HUD draws its panel + controls");
         let has_text = |needle: &str| {
             frame

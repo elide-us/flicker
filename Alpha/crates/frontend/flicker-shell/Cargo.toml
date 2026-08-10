@@ -14,6 +14,7 @@ license.workspace = true
 # zero copied files.
 [dependencies]
 flicker = { path = "../../core/flicker" }
+flicker-content.workspace = true
 # Directional-nav wiring for the menu (spec §8): the resolver + focus event bus.
 # Frontend → router → core (spec §2), the same edges pocclusters uses.
 flicker-input-core = { workspace = true }

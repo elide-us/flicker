@@ -10,11 +10,11 @@ use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, SceneLighting, TextureHandle, Vec3,
     VolumetricDisk, MAX_VOLUMETRIC_BODIES,
 };
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui_with, strings, UiInput, UiIntents, UiState,
-    WalkerHandler, UI_COMPONENT_MODULES,
+    load_styles, load_ui_json, render_hud, run_ui, strings, UiInput, UiIntents, UiState,
+    WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -83,9 +83,8 @@ pub struct Sim {
     theme: Option<Theme>,
 
     // ── The declarative HUD (S10): a walker tree replaces the immediate
-    // `draw_text` readout. The host is retained as the Lua component library;
-    // the tree + the screen's declared intents are cached at enter. ──
-    script: Option<ScriptHost>,
+    // `draw_text` readout. The tree + the screen's declared intents are cached
+    // at enter; the script host that built them is dropped there. ──
     ui_tree: Option<UiNode>,
     ui_intents: UiIntents,
     ui_styles: serde_json::Value,
@@ -120,7 +119,6 @@ impl Sim {
             tick: 0,
             space_prev: false,
             theme: None,
-            script: None,
             ui_tree: None,
             ui_intents: UiIntents::default(),
             ui_styles: serde_json::Value::Object(Default::default()),
@@ -263,7 +261,7 @@ impl Scene for Sim {
         // built once. The fixed roster rides the `ROSTER` data global (name +
         // tag line per planet, inner → outer); values ride the Model.
         self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
+        match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.solarbirth`)
                 // Structure only: the name picks each row's colour path; the
@@ -286,13 +284,14 @@ impl Scene for Sim {
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
-                self.script = Some(script);
+                // The host is dropped here: the parsed `UiNode` is fully owned data
+                // and every control draws in the engine, so nothing reads the VM again.
             }
             Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, r: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, r: &Renderer) -> Transition {
         // Walk the cached HUD tree: layout + hit-test + draw in one pass. Bare
         // text on space (no styled containers), so it never claims the pointer
         // (`hud_hit` stays false) and drag-to-orbit keeps working across it.
@@ -308,8 +307,7 @@ impl Scene for Sim {
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
             };
-            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
             self.hud_commands = frame.commands;
         }
@@ -485,7 +483,7 @@ mod tests {
         use flicker::render::Vec2;
         use flicker::ui::run_ui;
 
-        let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+        let script = ScriptHost::from_file(HUD_SCRIPT)
             .expect("hud_solarbirth.lua loads");
         load_ui_json(&script, HUD_UI_ELEMENTS);
         let planets = system::roster();

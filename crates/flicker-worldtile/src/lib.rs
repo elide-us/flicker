@@ -60,26 +60,30 @@ pub use erosion::{tile_mass_kg, BedProps, Eroder, ErosionParams, PassReport};
 pub use mask::{HexMask, TileFrame, PIXELS_PER_TILE, TILE_DIM, TILE_SPAN_M};
 pub use materialize::{materialize, Tile};
 
-/// Feet across one pixel — the width of a voxel cluster, and the constant the
-/// whole scale chain hangs from.
+/// Feet across one pixel — the width of a voxel cluster. Together with
+/// [`TILE_DIM`] and [`METRES_PER_FOOT`] it derives the canonical
+/// [`TILE_SPAN_M`], which lives with the world constants in
+/// `flicker-poc-chemistry` — the guard test below pins the two statements equal.
 pub const FEET_PER_PIXEL: f64 = 128.0;
 
 /// Metres per foot, so the scale chain is stated once.
 pub const METRES_PER_FOOT: f64 = 0.3048;
 
-/// **The planet radius a given grid frequency implies, m.**
-///
-/// A tile is 2048 px at 128 ft and that is *not* a quality setting — a hex IS a
-/// 2048² map. So the tile span is fixed and the planet has to fit the grid: a
-/// coarser grid is a **smaller planet**, not a planet with bigger hexes. Solving
-/// `4πR² / (10·freq² + 2) = hexagon area` for R is the whole of it.
-///
-/// This is the freq↔radius pinning the topology spec asks for. Without it a coarse
-/// test world silently has 50-mile tiles on an Earth-sized sphere, every tile falls
-/// entirely inside its own cell, and nothing about the pixel tier means anything.
-pub fn radius_for_freq(freq: u32) -> f64 {
-    let cells = 10.0 * (freq.max(1) as f64).powi(2) + 2.0;
-    // A hexagon measuring `TILE_SPAN_M` flat-to-flat covers `√3/2` of its square.
-    let hex_area = TILE_SPAN_M * TILE_SPAN_M * (3f64.sqrt() / 2.0);
-    (hex_area * cells / (4.0 * std::f64::consts::PI)).sqrt()
+/// **The planet radius a given grid frequency implies, m** — the freq↔radius
+/// pinning the topology spec asks for, re-exported from the world constants
+/// (`flicker-poc-chemistry::config`), where the whole size chain lives since
+/// the two-models incident (2026-08-06): one derivation, both tiers.
+pub use flicker_poc_chemistry::radius_for_freq;
+
+#[cfg(test)]
+mod scale_chain {
+    /// The pixel tier's own statement of the span (2048 px × 128 ft × 0.3048)
+    /// must be THE span the world constants carry — the drift between two
+    /// derivations of this number is exactly how one repo ended up simulating
+    /// two different-sized planets at once.
+    #[test]
+    fn the_tile_span_is_the_world_span() {
+        let ours = super::TILE_DIM as f64 * super::FEET_PER_PIXEL * super::METRES_PER_FOOT;
+        assert_eq!(ours, flicker_poc_chemistry::TILE_SPAN_M, "one span, one canon");
+    }
 }

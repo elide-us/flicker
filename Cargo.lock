@@ -971,19 +971,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flicker-atc"
-version = "0.1.0"
-dependencies = [
- "fastrand",
- "flicker",
- "flicker-input-core",
- "flicker-input-router",
- "flicker-shell",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "flicker-celestial"
 version = "0.1.0"
 dependencies = [
@@ -1057,10 +1044,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "flicker-globe"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
+ "glam",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "flicker-godmode"
 version = "0.1.0"
 dependencies = [
  "flicker",
+ "flicker-globe",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-materials",
@@ -1220,10 +1220,25 @@ name = "flicker-pocepochs"
 version = "0.1.0"
 dependencies = [
  "flicker",
+ "flicker-globe",
  "flicker-input-core",
  "flicker-input-router",
  "flicker-shell",
  "flicker-worldengine",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "flicker-populous"
+version = "0.1.0"
+dependencies = [
+ "flicker",
+ "flicker-globe",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-shell",
+ "flicker-worldgrid",
  "serde_json",
  "tracing",
 ]
@@ -1288,7 +1303,9 @@ version = "0.1.0"
 dependencies = [
  "flicker-app",
  "flicker-input-core",
+ "flicker-input-router",
  "flicker-render",
+ "tracing",
 ]
 
 [[package]]
@@ -1310,6 +1327,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker",
+ "flicker-content",
  "flicker-input-core",
  "flicker-input-router",
  "image",
@@ -1382,6 +1400,7 @@ dependencies = [
  "flicker-input-core",
  "flicker-input-router",
  "flicker-render",
+ "flicker-scene",
  "flicker-script",
  "serde",
  "serde_json",
@@ -1429,6 +1448,7 @@ name = "flicker-worldgen"
 version = "0.1.0"
 dependencies = [
  "flicker-materials",
+ "flicker-poc-chemistry",
  "flicker-primitive",
  "flicker-worldgrid",
  "flicker-worldstate",
@@ -3050,13 +3070,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flicker-assetpipeline",
- "flicker-atc",
  "flicker-clicktrainer",
  "flicker-content",
  "flicker-controllertester",
  "flicker-godmode",
  "flicker-loomforge",
  "flicker-pocclusters",
+ "flicker-populous",
  "flicker-quartermaster",
  "flicker-sablework",
  "flicker-shell",

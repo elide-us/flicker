@@ -28,6 +28,22 @@ pub struct CompoundElement {
     pub count: u32,
 }
 
+/// **A phase's stability limit** — bury it under at least this much pressure at
+/// at least this temperature and it reorganises into something else.
+///
+/// The pair is read against a bed's `peak_pt`, the maximum it has ever
+/// endured, because metamorphic grade is a high-water mark: rock that has been
+/// deep does not un-become what the depth made it when it is exhumed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MetamorphicRule {
+    /// The phase this one becomes, by catalog name.
+    pub to: String,
+    /// Peak overburden pressure it must have carried, Pa.
+    pub pressure_pa: f64,
+    /// Peak temperature it must have reached, K.
+    pub temp_k: f64,
+}
+
 /// A compound from the Prism catalog.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompoundDef {
@@ -82,8 +98,30 @@ pub struct CompoundDef {
     pub brittleness: Option<f32>,
     /// Whether this row is a **sim-required** addition beyond the Book III
     /// crafting tables (the R6b mineral merge) rather than a transcribed book row.
+    ///
+    /// **This is PROVENANCE — which book a row came from — and says nothing
+    /// about what the world can make.** It was briefly used as the
+    /// crystallisation filter, which is why ore was a bare number and never a
+    /// mineral, and why quartz could not form (2026-08-06). Use
+    /// [`crystallizes`](Self::crystallizes) for that question.
     #[serde(default)]
     pub sim_required: bool,
+    /// **Whether this phase forms by crystallisation** from a melt or from
+    /// solution circulating in rock — the candidate set the `Crystallization`
+    /// stage draws from.
+    ///
+    /// False for minerals with a different route: evaporites need standing
+    /// water to dry out, coal is made from buried tissue by maturation, and
+    /// bauxite is a weathering residue. Absent (false) on every non-mineral
+    /// row — a gas or an alloy does not crystallise out of rock, and gemstones
+    /// wait on the metamorphic chemistry that would form them.
+    #[serde(default)]
+    pub crystallizes: bool,
+    /// **What this phase becomes when it is buried hard enough and hot enough**
+    /// — its stability limit, read by the `Metamorphism` stage. Absent on
+    /// phases with no prograde reaction in the catalog.
+    #[serde(default)]
+    pub metamorphic: Option<MetamorphicRule>,
     /// Free-form provenance/geology note (sim-required rows).
     #[serde(default)]
     pub note: Option<String>,

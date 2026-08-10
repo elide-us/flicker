@@ -1,15 +1,16 @@
 //! flicker-widgets — the engine's **UI toolkit**: the Rust component walker
 //! (layout / draw / hit-test over a Lua-declared [`UiNode`] tree), the
-//! `ui/<kind>.lua` component library, the template tier, Surfaces, intents,
-//! the stringtable, and the [`render_hud`] draw bridge. (`flicker` re-exports
-//! this crate as `flicker::ui`.)
+//! [`component`] tier that owns every control's draw + hit, the template tier,
+//! Surfaces, intents, the stringtable, and the [`render_hud`] draw bridge.
+//! (`flicker` re-exports this crate as `flicker::ui`.)
 //!
 //! The UI pattern: **Lua declares** (a screen's `tree()` returns component
-//! instances; per-control behaviour lives in `ui/<kind>.lua`), **data rides the
-//! Model** (binds), **styles live in `ui_elements.json`** (one palette,
-//! `theme.tokens`), and **Rust owns the walk** — [`run_ui_with`] lays the cached
-//! tree out, dispatches component draw/hit through the embedded
-//! [`UI_COMPONENT_MODULES`], and returns [`HudCommand`]s for [`render_hud`].
+//! instances), **data rides the Model** (binds), **styles live in
+//! `ui_elements.json`** (one palette, `theme.tokens`), and **Rust owns
+//! everything else** — [`run_ui`] lays the cached tree out, draws and hit-tests
+//! each control in [`component`], and returns [`HudCommand`]s for [`render_hud`].
+//! Per-control behaviour was briefly a `ui/<kind>.lua` module tier; it came back
+//! to the engine over 2026-08 and that tier is deleted (2026-08-10).
 //! This crate depends on both `flicker-script` (the Lua↔Rust seam) and
 //! `flicker-render` (the draw calls), which is exactly why it is its own crate:
 //! the boundary contract forbids `flicker-script` from ever touching a renderer
@@ -19,12 +20,12 @@
 //! ```ignore
 //! // setup (once):
 //! let styles = flicker_widgets::load_styles("ui_elements.json"); // token-resolved
-//! let host = ScriptHost::from_file_with_modules(path, UI_COMPONENT_MODULES)?;
+//! let host = ScriptHost::from_file(path)?;
 //! flicker_widgets::load_ui_json(&host, "ui_elements.json");   // → the `UI` global
 //! let tree = host.ui_tree()?.expect("tree()");                 // cached once
 //! let intents = UiIntents::of(&tree);                          // S9 declaration
 //! // each frame:
-//! let frame = run_ui_with(&tree, &model, &styles, &input, &mut state, Some(&host));
+//! let frame = run_ui(&tree, &model, &styles, &input, &mut state);
 //! flicker_widgets::render_hud(renderer, &frame.commands, white, &textures);
 //! ```
 //!
@@ -40,20 +41,19 @@ use flicker_script::{HudCommand, ScriptHost, TextAlign, UiNode};
 /// the template builders both read their inputs through — no duplicate reader impls.
 mod config;
 
-/// The Rust **component walker** — Lua declares a [`UiNode`] tree and owns each
-/// control's draw/hit in `ui/<kind>.lua`; Rust owns layout, the retained draw
-/// cache + bounded dispatch, generic hit plumbing, and results routing. See
-/// [`component`].
+/// The Rust **component walker** — Lua declares a [`UiNode`] tree; Rust owns
+/// everything after that: layout, each control's draw + hit, the retained draw
+/// cache, generic hit plumbing, and results routing. See [`component`].
 ///
 /// [`UiNode`]: flicker_script::UiNode
 pub mod component;
-pub use component::{run_ui, run_ui_with, DragPayload, RttSlot, UiFrame, UiInput, UiState};
+pub use component::{run_ui, DragPayload, RttSlot, UiFrame, UiInput, UiState};
 
 /// The **router adapter** — [`WalkerHandler`] makes the walker one layer of the
 /// `flicker-input-router` event bus (`hud_hit` → consume-pointer, focus writes
 /// through [`UiState`]). See [`walker`].
 pub mod walker;
-pub use walker::{focusables_of, WalkerHandler};
+pub use walker::{focusables_of, walker_owned, WalkerHandler};
 
 /// The **declarative intents** (S9) — a screen ROOT's `on_<signal>: "result"`
 /// props collected as [`UiIntents`], consumed by the walker layer
@@ -71,6 +71,16 @@ pub use intents::UiIntents;
 pub mod template;
 pub use template::{
     builtin_templates, expand, BuildCtx, Slots, TemplateDef, TemplateFn, TemplateRegistry,
+};
+
+/// The **scene file** — `{ boot, behaviour, params, tree, exits }` as authored
+/// JSON, one `<Name>.scene.json` per scene: the composition a human assembles,
+/// the Rust behaviour that plays it, and the routing that leaves it — plus
+/// [`SceneManifest`], which indexes the folder they live in so the folder listing
+/// IS the roster. See [`scene_def`].
+pub mod scene_def;
+pub use scene_def::{
+    scene_id_from_file_name, SceneDef, SceneExit, SceneManifest, SCENE_FILE_SUFFIX,
 };
 
 /// The floating in-world **chat panel** builder — a bare `UiNode` builder (not a
@@ -105,43 +115,11 @@ pub mod strings;
 /// component tree. Deleted together with that conversion.
 pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
 
-/// The Lua UI **component library** modules — `(require-name, source)` pairs to pass to
-/// `ScriptHost::new_with_modules` / `from_file_with_modules` / `library`, so a screen's
-/// VM can `require("ui.<kind>")` and the walker can dispatch that kind's DRAW to it (see
-/// [`run_ui_with`]). ONE canonical list: every consumer registers the SAME set — add a
-/// control here when its `ui/<kind>.lua` lands and drops the Rust twin.
-pub const UI_COMPONENT_MODULES: &[(&str, &str)] = &[
-    ("ui.core", include_str!("../../../../content/sensorium/scripts/ui/core.lua")),
-    ("ui.button", include_str!("../../../../content/sensorium/scripts/ui/button.lua")),
-    ("ui.checkbox", include_str!("../../../../content/sensorium/scripts/ui/checkbox.lua")),
-    ("ui.toggle", include_str!("../../../../content/sensorium/scripts/ui/toggle.lua")),
-    ("ui.radio", include_str!("../../../../content/sensorium/scripts/ui/radio.lua")),
-    ("ui.tile", include_str!("../../../../content/sensorium/scripts/ui/tile.lua")),
-    ("ui.pill_toggle", include_str!("../../../../content/sensorium/scripts/ui/pill_toggle.lua")),
-    ("ui.tabs", include_str!("../../../../content/sensorium/scripts/ui/tabs.lua")),
-    ("ui.select", include_str!("../../../../content/sensorium/scripts/ui/select.lua")),
-    ("ui.context_menu", include_str!("../../../../content/sensorium/scripts/ui/context_menu.lua")),
-    ("ui.slider", include_str!("../../../../content/sensorium/scripts/ui/slider.lua")),
-    ("ui.stepper", include_str!("../../../../content/sensorium/scripts/ui/stepper.lua")),
-    ("ui.list", include_str!("../../../../content/sensorium/scripts/ui/list.lua")),
-    ("ui.text_field", include_str!("../../../../content/sensorium/scripts/ui/text_field.lua")),
-    ("ui.sprite", include_str!("../../../../content/sensorium/scripts/ui/sprite.lua")),
-    ("ui.gauge", include_str!("../../../../content/sensorium/scripts/ui/gauge.lua")),
-    ("ui.resource_gauge", include_str!("../../../../content/sensorium/scripts/ui/resource_gauge.lua")),
-    ("ui.action_slot", include_str!("../../../../content/sensorium/scripts/ui/action_slot.lua")),
-    ("ui.medallion", include_str!("../../../../content/sensorium/scripts/ui/medallion.lua")),
-    ("ui.stat_dot", include_str!("../../../../content/sensorium/scripts/ui/stat_dot.lua")),
-    ("ui.badge", include_str!("../../../../content/sensorium/scripts/ui/badge.lua")),
-    ("ui.tooltip", include_str!("../../../../content/sensorium/scripts/ui/tooltip.lua")),
-    ("ui.rune_corners", include_str!("../../../../content/sensorium/scripts/ui/rune_corners.lua")),
-];
-
 /// The **structural** component kinds — the ones the walker itself lays out and
-/// draws. Every other legal kind is an interactive Component, and its name is the
-/// `ui.<kind>` module that owns it in [`UI_COMPONENT_MODULES`]; `option` is neither —
-/// it is pure data a segmented control reads out of its own children. (`list` is a
-/// Component — `ui/list.lua` owns its draw + hit — even though its column LAYOUT
-/// and viewport clip remain walker primitives.)
+/// draws. Every other legal kind is an interactive Component, owned by the engine
+/// ([`RUST_COMPONENT_KINDS`]); `option` is neither — it is pure data an option strip
+/// reads out of its own children. (`list` is a Component — the engine owns its draw
+/// + hit — even though its column LAYOUT and viewport clip remain walker primitives.)
 ///
 /// Together these are the complete vocabulary. A kind outside it is a typo: the walker
 /// would anchor-overlay its children and draw nothing, silently, so
@@ -149,15 +127,53 @@ pub const UI_COMPONENT_MODULES: &[(&str, &str)] = &[
 const STRUCTURAL_KINDS: &[&str] =
     &["screen", "cell", "row", "stack", "grid", "rtt", "text", "option"];
 
-/// Every component kind a tree may legally name — [`STRUCTURAL_KINDS`] plus one per
-/// Lua component module. `ui.core` is the shared emitter LIBRARY, not a component:
-/// a `core` node would pass the gate and draw nothing, so it is excluded here.
+/// The **Rust component** kinds — interactive Components whose draw/hit/bind logic
+/// lives in the ENGINE (`component.rs`), which is where a Component's logic belongs:
+/// Aaron's ratified taxonomy 9C141E1C says *"the walker's per-control draw + hit +
+/// bind code IS that Component's logic"*, and the 2026-08-09 ruling BF0AF0C9 restored
+/// that after the 2026-07-30 inversion moved them into `ui/<kind>.lua`.
+///
+/// These are NOT [`STRUCTURAL_KINDS`]: a `button` owns semantics, a `row` does not.
+/// The taxonomy's Primitive/Component line is real and this list keeps it visible.
+///
+/// The restoration is COMPLETE: the Lua component tier and its module list are gone
+/// (2026-08-10), so this list is now the WHOLE interactive vocabulary rather than one
+/// half of a migration meter. A new control is a new arm in `component.rs` and a new
+/// entry here — there is no other tier to put one in.
+const RUST_COMPONENT_KINDS: &[&str] = &[
+    "button", "panel", "sprite", "rune_corners", "tooltip", "checkbox", "toggle", "radio", "tile",
+    "pill_toggle", "tabs", "select", "slider", "stepper", "text_field", "list", "context_menu",
+    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge",
+];
+
+/// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests
+/// rather than merely laying out.
+///
+/// The walker asks this at each decision the old Lua library used to gate: the draw
+/// cache's `hot_matters` and the hit dispatch.
+pub(crate) fn is_rust_component(kind: &str) -> bool {
+    RUST_COMPONENT_KINDS.contains(&kind)
+}
+
+/// Every engine-tier component kind — the roster, for the gate that holds each control
+/// to its obligations (a legal kind, and a hit answered in Rust). Test-only: the walker
+/// itself asks [`is_rust_component`] about ONE kind at a time and never needs the list.
+#[cfg(test)]
+pub(crate) fn rust_component_kinds() -> &'static [&'static str] {
+    RUST_COMPONENT_KINDS
+}
+
+/// Every component kind a tree may legally name — [`STRUCTURAL_KINDS`] plus the
+/// [`RUST_COMPONENT_KINDS`]. That union is the complete vocabulary now that the Lua
+/// component tier is gone; anything else is a typo, caught by [`unknown_kinds`].
+///
+/// `core` used to need an explicit exclusion here: `ui.core` — the shared emitter
+/// LIBRARY, never a component — sat in the module list this function also consulted,
+/// so a stray `core` node passed the gate and then drew nothing. With that list
+/// deleted the exclusion is structural: `core` is in neither roster, so it is simply
+/// unknown.
 pub fn is_known_kind(kind: &str) -> bool {
-    kind != "core"
-        && (STRUCTURAL_KINDS.contains(&kind)
-            || UI_COMPONENT_MODULES
-                .iter()
-                .any(|(name, _)| name.strip_prefix("ui.") == Some(kind)))
+    STRUCTURAL_KINDS.contains(&kind) || RUST_COMPONENT_KINDS.contains(&kind)
 }
 
 /// Every kind in `tree` the engine does not know, deduped — empty for a well-formed
@@ -289,10 +305,17 @@ pub fn render_hud(
                 h,
                 color,
                 layer,
+                uv,
             } => {
                 if let Some(&handle) = textures.get(*tex as usize) {
                     renderer.set_layer(base + layer);
-                    renderer.draw_sprite(handle, Vec2::new(*x, *y), Vec2::new(*w, *h), *color);
+                    renderer.draw_sprite_uv(
+                        handle,
+                        Vec2::new(*x, *y),
+                        Vec2::new(*w, *h),
+                        *color,
+                        *uv,
+                    );
                 }
             }
             HudCommand::Text {
@@ -522,20 +545,15 @@ mod tests {
     use super::*;
     use flicker_script::ScriptHost;
 
-    /// The draw-side fallback consts in the `ui/*.lua` components (`local INK =
-    /// {…}` etc.) are BYTE COPIES of `theme.tokens` values — a second source of
-    /// truth by the fallback-is-a-fork law. This gate converts every copy into a
-    /// CHECKED mirror: each uppercase 4-float local in every registered module
-    /// must equal some canonical token value exactly, so a token retune that
-    /// forgets a fallback (or a fallback typo) is a build failure, not a silent
-    /// colour drift on the one frame a style block goes missing.
-    #[test]
-    fn lua_fallback_consts_mirror_theme_tokens_exactly() {
+    /// The canonical Prism palette (`theme.tokens` in `ui_elements.json`) as
+    /// `(name, rgba)` — the one source of truth both fallback gates below check
+    /// their copies against.
+    fn theme_tokens() -> Vec<(String, [f64; 4])> {
         let elements: serde_json::Value = serde_json::from_str(include_str!(
             "../../../../content/sensorium/resources/ui_elements.json"
         ))
         .expect("ui_elements.json parses");
-        let tokens: Vec<(String, [f64; 4])> = elements["theme"]["tokens"]
+        elements["theme"]["tokens"]
             .as_object()
             .expect("theme.tokens present")
             .iter()
@@ -543,56 +561,147 @@ mod tests {
                 let c: Vec<f64> = v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
                 (k.clone(), [c[0], c[1], c[2], c[3]])
             })
-            .collect();
+            .collect()
+    }
 
+    /// The name of the token `parts` matches exactly, else the nearest one — so a
+    /// drifted fallback's failure message names what it probably meant.
+    fn nearest_token(tokens: &[(String, [f64; 4])], parts: &[f64]) -> Option<String> {
+        if tokens.iter().any(|(_, tv)| tv.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6)) {
+            return None;
+        }
+        Some(
+            tokens
+                .iter()
+                .min_by(|(_, a), (_, b)| {
+                    let da: f64 = a.iter().zip(parts).map(|(x, y)| (x - y).abs()).sum();
+                    let db: f64 = b.iter().zip(parts).map(|(x, y)| (x - y).abs()).sum();
+                    da.partial_cmp(&db).unwrap()
+                })
+                .map(|(k, _)| k.clone())
+                .unwrap_or_else(|| "?".to_string()),
+        )
+    }
+
+    /// **Every neutral fallback in `component.rs` is a byte copy of a `theme.tokens`
+    /// entry.** A control's missing-style floor (`const INK: [f32; 4] = […]`) is what
+    /// it draws with when its style block omits a key, so a fallback that drifts from
+    /// the palette is a control that looks subtly wrong only in the case nobody
+    /// authored.
+    ///
+    /// This ran as a Lua-side gate until the container slice (2026-08-09) moved
+    /// `STONE`/`SAP`/`INK`/`DIM`/`CLEAR` into the engine; it reads `component.rs`
+    /// directly now, which is where every fallback lives.
+    #[test]
+    fn rust_fallback_consts_mirror_theme_tokens_exactly() {
+        let tokens = theme_tokens();
         let mut checked = 0;
         let mut bad = Vec::new();
-        for (module, src) in UI_COMPONENT_MODULES {
-            for line in src.lines() {
-                let t = line.trim_start();
-                let Some(rest) = t.strip_prefix("local ") else { continue };
-                let Some((name, value)) = rest.split_once('=') else { continue };
-                let name = name.trim();
-                if name.is_empty() || !name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
-                    continue;
-                }
-                let value = value.trim();
-                let Some(inner) = value.strip_prefix('{').and_then(|v| v.split_once('}')) else {
-                    continue;
-                };
-                let parts: Vec<f64> = inner
-                    .0
-                    .split(',')
-                    .filter_map(|p| p.trim().parse::<f64>().ok())
-                    .collect();
-                if parts.len() != 4 {
-                    continue;
-                }
-                checked += 1;
-                let hit = tokens
-                    .iter()
-                    .any(|(_, tv)| tv.iter().zip(&parts).all(|(a, b)| (a - b).abs() < 1e-6));
-                if !hit {
-                    let nearest = tokens
-                        .iter()
-                        .min_by(|(_, a), (_, b)| {
-                            let da: f64 = a.iter().zip(&parts).map(|(x, y)| (x - y).abs()).sum();
-                            let db: f64 = b.iter().zip(&parts).map(|(x, y)| (x - y).abs()).sum();
-                            da.partial_cmp(&db).unwrap()
-                        })
-                        .map(|(k, _)| k.as_str())
-                        .unwrap_or("?");
-                    bad.push(format!("{module} `{name}` = {parts:?} (nearest token: ${nearest})"));
-                }
+        for line in include_str!("component.rs").lines() {
+            let Some(rest) = line.strip_prefix("const ") else { continue };
+            let Some((name, value)) = rest.split_once(": [f32; 4] = [") else { continue };
+            let Some((inner, _)) = value.split_once(']') else { continue };
+            let parts: Vec<f64> =
+                inner.split(',').filter_map(|p| p.trim().parse::<f64>().ok()).collect();
+            if parts.len() != 4 {
+                continue;
+            }
+            checked += 1;
+            if let Some(near) = nearest_token(&tokens, &parts) {
+                bad.push(format!("component.rs `{name}` = {parts:?} (nearest token: ${near})"));
             }
         }
-        assert!(checked > 20, "the gate must actually find the fallback consts ({checked})");
-        assert!(bad.is_empty(), "fallback consts drifted from theme.tokens:\n{}", bad.join("\n"));
+        assert!(checked >= 9, "the gate must actually find the fallback consts ({checked})");
+        assert!(bad.is_empty(), "engine fallback consts drifted from theme.tokens:\n{}", bad.join("\n"));
+    }
+
+    /// The NAMED half of the same law, and the replacement for the Lua fallback gate
+    /// that died with the `ui/*.lua` component tier (2026-08-10). That gate walked
+    /// `UI_COMPONENT_MODULES` checking each module's `local INK = {…}` against
+    /// `theme.tokens`; with the list deleted it would have iterated NOTHING and passed
+    /// — a gate certifying the very drift it exists to catch. This one carries the
+    /// obligation over to the tier that now owns those colours.
+    ///
+    /// The gate above proves each fallback equals SOME token. That is not enough on a
+    /// palette this dense: `$stone1` and `$stone2` are 0.02 apart, so a const could
+    /// silently re-anchor to its neighbour and still pass. Here each const is pinned to
+    /// the token it is NAMED for — `INK` is `$ink`, `STONE` is `$stone1` — so a retune
+    /// that moves a token while its copy stands still fails the build instead of
+    /// drifting the missing-style floor by one shade.
+    ///
+    /// The pairing is also a completeness ledger: a new `const X: [f32; 4]` must name
+    /// its token here or be declared token-less, so no fallback escapes the discipline
+    /// by being born after the gate.
+    #[test]
+    fn component_consts_mirror_their_named_theme_tokens() {
+        // (the `const` in component.rs, the `theme.tokens` entry it copies)
+        const PAIRS: &[(&str, &str)] = &[
+            ("INK", "ink"),
+            ("PANEL", "stone2"),
+            ("RUNE", "rune_glow"),
+            ("SAP", "sap_base"),
+            ("CLEAR", "stage_void"),
+            ("BRONZE", "bronze"),
+            ("BRONZE_DIM", "bronze_dim"),
+            ("FLASH_LIT", "rune_glow_hi"),
+            ("DIM", "dim"),
+            ("STONE", "stone1"),
+            ("WELL", "well"),
+            ("STONE_BTN", "stone_btn"),
+            ("MARKER", "stam_hi"),
+            ("SIG_BLUE", "sig_blue"),
+        ];
+        // Consts with no `$token` twin — the authored block carries the literal. Listed
+        // so the completeness check below stays honest about them.
+        const TOKENLESS: &[&str] = &["BAND"];
+
+        let tokens = theme_tokens();
+        // The top-level fallback consts as `component.rs` actually declares them (the
+        // `#[cfg(test)]` locals inside functions are indented, so they are not picked up).
+        let found: Vec<(String, Vec<f64>)> = include_str!("component.rs")
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("const ")?;
+                let (name, value) = rest.split_once(": [f32; 4] = [")?;
+                let (inner, _) = value.split_once(']')?;
+                let parts: Vec<f64> =
+                    inner.split(',').filter_map(|p| p.trim().parse::<f64>().ok()).collect();
+                (parts.len() == 4).then(|| (name.to_string(), parts))
+            })
+            .collect();
+
+        let mut bad = Vec::new();
+        for (name, token) in PAIRS {
+            let Some((_, parts)) = found.iter().find(|(n, _)| n == name) else {
+                bad.push(format!("`{name}` is gone from component.rs — the pairing is stale"));
+                continue;
+            };
+            let Some((_, want)) = tokens.iter().find(|(t, _)| t == token) else {
+                bad.push(format!("`{name}` names `${token}`, which theme.tokens does not have"));
+                continue;
+            };
+            if !want.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6) {
+                bad.push(format!("`{name}` = {parts:?} but `${token}` = {want:?}"));
+            }
+        }
+        assert!(bad.is_empty(), "engine fallback consts drifted from their tokens:\n{}", bad.join("\n"));
+
+        let unpaired: Vec<&str> = found
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !PAIRS.iter().any(|(p, _)| p == n) && !TOKENLESS.contains(n))
+            .collect();
+        assert!(
+            unpaired.is_empty(),
+            "component.rs fallback consts with no named token: {unpaired:?} — pair each with \
+             its `theme.tokens` entry above, or declare it TOKENLESS"
+        );
     }
 
     /// The vocabulary gate has to be able to FAIL, or the screens it guards prove
-    /// nothing. Also pins that every Lua component module is a legal kind — the two
-    /// lists are maintained separately and would otherwise drift apart silently.
+    /// nothing. Also pins that `core` — the emitter library the deleted Lua tier
+    /// exported, never a component — is still rejected, now because it is in neither
+    /// roster rather than by a hardcoded `kind != "core"`.
     #[test]
     fn unknown_kinds_catches_a_typo_and_an_unexpanded_template() {
         let leaf = |kind: &str| UiNode { component: kind.to_string(), ..Default::default() };
@@ -615,13 +724,9 @@ mod tests {
             "a template that never expanded is reported too"
         );
 
-        for (name, _) in UI_COMPONENT_MODULES {
-            if let Some(kind) = name.strip_prefix("ui.") {
-                // `core` is the primitive emitter set, not a component.
-                if kind != "core" {
-                    assert!(is_known_kind(kind), "`{kind}` has a Lua module but is not a legal kind");
-                }
-            }
+        assert!(!is_known_kind("core"), "`core` is the emitter library, never a component kind");
+        for kind in rust_component_kinds() {
+            assert!(is_known_kind(kind), "`{kind}` is an engine component but not a legal kind");
         }
     }
 

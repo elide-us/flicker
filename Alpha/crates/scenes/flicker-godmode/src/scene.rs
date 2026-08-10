@@ -25,20 +25,19 @@ use flicker_input_core::{
     AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState,
 };
 use flicker::render::{
-    FrameGraph, MeshHandle, MeshIndices, Rect, Renderer, TextureHandle, Vec2, Vec3,
+    FrameGraph, Renderer, TextureHandle, Vec2, Vec3,
 };
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, UiNode, Value, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui_with, strings, TemplateRegistry,
-    UiInput, UiIntents, UiState, WalkerHandler, UI_COMPONENT_MODULES,
+    builtin_templates, expand, load_styles, render_hud, run_ui, strings, TemplateRegistry,
+    UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
-use crate::camera::OrbitCam;
-use crate::globe::{self, RADIUS};
+use flicker_globe::{self as globe, GlobeWorld, ShellSpec, RADIUS};
 use crate::globe_view;
 use crate::route::RootHandler;
 use crate::sim_thread::{
@@ -52,8 +51,9 @@ use flicker_poc_chemistry::{ProcessDef, PLANET_FREQ};
 #[derive(Clone, Copy)]
 enum Preset {
     Mercury,
-    Mars,
+    Venus,
     Earth,
+    Mars,
     Europa,
 }
 use flicker_poc_chemistry::{Levers, PlateEvent};
@@ -134,21 +134,30 @@ const GLOBE_SLOT: &str = "gm_globe";
 /// The field tabs: the action a button fires, and the view it selects. One
 /// table, so the tab strip, the dispatcher and the lit-tab styling can never
 /// disagree about how many views there are or what they are called.
-/// Each row is `(action id, view, label token)`. The label rides here too so the
+/// Each row is `(action id, view, label token, which shell it paints)`. The
+/// TARGET rides here because it used to live nowhere: the binding was implicit
+/// in two separate `match` arms — one in the mantle builder, one in
+/// `crust_color` — and nothing declared which shell a view belonged to. A field
+/// absent from both painted NOTHING, silently, and Plates/Seams sat in the
+/// wrong arm for as long as the bench has existed: they coloured the mantle at
+/// 0.960 while the crust shells above them kept their rock colours, so plate
+/// colour was visible only through holes in the crust or in cutaway (Aaron:
+/// *"the plates and seams visualization are basically useless… it just colors
+/// the shell under the lower layer"*). The label rides here too so the
 /// strip's buttons and anything else that has to NAME a view — the pause card's
 /// switch — read one roster; `the_view_roster_agrees_with_itself` pins these
 /// against the authored buttons.
-const FIELD_ACTIONS: [(&str, Field, &str); 10] = [
-    ("field_temperature", Field::Temperature, "$chem_field_heat"),
-    ("field_differentiation", Field::Differentiation, "$chem_field_core"),
-    ("field_plates", Field::Plates, "$chem_field_plates"),
-    ("field_seams", Field::Seams, "$chem_field_seams"),
-    ("field_elevation", Field::Elevation, "$chem_field_relief"),
-    ("field_coast", Field::Coast, "$chem_field_coast"),
-    ("field_motion", Field::Motion, "$chem_field_motion"),
-    ("field_rain", Field::Rain, "$chem_field_rain"),
-    ("field_strata", Field::Strata, "$chem_field_strata"),
-    ("field_ore", Field::Ore, "$chem_field_ore"),
+const FIELD_ACTIONS: [(&str, Field, &str, Paints); 10] = [
+    ("field_temperature", Field::Temperature, "$chem_field_heat", Paints::Interior),
+    ("field_differentiation", Field::Differentiation, "$chem_field_core", Paints::Interior),
+    ("field_plates", Field::Plates, "$chem_field_plates", Paints::Surface),
+    ("field_seams", Field::Seams, "$chem_field_seams", Paints::Surface),
+    ("field_elevation", Field::Elevation, "$chem_field_relief", Paints::Surface),
+    ("field_coast", Field::Coast, "$chem_field_coast", Paints::Surface),
+    ("field_motion", Field::Motion, "$chem_field_motion", Paints::Overlay),
+    ("field_rain", Field::Rain, "$chem_field_rain", Paints::Surface),
+    ("field_strata", Field::Strata, "$chem_field_strata", Paints::Surface),
+    ("field_ore", Field::Ore, "$chem_field_ore", Paints::Surface),
 ];
 
 /// The stringtable token naming a view — the roster's own label, so the pause
@@ -156,8 +165,8 @@ const FIELD_ACTIONS: [(&str, Field, &str); 10] = [
 fn view_token(field: Field) -> &'static str {
     FIELD_ACTIONS
         .iter()
-        .find(|&&(_, f, _)| f == field)
-        .map(|&(_, _, token)| token)
+        .find(|&&(_, f, _, _)| f == field)
+        .map(|&(_, _, token, _)| token)
         .unwrap_or("$chem_field_heat")
 }
 
@@ -285,85 +294,9 @@ const R_MOTION: f32 = 1.012 * RADIUS;
 // ── The graticule ──
 /// Radius the reference lines are drawn at — clear of the outermost rock and of
 /// the motion arrows, so the grid reads as a frame around the world rather than
-/// something lying on it.
+/// something lying on it. The frame itself is the SHARED [`globe::graticule`]
+/// (one grid for every bench's globe; Populous draws the identical value).
 const R_GRID: f32 = 1.022 * RADIUS;
-/// Segments per full circle. Enough that a great circle reads as a curve rather
-/// than a polygon at any zoom the bench allows.
-const GRID_STEPS: usize = 144;
-/// Axial tilt, degrees — the tropics and the polar circles are this angle
-/// measured from the equator and from the poles. Prism's own tilt: the number
-/// that decides where the sun stands overhead and where it never rises, and the
-/// same reason Earth's tropics sit where they do.
-const AXIAL_TILT_DEG: f32 = 23.44;
-/// Spacing of the ordinary parallels and meridians, degrees.
-const GRID_SPACING_DEG: f32 = 30.0;
-
-/// The reference frame: parallels, meridians, and the four latitudes that mean
-/// something.
-///
-/// **The equator, the tropics and the polar circles are not decoration** — the
-/// insolation law reads latitude straight off the Y axis, so those lines mark
-/// exactly where the surface temperature bands, the evaporation and the ice
-/// actually change. The prime meridian is +X and the antimeridian −X by
-/// declaration, which is all a prime meridian ever is: Greenwich is a choice,
-/// not a discovery.
-///
-/// Grouped by colour like the motion arrows, and drawn through the same pass —
-/// a second line consumer, not a second line system.
-fn graticule() -> globe_view::Arrows {
-    let ring = |lat_deg: f32| -> Vec<(Vec3, Vec3)> {
-        let lat = lat_deg.to_radians();
-        let (y, r) = (lat.sin(), lat.cos());
-        let at = |k: usize| {
-            let a = k as f32 / GRID_STEPS as f32 * std::f32::consts::TAU;
-            Vec3::new(r * a.cos(), y, r * a.sin()) * R_GRID
-        };
-        (0..GRID_STEPS).map(|k| (at(k), at(k + 1))).collect()
-    };
-    let meridian = |lon_deg: f32| -> Vec<(Vec3, Vec3)> {
-        let lon = lon_deg.to_radians();
-        let at = |k: usize| {
-            let a = k as f32 / GRID_STEPS as f32 * std::f32::consts::TAU;
-            Vec3::new(a.cos() * lon.cos(), a.sin(), a.cos() * lon.sin()) * R_GRID
-        };
-        (0..GRID_STEPS).map(|k| (at(k), at(k + 1))).collect()
-    };
-
-    // The ordinary grid — dim, so it frames without competing.
-    let faint = [0.42, 0.47, 0.58, 1.0];
-    let mut mesh: Vec<(Vec3, Vec3)> = Vec::new();
-    let mut lat = GRID_SPACING_DEG;
-    while lat < 90.0 {
-        mesh.extend(ring(lat));
-        mesh.extend(ring(-lat));
-        lat += GRID_SPACING_DEG;
-    }
-    let mut lon = GRID_SPACING_DEG;
-    while lon < 180.0 {
-        mesh.extend(meridian(lon));
-        lon += GRID_SPACING_DEG;
-    }
-
-    vec![
-        (faint, mesh),
-        // The equator — the one line every other latitude is measured from.
-        ([0.95, 0.80, 0.35, 1.0], ring(0.0)),
-        // The tropics: the band the star can stand directly over.
-        ([0.55, 0.85, 0.55, 1.0], {
-            let mut v = ring(AXIAL_TILT_DEG);
-            v.extend(ring(-AXIAL_TILT_DEG));
-            v
-        }),
-        // The polar circles: where the sun can fail to rise at all.
-        ([0.55, 0.75, 0.95, 1.0], {
-            let mut v = ring(90.0 - AXIAL_TILT_DEG);
-            v.extend(ring(-(90.0 - AXIAL_TILT_DEG)));
-            v
-        }),
-        // Prime meridian and antimeridian — the seam the map is cut on.
-        ([0.90, 0.55, 0.45, 1.0], meridian(0.0)),
-    ]
-}
 
 /// **Where the ground is going**, as one arrow per sampled column, grouped by
 /// plate colour so a raft reads as a raft.
@@ -454,6 +387,29 @@ fn clock_seed() -> u64 {
     z ^ (z >> 31)
 }
 
+/// Which shell a view paints — declared per row in [`FIELD_ACTIONS`], so the
+/// field→shell binding is DATA rather than two `match` arms that can disagree
+/// or silently omit a field.
+#[derive(Copy, Clone, PartialEq, Debug)]
+enum Paints {
+    /// The mantle shell, under the crust — a read of the interior.
+    Interior,
+    /// The crust shells: what is happening ON the world, where it can be seen.
+    Surface,
+    /// Nothing. The ground keeps its own rock colour and the view draws its own
+    /// geometry over the top.
+    Overlay,
+}
+
+/// Which shell this view paints. One lookup, one roster.
+fn paints(field: Field) -> Paints {
+    FIELD_ACTIONS
+        .iter()
+        .find(|&&(_, f, _, _)| f == field)
+        .map(|&(_, _, _, p)| p)
+        .unwrap_or(Paints::Surface)
+}
+
 /// Which field the globe is coloured by.
 ///
 /// The first four are **interior** reads and recolour the mantle shell, with the
@@ -507,8 +463,8 @@ impl Field {
     fn from_view(name: &str) -> Option<Self> {
         FIELD_ACTIONS
             .iter()
-            .find(|(_, _, token)| token.strip_prefix("$chem_field_") == Some(name))
-            .map(|&(_, field, _)| field)
+            .find(|(_, _, token, _)| token.strip_prefix("$chem_field_") == Some(name))
+            .map(|&(_, field, _, _)| field)
     }
 
     /// The name content uses for this view — the inverse of [`Field::from_view`].
@@ -539,16 +495,11 @@ pub struct GodModeScene {
     last_gen: u64,
 
     // ── view ──
-    cam: OrbitCam,
-    /// The core sphere — static, built once.
-    core_mesh: Option<MeshHandle>,
-    /// The dynamic layer shells (mantle + crust beds), rebuilt on each new frame.
-    shell_meshes: Vec<MeshHandle>,
-    /// This frame's motion headings, grouped by plate colour — line geometry, so
-    /// it lives beside the meshes and is rebuilt on the same `dirty` edge rather
-    /// than per frame. Empty in every view but [`Field::Motion`].
-    arrows: globe_view::Arrows,
-    dirty: bool,
+    /// **The globe, whole.** The shell stack, the offscreen target, the authored
+    /// stage, the orbit camera and the rect the walker reserved all live in the
+    /// one component — this bench publishes what the planet is MADE OF and the
+    /// world owns the picture of it.
+    world: GlobeWorld,
     field: Field,
     /// Cutaway: drop a 90° wedge out of every shell above the core, so the stack
     /// reads in section instead of only from outside.
@@ -585,16 +536,8 @@ pub struct GodModeScene {
     /// The tile last looked inside — the truth migration for one cell, shown as the
     /// ground it produced. Uploaded once when it arrives, not per frame.
     tile: Option<(TextureHandle, u32, String)>,
-    /// Where the walker put the globe this frame — the `gm_globe` RttSlot's
-    /// rect. `None` while the viewport is off screen, which is also what stops
-    /// the offscreen pass from costing anything.
-    globe_rect: Option<Rect>,
     /// The active frame's ramp extremes — what the legend's end labels print.
     ranges: LegendRanges,
-    /// The globe's offscreen target.
-    globe_view: globe_view::GlobeView,
-    /// The globe's authored look (`stages.godmode_globe`), read once in `enter`.
-    stage: globe_view::GlobeStage,
     /// Whether the erosion batch is running. A scene-side MIRROR: `ErodeToggle`
     /// is fire-and-forget to the worker thread and the sim publishes no echo of
     /// it, so both sides start false and stay in step by counting the same
@@ -622,9 +565,9 @@ pub struct GodModeScene {
     tick: u64,
 
     // ── The declarative HUD (S10): a walker tree replaces the immediate text
-    // readout + conservation ledger. The host is retained as the Lua component
-    // library; the tree + the screen's declared intents are cached at enter. ──
-    script: Option<ScriptHost>,
+    // readout + conservation ledger. The tree + the screen's declared intents are
+    // cached at enter; every control draws in the engine, so there is no script
+    // host here at all. ──
     /// The proto registry [`build_tree`](Self::build_tree) expands against —
     /// built once. Composition is DATA (`godmode_*` in `ui_templates.json`);
     /// this scene configures a surface, it never composes one.
@@ -642,6 +585,12 @@ pub struct GodModeScene {
 impl GodModeScene {
     pub fn new() -> Self {
         let seed = clock_seed();
+        // Read here rather than in `enter`: the globe's authored look
+        // (`stages.godmode_globe` — the light it is seen by and the backdrop it
+        // sits on) is what the world is BUILT from, so the styles must exist
+        // before the world does.
+        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let world = GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None);
         Self {
             sim: SimHandle::spawn(seed),
             seed,
@@ -653,11 +602,7 @@ impl GodModeScene {
             ready: false,
             snap: None,
             last_gen: 0,
-            cam: OrbitCam::new(RADIUS),
-            core_mesh: None,
-            shell_meshes: Vec::new(),
-            arrows: Vec::new(),
-            dirty: false,
+            world,
             field: Field::Temperature,
             cut: false,
             air: true,
@@ -671,10 +616,7 @@ impl GodModeScene {
             topology_stale: false,
             gate_ack: f64::NEG_INFINITY,
             tile: None,
-            globe_rect: None,
             ranges: LegendRanges::default(),
-            globe_view: globe_view::GlobeView::default(),
-            stage: globe_view::GlobeStage::default(),
             eroding: false,
             theme: None,
             white: None,
@@ -684,10 +626,9 @@ impl GodModeScene {
             ev: Vec::new(),
             route: RouteCtx::new(),
             tick: 0,
-            script: None,
             templates: builtin_templates(),
             ui_intents: UiIntents::default(),
-            ui_styles: serde_json::Value::Object(Default::default()),
+            ui_styles,
             ui_state: UiState::new(),
             hud_commands: Vec::new(),
             fired_sigs: Vec::new(),
@@ -915,7 +856,7 @@ impl GodModeScene {
                     .filter_map(|p| self.process_defs.get(p.name))
                     .filter_map(|def| Field::from_view(&def.view))
                     .collect();
-                for (action, field, _) in FIELD_ACTIONS {
+                for (action, field, _, _) in FIELD_ACTIONS {
                     m.set(
                         format!("{action}_style"),
                         if self.field == field {
@@ -1201,8 +1142,13 @@ impl GodModeScene {
                             },
                         );
                         // Progress scales: how far the slow ledgers have come.
-                        let water_pct = if snap.levers.water_budget_kg > 0.0 {
-                            (s.delivered_water_kg / snap.levers.water_budget_kg).min(1.0) * 100.0
+                        // The lever is a reference-scale (freq-96) budget; the
+                        // delivered ledger is this world's own, so the progress
+                        // read sizes the lever the same way the sim does.
+                        let water_goal = snap.levers.water_budget_kg
+                            * flicker_poc_chemistry::size_scale(snap.cells.len()).powi(3);
+                        let water_pct = if water_goal > 0.0 {
+                            (s.delivered_water_kg / water_goal).min(1.0) * 100.0
                         } else {
                             0.0
                         };
@@ -1400,14 +1346,6 @@ impl GodModeScene {
         m
     }
 
-    fn free_meshes(&mut self, renderer: &mut Renderer) {
-        if let Some(h) = self.core_mesh.take() {
-            renderer.free_mesh(h);
-        }
-        for h in self.shell_meshes.drain(..) {
-            renderer.free_mesh(h);
-        }
-    }
 }
 
 impl Default for GodModeScene {
@@ -1423,33 +1361,23 @@ impl Scene for GodModeScene {
         self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
         self.theme = Some(theme);
 
-        // The declarative HUD: styles, plus the script host as the COMPONENT
-        // LIBRARY only. There is deliberately no `hud_chemistry.lua` — a
-        // per-scene HUD script that hand-composes the surface is the legacy
-        // idiom (rule E5AFBBAB); composition lives in `ui_templates.json` and
-        // this scene only configures it.
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        // The declarative HUD is pure DATA: there is deliberately no
+        // `hud_chemistry.lua` — a per-scene HUD script that hand-composes the
+        // surface is the legacy idiom (rule E5AFBBAB); composition lives in
+        // `ui_templates.json` and this scene only configures it.
         // The legend's swatch colours, GENERATED from the same colour functions
         // that paint the globe — never authored, so they cannot drift from the
         // sphere they explain.
         self.inject_legend_styles();
-        // The globe's authored look, read once: the light it is seen by and
-        // the backdrop it sits on live in `stages.godmode_globe`, not in a
-        // constant here.
-        self.stage = globe_view::GlobeStage::from_styles(&self.ui_styles, globe_view::STAGE_SOURCE);
-        match ScriptHost::library(UI_COMPONENT_MODULES) {
-            Ok(script) => self.script = Some(script),
-            Err(e) => tracing::warn!("UI component library failed to load: {e} — no HUD"),
-        }
     }
 
 
     fn exit(&mut self, renderer: &mut Renderer) {
-        self.free_meshes(renderer);
+        self.world.free(renderer);
         // The sim thread shuts down when `self.sim` (SimHandle) drops.
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
         // ledger panel is a styled container, so the pointer over it sets
         // `hud_hit` — fed to the walker layer below as this frame's
@@ -1469,17 +1397,12 @@ impl Scene for GodModeScene {
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
             };
-            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-            let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
             // Where the globe landed. The walker RESERVES this rect and never
             // fills it (it runs late; offscreen passes must run first), so the
             // hand-off is: read it here, draw into it at the top of `render`.
-            self.globe_rect = frame
-                .rtts
-                .iter()
-                .find(|s| s.id == GLOBE_SLOT)
-                .map(|s| Rect { pos: Vec2::new(s.x, s.y), size: Vec2::new(s.w, s.h) });
+            self.world.place(frame.rtt_rect(GLOBE_SLOT));
             // The CLICK channel. A button's `action` fires into the frame's
             // results — reading only `hud_hit` and dropping the rest is exactly
             // how CARRY ON came to do nothing: the click fired into a struct
@@ -1566,7 +1489,7 @@ impl Scene for GodModeScene {
                         p.view,
                         FIELD_ACTIONS
                             .iter()
-                            .map(|&(_, f, _)| f.view_name())
+                            .map(|&(_, f, _, _)| f.view_name())
                             .collect::<Vec<_>>()
                             .join(" · "),
                     );
@@ -1580,7 +1503,7 @@ impl Scene for GodModeScene {
             self.seed_elements = s.seed_elements;
             if self.ready {
                 self.topology_stale = true;
-                self.dirty = true;
+                self.world.mark_dirty();
             }
             self.ready = true;
         }
@@ -1592,7 +1515,11 @@ impl Scene for GodModeScene {
         // before the scene sees any of them. A half-migrated surface answering
         // two input vocabularies at once is a tracked defect, so they went
         // together.
-        self.cam.update(input, self.globe_rect);
+        // One camera line, and it is the WORLD's: the look and zoom SIGNALS out
+        // of the active binding map, gated by the focus of the panel the world
+        // names (this bench names none yet, so the globe stays pointer-flown),
+        // and the pointer drag latching inside the world's own rect.
+        self.world.update(dt.as_secs_f32(), input, &self.bindings, self.ui_state.focused());
         Transition::None
     }
 
@@ -1605,55 +1532,62 @@ impl Scene for GodModeScene {
         }
 
         // A forge replaced the topology: every mesh built on the old sphere is
-        // stale, including the "static" core. Free them all; the rebuild below
-        // runs on the new dirs this same frame.
+        // stale. The rebuild below runs on the new dirs this same frame.
         if self.topology_stale {
-            self.free_meshes(renderer);
+            self.world.mark_dirty();
             self.topology_stale = false;
         }
 
-        // The core shell is static — build it once (per topology).
-        if self.core_mesh.is_none() && !self.dirs.is_empty() {
-            let (v, i) = globe::build(&self.dirs, &self.outlines, R_CORE, |_| Some(CORE_COLOR));
-            self.core_mesh = Some(renderer.upload_mesh(&v, MeshIndices::U32(&i)));
-        }
-
-        // Pull the newest frame; rebuild the dynamic shells if it advanced.
+        // Pull the newest frame; rebuild the shells if it advanced.
         if let Some(s) = self.sim.latest_if_newer(self.last_gen) {
             self.last_gen = s.gen;
             self.ranges = LegendRanges::from_cells(&s.cells);
             self.snap = Some(s);
-            self.dirty = true;
+            self.world.mark_dirty();
         }
 
-        if self.dirty {
-            for h in self.shell_meshes.drain(..) {
-                renderer.free_mesh(h);
+        if self.world.dirty() {
+            // Split the borrow: the world is written while the snapshot and the
+            // topology it is built from are read.
+            let Self { world, snap, dirs, outlines, ranges, field, cut, air, grid, .. } = self;
+            let mut shells: Vec<ShellSpec> = Vec::new();
+            let mut arrows: globe_view::Arrows = Vec::new();
+            // The core sits UNDER everything, so it leads the list: the world
+            // draws the shells in order and owns only the picture, not what a
+            // given bench's planet is made of.
+            if !dirs.is_empty() {
+                shells.push(ShellSpec {
+                    dirs,
+                    outlines,
+                    radius: R_CORE,
+                    inset: 0.0,
+                    color: Box::new(|_| Some(CORE_COLOR)),
+                    cell_radius: None, // every simulated shell is a sphere
+                });
             }
-            self.arrows.clear();
-            if let Some(snap) = self.snap.as_ref() {
-                let view = self.field;
-                let dirs = &self.dirs;
-                let outlines = &self.outlines;
+            if let Some(snap) = snap.as_ref() {
+                let view = *field;
+                let dirs: &[Vec3] = dirs;
+                let outlines: &[Vec<Vec3>] = outlines;
                 let cells = &snap.cells;
                 let (tmin, tmax) = cells
                     .iter()
                     .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.temp_k), hi.max(c.temp_k)));
                 let tspan = (tmax - tmin).max(1.0);
                 let light = Vec3::new(0.4, 0.7, 0.55).normalize();
-                let lit = |i: usize, base: [f32; 3]| {
+                let lit = move |i: usize, base: [f32; 3]| {
                     let l = (dirs[i].dot(light) * 0.5 + 0.5).clamp(0.25, 1.0);
                     [base[0] * l, base[1] * l, base[2] * l]
                 };
                 // Every shell above the core drops the wedge, so the cut reveals the
                 // whole stack in section rather than one layer at a time.
-                let cut = self.cut;
-                let sliced = |i: usize| cut && globe::in_wedge(dirs[i]);
+                let cut = *cut;
+                let sliced = move |i: usize| cut && globe::in_wedge(dirs[i]);
 
                 // Range of the surface fields, so their ramps span what is actually
                 // there rather than a guessed scale. Elevation stretches over the
                 // cached PERCENTILES, not min-max — see [`LegendRanges::elo`].
-                let (elo, ehi) = (self.ranges.elo, self.ranges.ehi);
+                let (elo, ehi) = (ranges.elo, ranges.ehi);
                 let deepest = cells.iter().map(|c| c.strata).max().unwrap_or(0).max(1);
                 let richest = cells.iter().map(|c| c.ore).fold(1.0f32, f32::max);
                 let wettest = cells.iter().map(|c| c.rain).fold(0.0f32, f32::max);
@@ -1661,70 +1595,88 @@ impl Scene for GodModeScene {
                 // Mantle shell — always present, coloured by the selected interior
                 // field. A surface field leaves it neutral so the crust above reads
                 // clearly against it.
-                let (mv, mi) = globe::build(dirs, outlines, R_MANTLE, |i| {
+                let mantle = move |i: usize| {
                     if sliced(i) {
                         return None;
                     }
                     let c = &cells[i];
-                    let base = match view {
-                        Field::Temperature => temp_color((c.temp_k - tmin) / tspan),
-                        Field::Differentiation => diff_color(c.differentiation),
-                        Field::Plates => plate_color(c.plate),
-                        Field::Seams => seam_color(c.seam),
-                        // A surface read (and Motion) leaves the interior neutral
-                        // so what is happening ON the world reads against it.
-                        _ => BARE_MANTLE_COLOR,
+                    // The ROSTER decides, not this match. A surface read leaves
+                    // the interior neutral so what is happening ON the world
+                    // reads against it.
+                    let base = if paints(view) == Paints::Interior {
+                        match view {
+                            Field::Differentiation => diff_color(c.differentiation),
+                            _ => temp_color((c.temp_k - tmin) / tspan),
+                        }
+                    } else {
+                        BARE_MANTLE_COLOR
                     };
                     Some(lit(i, base))
+                };
+                shells.push(ShellSpec {
+                    dirs,
+                    outlines,
+                    radius: R_MANTLE,
+                    inset: 0.0,
+                    color: Box::new(mantle),
+                    cell_radius: None,
                 });
-                self.shell_meshes.push(renderer.upload_mesh(&mv, MeshIndices::U32(&mi)));
 
                 // What a crust cell is painted with: its own rock colour normally,
                 // or the selected surface field when one is showing.
-                let crust_color = |i: usize, rock: [f32; 3]| -> [f32; 3] {
+                let crust_color = move |i: usize, rock: [f32; 3]| -> [f32; 3] {
                     let c = &cells[i];
+                    if paints(view) != Paints::Surface {
+                        // Interior reads and Motion say nothing about what the
+                        // ground IS, so it keeps its own rock colour.
+                        return rock;
+                    }
                     match view {
                         Field::Elevation => elevation_color(c.elevation_m, elo, ehi),
                         Field::Coast => coast_color(c.coast),
                         Field::Rain => rain_color(c.rain, wettest),
                         Field::Strata => strata_color(c.strata, deepest),
                         Field::Ore => ore_color(c.ore, richest),
-                        // Motion included: it says nothing about what the ground
-                        // IS, so the ground keeps its own rock colour and the
-                        // headings are drawn over it.
+                        // **Plates and seams paint the SURFACE**, where they can
+                        // actually be seen. They used to colour the mantle shell
+                        // underneath the crust, which is why the plate view read
+                        // as "the shell under the lower layer changed colour".
+                        Field::Plates => plate_color(c.plate),
+                        Field::Seams => seam_color(c.seam),
                         _ => rock,
                     }
                 };
 
-                // Oceanic crust shell — sparse.
-                let (ov, oi) = globe::build(dirs, outlines, R_OCEANIC, |i| {
-                    (!sliced(i) && cells[i].beds & BED_OCEANIC != 0)
-                        .then(|| lit(i, crust_color(i, OCEANIC_COLOR)))
-                });
-                if !oi.is_empty() {
-                    self.shell_meshes.push(renderer.upload_mesh(&ov, MeshIndices::U32(&oi)));
-                }
-
-                // Continental crust shell — sparse, outermost rock.
-                let (cv, ci) = globe::build(dirs, outlines, R_CONTINENTAL, |i| {
-                    (!sliced(i) && cells[i].beds & BED_CONTINENTAL != 0)
-                        .then(|| lit(i, crust_color(i, CONTINENTAL_COLOR)))
-                });
-                if !ci.is_empty() {
-                    self.shell_meshes.push(renderer.upload_mesh(&cv, MeshIndices::U32(&ci)));
+                // The two crust shells — sparse: a bed exists only where the
+                // simulation put one, and a `None` cell leaves the mantle bare.
+                for (radius, bed, base) in [
+                    (R_OCEANIC, BED_OCEANIC, OCEANIC_COLOR),
+                    (R_CONTINENTAL, BED_CONTINENTAL, CONTINENTAL_COLOR),
+                ] {
+                    shells.push(ShellSpec {
+                        dirs,
+                        outlines,
+                        radius,
+                        inset: 0.0,
+                        color: Box::new(move |i: usize| {
+                            (!sliced(i) && cells[i].beds & bed != 0)
+                                .then(|| lit(i, crust_color(i, base)))
+                        }),
+                        cell_radius: None,
+                    });
                 }
 
                 // The headings. Line geometry rather than colour, because the
                 // thing being reported is a DIRECTION — and only in the view
                 // that asks for it, so nothing pays for it otherwise.
                 if view == Field::Motion {
-                    self.arrows = motion_arrows(dirs, cells, true, |i| !sliced(i));
+                    arrows = motion_arrows(dirs, cells, true, |i| !sliced(i));
                 }
                 // The reference frame rides the same line channel — one pass,
                 // two consumers, and it is available in every view because
                 // "where is this" is a question every view raises.
-                if self.grid {
-                    self.arrows.extend(graticule());
+                if *grid {
+                    arrows.extend(globe::graticule(R_GRID));
                 }
 
                 // The exhale, classified: one stippled veil per gas, heaviest
@@ -1739,7 +1691,7 @@ impl Scene for GodModeScene {
                 // squeezed by one shared factor, which keeps the between-gas
                 // ratios — the actual read — intact while the world underneath
                 // stays visible under any sky whatsoever.
-                if self.air {
+                if *air {
                     let cover = veil_coverages(&snap.air_shells);
                     for (k, (&(gas, _), &coverage)) in
                         snap.air_shells.iter().zip(&cover).enumerate()
@@ -1749,37 +1701,32 @@ impl Scene for GodModeScene {
                         }
                         let tint = gas_tint(gas);
                         let radius = RADIUS * (R_AIR_BASE + k as f32 * R_AIR_STEP);
-                        let (av, ai) = globe::build(dirs, outlines, radius, |i| {
-                            (!sliced(i) && stippled(i, k, coverage)).then(|| lit(i, tint))
+                        shells.push(ShellSpec {
+                            dirs,
+                            outlines,
+                            radius,
+                            inset: 0.0,
+                            color: Box::new(move |i: usize| {
+                                (!sliced(i) && stippled(i, k, coverage)).then(|| lit(i, tint))
+                            }),
+                            cell_radius: None,
                         });
-                        if !ai.is_empty() {
-                            self.shell_meshes
-                                .push(renderer.upload_mesh(&av, MeshIndices::U32(&ai)));
-                        }
                     }
                 }
             }
-            self.dirty = false;
+            world.set_shells(shells);
+            world.set_arrows(arrows);
         }
 
         // The globe goes into the rect the walker reserved for it — FIRST.
         // `FrameGraph::execute` resets the shared per-frame draw queues, so an
         // offscreen pass declared after a main-frame draw would throw that draw
-        // away. `globe_rect` is `None` whenever the viewport is not on screen,
-        // and then the pass simply does not happen.
-        if let Some(rect) = self.globe_rect {
+        // away. The world's rect is `None` whenever the viewport is not on
+        // screen, and then the pass simply does not happen.
+        {
             let mut fg = FrameGraph::new();
-            self.globe_view.render(
-                renderer,
-                &mut fg,
-                rect,
-                renderer.layer(),
-                self.cam.camera(),
-                self.stage,
-                self.core_mesh,
-                &self.shell_meshes,
-                &self.arrows,
-            );
+            let layer = renderer.layer();
+            self.world.render(renderer, &mut fg, layer);
             fg.execute(renderer);
         }
         self.draw_hud(renderer);
@@ -1833,18 +1780,7 @@ impl GodModeScene {
     /// The globe is centred on the origin, so "toward the camera" is the point of it
     /// the maintainer is actually facing.
     fn facing_cell(&self) -> Option<u32> {
-        let toward = self.cam.camera().position.normalize_or_zero();
-        if toward.length_squared() < 0.5 || self.dirs.is_empty() {
-            return None;
-        }
-        let mut best = (f32::MIN, 0u32);
-        for (i, d) in self.dirs.iter().enumerate() {
-            let facing = d.dot(toward);
-            if facing > best.0 {
-                best = (facing, i as u32);
-            }
-        }
-        Some(best.1)
+        self.world.facing(&self.dirs).map(|i| i as u32)
     }
 
     /// Take a freshly materialised tile off the sim thread and upload it once.
@@ -1859,27 +1795,52 @@ impl GodModeScene {
     }
 
 
-    /// Stage a preset: endowment scales + size into the Starter's pending
-    /// knobs, and the two water levers set live. **An input bundle, never an
-    /// outcome**: these are the conditions the namesake world suggests, and
-    /// what actually forms from them is the simulation's business. The user
-    /// still presses FORGE.
+    /// Stage a preset: **the whole bundle** — endowment scales + planet size
+    /// into the Starter's pending knobs, and the water levers plus the star's
+    /// own brightness set live. **An input bundle, never an outcome**: these
+    /// are the conditions the namesake world suggests (its size, its
+    /// composition, its delivery, its orbit's sunlight), and what actually
+    /// forms from them is the simulation's business. The user still presses
+    /// FORGE.
     fn apply_preset(&mut self, preset: Preset) -> Option<SimCommand> {
-        let (scales, freq, infall, coverage): (&[(&str, f64)], u32, f64, f64) = match preset {
-            // Iron-heavy, volatile-starved, small, and the comets never came.
-            Preset::Mercury => {
-                (&[("Fe", 2.0), ("S", 1.5), ("H", 0.1), ("C", 0.3), ("N", 0.3)], 24, 0.05, 1.0)
-            }
-            // Smaller, drier, thinner — half the volatiles, a modest delivery.
-            Preset::Mars => {
-                (&[("H", 0.4), ("C", 0.5), ("N", 0.4), ("S", 0.8), ("Fe", 1.2)], 48, 0.3, 1.0)
-            }
-            // The base seed, exactly as accretion.json ships it.
-            Preset::Earth => (&[], 96, 1.0, 1.0),
-            // Small, rock-light, and drowned from outside: ten Earths of
-            // delivery onto a body that could never exhale that much.
-            Preset::Europa => (&[("H", 1.5), ("Si", 0.8), ("Fe", 0.8)], 12, 10.0, 1.0),
-        };
+        let (scales, freq, infall, coverage, stellar): (&[(&str, f64)], u32, f64, f64, f64) =
+            match preset {
+                // Iron-heavy, volatile-starved, small, seared, and the comets
+                // never came.
+                Preset::Mercury => (
+                    &[("Fe", 2.0), ("S", 1.5), ("H", 0.1), ("C", 0.3), ("N", 0.3)],
+                    24,
+                    0.05,
+                    1.0,
+                    6.7,
+                ),
+                // Earth-sized carbon hotbox under a nearer star: nearly dry,
+                // choking on its own CO₂.
+                Preset::Venus => (
+                    &[("C", 2.5), ("H", 0.3), ("N", 0.8), ("S", 1.2)],
+                    96,
+                    0.1,
+                    1.0,
+                    1.9,
+                ),
+                // The base seed, exactly as accretion.json ships it.
+                Preset::Earth => (&[], 96, 1.0, 1.0, 1.0),
+                // Smaller, drier, thinner, colder — half the volatiles, a
+                // modest delivery, a distant sun.
+                Preset::Mars => (
+                    &[("H", 0.4), ("C", 0.5), ("N", 0.4), ("S", 0.8), ("Fe", 1.2)],
+                    48,
+                    0.3,
+                    1.0,
+                    0.43,
+                ),
+                // Small, rock-light, far from the light, and drowned from
+                // outside: ten Earths of delivery onto a body that could never
+                // exhale that much.
+                Preset::Europa => {
+                    (&[("H", 1.5), ("Si", 0.8), ("Fe", 0.8)], 12, 10.0, 1.0, 0.04)
+                }
+            };
         for slot in self.pending_scales.iter_mut() {
             *slot = 1.0;
         }
@@ -1893,6 +1854,7 @@ impl GodModeScene {
             SimCommand::SetLevers(Levers {
                 water_budget_kg: infall * flicker_poc_chemistry::surface::DEFAULT_WATER_KG,
                 water_coverage_target: coverage,
+                stellar_heat: stellar,
                 ..s.levers
             })
         })
@@ -1941,10 +1903,10 @@ impl GodModeScene {
 
         // ── The view. These change what the maintainer SEES, never the world:
         //    no command leaves the scene, only a mesh rebuild. ──
-        for (action, field, _) in FIELD_ACTIONS {
+        for (action, field, _, _) in FIELD_ACTIONS {
             if results.is_on(action) {
                 self.field = field;
-                self.dirty = true;
+                self.world.mark_dirty();
             }
         }
         // The pause card's SHOW ME: go straight to the view that shows what just
@@ -1957,14 +1919,14 @@ impl GodModeScene {
                     self.process_defs.get(g.stage).and_then(|d| Field::from_view(&d.view))
                 {
                     self.field = v;
-                    self.dirty = true;
+                    self.world.mark_dirty();
                 }
                 self.gate_ack = g.at_myr;
             }
         }
         if results.is_on("field_next") {
             self.field = self.field.cycle();
-            self.dirty = true;
+            self.world.mark_dirty();
         }
         if results.is_on("field_prev") {
             // Cycling backwards is cycling forwards N−1 times — one law, read
@@ -1972,24 +1934,24 @@ impl GodModeScene {
             for _ in 0..FIELD_ACTIONS.len().saturating_sub(1) {
                 self.field = self.field.cycle();
             }
-            self.dirty = true;
+            self.world.mark_dirty();
         }
         if let Some(v) = toggled(results, "cut") {
             if self.cut != v {
                 self.cut = v;
-                self.dirty = true;
+                self.world.mark_dirty();
             }
         }
         if let Some(v) = toggled(results, "air") {
             if self.air != v {
                 self.air = v;
-                self.dirty = true;
+                self.world.mark_dirty();
             }
         }
         if let Some(v) = toggled(results, "grid") {
             if self.grid != v {
                 self.grid = v;
-                self.dirty = true;
+                self.world.mark_dirty();
             }
         }
         if results.is_on("seed_toggle") {
@@ -2107,17 +2069,6 @@ impl GodModeScene {
         // Presets: one-click INPUT BUNDLES. Each stages the Starter's pending
         // knobs and sets the two water levers; the user still FORGEs. Named for
         // the world that inspired them — nothing anywhere guarantees the result.
-        for (action, preset) in [
-            ("preset_mercury", Preset::Mercury),
-            ("preset_mars", Preset::Mars),
-            ("preset_earth", Preset::Earth),
-            ("preset_europa", Preset::Europa),
-        ] {
-            if results.is_on(action) {
-                out.extend(self.apply_preset(preset));
-            }
-        }
-
         // The Starter's knobs write into PENDING scene state — nothing reaches
         // the sim until FORGE births a world from them. No change-guard needed:
         // a drag is just a local number until the button.
@@ -2130,6 +2081,23 @@ impl GodModeScene {
         }
         if let Some(v) = results.number("seed_freq") {
             self.pending_freq = (v.round() as u32).clamp(6, 96);
+        }
+
+        // Presets run AFTER the knob reads, deliberately: both write the same
+        // pending state, and a preset click's own frame can carry the sliders'
+        // standing values — handled first, the preset's staged bundle was
+        // silently clobbered back the same frame, and the buttons appeared to
+        // change nothing but the infall (the exact symptom reported).
+        for (action, preset) in [
+            ("preset_mercury", Preset::Mercury),
+            ("preset_venus", Preset::Venus),
+            ("preset_earth", Preset::Earth),
+            ("preset_mars", Preset::Mars),
+            ("preset_europa", Preset::Europa),
+        ] {
+            if results.is_on(action) {
+                out.extend(self.apply_preset(preset));
+            }
         }
         if results.is_on("starter_open") {
             self.starter_open = true;

@@ -652,7 +652,7 @@ impl Stage for CarbonSink {
             self.co2_fracs.iter().find(|&&(e, _)| e == self.c).map_or(0.0, |&(_, f)| f);
         let area_total = world.cell_area_m2() * world.columns.len().max(1) as f64;
         let p_co2 = world.reservoirs.atmosphere.species.amount(CARBON_DIOXIDE)
-            * crate::column::GRAVITY_M_S2
+            * world.gravity_m_s2()
             / area_total;
         let target_c = ocean_kg * (HENRY_FRAC_PER_PA * p_co2).min(MAX_DISSOLVED_FRAC);
         let dic = world.reservoirs.ocean.contents.amount(self.c);
@@ -988,7 +988,8 @@ mod tests {
             formed_at_myr: 0.0,
             formed_by: FormationProcess::OceanicCrust,
             peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
         });
 
         let sky_before = w.reservoirs.atmosphere.species.amount(CARBON_DIOXIDE);

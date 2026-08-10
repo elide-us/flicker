@@ -284,6 +284,50 @@ fn boundary_distance(mask: &HexMask, x: u32, y: u32) -> f64 {
     REACH as f64
 }
 
+/// Test fixture (shared with the erosion tests): **stratify one column, the
+/// conserved way.** The size model makes a freq-6 bake a ~500-km planetoid
+/// whose per-tick deposits sit near the absolute bed-film floor
+/// (`MIN_BED_MASS_KG` is areal — the same hex at every size), so a short
+/// default-pace bake no longer reliably stratifies any column. These tests are
+/// about the MAPS, not the bake, so the heaviest column ALWAYS gets a felsic
+/// and a mafic bed drawn from the mantle — unconditionally, so a green run
+/// measured this one path and the claim is falsifiable (extra beds on an
+/// already-stratified column are harmless to the map invariants under test).
+#[cfg(test)]
+pub(crate) fn guarantee_stack(w: &mut flicker_poc_chemistry::World) {
+    use flicker_poc_chemistry::FormationProcess;
+    let cell = (0..w.columns.len())
+        .max_by(|&a, &b| {
+            (w.columns[a].layers.len(), w.columns[a].mass_kg())
+                .partial_cmp(&(w.columns[b].layers.len(), w.columns[b].mass_kg()))
+                .expect("column masses are finite")
+        })
+        .expect("a world has columns");
+    let beds: [(FormationProcess, [(u8, f64); 2]); 2] = [
+        (FormationProcess::ContinentalArc, [(14, 4.0e15), (13, 2.0e15)]),
+        (FormationProcess::OceanicCrust, [(12, 3.0e15), (26, 3.0e15)]),
+    ];
+    for (process, wants) in beds {
+        let mut melt = Vec::new();
+        for (e, want) in wants {
+            let mut want = want;
+            for src in 0..w.mantle.n_cells() {
+                if want <= 0.0 {
+                    break;
+                }
+                let took = w.mantle.remove(src, e, want);
+                if took > 0.0 {
+                    melt.push((e, took));
+                }
+                want -= took;
+            }
+        }
+        let at = w.tick_myr;
+        w.columns[cell].deposit(process, at, &melt);
+    }
+    w.audit("guarantee_stack");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,10 +347,11 @@ mod tests {
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let (grid, outlines) = icosphere_with_outlines(freq);
         let mut w = World::seed(grid, b, &t, 5);
-        let mut s = Scheduler::new(formation_stages(Arc::clone(&t), &w.budget.clone(), &Default::default()), 5);
+        let mut s = Scheduler::new(formation_stages(Arc::clone(&t), &w, &Default::default()), 5);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
+        crate::materialize::guarantee_stack(&mut w);
         (w, outlines)
     }
 
@@ -321,7 +366,7 @@ mod tests {
             .columns
             .iter()
             .position(|c| c.layers.len() >= 2)
-            .expect("some column grew a stack");
+            .expect("the fixture stratified a column");
         let tile = materialize(&w, cell, crate::radius_for_freq(6), &outlines[cell]);
         assert_eq!(tile.strata.len(), w.columns[cell].layers.len(), "a map per bed");
         // The column's beds keep their PROPORTIONS exactly — which is the trial
@@ -414,7 +459,7 @@ mod tests {
             .columns
             .iter()
             .position(|c| c.layers.len() >= 2)
-            .expect("some column grew a stack");
+            .expect("the fixture stratified a column");
         let tile = materialize(&w, cell, crate::radius_for_freq(6), &outlines[cell]);
         let (mx, my) = (TILE_DIM / 2, TILE_DIM / 2);
         assert!(tile.composite_m(mx, my) > 0.0, "there is ground in the middle of a cell");

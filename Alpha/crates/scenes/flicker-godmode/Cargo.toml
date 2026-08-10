@@ -24,6 +24,8 @@ flicker-worldgrid.workspace = true
 flicker-materials.workspace = true
 
 flicker = { path = "../../core/flicker" }
+# The shared hex-globe mesh builder (was this crate's own `globe.rs`).
+flicker-globe = { path = "../../frontend/flicker-globe" }
 flicker-shell.workspace = true
 # Input event bus (spec §4/§9): the shared resolve → route seam.
 flicker-input-core.workspace = true

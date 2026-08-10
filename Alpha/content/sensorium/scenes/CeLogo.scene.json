@@ -1,0 +1,10 @@
+{
+  "_comment": "SCENE FILE — the engine splash, the second half of the intro chain (see TegLogo.scene.json for the format). It names the SAME `splash` behaviour its sibling does and fires the same result (`done`); only the image and the routing differ, which is the point: two scenes, one behaviour, and neither of them named in Rust. This one hands off to the main menu.",
+  "behaviour": "splash",
+  "params": {
+    "image": "package/sensorium/assets/clay_engine_infinity_grey.png"
+  },
+  "exits": {
+    "done": { "to": "Main", "mode": "replace" }
+  }
+}

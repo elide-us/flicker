@@ -186,6 +186,11 @@ impl SpritePipeline {
 
     /// Push one quad at `position` (top-left in pixels) with the given pixel `size`,
     /// multiplied by `color` (RGBA in 0..1) in the fragment shader, sorting at `layer`.
+    ///
+    /// `uv` is the SOURCE sub-rectangle in normalized texture space, `[u0, v0, u1, v1]`
+    /// with the origin top-left — `[0.0, 0.0, 1.0, 1.0]` for the whole texture. This is
+    /// what lets many small images share one texture (an ATLAS) and so one draw call:
+    /// the quads batch by `texture`, and an atlas makes that one bind for the lot.
     #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
@@ -196,6 +201,7 @@ impl SpritePipeline {
         color: [f32; 4],
         layer: f32,
         clip: Option<[f32; 4]>,
+        uv: [f32; 4],
     ) {
         self.screen = screen;
         let to_ndc =
@@ -206,6 +212,8 @@ impl SpritePipeline {
         let bl = position + Vec2::new(0.0, size.y);
         let br = position + size;
 
+        let [u0, v0, u1, v1] = uv;
+
         self.quads.push(Quad {
             layer,
             clip,
@@ -213,32 +221,32 @@ impl SpritePipeline {
             verts: [
                 Vertex {
                     position: to_ndc(tl),
-                    uv: [0.0, 0.0],
+                    uv: [u0, v0],
                     color,
                 },
                 Vertex {
                     position: to_ndc(bl),
-                    uv: [0.0, 1.0],
+                    uv: [u0, v1],
                     color,
                 },
                 Vertex {
                     position: to_ndc(br),
-                    uv: [1.0, 1.0],
+                    uv: [u1, v1],
                     color,
                 },
                 Vertex {
                     position: to_ndc(tl),
-                    uv: [0.0, 0.0],
+                    uv: [u0, v0],
                     color,
                 },
                 Vertex {
                     position: to_ndc(br),
-                    uv: [1.0, 1.0],
+                    uv: [u1, v1],
                     color,
                 },
                 Vertex {
                     position: to_ndc(tr),
-                    uv: [1.0, 0.0],
+                    uv: [u1, v0],
                     color,
                 },
             ],

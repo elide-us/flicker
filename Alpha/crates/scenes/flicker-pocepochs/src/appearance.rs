@@ -1,19 +1,24 @@
-//! Planet rendering — the **layer-stack shell** approach reused from the poc-chemistry
-//! viewer (`flicker-poc-chemistry/src/globe.rs`): the scene builds **one mesh per layer**
-//! ([`build_shell`]), each at its own radius and **sparse** (a cell with no such layer leaves
-//! a hole), and stacks them radially. Material / Heat are a single surface shell coloured by
-//! the column's top layer. This is NOT a bespoke mesh — it is the existing shell renderer.
+//! **What the simulation LOOKS like** — this bench's data→colour vocabulary, and
+//! nothing else.
+//!
+//! What used to live beside this in a private `globe.rs` — a second `RADIUS`, a
+//! second `in_wedge`, a second `build_shell` and a second `OrbitCam` — is gone:
+//! the mesh, the stage, the offscreen target and the camera all belong to
+//! [`flicker_globe::GlobeWorld`], which is the ONE globe in Prism (rule
+//! DDD070C7). The per-column radius this bench needed was absorbed there as
+//! [`flicker_globe::ShellSpec::cell_radius`], so the layer-stack view is now the
+//! shared builder answering a different question, not a fork of it.
+//!
+//! What stays here is the half no shared crate can own: a `flicker_worldengine`
+//! `HexState` turned into a stack of sized, classified layers and a colour per
+//! cell. Those colours are **per-DATUM** (an element nobody has picked a hue for
+//! is hashed one), which is the sanctioned exception the authoring guide names —
+//! the walker's colour channel is dotted style paths, and a per-datum colour has
+//! no path.
 
-use flicker::render::{MeshVertex, Vec3};
+use flicker_globe::RADIUS;
 use flicker_worldengine::{classify, HexState, LayerKind, Phase, Tables};
 
-/// Base globe radius (world units) — the outer (crust / surface) shell; the orbit camera
-/// frames it.
-pub const RADIUS: f32 = 200.0;
-
-/// Radius of the interior ball surface (the mantle) — the layer stack builds outward from
-/// here at each layer's physical thickness (see [`cell_stack`]).
-const R_MANTLE: f32 = 0.85 * RADIUS;
 
 /// How the planet is coloured. `V` cycles them.
 #[derive(Copy, Clone, PartialEq)]
@@ -45,15 +50,9 @@ pub fn cycle_view(mode: ViewMode) -> ViewMode {
     }
 }
 
-/// Whether a cell direction lies in the **cutaway wedge** — a 90° longitude wedge removed
-/// from the outer shells so the interior shows through (the MRI-slice cut).
-pub fn in_wedge(dir: Vec3) -> bool {
-    dir.x > 0.0 && dir.z > 0.0
-}
-
-/// Base radius of the interior ball (the mantle surface); the crust / ocean / atmosphere stack
-/// OUTWARD from here, each sized by its physical volume.
-const R_BASE: f32 = R_MANTLE;
+/// Base radius of the interior ball — the mantle surface. The crust / ocean / atmosphere stack
+/// OUTWARD from here, each sized by its physical volume (see [`cell_stack`]).
+pub const R_BASE: f32 = 0.85 * RADIUS;
 /// Legibility knobs for the physical-thickness stack (tune live in the app): a floor so a thin
 /// layer still shows, and the scale on the cube-root-compressed volume ratio (the raw gas-vs-
 /// rock volume range is ~1000×, cube-root keeps it legible while preserving the ordering).
@@ -121,12 +120,6 @@ pub fn phase_color(phase: Phase) -> [f32; 3] {
         Phase::Liquid => [0.15, 0.40, 0.78],
         Phase::Gas => [0.70, 0.76, 0.86],
     }
-}
-
-/// The shader's direct-RGB material word (`mesh.wgsl`: `primary == 0xFFF` escape, RGB666).
-fn direct(rgb: [f32; 3]) -> u32 {
-    let q = |v: f32| ((v.clamp(0.0, 1.0) * 63.0).round() as u32) & 0x3F;
-    0xFFF | (q(rgb[0]) << 12) | (q(rgb[1]) << 18) | (q(rgb[2]) << 24)
 }
 
 fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
@@ -218,53 +211,4 @@ pub fn legend_entries(mode: ViewMode) -> Vec<(&'static str, [f32; 3])> {
             ("gas (air)", phase_color(Phase::Gas)),
         ],
     }
-}
-
-/// Build ONE shell mesh at `radius` from cell centres (`dirs`) + boundary outlines, colouring
-/// each cell by `color(i)`. A cell whose `color` returns `None` is **skipped** — that is how a
-/// layer shell is drawn only where the layer exists. Reused from the poc-chemistry layer-stack
-/// renderer (`flicker-poc-chemistry/src/globe.rs`).
-pub fn build_shell(
-    dirs: &[Vec3],
-    outlines: &[Vec<Vec3>],
-    radius: impl Fn(usize) -> f32,
-    color: impl Fn(usize) -> Option<[f32; 3]>,
-) -> (Vec<MeshVertex>, Vec<u32>) {
-    let mut verts: Vec<MeshVertex> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-
-    for (i, outline) in outlines.iter().enumerate() {
-        if outline.len() < 3 || i >= dirs.len() {
-            continue;
-        }
-        let Some(rgb) = color(i) else {
-            continue; // this cell has no such layer — leave a hole
-        };
-        let outward = dirs[i];
-        let r = radius(i);
-        let material = direct(rgb);
-        let normal = outward.to_array();
-        let center = outward * r;
-
-        let base = verts.len() as u32;
-        verts.push(MeshVertex { position: center.to_array(), normal, material });
-        for corner in outline {
-            verts.push(MeshVertex { position: (*corner * r).to_array(), normal, material });
-        }
-        let n = outline.len();
-        for k in 0..n {
-            let c0 = outline[k] * r;
-            let c1 = outline[(k + 1) % n] * r;
-            let i0 = base + 1 + k as u32;
-            let i1 = base + 1 + ((k + 1) % n) as u32;
-            // Wind so the triangle faces outward (CCW front, back-culled).
-            if (c0 - center).cross(c1 - center).dot(outward) >= 0.0 {
-                indices.extend([base, i0, i1]);
-            } else {
-                indices.extend([base, i1, i0]);
-            }
-        }
-    }
-
-    (verts, indices)
 }

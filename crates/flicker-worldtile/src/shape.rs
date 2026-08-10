@@ -156,7 +156,7 @@ mod tests {
         );
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, 5);
-        let mut s = Scheduler::new(formation_stages(Arc::clone(&t), &w.budget.clone(), &Default::default()), 5);
+        let mut s = Scheduler::new(formation_stages(Arc::clone(&t), &w, &Default::default()), 5);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }

@@ -21,7 +21,7 @@
 //! (a `workbench` carrying a fixed bank of six `synth_voice` rows); [`build_tree`]
 //! emits ONE instance node, declares the screen's input as `on_<signal>` props,
 //! and calls `expand` at the end — the single seam, so the scene and every gate
-//! walk the same tree. The script host is here purely as the COMPONENT LIBRARY.
+//! walk the same tree.
 //!
 //! # Why the swatch is one sprite and not nine
 //!
@@ -40,11 +40,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use flicker::render::{Renderer, TextureHandle, Vec2};
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, UiNode, Value, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui_with, TemplateRegistry, UiInput,
-    UiIntents, UiState, WalkerHandler, UI_COMPONENT_MODULES,
+    builtin_templates, expand, load_styles, render_hud, run_ui, TemplateRegistry, UiInput,
+    UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Resolver,
@@ -177,7 +177,6 @@ pub struct Sablework {
     /// draws everything else rather than by a second set of constants.
     lit_rect: Option<flicker::render::Rect>,
 
-    ui_host: Option<ScriptHost>,
     /// The proto registry `build_tree` expands against — built once.
     templates: TemplateRegistry,
     ui_intents: UiIntents,
@@ -203,16 +202,6 @@ impl Default for Sablework {
 impl Sablework {
     pub fn new() -> Self {
         let ui_styles = load_styles(HUD_UI_ELEMENTS);
-        // The script host is the COMPONENT LIBRARY — the `ui/<kind>.lua` modules the
-        // walker calls to draw and hit each control. It is NOT a place this scene
-        // keeps a tree: composition is data.
-        let ui_host = match ScriptHost::library(UI_COMPONENT_MODULES) {
-            Ok(host) => Some(host),
-            Err(e) => {
-                tracing::error!("component library load failed: {e} — no HUD");
-                None
-            }
-        };
         let tiles = ui_styles
             .get("sablework")
             .and_then(|s| s.get("preview"))
@@ -270,7 +259,6 @@ impl Sablework {
             commit_rx,
             lit: lit::LitPreview::default(),
             lit_rect: None,
-            ui_host,
             templates: builtin_templates(),
             ui_intents: UiIntents::default(),
             ui_state: UiState::default(),
@@ -564,18 +552,17 @@ impl Sablework {
         //
         // Controller is the floor, using only the ratified vocabulary: the bumpers
         // (`Tab*`) walk the MAP tabs — six views of one artifact is exactly what a
-        // tab is — and the stick (`Panel*`) moves between rack, swatch and rail.
-        // Selecting a VOICE is movement WITHIN the rack panel, so it belongs to the
-        // d-pad on the walker's focus graph, not to a signal of its own; touching
+        // tab is. NOTHING ELSE is declared: Confirm, Cancel and `Panel*` are the
+        // WALKER's on every screen in Prism (it activates the focused control,
+        // backs out, and cycles the panels), and naming one here bound four dead
+        // result names while statically killing activation on this bench —
+        // violation F1, 2026-08-09. Selecting a VOICE is movement WITHIN the rack
+        // panel, so it belongs to the d-pad on the walker's focus graph; touching
         // any of a voice's controls also selects it.
         for (signal, result) in [
             ("on_menu", "pause_open"),
-            ("on_confirm", "confirm"),
-            ("on_cancel", "cancel"),
             ("on_tab_next", "map_next"),
             ("on_tab_prev", "map_prev"),
-            ("on_panel_next", "panel_next"),
-            ("on_panel_prev", "panel_prev"),
         ] {
             page.props.insert(signal.into(), Value::Text(result.into()));
         }
@@ -646,7 +633,7 @@ impl Scene for Sablework {
         renderer.window().set_title("Sablework Bench");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         self.collect_bakes(dt);
         while let Ok(state) = self.commit_rx.try_recv() {
             if let CommitState::Failed(ref why) = state {
@@ -672,18 +659,12 @@ impl Scene for Sablework {
             backspace: false,
             wheel: input.mouse_wheel_delta,
         };
-        let lib = self.ui_host.as_ref().map(|h| h as &dyn ComponentLibrary);
-        let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         // The `rtt` node reserved a rect for the lit sub-scene; `render` draws into
         // it. `None` when the Lit tab is not showing, which is also what stops the
         // offscreen pass from costing anything.
-        self.lit_rect = frame.rtts.iter().find(|s| s.id == "sw_lit").map(|s| {
-            flicker::render::Rect {
-                pos: Vec2::new(s.x, s.y),
-                size: Vec2::new(s.w, s.h),
-            }
-        });
+        self.lit_rect = frame.rtt_rect("sw_lit");
         self.hud_commands = frame.commands;
         self.lit.tick(dt);
 

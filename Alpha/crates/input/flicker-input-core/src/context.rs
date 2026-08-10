@@ -12,9 +12,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::analog::AbstractControls;
 use crate::binding::{InputBinding, InputMap};
+use crate::device::{AxisDirection, GamepadAxis};
 use crate::resolve::EventKind;
 use crate::signal::ActionSignal;
-use crate::snapshot::{GamepadConfig, InputState};
+use crate::snapshot::{GamepadConfig, GamepadState, InputState};
+
+/// How far ONE physical binding is deflected in its own direction, 0..1.
+///
+/// The deadzone is the device snapshot's, applied exactly once
+/// ([`GamepadState::left_stick`] / [`right_stick`](GamepadState::right_stick)
+/// rescale what is left of the travel), so this reads the answer rather than
+/// re-deriving it. A digital control is a full deflection while it is held.
+fn binding_axis(b: InputBinding, s: &InputState, cfg: &GamepadConfig) -> f32 {
+    let InputBinding::GamepadAxis { axis, direction } = b else {
+        return if b.is_down(s, cfg) { 1.0 } else { 0.0 };
+    };
+    let Some(gp) = s.gamepad(0) else { return 0.0 };
+    let deflection = axis_deflection(gp, axis);
+    match direction {
+        AxisDirection::Positive => deflection.max(0.0),
+        AxisDirection::Negative => (-deflection).max(0.0),
+    }
+}
+
+/// The snapshot's own value for one axis: the deadzoned/rescaled stick component
+/// or the trigger's raw travel.
+fn axis_deflection(gp: &GamepadState, axis: GamepadAxis) -> f32 {
+    match axis {
+        GamepadAxis::LeftStickX => gp.left_stick().x,
+        GamepadAxis::LeftStickY => gp.left_stick().y,
+        GamepadAxis::RightStickX => gp.right_stick().x,
+        GamepadAxis::RightStickY => gp.right_stick().y,
+        GamepadAxis::LeftTrigger => gp.left_trigger(),
+        GamepadAxis::RightTrigger => gp.right_trigger(),
+    }
+}
 
 // ───────────────────────────────────────────────────────────────────
 // Section: Input Contexts
@@ -241,6 +273,31 @@ impl ContextualBindings {
             .any(|&b| b.is_down(s, cfg))
     }
 
+    /// Continuous / ANALOG query: how far is `signal` deflected in the active
+    /// context, 0..1 — the axis twin of [`signal_held`](Self::signal_held).
+    ///
+    /// A bound stick axis reports the snapshot's own already-deadzoned,
+    /// already-rescaled magnitude ([`GamepadState::left_stick`] /
+    /// [`right_stick`](GamepadState::right_stick)) in the binding's own
+    /// direction, and **nothing re-thresholds it**: a caller that applied its
+    /// own deadzone on top of that one would carve a second, larger dead centre
+    /// out of the stick — a measured defect this method exists to remove. A
+    /// trigger reports its raw 0..1 travel; a bound key or button reports 1.0
+    /// while it is down, so a keyboard and a stick drive the same code.
+    ///
+    /// The DIRECTION lives in the signal, not the sign: `LookRight` and
+    /// `LookLeft` each report how far they themselves are deflected, and a
+    /// caller takes the difference. Several bindings on one signal report the
+    /// largest deflection among them rather than their sum, so binding a signal
+    /// twice can never make it twice as fast.
+    pub fn signal_axis(&self, signal: ActionSignal, s: &InputState, cfg: &GamepadConfig) -> f32 {
+        self.active_map()
+            .bindings_for(signal)
+            .iter()
+            .map(|&b| binding_axis(b, s, cfg))
+            .fold(0.0f32, f32::max)
+    }
+
     /// Rebuild a runtime binding stack from a persisted [`InputProfile`]: install each
     /// named context's map (resolving the stable NAME → [`InputContext`] via the
     /// registry; unknown names are skipped), and reset the stack to `[World]` (spec
@@ -423,6 +480,33 @@ impl InputProfile {
         self.contexts.iter().find(|(n, _)| n == name).map(|(_, cb)| &cb.map)
     }
 
+    /// Fill the gaps a stale save leaves: for every context of the PRESET this
+    /// profile is named after, adopt the preset's bindings for signals the
+    /// saved map leaves wholly unbound (and adopt whole contexts the save
+    /// predates). Call once at load, before anything reads the profile.
+    ///
+    /// This is the profile-migration law: a persisted profile freezes the
+    /// defaults at save time, so every default binding added in a later build
+    /// is DEAD HARDWARE for anyone with a settings file — the bench rails,
+    /// nav tier and chord all shipped that way once. User rebinds always win;
+    /// only silence gains defaults; a profile with an unrecognised name is a
+    /// custom layout and is left exactly as saved. (`TextEntry` stays empty
+    /// through this by construction — its preset binds nothing.)
+    pub fn backfill_from_presets(&mut self) {
+        let preset = match self.name.as_str() {
+            "default" => Self::default_profile(),
+            "kbm_souls" => Self::kbm_souls(),
+            "xbox_souls" => Self::xbox_souls(),
+            _ => return,
+        };
+        for (name, preset_cb) in preset.contexts {
+            match self.contexts.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, cb)) => cb.map.backfill_unbound_from(&preset_cb.map),
+                None => self.contexts.push((name, preset_cb)),
+            }
+        }
+    }
+
     /// Set (or insert) the map for a context by stable NAME — how the shell writes a
     /// freshly-edited `World` map into the profile before persisting (spec §7.2).
     pub fn set_context_map(&mut self, name: &str, map: InputMap) {
@@ -463,8 +547,10 @@ fn menu_map() -> InputMap {
     m.bind(ActionSignal::NavDown, InputBinding::GamepadButton(GamepadButton::DPadDown));
     m.bind(ActionSignal::NavLeft, InputBinding::GamepadButton(GamepadButton::DPadLeft));
     m.bind(ActionSignal::NavRight, InputBinding::GamepadButton(GamepadButton::DPadRight));
-    m.bind(ActionSignal::TabPrev, InputBinding::GamepadButton(GamepadButton::LeftBumper));
-    m.bind(ActionSignal::TabNext, InputBinding::GamepadButton(GamepadButton::RightBumper));
+    // The two menu-rail scales (bumpers+`,`/`.` tabs, triggers+`[`/`]` pages) —
+    // the ONE shared definition, also carried by the `World` preset for bench
+    // chrome (see `InputMap::bind_menu_rails`).
+    m.bind_menu_rails();
     m.bind(ActionSignal::Confirm, InputBinding::GamepadButton(GamepadButton::South));
     m.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
     m
@@ -475,6 +561,59 @@ mod tests {
     use super::*;
     use crate::binding::InputBinding;
     use crate::device::{GamepadButton, Key};
+
+    /// **A stale save gains the new defaults; the user's own binds win.** A
+    /// profile persisted before a default binding existed must adopt it at
+    /// load (else the signal is dead hardware behind a settings file), while a
+    /// signal the user bound — even differently from the preset — is theirs.
+    /// An unrecognised profile name is a custom layout: untouched.
+    #[test]
+    fn backfill_adopts_new_defaults_and_keeps_user_binds() {
+        // A "default"-named profile whose World map predates the bench tier:
+        // movement rebound (user choice), no PanelNext/NavUp/ZoomIn at all.
+        let mut stale = InputMap::empty();
+        stale.bind(ActionSignal::MoveForward, InputBinding::Key(Key::I)); // user rebind
+        let mut profile = InputProfile::default_profile();
+        profile.set_context_map("World", stale);
+
+        profile.backfill_from_presets();
+        let world = profile.context_map("World").expect("World survives");
+        assert_eq!(
+            world.bindings_for(ActionSignal::MoveForward),
+            &[InputBinding::Key(Key::I)],
+            "a user rebind is never overwritten by the preset"
+        );
+        assert!(
+            !world.bindings_for(ActionSignal::PanelNext).is_empty(),
+            "a signal the save predates gains the current default"
+        );
+        assert!(
+            !world.bindings_for(ActionSignal::NavUp).is_empty(),
+            "the bench-nav tier arrives"
+        );
+        assert!(
+            !world.bindings_for(ActionSignal::ChordBegin).is_empty(),
+            "so does the chord modifier"
+        );
+        assert!(
+            profile
+                .context_map("TextEntry")
+                .is_some_and(|m| m.bindings_for(ActionSignal::Confirm).is_empty()),
+            "TextEntry stays empty — its preset binds nothing"
+        );
+
+        // A custom-named profile is left exactly as saved.
+        let mut custom = InputProfile::default_profile();
+        custom.name = "my_layout".to_string();
+        custom.set_context_map("World", InputMap::empty());
+        custom.backfill_from_presets();
+        assert!(
+            custom
+                .context_map("World")
+                .is_some_and(|m| m.bindings_for(ActionSignal::NavUp).is_empty()),
+            "an unrecognised name is a custom layout, not a stale default"
+        );
+    }
 
     #[test]
     fn world_const_reads_as_base() {

@@ -1,0 +1,69 @@
+{
+  "_comment": "SCENE FILE — the MAIN MENU (CeLogo exits here). Aaron's structure (2026-08-10): Frame (page) > Workbench (two-panel `multi_view`) > Left Bench (the menu) + Right Bench (the scene selector). The LEFT bench is realm buttons (Adventurer / Dungeon Maker / Game Master / Developer) + Settings + Quit; each realm button fires `mode_<realm>`, and the `menu` BEHAVIOUR turns that into a page-index write (`page = N`) — buttons select the page, not shoulder rails. The RIGHT bench is the PTT (`paged_menu`) with BOTH rails hidden (`hide_pages` + `hide_tabs`): the special case Aaron named — the page navigation shows no controls, because the LEFT buttons drive the index. Its content is the scene list for the selected realm, injected each frame by the behaviour (the client's registered SceneEntry set, filtered to `page`'s realm). Settings and Quit keep their existing behaviour. This is the SHELL; the runtime scene rows fill it.",
+  "behaviour": "menu",
+  "tree": {
+    "component": "screen",
+    "id": "main_menu",
+    "children": [
+      {
+        "template": "frame",
+        "style": "settings",
+        "w_frac": 1,
+        "h_frac": 1,
+        "slots": {
+          "center": [
+            {
+              "template": "multi_view",
+              "slots": {
+                "panes": [
+                  {
+                    "template": "ui_panel",
+                    "id": "menu",
+                    "tab_group": 0,
+                    "title": "$menu_prism",
+                    "slots": {
+                      "content": [
+                        {
+                          "component": "stack",
+                          "gap": 12,
+                          "children": [
+                            { "component": "button", "action": "mode_adventurer", "label": "$menu_explore_world", "size": 46, "style": "modal.buttons.variants.primary" },
+                            { "component": "button", "action": "mode_dm", "label": "$menu_build_world", "size": 46, "style": "modal.buttons.variants.primary" },
+                            { "component": "button", "action": "mode_gamemaster", "label": "$menu_game_master", "size": 46, "style": "modal.buttons.variants.primary" },
+                            { "component": "button", "action": "mode_developer", "label": "$menu_developer_mode", "size": 46, "style": "modal.buttons.variants.secondary" },
+                            { "component": "cell", "grow": 1.0 },
+                            { "component": "button", "action": "settings", "label": "$menu_settings", "size": 46, "style": "modal.buttons.variants.secondary" },
+                            { "component": "button", "action": "quit", "label": "$menu_quit", "size": 46, "style": "modal.buttons.variants.danger" }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "template": "ui_panel",
+                    "id": "selector",
+                    "tab_group": 1,
+                    "slots": {
+                      "content": [
+                        {
+                          "template": "paged_menu",
+                          "hide_pages": true,
+                          "hide_tabs": true,
+                          "slots": {
+                            "content": [
+                              { "component": "cell", "id": "scene_list", "grow": 1.0 }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

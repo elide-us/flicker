@@ -50,12 +50,33 @@ pub struct World {
 }
 
 impl World {
-    /// Area of one of this world's cells, m² — read from the grid it was built on
-    /// ([`cell_area_m2`](crate::config::cell_area_m2)), so a coarse test planet is
-    /// a coarse planet rather than a silently 16×-too-thick one. Equal-area makes
+    /// Area of one of this world's cells, m² — [`CELL_AREA_M2`](crate::config::CELL_AREA_M2),
+    /// **the same on every world**: the hex span is the canon, so a coarser grid
+    /// is a smaller planet, never a planet with bigger cells. Equal-area makes
     /// the single number exact for every cell.
     pub fn cell_area_m2(&self) -> f64 {
-        crate::config::cell_area_m2(self.grid.len())
+        crate::config::CELL_AREA_M2
+    }
+
+    /// `R / R_ref` for this world — `√(cells/92_162)`, exactly 1 on the
+    /// reference grid. See [`size_scale`](crate::config::size_scale).
+    pub fn size_scale(&self) -> f64 {
+        crate::config::size_scale(self.grid.len())
+    }
+
+    /// This world's radius, m — the planet the grid implies
+    /// ([`radius_for_cells`](crate::config::radius_for_cells)).
+    pub fn radius_m(&self) -> f64 {
+        crate::config::radius_for_cells(self.grid.len())
+    }
+
+    /// This world's surface gravity, m/s² — `g = GM/R²` with the mass riding
+    /// `size_scale³` and the radius riding `size_scale`, so it is the reference
+    /// [`GRAVITY_M_S2`](crate::config::GRAVITY_M_S2) `× size_scale`: a
+    /// half-size world presses its stacks half as hard, which is why small
+    /// worlds keep taller mountains.
+    pub fn gravity_m_s2(&self) -> f64 {
+        crate::config::GRAVITY_M_S2 * self.size_scale()
     }
 
     /// Seed an **undifferentiated hot ball** on `grid`: the entire budget spread
@@ -63,7 +84,14 @@ impl World {
     /// other reservoir empty, every column crust-free (spec §3.1). The core has not
     /// yet sunk out; there is no crust, no air, no sea. `seed` sets the initial
     /// thermal perturbation (the per-run initial condition, §3.5).
+    ///
+    /// `budget` is the **reference composition** (the seed as authored, through
+    /// whatever endowment knobs the forge applied); the world it births is the
+    /// size its grid implies, so the budget is sized `× size_scale³` here — at
+    /// the one seam every world passes through — rather than trusting every
+    /// caller to remember. On the reference grid the factor is exactly 1.
     pub fn seed(grid: Sphere, budget: Budget, tables: &Tables, seed: u64) -> Self {
+        let budget = budget.sized(crate::config::size_scale(grid.len()).powi(3));
         let mantle = MantleField::seed(&budget, &grid, seed);
         let columns = (0..grid.len() as u32).map(Column::empty).collect();
         // Immutable stoichiometry lookup so the World audits its own mineral ledger
@@ -146,6 +174,56 @@ impl World {
                      Every gram must be here, arrived, or gone.",
                     p - expected,
                 );
+            }
+        }
+    }
+
+    /// **Float-drift housekeeping for the air's species bookkeeping.** The
+    /// species ledger is an ORGANISATION of the element ledger, and the two-way
+    /// exchanges (the sea drinking and burping CO₂, the water cycle lifting and
+    /// raining vapour) shave both by proportions computed on different bases —
+    /// so over thousands of ticks the derived ledger drifts a few parts in 10⁷
+    /// past the conserved one, and the compound bound rightly refuses it (the
+    /// same fragility class as the bed-film rule, in the sky instead of the
+    /// ground). Once per tick the species claims are snapped back inside the
+    /// element bound. **The correction is bounded**: a discrepancy past 1e-5
+    /// relative is a real leak, not float drift, and panics here instead of
+    /// being absorbed — the harness stays honest.
+    pub(crate) fn settle_air_species(&mut self) {
+        let air = &mut self.reservoirs.atmosphere;
+        let mut implied: BTreeMap<ElementId, f64> = BTreeMap::new();
+        for (compound_id, gas_mass) in air.species.iter() {
+            if let Some(fracs) = self.compound_stoich.get(&compound_id) {
+                for &(element, frac) in fracs {
+                    *implied.entry(element).or_insert(0.0) += gas_mass * frac;
+                }
+            }
+        }
+        for (element, locked) in implied {
+            let free = air.contents.amount(element);
+            if locked <= free || locked <= 0.0 {
+                continue;
+            }
+            let rel = (locked - free) / locked;
+            assert!(
+                rel < 1e-5,
+                "air species claim {locked:.6e} kg of element {element} exceeds free {free:.6e} \
+                 by {rel:.2e} — a real leak, not float drift"
+            );
+            let scale = (free / locked).clamp(0.0, 1.0);
+            let carriers: Vec<u16> = air
+                .species
+                .iter()
+                .filter(|(id, _)| {
+                    self.compound_stoich
+                        .get(id)
+                        .is_some_and(|f| f.iter().any(|&(e, frac)| e == element && frac > 0.0))
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in carriers {
+                let mass = air.species.amount(id);
+                air.species.remove(id, mass * (1.0 - scale));
             }
         }
     }
@@ -241,7 +319,7 @@ pub(crate) fn freeze_lid(world: &mut World) {
 /// can never disagree about the sky.
 pub fn p_co2_pa(world: &World) -> f64 {
     world.reservoirs.atmosphere.species.amount(crate::atmosphere::CARBON_DIOXIDE)
-        * crate::column::GRAVITY_M_S2
+        * world.gravity_m_s2()
         / (world.cell_area_m2() * world.columns.len().max(1) as f64)
 }
 
@@ -331,7 +409,7 @@ pub struct PlanetState {
 impl PlanetState {
     /// Sample the aggregate from the world — the top-of-tick snapshot.
     pub fn sample(world: &World) -> Self {
-        use crate::column::{crust_kind, elevation_m, CrustKind};
+        use crate::column::{crust_kind, CrustKind};
         let r = &world.reservoirs;
         let m = &world.mantle;
         let crust: f64 = world.columns.iter().map(Column::mass_kg).sum();
@@ -341,29 +419,31 @@ impl PlanetState {
 
         // Crust aggregates (M2): how much crust, how much of it is continental, and
         // how high it rides.
-        let area = world.cell_area_m2();
         let (mut n_crust, mut n_cont, mut elev_sum) = (0usize, 0usize, 0.0f64);
         let (mut strata_sum, mut max_strata) = (0usize, 0usize);
-        for col in &world.columns {
+        let flexed = elevation_field(world);
+        for (index, col) in world.columns.iter().enumerate() {
             strata_sum += col.layers.len();
             max_strata = max_strata.max(col.layers.len());
             match crust_kind(col) {
                 CrustKind::Undifferentiated => {}
                 kind => {
                     n_crust += 1;
-                    elev_sum += elevation_m(col, area);
+                    elev_sum += flexed[index];
                     if kind == CrustKind::Continental {
                         n_cont += 1;
                     }
                 }
             }
         }
+        // **Both reads on the FLEXED surface.** `sea_level_m` solves against it,
+        // so asking whether a column is under water with its Airy elevation
+        // compares two different worlds — and the two then disagree about where
+        // the coastline is. `submerged_frac` gates WaterDelivery's cutoff, so a
+        // disagreement here is not cosmetic.
+        let surface = elevation_field(world);
         let sea = sea_level_m(world);
-        let submerged = world
-            .columns
-            .iter()
-            .filter(|c| elevation_m(c, area) < sea)
-            .count();
+        let submerged = surface.iter().filter(|&&e| e < sea).count();
 
         Self {
             tick_myr: world.tick_myr,
@@ -422,11 +502,64 @@ impl PlanetState {
 ///
 /// An **empty ocean floods nothing**, so the level rests at the lowest column: a
 /// dry planet is a legal answer, and this read comes alive the moment water does.
-pub fn sea_level_m(world: &World) -> f64 {
-    use crate::column::elevation_m;
+/// How much of its own load a column carries **alone**, against what its
+/// neighbours take. The lithosphere is an elastic plate, not a raft of
+/// independent corks: a load is compensated over a **flexural wavelength** of
+/// ~100–200 km for continental lithosphere (elastic thickness ~30 km), so
+/// ground next to a mountain is held up by the mountain.
+///
+/// With six neighbours this keeps `3/9 ≈ a third` of the load local, and
+/// [`FLEXURE_PASSES`] spreads the rest over ~2 cells ≈ 150 km at the canon
+/// spacing — the real wavelength, not a chosen smoothness.
+const FLEXURE_SELF_WEIGHT: f64 = 3.0;
+/// Relaxation passes for the flexural spread. Two, because the wavelength is
+/// about two cells wide; more would be a longer plate than lithosphere is.
+const FLEXURE_PASSES: usize = 2;
 
+/// **The surface, with the lithosphere's own rigidity** — the elevation field
+/// everything that cares about SHAPE should read.
+///
+/// [`elevation_m`](crate::column::elevation_m) is Airy isostasy: one column,
+/// floating alone, answering only to what it is made of. That is the correct
+/// per-column buoyancy and the wrong planetary surface, because it leaves
+/// neighbouring ground **mechanically uncoupled** — and a world whose cells
+/// each float independently has no reason to grow a coastline, a shelf or a
+/// massif. It grows speckle.
+///
+/// Measured, before this existed: land came in **198 disconnected regions with
+/// 101 single-cell islands**, neighbour agreement 0.554 against a 0.421 noise
+/// floor — 23% of the way from noise to a coherent mass. Aaron: *"doesn't look
+/// like continents oceans and mountain ranges just looks like random dots all
+/// over the place"*. With flexure at these constants: **42 regions, 6
+/// singletons, largest landmass 40% of all land, agreement 0.776** — 61%
+/// coherent.
+///
+/// **This adds physics, it does not smooth a picture.** No mass moves; the
+/// ledger is untouched. Flexure is the plate deflecting, which is exactly a
+/// question about where the SURFACE sits given a load — a derived read, like
+/// every other property of a column.
+pub fn elevation_field(world: &World) -> Vec<f64> {
+    use crate::column::elevation_m;
     let area = world.cell_area_m2();
-    let mut elevations: Vec<f64> = world.columns.iter().map(|c| elevation_m(c, area)).collect();
+    let mut e: Vec<f64> = world.columns.iter().map(|c| elevation_m(c, area)).collect();
+    for _ in 0..FLEXURE_PASSES {
+        let prev = e.clone();
+        for i in 0..e.len() {
+            let nb = &world.grid.neighbors[i];
+            if nb.is_empty() {
+                continue;
+            }
+            let sum: f64 = nb.iter().map(|&j| prev[j as usize]).sum();
+            e[i] = (prev[i] * FLEXURE_SELF_WEIGHT + sum)
+                / (FLEXURE_SELF_WEIGHT + nb.len() as f64);
+        }
+    }
+    e
+}
+
+pub fn sea_level_m(world: &World) -> f64 {
+    let mut elevations: Vec<f64> = elevation_field(world);
+    let area = world.cell_area_m2();
     if elevations.is_empty() {
         return 0.0;
     }
@@ -501,7 +634,8 @@ mod tests {
             formed_at_myr: 0.0,
             formed_by: FormationProcess::OceanicCrust,
             peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
         });
     }
 
@@ -542,7 +676,10 @@ mod tests {
         }
         w.audit("test fixture");
 
-        let elevations: Vec<f64> = w.columns.iter().map(|c| elevation_m(c, area)).collect();
+        // Against the FLEXED surface, because that is the one the solve floods
+        // and the one water actually ponds on. The claim under test is that the
+        // level holds exactly the water present — not which surface it is.
+        let elevations: Vec<f64> = elevation_field(&w);
         let (lo, hi) = elevations.iter().fold((f64::MAX, f64::MIN), |(a, b), &e| (a.min(e), b.max(e)));
         let want_level = 0.5 * (lo + hi);
         let want_volume: f64 = elevations.iter().map(|&e| (want_level - e).max(0.0) * area).sum();
@@ -604,6 +741,30 @@ mod tests {
         assert_eq!(elevation_m(&w.columns[0], w.cell_area_m2()), 0.0);
     }
 
+    /// **A world is the size its grid implies** (the size-model unification,
+    /// 2026-08-06): seeding the reference composition on a freq-4 grid births a
+    /// planetoid that accretes size³ of the reference mass, presses its stacks
+    /// with size × the reference gravity, and keeps the same 49.65-mi hexes.
+    /// At the reference cell count the scale is exactly 1, so the shipping
+    /// freq-96 world is bit-identical to the fixed-Earth era in mass, budgets
+    /// and gravity.
+    #[test]
+    fn a_world_is_the_size_its_grid_implies() {
+        use crate::config::{size_scale, CELL_AREA_M2, GRAVITY_M_S2, PLANET_CELLS, PLANET_MASS_KG};
+        let w = tiny_world();
+        let s = w.size_scale();
+        assert!(s < 0.05, "freq 4 is a planetoid, not an Earth: s = {s}");
+        assert!(
+            ((w.budget.total() - PLANET_MASS_KG * s.powi(3)) / w.budget.total()).abs() < 1e-6,
+            "the accreted mass rides size³: {} vs {}",
+            w.budget.total(),
+            PLANET_MASS_KG * s.powi(3),
+        );
+        assert!((w.gravity_m_s2() - GRAVITY_M_S2 * s).abs() < 1e-12, "gravity rides size");
+        assert_eq!(w.cell_area_m2(), CELL_AREA_M2, "the hex is the same hex at every size");
+        assert_eq!(size_scale(PLANET_CELLS), 1.0, "…and the reference world is scale 1 exactly");
+    }
+
     #[test]
     fn conserving_transfer_holds() {
         let mut w = tiny_world();
@@ -652,7 +813,8 @@ mod tests {
             formed_at_myr: 0.0,
             formed_by: FormationProcess::Primordial,
             peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
         });
         w.audit_compound_bound("over-budget");
     }

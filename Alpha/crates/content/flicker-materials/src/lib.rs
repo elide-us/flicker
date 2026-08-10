@@ -28,7 +28,7 @@ pub mod material;
 pub mod source;
 pub mod tables;
 
-pub use compound::{CompoundDef, CompoundElement};
+pub use compound::{CompoundDef, CompoundElement, MetamorphicRule};
 pub use element::{Element, ElementId, PhysicalState};
 pub use material::{MaterialDef, MaterialId};
 pub use rock::RockDef;

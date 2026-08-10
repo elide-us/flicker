@@ -61,23 +61,24 @@ pub use column::{
     MANTLE_DENSITY, SUBDUCTABLE_DENSITY,
 };
 pub use crust::{
-    CrustDensification, CrustGeneration, Crystallization, Delamination, StrataReconcile,
+    CrustGeneration, Crystallization, Delamination, Eclogitisation, Metamorphism,
+    StrataReconcile, ThermalSubsidence,
     Volcanism,
-    DEFAULT_ERUPTION_RATE, STRATA_SOFT_CAP,
+    DEFAULT_ERUPTION_RATE, ECLOGITE_DEPTH_M, STRATA_SOFT_CAP,
 };
 pub use tectonics::{audit_occupancy, cell_spacing, Conveyor};
-pub use surface::{bed_resistance, greenhouse_k, Erosion, Weather, WeatherField};
+pub use surface::{bed_resistance, greenhouse_k, Erosion, MassWasting, Weather, WeatherField};
 pub use infall::{LateVeneer, WaterDelivery};
-pub use hydrothermal::{enrichment, is_playable, prospect, Hydrothermal, Prospect};
+pub use hydrothermal::{enrichment, is_playable, ore_metals, prospect, Hydrothermal, Prospect};
 pub use config::{
-    cell_area_m2, content_data_dir, NOMINAL_DT_MYR, PLANET_CELLS, PLANET_FREQ, PLANET_MASS_KG,
-    PLANET_RADIUS_M,
+    content_data_dir, radius_for_cells, radius_for_freq, size_scale, CELL_AREA_M2, NOMINAL_DT_MYR,
+    PLANET_CELLS, PLANET_FREQ, PLANET_MASS_KG, TILE_SPAN_M,
 };
 pub use interior::{radiogenic_power_w, CoreFormation, MantleConvection, RadiogenicDecay};
 pub use mantle::{MantleField, MAGMA_OCEAN_K};
 pub use observer::{PlateEvent, PlateId, PlateObservation, PlateObserver, PlateRecord, Seam};
 pub use habitability::{observe as observe_habitability, Habitability};
-pub use planet::{p_co2_pa, sea_level_m, PlanetState, World};
+pub use planet::{elevation_field, p_co2_pa, sea_level_m, PlanetState, World};
 pub use process_file::{load_processes, Gate, Gated, ProcessDef};
 pub use scheduler::ProcessState;
 pub use reservoir::{Ocean, Reservoirs};
@@ -94,9 +95,11 @@ pub fn interior_stages() -> Vec<Box<dyn Stage>> {
     ]
 }
 
-/// Mass of the late veneer, kg — a few parts in ten thousand of the planet, which
-/// is the scale of Earth's own. Tiny, and the difference between a world with
-/// accessible gold and one without.
+/// Mass of the late veneer, kg **at reference (freq-96) scale** — a few parts in
+/// ten thousand of the planet, which is the scale of Earth's own. Tiny, and the
+/// difference between a world with accessible gold and one without. Like every
+/// mass budget it rides `size_scale³` ([`Levers::sized`]), so it stays the same
+/// few parts in ten thousand on a planet of any size.
 pub const DEFAULT_VENEER_KG: f64 = 2.0e21;
 
 /// **What the maintainer may set about a forming world.**
@@ -111,7 +114,11 @@ pub const DEFAULT_VENEER_KG: f64 = 2.0e21;
 /// could paint a continent would make every observation of the world afterwards
 /// unfalsifiable. Every field below is a parameter of a transformation.
 ///
-/// The multipliers are `1.0` for "as the physics has it"; the budgets are absolute.
+/// The multipliers are `1.0` for "as the physics has it". The three kg levers —
+/// the two **budgets** and the decomposer-niche **threshold** — are stated at
+/// reference (freq-96) scale: a dial position is a composition-like statement,
+/// the same at any planet size, and [`formation_stages`] sizes them
+/// `× size_scale³` to the world actually being run ([`Levers::sized`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Levers {
     // ── The three inputs at the boundary ──
@@ -193,6 +200,34 @@ impl Default for Levers {
 }
 
 impl Levers {
+    /// The levers as one particular world feels them: the three kg levers —
+    /// the two budgets AND the decomposer-niche threshold — are **composition
+    /// statements at reference scale**, so a smaller planet receives (and
+    /// requires) proportionally less — `× size_scale³`, the same law the
+    /// accretion budget rides (the R³ ruling, 2026-08-06). Rates, multipliers
+    /// and fractions are size-free and pass through untouched. At the reference
+    /// grid the factor is exactly 1, so the freq-96 world is bit-identical.
+    ///
+    /// **An extensive ledger may only be measured against a sized threshold**
+    /// (rule C7A30D8F): the niche dial gates on `lignin_buried`, a sum over
+    /// every column on the planet, so an unsized reference value would make the
+    /// guild's arrival 8× harder on a freq-48 world for no reason but grid
+    /// choice — the exact misread the habitability observer had.
+    ///
+    /// [`formation_stages`] applies this at the one seam where levers meet a
+    /// world — both the stages' budgets and the gate copies see sized values,
+    /// so a gate comparing `lever:water_budget_kg` against the sized
+    /// `delivered_water_kg` measures in one frame.
+    pub fn sized(&self, size_scale: f64) -> Self {
+        let s3 = size_scale.powi(3);
+        Self {
+            water_budget_kg: self.water_budget_kg * s3,
+            veneer_budget_kg: self.veneer_budget_kg * s3,
+            decomposer_niche_kg: self.decomposer_niche_kg * s3,
+            ..*self
+        }
+    }
+
     /// The **mechanism-test speeds** — the pre-recalibration rate constants
     /// (retired 2026-08-06 when the defaults moved to geologic e-folds), kept so
     /// a test that probes a *mechanism* finishes in tens of ticks instead of
@@ -244,20 +279,27 @@ impl Levers {
 /// happens to the denser of two stacks that want the same ground.
 pub fn formation_stages(
     tables: std::sync::Arc<flicker_materials::Tables>,
-    budget: &Budget,
+    world: &planet::World,
     levers: &Levers,
 ) -> Vec<Box<dyn Stage>> {
+    // The one seam where levers meet a world: size the kg budgets to it
+    // ([`Levers::sized`]), so the stages' budgets, the gate copies and the
+    // world's own sized ledgers all measure in one frame. Taking `&World`
+    // rather than a budget makes the sizing impossible to forget at any call
+    // site — and the veneer's cargo proportions read the world's own (sized)
+    // budget, which is the same composition either way.
+    let levers = levers.sized(world.size_scale());
     let defs = process_file::load_processes(&config::content_data_dir());
     defs.into_iter()
         .map(|def| {
-            let stage = build_stage(&def.runs, &tables, budget, levers).unwrap_or_else(|| {
+            let stage = build_stage(&def.runs, &tables, &world.budget, &levers).unwrap_or_else(|| {
                 panic!(
                     "processes.json runs '{}', but no such transformation is registered — \
                      new physics is written in Rust first, then named in the file",
                     def.runs
                 )
             });
-            Box::new(process_file::Gated::new(stage, def.gate, *levers)) as Box<dyn Stage>
+            Box::new(process_file::Gated::new(stage, def.gate, levers)) as Box<dyn Stage>
         })
         .collect()
 }
@@ -277,7 +319,8 @@ fn build_stage(
         "MantleConvection" => Box::new(MantleConvection),
         "Outgassing" => Box::new(Outgassing::new(tables, levers.outgas_rate)),
         "CrustGeneration" => Box::new(CrustGeneration { rate: levers.crust_gen_rate }),
-        "CrustDensification" => Box::new(CrustDensification),
+        "ThermalSubsidence" => Box::new(ThermalSubsidence),
+        "Eclogitisation" => Box::new(Eclogitisation),
         "Delamination" => Box::new(Delamination),
         "Volcanism" => Box::new(Volcanism::new(tables, levers.eruption_rate)),
         "WaterDelivery" => Box::new({
@@ -303,7 +346,9 @@ fn build_stage(
             levers.erosion_rate,
             levers.stellar_heat,
         )),
+        "MassWasting" => Box::new(MassWasting),
         "Crystallization" => Box::new(Crystallization::new(std::sync::Arc::clone(tables))),
+        "Metamorphism" => Box::new(Metamorphism::new(tables)),
         "StrataReconcile" => Box::new(StrataReconcile),
         _ => return None,
     })

@@ -89,20 +89,42 @@ pub struct Hydrothermal {
     pub leach_rate: f64,
 }
 
+/// **The metals a hydrothermal fluid can move** — the elements ore is
+/// *extracted for*, kept to those the periodic table calls transition metals.
+/// Read from the catalog and nowhere typed in: a catalog that adds a metal ore
+/// adds it to the fluid; one that adds a salt does not.
+///
+/// **The one definition.** The ore view in God Mode needs exactly this set to
+/// decide what to look for, and had its own byte-for-byte copy of the filter —
+/// two statements of one rule, free to drift the moment either was edited.
+///
+/// ⚠️ Known gap (2026-08-06): the periodic table carries only three categories
+/// (transition_metal / nonmetal_metalloid / alkali_metal), so **tin and lead —
+/// real ore metals — are lumped in with silicon and aluminium and excluded**.
+/// Widening the filter is not the fix: a first cut took every element in any
+/// harvestable mineral, swept in the framework the rock is built out of, and
+/// measured enrichment stayed at 3× however hard the funnel was driven — a
+/// fluid that carries everything separates nothing. Expressing "ore metal"
+/// properly needs a finer category on the element table, which is a content
+/// ruling, not a code change.
+pub fn ore_metals(tables: &Tables) -> Vec<ElementId> {
+    let mut mobile: Vec<ElementId> = tables
+        .compounds()
+        .iter()
+        .filter(|c| c.harvestable)
+        .filter_map(|c| c.extracted_element.as_deref())
+        .filter_map(|sym| tables.element(sym))
+        .filter(|e| e.category == "transition_metal")
+        .map(|e| e.number)
+        .collect();
+    mobile.sort_unstable();
+    mobile.dedup();
+    mobile
+}
+
 impl Hydrothermal {
     pub fn new(tables: &Tables, leach_rate: f64) -> Self {
-        let mut mobile: Vec<ElementId> = tables
-            .compounds()
-            .iter()
-            .filter(|c| c.harvestable)
-            .filter_map(|c| c.extracted_element.as_deref())
-            .filter_map(|sym| tables.element(sym))
-            .filter(|e| e.category == "transition_metal")
-            .map(|e| e.number)
-            .collect();
-        mobile.sort_unstable();
-        mobile.dedup();
-        Self { mobile, leach_rate }
+        Self { mobile: ore_metals(tables), leach_rate }
     }
 }
 
@@ -311,34 +333,52 @@ pub fn prospect(world: &World, tables: &Tables, workable: f64, reach_m: f64) -> 
     wanted.sort_unstable();
     wanted.dedup();
 
+    // How deep a bed sits: everything stacked on top of it.
+    let depth_of = |cell: usize, bed: Option<usize>| -> f64 {
+        bed.map_or(f64::MAX, |i| {
+            world.columns[cell]
+                .layers
+                .iter()
+                .skip(i + 1)
+                .map(|l| crate::column::thickness_m(l, area))
+                .sum()
+        })
+    };
+
     wanted
         .into_iter()
         .map(|element| {
-            let (mut best, mut best_cell, mut best_bed, mut workable_cells) =
-                (0.0f64, 0usize, None, 0usize);
+            // **The richest node a digger could actually GET TO.** `reach_m`
+            // used to be accepted and discarded, so the best seam on the planet
+            // was reported however deep it lay — and a world holding a fabulous
+            // orebody twenty kilometres down read as rich, then failed the
+            // depth check, while a modest reachable seam beside it went unseen.
+            // A classifier that asks "is there an accessible node" has to score
+            // reachable ground; the deepest one is not the answer to that.
+            let (mut best, mut best_cell, mut best_depth, mut workable_cells) =
+                (0.0f64, 0usize, f64::MAX, 0usize);
             for cell in 0..world.columns.len() {
                 let (e, bed) = enrichment(world, cell, element);
+                let depth = depth_of(cell, bed);
+                if depth > reach_m {
+                    continue;
+                }
                 if e >= workable {
                     workable_cells += 1;
                 }
                 if e > best {
                     best = e;
                     best_cell = cell;
-                    best_bed = bed;
+                    best_depth = depth;
                 }
             }
-            // How deep that bed sits: everything stacked on top of it. This is the
-            // question of whether anyone could reach it.
-            let col = &world.columns[best_cell];
-            let depth_m = best_bed.map_or(f64::MAX, |i| {
-                col.layers
-                    .iter()
-                    .skip(i + 1)
-                    .map(|l| crate::column::thickness_m(l, area))
-                    .sum()
-            });
-            let _ = reach_m;
-            Prospect { element, best_enrichment: best, best_cell, depth_m, workable_cells }
+            Prospect {
+                element,
+                best_enrichment: best,
+                best_cell,
+                depth_m: if best > 0.0 { best_depth } else { f64::MAX },
+                workable_cells,
+            }
         })
         .collect()
 }
@@ -368,7 +408,7 @@ mod tests {
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables"));
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w.budget.clone(), &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
@@ -422,7 +462,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::Hydrothermal,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
         }
         let (best, bed) = enrichment(&w, cell, gold);

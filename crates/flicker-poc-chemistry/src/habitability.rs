@@ -101,8 +101,13 @@ const SURFACE_SPAN_K: f64 = 300.0;
 /// Observe a [`World`]: read each condition axis off the state the pipeline has
 /// produced. Pure — it mutates nothing and encodes no causal rule. `levers`
 /// supplies the two boundary references the axes are read against (stellar
-/// heat for the surface ramp, the water budget as the hydrosphere endowment).
+/// heat for the surface ramp, the water budget as the hydrosphere endowment) —
+/// **at reference scale**, like every lever: the observer sizes them to this
+/// world itself ([`Levers::sized`]), so the hydrosphere axis compares the sized
+/// ocean against the sized endowment rather than under-reading every world
+/// smaller than the reference by its size³.
 pub fn observe(world: &World, levers: &Levers) -> Habitability {
+    let levers = &levers.sized(world.size_scale());
     let n = world.mantle.n_cells().max(1) as f64;
 
     // Interior — the cooling clock, normalised magma-ocean → cold.
@@ -238,8 +243,11 @@ mod tests {
         // 1000 K mantle and the temperate world is a lava world.
         crate::planet::freeze_lid(&mut w);
 
-        // A sea holding half the endowment.
-        let sea = levers.water_budget_kg * 0.5;
+        // A sea holding half the endowment — THIS world's endowment, which on a
+        // freq-4 planetoid is size³ of the reference lever. An unsized sea here
+        // is an Earth ocean dumped on a 270-km world, and it drowns the
+        // atmosphere axis's denominator.
+        let sea = levers.sized(w.size_scale()).water_budget_kg * 0.5;
         w.reservoirs.ocean.contents.add(1, sea / 9.0);
         w.reservoirs.ocean.contents.add(8, sea * 8.0 / 9.0);
 
@@ -257,7 +265,7 @@ mod tests {
         w.reservoirs.atmosphere.species.add(NITROGEN, 5.0e17);
         // A trace-CO₂ sky: the booked species mass sets pCO₂ ≈ Earth's ~40 Pa.
         let area = w.cell_area_m2() * w.columns.len() as f64;
-        let trace = 40.0 * area / crate::column::GRAVITY_M_S2;
+        let trace = 40.0 * area / w.gravity_m_s2();
         w.reservoirs.atmosphere.species.add(CARBON_DIOXIDE, trace);
 
         let h = observe(&w, &levers);

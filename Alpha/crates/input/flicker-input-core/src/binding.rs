@@ -195,6 +195,22 @@ impl InputMap {
             .unwrap_or(&[])
     }
 
+    /// Adopt `defaults`' bindings for every signal THIS map leaves wholly
+    /// unbound. The profile-migration half of the dead-hardware law: a
+    /// persisted map freezes the defaults at save time, so a signal whose
+    /// default binding was added in a LATER build resolves to nothing forever
+    /// for anyone with a settings file. Signals the user has bound (or rebound)
+    /// are untouched — only silence gains a default.
+    pub fn backfill_unbound_from(&mut self, defaults: &InputMap) {
+        for &signal in ActionSignal::ALL {
+            if self.bindings_for(signal).is_empty() {
+                for &binding in defaults.bindings_for(signal) {
+                    self.bind(signal, binding);
+                }
+            }
+        }
+    }
+
     /// The signal bound to a physical input, if any.
     pub fn action_for(&self, input: InputBinding) -> Option<ActionSignal> {
         self.input_to_action.get(&input).copied()
@@ -268,7 +284,108 @@ impl InputMap {
         map.bind(ActionSignal::Crouch, InputBinding::Key(Key::C));
         map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
         map.bind(ActionSignal::Reload, InputBinding::Key(Key::X));
+        // The bench surfaces run in the World context, and their page/tab rails
+        // are chrome, not modal-menu state — so the rail signals must resolve
+        // HERE. (They once lived only in the Menu context's map, which no bench
+        // ever pushes: every rail was declared, dispatched, and unreachable.)
+        map.bind_menu_rails();
+        map.bind_bench_nav();
         map
+    }
+
+    /// The bench-nav tier of the three-tier focus model (controller is the
+    /// floor: stick = panels, d-pad = selection within one, A/B = Confirm /
+    /// Cancel), bound in the WORLD preset because benches run there — a
+    /// declared `on_panel_*` / `on_confirm` with no World binding is dead
+    /// hardware, exactly the trap the rails fell into. A stick FLICK past the
+    /// deadzone is one panel step (the resolver edges each binding), so the
+    /// left stick walks the focus cursor between panes; d-pad and arrows move
+    /// the selection inside one. A screen that declares none of these leaves
+    /// every event to the walker's own nav defaults, so gameplay maps are
+    /// unaffected. Keyboard Confirm rides Enter (Space stays Jump here — the
+    /// Menu context map makes its own choices); pointer users need no Cancel
+    /// key, since for KBM the pane context is implied by the cursor.
+    pub(crate) fn bind_bench_nav(&mut self) {
+        use crate::device::GamepadButton;
+        self.bind(
+            ActionSignal::PanelPrev,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Negative },
+        );
+        self.bind(
+            ActionSignal::PanelNext,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Positive },
+        );
+        self.bind(ActionSignal::NavUp, InputBinding::Key(Key::Up));
+        self.bind(ActionSignal::NavDown, InputBinding::Key(Key::Down));
+        self.bind(ActionSignal::NavLeft, InputBinding::Key(Key::Left));
+        self.bind(ActionSignal::NavRight, InputBinding::Key(Key::Right));
+        self.bind(ActionSignal::NavUp, InputBinding::GamepadButton(GamepadButton::DPadUp));
+        self.bind(ActionSignal::NavDown, InputBinding::GamepadButton(GamepadButton::DPadDown));
+        self.bind(ActionSignal::NavLeft, InputBinding::GamepadButton(GamepadButton::DPadLeft));
+        self.bind(ActionSignal::NavRight, InputBinding::GamepadButton(GamepadButton::DPadRight));
+        self.bind(ActionSignal::Confirm, InputBinding::Key(Key::Enter));
+        self.bind(ActionSignal::Confirm, InputBinding::GamepadButton(GamepadButton::South));
+        self.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
+        // The stick's other axis: up draws the entered viewport's camera in,
+        // down backs it away (Positive = forward/up, the same convention the
+        // gamepad preset's MoveForward uses). The wheel stays the pointer's
+        // zoom, outside the signal map.
+        self.bind(
+            ActionSignal::ZoomIn,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+        );
+        self.bind(
+            ActionSignal::ZoomOut,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+        );
+        // The RIGHT stick looks around — the other half of the three-tier floor,
+        // and dead hardware on every bench until this binding existed: a scene
+        // that wanted an orbit had to reach past the map for `gamepad(0)`
+        // directly, which is exactly the reach this map is here to remove. The
+        // signal carries the DIRECTION, so each of the four names its own half
+        // of an axis and a reader takes the difference.
+        self.bind(
+            ActionSignal::LookRight,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Positive },
+        );
+        self.bind(
+            ActionSignal::LookLeft,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Negative },
+        );
+        self.bind(
+            ActionSignal::LookUp,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Positive },
+        );
+        self.bind(
+            ActionSignal::LookDown,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Negative },
+        );
+        // The chord modifier (Y / North — Aaron's ergonomic ruling: A/B are
+        // Confirm/Cancel, so Y opens the chord). Bound PLAIN here, not as a
+        // suppressing `modifier`: a bench holds it to scale a step (chord +
+        // d-pad = ±10), read via `signal_held` beside the step's own edge. A
+        // bench that grows real chord VERBS graduates to the ChordLayer.
+        self.bind(ActionSignal::ChordBegin, InputBinding::GamepadButton(GamepadButton::North));
+    }
+
+    /// The two menu-rail scales, on both devices — ONE definition, shared by the
+    /// `World` preset above (bench chrome) and the `Menu` context map (modal
+    /// menus), so the two cannot drift (spec §7.1: no hand-duplicated binding
+    /// lists). The BUMPERS cycle a section tab and the TRIGGERS cycle the whole
+    /// page — the same two scales the `paged_menu` surface draws as its LB/RB
+    /// and LT/RT rails. The keyboard equivalents keep that shape: the adjacent
+    /// `,`/`.` pair for the inner rail, the outer `[`/`]` pair for the outer
+    /// one, so the reach matches the scale of the move.
+    pub(crate) fn bind_menu_rails(&mut self) {
+        use crate::device::GamepadButton;
+        self.bind(ActionSignal::TabPrev, InputBinding::Key(Key::Comma));
+        self.bind(ActionSignal::TabNext, InputBinding::Key(Key::Period));
+        self.bind(ActionSignal::TabPrev, InputBinding::GamepadButton(GamepadButton::LeftBumper));
+        self.bind(ActionSignal::TabNext, InputBinding::GamepadButton(GamepadButton::RightBumper));
+        self.bind(ActionSignal::PagePrev, InputBinding::Key(Key::LeftBracket));
+        self.bind(ActionSignal::PageNext, InputBinding::Key(Key::RightBracket));
+        self.bind(ActionSignal::PagePrev, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+        self.bind(ActionSignal::PageNext, InputBinding::GamepadButton(GamepadButton::RightTrigger));
     }
 
     /// ESDF keyboard layout. Same idea as WASD but shifted right.

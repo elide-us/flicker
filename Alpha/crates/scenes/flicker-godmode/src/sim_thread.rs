@@ -21,7 +21,7 @@ use flicker_materials::{JsonTableSource, Tables};
 use flicker_worldgrid::icosphere_with_outlines;
 
 use flicker_poc_chemistry::{
-    biosphere, content_data_dir, crust_kind, elevation_m, enrichment, formation_stages,
+    biosphere, content_data_dir, crust_kind, enrichment, formation_stages,
     observe_habitability,
     Budget, CrustKind, Habitability, Levers, PlanetState, PlateEvent, PlateObservation,
     PlateObserver, ProcessState, Scheduler, World, NOMINAL_DT_MYR, PLANET_FREQ,
@@ -503,17 +503,10 @@ fn sim_main(
     // Shared with the stages that read the catalog (crystallization asks what a
     // mineral is made of; erosion asks how well the resulting rock lasts).
     let tables = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("material tables"));
-    let _ = ORE_METALS.set(
-        tables
-            .compounds()
-            .iter()
-            .filter(|c| c.harvestable)
-            .filter_map(|c| c.extracted_element.as_deref())
-            .filter_map(|sym| tables.element(sym))
-            .filter(|e| e.category == "transition_metal")
-            .map(|e| e.number)
-            .collect(),
-    );
+    // The SAME set the fluid actually carries — asked of the sim crate rather
+    // than re-derived here, so the view cannot come to look for a metal the
+    // chemistry never moves (this was a byte-for-byte copy of the filter).
+    let _ = ORE_METALS.set(flicker_poc_chemistry::ore_metals(&tables));
     // The BASE seed: what accretion.json says. Every forged world scales THIS,
     // so knob settings never compound across reseeds.
     let base_budget = Budget::from_dir(&dir, &tables).expect("accretion.json");
@@ -558,7 +551,7 @@ fn sim_main(
     let mut rate_hz = PLAY_TICKS_PER_SEC;
     let mut seed = seed0;
     let mut world = World::seed(grid.clone(), budget.clone(), &tables, seed);
-    let mut sched = Scheduler::new(formation_stages(Arc::clone(&tables), &budget, &levers), seed);
+    let mut sched = Scheduler::new(formation_stages(Arc::clone(&tables), &world, &levers), seed);
     let mut playing = false;
     let mut gen = 0u64;
     // The plate observer is read-only annotation on the sim thread — never a stage.
@@ -647,7 +640,7 @@ fn sim_main(
                         .map(|p| p.name.to_string())
                         .collect();
                     sched = Scheduler::new(
-                        formation_stages(Arc::clone(&tables), &budget, &levers),
+                        formation_stages(Arc::clone(&tables), &world, &levers),
                         seed,
                     );
                     for name in held {
@@ -667,7 +660,7 @@ fn sim_main(
                 }
                 Ok(SimCommand::Reset) => {
                     world = World::seed(grid.clone(), budget.clone(), &tables, seed);
-                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &budget, &levers), seed);
+                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &world, &levers), seed);
                     observer.reset();
                     event_log.clear();
                     gates.reset();
@@ -691,7 +684,7 @@ fn sim_main(
                         send_static(&grid, tile_outlines.clone(), &budget, &seed_elements);
                     }
                     world = World::seed(grid.clone(), budget.clone(), &tables, seed);
-                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &budget, &levers), seed);
+                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &world, &levers), seed);
                     observer.reset();
                     event_log.clear();
                     gates.reset();
@@ -779,7 +772,6 @@ fn publish(
     gen: &mut u64,
 ) -> bool {
     let state = PlanetState::sample(world);
-    let cell_area = world.cell_area_m2();
     // The metals worth looking for, named by the catalog rather than here.
     let ore_metals: &[u8] = ORE_METALS.get().map(|v| v.as_slice()).unwrap_or(&[]);
     // **This tick's weather, published instead of thrown away.** `Weather` holds
@@ -790,10 +782,16 @@ fn publish(
     // What each ground IS against the sea. Computed in two passes because the
     // EDGE is a fact about neighbours, and the adjacency lives here.
     let sea = state.sea_level_m;
+    // **The FLEXED surface**, the one the sea level was solved against and the
+    // one the ground actually sits at. Airy elevation here would draw a
+    // coastline the sim does not have — and, because each column floats alone
+    // under Airy, it draws it as speckle.
+    let surface = flicker_poc_chemistry::elevation_field(world);
     let coast: Vec<u8> = world
         .columns
         .iter()
-        .map(|col| coast_class(crust_kind(col), elevation_m(col, cell_area), sea))
+        .enumerate()
+        .map(|(i, col)| coast_class(crust_kind(col), surface[i], sea))
         .collect();
     let cells = world
         .columns
@@ -824,7 +822,7 @@ fn publish(
                 plate: obs.labels[i],
                 seam: obs.seams[i].code(),
                 strata: col.layers.len().min(u8::MAX as usize) as u8,
-                elevation_m: elevation_m(col, cell_area) as f32,
+                elevation_m: surface[i] as f32,
                 ore: ore_metals
                     .iter()
                     .map(|&e| enrichment(world, i, e).0)

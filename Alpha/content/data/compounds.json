@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "source": "Prism/BookIII.md \u2014 the compound catalog (Common, Alloy, Biological, Mineral, Useful, Gemstone Compounds). Transcribed faithfully; the engine's compound catalog was previously deferred (BookIII: 'the exact mapping from these tables to classified materials is unassigned \u2014 the world simulation works element->material directly'). This file lands it.",
-    "schema": "Each row: id, name, formula (ASCII, verbatim from the book \u2014 may reference elements outside the Prism 28-element table (ceiling 30; count per periodic_table.json _meta.additions)), category (common|mineral|useful|gemstone|biological|alloy), elements[{symbol,count}] (PARSED constituents, restricted to Prism periodic_table.json elements \u2014 non-Prism symbols like F in Apatite's formula are dropped from this list but kept in `formula`), natural (true = forms in-world during world-gen; false = a crafted alloy/recipe), hardness_mohs / density_g_cm3 / brittleness (0..1) \u2014 ONE TABLE (Aaron, 2026-07-13): populated on EVERY row, no split populations. Real-world reference values; for the 78 Book III rows they are proposed-starting-values pending ratification (the R6b twelve were ruled with theirs); 0.0 hardness/brittleness = not applicable (non-solid), the element-table gas convention. Quench/cooling-rate is deliberately NOT a column here: per R4b it is per-layer formation provenance, combined with these constants by the R7 conditions registry. extracted_element (ore target, omitted if none), harvestable (true = curated mineable ore/gem that must reach a concentrated vein; curated gameplay canon \u2014 NOT extended by the R6b merge; spodumene/dolomite ore notes await a separate ruling), sim_required (true = row added beyond the Book III transcription \u2014 the R6b mineral merge, ids 79-90 continuing the id space), uses (Book rows) / note (R6b rows) \u2014 sparse text fields.",
+    "source": "Prism/BookIII.md — the compound catalog (Common, Alloy, Biological, Mineral, Useful, Gemstone Compounds). Transcribed faithfully; the engine's compound catalog was previously deferred (BookIII: 'the exact mapping from these tables to classified materials is unassigned — the world simulation works element->material directly'). This file lands it.",
+    "schema": "Each row: id, name, formula (ASCII, verbatim from the book — may reference elements outside the Prism 28-element table (ceiling 30; count per periodic_table.json _meta.additions)), category (common|mineral|useful|gemstone|biological|alloy), elements[{symbol,count}] (PARSED constituents, restricted to Prism periodic_table.json elements — non-Prism symbols like F in Apatite's formula are dropped from this list but kept in `formula`), natural (true = forms in-world during world-gen; false = a crafted alloy/recipe), hardness_mohs / density_g_cm3 / brittleness (0..1) — ONE TABLE (Aaron, 2026-07-13): populated on EVERY row, no split populations. Real-world reference values; for the 78 Book III rows they are proposed-starting-values pending ratification (the R6b twelve were ruled with theirs); 0.0 hardness/brittleness = not applicable (non-solid), the element-table gas convention. Quench/cooling-rate is deliberately NOT a column here: per R4b it is per-layer formation provenance, combined with these constants by the R7 conditions registry. extracted_element (ore target, omitted if none), harvestable (true = curated mineable ore/gem that must reach a concentrated vein; curated gameplay canon — NOT extended by the R6b merge; spodumene/dolomite ore notes await a separate ruling), sim_required (true = row added beyond the Book III transcription — the R6b mineral merge, ids 79-90 continuing the id space), uses (Book rows) / note (R6b rows) — sparse text fields.",
     "use": "Loaded by flicker-materials Tables via TableSource (JsonTableSource reads this as a sibling of periodic_table.json/materials.json). The composition->compound classifier + the mineral extraction wiring to the node/vein layer are the next step.",
     "counts": {
       "common": 14,
@@ -14,8 +14,10 @@
     "format": "flicker.compounds",
     "version": 2,
     "retired_ids": {
-      "42": "Feldspar \u2014 the Books' combined two-formula row (KAlSi3O8, NaAlSi3O8), superseded by the R6b split rows Albite (82) and Orthoclase (83); ruled retired by Aaron 2026-07-13. Ids are stable \u2014 NEVER reuse a retired id."
-    }
+      "42": "Feldspar — the Books' combined two-formula row (KAlSi3O8, NaAlSi3O8), superseded by the R6b split rows Albite (82) and Orthoclase (83); ruled retired by Aaron 2026-07-13. Ids are stable — NEVER reuse a retired id."
+    },
+    "crystallizes": "crystallizes (minerals only) = this phase forms by CRYSTALLISATION from a melt or from solution circulating in rock, so the Crystallization stage may make it. FALSE for phases with a different route: Halite/Sylvite/Saltpeter are evaporites (need standing water to dry out), Coal is made from buried tissue by Maturation, Bauxite is a tropical weathering residue. Replaces the stage's former filter on sim_required, which is a PROVENANCE flag (which book a row came from) and was never a statement about what can form - using it as one is why ore was a bare number and never a mineral, and why quartz, and therefore sandstone/chert/quartzite, could not exist (2026-08-06).",
+    "metamorphic": "metamorphic = {to, pressure_pa, temp_k}: the PHYSICAL stability limit of the phase - under at least this peak pressure and peak temperature (Layer.peak_pt, the worst a bed has ever endured) it reorganises into 'to'. These are the real numbers for the reaction and are NOT chosen against what any particular world can reach: a threshold no ground attains simply means that world never made the phase, which is a fact about the world and not an error to correct (DO NOT ENCODE RULES FOR OUTCOMES). The reaction must be ELEMENT-NEUTRAL - both phases the same elements in the same proportions - checked at load; anything releasing a volatile needs a reaction that books it too, and is not expressible here yet."
   },
   "compounds": [
     {
@@ -240,6 +242,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": false,
       "hardness_mohs": 2.5,
       "density_g_cm3": 2.17,
       "brittleness": 0.6,
@@ -263,6 +266,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": false,
       "hardness_mohs": 2.0,
       "density_g_cm3": 1.99,
       "brittleness": 0.6,
@@ -290,6 +294,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.0,
       "density_g_cm3": 2.71,
       "brittleness": 0.6,
@@ -317,6 +322,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.5,
       "density_g_cm3": 4.7,
       "brittleness": 0.6,
@@ -344,6 +350,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.5,
       "density_g_cm3": 4.8,
       "brittleness": 0.6,
@@ -367,6 +374,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 5.26,
       "brittleness": 0.7,
@@ -390,6 +398,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.0,
       "density_g_cm3": 4.85,
       "brittleness": 0.7,
@@ -413,6 +422,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.5,
       "density_g_cm3": 5.5,
       "brittleness": 0.6,
@@ -440,6 +450,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.5,
       "density_g_cm3": 4.2,
       "brittleness": 0.7,
@@ -463,6 +474,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.5,
       "density_g_cm3": 4.1,
       "brittleness": 0.7,
@@ -486,6 +498,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.5,
       "density_g_cm3": 7.3,
       "brittleness": 0.2,
@@ -505,6 +518,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 4.0,
       "density_g_cm3": 21.45,
       "brittleness": 0.1,
@@ -524,6 +538,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.5,
       "density_g_cm3": 19.3,
       "brittleness": 0.1,
@@ -547,6 +562,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.5,
       "density_g_cm3": 10.9,
       "brittleness": 0.7,
@@ -574,6 +590,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": false,
       "hardness_mohs": 2.5,
       "density_g_cm3": 2.42,
       "brittleness": 0.5,
@@ -593,13 +610,19 @@
         }
       ],
       "natural": true,
+      "crystallizes": false,
       "hardness_mohs": 2.0,
       "density_g_cm3": 1.35,
       "brittleness": 0.8,
       "extracted_element": "C",
       "harvestable": true,
       "uses": "Fuel source for smelting and heating, processable into graphite, and essential to steel production with iron.",
-      "note": ""
+      "note": "",
+      "metamorphic": {
+        "to": "Graphite",
+        "pressure_pa": 300000000.0,
+        "temp_k": 700.0
+      }
     },
     {
       "id": 26,
@@ -617,6 +640,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 7.0,
       "density_g_cm3": 2.65,
       "brittleness": 0.8,
@@ -640,6 +664,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.5,
       "density_g_cm3": 7.0,
       "brittleness": 0.6,
@@ -663,6 +688,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.5,
       "density_g_cm3": 7.6,
       "brittleness": 0.7,
@@ -690,6 +716,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": false,
       "hardness_mohs": 2.0,
       "density_g_cm3": 2.11,
       "brittleness": 0.5,
@@ -725,6 +752,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.0,
       "density_g_cm3": 3.2,
       "brittleness": 0.6,
@@ -744,6 +772,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.0,
       "density_g_cm3": 2.07,
       "brittleness": 0.9,
@@ -775,7 +804,7 @@
     {
       "id": 33,
       "name": "Gypsum",
-      "formula": "CaSO4\u00b72H2O",
+      "formula": "CaSO4·2H2O",
       "category": "useful",
       "elements": [
         {
@@ -935,7 +964,12 @@
       "hardness_mohs": 1.5,
       "density_g_cm3": 2.26,
       "brittleness": 0.4,
-      "uses": "Pure carbon used in pencils, lubricants, refractory materials, electrodes, and battery components, and can be processed into diamonds."
+      "uses": "Pure carbon used in pencils, lubricants, refractory materials, electrodes, and battery components, and can be processed into diamonds.",
+      "metamorphic": {
+        "to": "Diamond",
+        "pressure_pa": 4950000000.0,
+        "temp_k": 1300.0
+      }
     },
     {
       "id": 43,
@@ -1068,7 +1102,7 @@
     {
       "id": 49,
       "name": "Opal",
-      "formula": "SiO2\u00b7nH2O",
+      "formula": "SiO2·nH2O",
       "category": "gemstone",
       "elements": [
         {
@@ -1741,6 +1775,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 7.0,
       "density_g_cm3": 3.27,
       "brittleness": 0.7,
@@ -1767,6 +1802,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 5.5,
       "density_g_cm3": 3.2,
       "brittleness": 0.7,
@@ -1797,6 +1833,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 2.73,
       "brittleness": 0.6,
@@ -1827,6 +1864,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 2.62,
       "brittleness": 0.6,
@@ -1857,6 +1895,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 2.56,
       "brittleness": 0.6,
@@ -1895,6 +1934,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.5,
       "density_g_cm3": 3.0,
       "brittleness": 0.9,
@@ -1929,6 +1969,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 2.5,
       "density_g_cm3": 2.82,
       "brittleness": 0.9,
@@ -1951,6 +1992,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 5.15,
       "brittleness": 0.6,
@@ -1973,6 +2015,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.0,
       "density_g_cm3": 5.01,
       "brittleness": 0.7,
@@ -2003,6 +2046,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.5,
       "density_g_cm3": 2.85,
       "brittleness": 0.5,
@@ -2033,6 +2077,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 6.5,
       "density_g_cm3": 3.15,
       "brittleness": 0.6,
@@ -2063,6 +2108,7 @@
         }
       ],
       "natural": true,
+      "crystallizes": true,
       "hardness_mohs": 3.5,
       "density_g_cm3": 2.55,
       "brittleness": 0.8,
@@ -2193,6 +2239,5 @@
       "sim_required": true,
       "note": "Free molecular oxygen. Not primordial - a BIOSIGNATURE: it accumulates only where photosynthesis buries carbon faster than decay and weathering return it."
     }
-
   ]
 }

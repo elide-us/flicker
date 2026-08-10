@@ -80,8 +80,9 @@ pub struct ChatView<'a> {
     /// Dotted style-block PREFIX, e.g. `"pocclusters.chat"`.
     pub style: &'a str,
     /// The active channel (wire form, e.g. `"#general"`) — titlebar caption + tab selection.
+    /// The `chat_tab` bind carries its INDEX in [`channels`](Self::channels), not its name.
     pub active: &'a str,
-    /// Joined channels (wire form); one tab each.
+    /// Joined channels (wire form); one tab each, and the tab's `value` is its index here.
     pub channels: &'a [String],
     /// The visible log tail, oldest-first.
     pub lines: &'a [ChatLineView],
@@ -113,7 +114,8 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     set_txt(&mut tabs, "tab_active", &sty("tab_active"));
     set_txt(&mut tabs, "tab_idle", &sty("tab_idle"));
     tabs.grow = Some(1.0);
-    tabs.children = view.channels.iter().map(|c| tab_child(c, &display_channel(c))).collect();
+    tabs.children =
+        view.channels.iter().enumerate().map(|(i, c)| tab_child(i, &display_channel(c))).collect();
     let mut tabrow = elem("row");
     tabrow.height = Some(TAB_H);
     tabrow.gap = 4.0;
@@ -240,9 +242,11 @@ fn button(style: &str, action: &str, label: &str, w: f32) -> UiNode {
     b
 }
 
-fn tab_child(value: &str, label: &str) -> UiNode {
+/// One channel tab: its `value` is the channel's INDEX in `ChatView::channels` (an
+/// index is a number, everywhere), and the channel NAME is what the tab shows.
+fn tab_child(i: usize, label: &str) -> UiNode {
     let mut n = elem("cell");
-    set_txt(&mut n, "value", value);
+    set_num(&mut n, "value", i as f64);
     set_txt(&mut n, "label", label);
     n
 }
@@ -347,10 +351,18 @@ mod tests {
         assert_eq!(field.id, "chat_input");
         assert_eq!(field.bind.as_deref(), Some("chat_input"));
 
-        // One tab per channel; the strip reports through `chat_tab`.
+        // One tab per channel; the strip reports through `chat_tab`. A tab's `value`
+        // is the channel's INDEX — a number, the one representation of a selection.
         let tabs = find(&root, |n| n.component == "tabs").expect("a tabs strip");
         assert_eq!(tabs.children.len(), channels.len());
         assert_eq!(tabs.bind.as_deref(), Some("chat_tab"));
+        for (i, tab) in tabs.children.iter().enumerate() {
+            assert_eq!(
+                tab.props.get("value"),
+                Some(&Value::Number(i as f64)),
+                "tab {i} carries its numeric index"
+            );
+        }
 
         // The list holds one line per view line, and follows `chat_scroll`.
         let scroll = find(&root, |n| n.component == "list").expect("a list");
@@ -413,5 +425,48 @@ mod tests {
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &input, &mut state);
         assert!(!frame.commands.is_empty(), "the chat panel should emit draw commands");
+    }
+
+    /// **A channel tab reports its INDEX.** The strip's selection channel is a number
+    /// end to end — the tab's `value`, the `chat_tab` bind, and the scene's read of it
+    /// (`pocclusters` maps the index back to the channel name).
+    #[test]
+    fn a_tab_click_reports_the_channel_index() {
+        use crate::{run_ui, UiInput, UiState};
+        use flicker_render::Vec2;
+        use flicker_script::ValueMap;
+
+        let channels = vec!["#general".to_string(), "#trade".to_string()];
+        let view = ChatView {
+            style: "pocclusters.chat",
+            active: "#general",
+            channels: &channels,
+            lines: &[],
+            roster: &[],
+            nick: "me",
+        };
+        // Frame at (20,400) 820×260, column pad 6 / gap 6: titlebar 406..436, then the
+        // tab row at 442..472. The strip grows to 808 − (34 + 34 + 4 + 4) = 732 wide
+        // from x 26, so its two cells split at x 392 — click the second one.
+        let tree = chat_panel(20.0, 400.0, 820.0, 260.0, &view);
+        let click = UiInput {
+            mouse: Vec2::new(500.0, 457.0),
+            clicked: true,
+            down: true,
+            screen: Vec2::new(1280.0, 720.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let model = ValueMap::new().with("chat_tab", 0.0);
+        let f = run_ui(
+            &tree,
+            &model,
+            &serde_json::json!({}),
+            &click,
+            &mut UiState::new(),
+        );
+        assert_eq!(f.results.number("chat_tab"), Some(1.0), "the second tab selects index 1");
+        assert_eq!(f.results.text("chat_tab"), None, "a tab selection is never text");
     }
 }

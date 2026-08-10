@@ -87,7 +87,7 @@ function M.tree()
     col[#col + 1] = stat_row(ct, row)
   end
   col[#col + 1] = Stack { size = ct.reset.gap_top }
-  -- RESET — the shared modal secondary-button kit (hover-lit via ui/button.lua).
+  -- RESET — the shared modal secondary-button kit (hover-lit by the engine's button arm).
   col[#col + 1] = Button {
     id = "reset",
     action = "reset",

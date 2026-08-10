@@ -60,12 +60,13 @@ local function bound(key, box, glyph, color, font, align)
   return Text { text_bind = key, size = box, text_size = glyph, color = color, font = font or "body", align = align }
 end
 
--- ── select / pill option children (value = 0-based index string, matched by the
---    scene which parses the index back) ──
+-- ── select / pill option children. An option's value is its 0-based INDEX, and an
+--    index is a NUMBER (the strip boundary, enforced by the engine's hit arms) — the
+--    scene reads the index straight back off the bind. ──
 local function options_of(r)
   local out = {}
   for i, label in ipairs(r.options or {}) do
-    out[#out + 1] = Opt { value = tostring(i - 1), label = label }
+    out[#out + 1] = Opt { value = i - 1, label = label }
   end
   return out
 end
@@ -207,15 +208,17 @@ end
 -- Controller-profile selector options, DATA-driven from the `PROFILES` global (the named
 -- InputProfiles the shell publishes, spec §7.3). Falls back to a single "Default" when
 -- unpublished (e.g. the build-time tree smoke test builds with no PROFILES global).
+-- An option's value is its INDEX into PROFILES; the scene maps the index back to the
+-- profile's stable name (the strip boundary: an index is a number).
 local function profile_opts()
   local opts = {}
   if PROFILES then
-    for _, p in ipairs(PROFILES) do
-      opts[#opts + 1] = Opt { value = p.value, label = p.label }
+    for i, p in ipairs(PROFILES) do
+      opts[#opts + 1] = Opt { value = i - 1, label = p.label }
     end
   end
   if #opts == 0 then
-    opts[1] = Opt { value = "default", label = "$set_default" }
+    opts[1] = Opt { value = 0, label = "$set_default" }
   end
   return opts
 end
@@ -281,14 +284,15 @@ local function content_header()
         bound("sec_title", 40, S.content.title_size, "settings.content.title_color", "display", "left"),
       } },
       -- Input sub-tabs as a segmented pill (two-way `input_subtab`); matches the
-      -- current pill sub-tabs and stays in the settings namespace.
+      -- current pill sub-tabs and stays in the settings namespace. The bind carries
+      -- the sub-tab's INDEX — the scene maps it back to the `sub_*` surface.
       Pill {
         id = "input_subtab", bind = "input_subtab", visible_bind = "sec_input",
         size = 330, style = "settings.controls.pill",
         children = {
-          Opt { value = "keyboard", label = "$set_keyboard" },
-          Opt { value = "mouse", label = "$set_mouse" },
-          Opt { value = "controller", label = "$set_controller" },
+          Opt { value = 0, label = "$set_keyboard" },
+          Opt { value = 1, label = "$set_mouse" },
+          Opt { value = 2, label = "$set_controller" },
         },
       },
     },

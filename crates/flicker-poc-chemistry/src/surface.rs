@@ -42,7 +42,10 @@ use crate::stage::{Stage, StageRng};
 /// Liquid water density, kg/m³.
 pub const WATER_DENSITY: f64 = 1000.0;
 
-/// Water delivered over a run by default, kg — the scale of Earth's ocean.
+/// Water delivered over a run by default, kg, **at reference (freq-96) scale**
+/// — the scale of Earth's ocean. Like every mass budget it rides `size_scale³`
+/// ([`Levers::sized`](crate::Levers::sized)): the same fraction of a smaller
+/// planet is less water, and the sea it makes is proportionally shallower.
 pub const DEFAULT_WATER_KG: f64 = 1.4e21;
 
 /// Solar constant proxy: surface temperature, K, where the star is straight
@@ -133,22 +136,113 @@ pub fn mean_surface_temp_k(world: &World, stellar: f64) -> f64 {
     sum / n as f64
 }
 
-/// Fraction of a submerged cell's water that evaporates per Myr at full warmth.
-const EVAPORATION_RATE: f64 = 0.35;
+/// **Evaporation off a water surface, metres per Myr at full warmth** — a FLUX,
+/// not a fraction of the reservoir. Earth's ocean gives up ~1.2 m/yr, and this
+/// is that number in the sim's own currency.
+///
+/// It used to be `0.35`, read as *"the fraction of a submerged cell's water that
+/// evaporates per Myr"* — depth times a rate. That form **structurally capped
+/// ocean turnover at 0.35 per Myr**, because you cannot evaporate more than all
+/// of a reservoir; Earth turns its ocean over ~270 times per Myr. No value of a
+/// fraction can fix that, and anything above 1.0 is nonsense.
+///
+/// Evaporation is a **surface** process: a 4 km ocean and a 4 m pond give up the
+/// same depth per square metre. Depth belongs in the ledger as a limit on what
+/// is available, never as a multiplier on the rate — and a shallow sea therefore
+/// turns over FASTER, which is the physically right answer this world was
+/// getting backwards.
+///
+/// Measured consequence of the old form: rain 17 m/Myr, rivers ~3,000× under-fed,
+/// and denudation at 21 mm/Myr against a real 10–100 m/Myr (E782666A).
+const EVAPORATION_FLUX_M_PER_MY: f64 = 1.2e6;
 /// Fraction of the vapour over a cell that drifts to its neighbours per Myr.
 const ADVECTION_RATE: f64 = 0.55;
 /// Fraction of vapour that rains out per Myr at full forcing.
 const CONDENSATION_RATE: f64 = 0.5;
-/// How strongly rising ground forces air up and wrings it out. This is what makes
-/// a windward slope wet and the ground behind it dry.
-const OROGRAPHIC_GAIN: f64 = 4.0;
+/// How strongly rising ground forces air up and wrings it out — what makes a
+/// windward slope wet and the ground behind it dry.
+///
+/// **1.0, against a base of [`BASE_WRING`].** At 4.0 a mountain flank wrung its
+/// air completely dry (the term saturated) while flat warm ground gave up an
+/// eighth of its vapour — an 8× concentration that put essentially all the
+/// world's rain on the slopes beside mountains and left the interiors arid
+/// (Aaron, 2026-08-06: *"rain storms aren't just concentrated on the 50m along
+/// the side of mountains, they happen everywhere"*). Real windward
+/// enhancement is more like 2–5× lowland rainfall, which is what this gives.
+const OROGRAPHIC_GAIN: f64 = 1.0;
 
-/// Erosive power per unit of gathered flow and slope, m of rock per Myr. The
-/// overall strength of the carving; the *contrast* between rocks is what shapes it.
-pub const DEFAULT_EROSION_RATE: f64 = 6.0e-4;
-/// How much of the gathered flow's carrying capacity is used up per step, so a
-/// slackening river drops its load rather than carrying it to the sea entire.
-const DEPOSITION_RATE: f64 = 0.35;
+/// What air gives up wherever it is, before latitude or terrain say anything —
+/// **it rains everywhere**. Orography and cool air modulate this; they no
+/// longer dwarf it.
+const BASE_WRING: f64 = 0.5;
+
+/// Erosive power, m of rock per Myr at unit √flow, unit slope, unit resistance.
+/// The overall strength of the carving; the *contrast* between rocks is what
+/// shapes it. **Recalibrated 2026-08-06** with the moisture fix and the move to
+/// physical slope (rise over the actual cell spacing — the old currency divided
+/// the drop by a bare 1000 m): the two changes rescale the same term, so the
+/// rate was re-derived from the measured forcing (`erosion_forcing_report`)
+/// against the sim's own uplift pace — the conveyor builds relief at roughly a
+/// tenth of a metre per tick on active ground, so the MEDIAN land cut must sit
+/// well under that or the world levels to a grey mean (the attractor Aaron
+/// kept seeing), while the steep-and-wet tail is what carves. Measured at the
+/// 2.4-BY mid-bake (freq 24, H 0.15, seed 42): rate 1.0 gave land cut
+/// p50 0.101 / p99 1.11 m per tick — so 0.25 puts the median at ~0.025 m/tick,
+/// a quarter of the uplift pace, with the tail near 0.3 m/tick where it is
+/// steep, wet and soft.
+pub const DEFAULT_EROSION_RATE: f64 = 0.25;
+
+/// **How much sediment moving water can hold — a SATURATION**, as a mass
+/// fraction of the water carrying it.
+///
+/// Real rivers run ~0.4 kg/m³ suspended load on the global average and ~0.5 for
+/// the Mississippi; the Yellow River, the muddiest large river on Earth, reaches
+/// ~35. `0.01` is 10 kg/m³ — a heavily laden river, which is the right end of
+/// the range for a tectonically active world shedding fresh orogens.
+///
+/// **This replaced a capacity proportional to `√flow · slope`** — stream POWER,
+/// with no water in it at all. That form tracked the slope, so it stayed high
+/// down a steep reach and collapsed at the slope break, dumping an entire
+/// catchment's load in one place at the basin edge (Aaron, 2026-08-06: *"the
+/// entire volume being moved directly to the end of the drainage basin in one
+/// move"*). Saturation is a property of the water, not of the ground it is
+/// running over.
+const MAX_SEDIMENT_FRAC: f64 = 0.01;
+
+/// How far sediment travels before it settles, m — the characteristic transport
+/// length. A fraction `spacing / this` of whatever a stream is carrying lands in
+/// every cell it crosses, so a river **exchanges all the way down** instead of
+/// running full and dumping at one break. Ten cell spacings: a grain entrained
+/// in the headwaters typically reaches the sea, but the floodplain, the shelf
+/// and the delta each take their share on the way.
+const TRANSPORT_LENGTH_M: f64 = 10.0 * 74_357.0;
+
+/// What freshly-cut sediment weighs on the way down, kg/m³ — converts the
+/// capacity's metres-of-cut currency into carried mass.
+const SEDIMENT_DENSITY: f64 = 2200.0;
+
+/// Rise over run, per cell spacing, above which rock will not stand — the
+/// effective strength of crust at hex scale. Ground steeper than this sheds
+/// ([`MassWasting`]) until it can stand; the bake report prints slopes against
+/// this same number, in this same currency. 0.08 over the 74-km spacing is a
+/// ~6-km step between neighbouring cells — Andes-class: the tallest fronts
+/// real crust holds over that distance — so a genuine young collision belt
+/// STANDS (measured: tighter thresholds shaved the belts onto adjacent
+/// oceanic slabs, whose subduction then drained the continental inventory),
+/// while the single-hex runaways (tens of kilometres, 10–15× over threshold)
+/// still shed into ranges.
+pub const REPOSE_SLOPE: f64 = 0.08;
+
+/// Fraction of the over-repose EXCESS that slumps per Myr. Proportional to the
+/// overshoot — the same self-limiting posture as the delamination ceiling — and
+/// split across the receiving neighbours, so the relaxation can never invert a
+/// slope or overshoot a pit into a peak, which is exactly the flicker this
+/// mechanism exists to end. At the ~6-km threshold this touches essentially
+/// nothing but the runaway convergence cells (the bake's p90 slope is 0.007
+/// against the 0.08 repose), so it is set aggressive: the one white-dot spike's
+/// standing height is the balance of the conveyor's pinned firehose against
+/// this rate — measured, 0.25 held it near 17 km; doubling halves it.
+const TALUS_RATE: f64 = 0.5;
 
 /// No single tick may take more than this fraction of the bed it is cutting.
 /// Erosion is a process, not an event, and a tick that strips a whole bed is
@@ -159,6 +253,44 @@ const MAX_STRIP_FRAC: f64 = 0.25;
 /// Resistance assumed for rock the catalog does not recognise. Deliberately middling
 /// and deliberately not zero — unknown rock must not erode like salt.
 const UNKNOWN_RESISTANCE: f32 = 0.5;
+
+/// Metres between neighbouring cell centres — `√(cell area)`, the run every
+/// aggregate slope is measured over. The size model fixed the span, so this is
+/// one number (≈74 km) on every world at every frequency — which is what lets
+/// the repose threshold and the erosion rate calibrate once and hold
+/// everywhere.
+pub fn cell_spacing_m() -> f64 {
+    crate::config::CELL_AREA_M2.sqrt()
+}
+
+/// Rise over run between two cells, in the one slope currency: metres of drop
+/// per metre of [`cell_spacing_m`]. Physical, so the repose constant, the bake
+/// report's histogram and the cut law all speak the same number.
+pub(crate) fn slope_between(drop_m: f64) -> f64 {
+    (drop_m / cell_spacing_m()).max(0.0)
+}
+
+/// **The stream-power law** — metres of rock one tick's gathered flow can cut at
+/// this slope through this rock. One definition, shared by the tick and the
+/// forcing probe, so the report can never measure a different law than the one
+/// that runs.
+pub(crate) fn stream_cut_m(rate: f64, flow: f64, slope: f64, resistance: f64, dt_myr: f64) -> f64 {
+    rate * flow.max(0.0).sqrt() * slope * dt_myr / resistance.clamp(0.02, 1.0)
+}
+
+/// **What the water crossing a cell can HOLD, kg** — its own mass times
+/// [`MAX_SEDIMENT_FRAC`]. `flow` is metres of water depth per Myr gathered from
+/// the whole catchment, so the water mass through this cell in one tick is
+/// `flow · dt · area · ρ_water`.
+///
+/// Capacity now depends on **how much water there is**, not on how steep the
+/// ground is. A big river on a flat delta still carries its load — which is why
+/// deltas are built out of what the river brought, not out of what fell off the
+/// mountain beside them.
+pub(crate) fn stream_capacity_kg(flow: f64, area: f64, dt_myr: f64) -> f64 {
+    let water_kg = flow.max(0.0) * dt_myr * area * WATER_DENSITY;
+    MAX_SEDIMENT_FRAC * water_kg
+}
 
 /// **Weather** — surface temperature, evaporation, drift, and rain.
 ///
@@ -172,6 +304,21 @@ pub struct WeatherField {
     /// Surface temperature, K.
     pub temp_k: Vec<f64>,
     /// Rain reaching the ground, in metres of water depth per Myr.
+    ///
+    /// **THROUGHPUT, not a withdrawal.** This is the total depth of water that
+    /// falls on the cell over the interval — the same water falling over and
+    /// over. Earth's hydrological cycle turns in ~3,700 years, so at a 1.6 Myr
+    /// tick it completes some four hundred times *within one step*: this number
+    /// exceeding the standing ocean depth is expected and is not a conservation
+    /// problem.
+    ///
+    /// Nothing here moves mass — [`Weather::observe`] takes `&World`. The
+    /// LEDGER is [`WaterCycle`](crate::atmosphere::WaterCycle)'s business, and
+    /// it is an equilibrium: over an interval this long, evaporation and
+    /// rainfall balance and the *net* transfer is near zero. Two different
+    /// quantities, and conflating them is what starved erosion — the forcing
+    /// field was being computed with reservoir-withdrawal semantics when
+    /// nothing was being withdrawn.
     pub rain: Vec<f64>,
     /// Where the sea stands this tick, m.
     pub sea_level: f64,
@@ -184,9 +331,8 @@ impl Weather {
     /// supplies it; the GM lever stands in until then).
     pub fn observe(world: &World, dt_myr: f64, stellar: f64) -> WeatherField {
         let n = world.columns.len();
-        let area = world.cell_area_m2();
         let sea_level = sea_level_m(world);
-        let elevation: Vec<f64> = world.columns.iter().map(|c| elevation_m(c, area)).collect();
+        let elevation: Vec<f64> = crate::planet::elevation_field(world);
 
         // What the air keeps — a read of which gases are actually in it.
         let greenhouse = greenhouse_k(world);
@@ -206,17 +352,17 @@ impl Weather {
         let submerged: Vec<f64> = (0..n)
             .map(|i| (sea_level - elevation[i]).max(0.0))
             .collect();
-        let submerged_volume: f64 = submerged.iter().sum::<f64>() * area;
+        // Depth decides WHETHER this cell is a water surface; it does not scale
+        // how hard that surface evaporates. See [`EVAPORATION_FLUX_M_PER_MY`].
         let mut vapour: Vec<f64> = (0..n)
             .map(|i| {
                 if submerged[i] <= 0.0 || ocean_volume <= 0.0 {
                     return 0.0;
                 }
                 let warmth = ((temp_k[i] - 273.0) / 40.0).clamp(0.0, 1.0);
-                submerged[i] * EVAPORATION_RATE * warmth * dt_myr
+                EVAPORATION_FLUX_M_PER_MY * warmth * dt_myr
             })
             .collect();
-        let _ = submerged_volume;
 
         // Drift: vapour spreads to its neighbours, so air off a sea reaches inland.
         for _ in 0..2 {
@@ -235,17 +381,11 @@ impl Weather {
         }
 
         // Rain: air wrings out where it is cool, and much harder where the ground
-        // rises under it.
-        //
-        // ⚠️ **KNOWN DEFECT, deliberately left standing for now** (2026-08-06).
-        // `wrung_fraction` can exceed 1 and the parcel is never depleted, so a
-        // cell rains more than the vapour above it and its neighbours still find
-        // that vapour untouched. Aaron identified it exactly. Fixing it in
-        // isolation made the whole world STATIC, because `DEFAULT_EROSION_RATE`
-        // and the carry capacity were both calibrated against this inflated
-        // rain — correcting the moisture budget without re-deriving those
-        // constants together turned erosion off. The fix and the recalibration
-        // have to land as one measured change, not as a lone correction.
+        // rises under it. The share is a FRACTION of the parcel — never more
+        // water than the air above the cell holds. (The over-unity forcing this
+        // used to carry was the moisture-budget defect Aaron named; it landed
+        // together with the erosion-rate re-derivation, as one measured change,
+        // because the old rate was calibrated against the phantom rain.)
         let rain: Vec<f64> = (0..n)
             .map(|i| {
                 let rise = world.grid.neighbors[i]
@@ -323,7 +463,10 @@ impl Stage for Erosion {
         }
         let area = world.cell_area_m2();
         let weather = Weather::observe(world, dt_myr, self.stellar);
-        let elevation: Vec<f64> = world.columns.iter().map(|c| elevation_m(c, area)).collect();
+        // The FLEXED surface: drainage, slopes and coastlines are questions
+        // about where the ground actually sits, and a plate holds its
+        // neighbours up. Airy elevation would route rivers around speckle.
+        let elevation: Vec<f64> = crate::planet::elevation_field(world);
 
         // Where each cell drains: the neighbour that lies lowest, if any does.
         // A cell with no lower neighbour is a sink — a lake, or the sea.
@@ -357,42 +500,134 @@ impl Stage for Erosion {
         // from cell to cell — so every gram that leaves a column is in the water or
         // on the ground, never in limbo. That is why this needs no scratch state on
         // the world and cannot leak.
+        //
+        // TRANSPORT-LIMITED: the flow leaving a cell can hold only
+        // [`stream_capacity_kg`] — so much of its own cutting — and both sides
+        // of the ledger answer to it. Cutting stops when the stream is full
+        // (a loaded river polishes rather than digs, which is what ends the
+        // endless trunk incision that used to ship whole mountain ranges into
+        // the abyssal sinks), and the load above capacity settles where the
+        // slope slackens — floodplains at the range front, shelves at the
+        // coast, filled basins — instead of riding to the deepest cell.
         let mut load: Vec<Composition> = vec![Composition::new(); n];
         for &cell in &order {
             let mut carrying = std::mem::take(&mut load[cell]);
-
-            // Ground under the sea is not being rained on and is not being cut.
-            if elevation[cell] > weather.sea_level {
-                if let Some(to) = downhill[cell] {
-                    let slope = ((elevation[cell] - elevation[to]) / 1000.0).max(0.0);
-                    let resistance =
-                        self.surface_resistance(&world.columns[cell]).clamp(0.02, 1.0) as f64;
-                    // Stream power: gathered flow and slope do the cutting, and the
-                    // rock decides how much of it lands. The DIVISION by resistance
-                    // is the whole outcrop model — soft ground goes first.
-                    let cut_m = self.rate * flow[cell].sqrt() * slope * dt_myr / resistance;
-                    for (e, m) in strip(&mut world.columns[cell], cut_m, area) {
-                        carrying.add(e, m);
-                    }
-                }
-            }
 
             match downhill[cell] {
                 // A sink — a basin, or the sea. The water stops, so everything it
                 // was carrying settles here.
                 None => land(world, cell, carrying),
                 Some(to) => {
-                    // The flow slackens where the catchment below is not much
-                    // bigger than this one; what it can no longer hold settles.
-                    let ease = 1.0 - (flow[cell] / (flow[to] + 1e-9)).min(1.0);
-                    let drop = (DEPOSITION_RATE * ease).clamp(0.0, 1.0);
-                    let mut settling = Composition::new();
-                    for (e, m) in carrying.iter().map(|(e, m)| (e, m * drop)).collect::<Vec<_>>() {
-                        let got = carrying.remove(e, m);
-                        settling.add(e, got);
+                    let slope = slope_between(elevation[cell] - elevation[to]);
+                    let capacity = stream_capacity_kg(flow[cell], area, dt_myr);
+
+                    // Ground under the sea is not being rained on and is not
+                    // being cut; above it, the stream cuts only while it has
+                    // room to carry what it cuts.
+                    if elevation[cell] > weather.sea_level {
+                        let resistance = self.surface_resistance(&world.columns[cell]) as f64;
+                        let want_m =
+                            stream_cut_m(self.rate, flow[cell], slope, resistance, dt_myr);
+                        let headroom_kg = (capacity - carrying.total()).max(0.0);
+                        let density = world.columns[cell]
+                            .layers
+                            .last()
+                            .map(crate::column::density_kg_m3)
+                            .unwrap_or(SEDIMENT_DENSITY);
+                        let cut_m = want_m.min(headroom_kg / (density * area).max(1.0));
+                        for (e, m) in strip(&mut world.columns[cell], cut_m, area) {
+                            carrying.add(e, m);
+                        }
                     }
-                    land(world, cell, settling);
+
+                    // **The exchange, at EVERY cell.** A river is not a bucket
+                    // that only spills when full: part of what it carries
+                    // settles wherever it goes, and it picks more up where it
+                    // has room. So the load lands ALL THE WAY DOWN — the
+                    // valley floor, the floodplain, the shelf, the delta — and
+                    // a catchment's sediment stops arriving as one lump at the
+                    // first slope break (Aaron, 2026-08-06).
+                    let settle = (cell_spacing_m() / TRANSPORT_LENGTH_M).clamp(0.0, 1.0);
+                    let over = (carrying.total() - capacity).max(0.0);
+                    let drop_kg = over + (carrying.total() - over).max(0.0) * settle;
+                    let frac = (drop_kg / carrying.total().max(1.0)).clamp(0.0, 1.0);
+                    if frac > 0.0 {
+                        let mut settling = Composition::new();
+                        for (e, m) in
+                            carrying.iter().map(|(e, m)| (e, m * frac)).collect::<Vec<_>>()
+                        {
+                            let got = carrying.remove(e, m);
+                            settling.add(e, got);
+                        }
+                        land(world, cell, settling);
+                    }
                     load[to].add_composition(&carrying);
+                }
+            }
+        }
+    }
+}
+
+/// **Mass wasting** — ground steeper than rock can stand collapses downhill.
+///
+/// The aggregate's answer to over-steepening, and the mechanism the black-ring
+/// defect was missing: fluvial incision digs a pit beside a peak, and nothing
+/// used to answer the cliff between them, so the pair just sharpened until the
+/// elevation view flickered white against black. Here any drop steeper than the
+/// [`REPOSE_SLOPE`] over the cell spacing sheds its EXCESS — proportional to
+/// the overshoot, like the delamination ceiling, so the relaxation is
+/// self-limiting and can never invert a slope — split across the receiving
+/// neighbours, drawing from the WHOLE column ([`strip_deep`]), because a
+/// collapsing mountainside does not stop at the top bed.
+///
+/// This is also the missing lateral spread: a single-hex spike a collision
+/// piled up sheds into its ring of neighbours tick after tick and becomes a
+/// massif several cells wide — a mountain RANGE, which no placement rule ever
+/// draws.
+pub struct MassWasting;
+
+impl Stage for MassWasting {
+    fn name(&self) -> &'static str {
+        "MassWasting"
+    }
+
+    fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
+        let n = world.columns.len();
+        if n == 0 {
+            return;
+        }
+        let area = world.cell_area_m2();
+        let threshold_m = REPOSE_SLOPE * cell_spacing_m();
+        // Everything is measured against the tick-start snapshot, and each
+        // donor sheds at most half its excess split by the max neighbour count
+        // — so no pair can invert and no pit can be piled above its walls,
+        // whatever order the cells are visited in. Geologically slow is
+        // correct here; oscillation is the one thing this must never do.
+        let step = (TALUS_RATE * dt_myr).min(0.5) / 6.0;
+        // **LOCAL elevation here, deliberately — not the flexed field.** Mass
+        // wasting answers the over-steepening of an actual pile of rock, so it
+        // has to SEE the pile. Flexure describes where the plate sits, and
+        // reading it here let a 16 km spike smooth to a 3.5 km apparent drop,
+        // fall under the repose threshold, and stand forever with its mass
+        // still heaped on one cell (caught by
+        // `a_spike_sheds_into_a_range_and_never_inverts`).
+        //
+        // The split is principled: hydrology and coastlines are questions about
+        // the SURFACE and read `elevation_field`; mass stability is a question
+        // about the COLUMN and reads its own buoyancy.
+        let elevation: Vec<f64> = world.columns.iter().map(|c| elevation_m(c, area)).collect();
+        for cell in 0..n {
+            for j in 0..world.grid.neighbors[cell].len() {
+                let to = world.grid.neighbors[cell][j] as usize;
+                let drop = elevation[cell] - elevation[to];
+                if drop <= threshold_m {
+                    continue;
+                }
+                let shed_m = (drop - threshold_m) * step;
+                let taken = strip_deep(&mut world.columns[cell], shed_m, area);
+                if !taken.is_empty() {
+                    let at = world.tick_myr;
+                    world.columns[to].deposit(FormationProcess::Sediment, at, &taken);
                 }
             }
         }
@@ -402,17 +637,15 @@ impl Stage for Erosion {
 /// **What share of the air over a cell wrings out**, `0..1` — cool air gives up
 /// more, and ground that RISES under the air forces it up and wrings it harder.
 ///
-/// ⚠️ **NOT bounded by 1, and that is the standing defect** — see the use site.
-/// Forced hard enough (the term reaches 5.25) this claims more water than the
-/// air holds, and the parcel is never debited either, so neighbours find the
-/// same vapour untouched. Clamping it ALONE is not the fix: it silently
-/// rescales every downstream flow, and `DEFAULT_EROSION_RATE` is calibrated
-/// against the inflated numbers, so the world goes static. The correction and
-/// the recalibration are one change.
+/// **Bounded by 1**: a cell cannot rain more water than the air above it
+/// holds. This is the moisture-budget fix (the unbounded forcing reached 5.25
+/// and was the phantom water the old erosion rate was calibrated against); it
+/// landed together with that rate's re-derivation, per the
+/// correction-and-recalibration-are-one-change lesson.
 fn wrung_fraction(temp_k: f64, rise_m: f64) -> f64 {
     let cool = ((300.0 - temp_k) / 60.0).clamp(0.0, 1.0);
     let lift = (rise_m / 2000.0).clamp(0.0, 1.0) * OROGRAPHIC_GAIN;
-    (CONDENSATION_RATE * (0.25 + cool + lift)).max(0.0)
+    (CONDENSATION_RATE * (BASE_WRING + cool + lift)).clamp(0.0, 1.0)
 }
 
 /// Take up to `depth_m` off the top of a column and hand the mass back to the
@@ -436,6 +669,42 @@ fn strip(col: &mut Column, depth_m: f64, area: f64) -> Vec<(ElementId, f64)> {
     let taken = top.release(if whole { 1.0 } else { (want / have).min(MAX_STRIP_FRAC) });
     if col.layers.last().is_some_and(|l| l.mass_kg() <= 0.0) {
         col.layers.pop();
+    }
+    taken
+}
+
+/// Take up to `depth_m` off a column **through as many beds as it takes** — the
+/// mass-wasting draw. A collapsing slope does not stop at the top bed the way a
+/// river's polish does, so this has no per-bed strip cap; it is bounded instead
+/// by the caller's overshoot-proportional `depth_m`. Same film rule as
+/// everything else: a bed worn to less than `MIN_BED_MASS_KG` goes whole, and
+/// "gone" is a mass test, never `is_empty` on a ledger that can carry
+/// zero-valued keys.
+fn strip_deep(col: &mut Column, depth_m: f64, area: f64) -> Vec<(ElementId, f64)> {
+    let mut left = depth_m;
+    let mut taken: Vec<(ElementId, f64)> = Vec::new();
+    while left > 0.0 {
+        let Some(top) = col.layers.last_mut() else {
+            break;
+        };
+        let have = top.mass_kg();
+        if have <= 0.0 {
+            col.layers.pop();
+            continue;
+        }
+        let density = crate::column::density_kg_m3(top);
+        let want_kg = left * density * area;
+        let whole = have - want_kg < crate::column::MIN_BED_MASS_KG;
+        let got = top.release(if whole { 1.0 } else { (want_kg / have).min(1.0) });
+        let got_kg: f64 = got.iter().map(|&(_, m)| m).sum();
+        left -= got_kg / (density * area).max(1.0);
+        taken.extend(got);
+        if col.layers.last().is_some_and(|l| l.mass_kg() <= 0.0) {
+            col.layers.pop();
+        }
+        if !whole || got_kg <= 0.0 {
+            break;
+        }
     }
     taken
 }
@@ -471,7 +740,7 @@ mod tests {
         let t = tables();
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w.budget.clone(), &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
@@ -523,7 +792,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
             col
         };
@@ -592,14 +862,301 @@ mod tests {
             wrung_fraction(250.0, 0.0) > flat,
             "and so does cold air"
         );
-        // ⚠️ This term is NOT bounded by 1 today, and that is the standing
-        // moisture-budget defect documented at its use site: forced hard
-        // enough it claims more water than the air holds. Recorded here so the
-        // number is visible rather than assumed.
+        // The moisture budget: however hard the forcing, a cell cannot rain
+        // more than the air above it holds. (The over-unity defect that used
+        // to live here was the phantom water the old erosion rate was
+        // calibrated against; it was removed together with that rate's
+        // re-derivation.)
         assert!(
-            wrung_fraction(250.0, 50_000.0) > 1.0,
-            "the known over-unity forcing is still present — remove this line with the fix"
+            wrung_fraction(250.0, 50_000.0) <= 1.0,
+            "a share of a parcel is never more than the parcel"
         );
     }
 
+    /// **Saturation is a property of the WATER.** What a stream can hold rides
+    /// how much water crosses the cell and nothing else — a big river on a flat
+    /// delta still carries its load, which is how a delta gets built out of
+    /// what the river brought. The old law multiplied by slope, so capacity
+    /// collapsed at every slope break and a whole catchment's sediment landed
+    /// in one place.
+    #[test]
+    fn capacity_is_a_saturation_of_the_water_not_of_the_slope() {
+        let area = crate::config::CELL_AREA_M2;
+        let small = stream_capacity_kg(50.0, area, 1.6);
+        let trunk = stream_capacity_kg(500.0, area, 1.6);
+        assert!(trunk > small, "more water carries more sediment");
+        assert!(
+            (trunk / small - 10.0).abs() < 1e-9,
+            "and it is LINEAR in the water — ten times the flow, ten times the load"
+        );
+        assert_eq!(stream_capacity_kg(0.0, area, 1.6), 0.0, "no water carries nothing");
+        // It is exactly the saturation fraction of the water's own mass.
+        let water = 50.0 * 1.6 * area * WATER_DENSITY;
+        assert!((small - MAX_SEDIMENT_FRAC * water).abs() < 1.0);
+    }
+
+    /// **A river exchanges all the way down.** Even a stream well under its
+    /// saturation drops part of its load in every cell it crosses, so sediment
+    /// lands along the whole path instead of arriving as one lump wherever the
+    /// gradient first slackens.
+    #[test]
+    fn a_stream_drops_something_in_every_cell_it_crosses() {
+        let settle = (cell_spacing_m() / TRANSPORT_LENGTH_M).clamp(0.0, 1.0);
+        assert!(settle > 0.0 && settle < 1.0, "a share settles per cell: {settle}");
+        // Under capacity, the drop is that share — not zero, which is what the
+        // overflow-only rule gave.
+        let carrying = 1.0e15f64;
+        let capacity = 1.0e18f64;
+        let over = (carrying - capacity).max(0.0);
+        let drop = over + (carrying - over).max(0.0) * settle;
+        assert!(over == 0.0 && drop > 0.0, "well under capacity, and still deposits {drop:.3e} kg");
+    }
+
+    /// **It rains everywhere.** Rising ground still wrings harder — that is what
+    /// makes a wet windward slope and a dry shadow — but it no longer takes
+    /// essentially all of the world's rain: the flank-to-flat ratio is the 2–5×
+    /// real orography gives, not the 8× that left every interior arid.
+    #[test]
+    fn orography_modulates_the_rain_rather_than_monopolising_it() {
+        let flat = wrung_fraction(300.0, 0.0);
+        let flank = wrung_fraction(300.0, 3000.0);
+        assert!(flat > 0.2, "flat warm ground still rains: {flat}");
+        assert!(flank > flat, "and rising ground rains harder: {flank} vs {flat}");
+        let ratio = flank / flat;
+        assert!((2.0..=5.0).contains(&ratio), "orographic enhancement {ratio:.1}x is realistic");
+    }
+
+    /// **Over-steep ground sheds until it can stand.** A single-hex spike — the
+    /// white-dot defect — spreads into its ring of neighbours instead of
+    /// flickering against them: every pair's slope relaxes toward the repose
+    /// threshold, monotonically, conserving every gram, and no neighbour is
+    /// ever piled above the donor (the inversion that made the old picture
+    /// wiggle).
+    #[test]
+    fn a_spike_sheds_into_a_range_and_never_inverts() {
+        let (mut w, _t) = world(4, 11, 0);
+        let area = w.cell_area_m2();
+        // Build a genuinely absurd spike from the whole planetoid's mantle —
+        // tens of kilometres over its neighbours, like the runaways the bake
+        // used to keep.
+        let spike = 0usize;
+        let mut melt: Vec<(ElementId, f64)> = Vec::new();
+        for (e, want) in [(14u8, 6.0e17), (8u8, 4.0e17), (13u8, 2.0e17)] {
+            let mut want = want;
+            for src in 0..w.mantle.n_cells() {
+                if want <= 0.0 {
+                    break;
+                }
+                let took = w.mantle.remove(src, e, want);
+                if took > 0.0 {
+                    melt.push((e, took));
+                }
+                want -= took;
+            }
+        }
+        w.columns[spike].deposit(FormationProcess::ContinentalArc, 0.0, &melt);
+        w.audit("spike fixture");
+
+        let elev = |w: &World, i: usize| elevation_m(&w.columns[i], area);
+        let worst = |w: &World| {
+            (0..w.columns.len())
+                .flat_map(|i| {
+                    w.grid.neighbors[i].iter().map(move |&j| (i, j as usize))
+                })
+                .map(|(i, j)| elev(w, i) - elev(w, j))
+                .fold(f64::MIN, f64::max)
+        };
+        let before = worst(&w);
+        assert!(before > 10_000.0, "the fixture is a real runaway: {before:.0} m");
+
+        let stage = MassWasting;
+        let mut rng = crate::stage::StageRng::new(4);
+        let mut last = before;
+        for _ in 0..200 {
+            stage.tick(&mut w, crate::config::NOMINAL_DT_MYR, &mut rng);
+            w.audit("MassWasting");
+            let now = worst(&w);
+            assert!(now <= last + 1e-6, "relaxation is monotone: {last:.1} → {now:.1}");
+            // The spike stays the local high: shedding may never invert the pair.
+            for &j in &w.grid.neighbors[spike] {
+                assert!(
+                    elev(&w, spike) >= elev(&w, j as usize) - 1e-6,
+                    "a neighbour was piled above the donor"
+                );
+            }
+            last = now;
+        }
+        assert!(last < before * 0.5, "the cliff relaxed: {before:.0} → {last:.0} m");
+        let grew = w.grid.neighbors[spike]
+            .iter()
+            .filter(|&&j| {
+                w.columns[j as usize]
+                    .layers
+                    .iter()
+                    .any(|l| l.formed_by == FormationProcess::Sediment)
+            })
+            .count();
+        assert!(grew >= 3, "the spike became a massif: {grew} neighbours carry its talus");
+    }
+
+    /// **EROSION MUST WEAR THE WORLD DOWN AT A GEOLOGICAL RATE.**
+    ///
+    /// Not an outcome assertion — it names no landscape and requires no shape.
+    /// It pins the *order of magnitude* of a physical quantity that is measured
+    /// on the real Earth, which is the one kind of number this simulation may be
+    /// held to (the same standing correction that says a real-world quantity is
+    /// supplied and cited, never guessed).
+    ///
+    /// **It exists because a five-order-of-magnitude error passed the whole
+    /// suite, twice, in both directions.** Evaporation was written as a fraction
+    /// of the ocean's DEPTH per Myr, which structurally capped the hydrological
+    /// cycle at 0.35 turnovers/Myr against Earth's ~270; denudation ran at
+    /// **21 mm/Myr** for weeks with every test green. Fixing it multiplied rain
+    /// by ~17,000× and every test stayed green again. The suite checked
+    /// mechanism — does capacity bind, does sediment conserve — and nothing
+    /// checked SCALE.
+    ///
+    /// The band is deliberately wide. Real continental denudation spans cratons
+    /// at ~5 m/Myr to active orogens at 10–100; anywhere inside two orders of
+    /// that is a world doing recognisable geology, and outside it is a world
+    /// where rivers are either ornamental or catastrophic.
+    #[test]
+    fn erosion_wears_the_world_down_at_a_geological_rate() {
+        let t = tables();
+        let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
+        let mut w = World::seed(icosphere(12), b, &t, 42);
+        let levers = crate::Levers::default();
+        let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
+        let dt = crate::NOMINAL_DT_MYR;
+        for _ in 0..400 {
+            sched.step(&mut w, dt, None);
+        }
+
+        let area = w.cell_area_m2();
+        let weather = Weather::observe(&w, dt, levers.stellar_heat);
+        let elevation: Vec<f64> = w.columns.iter().map(|c| elevation_m(c, area)).collect();
+        let n = w.columns.len();
+        let mut cuts: Vec<f64> = Vec::new();
+        for i in 0..n {
+            if elevation[i] <= weather.sea_level {
+                continue;
+            }
+            let low = w.grid.neighbors[i]
+                .iter()
+                .map(|&j| elevation[j as usize])
+                .fold(f64::INFINITY, f64::min);
+            if !low.is_finite() || low >= elevation[i] {
+                continue;
+            }
+            let resistance = w.columns[i]
+                .layers
+                .last()
+                .map(|l| bed_resistance(&t, l) as f64)
+                .unwrap_or(1.0);
+            cuts.push(stream_cut_m(
+                levers.erosion_rate,
+                weather.rain[i],
+                slope_between(elevation[i] - low),
+                resistance,
+                dt,
+            ));
+        }
+        assert!(!cuts.is_empty(), "the fixture has land with somewhere to drain");
+        cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_m_per_my = cuts[cuts.len() / 2] / dt;
+
+        assert!(
+            (0.05..=200.0).contains(&median_m_per_my),
+            "median denudation {median_m_per_my:.4} m/Myr is outside anything geology does \
+             (cratons ~5, active orogens 10–100). Under it, rivers are ornamental and the \
+             world keeps whatever tectonics builds; over it, the continents wash away."
+        );
+    }
+
+    /// **The forcing, measured on a real world** — the instrument the reverted
+    /// rework was missing (measurement-first: constants are chosen against
+    /// these numbers, not guessed). Bakes the H=0.15 world to a mid-life state
+    /// and prints the distributions of rain, flow, slope, wanted cut and
+    /// capacity over land.
+    #[test]
+    #[ignore = "a report for the maintainer, run by hand"]
+    fn erosion_forcing_report() {
+        let t = tables();
+        let b = Budget::from_dir(&content_data_dir(), &t)
+            .expect("budget")
+            .rescaled(&[(1, 0.15)]);
+        let mut w = World::seed(icosphere(24), b, &t, 42);
+        let mut s =
+            Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::default()), 42);
+        for _ in 0..1500 {
+            s.step(&mut w, crate::config::NOMINAL_DT_MYR, None);
+        }
+
+        let area = w.cell_area_m2();
+        let dt = crate::config::NOMINAL_DT_MYR;
+        let weather = Weather::observe(&w, dt, 1.0);
+        let elevation: Vec<f64> = w.columns.iter().map(|c| elevation_m(c, area)).collect();
+        let n = w.columns.len();
+        let downhill: Vec<Option<usize>> = (0..n)
+            .map(|i| {
+                w.grid.neighbors[i]
+                    .iter()
+                    .map(|&j| j as usize)
+                    .filter(|&j| elevation[j] < elevation[i])
+                    .min_by(|&a, &b| {
+                        elevation[a].partial_cmp(&elevation[b]).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by(|&a, &b| {
+            elevation[b].partial_cmp(&elevation[a]).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut flow: Vec<f64> = weather.rain.clone();
+        for &cell in &order {
+            if let Some(to) = downhill[cell] {
+                flow[to] += flow[cell];
+            }
+        }
+
+        let land: Vec<usize> = (0..n)
+            .filter(|&i| elevation[i] > weather.sea_level && downhill[i].is_some())
+            .collect();
+        let pct = |mut v: Vec<f64>| -> (f64, f64, f64, f64) {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let at = |q: f64| v[(((v.len() - 1) as f64) * q) as usize];
+            (at(0.5), at(0.9), at(0.99), *v.last().unwrap_or(&0.0))
+        };
+        let erosion = Erosion::new(Arc::clone(&t), DEFAULT_EROSION_RATE, 1.0);
+        let slope_of = |i: usize| slope_between(elevation[i] - elevation[downhill[i].unwrap()]);
+        let (r50, r90, r99, rmax) = pct(land.iter().map(|&i| weather.rain[i]).collect());
+        let (f50, f90, f99, fmax) = pct(land.iter().map(|&i| flow[i]).collect());
+        let (s50, s90, s99, smax) = pct(land.iter().map(|&i| slope_of(i)).collect());
+        let (c50, c90, c99, cmax) = pct(
+            land.iter()
+                .map(|&i| {
+                    let res = erosion.surface_resistance(&w.columns[i]) as f64;
+                    stream_cut_m(DEFAULT_EROSION_RATE, flow[i], slope_of(i), res, dt)
+                })
+                .collect(),
+        );
+        let (k50, k90, k99, kmax) = pct(
+            land.iter()
+                .map(|&i| stream_capacity_kg(flow[i], area, dt))
+                .collect(),
+        );
+        eprintln!(
+            "land {} of {n} · sea {:.0} m · spacing {:.0} m · repose {}\n\
+             rain  p50 {r50:.3}  p90 {r90:.3}  p99 {r99:.3}  max {rmax:.3}  (m/tick)\n\
+             flow  p50 {f50:.2}  p90 {f90:.2}  p99 {f99:.2}  max {fmax:.2}\n\
+             slope p50 {s50:.5}  p90 {s90:.5}  p99 {s99:.5}  max {smax:.5}\n\
+             cut   p50 {c50:.3}  p90 {c90:.3}  p99 {c99:.3}  max {cmax:.3}  (m/tick at rate {})\n\
+             cap   p50 {k50:.2e}  p90 {k90:.2e}  p99 {k99:.2e}  max {kmax:.2e}  (kg)",
+            land.len(),
+            weather.sea_level,
+            cell_spacing_m(),
+            REPOSE_SLOPE,
+            DEFAULT_EROSION_RATE,
+        );
+    }
 }

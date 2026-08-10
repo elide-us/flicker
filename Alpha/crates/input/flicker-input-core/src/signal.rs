@@ -95,6 +95,15 @@ pub enum ActionSignal {
     TabNext,
     /// Return to the previous tab / group (LB / left trigger).
     TabPrev,
+    /// Advance to the next top-level PAGE (RT / `]`).
+    ///
+    /// A rung ABOVE `TabNext`: a controller-first menu has two rails, and they are
+    /// different scales of movement — the triggers cycle the whole page, the bumpers
+    /// cycle a section within it. Keeping them distinct is what lets a surface show
+    /// both rails at once (the `paged_menu` template) without one shadowing the other.
+    PageNext,
+    /// Return to the previous top-level page (LT / `[`).
+    PagePrev,
 
     // ── Editor navigation (controller-first benches) ──
     // A bench screen is several PANELS (a tree, a list, an inspector); the d-pad
@@ -109,6 +118,12 @@ pub enum ActionSignal {
     ModeNext,
     /// Previous view mode within the current tab.
     ModePrev,
+    /// Draw the focused viewport's camera closer (left stick up on a bench —
+    /// the same stick whose X axis walks the panels; the wheel is the pointer's
+    /// zoom and stays outside the signal map).
+    ZoomIn,
+    /// Back the focused viewport's camera away (left stick down).
+    ZoomOut,
 
     // ── Editor verbs (the chord layer) ──
     // Reached by holding the chord modifier and pressing a NON-FACE control —
@@ -188,10 +203,14 @@ impl ActionSignal {
         ActionSignal::NavRight,
         ActionSignal::TabNext,
         ActionSignal::TabPrev,
+        ActionSignal::PageNext,
+        ActionSignal::PagePrev,
         ActionSignal::PanelNext,
         ActionSignal::PanelPrev,
         ActionSignal::ModeNext,
         ActionSignal::ModePrev,
+        ActionSignal::ZoomIn,
+        ActionSignal::ZoomOut,
         ActionSignal::Undo,
         ActionSignal::Redo,
         ActionSignal::Cut,
@@ -258,10 +277,14 @@ impl ActionSignal {
             Self::NavRight => "NavRight",
             Self::TabNext => "TabNext",
             Self::TabPrev => "TabPrev",
+            Self::PageNext => "PageNext",
+            Self::PagePrev => "PagePrev",
             Self::PanelNext => "PanelNext",
             Self::PanelPrev => "PanelPrev",
             Self::ModeNext => "ModeNext",
             Self::ModePrev => "ModePrev",
+            Self::ZoomIn => "ZoomIn",
+            Self::ZoomOut => "ZoomOut",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::Cut => "Cut",
@@ -328,10 +351,14 @@ impl ActionSignal {
             Self::NavRight => "Nav right",
             Self::TabNext => "Tab \u{2192}",
             Self::TabPrev => "\u{2190} Tab",
+            Self::PageNext => "Page \u{2192}",
+            Self::PagePrev => "\u{2190} Page",
             Self::PanelNext => "Panel \u{2192}",
             Self::PanelPrev => "\u{2190} Panel",
             Self::ModeNext => "Mode \u{2192}",
             Self::ModePrev => "\u{2190} Mode",
+            Self::ZoomIn => "Zoom In",
+            Self::ZoomOut => "Zoom Out",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::Cut => "Cut",
@@ -390,10 +417,14 @@ impl fmt::Display for ActionSignal {
             Self::NavRight => "Navigate Right",
             Self::TabNext => "Next Tab",
             Self::TabPrev => "Previous Tab",
+            Self::PageNext => "Next Page",
+            Self::PagePrev => "Previous Page",
             Self::PanelNext => "Next Panel",
             Self::PanelPrev => "Previous Panel",
             Self::ModeNext => "Next View Mode",
             Self::ModePrev => "Previous View Mode",
+            Self::ZoomIn => "Zoom In",
+            Self::ZoomOut => "Zoom Out",
             Self::Undo => "Undo",
             Self::Redo => "Redo",
             Self::Cut => "Cut",

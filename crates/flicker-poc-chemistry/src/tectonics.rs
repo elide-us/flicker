@@ -49,7 +49,9 @@ use glam::{Mat3, Vec3};
 
 use flicker_materials::ElementId;
 
-use crate::column::{density_kg_m3, elevation_m, Column, FormationProcess, SUBDUCTABLE_DENSITY};
+use crate::column::{
+    density_kg_m3, elevation_m, Column, FormationProcess, Layer, SUBDUCTABLE_DENSITY,
+};
 use crate::observer::segment_where;
 use crate::planet::{sea_level_m, World};
 use crate::stage::{Stage, StageRng};
@@ -106,6 +108,33 @@ const RIDGE_MELT_FRACTION: f64 = 0.0004;
 /// The temperature a subducting stack carries down with it, K — surface rock,
 /// which is what a slab is made of. See the cooling term in [`collide`].
 const SLAB_SURFACE_K: f64 = 300.0;
+
+/// **The two ends of the circuit, counted.** Mass the seams swallowed and mass
+/// the seams welled back up, kg, since the last [`take_seam_flux`].
+///
+/// OBSERVATION ONLY — nothing reads these to decide anything, and removing them
+/// changes no outcome. They exist because "we sink material, and what we sink
+/// has to come back" is an **aggregate** claim about the whole planet, and the
+/// only way to know whether the circuit closes is to count both ends. It is not
+/// per-cell provenance and must never become that: the planet is the well.
+static SUNK_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WELLED_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn add_flux(counter: &std::sync::atomic::AtomicU64, kg: f64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let _ = counter.fetch_update(Relaxed, Relaxed, |bits| {
+        Some((f64::from_bits(bits) + kg).to_bits())
+    });
+}
+
+/// Read and reset both counters: `(subducted_kg, welled_kg)`.
+pub fn take_seam_flux() -> (f64, f64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        f64::from_bits(SUNK_BITS.swap(0, Relaxed)),
+        f64::from_bits(WELLED_BITS.swap(0, Relaxed)),
+    )
+}
 
 /// How far a cell's temperature falls per unit of its own mass drawn off as
 /// melt, K. Melting takes the heat of fusion out of what stays behind, so a
@@ -390,6 +419,60 @@ impl Conveyor {
             }
         }
 
+        // ── The buoyant standoff: LAND DOES NOT RIDE OVER LAND. ──
+        //
+        // Two stacks that both refuse to sink used to be settled by `collide`:
+        // one took the ground and wore the other, and the ground the loser came
+        // from — nobody left to claim it — froze a fresh mafic floor. Mass was
+        // conserved and AREA was not. Every such meeting turned two land cells
+        // into one taller land cell plus one cell of new sea floor, so
+        // continental crust could only ever concentrate: a one-hex spike, a
+        // ring of young floor beside it that ages, densifies and founders (the
+        // black hexes), belts that stay one hex wide, and plates that eat their
+        // own leading edge instead of welding to what they meet.
+        //
+        // What a real continent does when it meets something it cannot push
+        // under is STOP. The boundary locks, and the shortening goes into
+        // crumpling instead of into anybody's mantle. So the step is REFUSED —
+        // same un-step idiom as the dedup above, destination home and the
+        // stride refunded — and both cells keep their ground. Nothing is
+        // subducted here, so nothing needs conserving: this only decides who
+        // moves.
+        //
+        // Only against ground that is still going to BE there: a cell whose
+        // occupant is leaving for somewhere else is free to step into. Two
+        // kinds of ground hold — one that is staying put, and one that is
+        // driving straight back at us, which is the head-on continental
+        // collision and the whole reason this exists. A cycle of stacks
+        // rotating through one another holds nobody up and is left alone.
+        //
+        // Runs to fixpoint because each pass only un-steps, which is also what
+        // resolves chains: arresting one stack makes it stationary ground for
+        // the stack behind it, so the shortening propagates back into the plate
+        // exactly as it should.
+        let mut arrested: Vec<(usize, usize)> = Vec::new();
+        loop {
+            let mut changed = false;
+            for from in 0..n {
+                let to = destination[from];
+                if to == from || (destination[to] != to && destination[to] != from) {
+                    continue;
+                }
+                if !unsubductable(&world.columns[from]) || !unsubductable(&world.columns[to]) {
+                    continue;
+                }
+                destination[from] = from;
+                let (here, there) = (world.grid.dirs[from], world.grid.dirs[to]);
+                let d = world.columns[from].accum_disp + (there - here);
+                world.columns[from].accum_disp = d - here * d.dot(here);
+                arrested.push((from, to));
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+
         // ── Lift everything, then settle it. ──
         // Who arrives where, as an intrusive chain through two flat arrays rather
         // than a Vec per cell: this runs every tick over every cell on the planet,
@@ -406,6 +489,8 @@ impl Conveyor {
             .collect();
 
         let mut here: Vec<Column> = Vec::with_capacity(4);
+        let mut vacancies: Vec<usize> = Vec::new();
+        let mut well = 0.0f64;
         for cell in 0..n {
             here.clear();
             let mut at = head[cell];
@@ -416,24 +501,154 @@ impl Conveyor {
                 at = next[at as usize];
             }
             match here.len() {
-                0 => open_ground(world, cell),
+                0 => vacancies.push(cell),
                 1 => {
                     let mut col = here.pop().expect("one arrival");
                     col.cell_id = cell as u32;
                     world.columns[cell] = col;
                 }
-                _ => collide(world, cell, std::mem::take(&mut here), self.arc_return, sea, area),
+                _ => collide(
+                    world,
+                    cell,
+                    std::mem::take(&mut here),
+                    self.arc_return,
+                    sea,
+                    area,
+                    &mut well,
+                ),
             }
         }
+        // **Count what the well took, then spend it at the fountains.** One
+        // planet-wide number split evenly between the gaps that opened — no
+        // cell knows where any of it came from, because the planet is the well.
+        // Whatever the gaps cannot take stays in the mantle where it sank.
+        let share = if vacancies.is_empty() {
+            0.0
+        } else {
+            well.max(0.0) / vacancies.len() as f64
+        };
+        for cell in std::mem::take(&mut vacancies) {
+            open_ground(world, cell, share);
+        }
+
+        // ── The crumple: shortening a locked boundary cannot spend on motion. ──
+        //
+        // The push does not stop because the step was refused. Convergence that
+        // cannot move ground has to go somewhere, and where it goes is up: the
+        // advancing stack's COVER is thrust over the block resisting it, one
+        // sheet at a time, while its own basement stays where it is. That is
+        // the shape of a real collision margin — a thickening belt on the
+        // overridden side, and behind it a foreland that has been stripped of
+        // its cover but is still standing, still land.
+        //
+        // **The basement never goes.** A stack down to its last bed thrusts
+        // nothing, which is what keeps the trailing cell continental instead of
+        // recreating the vacancy this whole mechanism exists to prevent — and it
+        // is self-limiting for free: a belt strips its foreland's cover, then
+        // stops, until sediment and arc melt build a new cover for it to take.
+        //
+        // Whole beds, through the same `pile_on` a collision uses, so every bed
+        // keeps its elements, its minerals, its densification and its history —
+        // a fractional split would drop the mineral ledger on the floor, since
+        // `Layer::release` discards what it removes.
+        // **Which way the sheet goes is the same question a collision asks**:
+        // the lighter block rides, so the DENSER one is overridden and it is
+        // the denser one's cover that is scraped off. Without that asymmetry a
+        // head-on pair simply trades covers back and forth every tick and
+        // builds nothing — thickening needs an upper plate and a lower one.
+        // Ties break on cell id so a run stays deterministic.
+        // **A thrust SPENDS the shortening it came from.** The arrest above
+        // refunds the stride — the push did not go away just because the step
+        // was refused — but a refund with nothing debiting it means the contact
+        // re-earns its step on the very next tick without accumulating any new
+        // convergence, and thrusts another whole bed. Every tick, for as long as
+        // the boundary is locked, at a rate set by the TICK COUNT rather than by
+        // how fast the plates are actually closing.
+        //
+        // Measured after the layer cake landed: slope p90 pegged exactly at
+        // `REPOSE_SLOPE` across a tenth of the planet — mass wasting clamping
+        // everywhere because relief was being built faster than anything could
+        // relax it. Doubling the bed count (1.9 → 3.9) doubled what an unpaced
+        // crumple had to move.
+        //
+        // Spending one cell spacing per sheet is what makes the rate physical:
+        // convergence goes into shortening, and a plate closing at some speed
+        // thrusts at that speed however the timestep is chopped. A contact that
+        // is arrested but thrusts NOTHING — wrong side, or down to its last bed
+        // — keeps its accumulation, which is also right: the push is still
+        // there and still building.
+        for (from, to) in arrested {
+            let (mine, theirs) =
+                (world.columns[from].mean_density(), world.columns[to].mean_density());
+            let overridden = mine > theirs || (mine == theirs && from > to);
+            if !overridden || world.columns[from].layers.len() < 2 {
+                continue;
+            }
+            let spacing = cell_spacing(world, from);
+            let sheet = world.columns[from].layers.pop().expect("checked: at least two beds");
+            world.columns[to].pile_on(vec![sheet]);
+            let d = world.columns[from].accum_disp;
+            let carried = d.length();
+            world.columns[from].accum_disp =
+                if carried > spacing { d * ((carried - spacing) / carried) } else { Vec3::ZERO };
+        }
+
         audit_occupancy(world, "Conveyor");
     }
+}
+
+/// **Can this bed stop a descending slab?** Igneous AND too buoyant to follow.
+///
+/// Sediment, peat and vein fill are weak, wet and metres thin; they ride down
+/// with the basement they were lying on, exactly as the sediment on a real
+/// subducting plate does (see the long note at the use site in [`collide`] for
+/// what letting them arrest it cost).
+///
+/// **The one buoyancy predicate**, shared by the collision scan and the
+/// standoff test in [`Conveyor::step`] — if those two could disagree about what
+/// sinks, a stack could be refused a step for being unsinkable and then be sunk
+/// on arrival.
+fn bed_arrests(bed: &Layer) -> bool {
+    !matches!(
+        bed.formed_by,
+        FormationProcess::Sediment | FormationProcess::Organic | FormationProcess::Hydrothermal
+    ) && density_kg_m3(bed) <= SUBDUCTABLE_DENSITY
+}
+
+/// **Is this stack unsinkable?** Its lowest bed decides: the leading edge goes
+/// under first, so if the basement itself is too buoyant to follow, nothing
+/// below the surface can be pushed down and the stack cannot be disposed of at
+/// all. An empty column is not unsinkable — bare mantle is overridden freely.
+fn unsubductable(col: &Column) -> bool {
+    col.layers.first().is_some_and(bed_arrests)
 }
 
 /// **A vacancy.** Nobody arrived, so the mantle beneath is uncovered and
 /// decompresses: it melts and freezes a thin mafic crust. Dense, low-riding — read
 /// by isostasy as ocean floor, which is what a spreading ridge leaves behind.
-fn open_ground(world: &mut World, cell: usize) {
-    let melt = draw_melt(world, cell, RIDGE_MELT_FRACTION, crate::crust::oceanic_affinity);
+fn open_ground(world: &mut World, cell: usize, from_the_well_kg: f64) {
+    let mut melt = draw_melt(world, cell, RIDGE_MELT_FRACTION, crate::crust::oceanic_affinity);
+    // **The fountain runs on what the well took in.** Decompression melt alone
+    // is blind to what the seams ate, which is why welling returned 8.7% of
+    // subduction and the rest sat stranded under the trenches. This asks for
+    // this gap's share of the planet's intake instead — an AGGREGATE number,
+    // with no idea which cell any of it came from, drawn like all ridge melt
+    // from the mantle right here. Decompression is the floor, so a world with
+    // no subduction still spreads.
+    let have: f64 = melt.iter().map(|&(_, m)| m).sum();
+    if from_the_well_kg > have {
+        let reachable: f64 = world
+            .mantle
+            .elements()
+            .iter()
+            .map(|&e| world.mantle.mass(cell, e) * crate::crust::oceanic_affinity(e))
+            .sum();
+        if reachable > 0.0 {
+            let fraction = (from_the_well_kg - have) / reachable;
+            melt.extend(draw_melt(world, cell, fraction, crate::crust::oceanic_affinity));
+        }
+    }
+    add_flux(&WELLED_BITS, melt.iter().map(|&(_, m)| m).sum());
     let mut col = Column::empty(cell as u32);
     if !melt.is_empty() {
         col.deposit(FormationProcess::OceanicCrust, world.tick_myr, &melt);
@@ -464,6 +679,7 @@ fn collide(
     arc_return: f64,
     sea_level: f64,
     area: f64,
+    well: &mut f64,
 ) {
     // The lightest rides. Ties broken by cell id so a run stays deterministic.
     contenders.sort_by(|a, b| {
@@ -511,16 +727,12 @@ fn collide(
             // averages out"). It also broke the distillation loop: mud that
             // never goes down never comes back refined, so continents could
             // never purify into anything light enough to stand up.
-            let arrests = !matches!(
-                bed.formed_by,
-                FormationProcess::Sediment
-                    | FormationProcess::Organic
-                    | FormationProcess::Hydrothermal
-            ) && density_kg_m3(&bed) <= SUBDUCTABLE_DENSITY;
+            let arrests = bed_arrests(&bed);
             if sinking && !arrests {
                 for (e, m) in bed.elements.iter() {
                     world.mantle.add(cell, e, m);
                     returning.push((e, m * ret));
+                    *well += m;
                     sank_kg += m;
                 }
             } else {
@@ -536,6 +748,7 @@ fn collide(
         // been swallowing slabs becomes a cold downwelling, the flow reorganises
         // around it, and the conveyor's convergence MIGRATES rather than
         // grinding the same ground for four billion years.
+        add_flux(&SUNK_BITS, sank_kg);
         if sank_kg > 0.0 {
             let cell_mass = world.mantle.cell_mass(cell);
             if cell_mass > 0.0 {
@@ -561,6 +774,9 @@ fn collide(
             }
             let got = world.mantle.remove(cell, e, want);
             if got > 0.0 {
+                // Already back at the surface here, so the well never held it
+                // and the spreading edge must not spend it a second time.
+                *well -= got;
                 melt.push((e, got));
             }
         }
@@ -612,6 +828,20 @@ pub(crate) fn draw_melt(
     melt
 }
 
+/// Drive one reshuffle directly, with the bodies named by hand — same reason
+/// as [`collide_for_test`]: reaching the standoff through a whole tick means
+/// testing the segmentation at the same time, and which cells the segmentation
+/// happens to group is not the claim under test.
+#[cfg(test)]
+pub(crate) fn step_for_test(
+    conveyor: &Conveyor,
+    world: &mut World,
+    labels: &[u32],
+    members: &[Vec<usize>],
+) {
+    conveyor.step(world, labels, members)
+}
+
 /// Drive one collision directly — the seam behaviours (who sinks, what rides
 /// down with it, how much cold the slab carries) are the tectonic claims worth
 /// testing on their own, and reaching them through a whole conveyor step means
@@ -625,7 +855,7 @@ pub(crate) fn collide_for_test(
     sea_level: f64,
     area: f64,
 ) {
-    collide(world, cell, contenders, arc_return, sea_level, area)
+    collide(world, cell, contenders, arc_return, sea_level, area, &mut 0.0)
 }
 
 /// Every cell holds exactly one column, and each column knows the cell it stands
@@ -709,7 +939,7 @@ mod tests {
             let mut winner = Column::empty(cell as u32);
             winner.layers.push(bed(&[(14, 5.0e18), (19, 2.0e18)]));
             let before = w.columns[cell].mass_kg();
-            collide(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, sea, area);
+            collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, sea, area);
             let _ = before;
             w.columns[cell]
                 .layers
@@ -747,7 +977,7 @@ mod tests {
         winner.layers.push(bed(&[(14, 5.0e18), (19, 2.0e18)]));
 
         let area = w.cell_area_m2();
-        collide(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, DRY_WORLD, area);
 
         let survived = &w.columns[cell];
         assert!(survived.layers.len() >= 3, "the buoyant rock and what rode above it stayed");
@@ -775,7 +1005,7 @@ mod tests {
         let total = a.mass_kg() + b.mass_kg();
 
         let area = w.cell_area_m2();
-        collide(&mut w, cell, vec![a, b], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        collide_for_test(&mut w, cell, vec![a, b], DEFAULT_ARC_RETURN, DRY_WORLD, area);
 
         let piled = &w.columns[cell];
         assert_eq!(piled.layers.len(), 2, "neither stack was swallowed");
@@ -794,7 +1024,7 @@ mod tests {
         let before = w.mantle.total_mass();
         w.columns[cell] = Column::empty(cell as u32);
 
-        open_ground(&mut w, cell);
+        open_ground(&mut w, cell, 0.0);
 
         assert!(!w.columns[cell].layers.is_empty(), "the vacancy filled");
         assert!(
@@ -807,6 +1037,7 @@ mod tests {
         );
     }
 
+
     fn bed(elements: &[(ElementId, f64)]) -> crate::column::Layer {
         let mut c = flicker_worldstate::Composition::new();
         for &(e, m) in elements {
@@ -818,7 +1049,8 @@ mod tests {
             formed_at_myr: 0.0,
             formed_by: FormationProcess::OceanicCrust,
             peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
         }
     }
 
@@ -832,7 +1064,7 @@ mod tests {
         let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut sched = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w.budget.clone(), &crate::Levers::brisk()), seed);
+        let mut sched = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
         for _ in 0..90 {
             sched.step(&mut w, 1.0, None);
         }
@@ -852,6 +1084,323 @@ mod tests {
         let mut w = World::seed(icosphere(freq), b, &t, seed);
         crate::planet::freeze_lid(&mut w);
         w
+    }
+
+    /// Every column replaced by a felsic stack drawn from its own mantle cell —
+    /// an all-continental world, so every meeting is buoyant-against-buoyant.
+    /// Two beds, because the crumple thrusts the COVER and keeps the basement,
+    /// and a one-bed world could not show the difference.
+    fn continental_world(freq: u32, seed: u64) -> World {
+        let mut w = lidded_world(freq, seed);
+        for cell in 0..w.columns.len() {
+            for bed in w.columns[cell].take_all() {
+                for (e, m) in bed.elements.iter() {
+                    w.mantle.add(cell, e, m);
+                }
+            }
+            // A basement and a cover, laid by two DIFFERENT processes — which
+            // is what starts a bed now that a stratum is a depositional event
+            // rather than a composition contrast (ruling B, 2026-08-07). A
+            // one-bed column has no cover to thrust, so the crumple would have
+            // nothing to act on. Masses sized to a freq-6 planetoid's cells,
+            // which hold only a few 10^18 kg all told.
+            let beds = [(13u8, FormationProcess::ContinentalArc), (11, FormationProcess::Volcanic)];
+            for (k, (cover, process)) in beds.into_iter().enumerate() {
+                let mut melt = Vec::new();
+                for (e, want) in [(14u8, 2.0e17), (cover, 5.0e16)] {
+                    let got = w.mantle.remove(cell, e, want);
+                    if got > 0.0 {
+                        melt.push((e, got));
+                    }
+                }
+                w.columns[cell].deposit(process, k as f64, &melt);
+            }
+        }
+        w.audit("continental fixture");
+        w
+    }
+
+    /// **LAND DOES NOT RIDE OVER LAND** (Aaron, 2026-08-06: *"it sounds exactly
+    /// like the conditions under which we should be pushing hexes together to
+    /// make them cohesive continental plates"*).
+    ///
+    /// Drive an all-continental world into itself. Every meeting is between two
+    /// stacks that refuse to sink, so no ground may be vacated and no sea floor
+    /// may be manufactured: the count of cells carrying unsinkable basement is
+    /// the world's LAND AREA, and it must not fall. Before the standoff every
+    /// such meeting spent one cell — the loser rode onto the winner and the
+    /// ground it left froze a fresh mafic floor — so continental area drained
+    /// away one hex per collision, which is where the one-hex spikes and the
+    /// black ring beside them came from.
+    #[test]
+    fn continents_that_collide_keep_their_ground() {
+        let mut w = continental_world(6, 5);
+        let land = |w: &World| w.columns.iter().filter(|c| unsubductable(c)).count();
+        let before = land(&w);
+        assert_eq!(before, w.columns.len(), "the fixture starts all-continental");
+
+        // TWO hemispheres driving head-on into each other at the equator, with
+        // the bodies named by hand. It has to be two BODIES: same-body
+        // contention is lattice noise and the dedup above rightly un-steps it,
+        // so a single global plate never reaches the standoff at all. The
+        // displacement is set directly rather than accumulated from a velocity
+        // field, so the claim under test is the reshuffle and not the
+        // segmentation's opinion of where a boundary belongs.
+        let axis = Vec3::Y;
+        let n = w.columns.len();
+        let mut labels = vec![0u32; n];
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); 3];
+        for cell in 0..n {
+            let north = axis.dot(w.grid.dirs[cell]) >= 0.0;
+            labels[cell] = if north { 1 } else { 2 };
+            members[labels[cell] as usize].push(cell);
+        }
+        let conveyor = Conveyor::default();
+        for _ in 0..40 {
+            for (cell, &label) in labels.iter().enumerate() {
+                let r = w.grid.dirs[cell];
+                let tangent = axis - r * axis.dot(r);
+                let sign = if label == 1 { -1.0 } else { 1.0 };
+                let sp = cell_spacing(&w, cell);
+                w.columns[cell].accum_disp = tangent.normalize_or_zero() * sign * sp * 1.2;
+            }
+            step_for_test(&conveyor, &mut w, &labels, &members);
+            w.audit("Conveyor");
+            assert_eq!(
+                land(&w),
+                before,
+                "a collision spent continental ground: {} of {before} cells left",
+                land(&w),
+            );
+        }
+        // And the convergence did real work rather than simply freezing: the
+        // cover has been thrust, so somewhere is carrying more beds than it
+        // started with.
+        let deepest = w.columns.iter().map(|c| c.layers.len()).max().unwrap_or(0);
+        assert!(deepest > 2, "the crumple thickened a belt: deepest stack is {deepest} beds");
+    }
+
+    /// **A THRUST COSTS CONVERGENCE.** The crumple used to fire once per locked
+    /// contact per TICK: the arrest refunds the stride, nothing debited it, so a
+    /// contact re-earned its step every tick without the plates closing any
+    /// further. The belt then thickened at a rate set by the timestep rather
+    /// than by how fast anything was actually moving — and after the layer cake
+    /// doubled the bed count it pegged slope p90 at the angle of repose across a
+    /// tenth of the planet.
+    ///
+    /// The test the old one could not be: the fixture above re-sets
+    /// `accum_disp` every iteration, so it re-earns the step by hand and the
+    /// pacing never showed. Here the convergence is banked ONCE and the world is
+    /// left to run — so the sheets thrust are bounded by the convergence
+    /// supplied, not by how many ticks it is chopped into.
+    #[test]
+    fn the_crumple_spends_the_shortening_it_thrusts() {
+        let mut w = continental_world(6, 5);
+        let axis = Vec3::Y;
+        let n = w.columns.len();
+        let mut labels = vec![0u32; n];
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); 3];
+        for cell in 0..n {
+            let north = axis.dot(w.grid.dirs[cell]) >= 0.0;
+            labels[cell] = if north { 1 } else { 2 };
+            members[labels[cell] as usize].push(cell);
+        }
+
+        // **Deep columns, or the test cannot see the defect.** The standard
+        // fixture carries two beds and the basement never goes, so every cell
+        // can thrust exactly ONE sheet whatever the pacing — which is precisely
+        // why the belt test above passed both before and after this bug existed.
+        // Six beds gives a foreland something to strip.
+        const DEEP: usize = 6;
+        for cell in 0..n {
+            for k in 2..DEEP {
+                let mut melt = Vec::new();
+                for (e, want) in [(14u8, 5.0e16), (13u8, 2.0e16)] {
+                    let got = w.mantle.remove(cell, e, want);
+                    if got > 0.0 {
+                        melt.push((e, got));
+                    }
+                }
+                // Alternating processes: a bed is a depositional EVENT now.
+                let process = if k % 2 == 0 {
+                    FormationProcess::Volcanic
+                } else {
+                    FormationProcess::ContinentalArc
+                };
+                w.columns[cell].deposit(process, k as f64, &melt);
+            }
+        }
+        w.audit("deep fixture");
+        let shallowest_before = w.columns.iter().map(|c| c.layers.len()).min().unwrap_or(0);
+        assert!(shallowest_before >= DEEP - 1, "the fixture really is deep");
+
+        // Bank TWO cell-spacings of convergence, once, and never top it up.
+        let banked = 2.0f32;
+        for cell in 0..n {
+            let r = w.grid.dirs[cell];
+            let tangent = axis - r * axis.dot(r);
+            let sign = if labels[cell] == 1 { -1.0 } else { 1.0 };
+            let sp = cell_spacing(&w, cell);
+            w.columns[cell].accum_disp = tangent.normalize_or_zero() * sign * sp * banked;
+        }
+        let beds_before: usize = w.columns.iter().map(|c| c.layers.len()).sum();
+
+        let conveyor = Conveyor::default();
+        for _ in 0..30 {
+            step_for_test(&conveyor, &mut w, &labels, &members);
+            w.audit("Conveyor");
+        }
+
+        // Thrusting MOVES a bed between columns, so the planet's total bed count
+        // cannot change — that is the conservation half.
+        let beds_after: usize = w.columns.iter().map(|c| c.layers.len()).sum();
+        assert_eq!(beds_before, beds_after, "thrusting moves beds, it does not make them");
+
+        // And the pacing half: a foreland can only give up as many sheets as the
+        // convergence paid for. Unpaced, thirty ticks strip every foreland to
+        // its basement regardless of how little the plates actually closed.
+        let stripped = w.columns.iter().map(|c| c.layers.len()).min().unwrap_or(0);
+        assert!(
+            stripped as f32 >= DEEP as f32 - banked - 1.0,
+            "a foreland cannot be stripped faster than it converges: {stripped} beds left \
+             of {DEEP} after banking {banked} spacings over 30 ticks"
+        );
+    }
+
+    /// The standoff is about BUOYANCY, not about stopping the conveyor: sea
+    /// floor is dense all the way down, so it still goes under a continent and
+    /// still comes back as arc melt. Without this the fix would have quietly
+    /// ended subduction — and with it, trenches, arcs and the whole
+    /// distillation loop.
+    #[test]
+    fn sea_floor_still_subducts_under_a_continent() {
+        let mut w = crusted_world(6, 7);
+        let cell = 0usize;
+        let mafic = bed(&[(12, 3.0e18), (26, 3.0e18)]);
+        let felsic = bed(&[(14, 5.0e18), (13, 1.5e18)]);
+        assert!(!bed_arrests(&mafic), "sea floor sinks");
+        assert!(bed_arrests(&felsic), "refined rock does not");
+
+        let mut loser = Column::empty(cell as u32);
+        loser.layers.push(mafic);
+        let mut winner = Column::empty(cell as u32);
+        winner.layers.push(felsic);
+        assert!(!unsubductable(&loser), "an all-mafic stack is disposable");
+        assert!(unsubductable(&winner), "a felsic stack is not");
+
+        let before = w.mantle.element_mass(12);
+        let area = w.cell_area_m2();
+        collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        assert!(w.mantle.element_mass(12) > before, "the slab went down");
+    }
+
+    /// **DOES THE WHOLE STACK TRAVEL, OR ONLY ITS BASE?** (Aaron in-window,
+    /// 2026-08-06, offered as an observation rather than a diagnosis: *"it
+    /// seems like only the lowest layer of the hex stack is being moved… when
+    /// the plates move, everything in the tile that is a ground layer should be
+    /// moving as well."*)
+    ///
+    /// It matters beyond the look of it: burial depth is position in the stack,
+    /// so a column that arrived without its cover would carry the wrong
+    /// `peak_pt` and every read that depends on depth — metamorphic grade
+    /// first — would be reading fiction.
+    ///
+    /// Marks one column's beds with stamps nothing else uses, steps the
+    /// conveyor, and requires all of them to be found together, in order, with
+    /// their masses intact.
+    #[test]
+    fn a_moving_plate_carries_its_whole_stack() {
+        let mut w = continental_world(6, 21);
+        let n = w.columns.len();
+        // Three beds nothing else could be confused with, bottom → top.
+        let stamps = [101.0f64, 102.0, 103.0];
+        let source = 40usize;
+        // Clear the fixture cell the conserved way — `layers.clear()` would
+        // simply destroy the rock, and the harness rightly refuses that.
+        for bed in w.columns[source].take_all() {
+            for (e, m) in bed.elements.iter() {
+                w.mantle.add(source, e, m);
+            }
+        }
+        let mut masses = Vec::new();
+        // Each bed a genuinely different rock — like accretes to like, so beds
+        // of one composition merge into one bed (correctly) and there would be
+        // nothing to tell apart.
+        for (k, (stamp, cover)) in stamps.iter().zip([13u8, 11, 19]).enumerate() {
+            let mut melt = Vec::new();
+            for (e, want) in [(14u8, 2.0e17 * (k + 1) as f64), (cover, 8.0e16)] {
+                let mut want = want;
+                for src in 0..w.mantle.n_cells() {
+                    if want <= 0.0 {
+                        break;
+                    }
+                    let took = w.mantle.remove(src, e, want);
+                    if took > 0.0 {
+                        melt.push((e, took));
+                    }
+                    want -= took;
+                }
+            }
+            // Alternating processes, because a bed is a depositional EVENT now:
+            // three arc pulses onto un-lithified arc rock are correctly ONE bed,
+            // and this fixture needs three.
+            let process =
+                if k == 1 { FormationProcess::Volcanic } else { FormationProcess::ContinentalArc };
+            w.columns[source].deposit(process, *stamp, &melt);
+            masses.push(w.columns[source].layers.last().expect("just laid").mass_kg());
+        }
+        assert_eq!(w.columns[source].layers.len(), 3, "the fixture is a three-bed stack");
+        w.audit("stack fixture");
+
+        // One body, one heading — a plain translation, so the stack has
+        // somewhere to go and the claim is about carriage, not segmentation.
+        let axis = w.grid.dirs[source];
+        let labels = vec![1u32; n];
+        let members: Vec<Vec<usize>> = vec![Vec::new(), (0..n).collect()];
+        for cell in 0..n {
+            let r = w.grid.dirs[cell];
+            let tangent = (axis.cross(r)).cross(r);
+            let sp = cell_spacing(&w, cell);
+            w.columns[cell].accum_disp = tangent.normalize_or_zero() * sp * 1.2;
+        }
+        step_for_test(&Conveyor::default(), &mut w, &labels, &members);
+        w.audit("Conveyor");
+
+        // Where did the marked beds end up?
+        let mut homes: Vec<(usize, Vec<f64>)> = Vec::new();
+        for (cell, col) in w.columns.iter().enumerate() {
+            let found: Vec<f64> = col
+                .layers
+                .iter()
+                .filter(|l| stamps.contains(&l.formed_at_myr))
+                .map(|l| l.formed_at_myr)
+                .collect();
+            if !found.is_empty() {
+                homes.push((cell, found));
+            }
+        }
+        assert_eq!(
+            homes.len(),
+            1,
+            "the stack was split across {} cells — the cover did not travel with its base: {homes:?}",
+            homes.len()
+        );
+        let (landed, found) = &homes[0];
+        assert_eq!(found.as_slice(), &stamps, "all three beds arrived, still in order");
+        let arrived = &w.columns[*landed];
+        for (k, stamp) in stamps.iter().enumerate() {
+            let bed = arrived
+                .layers
+                .iter()
+                .find(|l| l.formed_at_myr == *stamp)
+                .expect("checked present");
+            assert!(
+                (bed.mass_kg() - masses[k]).abs() < 1.0,
+                "bed {stamp} arrived with {:.3e} kg, not the {:.3e} it left with",
+                bed.mass_kg(),
+                masses[k]
+            );
+        }
     }
 
     /// **The seam defect Aaron saw in-window.** Around the twelve pentagons the

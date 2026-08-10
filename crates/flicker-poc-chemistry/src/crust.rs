@@ -301,12 +301,23 @@ impl Stage for Crystallization {
     }
 
     fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
-        // The minerals the simulation is asked to carry, with what each is made of.
+        // What can crystallise out of rock, with what each is made of — the
+        // catalog's own answer (`crystallizes`), never a list typed in here.
+        //
+        // This filtered on `sim_required` until 2026-08-06, which is a
+        // PROVENANCE flag naming the rows added beyond the Book III tables. The
+        // twelve it happens to select are all rock-formers, so it looked right
+        // and was not: every ORE mineral is a Book III row, so Hematite,
+        // Chalcopyrite and Native Gold could never form and ore stayed a bare
+        // element count with no mineral, no hardness and no rock identity. It
+        // also excluded Quartz — and with no quartz there is no sandstone,
+        // chert or quartzite, which are the three most erosion-resistant rocks
+        // in the catalog. The world could not make its own hardest ground.
         let recipes: Vec<(u16, Vec<(ElementId, f64)>)> = self
             .tables
             .compounds()
             .iter()
-            .filter(|c| c.category == "mineral" && c.sim_required)
+            .filter(|c| c.crystallizes)
             .map(|c| (c.id, self.tables.compound_mass_fractions(c)))
             .collect();
         if recipes.is_empty() {
@@ -389,16 +400,22 @@ impl Stage for Crystallization {
 /// The bed approaches the state exponentially, so nothing switches on: a young
 /// floor is barely denser than the day it froze, and an old one is a slab
 /// waiting to founder.
-const DENSIFICATION_EFOLD_MYR: f64 = 70.0;
+const COOLING_EFOLD_MYR: f64 = 70.0;
 
-/// **CrustDensification** — igneous rock, left alone, becomes heavier rock.
+/// **ThermalSubsidence** — igneous rock, left alone, cools and contracts.
 ///
-/// Not a new substance and not a gram of new mass: the same elements taking on
-/// the tighter mineral assemblage that cold, deep basalt actually wears
-/// (gabbro → eclogite). All this stage does is advance each igneous bed's
-/// [`densified`](crate::column::Layer::densified) toward 1; what that MEANS is
+/// Not a new substance and not a gram of new mass: the same elements packing
+/// tighter as the heat leaves. All this stage does is advance each igneous
+/// bed's [`cooled`](crate::column::Layer::cooled) toward 1; what that MEANS is
 /// [`density_kg_m3`](crate::column::density_kg_m3)'s business, and what the
 /// density means is isostasy's.
+///
+/// **Age is the whole condition, and that is correct here.** Cooling depends on
+/// how long the rock has been losing heat and on nothing else, so this stage
+/// has no pressure or depth gate and should not have one. Its twin
+/// [`Eclogitisation`] is the half that does — the two used to share this timer,
+/// which is what made a phase change that belongs 45 km down fire on every bed
+/// in the world.
 ///
 /// Three things fall out of it, none of them written anywhere as a result:
 ///
@@ -407,6 +424,8 @@ const DENSIFICATION_EFOLD_MYR: f64 = 70.0;
 /// a sea needs. Without it every column floats, the water spreads out over all
 /// of them, and every world ends up the same flat blue ball whatever else it
 /// did — the single largest reason this simulation could not make an Earth.
+/// Sea floor is far too thin to ever reach [`eclogite_pa`], so this stage does
+/// that job alone, and keeps the full gain the basins were measured at.
 ///
 /// **Slab pull, in the right order.** The densest stack loses a collision, and
 /// old floor is now the densest thing on the planet — so the oldest sea floor
@@ -415,30 +434,136 @@ const DENSIFICATION_EFOLD_MYR: f64 = 70.0;
 /// **Continents that stay.** The gain is scaled by how mafic the rock is, so a
 /// refined felsic pile gains nothing, ever. Nothing says continents are
 /// permanent; they simply never become heavy enough to sink.
-pub struct CrustDensification;
+pub struct ThermalSubsidence;
 
-impl Stage for CrustDensification {
+impl Stage for ThermalSubsidence {
     fn name(&self) -> &'static str {
-        "CrustDensification"
+        "ThermalSubsidence"
     }
 
     fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
-        let step = (dt_myr / DENSIFICATION_EFOLD_MYR).clamp(0.0, 1.0);
+        let step = (dt_myr / COOLING_EFOLD_MYR).clamp(0.0, 1.0);
         for col in &mut world.columns {
             for bed in &mut col.layers {
-                // Only rock a melt made. Sediment compacts and organics cook —
-                // both real, both somebody else's stage — but neither is the
-                // basalt phase change, and letting a mud drape "eclogitise"
-                // would sink coastlines for no reason anyone could point at.
-                if matches!(
-                    bed.formed_by,
-                    FormationProcess::Sediment
-                        | FormationProcess::Organic
-                        | FormationProcess::Hydrothermal
-                ) {
+                if !cools(bed) {
                     continue;
                 }
-                bed.densified += (1.0 - bed.densified) * step;
+                bed.cooled += (1.0 - bed.cooled) * step;
+            }
+        }
+    }
+}
+
+/// Whether a bed is the kind of rock these two stages act on at all.
+///
+/// Only rock a melt made. Sediment compacts and organics cook — both real, both
+/// somebody else's stage — but neither is the basalt phase change, and letting
+/// a mud drape "eclogitise" would sink coastlines for no reason anyone could
+/// point at.
+fn cools(bed: &crate::column::Layer) -> bool {
+    !matches!(
+        bed.formed_by,
+        FormationProcess::Sediment | FormationProcess::Organic | FormationProcess::Hydrothermal
+    )
+}
+
+/// Depth at which mafic rock changes phase into eclogite, m — ~45 km, where
+/// garnet becomes the stable assemblage in real basalt.
+///
+/// **This is the gate that was missing.** The phase change was being advanced
+/// on age alone, with no depth condition at all, so it reached every bed on the
+/// planet including the surface of continents. Measured over 200 ticks it
+/// converted continental crust to subductable crust 3,663 times and reversed
+/// zero times — a one-way ratchet that ate the continents from the inside and
+/// gave the conveyor a new classification to thrash against every tick.
+pub const ECLOGITE_DEPTH_M: f64 = 45_000.0;
+
+/// Reference density of the rock doing the pressing, kg/m³ — mid-crustal, the
+/// same ~2800 [`delamination_pa`] is quoted against.
+const OVERBURDEN_REF_DENSITY: f64 = 2800.0;
+
+/// The overburden [`ECLOGITE_DEPTH_M`] corresponds to **on this world**, Pa.
+///
+/// **A depth, not a pressure, because gravity here is derived from planet
+/// size.** The first cut of this stage hardcoded 1.3 GPa — correct for Earth —
+/// and the bake then measured the deepest overburden anywhere on the planet at
+/// 3.49e8 Pa, 0.27× the gate: the stage was inert, every tick, everywhere. This
+/// world is small (g ≈ 2.45 m/s² at the reference frequency, against Earth's
+/// 9.81) and its crust is thin, so an Earth pressure is out of reach by design.
+/// Asking the question as a DEPTH gets the same petrology at any planet size,
+/// which is what the size model requires of every constant that presses.
+///
+/// Ordering against [`delamination_pa`] is the physics: rock converts at this
+/// depth, and a root that has converted is heavy enough that by the
+/// delamination limit it can no longer hold itself up and founders. **That
+/// constant is still an absolute pressure and has the same size-model flaw —
+/// flagged, not changed here, because the ceiling it sets was measured.**
+pub fn eclogite_pa(world: &World) -> f64 {
+    OVERBURDEN_REF_DENSITY * world.gravity_m_s2() * ECLOGITE_DEPTH_M
+}
+
+/// How fast a bed converts once it is deep enough — an e-fold of ~20 My, the
+/// pace of a reaction that needs the rock to be both deep and wet.
+const ECLOGITISATION_EFOLD_MYR: f64 = 20.0;
+
+/// How fast eclogite reverts once it is NOT deep enough — an e-fold of ~60 My,
+/// three times slower than it converts. Retrogression is the sluggish
+/// direction in real rock: it needs fluid to rehydrate the assemblage, and dry
+/// eclogite can sit metastable in the crust for a very long time.
+const RETROGRADE_EFOLD_MYR: f64 = 60.0;
+
+/// **Eclogitisation** — mafic rock buried deep enough changes phase.
+///
+/// The pressure-driven half of what used to be one unconditional timer.
+/// [`ThermalSubsidence`] is rock getting denser because it got *cold*; this is
+/// rock getting denser because it got *deep*, and only the bottom of a genuinely
+/// thick pile ever qualifies. Each bed is judged on the overburden IT carries,
+/// not on the column's total, so a root converts from the base upward as it
+/// thickens — which is the order the rock actually does it in.
+///
+/// **It runs both ways.** Eclogite that comes back up out of its stability
+/// field reverts to the lighter assemblage, so a root that is shed, unroofed or
+/// eroded stops being a slab-in-waiting instead of staying one for the rest of
+/// the run. That reversibility is the point: the one-way version was measured
+/// making 3,663 continental→subductable conversions with zero reversals, and a
+/// ratchet with no pawl release only ever runs the world down in one direction.
+///
+/// Feeds [`Delamination`], which is the consequence: convert at
+/// [`eclogite_pa`], founder at [`delamination_pa`].
+pub struct Eclogitisation;
+
+impl Stage for Eclogitisation {
+    fn name(&self) -> &'static str {
+        "Eclogitisation"
+    }
+
+    fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
+        let area = world.cell_area_m2();
+        let gravity = world.gravity_m_s2();
+        let gate = eclogite_pa(world);
+        let forward = (dt_myr / ECLOGITISATION_EFOLD_MYR).clamp(0.0, 1.0);
+        let back = (dt_myr / RETROGRADE_EFOLD_MYR).clamp(0.0, 1.0);
+        for col in &mut world.columns {
+            // **One walk, top-down, carrying the load.** The load on a bed is
+            // the weight of everything above it — a whole-column read would
+            // convert a thin drape on a deep root as though it lay at the
+            // bottom of one. Asking `overburden_pa` per bed re-sums that stack
+            // every time, which is O(beds²) with a 28-element sum inside: free
+            // at the 1.9 beds this world used to carry, and 400 mass-sums per
+            // cell per tick once a stack can actually reach the cap of 20.
+            let mut above = 0.0f64;
+            for index in (0..col.layers.len()).rev() {
+                let load = above * gravity / area.max(f64::MIN_POSITIVE);
+                above += col.layers[index].mass_kg();
+                if !cools(&col.layers[index]) {
+                    continue;
+                }
+                let bed = &mut col.layers[index];
+                if load >= gate {
+                    bed.eclogitised += (1.0 - bed.eclogitised) * forward;
+                } else {
+                    bed.eclogitised -= bed.eclogitised * back;
+                }
             }
         }
     }
@@ -449,7 +574,27 @@ impl Stage for CrustDensification {
 /// the base of a thickened root sits at pressures where the rock is no longer
 /// stable as crust — and this is that depth in the currency the columns already
 /// keep: `ρgh` for ~70 km of ~2800 kg/m³ rock.
-const DELAMINATION_PA: f64 = 1.9e9;
+const DELAMINATION_DEPTH_M: f64 = 70_000.0;
+
+/// The overburden [`DELAMINATION_DEPTH_M`] corresponds to **on this world**, Pa.
+///
+/// **A depth, not a pressure — the same size-model bug the eclogite gate had.**
+/// This was written as an absolute `1.9e9`, which is that depth at EARTH's
+/// gravity (70 km × 2800 kg/m³ × 9.81). This planet's gravity is derived from
+/// its size (2.45 m/s² at the reference frequency), so the same 70 km of rock
+/// presses about 4.8e8 here and the ceiling sat roughly 4× out of reach.
+///
+/// Measured 2026-08-07: **0 of 5762 columns had ever reached it** — max basal
+/// pressure on the planet 1.302e9 against a 1.90e9 threshold. Delamination has
+/// never fired in this simulation. That went unnoticed because the tectonic
+/// conveyor was stranding ~91% of subducted mass in the mantle and *that* was
+/// acting as the crust sink; the two faults concealed each other, and the
+/// earlier "crustal height is now BOUNDED" result was reading the stranding.
+/// Closing the seam circuit removed the accidental sink and left crust
+/// unbounded, which is what exposed this.
+pub fn delamination_pa(world: &World) -> f64 {
+    OVERBURDEN_REF_DENSITY * world.gravity_m_s2() * DELAMINATION_DEPTH_M
+}
 
 /// Fraction of a root's EXCESS load that founders per Myr — an e-fold of ~10
 /// My, the pace at which a real orogen sheds a root it can no longer carry.
@@ -465,11 +610,11 @@ const DELAMINATION_RATE: f64 = 0.1;
 
 /// **Delamination** — a mountain root that grows too deep falls off.
 ///
-/// The pressure-driven twin of [`CrustDensification`]: that one is rock going
-/// dense because it got *cold*, this one is rock going dense because it got
-/// *deep*. Past [`DELAMINATION_PA`] the bottom of a thickened pile is no longer
-/// stable as crust; it converts, becomes heavier than the mantle it is resting
-/// on, and sinks away — taking the pile's height with it.
+/// The last step of the depth story, and [`Eclogitisation`] is the one before
+/// it: that stage converts the rock at [`eclogite_pa`], this one takes it away
+/// once the pile passes [`delamination_pa`] and the root can no longer hold
+/// itself up. Rock that has converted is heavier than the mantle it is resting
+/// on, so it sinks away — taking the pile's height with it.
 ///
 /// **This is the ceiling the model did not have.** Collisions pile stacks onto
 /// stacks with nothing to stop them: a 4.5 BY bake put one column at fourteen
@@ -492,11 +637,13 @@ impl Stage for Delamination {
 
     fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
         let area = world.cell_area_m2();
+        let gravity = world.gravity_m_s2();
         let step = (DELAMINATION_RATE * dt_myr).clamp(0.0, 1.0);
+        let ceiling = delamination_pa(world);
         for cell in 0..world.columns.len() {
             // The load on the deepest rock is the whole stack's own weight.
-            let basal = crate::column::basal_pressure_pa(&world.columns[cell], area);
-            if basal < DELAMINATION_PA {
+            let basal = crate::column::basal_pressure_pa(&world.columns[cell], gravity, area);
+            if basal < ceiling {
                 continue;
             }
             // **What goes is measured against the OVERSHOOT, not against the
@@ -508,7 +655,7 @@ impl Stage for Delamination {
             // the root cannot hold, so that is the thing that falls off. The
             // pile then settles toward the pressure it can carry, which is what
             // a ceiling means.
-            let mut budget = (basal - DELAMINATION_PA) * area / crate::column::GRAVITY_M_S2 * step;
+            let mut budget = (basal - ceiling) * area / gravity * step;
             // The BASE goes — bottom-first, because that is where the pressure
             // is. What leaves is rock, so the column gets shorter; what the
             // mountain keeps is everything above it.
@@ -553,6 +700,107 @@ impl Stage for Delamination {
     }
 }
 
+/// Fraction of what a bed COULD reorganise that it does per Myr. Metamorphism
+/// is slow even by the standards of this pipeline — an orogen holds its root at
+/// depth for tens of millions of years — and the rate keeps it a process rather
+/// than a verdict handed down the instant a threshold is crossed.
+const METAMORPHIC_RATE: f64 = 0.02;
+
+/// **Metamorphism** — rock that has been buried deep enough and hot enough
+/// stops being what it was.
+///
+/// The one transformation in the pipeline that reads [`Layer::peak_pt`], and
+/// the reason that record is kept at all. Grade is a **high-water mark**: the
+/// pair is the worst a bed has ever endured, so rock carried back to the
+/// surface stays what the depth made it. That is why a worn-down orogen exposes
+/// slate and gneiss rather than the mud it started as.
+///
+/// **Nothing here names a mineral or a pressure.** Each reaction is a phase's
+/// own stability limit in the catalog (`metamorphic: {to, pressure_pa,
+/// temp_k}`), so the chemistry is content and this is only the machinery.
+///
+/// Those limits are the **real numbers for the reaction** and are not chosen
+/// against what any particular world can reach. A threshold no ground on a
+/// planet ever attains means that planet never made the phase — a fact about
+/// the world, not a miscalibration, and not something to correct by moving the
+/// number. (Recorded because the first draft of this stage did exactly that:
+/// the diamond limit was placed just under the delamination ceiling so that
+/// diamonds would come out rare-but-present, which is writing an outcome.)
+///
+/// **Element-neutral by construction.** A reaction may only rearrange a phase
+/// into one built from the same elements in the same proportions — checked at
+/// construction, loudly. Carbon does this honestly: buried coal orders into
+/// graphite and graphite into diamond, all of it pure carbon, so the element
+/// ledger never moves and the compound bound cannot be broken. A reaction that
+/// releases a volatile — serpentine dehydrating to olivine and water — has to
+/// book that water somewhere, and is deliberately not expressible yet.
+pub struct Metamorphism {
+    /// `(from, to, pressure_pa, temp_k)`, resolved from the catalog once.
+    reactions: Vec<(u16, u16, f64, f64)>,
+}
+
+impl Metamorphism {
+    /// Resolve every stability limit the catalog states. Panics if a reaction
+    /// names a phase that is missing or one built from different elements —
+    /// both are content errors that would otherwise surface as a conservation
+    /// panic thousands of ticks into a bake.
+    pub fn new(tables: &flicker_materials::Tables) -> Self {
+        let mut reactions = Vec::new();
+        for c in tables.compounds() {
+            let Some(rule) = c.metamorphic.as_ref() else { continue };
+            let to = tables.compound(&rule.to).unwrap_or_else(|| {
+                panic!("{} metamorphoses to '{}', absent from the catalog", c.name, rule.to)
+            });
+            let (a, b) = (tables.compound_mass_fractions(c), tables.compound_mass_fractions(to));
+            let neutral = a.len() == b.len()
+                && a.iter()
+                    .all(|&(e, f)| b.iter().any(|&(e2, f2)| e2 == e && (f - f2).abs() < 1e-9));
+            assert!(
+                neutral,
+                "{} → {} is not element-neutral; a reaction that changes composition must book \
+                 what it releases",
+                c.name, to.name
+            );
+            reactions.push((c.id, to.id, rule.pressure_pa, rule.temp_k));
+        }
+        Self { reactions }
+    }
+}
+
+impl Stage for Metamorphism {
+    fn name(&self) -> &'static str {
+        "Metamorphism"
+    }
+
+    fn tick(&self, world: &mut World, dt_myr: f64, _rng: &mut StageRng) {
+        if self.reactions.is_empty() {
+            return;
+        }
+        let step = (METAMORPHIC_RATE * dt_myr).clamp(0.0, 1.0);
+        for col in &mut world.columns {
+            for bed in &mut col.layers {
+                let (p, t) = bed.peak_pt;
+                for &(from, to, need_p, need_t) in &self.reactions {
+                    if p < need_p || t < need_t {
+                        continue;
+                    }
+                    let have = bed.minerals.amount(from);
+                    if have <= 0.0 {
+                        continue;
+                    }
+                    // Mineral ledger only: same elements in the same
+                    // proportions, so the conserved ledger never moves and the
+                    // compound bound cannot break.
+                    let moved = bed.minerals.remove(from, have * step);
+                    if moved > 0.0 {
+                        bed.minerals.add(to, moved);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// **Strata reconciliation** — the stack's housekeeping, run after the tick's
 /// material has moved. It is the last step of the loop for a reason: every bed
 /// records the load and heat it has just endured, and then burial is allowed to
@@ -582,11 +830,20 @@ impl Stage for StrataReconcile {
 
     fn tick(&self, world: &mut World, _dt_myr: f64, _rng: &mut StageRng) {
         let area = world.cell_area_m2();
+        let gravity = world.gravity_m_s2();
+        // The sky's contribution to the surface, sampled once — the same read
+        // the weather uses, so the ground and the air cannot disagree about how
+        // warm the world is.
+        let greenhouse = crate::surface::greenhouse_k(world);
         for cell in 0..world.columns.len() {
-            // The rock a bed sits in is the rock beneath it — the mantle cell's
-            // temperature until a real geotherm arrives with the thermal stages.
-            let temp_k = world.mantle.temp_k[cell];
-            world.columns[cell].reconcile(temp_k, area, STRATA_SOFT_CAP);
+            // **A bed's temperature is its DEPTH's temperature.** It used to be
+            // handed the mantle's outright, at every depth, which is why the
+            // record's temperature half meant nothing and metamorphism could
+            // not read it. Now the column warms from its own surface toward the
+            // mantle beneath it (see [`geotherm_k`]).
+            let surface_k = crate::surface::cell_surface_temp_k(world, cell, 1.0, greenhouse);
+            let mantle_k = world.mantle.temp_k[cell];
+            world.columns[cell].reconcile(surface_k, mantle_k, gravity, area, STRATA_SOFT_CAP);
         }
     }
 }
@@ -601,13 +858,222 @@ mod tests {
     use flicker_materials::{JsonTableSource, Tables};
     use flicker_worldgrid::icosphere;
 
+    /// Draw a bed of a **given composition** out of a cell's mantle, never
+    /// conjuring mass: every element is scaled by the same factor so the ratios
+    /// the caller asked for survive whatever the cell can actually supply. A
+    /// fixture that silently drew a different rock than it asked for is how two
+    /// of these tests first went red.
+    fn drawn(
+        w: &mut World,
+        cell: usize,
+        want: &[(u8, f64)],
+        mass_kg: f64,
+    ) -> flicker_worldstate::Composition {
+        let scale = want
+            .iter()
+            .map(|&(e, f)| w.mantle.mass(cell, e) / (f * mass_kg))
+            .fold(f64::INFINITY, f64::min)
+            .min(1.0);
+        let mut c = flicker_worldstate::Composition::new();
+        for &(e, f) in want {
+            c.add(e, w.mantle.remove(cell, e, f * mass_kg * scale));
+        }
+        c
+    }
+
+    /// Push a bed of `want` onto `cell`'s stack, drawing it from `from`'s mantle.
+    fn push_bed(
+        w: &mut World,
+        cell: usize,
+        from: usize,
+        want: &[(u8, f64)],
+        mass_kg: f64,
+        by: crate::column::FormationProcess,
+    ) {
+        let elements = drawn(w, from, want, mass_kg);
+        w.columns[cell].layers.push(crate::column::Layer {
+            elements,
+            minerals: Default::default(),
+            formed_at_myr: 0.0,
+            formed_by: by,
+            peak_pt: (0.0, 0.0),
+            cooled: 0.0,
+            eclogitised: 0.0,
+        });
+    }
+
+    /// **ORE IS A MINERAL, AND THE WORLD CAN MAKE ITS OWN HARDEST ROCK.**
+    ///
+    /// The crystalliser used to select its candidates with `sim_required` — a
+    /// PROVENANCE flag naming rows added beyond the Book III tables. Every ore
+    /// mineral is a Book III row, so gold, hematite and chalcopyrite could
+    /// never form and ore was a bare element count with no mineral, no
+    /// hardness and no rock identity; quartz could not form either, and
+    /// without quartz there is no sandstone, chert or quartzite — the three
+    /// most erosion-resistant rocks in the catalog. Both are consequences of
+    /// one wrong predicate, so both are pinned here.
+    #[test]
+    fn ore_and_quartz_can_crystallise() {
+        use crate::column::{FormationProcess, Layer};
+        use crate::stage::{Stage, StageRng};
+        let dir = content_data_dir();
+        let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("t"));
+        let b = Budget::from_dir(&dir, &t).expect("budget");
+        let mut w = World::seed(icosphere(4), b, &t, 12);
+
+        // A silica bed with a little iron and gold in it — drawn from the
+        // mantle, never conjured, like every other fixture.
+        let mut melt = Vec::new();
+        for (e, want) in [(8u8, 6.0e16), (14, 5.0e16), (26, 2.0e16), (79, 1.0e14)] {
+            let mut want = want;
+            for src in 0..w.mantle.n_cells() {
+                if want <= 0.0 {
+                    break;
+                }
+                let took = w.mantle.remove(src, e, want);
+                if took > 0.0 {
+                    melt.push((e, took));
+                }
+                want -= took;
+            }
+        }
+        w.columns[0].deposit(FormationProcess::OceanicCrust, 0.0, &melt);
+        w.audit("fixture");
+
+        let stage = super::Crystallization::new(std::sync::Arc::clone(&t));
+        let mut rng = StageRng::new(1);
+        for _ in 0..40 {
+            stage.tick(&mut w, 1.0, &mut rng);
+            w.audit("Crystallization");
+            w.audit_compound_bound("Crystallization");
+        }
+
+        let made: Vec<String> = w.columns[0]
+            .layers
+            .iter()
+            .flat_map(|l: &Layer| l.minerals.iter())
+            .filter(|&(_, m)| m > 0.0)
+            .filter_map(|(id, _)| t.compound_by_id(id).map(|c| c.name.clone()))
+            .collect();
+        assert!(made.iter().any(|n| n == "Quartz"), "quartz must be formable: {made:?}");
+        assert!(
+            made.iter().any(|n| t.compound(n).is_some_and(|c| c.harvestable)),
+            "an ore mineral must be formable: {made:?}"
+        );
+    }
+
+    /// **DEPTH COOKS ROCK; AGE DOES NOT.** The geotherm and the reaction it
+    /// unlocks, together, because neither is worth anything alone: before this
+    /// every bed was stamped with the mantle's temperature at every depth, so
+    /// the record's temperature half carried no depth information and no
+    /// transformation could honestly read it.
+    ///
+    /// Two carbon beds, identical but for how deeply they are buried. The deep
+    /// one orders into graphite; the shallow one stays coal however long it
+    /// sits there. Nothing says "coal becomes graphite at 7 km" — the catalog
+    /// states a stability limit and the column states a depth.
+    #[test]
+    fn only_deeply_buried_carbon_reorganises() {
+        use crate::column::{geotherm_k, FormationProcess, Layer};
+        use crate::stage::{Stage, StageRng};
+        let dir = content_data_dir();
+        let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
+        let coal = t.compound("Coal").expect("coal").id;
+        let graphite = t.compound("Graphite").expect("graphite").id;
+        let rule = t.compound("Coal").unwrap().metamorphic.clone().expect("coal has a limit");
+
+        // The geotherm itself: warms downward, never past the mantle, and the
+        // surface is the surface.
+        assert_eq!(geotherm_k(290.0, 1800.0, 0.0), 290.0, "the top is the surface");
+        assert!(geotherm_k(290.0, 1800.0, 10_000.0) > 290.0, "it warms downward");
+        assert!(
+            geotherm_k(290.0, 1800.0, 1.0e9) <= 1800.0,
+            "nothing in the crust is hotter than what it sits on"
+        );
+
+        let bed = |mass: f64| {
+            let mut elements = flicker_worldstate::Composition::new();
+            elements.add(6, mass);
+            let mut minerals = flicker_worldstate::CompoundLedger::new();
+            minerals.add(coal, mass);
+            Layer {
+                elements,
+                minerals,
+                formed_at_myr: 0.0,
+                formed_by: FormationProcess::Organic,
+                peak_pt: (0.0, 0.0),
+                cooled: 0.0,
+                eclogitised: 0.0,
+            }
+        };
+        // Hand each bed the conditions directly — the claim under test is the
+        // reaction, not how a column comes to be deep.
+        let mut deep = bed(1.0e17);
+        deep.peak_pt = (rule.pressure_pa * 1.5, rule.temp_k + 100.0);
+        let mut shallow = bed(1.0e17);
+        shallow.peak_pt = (rule.pressure_pa * 0.1, rule.temp_k + 100.0);
+        let mut col = crate::column::Column::empty(0);
+        col.layers.push(deep);
+        col.layers.push(shallow);
+
+        let mut w = World::seed(icosphere(4), Budget::from_dir(&dir, &t).expect("b"), &t, 3);
+        w.columns[0] = col;
+        let stage = super::Metamorphism::new(&t);
+        let mut rng = StageRng::new(7);
+        for _ in 0..200 {
+            stage.tick(&mut w, 1.0, &mut rng);
+            w.audit_compound_bound("Metamorphism");
+        }
+
+        let deep_bed = &w.columns[0].layers[0];
+        let shallow_bed = &w.columns[0].layers[1];
+        assert!(deep_bed.minerals.amount(graphite) > 0.0, "the deep bed ordered into graphite");
+        assert!(
+            deep_bed.minerals.amount(coal) < 1.0e16,
+            "and most of its coal is gone: {}",
+            deep_bed.minerals.amount(coal)
+        );
+        assert_eq!(
+            shallow_bed.minerals.amount(graphite),
+            0.0,
+            "shallow carbon stays coal however long it sits"
+        );
+        // Element-neutral: carbon in, carbon out, the ledger untouched.
+        assert!((deep_bed.elements.amount(6) - 1.0e17).abs() < 1.0, "no element moved");
+    }
+
+    /// The catalog's own statement of what crystallises — a phase with another
+    /// route must not be makeable out of rock, or the world grows coal in its
+    /// basalt and rock salt at the bottom of the sea.
+    #[test]
+    fn only_phases_that_crystallise_are_candidates() {
+        let dir = content_data_dir();
+        let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
+        for (name, want) in [
+            ("Quartz", true),
+            ("Native Gold", true),
+            ("Hematite", true),
+            ("Olivine", true),
+            ("Halite", false),   // evaporite — needs standing water to dry out
+            ("Coal", false),     // Maturation makes it from buried tissue
+            ("Bauxite", false),  // a tropical weathering residue
+        ] {
+            let c = t.compound(name).unwrap_or_else(|| panic!("{name} missing"));
+            assert_eq!(c.crystallizes, want, "{name}: crystallizes should be {want}");
+        }
+        // And nothing outside the mineral category may crystallise out of rock.
+        for c in t.compounds().iter().filter(|c| c.crystallizes) {
+            assert_eq!(c.category, "mineral", "{} crystallises but is not a mineral", c.name);
+        }
+    }
+
     /// A world run through the full formation pipeline for `ticks` Myr.
     fn run(freq: u32, seed: u64, ticks: usize) -> World {
         let dir = content_data_dir();
         let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w.budget.clone(), &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None); // conservation audited every tick
         }
@@ -640,11 +1106,20 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
         }
 
-        let stage = super::Volcanism::new(&t, super::DEFAULT_ERUPTION_RATE);
+        // Mechanism-test speed, the same posture as `Levers::brisk`: a freq-4
+        // planetoid's per-cell mantle is ~24× lighter than the reference
+        // world's, while the bed-film floor (`MIN_BED_MASS_KG`) is areal and
+        // absolute — the same hex at every size. At the as-written rate each
+        // tick's lava is a sub-floor film that joins the lid, and no run length
+        // can spawn a bed from films; the probe is about the MECHANISM (a plume
+        // erupts through the lid, builds Volcanic ground, vents gas), so it
+        // runs the eruption brisk.
+        let stage = super::Volcanism::new(&t, 100.0 * super::DEFAULT_ERUPTION_RATE);
         let mut rng = StageRng::new(3);
         for _ in 0..20 {
             stage.tick(&mut w, 1.0, &mut rng);
@@ -689,7 +1164,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
         }
         let stage = super::Volcanism::new(&t, super::DEFAULT_ERUPTION_RATE);
@@ -777,7 +1253,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-                densified: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
         };
         // Cell 0: mafic sea floor. Cell 1: a refined felsic pile.
@@ -792,11 +1269,11 @@ mod tests {
         assert!(fresh_high > 0.0, "…so it rides above the datum: {fresh_high:.0} m");
 
         // Age it. 600 My is many e-folds — an old abyssal plain.
-        let stage = super::CrustDensification;
+        let stage = super::ThermalSubsidence;
         let mut rng = StageRng::new(1);
         for _ in 0..600 {
             stage.tick(&mut w, 1.0, &mut rng);
-            w.audit("CrustDensification"); // it moves no mass, ever
+            w.audit("ThermalSubsidence"); // it moves no mass, ever
         }
 
         let old_floor = density_kg_m3(&w.columns[0].layers[0]);
@@ -819,6 +1296,164 @@ mod tests {
         );
     }
 
+    /// **THE CONTINENT-EATER, pinned — as a CHARACTERISATION, not a pass.**
+    ///
+    /// A continental column is never pure arc melt: it picks up volcanic beds,
+    /// thrust sheets and floor scraped off collisions, so its mafic fraction
+    /// climbs. Age alone then carries it across [`SUBDUCTABLE_DENSITY`],
+    /// `crust_kind` calls it sea floor, and the conveyor subducts it — measured
+    /// at 3,663 conversions per 200 ticks with zero reversals.
+    ///
+    /// **Splitting the timers did not close this, and the obvious lever is not
+    /// available.** Moving `eclogite_former_frac`'s ramp right stops the leak in
+    /// this fixture and takes the ocean basins with it (the 4.5 BY bake put the
+    /// basin floor back at −52 m from −282 m), because the same number decides
+    /// whether real sea floor densifies at all. So the leak stands, deliberately
+    /// and measured, until it is ruled on.
+    ///
+    /// What this test locks is the half that IS fixed: the pressure-driven
+    /// phase change no longer fires on surface rock. The final assert records
+    /// the leak that remains — **when it is closed, that assert should be
+    /// inverted, not deleted.**
+    #[test]
+    fn a_mixed_continental_bed_still_ages_into_subductability() {
+        use crate::column::{density_kg_m3, FormationProcess, SUBDUCTABLE_DENSITY};
+        use crate::stage::{Stage, StageRng};
+        let dir = content_data_dir();
+        let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
+        let b = Budget::from_dir(&dir, &t).expect("budget");
+        let mut w = World::seed(icosphere(4), b, &t, 91);
+
+        // Felsic silica (Si = 0.30) carrying a real contamination load: Mg+Fe =
+        // 0.15 of the bed, against a clean granite's ~0.085. Aluminium and
+        // potassium are left out on purpose — the mantle holds almost no K
+        // (5.5e14 kg in a cell, measured), so asking for them yields a bed of a
+        // quite different rock than the one this test means to make.
+        const MIXED: &[(u8, f64)] = &[(8, 0.55), (14, 0.30), (12, 0.09), (26, 0.06)];
+        push_bed(&mut w, 0, 0, MIXED, 1.2e18, FormationProcess::ContinentalArc);
+        w.audit("fixture");
+
+        // The fixture is the claim, so check it IS the rock described above
+        // before drawing any conclusion from how it behaves.
+        {
+            let bed = &w.columns[0].layers[0];
+            let m = bed.mass_kg();
+            let si = bed.elements.amount(14) / m;
+            let mafic = (bed.elements.amount(12) + bed.elements.amount(26)) / m;
+            assert!((si - 0.30).abs() < 0.01, "felsic silica: {si:.3}");
+            assert!((mafic - 0.15).abs() < 0.01, "contaminated, not clean: {mafic:.3}");
+        }
+
+        // Age it far past every e-fold there is — cooling saturates.
+        let stage = super::ThermalSubsidence;
+        let mut rng = StageRng::new(3);
+        for _ in 0..1000 {
+            stage.tick(&mut w, 1.0, &mut rng);
+        }
+
+        let bed = &w.columns[0].layers[0];
+        assert!(bed.cooled > 0.99, "the fixture really did saturate: {:.3}", bed.cooled);
+
+        // THE HALF THAT IS FIXED. A surface bed carries nothing above it, so the
+        // phase change cannot touch it however long the world runs. This is the
+        // ratchet that used to run here, and it is gone.
+        let ecl = super::Eclogitisation;
+        for _ in 0..1000 {
+            ecl.tick(&mut w, 1.0, &mut rng);
+        }
+        assert_eq!(
+            w.columns[0].layers[0].eclogitised, 0.0,
+            "no overburden, no phase change — the pressure gate holds at the surface"
+        );
+
+        // THE HALF THAT IS NOT. Cooling alone still carries this mixture past
+        // the buoyancy threshold, which is the continent leak. Recorded so the
+        // gap is visible in the suite rather than only in a bake nobody runs.
+        let rho = density_kg_m3(&w.columns[0].layers[0]);
+        assert!(
+            rho > SUBDUCTABLE_DENSITY,
+            "KNOWN GAP — if this now fails the leak has been closed, and this \
+             assert should be INVERTED rather than removed: {rho:.0} vs {SUBDUCTABLE_DENSITY:.0}"
+        );
+    }
+
+    /// **The phase change belongs at depth, and it lets go.** Two guards on
+    /// [`Eclogitisation`] in one fixture, because they are the same claim from
+    /// both sides: pressure is the condition, so rock without the pressure never
+    /// converts, and rock that LOSES the pressure reverts. The one-way version
+    /// reversed zero times in 200 ticks, which is what made it a ratchet.
+    #[test]
+    fn eclogite_needs_depth_and_gives_it_back() {
+        use crate::column::{overburden_pa, FormationProcess};
+        use crate::stage::{Stage, StageRng};
+        let dir = content_data_dir();
+        let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
+        let b = Budget::from_dir(&dir, &t).expect("budget");
+        let mut w = World::seed(icosphere(4), b, &t, 12);
+        let area = w.cell_area_m2();
+        let gravity = w.gravity_m_s2();
+        let gate = super::eclogite_pa(&w);
+
+        // Basalt: a third of it eclogite-formers, so the composition gate is
+        // wide open and DEPTH is the only thing under test.
+        const BASALT: &[(u8, f64)] = &[(8, 0.44), (14, 0.24), (12, 0.19), (26, 0.13)];
+        // A root cannot come out of the ground beneath it — one cell's mantle
+        // is nowhere near enough to press its own base to the gate — so it has
+        // to be gathered from a wide area. That is exactly what a collision
+        // does, and it is why roots are rare.
+        const BED_KG: f64 = 1.6e18;
+
+        // Cell 0: a lone bed — sea floor, nothing on top of it.
+        push_bed(&mut w, 0, 0, BASALT, BED_KG, FormationProcess::OceanicCrust);
+        // Cell 1: a root, each bed drawn from a different cell's mantle.
+        for from in 1..18 {
+            push_bed(&mut w, 1, from, BASALT, BED_KG, FormationProcess::OceanicCrust);
+        }
+        w.audit("fixture");
+
+        let shallow = overburden_pa(&w.columns[0], 0, gravity, area);
+        let deep = overburden_pa(&w.columns[1], 0, gravity, area);
+        assert!(shallow < gate, "sea floor is shallow: {shallow:.2e} Pa");
+        assert!(deep >= gate, "the root's base is deep: {deep:.2e} Pa");
+
+        let stage = super::Eclogitisation;
+        let mut rng = StageRng::new(5);
+        for _ in 0..200 {
+            stage.tick(&mut w, 1.0, &mut rng);
+            w.audit("Eclogitisation"); // it moves no mass, ever
+        }
+
+        assert_eq!(
+            w.columns[0].layers[0].eclogitised, 0.0,
+            "same rock, same age, no depth — no phase change"
+        );
+        let converted = w.columns[1].layers[0].eclogitised;
+        assert!(converted > 0.9, "the root's base converted: {converted:.3}");
+
+        // Now unroof it — delamination, erosion and the conveyor all do this —
+        // and the rock must come back out of the assemblage it went into. What
+        // comes off has to GO somewhere: hand it back to the mantle, the same
+        // move a foundering root makes, so the world still balances.
+        for bed in w.columns[1].layers.split_off(1) {
+            for (e, m) in bed.elements.iter() {
+                w.mantle.add(1, e, m);
+            }
+        }
+        w.audit("unroofed");
+        assert!(
+            overburden_pa(&w.columns[1], 0, gravity, area) < gate,
+            "the load really is gone"
+        );
+        for _ in 0..200 {
+            stage.tick(&mut w, 1.0, &mut rng);
+        }
+        let after = w.columns[1].layers[0].eclogitised;
+        assert!(
+            after < 0.1 * converted,
+            "eclogite carried back up retrogrades: {converted:.3} → {after:.3}"
+        );
+    }
+
     /// A veneer cannot arrest a slab — it goes down with the basement it was
     /// lying on. Letting the first soft film stop the descent was the model's
     /// largest homogeniser: every collision scraped the loser's whole mixed
@@ -832,11 +1467,22 @@ mod tests {
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(4), b, &t, 78);
 
-        // Same discipline: both contenders are made of mantle this world had.
+        // Same discipline: both contenders are made of mantle this world had —
+        // drawn from across the whole planetoid, because one sized freq-4 cell
+        // holds ~2.7e18 kg total and the old single-cell draws came up empty
+        // (the third bed was drawing from a cell the first two had drained).
         let mk = |w: &mut World, els: &[(u8, f64)], by: FormationProcess| {
             let mut c = flicker_worldstate::Composition::new();
             for &(e, m) in els {
-                c.add(e, w.mantle.remove(0, e, m));
+                let mut want = m;
+                for src in 0..w.mantle.n_cells() {
+                    if want <= 0.0 {
+                        break;
+                    }
+                    let took = w.mantle.remove(src, e, want);
+                    c.add(e, took);
+                    want -= took;
+                }
             }
             Layer {
                 elements: c,
@@ -844,16 +1490,17 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: by,
                 peak_pt: (0.0, 0.0),
-                densified: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             }
         };
         // A dense mafic floor wearing a light sediment drape.
         let mut loser = Column::empty(0);
-        loser.layers.push(mk(&mut w, &[(12, 3.0e18), (26, 3.0e18)], FormationProcess::OceanicCrust));
-        loser.layers.push(mk(&mut w, &[(14, 2.0e18), (8, 1.5e18)], FormationProcess::Sediment));
+        loser.layers.push(mk(&mut w, &[(12, 3.0e17), (26, 3.0e17)], FormationProcess::OceanicCrust));
+        loser.layers.push(mk(&mut w, &[(14, 2.0e17), (8, 1.5e17)], FormationProcess::Sediment));
         // A buoyant felsic winner.
         let mut winner = Column::empty(0);
-        winner.layers.push(mk(&mut w, &[(14, 5.0e18), (19, 2.0e18)], FormationProcess::ContinentalArc));
+        winner.layers.push(mk(&mut w, &[(14, 5.0e17), (19, 2.0e17)], FormationProcess::ContinentalArc));
 
         let area = w.cell_area_m2();
         crate::tectonics::collide_for_test(&mut w, 0, vec![winner, loser], 0.3, -1.0e9, area);
@@ -880,14 +1527,32 @@ mod tests {
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(4), b, &t, 91);
         let area = w.cell_area_m2();
+        let gravity = w.gravity_m_s2();
+        // The mass whose weight sits exactly at the ceiling ON THIS WORLD —
+        // the fixture is stated against it, not in typed-in kilograms, so the
+        // test means the same thing at any planet size. (On a freq-4 planetoid
+        // gravity is ~4% of the reference, so the pile that over-presses its
+        // base is enormous — which is why small worlds keep taller mountains.)
+        let ceiling_kg = super::delamination_pa(&w) * area / gravity;
 
-        // Drawn from the mantle, never conjured. Cell 0 gets an absurd pile
-        // (the runaway); cell 1 gets an ordinary range.
-        let stack = |w: &mut World, cell: usize, scale: f64| {
+        // Drawn from the mantle, never conjured — from across the whole
+        // planetoid, because one small-world cell holds less rock than the
+        // ceiling needs. Cell 0 gets the runaway pile; cell 1 an ordinary range.
+        let stack = |w: &mut World, cell: usize, total: f64| {
             for k in 0..3 {
                 let mut c = flicker_worldstate::Composition::new();
                 for (e, share) in [(8u8, 0.47), (14, 0.34), (13, 0.15), (19, 0.04)] {
-                    c.add(e, w.mantle.remove(cell, e, share * scale));
+                    let mut want = share * total / 3.0;
+                    let mut got = 0.0;
+                    for src in 0..w.mantle.n_cells() {
+                        if want <= 0.0 {
+                            break;
+                        }
+                        let take = w.mantle.remove(src, e, want);
+                        got += take;
+                        want -= take;
+                    }
+                    c.add(e, got);
                 }
                 w.columns[cell].layers.push(Layer {
                     elements: c,
@@ -895,20 +1560,21 @@ mod tests {
                     formed_at_myr: k as f64,
                     formed_by: FormationProcess::ContinentalArc,
                     peak_pt: (0.0, 0.0),
-                    densified: 0.0,
+                    cooled: 0.0,
+                    eclogitised: 0.0,
                 });
             }
         };
-        stack(&mut w, 0, 4.0e20); // over-pressed
-        stack(&mut w, 1, 2.0e18); // an ordinary range
+        stack(&mut w, 0, 2.2 * ceiling_kg); // over-pressed (margin for share shortfalls)
+        stack(&mut w, 1, 0.1 * ceiling_kg); // an ordinary range
         w.audit("fixture");
 
         assert!(
-            basal_pressure_pa(&w.columns[0], area) > super::DELAMINATION_PA,
+            basal_pressure_pa(&w.columns[0], gravity, area) > super::delamination_pa(&w),
             "the fixture's runaway pile is genuinely over-pressed"
         );
         assert!(
-            basal_pressure_pa(&w.columns[1], area) < super::DELAMINATION_PA,
+            basal_pressure_pa(&w.columns[1], gravity, area) < super::delamination_pa(&w),
             "…and the ordinary range is not"
         );
         let (tall_before, modest_before) =
@@ -968,7 +1634,14 @@ mod tests {
         // clean across seeds (1.4–1.7×). Same playbook as the plates test at
         // the ISEA landing: when a small-world read turns out to have been
         // leaning on an artifact, the test moves to ground that can hold it.
-        let w = run(24, 5, 240);
+        //
+        // And read at 500 ticks, not 240 (2026-08-06, the erosion rework):
+        // mass wasting spreads young one-cell belts into their rings and the
+        // talus rides adjacent slabs into trenches, so at 240 ticks the read
+        // lands mid-avalanche — belts shaved, arc return not yet caught up.
+        // The claim is about what the two melts DO, and by 500 the recycling
+        // loop has paid the belts back.
+        let w = run(24, 5, 500);
         let area = w.cell_area_m2();
         let mut ocean = Vec::new();
         let mut cont = Vec::new();
@@ -982,8 +1655,51 @@ mod tests {
         assert!(!ocean.is_empty(), "some ocean floor formed");
         assert!(!cont.is_empty(), "some continents formed");
         let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let med = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v[v.len() / 2]
+        };
         let (om, cm) = (mean(&ocean), mean(&cont));
-        eprintln!("continental {cm:.0} m vs oceanic {om:.0} m  ({:.2}x)", cm / om.max(1e-9));
+        eprintln!(
+            "continental {cm:.0} m (n {}, med {:.0}) vs oceanic {om:.0} m (n {}, med {:.0})  ({:.2}x)",
+            cont.len(),
+            med(&mut cont.clone()),
+            ocean.len(),
+            med(&mut ocean.clone()),
+            cm / om.max(1e-9)
+        );
+        // The four-way split that decodes a failure here instantly: the water-laid
+        // veneer populations churn hard in the young window (talus riding slabs,
+        // shelves building), and knowing WHICH population moved is the difference
+        // between a mechanism bug and an early read (it took three
+        // investigations to learn that the first time).
+        {
+            let sedimented = |c: &crate::column::Column| {
+                c.layers.iter().any(|l| l.formed_by == crate::column::FormationProcess::Sediment)
+            };
+            let mut oc = (0usize, Vec::new());
+            let mut os = (0usize, Vec::new());
+            let mut cc = (0usize, Vec::new());
+            let mut cs = (0usize, Vec::new());
+            for col in &w.columns {
+                let e = elevation_m(col, area);
+                match (crust_kind(col), sedimented(col)) {
+                    (CrustKind::Oceanic, false) => { oc.0 += 1; oc.1.push(e); }
+                    (CrustKind::Oceanic, true) => { os.0 += 1; os.1.push(e); }
+                    (CrustKind::Continental, false) => { cc.0 += 1; cc.1.push(e); }
+                    (CrustKind::Continental, true) => { cs.0 += 1; cs.1.push(e); }
+                    _ => {}
+                }
+            }
+            let m = |v: &Vec<f64>| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+            eprintln!(
+                "  ocean pure n {} mean {:.0} · ocean+sed n {} mean {:.0} · cont pure n {} mean {:.0} · cont+sed n {} mean {:.0}",
+                oc.0, m(&oc.1), os.0, m(&os.1), cc.0, m(&cc.1), cs.0, m(&cs.1)
+            );
+            let strata: f64 = w.columns.iter().map(|c| c.layers.len() as f64).sum::<f64>()
+                / w.columns.len() as f64;
+            eprintln!("  mean strata {strata:.1} · sea {:.0} m", crate::planet::sea_level_m(&w));
+        }
         // Buoyant crust rides higher — Archimedes, through absolute Airy isostasy.
         // That direction is forced by the mechanism, so it is fair to require it.
         assert!(cm > om, "continents ride higher than ocean floor ({cm:.0} m vs {om:.0} m)");
@@ -1123,3 +1839,4 @@ mod tests {
         // 7E01115B history turned on.
     }
 }
+

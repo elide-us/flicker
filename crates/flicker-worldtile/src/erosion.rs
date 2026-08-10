@@ -529,15 +529,19 @@ pub mod demo {
 mod tests {
     use super::*;
 
-    /// A small radius so demo tiles have visible slopes per pixel; passes stay fast.
-    const R: f64 = 6_371_000.0 / 96.0;
+    /// A small radius so demo tiles have visible slopes per pixel; passes stay
+    /// fast. Stated through the span canon (a freq-1 planetoid is ~73 km)
+    /// rather than as a stray Earth-radius literal.
+    fn r() -> f64 {
+        flicker_poc_chemistry::radius_for_freq(1)
+    }
 
     /// **The trial balance, per pass.** Everything cut is carried, dropped, or
     /// exported: `Σ(before) = Σ(after) + exported`, exactly — the same ledger
     /// discipline as every stage on the aggregate side.
     #[test]
     fn a_pass_conserves_every_gram() {
-        let (mut tile, props) = demo::ridge(R);
+        let (mut tile, props) = demo::ridge(r());
         let params = ErosionParams::default();
         let mut eroder = Eroder::new();
         for pass in 0..5 {
@@ -560,7 +564,7 @@ mod tests {
     fn erosion_is_deterministic() {
         let params = ErosionParams::default();
         let run = || {
-            let (mut tile, props) = demo::canyon(R, 6);
+            let (mut tile, props) = demo::canyon(r(), 6);
             let mut eroder = Eroder::new();
             let mut exported = 0.0;
             for _ in 0..3 {
@@ -584,7 +588,7 @@ mod tests {
     /// a depositing regime and the comparison measures the network, not the rock.)
     #[test]
     fn soft_ground_goes_first() {
-        let (tile, _) = demo::ridge(R);
+        let (tile, _) = demo::ridge(r());
         let params = ErosionParams::default();
         let (x, y) = (TILE_DIM / 2, TILE_DIM / 2);
         let i = super::idx(x, y);
@@ -615,7 +619,7 @@ mod tests {
     /// not one map, it is whichever bed the water has reached.
     #[test]
     fn cutting_through_a_bed_exposes_the_one_beneath() {
-        let (mut tile, props) = demo::canyon(R, 4);
+        let (mut tile, props) = demo::canyon(r(), 4);
         let params = ErosionParams { rate: 0.4, ..Default::default() };
         let top = tile.strata.len() - 1;
         let exposed_before: usize =
@@ -637,7 +641,7 @@ mod tests {
     /// and mass carried off it is banked for the neighbour, not lost.
     #[test]
     fn the_watershed_drains_across_the_rim() {
-        let (mut tile, props) = demo::ridge(R);
+        let (mut tile, props) = demo::ridge(r());
         let params = ErosionParams::default();
         let mut exported = 0.0;
         let mut eroder = Eroder::new();
@@ -652,7 +656,7 @@ mod tests {
     /// reintegration commit to reconcile.
     #[test]
     fn slack_water_lays_a_new_bed() {
-        let (mut tile, props) = demo::canyon(R, 4);
+        let (mut tile, props) = demo::canyon(r(), 4);
         let migrated = tile.strata.len();
         let params = ErosionParams::default();
         let mut eroder = Eroder::new();
@@ -672,7 +676,7 @@ mod tests {
     /// (The scenery itself is the maintainer's to judge in the inspector.)
     #[test]
     fn the_plain_lowers_and_the_dike_does_not_go_with_it() {
-        let (mut tile, props) = demo::ridge(R);
+        let (mut tile, props) = demo::ridge(r());
         // Hard rain, so the emergence shows within a test's patience; the same
         // physics at the restrained default is what the inspector watches.
         let params = ErosionParams { rate: 2.0, ..Default::default() };
@@ -735,15 +739,16 @@ mod real_world {
         let (grid, outlines) = icosphere_with_outlines(6);
         let mut w = World::seed(grid, b, &t, 5);
         let mut s =
-            Scheduler::new(formation_stages(Arc::clone(&t), &w.budget.clone(), &Default::default()), 5);
+            Scheduler::new(formation_stages(Arc::clone(&t), &w, &Default::default()), 5);
         for _ in 0..150 {
             s.step(&mut w, 1.0, None);
         }
+        crate::materialize::guarantee_stack(&mut w);
         let cell = w
             .columns
             .iter()
             .position(|c| c.layers.len() >= 2)
-            .expect("some column grew a stack");
+            .expect("the fixture stratified a column");
         let mut tile = materialize(&w, cell, crate::radius_for_freq(6), &outlines[cell]);
         let props: Vec<BedProps> = w.columns[cell]
             .layers

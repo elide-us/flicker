@@ -3,7 +3,7 @@
     "format": "flicker.accretion",
     "version": 1,
     "purpose": "BULK PLANET accretion seed - the undifferentiated ball at t=0. Core, mantle, crust, ocean and atmosphere are all PARTITIONS of this, produced by the sim. REPLACES abundance.json, which was a CRUSTAL assay (46% O / 5% Fe / no Mg lever) and therefore an OUTCOME used as an INPUT.",
-    "invariant": "weights are mass-% of TOTAL PLANET MASS and sum to 100.0. Every element is explicit - there is no abundance_floor mechanism. Planet mass is FIXED at Earth (5.972e24 kg); there is no size slider.",
+    "invariant": "weights are mass-% of the REFERENCE planet mass (freq 96 = Earth, 5.972e24 kg) and sum to 100.0. Every element is explicit - there is no abundance_floor mechanism. The composition is size-invariant: a world born on a coarser grid is a SMALLER PLANET (the tile span is the canon), and World::seed sizes this total by size_scale^3 (R^3 ruling, 2026-08-06). Size is chosen by grid frequency, never by editing this file.",
     "crust_is_an_output": "The old abundance.json numbers survive as an ACCEPTANCE TEST: the crust the sim GROWS should assay near 46 O / 28 Si / 8 Al / 5 Fe. Never a seed.",
     "planet_mass_kg": 5.972e+24
   },

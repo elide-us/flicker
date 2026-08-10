@@ -1,0 +1,27 @@
+[package]
+name = "flicker-globe"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# One hex-globe mesh builder, shared. A shell of hex patches on a sphere of a
+# given radius is not scene-specific — God Mode, the Planet Simulation and the
+# Populous bench all draw the same thing — and it had already been written twice
+# (`flicker-godmode/src/globe.rs`, `flicker-pocepochs/src/globe.rs`) before this
+# crate existed. Rule DDD070C7: enhance the existing system, never add a third.
+[lib]
+name = "flicker_globe"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { path = "../../core/flicker" }
+# The orbit camera reads the shared input state.
+flicker-input-core.workspace = true
+# The world sits in the input chain: it answers the look/zoom signals while its
+# own panel holds focus, and passes everything else down.
+flicker-input-router.workspace = true
+# The offscreen view: matrices for the draw, the authored stage read out of
+# `ui_elements.json`, and a warning when a named stage resolves to nothing.
+glam.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

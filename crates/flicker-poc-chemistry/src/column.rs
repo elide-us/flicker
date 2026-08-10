@@ -21,14 +21,12 @@ const MG: ElementId = 12;
 const FE: ElementId = 26;
 const CA: ElementId = 20;
 
-/// Surface gravity, m/s² — turns the mass stacked above a bed into the pressure
-/// on it.
-pub const GRAVITY_M_S2: f64 = 9.81;
-
-/// How unlike the bed beneath arriving material must be before it starts its own
-/// bed instead of thickening that one. A mass-fraction distance (see
-/// [`dissimilarity`]), so ~0.1 means "a tenth of the composition changed".
-const BED_SPAWN_DISSIMILARITY: f64 = 0.10;
+/// The **reference** surface gravity, re-exported from
+/// [`config`](crate::config::GRAVITY_M_S2). Pressure math here takes the acting
+/// gravity as a parameter — a world's own is
+/// [`World::gravity_m_s2`](crate::planet::World::gravity_m_s2), reference × its
+/// size scale — so a half-size planet presses its stacks half as hard.
+pub use crate::config::GRAVITY_M_S2;
 
 /// Material thinner than this can never be its own bed, however exotic — a film
 /// settling on a bed joins that bed. Keeps a per-tick trickle from shredding the
@@ -40,22 +38,9 @@ const BED_SPAWN_DISSIMILARITY: f64 = 0.10;
 /// larger than the rock (see [`Delamination`](crate::crust::Delamination)).
 pub const MIN_BED_MASS_KG: f64 = 1.0e15;
 
-/// How alike two buried beds must be before burial erases the boundary between
-/// them. Tighter than the spawn threshold on purpose: a boundary that formed is
-/// not undone by the same contrast that made it.
-const MERGE_DISSIMILARITY: f64 = 0.04;
-
 /// Overburden a bed must have carried before it can merge at all. Below it the
 /// beds are still loose and the contact is still a contact.
 const LITHIFICATION_PA: f64 = 2.0e7;
-
-/// How much each bed over the soft cap widens the merge tolerance. The cap is a
-/// data-volume guardrail — every bed is potentially another 2K map per tile — and
-/// this is how it is paid: by letting the most-alike pair go, never by capping the
-/// count outright. At this pressure the tolerance passes total dissimilarity
-/// (1.0) about twelve beds past the cap, so even a stack of mutually alien beds
-/// has a hard ceiling within reach of the ruled range (20).
-const CAP_PRESSURE_PER_BED: f64 = 2.0;
 
 /// How unlike two compositions are, `0` (identical proportions) .. `1` (sharing
 /// nothing). Half the total absolute difference of their mass fractions — the
@@ -115,9 +100,9 @@ pub struct Layer {
     pub formed_by: FormationProcess,
     /// Max (pressure, temperature) ever seen → metamorphic grade. Monotonic.
     pub peak_pt: (f64, f64),
-    /// **How far this bed's minerals have reorganised into the cold, dense
-    /// assemblage**, `0..1` — the gabbro→eclogite transition, advanced by
-    /// [`CrustDensification`](crate::crust::CrustDensification).
+    /// **How far this bed has cooled into its contracted state**, `0..1` —
+    /// advanced by [`ThermalSubsidence`](crate::crust::ThermalSubsidence) on
+    /// AGE alone, because that is what cooling depends on.
     ///
     /// INTEGRATED state, not a derived read: it is a history the bed
     /// accumulates, exactly like [`peak_pt`](Self::peak_pt) above and the
@@ -130,7 +115,21 @@ pub struct Layer {
     /// second half every column floats, there is nowhere for a sea to sit, and
     /// any ocean at all spreads out and drowns the world (the flat-water-world
     /// attractor Aaron kept landing in).
-    pub densified: f64,
+    pub cooled: f64,
+    /// **How far this bed has changed phase into eclogite**, `0..1` — advanced
+    /// by [`Eclogitisation`](crate::crust::Eclogitisation) on the PRESSURE this
+    /// particular bed carries, because that is what a phase change depends on.
+    ///
+    /// Split from [`cooled`](Self::cooled) after measurement: the two were one
+    /// unconditional timer, and the pressure half — which should only ever
+    /// reach a deep root — was firing on every bed in the world. It converted
+    /// continental crust to subductable crust 3,663 times per 200 ticks with
+    /// zero reversals, which is what was eating the continents from the inside.
+    ///
+    /// Unlike cooling, this one RETROGRADES. Eclogite carried back up out of
+    /// its stability field reverts, so a root that is shed or unroofed stops
+    /// being a slab-in-waiting instead of staying one forever.
+    pub eclogitised: f64,
 }
 
 impl Layer {
@@ -266,12 +265,25 @@ impl Column {
             // Too little to register as its own bed however different it is — a
             // film settling on a bed joins that bed.
             Some(_) if arriving < MIN_BED_MASS_KG => false,
+            // **A BED IS A DEPOSITIONAL EVENT** (Aaron, ruling B, 2026-08-07),
+            // not a composition contrast. Two conditions, and both are already
+            // carried by the column — neither is a new constant to tune:
+            //
+            // 1. **A different process laid this down.** A change of process is
+            //    a change of environment, and that is what a stratum boundary
+            //    IS: ash on mud, mud on lava, a thrust sheet on sea floor.
+            // 2. **The bed below has lithified.** Loose material does not mix
+            //    into cemented rock; it settles on top of it. This is what
+            //    paces the cake, because a bed must be buried enough to weld
+            //    before the next one can start — so beds accumulate at the
+            //    speed the world actually deposits, not per tick.
+            //
+            // The old test was `dissimilarity > BED_SPAWN_DISSIMILARITY`, and
+            // between it and burial erasing boundaries again the stack averaged
+            // **1.9 beds against a cap of 20** — the canyon wall the cap exists
+            // for was never being deposited in the first place.
             Some(top) => {
-                let mut incoming = Composition::new();
-                for &(e, m) in add {
-                    incoming.add(e, m);
-                }
-                dissimilarity(&top.elements, &incoming) > BED_SPAWN_DISSIMILARITY
+                top.formed_by != process || top.peak_pt.0 >= LITHIFICATION_PA
             }
         };
         if spawn {
@@ -281,7 +293,8 @@ impl Column {
                 formed_at_myr,
                 formed_by: process,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
         }
         let top = self.layers.last_mut().expect("just ensured a top layer");
@@ -291,73 +304,91 @@ impl Column {
     }
 
     /// The stack's own housekeeping, run once the tick's material has moved:
-    /// **record what each bed has endured, then let burial erase the boundaries
-    /// that burial erases.**
+    /// **record what each bed has endured, then push the overflow into bedrock.**
     ///
     /// Two consequences, no targets:
     /// - Every bed's `peak_pt` takes the max of what it has ever seen. Pressure is
     ///   the load above it, temperature is the rock it sits in. Monotone, permanent
     ///   — this is the record the metamorphic chemistry later reads.
-    /// - Adjacent beds that are alike **and** loaded merge into one. A bed boundary
-    ///   is a contrast; squeeze two similar beds together hard enough and there is
-    ///   no contrast left to see. Mass moves whole, so the merge is exactly
-    ///   conservative.
+    /// - Past `soft_cap` beds, **the BOTTOM of the stack collapses**: bed 1 is
+    ///   folded into bed 0 until the count fits. Bed 0 is the bedrock — an
+    ///   aggregate whose thickness is the column's root height. Mass moves
+    ///   whole, so the collapse is exactly conservative.
     ///
-    /// `soft_cap` is a **resource** guardrail, not a shape target: as the stack
-    /// grows past it the tolerance widens, so the pair that merges is always the
-    /// most-alike pair available. Nothing here ever names a desired stack.
-    pub fn reconcile(&mut self, temp_k: f64, cell_area_m2: f64, soft_cap: usize) {
+    /// **A boundary that formed is not erased by burial** (Aaron, ruling A,
+    /// 2026-08-07). This used to merge the most-alike ADJACENT pair anywhere in
+    /// the stack, with a tolerance that widened past the cap. Two costs: the
+    /// stack averaged 1.9 beds because boundaries were destroyed as readily as
+    /// they were made, and a mid-stack merge renumbers every bed above it — so
+    /// nothing downstream, least of all a layer-cake render, could hold an
+    /// identity for "the third bed down". Collapsing from the bottom keeps
+    /// indices stable measured from the SURFACE, which is where they are looked
+    /// at, and confines the churn to the least visible place.
+    ///
+    /// `soft_cap` remains a **resource** guardrail, not a shape target: it says
+    /// how many beds may be retained, never what they should contain.
+    pub fn reconcile(
+        &mut self,
+        surface_k: f64,
+        mantle_k: f64,
+        gravity_m_s2: f64,
+        cell_area_m2: f64,
+        soft_cap: usize,
+    ) {
         if self.layers.is_empty() {
             return;
         }
-        // Load above each bed, walked top-down so each bed sees what it carries.
+        // Load AND depth at each bed's BASE, walked top-down so each bed sees
+        // what it carries and how deep it lies. Both are what `peak_pt` is for.
+        //
+        // **The base, not the top** — a bed's PEAK pressure is at its bottom,
+        // which is where it welds and where it cooks. Reading the top instead
+        // recorded zero for the topmost bed forever (nothing is above it), and
+        // that silently disabled the lithification half of the bed-spawn rule:
+        // `deposit` asks whether the bed it is landing on has cemented, and the
+        // answer was permanently no. A thick bed lithifies under its own weight,
+        // which is exactly what paces a layer cake.
         let mut above = 0.0f64;
+        let mut depth = 0.0f64;
         for i in (0..self.layers.len()).rev() {
-            let p = above * GRAVITY_M_S2 / cell_area_m2;
+            let mass = self.layers[i].mass_kg();
+            let thickness = thickness_m(&self.layers[i], cell_area_m2);
+            let p = (above + mass) * gravity_m_s2 / cell_area_m2;
+            let t = geotherm_k(surface_k, mantle_k, depth + thickness);
             let bed = &mut self.layers[i];
-            bed.peak_pt = (bed.peak_pt.0.max(p), bed.peak_pt.1.max(temp_k));
-            above += bed.mass_kg();
+            bed.peak_pt = (bed.peak_pt.0.max(p), bed.peak_pt.1.max(t));
+            above += mass;
+            depth += thickness;
         }
 
-        // Over the soft cap the tolerance opens up, so the most-alike loaded pair
-        // gives way first. Under it, only genuinely-alike pairs merge.
-        let over = self.layers.len().saturating_sub(soft_cap) as f64;
-        let tolerance = MERGE_DISSIMILARITY * (1.0 + over * CAP_PRESSURE_PER_BED);
-        let mut i = self.layers.len().saturating_sub(1);
-        while i > 0 {
-            // The load ON THE CONTACT is what welds it: the contact sits at the base
-            // of bed `i`, which is the top of bed `i - 1`, so the pressure there is
-            // what bed `i - 1` carries — bed `i` plus everything above it. A fresh
-            // film on a deep pile therefore does NOT weld (its contact is shallow),
-            // while a deep pair does. Reading bed `i`'s own load instead would say
-            // the topmost contact is never loaded, which is never true of anything
-            // but the top surface itself.
-            let loaded = self.layers[i - 1].peak_pt.0 >= LITHIFICATION_PA;
-            // Past the ruled cap the guardrail pays REGARDLESS of lithification:
-            // two loose films are one loose bed — there is no welded contrast to
-            // preserve between them — and a cap that a rain of thin films can
-            // outrun is no cap at all (measured: 180 beds against a cap of 20,
-            // every shallow contact exempt). Under the cap the weld gate stands,
-            // so genuinely distinct young strata keep their contacts.
-            if (loaded || over > 0.0)
-                && dissimilarity(&self.layers[i - 1].elements, &self.layers[i].elements) <= tolerance
-            {
-                let upper = self.layers.remove(i);
-                let lower = &mut self.layers[i - 1];
-                // Whole-mass move: every gram lands, so the audit sees no change.
-                for (e, m) in upper.elements.iter() {
-                    lower.elements.add(e, m);
-                }
-                for (c, m) in upper.minerals.iter() {
-                    lower.minerals.add(c, m);
-                }
-                // The merged bed remembers the harsher history of the two.
-                lower.peak_pt = (
-                    lower.peak_pt.0.max(upper.peak_pt.0),
-                    lower.peak_pt.1.max(upper.peak_pt.1),
-                );
+        // **The overflow goes to bedrock.** Bed 1 folds into bed 0 until the
+        // count fits, so the deepest record is the one that gives way and
+        // everything above keeps its place measured from the surface.
+        while self.layers.len() > soft_cap.max(1) {
+            let upper = self.layers.remove(1);
+            let bedrock = &mut self.layers[0];
+            // Weighed BEFORE the merge — after it, bedrock's mass already
+            // includes what is being blended in and the weighting is meaningless.
+            let (bm, um) = (bedrock.mass_kg(), upper.mass_kg());
+            let total = (bm + um).max(f64::MIN_POSITIVE);
+            // Whole-mass move: every gram lands, so the audit sees no change.
+            for (e, m) in upper.elements.iter() {
+                bedrock.elements.add(e, m);
             }
-            i -= 1;
+            for (c, m) in upper.minerals.iter() {
+                bedrock.minerals.add(c, m);
+            }
+            // Bedrock remembers the harsher history of everything it has eaten,
+            // and the dense-assemblage states come with their mass — mass-weighted,
+            // because a state is a property of the rock and the rock is being
+            // combined. Reading either one off the survivor alone would let a
+            // thin fresh bed erase the history of the pile it landed on.
+            bedrock.cooled = (bedrock.cooled * bm + upper.cooled * um) / total;
+            bedrock.eclogitised = (bedrock.eclogitised * bm + upper.eclogitised * um) / total;
+            bedrock.peak_pt = (
+                bedrock.peak_pt.0.max(upper.peak_pt.0),
+                bedrock.peak_pt.1.max(upper.peak_pt.1),
+            );
         }
     }
 
@@ -492,8 +523,21 @@ pub fn density_kg_m3(layer: &Layer) -> f64 {
     // and the world finally has somewhere to put an ocean. A felsic pile scores
     // ~0 here and is untouched however long it sits — which is why continents
     // are permanent and sea floor is not.
-    let silicate =
-        silicate + layer.densified.clamp(0.0, 1.0) * ECLOGITE_GAIN * eclogite_former_frac(layer);
+    //
+    // **Two states, because two different things make rock dense.** Cooling is
+    // age-driven and reaches every bed that sits long enough; the eclogite
+    // phase change is pressure-driven and only ever reaches the bottom of a
+    // thick root. They were one field advanced by one unconditional timer, and
+    // the consequence was measured: continental columns mixed themselves past
+    // the buoyancy threshold and the conveyor ate them. Both gains are gated by
+    // the same mafic fraction — a granite has no garnet-formers to reorganise
+    // whatever happens to it — but each is advanced by its own stage on its own
+    // condition.
+    let mafic = eclogite_former_frac(layer);
+    let silicate = silicate
+        + mafic
+            * (layer.cooled.clamp(0.0, 1.0) * THERMAL_GAIN
+                + layer.eclogitised.clamp(0.0, 1.0) * ECLOGITE_GAIN);
 
     // **Carbon-rich rock is not silicate rock.** Peat, coal and oil shale are
     // among the lightest things a column can carry, and they contain no silicon
@@ -513,13 +557,39 @@ pub fn density_kg_m3(layer: &Layer) -> f64 {
 /// Bulk density of carbon-rich rock, kg/m³ — the peat/coal/oil-shale family.
 pub const ORGANIC_DENSITY: f64 = 1400.0;
 
-/// How much denser fully-eclogitised mafic rock is than the fresh basalt it was,
-/// kg/m³. Real eclogite runs ~3500 against basalt's ~2900, and this is that
-/// difference: enough that cold sea floor clears [`MANTLE_DENSITY`] with room
-/// to spare. That crossing is what turns an ocean floor into an ocean BASIN,
-/// and Earth's own abyssal plains lie ~4 km below its continental shelves for
-/// exactly this reason.
-pub const ECLOGITE_GAIN: f64 = 560.0;
+/// How much denser cold mafic rock is than the fresh melt it froze from, kg/m³
+/// — the COOLING half, which is the one that builds ocean basins. Sized so that
+/// old sea floor (mafic fraction 1.0 on the ramp below, silicate base ~3000)
+/// reaches ~3560 and so clears [`MANTLE_DENSITY`] with room to spare. That
+/// crossing is what turns an ocean floor into an ocean BASIN, and Earth's own
+/// abyssal plains lie ~4 km below its continental shelves for exactly this
+/// reason.
+///
+/// Sea floor never gets deep enough to eclogitise — a 7 km column carries about
+/// 0.2 GPa against [`eclogite_pa`](crate::crust::eclogite_pa)'s 1.3 — so this
+/// constant has to do the whole basin job on its own, and it keeps the value
+/// the basin hypsometry was measured at.
+pub const THERMAL_GAIN: f64 = 560.0;
+
+/// The FURTHER gain when deep mafic rock actually changes phase, kg/m³ — on top
+/// of [`THERMAL_GAIN`], since rock this deep is also cold.
+///
+/// **Currently ZERO, deliberately, pending Aaron's ruling.** The physical value
+/// is ~200 (real eclogite runs ~3500–3600 against basalt's ~2900, so a root that
+/// had both cooled and converted would land near 3760). But it was set to 200
+/// the moment the stage landed, and 200 is *extra sink weight applied precisely
+/// to deep continental roots* — measured, 18 of the 19 columns carrying
+/// converted rock are continental, i.e. the thickest piles, i.e. mountains.
+/// Aaron's report on the first build carrying it was *"the mountains with black
+/// dot wiggling is back… you've fucked up the sink weight on mountain seams"*.
+///
+/// That report is not cleanly attributable — the build he ran was taken while
+/// the tree was in a reverted measurement state — so this is held at zero to
+/// make the density law **identical to the known-good build**. The phase change
+/// still runs and `eclogitised` is still tracked and correctly gated; it simply
+/// carries no weight until the ruling. Raising it is a one-line change and
+/// wants its own before/after bake, because it lands on mountain roots.
+pub const ECLOGITE_GAIN: f64 = 0.0;
 
 /// **How much of this bed can actually become eclogite**, `0..1` — its
 /// magnesium, iron and calcium, which are what a garnet is built out of.
@@ -530,6 +600,20 @@ pub const ECLOGITE_GAIN: f64 = 560.0;
 /// [`continental_affinity`](crate::crust::continental_affinity)'s refined melts
 /// run ~0.085 and score zero — so sea floor founders and continents never can,
 /// out of the two melts' own chemistry rather than a rule naming either.
+///
+/// **This ramp is load-bearing for the OCEAN BASINS, and it is calibrated.**
+/// Moving its opening from 0.10 to 0.18 was tried on 2026-08-07, to stop mixed
+/// continental rock scoring: the reasoning was that a rock halfway between
+/// granite and basalt is a diorite and should build little garnet. The 4.5 BY
+/// bake refuted it. This world's sea floor does not sit at the ~0.27 the note
+/// above assumes — a great deal of it lives between 0.10 and 0.20 — so opening
+/// at 0.18 cut the densification of real sea floor, and the basin floor went
+/// from −282 m back to −52 m, undoing the depth the erosion work had just won.
+///
+/// So it stays where it was measured. The continental leak it was aimed at —
+/// mixed columns crossing [`SUBDUCTABLE_DENSITY`] from age alone — is real and
+/// still open, but this is the wrong lever for it: the same number sets whether
+/// the world has basins at all.
 fn eclogite_former_frac(layer: &Layer) -> f64 {
     let mass = layer.mass_kg();
     if mass <= 0.0 {
@@ -557,6 +641,32 @@ pub fn crust_thickness_m(col: &Column, cell_area_m2: f64) -> f64 {
     col.layers.iter().map(|l| thickness_m(l, cell_area_m2)).sum()
 }
 
+/// Depth over which the ground warms from its own surface to the temperature of
+/// the mantle underneath it, m — the lithosphere's thickness. Earth's runs
+/// ~100 km, and the number is what sets the geothermal gradient: at a 500 K
+/// surface-to-mantle contrast this gives ~5 K/km near the top, which is the
+/// right order for real crust.
+pub const LITHOSPHERE_SCALE_M: f64 = 100_000.0;
+
+/// **How warm a bed is at `depth_m` below the surface** — the geotherm.
+///
+/// Rock gets hotter downward because the mantle is the heat source under it, so
+/// the profile runs from the ground's own surface temperature toward the
+/// mantle's over [`LITHOSPHERE_SCALE_M`], and never overshoots it: nothing in
+/// the crust is hotter than what it is sitting on.
+///
+/// **Why this had to exist before metamorphism could.** Every bed used to be
+/// stamped with the mantle temperature outright, whatever depth it lay at, so
+/// `peak_pt`'s temperature half carried no depth information and nothing could
+/// honestly read it — the codebase said so at three separate sites, all in the
+/// future tense. With a real geotherm the pair finally means something: shallow
+/// rock stays cool however old it gets, and only ground buried under a genuine
+/// mountain root reaches the conditions that reorganise it.
+pub fn geotherm_k(surface_k: f64, mantle_k: f64, depth_m: f64) -> f64 {
+    let reach = (depth_m / LITHOSPHERE_SCALE_M).clamp(0.0, 1.0);
+    surface_k + (mantle_k - surface_k) * reach
+}
+
 /// Overburden pressure on the TOP of bed `index`, Pa — **derived**, never stored:
 /// the weight of everything stacked above it, spread over the cell.
 ///
@@ -564,15 +674,15 @@ pub fn crust_thickness_m(col: &Column, cell_area_m2: f64) -> f64 {
 /// compaction (which beds merge), it is the `peak_pt` a bed carries forever, and
 /// it is the `P` the metamorphic chemistry will read when a buried carbon bed
 /// reorganises into something harder.
-pub fn overburden_pa(col: &Column, index: usize, cell_area_m2: f64) -> f64 {
+pub fn overburden_pa(col: &Column, index: usize, gravity_m_s2: f64, cell_area_m2: f64) -> f64 {
     let above: f64 = col.layers.iter().skip(index + 1).map(Layer::mass_kg).sum();
-    above * GRAVITY_M_S2 / cell_area_m2.max(f64::MIN_POSITIVE)
+    above * gravity_m_s2 / cell_area_m2.max(f64::MIN_POSITIVE)
 }
 
 /// Pressure at the BASE of the column, Pa — the whole stack's weight. What the
 /// deepest bed carries.
-pub fn basal_pressure_pa(col: &Column, cell_area_m2: f64) -> f64 {
-    col.mass_kg() * GRAVITY_M_S2 / cell_area_m2.max(f64::MIN_POSITIVE)
+pub fn basal_pressure_pa(col: &Column, gravity_m_s2: f64, cell_area_m2: f64) -> f64 {
+    col.mass_kg() * gravity_m_s2 / cell_area_m2.max(f64::MIN_POSITIVE)
 }
 
 /// Mean elevation of a column, m above the mantle datum — **the only place
@@ -593,8 +703,8 @@ pub fn elevation_m(col: &Column, cell_area_m2: f64) -> f64 {
 mod tests {
     use super::*;
 
-    /// A cell's worth of area, for the pressure reads.
-    const AREA: f64 = 5.534e9;
+    /// A cell's worth of area, for the pressure reads — the one canon area.
+    const AREA: f64 = crate::config::CELL_AREA_M2;
     /// Enough mass that a bed can stand on its own (well over [`MIN_BED_MASS_KG`]).
     const BIG: f64 = 1.0e18;
 
@@ -618,7 +728,8 @@ mod tests {
                 formed_at_myr: i as f64,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            densified: 0.0,
+            cooled: 0.0,
+            eclogitised: 0.0,
             });
             for &(e, m) in bed {
                 c.layers.last_mut().unwrap().elements.add(e, m);
@@ -651,20 +762,46 @@ mod tests {
         assert_eq!(c.layers.len(), 1);
     }
 
-    /// Burial erases a boundary between beds that are alike — and every gram of
-    /// both is still there afterwards.
+    /// **A boundary that formed is not erased by burial** (ruling A, 2026-08-07).
+    /// This used to be the opposite: alike loaded beds merged, and between that
+    /// and a composition test for spawning, the stack averaged 1.9 beds against
+    /// a cap of 20 — the canyon wall the cap exists for was never deposited.
     #[test]
-    fn burial_merges_alike_beds_and_conserves_every_gram() {
+    fn burial_does_not_erase_a_boundary() {
         let mut c = col_with(&[mafic(BIG), mafic(BIG), mafic(BIG)]);
+        for _ in 0..8 {
+            c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
+        }
+        assert_eq!(c.layers.len(), 3, "alike and loaded, and still three beds");
+    }
+
+    /// Past the cap the BOTTOM gives way: bed 1 folds into bedrock until the
+    /// count fits, so indices stay stable measured from the surface and the
+    /// deepest record is the one that pays. Every gram lands.
+    #[test]
+    fn overflow_collapses_into_bedrock_and_conserves_every_gram() {
+        let mut c = col_with(&[mafic(BIG), felsic(BIG), mafic(BIG), felsic(BIG)]);
         let before = c.mass_kg();
-        // Load them first (peak_pt is what the merge reads), then let it act.
-        c.reconcile(1200.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
-        c.reconcile(1200.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
-        assert_eq!(c.layers.len(), 1, "alike, loaded beds become one bed");
+        let top_before = c.layers.last().expect("a top bed").mass_kg();
+
+        c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, 2);
+
+        assert_eq!(c.layers.len(), 2, "collapsed to the cap");
         assert!(
             (c.mass_kg() - before).abs() < 1e-6 * before,
-            "the merge moved whole mass: {before} → {}",
+            "the collapse moved whole mass: {before} → {}",
             c.mass_kg()
+        );
+        // Bedrock ate the overflow; the surface bed is untouched, which is the
+        // property the layer-cake render depends on.
+        assert!(
+            c.layers[0].mass_kg() > BIG * 2.5,
+            "bedrock aggregated what it swallowed: {:.3e}",
+            c.layers[0].mass_kg()
+        );
+        assert!(
+            (c.layers.last().expect("a top bed").mass_kg() - top_before).abs() < 1e-9 * top_before,
+            "the surface bed did not move"
         );
     }
 
@@ -674,7 +811,7 @@ mod tests {
     fn burial_does_not_merge_beds_that_differ() {
         let mut c = col_with(&[mafic(BIG), felsic(BIG)]);
         for _ in 0..5 {
-            c.reconcile(1200.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
+            c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
         }
         assert_eq!(c.layers.len(), 2);
     }
@@ -687,7 +824,7 @@ mod tests {
         let tiny = MIN_BED_MASS_KG;
         let mut c = col_with(&[mafic(tiny), mafic(tiny)]);
         for _ in 0..5 {
-            c.reconcile(1200.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
+            c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
         }
         assert_eq!(c.layers.len(), 2, "no load, no compaction");
     }
@@ -697,14 +834,21 @@ mod tests {
     #[test]
     fn a_bed_remembers_the_worst_it_has_seen() {
         let mut c = col_with(&[mafic(BIG), felsic(BIG)]);
-        c.reconcile(1500.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
+        c.reconcile(1500.0, 1500.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
         let (p, t) = c.layers[0].peak_pt;
         assert!(p > 0.0 && (t - 1500.0).abs() < 1e-9, "the buried bed recorded its load");
-        assert_eq!(c.layers[1].peak_pt.0, 0.0, "the top bed carries nothing");
+        // The top bed records the pressure at ITS OWN BASE — its own weight. A
+        // bed's peak is at its bottom, and reading the top instead pinned the
+        // surface bed at zero forever, which disabled the lithification half of
+        // the bed-spawn rule (a bed could never cement, so nothing ever landed
+        // ON it as a new stratum).
+        let top = c.layers[1].peak_pt.0;
+        assert!(top > 0.0, "the top bed carries its own weight: {top:.3e} Pa");
+        assert!(top < p, "…and still less than the bed beneath it: {top:.3e} vs {p:.3e}");
 
         // Strip the load and cool it: the record must not fall.
         c.layers.pop();
-        c.reconcile(300.0, AREA, STRATA_SOFT_CAP_FOR_TEST);
+        c.reconcile(300.0, 300.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
         assert_eq!(c.layers[0].peak_pt, (p, t), "peak is a high-water mark, not a reading");
     }
 
@@ -730,7 +874,7 @@ mod tests {
         let mut settled = 0;
         for _ in 0..40 {
             let n = c.layers.len();
-            c.reconcile(1200.0, AREA, cap);
+            c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, cap);
             if c.layers.len() == n {
                 settled += 1;
                 if settled > 2 {
@@ -776,7 +920,7 @@ mod tests {
         let mut settled = 0;
         for _ in 0..80 {
             let n = c.layers.len();
-            c.reconcile(1200.0, AREA, cap);
+            c.reconcile(1200.0, 1200.0, GRAVITY_M_S2, AREA, cap);
             if c.layers.len() == n {
                 settled += 1;
                 if settled > 2 {
@@ -798,11 +942,11 @@ mod tests {
     #[test]
     fn overburden_is_the_weight_above() {
         let c = col_with(&[mafic(BIG), mafic(BIG), mafic(BIG)]);
-        assert_eq!(overburden_pa(&c, 2, AREA), 0.0, "the top bed carries nothing");
+        assert_eq!(overburden_pa(&c, 2, GRAVITY_M_S2, AREA), 0.0, "the top bed carries nothing");
         let one_bed = c.layers[0].mass_kg() * GRAVITY_M_S2 / AREA;
-        assert!((overburden_pa(&c, 1, AREA) - one_bed).abs() < 1e-3);
-        assert!((overburden_pa(&c, 0, AREA) - 2.0 * one_bed).abs() < 1e-3);
-        assert!((basal_pressure_pa(&c, AREA) - 3.0 * one_bed).abs() < 1e-3);
+        assert!((overburden_pa(&c, 1, GRAVITY_M_S2, AREA) - one_bed).abs() < 1e-3);
+        assert!((overburden_pa(&c, 0, GRAVITY_M_S2, AREA) - 2.0 * one_bed).abs() < 1e-3);
+        assert!((basal_pressure_pa(&c, GRAVITY_M_S2, AREA) - 3.0 * one_bed).abs() < 1e-3);
     }
 
     /// The distance the whole lifecycle is written in terms of.

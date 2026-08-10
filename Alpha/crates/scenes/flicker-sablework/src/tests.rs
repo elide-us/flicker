@@ -6,7 +6,7 @@
 
 use flicker::render::Vec2;
 use flicker::script::{HudCommand, Value, ValueMap};
-use flicker::ui::{load_styles, run_ui_with, strings, UiInput, UiState};
+use flicker::ui::{load_styles, run_ui, strings, UiInput, UiState};
 use flicker_texture::{BlendMode, MapKind, NoiseKind, CHANNEL_COUNT};
 
 use super::*;
@@ -34,7 +34,6 @@ fn draw() -> Vec<HudCommand> {
     let bench = Sablework::new();
     let tree = tree_of(&bench);
     let styles = load_styles(HUD_UI_ELEMENTS);
-    let host = bench.ui_host.as_ref().expect("component library loaded");
     let snap = UiInput {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
@@ -44,7 +43,7 @@ fn draw() -> Vec<HudCommand> {
         backspace: false,
         wheel: 0.0,
     };
-    run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host))
+    run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new())
         .commands
 }
 
@@ -166,8 +165,24 @@ fn the_console_is_a_data_proto_the_scene_only_configures() {
 #[test]
 fn the_screen_declares_its_input_as_data() {
     let tree = tree_of(&Sablework::new());
-    for signal in ["on_menu", "on_confirm", "on_cancel", "on_tab_next", "on_tab_prev"] {
+    for signal in ["on_menu", "on_tab_next", "on_tab_prev"] {
         assert!(tree.props.contains_key(signal), "the screen does not declare {signal}");
+    }
+    // …and NOT ONE walker-owned signal. Confirm, Cancel, `Nav*` and `Panel*` mean
+    // the same thing on every screen in Prism and the walker answers all of them;
+    // a screen that named one would kill it on itself (violation F1, 2026-08-09).
+    for signal in [
+        "on_confirm",
+        "on_cancel",
+        "on_nav_up",
+        "on_nav_down",
+        "on_nav_left",
+        "on_nav_right",
+        "on_panel_next",
+        "on_panel_prev",
+        "on_chord_begin",
+    ] {
+        assert!(!tree.props.contains_key(signal), "`{signal}` is the walker's, not this screen's");
     }
     // And the walker can collect them — the seam that puts them on the Router.
     assert!(!UiIntents::of(&tree).is_empty(), "declared intents were not collected");
@@ -550,7 +565,6 @@ fn switching_maps_switches_the_drawn_texture() {
         route::apply(&mut bench, &results);
 
         let tree = tree_of(&bench);
-        let host = bench.ui_host.as_ref().expect("component library");
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
@@ -561,7 +575,7 @@ fn switching_maps_switches_the_drawn_texture() {
             wheel: 0.0,
         };
         let frame =
-            run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host));
+            run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
         let drawn: Vec<u32> = frame
             .commands
             .iter()
@@ -591,7 +605,6 @@ fn the_lit_tab_reserves_a_sub_scene_instead_of_a_sprite() {
     assert!(bench.showing_lit(), "the lit tab did not select");
 
     let tree = tree_of(&bench);
-    let host = bench.ui_host.as_ref().expect("component library");
     let snap = UiInput {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
@@ -602,7 +615,7 @@ fn the_lit_tab_reserves_a_sub_scene_instead_of_a_sprite() {
         wheel: 0.0,
     };
     let frame =
-        run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host));
+        run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
 
     let slot = frame
         .rtts
@@ -629,7 +642,6 @@ fn a_flat_tab_costs_no_sub_scene() {
     let mut bench = Sablework::new();
     fire(&mut bench, "map_normal", true);
     let tree = tree_of(&bench);
-    let host = bench.ui_host.as_ref().expect("component library");
     let snap = UiInput {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
@@ -640,7 +652,7 @@ fn a_flat_tab_costs_no_sub_scene() {
         wheel: 0.0,
     };
     let frame =
-        run_ui_with(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new(), Some(host));
+        run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
     assert!(
         frame.rtts.iter().all(|s| s.id != "sw_lit"),
         "the lit sub-scene renders while a flat map is showing"
@@ -710,7 +722,7 @@ fn every_button_can_fire() {
 /// just as dead as one with no action at all.
 #[test]
 fn every_button_action_is_handled() {
-    fn walk<'a>(n: &'a UiNode, out: &mut Vec<String>) {
+    fn walk(n: &UiNode, out: &mut Vec<String>) {
         if n.component == "button" {
             if let Some(a) = n.action.as_deref() {
                 out.push(a.to_string());

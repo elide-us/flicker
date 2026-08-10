@@ -39,7 +39,31 @@ use std::time::Duration;
 
 use flicker_app::{App, CursorImage};
 use flicker_input_core::InputState;
+pub use flicker_input_router::{InputEvent, RouteCtx};
 use flicker_render::Renderer;
+
+/// The resolved discrete input for one frame, handed to the active scene by the
+/// [`SceneManager`].
+///
+/// This is the seam that DECOUPLES input from the scene (Input Standardization,
+/// 2026-08-10): the manager owns the pipeline — device snapshot → [`Resolver`] →
+/// active [`InputContext`] — and hands the scene the already-resolved signal
+/// [`events`](Self::events) plus the [`route`](Self::route) scratch it routes them
+/// into. A scene NEVER re-resolves and never owns a `Resolver`; it composes its
+/// handler chain (the UI walker + its own gameplay base) and calls
+/// `Router::dispatch(signals.events, chain, signals.route)`. Context push/pop the
+/// chain requests into `route` are applied by the manager against the ONE shared
+/// context stack after `update` returns.
+///
+/// [`Resolver`]: flicker_input_core::Resolver
+/// [`InputContext`]: flicker_input_core::InputContext
+pub struct SceneInput<'a> {
+    /// This frame's resolved signal events, for the scene's active context.
+    pub events: &'a [InputEvent<'a>],
+    /// The router scratch the scene routes `events` into; the manager reconciles
+    /// its context requests against the shared stack after the scene returns.
+    pub route: &'a mut RouteCtx,
+}
 
 /// One screen / mode of the application — a logo, a menu, the game, a pause
 /// modal, and so on. Scenes are owned by the [`SceneManager`] on a stack.
@@ -51,7 +75,18 @@ pub trait Scene {
 
     /// Advance one frame and return a [`Transition`]. Only the top scene is
     /// updated; scenes beneath an overlay are frozen.
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition;
+    ///
+    /// `signals` carries the frame's resolved input (see [`SceneInput`]) — a scene
+    /// routes `signals.events` through its handler chain rather than owning a
+    /// resolver. `input` remains for the pointer + analog channel (the discrete bus
+    /// is `signals.events`; the analog split is a later stage).
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition;
 
     /// Draw the scene. Overlays draw over whatever is already on screen.
     fn render(&mut self, renderer: &mut Renderer);
@@ -84,7 +119,47 @@ pub enum Transition {
     Pop,
     /// Exit the application.
     Quit,
+    /// Go to the scene REGISTERED UNDER `id`, letting the manager resolve and build
+    /// it — the id-addressed form of `Replace` / `ReplaceRoot` / `Push`.
+    ///
+    /// This is what takes the scene chain out of Rust. The variants above all carry a
+    /// `Box<dyn Scene>`, which means the departing scene must name its successor's
+    /// concrete TYPE and construct it: `Transition::Replace(Box::new(MenuScene::new()))`
+    /// hard-wires "logo is followed by menu" into the logo's source. Naming an id
+    /// instead lets the successor be authored — a splash, the main menu and a bench
+    /// launch are then the SAME mechanism, and the chain lives in the roster rather
+    /// than in constructor calls.
+    ///
+    /// An id with no registered scene is a loud no-op (logged, stack untouched) — a
+    /// typo must not silently strand the player on a splash screen.
+    Goto {
+        /// The registered scene id, e.g. `"ce_logo"` / `"main_menu"`.
+        id: String,
+        /// Which stack reshape to perform once the id resolves.
+        mode: GotoMode,
+    },
 }
+
+/// How a [`Transition::Goto`] reshapes the stack once its id resolves — the three
+/// forward moves, named so a roster can spell them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GotoMode {
+    /// Swap the top scene (a splash advancing to the next splash).
+    Replace,
+    /// Unwind the whole stack and start over (returning to the main menu).
+    ReplaceRoot,
+    /// Overlay, freezing the scene below (a pause menu).
+    Push,
+}
+
+/// Resolves a scene id to a fresh instance — the manager's link to whatever owns the
+/// roster.
+///
+/// The manager deliberately does NOT own the registry: scene ids and their factories
+/// are a CLIENT concern (`flicker-shell` holds `SceneEntry { id, factory, … }`), and a
+/// crate this low must not depend on the app above it. Injecting the lookup keeps the
+/// mechanism here and the roster there.
+pub type SceneResolver = Box<dyn Fn(&str) -> Option<Box<dyn Scene>>>;
 
 /// Owns the scene stack and drives it as a [`flicker_app::App`].
 pub struct SceneManager {
@@ -92,6 +167,9 @@ pub struct SceneManager {
     pending: Transition,
     quit: bool,
     cursor: Option<CursorImage>,
+    /// Resolves [`Transition::Goto`] ids. `None` = no roster wired, so id-addressed
+    /// transitions cannot be served (they log and do nothing).
+    resolver: Option<SceneResolver>,
 }
 
 impl SceneManager {
@@ -104,7 +182,38 @@ impl SceneManager {
             pending: Transition::None,
             quit: false,
             cursor: None,
+            resolver: None,
         }
+    }
+
+    /// Start on the scene registered under `entry`, resolving it through `resolver` —
+    /// the fully id-addressed boot.
+    ///
+    /// `SceneManager::new` takes a constructed scene, which makes the ENTRY POINT a
+    /// compiled-in decision the same way `Replace(Box::new(..))` made the chain one.
+    /// Here the first scene is named, not built, so the whole chain — entry included —
+    /// is a roster concern.
+    ///
+    /// Returns `None` when `entry` is not registered; that is a fatal boot
+    /// misconfiguration and the caller should say so loudly rather than limp on.
+    #[must_use]
+    pub fn from_roster(entry: &str, resolver: SceneResolver) -> Option<Self> {
+        let initial = resolver(entry)?;
+        Some(Self {
+            stack: vec![initial],
+            pending: Transition::None,
+            quit: false,
+            cursor: None,
+            resolver: Some(resolver),
+        })
+    }
+
+    /// Wire a roster onto a manager built with [`new`](Self::new), so its scenes can
+    /// use [`Transition::Goto`].
+    #[must_use]
+    pub fn with_resolver(mut self, resolver: SceneResolver) -> Self {
+        self.resolver = Some(resolver);
+        self
     }
 
     /// Attach a custom hardware cursor for the runner to register at window
@@ -119,8 +228,34 @@ impl SceneManager {
     /// Apply the transition stored by the last `update`. Runs in `render`
     /// because `enter`/`exit` need `&mut Renderer`.
     fn apply_pending(&mut self, renderer: &mut Renderer) {
-        match std::mem::replace(&mut self.pending, Transition::None) {
+        let pending = std::mem::replace(&mut self.pending, Transition::None);
+        // Resolve an id-addressed `Goto` into the concrete reshape it names, BEFORE the
+        // stack is touched — so the three moves below stay the only places the stack
+        // changes shape, and a `Goto` is provably nothing more than a late-bound
+        // `Replace`/`ReplaceRoot`/`Push`.
+        let pending = match pending {
+            Transition::Goto { id, mode } => match self.resolve(&id) {
+                Some(next) => match mode {
+                    GotoMode::Replace => Transition::Replace(next),
+                    GotoMode::ReplaceRoot => Transition::ReplaceRoot(next),
+                    GotoMode::Push => Transition::Push(next),
+                },
+                // Fail LOUD and stay put. Silently doing nothing would look like a
+                // hung splash screen; advancing to some fallback would hide the typo.
+                None => {
+                    tracing::error!(
+                        "scene id '{id}' is not in the roster — transition ignored; \
+                         register it, or fix the id the departing scene named"
+                    );
+                    Transition::None
+                }
+            },
+            other => other,
+        };
+        match pending {
             Transition::None | Transition::Quit => {}
+            // Resolved above into one of the three concrete moves; unreachable here.
+            Transition::Goto { .. } => {}
             Transition::Replace(mut next) => {
                 if let Some(mut top) = self.stack.pop() {
                     top.exit(renderer);
@@ -150,6 +285,17 @@ impl SceneManager {
                 if self.stack.is_empty() {
                     self.quit = true; // popped the last scene → nothing left to run
                 }
+            }
+        }
+    }
+
+    /// Build the scene registered under `id`, if a roster is wired and knows it.
+    fn resolve(&self, id: &str) -> Option<Box<dyn Scene>> {
+        match &self.resolver {
+            Some(r) => r(id),
+            None => {
+                tracing::error!("scene id '{id}' requested but no roster is wired");
+                None
             }
         }
     }
@@ -188,7 +334,14 @@ impl App for SceneManager {
 
     fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
         if let Some(top) = self.stack.last_mut() {
-            let transition = top.update(dt, input, renderer);
+            // S1 scaffold (Input Standardization): the manager will own the
+            // pipeline (Resolver + shared context stack) and resolve `events` here
+            // for the active scene's context. Until each scene is converted it still
+            // resolves internally and IGNORES these, so the seam is in place with
+            // behaviour unchanged — an empty event set and a fresh route.
+            let mut route = RouteCtx::new();
+            let mut signals = SceneInput { events: &[], route: &mut route };
+            let transition = top.update(dt, input, &mut signals, renderer);
             if matches!(transition, Transition::Quit) {
                 self.quit = true;
             }
@@ -234,6 +387,7 @@ mod tests {
                 &mut self,
                 _: std::time::Duration,
                 _: &flicker_input_core::InputState,
+                _: &mut super::SceneInput,
                 _: &flicker_render::Renderer,
             ) -> super::Transition {
                 super::Transition::None

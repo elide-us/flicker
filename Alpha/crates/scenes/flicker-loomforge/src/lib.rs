@@ -32,13 +32,12 @@ use std::time::Duration;
 use canvas::{CanvasArea, CardRect};
 use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
 use flicker::render::{FrameGraph, Rect as StageRect, Renderer, TextureHandle, Vec2};
-use flicker::scene::{Scene, Transition};
+use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{
-    ComponentLibrary, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap,
+    HudCommand, UiAnchor, UiNode, Value, ValueMap,
 };
 use flicker::ui::{
-    load_styles, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
-    UI_COMPONENT_MODULES,
+    load_styles, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -129,11 +128,6 @@ pub struct LoomforgeBench {
     /// Intent names fired last frame — republished ONCE into the next frame's
     /// Model as the transient `sig_<name>` mirror (S9), then dropped.
     fired_sigs: Vec<String>,
-    /// Component-library host built once at construction: the walker dispatches each
-    /// control's draw/hit to its `ui/<kind>.lua` module through this. `None` (load
-    /// failure) leaves component nodes drawing only their structural box or nothing —
-    /// a visible failure, not an alternate render path.
-    ui_lib: Option<ScriptHost>,
     hud_commands: Vec<HudCommand>,
     hud_white: Option<TextureHandle>,
     theme: Option<Theme>,
@@ -277,13 +271,6 @@ impl LoomforgeBench {
             ui_styles: serde_json::Value::Null,
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
-            ui_lib: match ScriptHost::library(UI_COMPONENT_MODULES) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    tracing::error!("loomforge ui component library failed: {e}");
-                    None
-                }
-            },
             hud_commands: Vec::new(),
             hud_white: None,
             theme: None,
@@ -1794,7 +1781,7 @@ impl Scene for LoomforgeBench {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // Input arbitration (Esc → pause + the HUD pointer-consume) now runs through the
         // ONE event bus in the resolve → dispatch block below, once this frame's walker
         // pass has produced `over_hud`. The node-graph / TAE-timeline tools keep their
@@ -1843,8 +1830,7 @@ impl Scene for LoomforgeBench {
             backspace: false,
             wheel: input.mouse_wheel_delta,
         };
-        let lib = self.ui_lib.as_ref().map(|h| h as &dyn ComponentLibrary);
-        let frame = run_ui_with(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         // Copy out what the canvas needs before `frame` is consumed / `self` mutated.
         let over_hud = frame.results.is_on("hud_hit");
         let dropped = frame.results.is_on("drag_dropped");

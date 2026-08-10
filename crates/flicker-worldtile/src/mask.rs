@@ -10,17 +10,17 @@
 
 use glam::{DVec2, DVec3, Vec3};
 
-use crate::{FEET_PER_PIXEL, METRES_PER_FOOT};
-
 /// Pixels across a tile. A hex *is* a 2048² map; this is not a quality setting.
 pub const TILE_DIM: u32 = 2048;
 
 /// Pixels in a whole tile, corners included.
 pub const PIXELS_PER_TILE: usize = (TILE_DIM as usize) * (TILE_DIM as usize);
 
-/// How far a tile spans, m — 2048 pixels at 128 ft each, which is the 49.65 mi a
-/// hex measures flat to flat. The two numbers agree here and nowhere else.
-pub const TILE_SPAN_M: f64 = TILE_DIM as f64 * FEET_PER_PIXEL * METRES_PER_FOOT;
+/// How far a tile spans, m — 2048 pixels at 128 ft each, the 49.65 mi a hex
+/// measures flat to flat **at every frequency**. Re-exported from the world
+/// constants so the pixel tier and the chemistry tier cannot drift apart; the
+/// scale-chain guard in `lib.rs` pins this crate's own derivation to it.
+pub use flicker_poc_chemistry::TILE_SPAN_M;
 
 /// A cell's own frame: where its tile sits on the sphere and which way is up in it.
 ///

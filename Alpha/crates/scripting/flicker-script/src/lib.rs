@@ -64,7 +64,7 @@
 //! return M
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use flicker_input_core::InputState;
@@ -143,6 +143,12 @@ pub enum HudCommand {
     /// A textured quad drawn from an engine texture, referenced by the `id`
     /// the host registered with [`ScriptHost::set_texture_ids`]. `color`
     /// tints the sampled texel (`[1; 4]` for none).
+    ///
+    /// `uv` is the SOURCE sub-rectangle in normalized texture space,
+    /// `[u0, v0, u1, v1]` with the origin top-left — `[0, 0, 1, 1]` (the Lua default
+    /// when a command carries no `uv`) is the whole image. A sub-rect is how many
+    /// small images share one texture: an ATLAS, drawn in one bind rather than one
+    /// per image.
     Sprite {
         tex: u32,
         x: f32,
@@ -151,6 +157,7 @@ pub enum HudCommand {
         h: f32,
         color: [f32; 4],
         layer: f32,
+        uv: [f32; 4],
     },
     /// A line of text positioned at `(x, y)` per `align`, in the face `font`.
     /// `italic`/`bold` style it within the family (Body italic "for flavor";
@@ -321,8 +328,8 @@ pub struct UiNode {
 /// A single value crossing the engine↔script boundary — the *only* value
 /// currency the [boundary contract](crate#boundary-contract-engine--script-—-strictly-enforced)
 /// permits in either direction. Plain scalars only; no handles or references.
-/// Deserializes untagged (`true` / `3.5` / `"text"`), so a [`HitVerdict`]'s
-/// `value` field parses straight off a component's plain-data return.
+/// Deserializes untagged (`true` / `3.5` / `"text"`), so a scalar parses straight
+/// off plain-data JSON wherever the walker carries one.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Value {
@@ -438,15 +445,6 @@ pub struct ScriptHost {
     #[allow(dead_code)]
     lua: Lua,
     module: Table,
-    /// Component kinds available as `require("ui.<kind>")` modules that expose the
-    /// `draw(cmds, rect, props)` + `hit(mx, my, rect, props, click, down)` contract —
-    /// the Lua half of the Prism component library the Rust walker dispatches to (see
-    /// [`ComponentLibrary`]). Populated by
-    /// [`new_with_modules`](Self::new_with_modules); empty otherwise.
-    component_kinds: HashSet<String>,
-    /// The `M.hit_shape` declarations among those kinds (see [`HitShape`]) — probed
-    /// once at build, so the walker's per-node lookup never enters the VM.
-    component_hit_shapes: HashMap<String, HitShape>,
 }
 
 impl ScriptHost {
@@ -457,18 +455,16 @@ impl ScriptHost {
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         // Fail fast if the contract is not met, rather than at the first frame.
         check_contract(&module)?;
-        Ok(Self {
-            lua,
-            module,
-            component_kinds: HashSet::new(),
-            component_hit_shapes: HashMap::new(),
-        })
+        Ok(Self { lua, module })
     }
 
     /// Like [`new`](Self::new), but first registers a set of **requireable Lua
-    /// modules** so the script (and modules) can `require("<name>")` each other —
-    /// the seam for splitting the UI into one file per component (a shared `core`
-    /// + `button`/`slider`/… + a `layout` engine) instead of one monolith.
+    /// modules** so the script (and modules) can `require("<name>")` each other,
+    /// instead of every screen being one monolithic chunk.
+    ///
+    /// No screen uses this today: its original consumer was the `ui/<kind>.lua`
+    /// component tier, deleted 2026-08-10. It stays as the VM's general
+    /// composition primitive, pinned by `require_composes_per_file_modules`.
     ///
     /// The VM is Luau (sandboxed — no stock `package`/`require`), so this installs
     /// a minimal `require`: each `(name, source)` is compiled to a loader function
@@ -486,11 +482,7 @@ impl ScriptHost {
         install_require(&lua, modules)?;
         let module: Table = lua.load(source).set_name(chunk_name).eval()?;
         check_contract(&module)?;
-        // A `ui.<kind>` module IS a component iff it exposes the draw+hit contract;
-        // `ui.core` (the primitive emitters) does not, so it is excluded without a
-        // hard-coded denylist.
-        let (component_kinds, component_hit_shapes) = probe_component_kinds(&lua, modules)?;
-        Ok(Self { lua, module, component_kinds, component_hit_shapes })
+        Ok(Self { lua, module })
     }
 
     /// Load and evaluate a HUD script from a file on disk. The path is
@@ -502,33 +494,6 @@ impl ScriptHost {
             source,
         })?;
         Self::new(&source, &path.display().to_string())
-    }
-
-    /// Like [`from_file`](Self::from_file), but also registers requireable `modules`
-    /// (see [`new_with_modules`](Self::new_with_modules)) — for a screen loaded from a
-    /// file whose components live in `ui/*.lua`, so the same host builds the tree AND
-    /// serves as the [`ComponentLibrary`] the walker dispatches per-node DRAW to.
-    pub fn from_file_with_modules(
-        path: impl AsRef<Path>,
-        modules: &[(&str, &str)],
-    ) -> Result<Self, ScriptError> {
-        let path = path.as_ref();
-        let source = std::fs::read_to_string(path).map_err(|source| ScriptError::Io {
-            path: path.display().to_string(),
-            source,
-        })?;
-        Self::new_with_modules(&source, &path.display().to_string(), modules)
-    }
-
-    /// A **component-library-only** host: installs `modules` behind a trivial screen, for
-    /// a consumer that builds its [`UiNode`] tree in Rust (no Lua `tree()`) yet still
-    /// wants the walker to dispatch a control's DRAW to its `ui/<kind>.lua`.
-    pub fn library(modules: &[(&str, &str)]) -> Result<Self, ScriptError> {
-        Self::new_with_modules(
-            "return { tree = function() return { component = 'page' } end }",
-            "ui-library",
-            modules,
-        )
     }
 
     /// Expose engine textures to the script as a global `Textures` table
@@ -675,257 +640,9 @@ impl ScriptHost {
     }
 }
 
-/// The trivial hit geometries a component module may declare with `M.hit_shape`,
-/// so the walker answers its hover/claim in RUST — zero Lua crossings — instead of
-/// dispatching `M.hit`. Probed once at library build (see [`ComponentLibrary::hit_shape`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HitShape {
-    /// `M.hit_shape = "rect"` — the whole node rect is the interactive region: the
-    /// walker claims the pointer on rect-contains and, on a click inside, fires the
-    /// node's `action` / toggles its bool `bind` generically (button, tile).
-    Rect,
-    /// `M.hit_shape = "none"` — presentational: never claims the pointer, never
-    /// interacts (sprite, tooltip, rune_corners). The module still defines `M.hit`
-    /// (the component contract), but it is never called.
-    None,
-}
-
-/// What one component's `M.hit` decided for this frame's pointer — the plain-data
-/// verdict the walker applies generically (each field maps onto walker-owned state
-/// or the results map; the component never touches either directly). A component
-/// may return a bare boolean (parsed as `{ hit = … }`) or a table of these fields;
-/// every field is optional. Scalars only — the boundary contract is unchanged.
-#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
-#[serde(default)]
-pub struct HitVerdict {
-    /// The pointer is over this component's TIGHT region (claims `hud_hit`).
-    pub hit: bool,
-    /// New value for the node's `bind` (a click toggled/picked/dragged it).
-    pub value: Option<Value>,
-    /// Fire the node's `action` (a click landed on its activating region).
-    pub activate: bool,
-    /// `Some(true)` grabs pointer capture for the node (a slider drag starts);
-    /// release-on-button-up stays the walker's generic rule.
-    pub capture: Option<bool>,
-    /// `Some(true)` opens this node's popup (`state.open`), `Some(false)` closes it.
-    pub open: Option<bool>,
-    /// `Some(true)` gives this node KEYBOARD focus (`state.focus` ← the node's `id`;
-    /// a node with no id cannot hold focus, so it is a no-op there). `Some(false)` /
-    /// `None` leave focus unchanged — CLEARING stays the walker's generic rule: any
-    /// fresh click drops focus up front, and the clicked field re-claims it here.
-    pub focus: Option<bool>,
-    /// Write the node's `bind` into its `focus_group` key (slider focus).
-    pub group_focus: bool,
-    /// Fire the `action` of the node's CHILD at this index — **1-based**, matching
-    /// the Lua `props.children[i]` the component indexed to find the row (a context
-    /// menu's items are data children of the menu node, so the MENU receives the
-    /// dispatch and names the picked row here). `0`, out-of-range, or a child with
-    /// no/empty `action` is a silent no-op in the walker.
-    pub activate_child: Option<usize>,
-}
-
-/// The **retained-harness seam**: a Lua component library that the Rust walker
-/// (`run_ui` in `flicker-widgets`) dispatches a single laid-out node to. The walker
-/// owns layout + retained interaction state and RENDERS; a migrated control owns its
-/// own draw/hit LOGIC in `ui/<kind>.lua` (`M.draw(cmds, rect, props)` +
-/// `M.hit(mx, my, rect, props, click, down)` → [`HitVerdict`]). Props cross as plain
-/// data (a JSON tree) and commands come back as [`HudCommand`]s, so the four-channel
-/// boundary is unchanged and `mlua` stays confined to this crate — the walker never
-/// sees a [`Lua`] handle.
-pub trait ComponentLibrary {
-    /// Whether `kind` is a Lua component here (a `ui.<kind>` module with `draw`+`hit`).
-    /// Cheap set lookup — the walker gates on it per node before crossing into Lua.
-    fn handles(&self, kind: &str) -> bool;
-
-    /// The trivial hit geometry `kind` declared with `M.hit_shape`, if any — the
-    /// walker answers those in Rust with zero Lua crossings. `None` means the kind
-    /// owns a real `M.hit` and the walker dispatches [`hit_component`](Self::hit_component).
-    fn hit_shape(&self, kind: &str) -> Option<HitShape>;
-
-    /// Draw one component into `rect` (`[x, y, w, h]`) with plain-data `props`,
-    /// returning the [`HudCommand`]s it emitted (the walker renders them).
-    fn draw_component(
-        &self,
-        kind: &str,
-        rect: [f32; 4],
-        props: &serde_json::Value,
-    ) -> Result<Vec<HudCommand>, ScriptError>;
-
-    /// Hit-test one component: dispatch `M.hit(mx, my, rect, props, click, down)`
-    /// and parse its return into a [`HitVerdict`]. `click` is this frame's press
-    /// edge already gated on the node's enabled state; `down` is the raw held state
-    /// (a captured slider keeps writing while held). Only called on input-active
-    /// frames for candidate nodes — the walker's bounded-dispatch rule.
-    #[allow(clippy::too_many_arguments)]
-    fn hit_component(
-        &self,
-        kind: &str,
-        mx: f32,
-        my: f32,
-        rect: [f32; 4],
-        props: &serde_json::Value,
-        click: bool,
-        down: bool,
-    ) -> Result<HitVerdict, ScriptError>;
-}
-
-impl ScriptHost {
-    /// `require("ui.<kind>")` → the component's module table (cached by `require`).
-    fn require_component(&self, kind: &str) -> Result<Table, ScriptError> {
-        let require: Function = self.lua.globals().get("require")?;
-        let module: Table = require.call(format!("ui.{kind}"))?;
-        Ok(module)
-    }
-
-    /// A `{ x, y, w, h }` Lua table for a component's rect argument.
-    fn rect_table(&self, rect: [f32; 4]) -> Result<Table, ScriptError> {
-        let t = self.lua.create_table()?;
-        t.set("x", rect[0])?;
-        t.set("y", rect[1])?;
-        t.set("w", rect[2])?;
-        t.set("h", rect[3])?;
-        Ok(t)
-    }
-}
-
-impl ComponentLibrary for ScriptHost {
-    fn handles(&self, kind: &str) -> bool {
-        self.component_kinds.contains(kind)
-    }
-
-    fn hit_shape(&self, kind: &str) -> Option<HitShape> {
-        self.component_hit_shapes.get(kind).copied()
-    }
-
-    fn draw_component(
-        &self,
-        kind: &str,
-        rect: [f32; 4],
-        props: &serde_json::Value,
-    ) -> Result<Vec<HudCommand>, ScriptError> {
-        let module = self.require_component(kind)?;
-        let draw: Function = module.get("draw")?;
-        // The component appends to `cmds` in place (Lua tables are references), so we
-        // read the same handle back after the call and parse it like the immediate path.
-        let cmds = self.lua.create_table()?;
-        let rect_t = self.rect_table(rect)?;
-        let props_t = json_to_lua(&self.lua, props)?;
-        draw.call::<()>((cmds.clone(), rect_t, props_t))?;
-        Ok(parse_commands(&cmds)?)
-    }
-
-    fn hit_component(
-        &self,
-        kind: &str,
-        mx: f32,
-        my: f32,
-        rect: [f32; 4],
-        props: &serde_json::Value,
-        click: bool,
-        down: bool,
-    ) -> Result<HitVerdict, ScriptError> {
-        let module = self.require_component(kind)?;
-        let hit: Function = module.get("hit")?;
-        let rect_t = self.rect_table(rect)?;
-        let props_t = json_to_lua(&self.lua, props)?;
-        let ret: mlua::Value = hit.call((mx, my, rect_t, props_t, click, down))?;
-        Ok(parse_hit_verdict(&ret)?)
-    }
-}
-
-/// Parse a component `M.hit` return into a [`HitVerdict`]: a bare boolean is
-/// `{ hit = … }`, `nil` is the empty verdict, a table reads the optional scalar
-/// fields. Anything else (or a non-scalar `value`) is a contract error — the
-/// boundary carries bool|number|text only.
-fn parse_hit_verdict(v: &mlua::Value) -> mlua::Result<HitVerdict> {
-    let table = match v {
-        mlua::Value::Boolean(b) => {
-            return Ok(HitVerdict { hit: *b, ..HitVerdict::default() });
-        }
-        mlua::Value::Nil => return Ok(HitVerdict::default()),
-        mlua::Value::Table(t) => t,
-        other => {
-            return Err(mlua::Error::FromLuaConversionError {
-                from: other.type_name(),
-                to: "HitVerdict".to_string(),
-                message: Some("component hit must return a boolean or a verdict table".into()),
-            });
-        }
-    };
-    let value = match table.get::<mlua::Value>("value")? {
-        mlua::Value::Nil => None,
-        mlua::Value::Boolean(b) => Some(Value::Bool(b)),
-        mlua::Value::Integer(n) => Some(Value::Number(n as f64)),
-        mlua::Value::Number(n) => Some(Value::Number(n)),
-        mlua::Value::String(s) => Some(Value::Text(s.to_str()?.to_string())),
-        other => {
-            return Err(mlua::Error::FromLuaConversionError {
-                from: other.type_name(),
-                to: "Value".to_string(),
-                message: Some("hit verdict `value` must be bool|number|text".into()),
-            });
-        }
-    };
-    Ok(HitVerdict {
-        hit: table.get::<Option<bool>>("hit")?.unwrap_or(false),
-        value,
-        activate: table.get::<Option<bool>>("activate")?.unwrap_or(false),
-        capture: table.get::<Option<bool>>("capture")?,
-        open: table.get::<Option<bool>>("open")?,
-        focus: table.get::<Option<bool>>("focus")?,
-        group_focus: table.get::<Option<bool>>("group_focus")?.unwrap_or(false),
-        activate_child: table.get::<Option<usize>>("activate_child")?,
-    })
-}
-
-/// Probe which installed `ui.<kind>` modules are COMPONENTS — i.e. expose the
-/// `draw` + `hit` pair. `ui.core` (the primitive emitters) is a `ui.*` module too
-/// but lacks the pair, so it is excluded by contract (no hard-coded name list). Also reads each component's optional `M.hit_shape`
-/// declaration (see [`HitShape`]) — paid once here, so the walker's per-frame lookup
-/// is a map probe. `require` caches, so this evaluation is paid once.
-#[allow(clippy::type_complexity)]
-fn probe_component_kinds(
-    lua: &Lua,
-    modules: &[(&str, &str)],
-) -> Result<(HashSet<String>, HashMap<String, HitShape>), ScriptError> {
-    let require: Function = lua.globals().get("require")?;
-    let mut kinds = HashSet::new();
-    let mut shapes = HashMap::new();
-    for (name, _) in modules {
-        let Some(kind) = name.strip_prefix("ui.") else {
-            continue;
-        };
-        if let mlua::Value::Table(t) = require.call::<mlua::Value>(*name)? {
-            let has_draw = t.get::<Option<Function>>("draw")?.is_some();
-            let has_hit = t.get::<Option<Function>>("hit")?.is_some();
-            if has_draw && has_hit {
-                kinds.insert(kind.to_string());
-                match t.get::<Option<String>>("hit_shape")?.as_deref() {
-                    Some("rect") => {
-                        shapes.insert(kind.to_string(), HitShape::Rect);
-                    }
-                    Some("none") => {
-                        shapes.insert(kind.to_string(), HitShape::None);
-                    }
-                    // Fail fast on a typo: a misspelled shape would silently change
-                    // hit behaviour (dispatching `M.hit` instead of the Rust answer).
-                    Some(other) => {
-                        return Err(ScriptError::Lua(mlua::Error::RuntimeError(format!(
-                            "ui.{kind}: unknown hit_shape '{other}' (expected \"rect\" or \"none\")"
-                        ))));
-                    }
-                    None => {}
-                }
-            }
-        }
-    }
-    Ok((kinds, shapes))
-}
-
-/// Parse a Lua list of command tables (each keyed by `kind`) into [`HudCommand`]s.
-/// Shared by the immediate [`ScriptHost::draw`] path and the retained per-component
-/// [`ScriptHost::draw_component`] path — one parser, two callers. Unknown kinds are
-/// skipped with a warning rather than failing the frame.
+/// Parse a Lua list of command tables (each keyed by `kind`) into [`HudCommand`]s —
+/// the outbound half of the draw boundary, used by [`ScriptHost::draw`]. Unknown
+/// kinds are skipped with a warning rather than failing the frame.
 fn parse_commands(list: &Table) -> mlua::Result<Vec<HudCommand>> {
     let mut commands = Vec::new();
     for item in list.sequence_values::<Table>() {
@@ -948,6 +665,7 @@ fn parse_commands(list: &Table) -> mlua::Result<Vec<HudCommand>> {
                 h: cmd.get("h")?,
                 color: read_color(&cmd)?,
                 layer: read_layer(&cmd)?,
+                uv: read_uv(&cmd)?,
             }),
             "text" => commands.push(HudCommand::Text {
                 x: cmd.get("x")?,
@@ -1027,6 +745,18 @@ fn read_color_keys(
         cmd.get::<Option<f32>>(keys.1)?.unwrap_or(default[1]),
         cmd.get::<Option<f32>>(keys.2)?.unwrap_or(default[2]),
         cmd.get::<Option<f32>>(keys.3)?.unwrap_or(default[3]),
+    ])
+}
+
+/// Read a [`HudCommand::Sprite`]'s source sub-rectangle from four named keys,
+/// defaulting to the WHOLE texture — so a command that names no `uv` blits the
+/// whole image exactly as it always did, and only an atlas draw carries the keys.
+fn read_uv(cmd: &Table) -> mlua::Result<[f32; 4]> {
+    Ok([
+        cmd.get::<Option<f32>>("u0")?.unwrap_or(0.0),
+        cmd.get::<Option<f32>>("v0")?.unwrap_or(0.0),
+        cmd.get::<Option<f32>>("u1")?.unwrap_or(1.0),
+        cmd.get::<Option<f32>>("v1")?.unwrap_or(1.0),
     ])
 }
 
@@ -1279,7 +1009,13 @@ pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
             .map(str::to_string),
         template,
         slots,
-        nav_ordinal: obj.get("nav_ordinal").and_then(J::as_u64).unwrap_or(0) as u32,
+        // `as_f64`, like every other numeric field above — NOT `as_u64`. A
+        // template param arrives as a float-shaped JSON number (the substituter
+        // builds them with `Number::from_f64`), and `as_u64` rejects those, so
+        // an `as_u64` read made every proto-authored ordinal silently 0 — the
+        // exact "an authored name fails to NOTHING" defect (rule 4BB12A75), and
+        // invisible because 0 is also the default.
+        nav_ordinal: obj.get("nav_ordinal").and_then(J::as_f64).unwrap_or(0.0).max(0.0) as u32,
         tab_group: obj
             .get("tab_group")
             .and_then(J::as_str)
@@ -1370,161 +1106,6 @@ fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // A minimal component (the `M.draw`/`M.hit` contract) + a stub screen, proving the
-    // `ComponentLibrary` seam the Rust walker uses: `handles` gates by contract, and
-    // `draw_component`/`hit_component` cross plain data both ways. Inline (not the real
-    // `ui/button.lua`) so this crate stays free of a content-file dependency.
-    const MINI_BUTTON: &str = r#"
-        local M = {}
-        function M.draw(cmds, r, props)
-          cmds[#cmds + 1] = { kind = "panel", x = r.x, y = r.y, w = r.w, h = r.h, r = 0.1, g = 0.2, b = 0.3, a = 1 }
-          cmds[#cmds + 1] = { kind = "text", x = r.x, y = r.y, text = props.label, size = 14 }
-        end
-        function M.hit(mx, my, r)
-          return mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
-        end
-        return M
-    "#;
-    const STUB_SCREEN: &str = r#"
-        local M = {}
-        function M.tree() return { component = "screen" } end
-        return M
-    "#;
-
-    #[test]
-    fn component_library_dispatches_draw_and_hit() {
-        let host =
-            ScriptHost::new_with_modules(STUB_SCREEN, "stub-screen", &[("ui.button", MINI_BUTTON)])
-                .expect("stub screen + component module load");
-
-        // `handles` is contract-defined: the button (draw+hit) registers; a kind with
-        // no installed module does not.
-        assert!(host.handles("button"), "button exposes draw+hit → a component");
-        assert!(!host.handles("slider"), "unregistered kind is not handled");
-
-        // draw_component: the Rust harness hands a rect + props; Lua emits commands.
-        let cmds = host
-            .draw_component("button", [10.0, 20.0, 80.0, 30.0], &serde_json::json!({ "label": "GO" }))
-            .expect("component draws");
-        assert_eq!(cmds.len(), 2, "panel + label");
-        if let HudCommand::Panel { x, y, w, h, .. } = &cmds[0] {
-            assert_eq!((*x, *y, *w, *h), (10.0, 20.0, 80.0, 30.0), "panel takes the given rect");
-        } else {
-            panic!("first command should be the button's panel");
-        }
-        if let HudCommand::Text { text, size, .. } = &cmds[1] {
-            assert_eq!(text, "GO", "label rode across as a plain-data prop");
-            assert_eq!(*size, 14.0);
-        } else {
-            panic!("second command should be the button's label");
-        }
-
-        // hit_component: a bare-boolean return parses as `{ hit = … }`.
-        let r = [10.0, 20.0, 80.0, 30.0];
-        let v = host.hit_component("button", 15.0, 25.0, r, &serde_json::json!({}), false, false).unwrap();
-        assert_eq!(v, HitVerdict { hit: true, ..HitVerdict::default() }, "inside → hit");
-        let v = host.hit_component("button", 200.0, 25.0, r, &serde_json::json!({}), false, false).unwrap();
-        assert!(!v.hit, "outside → miss");
-    }
-
-    // A component whose `M.hit` returns a full verdict TABLE (the S4 contract): the
-    // click edge + held state ride as args, and each optional field parses into the
-    // typed `HitVerdict` — `value` as a boundary scalar.
-    const VERDICT_COMPONENT: &str = r#"
-        local M = {}
-        function M.draw(cmds, r, props) end
-        function M.hit(mx, my, r, props, click, down)
-          if not click then
-            return mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
-          end
-          return {
-            hit = true,
-            value = (props.mode or "picked"),
-            activate = down == true,
-            capture = true,
-            open = false,
-            focus = true,
-            group_focus = true,
-            activate_child = 3,
-          }
-        end
-        return M
-    "#;
-
-    #[test]
-    fn hit_component_parses_a_full_verdict_table() {
-        let host = ScriptHost::new_with_modules(
-            STUB_SCREEN,
-            "stub-screen",
-            &[("ui.gadget", VERDICT_COMPONENT)],
-        )
-        .expect("verdict component loads");
-        let r = [0.0, 0.0, 50.0, 20.0];
-
-        // Non-click frame: the bare-boolean form still parses.
-        let v = host.hit_component("gadget", 10.0, 10.0, r, &serde_json::json!({}), false, false).unwrap();
-        assert_eq!(v, HitVerdict { hit: true, ..HitVerdict::default() });
-
-        // Click frame: every field crosses — props feed `value`, args feed the
-        // edges — and a child-row activation names its 1-based index.
-        let v = host
-            .hit_component("gadget", 10.0, 10.0, r, &serde_json::json!({ "mode": "m2" }), true, true)
-            .unwrap();
-        assert_eq!(
-            v,
-            HitVerdict {
-                hit: true,
-                value: Some(Value::Text("m2".into())),
-                activate: true,
-                capture: Some(true),
-                open: Some(false),
-                focus: Some(true),
-                group_focus: true,
-                activate_child: Some(3),
-            }
-        );
-    }
-
-    // `M.hit_shape` probing: a declared trivial shape is read ONCE at build and
-    // surfaces through the `ComponentLibrary` seam; an undeclared kind has none; a
-    // typo fails the build instead of silently changing hit behaviour.
-    #[test]
-    fn hit_shape_probes_at_build_and_rejects_typos() {
-        let rect_kind = r#"
-            local M = {}
-            M.hit_shape = "rect"
-            function M.draw(cmds, r, props) end
-            function M.hit(mx, my, r) return true end
-            return M
-        "#;
-        let none_kind = r#"
-            local M = {}
-            M.hit_shape = "none"
-            function M.draw(cmds, r, props) end
-            function M.hit(mx, my, r) return true end
-            return M
-        "#;
-        let host = ScriptHost::new_with_modules(
-            STUB_SCREEN,
-            "stub-screen",
-            &[("ui.btnish", rect_kind), ("ui.deco", none_kind), ("ui.gadget", VERDICT_COMPONENT)],
-        )
-        .expect("shaped components load");
-        assert_eq!(host.hit_shape("btnish"), Some(HitShape::Rect));
-        assert_eq!(host.hit_shape("deco"), Some(HitShape::None));
-        assert_eq!(host.hit_shape("gadget"), None, "no declaration → real M.hit dispatch");
-
-        let typo = r#"
-            local M = {}
-            M.hit_shape = "circle"
-            function M.draw(cmds, r, props) end
-            function M.hit(mx, my, r) return true end
-            return M
-        "#;
-        let err = ScriptHost::new_with_modules(STUB_SCREEN, "stub-screen", &[("ui.bad", typo)]);
-        assert!(err.is_err(), "an unknown hit_shape fails the library build");
-    }
 
     // Two peer modules + a main script that requires both — the per-file
     // component seam. `component` requires the shared `core`; the main script
@@ -1719,6 +1300,8 @@ mod tests {
                     h: 7.0,
                     color: [1.0, 1.0, 1.0, 0.5],
                     layer: 2.0,
+                    // No `u0..v1` on the command: the whole texture, as before.
+                    uv: [0.0, 0.0, 1.0, 1.0],
                 },
                 HudCommand::Text {
                     x: 400.0,
@@ -1983,6 +1566,28 @@ mod tests {
         let without = parse_ui_json(&serde_json::json!({ "component": "button" })).unwrap();
         assert_eq!(without.tab_group, "");
         assert_eq!(without.nav_ordinal, 0);
+
+        // **A FLOAT-SHAPED ordinal is the same ordinal.** This is the channel a
+        // template param travels: the substituter builds every numeric prop with
+        // `Number::from_f64`, so a proto's `"@nav_ordinal=1"` (and an authored
+        // literal `1.0`) reaches here as a float. Read with `as_u64` these all
+        // fell back to 0 — silently, because 0 is also the default — which put
+        // every proto-authored control at its group's entry point and broke the
+        // d-pad order behind a green build. Every neighbouring numeric field
+        // uses `as_f64`; this one now does too.
+        for (json, want) in [(serde_json::json!(1.0), 1), (serde_json::json!(2.0), 2)] {
+            let n = parse_ui_json(&serde_json::json!({
+                "component": "button", "nav_ordinal": json
+            }))
+            .unwrap();
+            assert_eq!(n.nav_ordinal, want, "a float-shaped ordinal is that ordinal");
+        }
+        // A nonsense ordinal floors at the group's entry point rather than
+        // wrapping to u32::MAX through a negative cast.
+        let neg =
+            parse_ui_json(&serde_json::json!({ "component": "button", "nav_ordinal": -3.0 }))
+                .unwrap();
+        assert_eq!(neg.nav_ordinal, 0);
     }
 
     #[test]

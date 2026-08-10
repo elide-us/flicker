@@ -424,7 +424,7 @@ fn the_bench_lands_its_regions_at_both_resolutions() {
         // edge of the narrower bench — and a view you cannot reach is a view you
         // do not have, however well the ramp behind it works.
         let mut last_x = f32::MIN;
-        for &(action, _, token) in FIELD_ACTIONS.iter() {
+        for &(action, _, token, _) in FIELD_ACTIONS.iter() {
             let label = flicker::ui::strings::resolve(token).into_owned();
             let (x, _) = at(&label);
             assert!(
@@ -829,7 +829,7 @@ fn the_view_roster_agrees_with_itself() {
         f = f.cycle();
     }
     assert_eq!(f, FIELD_ACTIONS[0].1, "cycle() closes the ring");
-    for &(_, field, _) in FIELD_ACTIONS.iter() {
+    for &(_, field, _, _) in FIELD_ACTIONS.iter() {
         assert!(seen.contains(&field), "{field:?} has a button but cycle() never reaches it");
     }
 
@@ -837,7 +837,7 @@ fn the_view_roster_agrees_with_itself() {
     //    roster — declared and dispatched are the same set.
     let mut declared = Vec::new();
     declared_actions(&GodModeScene::new().build_tree(), &mut declared);
-    for &(action, _, _) in FIELD_ACTIONS.iter() {
+    for &(action, _, _, _) in FIELD_ACTIONS.iter() {
         assert!(
             declared.iter().any(|d| d == action),
             "'{action}' is in the roster but no button declares it"
@@ -845,7 +845,7 @@ fn the_view_roster_agrees_with_itself() {
     }
     for action in declared.iter().filter(|a| a.starts_with("field_")) {
         assert!(
-            FIELD_ACTIONS.iter().any(|&(a, _, _)| a == action),
+            FIELD_ACTIONS.iter().any(|&(a, _, _, _)| a == action),
             "a button declares '{action}', which the roster does not have"
         );
     }
@@ -853,7 +853,7 @@ fn the_view_roster_agrees_with_itself() {
     // 3. Every label token resolves. An unresolved token renders as the token,
     //    so this is the difference between a button saying MOTION and one
     //    saying $chem_field_motion.
-    for &(action, _, token) in FIELD_ACTIONS.iter() {
+    for &(action, _, token, _) in FIELD_ACTIONS.iter() {
         let text = flicker::ui::strings::resolve(token);
         assert_ne!(text, token, "'{action}' label {token} is missing from the stringtable");
         assert!(!text.is_empty(), "'{action}' label {token} resolves to nothing");
@@ -876,7 +876,7 @@ fn every_authored_view_names_a_real_one() {
             "processes.json: '{}' names view '{}', which is not one of {:?}",
             p.runs,
             p.view,
-            FIELD_ACTIONS.iter().map(|&(_, f, _)| f.view_name()).collect::<Vec<_>>(),
+            FIELD_ACTIONS.iter().map(|&(_, f, _, _)| f.view_name()).collect::<Vec<_>>(),
         );
     }
     // And the file is actually USING the mechanism — if every entry were blank
@@ -1045,7 +1045,7 @@ fn every_view_explains_its_colours() {
         node.as_array().is_some_and(|a| a.len() == 4)
     };
 
-    for &(_, field, _) in FIELD_ACTIONS.iter() {
+    for &(_, field, _, _) in FIELD_ACTIONS.iter() {
         scene.field = field;
         let mut m = ValueMap::new();
         scene.legend_model(&mut m);

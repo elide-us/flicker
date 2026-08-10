@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use flicker::app::run as run_app;
 use flicker::render::{Renderer, TextureHandle};
-use flicker::scene::{Scene, SceneManager, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::scene::{GotoMode, Scene, SceneInput, SceneManager, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
     builtin_templates, expand, focusables_of, load_styles_str, load_ui_json_str, render_hud,
-    run_ui_with, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
-    UI_COMPONENT_MODULES,
+    run_ui, SceneDef, SceneManifest, Surface, Surfaces, UiInput, UiIntents, UiState,
+    WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ActionSignal, ContextualBindings, Fired, GamepadConfig, InputMap,
@@ -78,10 +78,16 @@ impl SceneInfo {
 pub const REALM_ADVENTURER: &str = "adventurer";
 /// DM mode ("Build the World") — under construction; its tier-2 page is a note.
 pub const REALM_DM: &str = "dm";
+/// **GAME MASTER** — where the WORLD itself is authored: the planet simulation
+/// and the benches that shape a map before anyone plays on it. Distinct from
+/// [`REALM_DM`], which is about building an adventure inside a world that
+/// already exists, and from [`REALM_DEVELOPER`], which is engine tooling.
+pub const REALM_GAMEMASTER: &str = "gamemaster";
 /// Developer mode — the scene-select launcher (benches / tools / POCs) as tier 2.
 pub const REALM_DEVELOPER: &str = "developer";
 /// The launcher root's mode tiers, in display order.
-const REALMS: [&str; 3] = [REALM_ADVENTURER, REALM_DM, REALM_DEVELOPER];
+const REALMS: [&str; 4] =
+    [REALM_ADVENTURER, REALM_DM, REALM_GAMEMASTER, REALM_DEVELOPER];
 
 /// One launchable scene: a stable action `id`, its display `label`, its Prism style
 /// `variant` (`primary`/`secondary`/`danger`), and the `factory` that builds it.
@@ -217,9 +223,15 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     // Every shell client inherits the Prism pointer (theme-tinted hardware
     // cursor); when the pointer is hidden/captured elsewhere it simply isn't
     // shown — no visibility wiring here.
-    let result = run_app(
-        SceneManager::new(Box::new(LogoScene::new())).with_cursor(crate::theme::cursor_image()),
-    );
+    // Boot from the MANIFEST: the scene folder was indexed on first use, and exactly
+    // one file claimed `boot`. The engine never names a scene — it asks the manifest
+    // which scene starts, and resolves it through the same roster every later
+    // transition uses. The whole chain is authored data the shell can show you.
+    let boot = manifest().boot().to_string();
+    let manager = SceneManager::from_roster(&boot, Box::new(resolve_shell_scene))
+        .unwrap_or_else(|| panic!("boot scene '{boot}' did not resolve — its behaviour is unregistered"))
+        .with_cursor(crate::theme::cursor_image());
+    let result = run_app(manager);
     // The window is gone now; persist its final windowed size + position so the next
     // launch reopens the same way.
     persist_window_geometry();
@@ -378,8 +390,15 @@ impl GameSettings {
             return;
         };
         match serde_json::from_slice::<GameSettings>(&bytes) {
-            Ok(loaded) => {
+            Ok(mut loaded) => {
                 display::seed(loaded.display);
+                // A saved profile froze the default binds at save time — adopt
+                // the current build's defaults for anything it leaves unbound,
+                // BEFORE any consumer (the settings screen, the pending-input
+                // push, a scene seed) reads it. Without this, every default
+                // binding added after the save is dead hardware behind a
+                // settings file.
+                loaded.input_profile.backfill_from_presets();
                 *GAME_SETTINGS.lock().expect("settings lock") = loaded;
                 tracing::info!("loaded settings from {}", path.display());
             }
@@ -451,24 +470,140 @@ pub fn input_profile() -> InputProfile {
     GAME_SETTINGS.lock().expect("settings lock").input_profile.clone()
 }
 
-/// How long the logo splash shows before auto-advancing to the menu.
-/// Lua-driven intro splash (`scripts/logo.lua`, `UI.logo`): a sequence of
-/// full-screen logos that fade in / hold / fade out before the menu.
+/// The Lua-driven intro splash (`scripts/logo.lua`, timed by `UI.logo`): ONE
+/// full-screen logo that fades in / holds / fades out, then reports `done`.
 const LOGO_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/logo.lua");
 
-/// Intro logo images, in play order (publisher then engine), exposed to the
-/// script as the `Textures` names in `UI.logo.images`. Embedded in the crate so
-/// every client inherits the publisher/engine splash with no copied assets.
-const LOGO_IMAGES: [(&str, &[u8]); 2] = [
-    (
-        "elideus",
-        include_bytes!("../../../../content/package/sensorium/assets/elideus_productions_yellow.png"),
-    ),
-    (
-        "clay",
-        include_bytes!("../../../../content/package/sensorium/assets/clay_engine_infinity_grey.png"),
-    ),
-];
+/// Where the scene files live — the ONE thing the engine knows about scenes.
+///
+/// Asked of the content-roots service rather than spelled out, so the tree stays
+/// relocatable (an app's `content.json` moves it) and no second path can drift.
+/// The folder is READ AT RUNTIME, not embedded: authoring a scene without a
+/// recompile is the entire point of the manifest — a `.scene.json` dropped in here
+/// is in the roster the next time the app starts, and the boot chain can be
+/// re-ordered by editing a file. The cost is that a broken tree is a startup
+/// failure rather than a build failure, which is why [`manifest`] refuses to hand
+/// back a half-loaded roster.
+fn scenes_dir() -> std::path::PathBuf {
+    flicker_content::roots().sensorium().join("scenes")
+}
+
+thread_local! {
+    /// The indexed scenes folder, loaded once per process. `thread_local` (like
+    /// [`SCENES`]) because the shell runs on the winit thread and a `SceneDef`
+    /// carries a `UiNode`, which is not `Send`.
+    static MANIFEST: RefCell<Option<Rc<SceneManifest>>> = const { RefCell::new(None) };
+}
+
+/// The scene manifest — indexing the folder on first use.
+///
+/// A folder that will not index is FATAL and panics with the loader's own message
+/// (which names the offending file). There is nothing to limp on with: no roster
+/// means no boot scene, and the alternative to a panic is a black window, which is
+/// the exact failure the whole scene-file design exists to eliminate. [`run`] calls
+/// this before it opens a window, so the failure lands in a terminal.
+fn manifest() -> Rc<SceneManifest> {
+    MANIFEST.with(|cell| {
+        if let Some(m) = cell.borrow().as_ref() {
+            return m.clone();
+        }
+        let dir = scenes_dir();
+        let loaded = SceneManifest::load_dir(&dir, &builtin_templates())
+            .unwrap_or_else(|e| panic!("scene manifest failed to load: {e}"));
+        tracing::info!(
+            "scene manifest: {} scene(s) in {} — boot '{}'",
+            loaded.len(),
+            dir.display(),
+            loaded.boot()
+        );
+        let m = Rc::new(loaded);
+        *cell.borrow_mut() = Some(m.clone());
+        m
+    })
+}
+
+/// Builds the Rust scene for one loaded scene file — the BEHAVIOUR half of the
+/// split. `None` means the file named a behaviour that cannot be built (a missing
+/// param), which the caller reports.
+type BehaviourBuilder = fn(&SceneDef) -> Option<Box<dyn Scene>>;
+
+/// The shell's BEHAVIOUR REGISTRY: the name a scene file may put in `behaviour`,
+/// and the Rust impl that plays it.
+///
+/// This is the whole of what the engine knows, and it is deliberately not a list of
+/// scenes. A scene file names a behaviour; the engine looks the NAME up here. So
+/// adding a scene — a third splash, a second menu page, another bench front — is
+/// dropping a file into `content/sensorium/scenes/`, and only a genuinely new KIND
+/// of scene costs Rust: one entry in this table.
+const BEHAVIOURS: &[(&str, BehaviourBuilder)] =
+    &[("splash", build_splash), ("menu", build_menu)];
+
+/// The `splash` behaviour: play the ONE image named by `params.image` on
+/// `logo.lua`'s fade/hold timeline, then fire `done` and let the file route it.
+fn build_splash(def: &SceneDef) -> Option<Box<dyn Scene>> {
+    let Some(rel) = def.param_str("image") else {
+        tracing::error!(
+            "scene '{}' uses the `splash` behaviour but names no `params.image` — \
+             a splash with no image is a black screen",
+            def.id
+        );
+        return None;
+    };
+    Some(Box::new(LogoScene::new(splash_image(&def.id, rel), def.clone())))
+}
+
+/// The `menu` behaviour: the shell's main menu, whose buttons come from the
+/// client's registered [`SceneEntry`] set and launch BY ID.
+fn build_menu(_def: &SceneDef) -> Option<Box<dyn Scene>> {
+    Some(Box::new(MenuScene::new()))
+}
+
+/// Read a splash image named RELATIVE TO THE CONTENT ROOT (so a new splash is a PNG
+/// plus a scene file, with no Rust and no `include_bytes!`).
+///
+/// An unreadable image logs the full path and yields no bytes: the splash then
+/// plays its backdrop and still advances, because a stuck intro is worse than a
+/// missing logo. `every_shipped_splash_names_a_readable_image` is what makes this
+/// loud rather than merely survivable.
+fn splash_image(id: &str, rel: &str) -> Vec<u8> {
+    let path = flicker_content::roots().root().join(rel);
+    match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::error!("scene '{id}': image {} could not be read: {e}", path.display());
+            Vec::new()
+        }
+    }
+}
+
+/// The shell's scene roster — the ids [`Transition::Goto`] resolves through.
+///
+/// The MANIFEST comes first: a scene the human authored is looked up by id, and the
+/// behaviour its file names is built from [`BEHAVIOURS`]. After it come the client's
+/// registered [`SceneEntry`] benches, so `Goto { id: "populous" }` works from a menu
+/// button with no extra wiring — a bench is a tool in the toolbox and appears on the
+/// launcher, whereas a splash only ever needs to be reachable BY ID. Authored scenes
+/// win either way, so a client cannot shadow the boot chain with a bench of the same
+/// name.
+///
+/// No scene id appears in this function, and none may: that is the rule the manifest
+/// exists to keep.
+fn resolve_shell_scene(id: &str) -> Option<Box<dyn Scene>> {
+    if let Some(def) = manifest().get(id) {
+        let Some((_, build)) = BEHAVIOURS.iter().find(|(name, _)| *name == def.behaviour) else {
+            tracing::error!(
+                "scene '{id}' names behaviour '{}', which is not registered — known \
+                 behaviours are {:?}; a scene file alone does not make a scene run",
+                def.behaviour,
+                BEHAVIOURS.iter().map(|(n, _)| *n).collect::<Vec<_>>()
+            );
+            return None;
+        };
+        return build(def);
+    }
+    // Not an authored scene — fall through to the client's registered benches.
+    scenes().iter().find(|e| e.id == id).map(|e| (e.factory)())
+}
 
 /// Decode an embedded PNG/JPEG and upload it as a texture, returning the handle
 /// and its pixel size. Logs and yields `None` on failure (the splash degrades
@@ -487,54 +622,82 @@ fn load_image_texture(renderer: &mut Renderer, bytes: &[u8]) -> Option<(TextureH
     }
 }
 
-/// Intro splash: plays the logo sequence (timeline + fade in `logo.lua`), then
-/// replaces itself with the menu — also skippable with click / Space / Escape.
-/// The hold-time is, in future, room to stream the menu's background scene.
+/// The result an intro splash fires once it has played (or been skipped). Its
+/// scene FILE maps this name to the scene that follows; this file never learns
+/// what that is.
+const SPLASH_DONE: &str = "done";
+
+/// Intro splash: plays ONE logo (timeline + fade in `logo.lua`), then fires
+/// [`SPLASH_DONE`] and lets its scene file route it — also skippable with click /
+/// Space / Escape. The hold-time is, in future, room to stream the menu's
+/// background scene.
 struct LogoScene {
+    /// The PNG this splash plays, registered to the script as the texture `logo`.
+    /// Read from the content root at build time (a splash is a PNG + a scene file,
+    /// no `include_bytes!`), so it is owned bytes, empty when the image was unreadable.
+    image: Vec<u8>,
+    /// This splash's scene FILE. It used to carry a `next: &'static str` — the
+    /// successor named in Rust — which still made "publisher, then engine, then
+    /// menu" a fact compiled into this file. The scene now fires a RESULT and the
+    /// file's `exits` decide where that result goes.
+    def: SceneDef,
     script: Option<ScriptHost>,
-    /// `[white, <logos…>]` — index = the texture id the script references.
+    /// `[white, logo]` — index = the texture id the script references.
     textures: Vec<TextureHandle>,
-    /// Each logo's native pixel size, parallel to `UI.logo.images`, so the
-    /// script can fit + centre them.
-    sizes: Vec<(u32, u32)>,
+    /// The logo's native pixel size, so the script can fit + centre it.
+    size: (u32, u32),
     elapsed: Duration,
 }
 
 impl LogoScene {
-    fn new() -> Self {
+    /// A splash playing `image`, routed by the scene file `def`.
+    ///
+    /// ONE image per scene. This used to be a single scene walking a LIST of logos on
+    /// one Lua timeline, which hid "publisher, then engine, then menu" inside a content
+    /// array. Each splash is now its own registered scene and the order is authored in
+    /// its file — the same mechanism the main menu uses to launch a bench.
+    ///
+    /// A file with no [`SPLASH_DONE`] exit would leave the splash playing forever, so
+    /// it is reported HERE, once, at construction — not per-frame, and not silently.
+    fn new(image: Vec<u8>, def: SceneDef) -> Self {
+        if !def.exits.contains_key(SPLASH_DONE) {
+            tracing::error!(
+                "splash '{}' declares no `{SPLASH_DONE}` exit — it will play and then \
+                 sit there; add one to its scene file",
+                def.id
+            );
+        }
         Self {
+            image,
+            def,
             script: None,
             textures: Vec::new(),
-            sizes: Vec::new(),
+            size: (1, 1),
             elapsed: Duration::ZERO,
         }
     }
 
-    /// Per-frame model: elapsed seconds + each logo's native size (`img1_w`…).
+    /// Per-frame model: elapsed seconds + the logo's native size.
     fn model(&self) -> ValueMap {
-        let mut model = ValueMap::new().with("elapsed", self.elapsed.as_secs_f32());
-        for (i, &(w, h)) in self.sizes.iter().enumerate() {
-            model.set(format!("img{}_w", i + 1), w);
-            model.set(format!("img{}_h", i + 1), h);
-        }
-        model
+        ValueMap::new()
+            .with("elapsed", self.elapsed.as_secs_f32())
+            .with("img_w", self.size.0)
+            .with("img_h", self.size.1)
     }
 }
 
 impl Scene for LogoScene {
     fn enter(&mut self, renderer: &mut Renderer) {
-        // id 0 is the white pixel (rect fills / backdrop); the logos follow.
+        // id 0 is the white pixel (rect fills / backdrop); this splash's logo follows.
+        // It always registers as `logo`, whichever image this scene carries, so the
+        // script never learns which logo it is drawing.
         let mut textures = vec![renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1)];
         let mut ids: Vec<(&str, u32)> = vec![("white", 0)];
-        let mut sizes = Vec::new();
-        for (name, bytes) in LOGO_IMAGES {
-            if let Some((handle, w, h)) = load_image_texture(renderer, bytes) {
-                ids.push((name, textures.len() as u32));
-                textures.push(handle);
-                sizes.push((w, h));
-            } else {
-                sizes.push((1, 1)); // keep `imgN` indices aligned if a load fails
-            }
+        let mut sizes = (1, 1);
+        if let Some((handle, w, h)) = load_image_texture(renderer, &self.image) {
+            ids.push(("logo", textures.len() as u32));
+            textures.push(handle);
+            sizes = (w, h);
         }
         self.script = match ScriptHost::new(LOGO_SCRIPT, "logo.lua") {
             Ok(script) => {
@@ -550,14 +713,14 @@ impl Scene for LogoScene {
             }
         };
         self.textures = textures;
-        self.sizes = sizes;
+        self.size = sizes;
         // Apply the persisted (or default) display setting now the window
         // exists — so a saved fullscreen/resolution choice takes effect at
         // launch.
         display::current().apply(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         self.elapsed += dt;
         let skip =
             input.mouse_left_pressed || input.key_down(Key::Space) || input.key_down(Key::Escape);
@@ -575,7 +738,12 @@ impl Scene for LogoScene {
             None => true,
         };
         if skip || done {
-            return Transition::Replace(Box::new(MenuScene::new()));
+            // FIRE A RESULT, don't name a destination: this splash knows only that it
+            // has finished. Its file turns `done` into a `Goto` — so the timer stays
+            // Rust and the routing is data. A file with no such exit already logged at
+            // construction; staying put is the loud failure (a stuck splash), never a
+            // guessed successor.
+            return self.def.exit(SPLASH_DONE).unwrap_or(Transition::None);
         }
         Transition::None
     }
@@ -674,7 +842,7 @@ impl Scene for ConfirmDisplayScene {
         true
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         self.remaining -= dt.as_secs_f32();
         if self.remaining <= 0.0 {
             self.revert(renderer);
@@ -713,14 +881,6 @@ const SHELL_UI_JSON: &str = include_str!("../../../../content/sensorium/resource
 /// The UI stringtable (`{ token: { locale: text } }`) — every shell display string is a
 /// `$token` into this (text ruling 2026-07-31); tier-2 content, en-us seeded.
 const SHELL_STRINGS_JSON: &str = include_str!("../../../../content/data/stringtable.json");
-
-// Granular handles to the `ui/*.lua` component library, for tests that build bespoke
-// module sets. The LIVE list every scene registers is `flicker::ui::UI_COMPONENT_MODULES`
-// (single source of truth).
-#[cfg(test)]
-const UI_CORE: &str = include_str!("../../../../content/sensorium/scripts/ui/core.lua");
-#[cfg(test)]
-const UI_BUTTON: &str = include_str!("../../../../content/sensorium/scripts/ui/button.lua");
 
 /// Expose the embedded shell `ui_elements.json` to `script` as the `UI` global,
 /// so a screen reads its layout from named elements (`UI.modal.panel.w`) instead
@@ -857,6 +1017,7 @@ fn mode_items() -> Vec<MenuItem> {
     vec![
         MenuItem::new(format!("mode_{REALM_ADVENTURER}"), "$menu_explore_world", "primary"),
         MenuItem::new(format!("mode_{REALM_DM}"), "$menu_build_world", "primary"),
+        MenuItem::new(format!("mode_{REALM_GAMEMASTER}"), "$menu_game_master", "primary"),
         MenuItem::new(format!("mode_{REALM_DEVELOPER}"), "$menu_developer_mode", "secondary"),
     ]
 }
@@ -1064,11 +1225,6 @@ mod menu_template_tests {
 struct MenuView {
     textures: Vec<TextureHandle>,
     tree: Option<UiNode>,
-    /// The `menu.lua` VM, RETAINED past tree-build so it also serves as the Lua
-    /// component library (`ui.*` modules) the walker dispatches per-node DRAW to. Its
-    /// `handles`/`draw_component` render the migrated controls (button today); an
-    /// un-ported kind falls back to the Rust arm, so this is drop-in behaviour-identical.
-    host: Option<ScriptHost>,
     styles: serde_json::Value,
     ui_state: UiState,
     commands: Vec<HudCommand>,
@@ -1117,14 +1273,11 @@ impl MenuView {
         let entries = theme.lua_textures();
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = load_styles_str(SHELL_UI_JSON);
-        // Build with the `ui.*` component modules installed, so the SAME host both
-        // builds the tree AND serves as the Lua component library the walker dispatches
-        // DRAW to (one VM per screen). The host is RETAINED (not dropped) for that.
-        let (host, tree) = match ScriptHost::new_with_modules(
-            MENU_SCRIPT,
-            "menu.lua",
-            UI_COMPONENT_MODULES,
-        ) {
+        // The host is dropped once the tree is built: the parsed `UiNode` is fully
+        // owned data, and every control draws in the engine, so nothing reads the VM
+        // again. (It was retained for a stretch of 2026-07/08 as the Lua component
+        // library the walker dispatched DRAW to; that tier is gone — 2026-08-10.)
+        let tree = match ScriptHost::new(MENU_SCRIPT, "menu.lua") {
             Ok(s) => {
                 let ids: Vec<(&str, u32)> = entries
                     .iter()
@@ -1150,11 +1303,11 @@ impl MenuView {
                         None
                     }
                 };
-                (Some(s), tree)
+                tree
             }
             Err(e) => {
                 tracing::error!("menu.lua load failed: {e}");
-                (None, None)
+                None
             }
         };
         // The `Menu` context map (nav / confirm / cancel on keyboard + pad) from the
@@ -1169,7 +1322,6 @@ impl MenuView {
         Self {
             textures,
             tree,
-            host,
             styles,
             ui_state: UiState::new(),
             commands: Vec::new(),
@@ -1235,10 +1387,7 @@ impl MenuView {
             mirrored = m;
             &mirrored
         };
-        // Dispatch per-node DRAW to the Lua component library (the retained host);
-        // `button` renders via `ui/button.lua`, every other kind via its Rust arm.
-        let lib = self.host.as_ref().map(|h| h as &dyn ComponentLibrary);
-        let frame = run_ui_with(tree, model, &self.styles, &snap, &mut self.ui_state, lib);
+        let frame = run_ui(tree, model, &self.styles, &snap, &mut self.ui_state);
         self.commands = frame.commands;
         let mut results = frame.results;
         let hud_hit = results.is_on("hud_hit");
@@ -1265,13 +1414,10 @@ impl MenuView {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut self.route);
         }
-        // Confirm on a focused button fires its action exactly like a click
-        // (`results.set(action, true)`), so the scene's existing action handling runs.
-        if let Some(action) = walker.activated() {
-            results.set(action, true);
-        }
-        // A declared intent that fired folds into results the SAME way (S9) —
-        // and is queued for the one-frame `sig_<name>` Model mirror above.
+        // ONE drain: a declared intent that fired AND a pad Confirm on a focused
+        // button arrive as the same thing — a result name folded in exactly like a
+        // click (`results.set(name, true)`) — and both queue for the one-frame
+        // `sig_<name>` Model mirror above.
         for name in walker.take_fired() {
             results.set(name.as_str(), true);
             self.fired_sigs.push(name);
@@ -1303,10 +1449,6 @@ struct UnifiedSettingsScene {
     textures: Vec<TextureHandle>,
     /// The declarative `settings.lua` tree, built + expanded ONCE (walker-driven).
     tree: Option<UiNode>,
-    /// The `settings.lua` VM, RETAINED as the Lua component library the walker
-    /// dispatches per-node DRAW to (button today) — same one-VM-per-screen shape as
-    /// [`MenuView`]'s `host`.
-    host: Option<ScriptHost>,
     /// Resolved `ui_elements.json` styles (dotted `style` paths resolve against it).
     styles: serde_json::Value,
     /// Retained walker interaction state (open dropdown, slider drag capture).
@@ -1375,19 +1517,29 @@ struct UnifiedSettingsScene {
 /// actions while shown), carrying their S9 input-context as data (surfaced in
 /// `visibility_diff`, routed by nothing yet).
 fn settings_surfaces() -> Surfaces {
-    Surfaces::new(vec![
+    let mut decls = vec![
         Surface::new("sec_video").group("section").on(),
         Surface::new("sec_audio").group("section"),
         Surface::new("sec_input").group("section"),
-        Surface::new("sub_keyboard").group("subtab").on(),
-        Surface::new("sub_mouse").group("subtab"),
-        Surface::new("sub_controller").group("subtab"),
+    ];
+    for (i, name) in INPUT_SUBTABS.iter().enumerate() {
+        let s = Surface::new(format!("sub_{name}")).group("subtab");
+        decls.push(if i == 0 { s.on() } else { s });
+    }
+    decls.extend([
         Surface::new("rebinding"),
         Surface::new("applied"),
         Surface::new("confirm_close").context("Menu"),
         Surface::new("restore_note").context("Menu"),
-    ])
+    ]);
+    Surfaces::new(decls)
 }
+
+/// The input sub-tabs in STRIP ORDER. The `input_subtab` pill's option values are
+/// indices into this list (an index is a number, everywhere) and each entry names
+/// its `sub_<name>` visibility surface — one list, so the strip, the surfaces and
+/// the scene's own sub-tab state cannot disagree.
+const INPUT_SUBTABS: [&str; 3] = ["keyboard", "mouse", "controller"];
 
 /// Backend range of the mouse look sensitivity (the `m_look` row's display slider
 /// runs 0..100 over this — mapped here, so the slider stays a plain 0..100 bind).
@@ -1416,13 +1568,9 @@ impl UnifiedSettingsScene {
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = load_styles_str(SHELL_UI_JSON);
         // Build the declarative tree ONCE, then expand its `window` template into
-        // components — the same cache point MenuView uses. The host is RETAINED past
-        // tree-build to also serve as the Lua component library (`ui.*` modules).
-        let (host, tree) = match ScriptHost::new_with_modules(
-            SETTINGS_SCRIPT,
-            "settings.lua",
-            UI_COMPONENT_MODULES,
-        ) {
+        // components — the same cache point MenuView uses. The host is dropped after:
+        // the expanded tree is fully-owned data and every control draws in the engine.
+        let tree = match ScriptHost::new(SETTINGS_SCRIPT, "settings.lua") {
             Ok(s) => {
                 let ids: Vec<(&str, u32)> = entries
                     .iter()
@@ -1446,11 +1594,11 @@ impl UnifiedSettingsScene {
                         None
                     }
                 };
-                (Some(s), tree)
+                tree
             }
             Err(e) => {
                 tracing::error!("settings.lua load failed: {e}");
-                (None, None)
+                None
             }
         };
         let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
@@ -1466,7 +1614,6 @@ impl UnifiedSettingsScene {
             theme,
             textures,
             tree,
-            host,
             styles,
             ui_state: UiState::new(),
             commands: Vec::new(),
@@ -1503,11 +1650,26 @@ impl UnifiedSettingsScene {
         }
     }
 
+    /// The active sub-tab's position in [`INPUT_SUBTABS`] — what the `input_subtab`
+    /// strip binds to.
+    fn subtab_index(&self) -> usize {
+        INPUT_SUBTABS.iter().position(|s| *s == self.input_subtab).unwrap_or(0)
+    }
+
+    /// The active controller profile's position in the published `PROFILES` list —
+    /// what the `ctrl_profile` select binds to.
+    fn profile_index(&self) -> usize {
+        InputProfile::PRESET_NAMES
+            .iter()
+            .position(|(name, _)| *name == self.ctrl_profile)
+            .unwrap_or(0)
+    }
+
     /// Build the per-frame Model the walker reads: the section/sub-tab gates + header
     /// text + nav styling (scene state), the scroll offset, and every control's
-    /// value bind. The `select`/`pill_toggle` binds are STRINGS (0-based index)
-    /// because the walker matches option `value`s textually; the scene parses the
-    /// index back in `update`.
+    /// value bind. The `select`/`pill_toggle` binds are 0-based index NUMBERS —
+    /// which segment of an option strip is selected is an index, and an index is a
+    /// number end to end; `update` maps the index back to the thing it names.
     fn model(&self) -> ValueMap {
         let mut m = ValueMap::new();
 
@@ -1532,8 +1694,8 @@ impl UnifiedSettingsScene {
         m.set("kicker", flicker::ui::strings::resolve(kicker).into_owned());
         m.set("sec_title", flicker::ui::strings::resolve(title).into_owned());
         m.set("kicker_color_path", color);
-        m.set("input_subtab", self.input_subtab.as_str());
-        m.set("ctrl_profile", self.ctrl_profile.as_str());
+        m.set("input_subtab", self.subtab_index() as f64);
+        m.set("ctrl_profile", self.profile_index() as f64);
 
         // ── scroll (two-way offset; the wheel rides UiInput) + the inert gate ──
         m.set("scroll_off", self.scroll_off as f64);
@@ -1541,11 +1703,11 @@ impl UnifiedSettingsScene {
 
         // ── wired VIDEO (display mode + resolution ride the live DisplaySetting) ──
         let disp = display::current();
-        m.set("video_display_mode", display::mode_index(disp.mode).to_string());
-        m.set("video_resolution", display::resolution_index(disp.res).to_string());
-        m.set("video_quality", self.settings.video.quality.to_string());
+        m.set("video_display_mode", display::mode_index(disp.mode) as f64);
+        m.set("video_resolution", display::resolution_index(disp.res) as f64);
+        m.set("video_quality", self.settings.video.quality as f64);
         m.set("video_vsync", self.settings.video.vsync);
-        m.set("video_fps_limit", self.settings.video.fps_limit.to_string());
+        m.set("video_fps_limit", self.settings.video.fps_limit as f64);
 
         // ── wired MOUSE (look sensitivity mapped backend → 0..100 display) ──
         let pct = ((self.settings.input.mouse_sensitivity - LOOK_SENS_MIN)
@@ -1673,7 +1835,7 @@ impl Scene for UnifiedSettingsScene {
         true
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let Some(tree) = self.tree.as_ref() else {
             return Transition::Pop;
         };
@@ -1703,8 +1865,7 @@ impl Scene for UnifiedSettingsScene {
             wheel: input.mouse_wheel_delta,
         };
         let model = self.model();
-        let lib = self.host.as_ref().map(|h| h as &dyn ComponentLibrary);
-        let frame = run_ui_with(tree, &model, &self.styles, &snap, &mut self.ui_state, lib);
+        let frame = run_ui(tree, &model, &self.styles, &snap, &mut self.ui_state);
         self.commands = frame.commands;
         let mut results = frame.results;
         let hud_hit = results.is_on("hud_hit");
@@ -1786,15 +1947,19 @@ impl Scene for UnifiedSettingsScene {
                 self.scroll_off = 0.0;
             }
         }
-        if let Some(t) = results.text("input_subtab") {
-            if t != self.input_subtab {
-                self.surfaces.set_exclusive(&format!("sub_{t}"));
-                self.input_subtab = t.to_string();
+        // Both strips report an INDEX; the scene maps it back to the name it stands for.
+        if let Some(name) = results.number("input_subtab").and_then(|i| INPUT_SUBTABS.get(i as usize))
+        {
+            if *name != self.input_subtab {
+                self.surfaces.set_exclusive(&format!("sub_{name}"));
+                self.input_subtab = name.to_string();
                 self.scroll_off = 0.0;
             }
         }
-        if let Some(p) = results.text("ctrl_profile") {
-            self.ctrl_profile = p.to_string();
+        if let Some((name, _)) =
+            results.number("ctrl_profile").and_then(|i| InputProfile::PRESET_NAMES.get(i as usize))
+        {
+            self.ctrl_profile = name.to_string();
         }
 
         // ── Restore defaults: reset the buffer, mark dirty, and pop the ack notice ──
@@ -1826,11 +1991,11 @@ impl Scene for UnifiedSettingsScene {
 
         // ── Apply video changes ──
         // Display mode + resolution edit the SINGLE DisplaySetting directly. The
-        // select binds carry a 0-based index STRING (walker matches option values
-        // textually), parsed here; apply only on an ACTUAL change (the binds report
-        // the current index every frame, so guard against re-applying).
-        if let Some(idx) = results.text("video_display_mode").and_then(|s| s.parse::<usize>().ok()) {
-            let idx = idx.min(display::DisplayMode::ALL.len() - 1);
+        // select binds carry a 0-based index NUMBER; apply only on an ACTUAL change
+        // (the binds report the current index every frame, so guard against
+        // re-applying).
+        if let Some(idx) = results.number("video_display_mode") {
+            let idx = (idx as usize).min(display::DisplayMode::ALL.len() - 1);
             let mode = display::DisplayMode::ALL[idx];
             if mode != display::current().mode {
                 if let Some(prev) = apply_display_change(DisplayChange::Mode(mode), renderer) {
@@ -1838,8 +2003,8 @@ impl Scene for UnifiedSettingsScene {
                 }
             }
         }
-        if let Some(idx) = results.text("video_resolution").and_then(|s| s.parse::<usize>().ok()) {
-            if let Some(res) = display::resolution_at(idx) {
+        if let Some(idx) = results.number("video_resolution") {
+            if let Some(res) = display::resolution_at(idx as usize) {
                 if res != display::current().res {
                     if let Some(prev) = apply_display_change(DisplayChange::Resolution(res), renderer)
                     {
@@ -1850,7 +2015,7 @@ impl Scene for UnifiedSettingsScene {
         }
         // Each write only fires (and marks dirty) on an ACTUAL change — the binds report
         // the current value every frame, so an unguarded assignment would flag dirty forever.
-        if let Some(q) = results.text("video_quality").and_then(|s| s.parse::<usize>().ok()) {
+        if let Some(q) = results.number("video_quality").map(|q| q as usize) {
             if q != self.settings.video.quality {
                 self.settings.video.quality = q;
                 self.dirty = true;
@@ -1862,7 +2027,7 @@ impl Scene for UnifiedSettingsScene {
                 self.dirty = true;
             }
         }
-        if let Some(f) = results.text("video_fps_limit").and_then(|s| s.parse::<usize>().ok()) {
+        if let Some(f) = results.number("video_fps_limit").map(|f| f as usize) {
             if f != self.settings.video.fps_limit {
                 self.settings.video.fps_limit = f;
                 self.dirty = true;
@@ -2061,7 +2226,7 @@ impl Scene for MenuScene {
         self.theme = Some(theme);
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, _dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let results = match self.view.as_mut() {
             Some(view) => view.update(input, renderer, &ValueMap::new()),
             None => return Transition::None,
@@ -2080,11 +2245,16 @@ impl Scene for MenuScene {
                 return Transition::Pop;
             }
         }
-        // A launch button fired → replace the menu with that scene (the factory is
-        // shared via `Rc`, so returning here any number of times is fine).
+        // A launch button fired → go to that scene BY ID. The button's action name is
+        // already the entry's id, so a menu button and a splash's hand-off are now the
+        // same mechanism: name a successor, let the manager resolve it. The menu no
+        // longer builds the scene it launches.
         for entry in self.scenes.iter() {
             if results.is_on(&entry.id) {
-                return Transition::Replace((entry.factory)());
+                return Transition::Goto {
+                    id: entry.id.clone(),
+                    mode: GotoMode::Replace,
+                };
             }
         }
         if results.is_on("settings") {
@@ -2152,7 +2322,7 @@ impl Scene for PauseScene {
         true
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, _dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // ── Menu action: resume ──
         let menu_down = self.bindings.action_pressed(ActionSignal::Menu, input);
         let menu_pressed = menu_down && !self.menu_prev;
@@ -2198,14 +2368,15 @@ mod script_smoke {
     use super::*;
 
     #[test]
-    fn button_dispatches_to_lua_component_through_run_ui() {
+    fn a_lua_declared_button_lays_out_and_draws_through_run_ui() {
         use flicker::render::Vec2;
-        use flicker::script::{ComponentLibrary, HudCommand};
-        use flicker::ui::run_ui_with;
+        use flicker::script::HudCommand;
+        use flicker::ui::run_ui;
 
-        // A screen whose tree is a column with one button leaf. The Rust harness lays it
-        // out (the grid/flow engine) and DISPATCHES the button's DRAW to `ui/button.lua`
-        // (component logic in Lua, rendering in Rust) — the S1 seam, end to end via run_ui.
+        // A screen whose tree is a column with one button leaf: Lua DECLARES, the engine
+        // lays it out (the grid/flow engine) and draws it. End to end through run_ui —
+        // the seam that used to dispatch the draw to `ui/button.lua` before the component
+        // tier came back to Rust (2026-08-10); the picture is unchanged.
         const SCREEN: &str = r#"
             local M = {}
             function M.tree()
@@ -2217,14 +2388,7 @@ mod script_smoke {
             function M.draw() return {} end
             return M
         "#;
-        let host = ScriptHost::new_with_modules(
-            SCREEN,
-            "s1-screen",
-            &[("ui.core", UI_CORE), ("ui.button", UI_BUTTON)],
-        )
-        .expect("screen + component modules load");
-        assert!(host.handles("button"), "button.lua registered as a component");
-
+        let host = ScriptHost::new(SCREEN, "s1-screen").expect("screen loads");
         let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
         let styles = load_styles_str(
             r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1], "radius": 4,
@@ -2239,17 +2403,16 @@ mod script_smoke {
             backspace: false,
             wheel: 0.0,
         };
-        let frame =
-            run_ui_with(&tree, &ValueMap::new(), &styles, &input, &mut UiState::new(), Some(&host));
+        let frame = run_ui(&tree, &ValueMap::new(), &styles, &input, &mut UiState::new());
 
         let panels: Vec<_> =
             frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).collect();
         let texts = frame.commands.iter().filter(|c| matches!(c, HudCommand::Text { .. })).count();
-        assert_eq!(panels.len(), 1, "the button drew its panel via lua");
-        assert_eq!(texts, 1, "the button drew its label via lua");
+        assert_eq!(panels.len(), 1, "the button drew its slab");
+        assert_eq!(texts, 1, "the button drew its label");
         assert!(
             frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "OK")),
-            "the button's top-level `label` prop reached the Lua render"
+            "the button's top-level `label` prop reached the draw"
         );
         // Column pad 8 in a 200×60 screen → the button's flow rect is (8, 8, 184, 44).
         if let HudCommand::Panel { x, y, w, h, .. } = panels[0] {
@@ -2258,12 +2421,12 @@ mod script_smoke {
     }
 
     #[test]
-    fn button_lua_glow_on_hover() {
+    fn button_glow_on_hover() {
         use flicker::render::Vec2;
 
-        // ui/button.lua draws a sapphire glow-halo panel BEHIND the slab only on hover:
-        // an idle button emits 1 panel (the slab) + its label; a hovered one emits 2
-        // panels (glow halo + slab) + its label. Locks the component's hover behaviour.
+        // A button draws a sapphire glow-halo panel BEHIND the slab only on hover: an
+        // idle button emits 1 panel (the slab) + its label; a hovered one emits 2 panels
+        // (glow halo + slab) + its label. Locks the component's hover behaviour.
         const SCREEN: &str = r#"
             local M = {}
             function M.tree()
@@ -2275,8 +2438,7 @@ mod script_smoke {
             function M.draw() return {} end
             return M
         "#;
-        let host = ScriptHost::new_with_modules(SCREEN, "glow-screen", UI_COMPONENT_MODULES)
-            .expect("component modules load");
+        let host = ScriptHost::new(SCREEN, "glow-screen").expect("screen loads");
         let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
         let styles = load_styles_str(
             r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1.0], "fill_bot": [0.10, 0.18, 0.34, 1.0],
@@ -2296,7 +2458,7 @@ mod script_smoke {
                 backspace: false,
                 wheel: 0.0,
             };
-            run_ui_with(&tree, &model, &styles, &input, &mut UiState::new(), Some(&host))
+            run_ui(&tree, &model, &styles, &input, &mut UiState::new())
                 .commands
                 .iter()
                 .filter(|c| matches!(c, HudCommand::Panel { .. }))
@@ -2329,7 +2491,7 @@ mod script_smoke {
             ("confirm", confirm_items()),
         ];
         for (screen, items) in cases {
-            let host = ScriptHost::new_with_modules(MENU_SCRIPT, "menu.lua", UI_COMPONENT_MODULES)
+            let host = ScriptHost::new(MENU_SCRIPT, "menu.lua")
                 .expect("load menu.lua");
             host.set_texture_ids(&[
                 ("white", 0),
@@ -2360,7 +2522,7 @@ mod script_smoke {
                 wheel: 0.0,
             };
             let frame =
-                run_ui_with(&tree, &model, &styles, &snap, &mut UiState::new(), Some(&host));
+                run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
             assert!(
                 !frame.commands.is_empty(),
                 "menu screen '{screen}' emits panel + buttons + text"
@@ -2389,7 +2551,7 @@ mod script_smoke {
         // load the SHIPPED table so these tests prove the token→text path end to end.
         flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
         let styles = load_styles_str(SHELL_UI_JSON);
-        let host = ScriptHost::new_with_modules(MENU_SCRIPT, "menu.lua", UI_COMPONENT_MODULES)
+        let host = ScriptHost::new(MENU_SCRIPT, "menu.lua")
             .expect("load menu.lua");
         host.set_texture_ids(&[
             ("white", 0),
@@ -2415,7 +2577,7 @@ mod script_smoke {
             backspace: false,
             wheel: 0.0,
         };
-        run_ui_with(&tree, &ValueMap::new(), &styles, &snap, &mut UiState::new(), Some(&host))
+        run_ui(&tree, &ValueMap::new(), &styles, &snap, &mut UiState::new())
             .commands
     }
 
@@ -2522,31 +2684,164 @@ mod script_smoke {
         );
     }
 
+    /// **GAME MASTER is its own realm, not a rename of Dungeon Maker.** Both
+    /// buttons exist, in order, and the new one carries the world-authoring
+    /// scenes while DM keeps its under-construction note.
+    #[test]
+    fn the_game_master_realm_sits_beside_dungeon_maker() {
+        fn dummy() -> Box<dyn Scene> {
+            unreachable!("scene_rows() reads metadata only — never calls the factory")
+        }
+        // The two-column launcher layout is what publishes scene rows at all.
+        SCENE_SELECT.with(|s| s.set(true));
+        set_scenes(vec![SceneEntry::new("gm_scene", "GM Scene", "primary", dummy)
+            .with_realm(REALM_GAMEMASTER)
+            .with_info(SceneInfo::new("GM Scene", "Simulation", "World", "d", "m"))]);
+
+        let gm = MenuScene::for_mode(REALM_GAMEMASTER);
+        let rows: Vec<String> = gm.scene_rows().iter().map(|r| r.id.clone()).collect();
+        assert_eq!(rows, ["gm_scene"], "GAME MASTER lists its own scenes");
+        assert!(gm.page().note.is_empty(), "a realm with scenes footers no note");
+
+        // Dungeon Maker is untouched: still present, still empty, still noted.
+        let dm = MenuScene::for_mode(REALM_DM);
+        assert!(dm.scene_rows().is_empty(), "the GM scene did not land in DM");
+        assert_eq!(dm.page().note, "$dm_coming_soon", "DM keeps its note");
+
+        // And the root lists BOTH, with GAME MASTER directly above Developer.
+        let ids: Vec<String> =
+            MenuScene::new().items().iter().map(|i| i.id.clone()).collect();
+        let at = |id: &str| ids.iter().position(|x| x == id).expect("button present");
+        assert!(at("mode_dm") < at("mode_gamemaster"), "Dungeon Maker survives above it");
+        assert!(at("mode_gamemaster") < at("mode_developer"), "GAME MASTER sits above Developer");
+    }
+
+    /// One splash, one image, one exit — the script no longer sequences. Whichever
+    /// logo the scene carries registers as `logo`, so this drives the script exactly
+    /// as `LogoScene` does.
     #[test]
     fn logo_script_runs() {
         let host = ScriptHost::new(LOGO_SCRIPT, "logo.lua").expect("load logo.lua");
-        host.set_texture_ids(&[("white", 0), ("elideus", 1), ("clay", 2)])
-            .expect("register textures");
+        host.set_texture_ids(&[("white", 0), ("logo", 1)]).expect("register textures");
         expose_ui_elements(&host);
-        let sizes = |elapsed: f32| {
+        let at = |elapsed: f32| {
             ValueMap::new()
                 .with("elapsed", elapsed)
-                .with("img1_w", 1920u32)
-                .with("img1_h", 1080u32)
-                .with("img2_w", 1672u32)
-                .with("img2_h", 941u32)
+                .with("img_w", 1920u32)
+                .with("img_h", 1080u32)
         };
         let input = InputState::new();
-        host.set_model(&sizes(0.3)).expect("publish model");
+        host.set_model(&at(0.3)).expect("publish model");
         let out = host.update(&input, 1920.0, 1080.0).expect("logo update");
-        assert!(!out.is_on("done"), "sequence still playing at t=0.3");
+        assert!(!out.is_on("done"), "still playing at t=0.3");
         assert!(
             host.draw(1920.0, 1080.0).expect("logo draw").len() >= 2,
-            "logo emits backdrop + first image"
+            "logo emits backdrop + its image"
         );
-        host.set_model(&sizes(99.0)).expect("publish model");
+        host.set_model(&at(99.0)).expect("publish model");
         let out = host.update(&input, 1920.0, 1080.0).expect("logo update done");
-        assert!(out.is_on("done"), "sequence done after it plays out");
+        assert!(out.is_on("done"), "done once this ONE splash has played");
+    }
+
+    /// The boot chain is reachable BY ID, end to end — the whole point of the roster.
+    ///
+    /// Resolving each id proves the chain exists as data rather than as constructor
+    /// calls, and that a client's benches fall through the same lookup. A typo'd id
+    /// must resolve to `None` so [`Transition::Goto`] can fail loud instead of
+    /// stranding the player on a splash.
+    #[test]
+    fn the_default_scene_chain_resolves_by_id() {
+        // The ids are the scene FILE names (minus `.scene.json`), and the boot scene
+        // is whichever file claimed `boot` — never a constant in this code.
+        assert_eq!(manifest().boot(), "TegLogo", "the boot scene is authored, not compiled in");
+        for id in ["TegLogo", "CeLogo", "Main"] {
+            assert!(resolve_shell_scene(id).is_some(), "'{id}' is in the shell roster");
+        }
+        assert!(resolve_shell_scene("no_such_scene").is_none(), "an unknown id resolves to None");
+    }
+
+    /// The successor named by a `Transition::Goto`, for asserting on a scene file's
+    /// routing without a window (`Transition` carries a `Box<dyn Scene>` in its other
+    /// arms, so it is neither `Debug` nor `PartialEq`).
+    fn goto_target(t: Option<Transition>) -> Option<(String, GotoMode)> {
+        match t {
+            Some(Transition::Goto { id, mode }) => Some((id, mode)),
+            _ => None,
+        }
+    }
+
+    /// **A splash's successor comes out of its FILE, not out of this crate.**
+    ///
+    /// The proof is the second half: the same loader is handed the shipped file with
+    /// its target rewritten, and the resolved successor moves with it. If the chain
+    /// were still compiled in — as `LogoScene { next: "ce_logo" }` was — editing the
+    /// file could not change anything and this test would fail.
+    #[test]
+    fn a_splash_exit_comes_from_its_file() {
+        let path = scenes_dir().join(format!("TegLogo{}", flicker::ui::SCENE_FILE_SUFFIX));
+        let shipped = std::fs::read_to_string(&path).expect("the publisher splash ships a file");
+        let def = SceneDef::parse("TegLogo", &shipped, &builtin_templates()).expect("it loads");
+        assert_eq!(
+            goto_target(def.exit(SPLASH_DONE)),
+            Some(("CeLogo".to_string(), GotoMode::Replace)),
+            "as shipped, the publisher splash hands off to the engine splash"
+        );
+
+        // Re-author the file's target and reload: same code, different chain.
+        let rerouted = shipped.replace("\"CeLogo\"", "\"Main\"");
+        assert_ne!(rerouted, shipped, "the edit found the authored target");
+        let def = SceneDef::parse("TegLogo", &rerouted, &builtin_templates()).expect("edited loads");
+        assert_eq!(
+            goto_target(def.exit(SPLASH_DONE)),
+            Some(("Main".to_string(), GotoMode::Replace)),
+            "the splash follows its file — the chain is data"
+        );
+    }
+
+    /// GATE for every scene FILE the shell ships: it loads, it is registered under the
+    /// id it declares, a Rust behaviour is bound to it, and every scene it exits to
+    /// resolves in the roster. An exit to a scene nobody registered is the silent
+    /// dead-end this gate exists to make loud (`Transition::Goto` would log and strand
+    /// the player on the splash).
+    ///
+    /// The tree gates — no unexpanded `template`, no unknown component kind — are
+    /// enforced by the loader itself, so an authored tree that fails either one never
+    /// gets as far as `Ok` here.
+    #[test]
+    fn every_shipped_scene_file_loads_and_its_exits_resolve() {
+        // The manifest indexed the real folder — so this walks what SHIPS, and every
+        // assertion runs the actual runtime resolver, not a test stand-in.
+        let m = manifest();
+        assert!(m.len() >= 3, "the shell ships at least the two splashes and the menu");
+        for def in m.scenes() {
+            for (result, target) in def.targets() {
+                assert!(
+                    resolve_shell_scene(target).is_some(),
+                    "scene '{}' exits `{result}` to '{target}', which is in no roster",
+                    def.id
+                );
+            }
+            assert!(
+                resolve_shell_scene(&def.id).is_some(),
+                "scene file '{}' has a Rust behaviour bound to it",
+                def.id
+            );
+        }
+    }
+
+    /// Both splashes must declare the ONE result their Rust behaviour fires. Without
+    /// it a splash plays its fade and then sits there forever — the exact silent
+    /// dead-end the scene file exists to make authorable.
+    #[test]
+    fn both_splashes_declare_the_done_exit() {
+        let m = manifest();
+        for id in ["TegLogo", "CeLogo"] {
+            let def = m.get(id).unwrap_or_else(|| panic!("'{id}' ships a scene file"));
+            assert!(
+                def.exit(SPLASH_DONE).is_some(),
+                "splash '{id}' routes the `{SPLASH_DONE}` result its timer fires"
+            );
+        }
     }
 
     #[test]
@@ -2563,7 +2858,7 @@ mod script_smoke {
         // shipped table so the walked commands carry the resolved en-us text.
         flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
         let styles = load_styles_str(SHELL_UI_JSON);
-        let host = ScriptHost::new_with_modules(SETTINGS_SCRIPT, "settings.lua", UI_COMPONENT_MODULES)
+        let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua")
             .expect("load settings.lua");
         host.set_texture_ids(&[("white", 0), ("cell", 1), ("settings_panel", 2)])
             .expect("register textures");
@@ -2581,7 +2876,7 @@ mod script_smoke {
         assert!(!has_unresolved_template(&tree), "the frame template fully expands");
 
         // The per-frame model the scene publishes for `(section, sub-tab)` — gates +
-        // header text + the (stringified-index) control binds.
+        // header text + the control binds (every strip selection is a 0-based INDEX).
         let model = |section: &str, subtab: &str| {
             let mut m = ValueMap::new();
             for id in ["video", "audio", "input"] {
@@ -2599,17 +2894,17 @@ mod script_smoke {
             m.set("kicker", flicker::ui::strings::resolve(kicker).into_owned());
             m.set("sec_title", flicker::ui::strings::resolve(title).into_owned());
             m.set("kicker_color_path", "theme.tokens.sig_blue");
-            m.set("input_subtab", subtab);
-            m.set("ctrl_profile", "default");
+            m.set("input_subtab", INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64);
+            m.set("ctrl_profile", 0.0);
             m.set("scroll_off", 0.0);
             m.set("off", false);
             m.set("rebinding", false);
             m.set("applied", false);
-            m.set("video_display_mode", "0");
-            m.set("video_resolution", "2");
-            m.set("video_quality", "2");
+            m.set("video_display_mode", 0.0);
+            m.set("video_resolution", 2.0);
+            m.set("video_quality", 2.0);
             m.set("video_vsync", true);
-            m.set("video_fps_limit", "1");
+            m.set("video_fps_limit", 1.0);
             m.set("look_sens_pct", 50.0);
             m.set("input_mouse_invert_pitch", false);
             m.set("bind_MoveForward", "W");
@@ -2628,7 +2923,7 @@ mod script_smoke {
             cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
         };
         let run = |section: &str, subtab: &str| {
-            run_ui_with(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new(), Some(&host))
+            run_ui(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new())
                 .commands
         };
 
@@ -2650,6 +2945,98 @@ mod script_smoke {
         );
     }
 
+    /// **A settings dropdown pick is an INDEX, and an index is a NUMBER.** The real
+    /// `settings.lua` resolution select, walked through the real engine-tier `select`
+    /// (`component.rs`): the picked row lands on `video_resolution` as a number
+    /// (never a stringified index),
+    /// and that number names a DIFFERENT resolution than the one published — which is
+    /// exactly the change `update` applies to the window.
+    #[test]
+    fn a_resolution_pick_reports_a_number_that_changes_the_resolution() {
+        use flicker::render::Vec2;
+
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
+        let styles = load_styles_str(SHELL_UI_JSON);
+        let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua")
+            .expect("load settings.lua");
+        host.set_texture_ids(&[("white", 0), ("cell", 1), ("settings_panel", 2)])
+            .expect("register textures");
+        expose_ui_elements(&host);
+        publish_profiles(&host);
+        let tree = expand(
+            host.ui_tree().expect("settings.lua tree() builds").expect("tree()"),
+            &builtin_templates(),
+        );
+
+        // The published selection: index 2 (1920×1080), the shell's own default rung.
+        const SHOWN: usize = 2;
+        const PICK: usize = 0;
+        let mut m = ValueMap::new();
+        for id in ["video", "audio", "input"] {
+            m.set(format!("sec_{id}"), id == "video");
+            m.set(format!("nav_{id}_style"), "modal.buttons.variants.secondary");
+        }
+        for id in INPUT_SUBTABS {
+            m.set(format!("sub_{id}"), id == "keyboard");
+        }
+        m.set("kicker", "");
+        m.set("sec_title", "");
+        m.set("kicker_color_path", "theme.tokens.sig_blue");
+        m.set("input_subtab", 0.0);
+        m.set("ctrl_profile", 0.0);
+        m.set("scroll_off", 0.0);
+        m.set("off", false);
+        m.set("rebinding", false);
+        m.set("applied", false);
+        m.set("video_display_mode", 0.0);
+        m.set("video_resolution", SHOWN as f64);
+        m.set("video_quality", 2.0);
+        m.set("video_vsync", true);
+        m.set("video_fps_limit", 1.0);
+        m.set("look_sens_pct", 50.0);
+        m.set("input_mouse_invert_pitch", false);
+
+        let at = |x: f32, y: f32, clicked: bool| UiInput {
+            mouse: Vec2::new(x, y),
+            clicked,
+            down: clicked,
+            screen: Vec2::new(1920.0, 1080.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let mut state = UiState::new();
+
+        // Where the layout actually put the resolution dropdown this frame.
+        let idle = run_ui(&tree, &m, &styles, &at(-9.0, -9.0, false), &mut state);
+        let [x, y, w, h] = idle
+            .rects
+            .iter()
+            .find(|(id, _)| id == "c_resolution")
+            .map(|(_, r)| *r)
+            .expect("the resolution select is placed");
+        assert!(w > 0.0 && h > 0.0, "the select has real extent");
+
+        // Click the field to open, then the PICK-th popup row (rows start 6px under
+        // the field, `settings.controls.menu.row_h` = 30 tall).
+        run_ui(&tree, &m, &styles, &at(x + w * 0.5, y + h * 0.5, true), &mut state);
+        let row_y = y + h + 6.0 + 30.0 * PICK as f32 + 15.0;
+        let f = run_ui(&tree, &m, &styles, &at(x + 20.0, row_y, true), &mut state);
+
+        assert_eq!(
+            f.results.number("video_resolution"),
+            Some(PICK as f64),
+            "the picked row reports its index as a NUMBER"
+        );
+        assert_eq!(f.results.text("video_resolution"), None, "…and never as text");
+        // …and that index is what moves the window: a different rung than the shown one.
+        assert_ne!(
+            display::resolution_at(PICK),
+            display::resolution_at(SHOWN),
+            "the pick names a different resolution — the change `update` applies"
+        );
+    }
+
     /// S9 stage 4, end-to-end minus the GPU: `settings.lua`'s ROOT declares
     /// `on_cancel = "settings_close"`, and an Esc press runs the REAL path — the
     /// Menu-context map resolves it to a `Cancel` edge, the router dispatches it
@@ -2660,7 +3047,7 @@ mod script_smoke {
         use flicker_input_router::{InputHandler, RouteCtx, Router};
 
         // The settings screen, built + expanded exactly as the scene caches it.
-        let host = ScriptHost::new_with_modules(SETTINGS_SCRIPT, "settings.lua", UI_COMPONENT_MODULES)
+        let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua")
             .expect("load settings.lua");
         expose_ui_elements(&host);
         publish_profiles(&host);
@@ -2816,7 +3203,15 @@ mod script_smoke {
         let ids: Vec<String> = root.items().iter().map(|i| i.id.clone()).collect();
         assert_eq!(
             ids,
-            ["mode_adventurer", "mode_dm", "mode_developer", "clicktrainer", "settings", "quit"]
+            [
+                "mode_adventurer",
+                "mode_dm",
+                "mode_gamemaster",
+                "mode_developer",
+                "clicktrainer",
+                "settings",
+                "quit"
+            ]
         );
         assert!(root.scene_rows().is_empty(), "the root menu publishes no scene rows");
         assert_eq!(root.page().mode, "", "the root is mode-less");

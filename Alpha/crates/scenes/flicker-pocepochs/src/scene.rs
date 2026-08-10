@@ -6,27 +6,26 @@
 //! convection run (each tick = one pass ≈ [`MY_PER_TICK`] My, the time for the crust to move
 //! one hex), **Down** resets to the Epoch-1 seed. **Esc** opens the pause menu.
 
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flicker_input_core::{
     AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
 };
-use flicker::render::{
-    Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle, Vec2,
-};
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, ValueMap};
+use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2, Vec3};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui_with, UiInput, UiIntents, UiState, WalkerHandler,
-    UI_COMPONENT_MODULES,
+    load_styles, load_ui_json, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_worldengine::{observe, LayerKind, Simulation, MY_PER_TICK};
 
-use crate::camera::OrbitCam;
-use crate::globe::{self, ViewMode};
+use flicker_globe::{GlobeWorld, ShellSpec, RADIUS};
+
+use crate::appearance::{self, ViewMode};
 use crate::route::RootHandler;
 
 /// The declarative HUD tree (`hud_pocepochs.lua`: readout text + the
@@ -35,6 +34,10 @@ const HUD_SCRIPT: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/scripts/hud_pocepochs.lua");
 const HUD_UI_ELEMENTS: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+/// The globe's authored stage — `stages.pocepochs_globe` in that same file: the light the
+/// planet is seen by, the backdrop it sits on, and the fact that its shells come from the
+/// simulation rather than the style sheet.
+const STAGE_SOURCE: &str = "pocepochs_globe";
 
 /// Default planet size (grid frequency, ~49.65 mi/hex). ½ Earth — snappy but planet-scale.
 const PLANET_FREQ: u32 = 48;
@@ -57,7 +60,9 @@ fn clock_seed() -> u64 {
 
 pub struct WorldScene {
     sim: Simulation,
-    cam: OrbitCam,
+    /// **The planet, whole** — the shell meshes, the authored stage, the offscreen target and
+    /// the orbit camera. This bench kept its own copy of every one of those; it keeps none now.
+    world: GlobeWorld,
     tick: u64,
     /// Current world seed (R rolls a new one).
     seed: u64,
@@ -67,8 +72,6 @@ pub struct WorldScene {
     /// descending, only the relevant (non-negligible) elements. Conserved across ticks, so it
     /// is a property of the Epoch-1 seed; recomputed on reseed / resize.
     element_dist: Vec<(u8, String, f32)>,
-    meshes: Vec<MeshHandle>,
-    dirty: bool,
     stats: String,
     theme: Option<Theme>,
     white: Option<TextureHandle>,
@@ -78,12 +81,9 @@ pub struct WorldScene {
     cutaway: bool,
     playing: bool,
     play_accum: f32,
-    /// The declarative HUD host (`hud_pocepochs.lua`), RETAINED as the Lua
-    /// component library the walker dispatches per-node DRAW to; `None` if the
-    /// script failed to load (the scene-drawn panels still draw).
-    script: Option<ScriptHost>,
-    /// The HUD's component tree, parsed ONCE at enter; walked every frame with
-    /// fresh Model bindings.
+    /// The HUD's component tree, built ONCE at enter from `hud_pocepochs.lua` and
+    /// walked every frame with fresh Model bindings; `None` if the script failed to
+    /// load (the scene-drawn panels still draw).
     ui_tree: Option<UiNode>,
     /// The screen's declarative bindings (S9): `on_menu = "pause_open"`.
     ui_intents: UiIntents,
@@ -124,15 +124,18 @@ impl WorldScene {
         let seed = clock_seed();
         let sim = Simulation::from_repo_seeded(PLANET_FREQ, seed)
             .expect("tick sim loads from Alpha/content/data");
+        // The styles are read HERE, not in `enter`, because the world is built FROM them: a
+        // globe's look is authored, and the object that owns the look has to exist before the
+        // first frame asks it to draw.
+        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let world = GlobeWorld::new(STAGE_SOURCE, &ui_styles, None);
         let mut scene = Self {
             sim,
-            cam: OrbitCam::new(globe::RADIUS),
+            world,
             tick: 0,
             seed,
             freq: PLANET_FREQ,
             element_dist: Vec::new(),
-            meshes: Vec::new(),
-            dirty: true,
             stats: String::new(),
             theme: None,
             white: None,
@@ -140,10 +143,9 @@ impl WorldScene {
             cutaway: false,
             playing: false, // start paused at the Epoch-1 seed; Space begins Epoch 2
             play_accum: 0.0,
-            script: None,
             ui_tree: None,
             ui_intents: UiIntents::default(),
-            ui_styles: serde_json::Value::Object(Default::default()),
+            ui_styles,
             ui_state: UiState::new(),
             hud_commands: Vec::new(),
             fired_sigs: Vec::new(),
@@ -253,7 +255,16 @@ impl WorldScene {
             )
         };
         self.stats = stats;
-        self.dirty = true;
+        self.publish_shells();
+    }
+
+    /// Publish what the planet is made of, for the current tick and view — the ONE hand-off
+    /// from the simulation to the world. Called wherever the picture's inputs move; there is
+    /// no stale flag, because the world is told the moment its data changes.
+    fn publish_shells(&mut self) {
+        self.sim.ensure(self.tick);
+        let Self { sim, world, tick, mode, cutaway, .. } = self;
+        world.set_shells(shells_for(sim, *tick, *mode, *cutaway));
     }
 
     /// The per-frame HUD model: the readout lines (pre-formatted strings — Rust
@@ -345,11 +356,75 @@ impl WorldScene {
         self.play_accum -= steps as f32;
         self.go_to_tick(self.tick + steps);
     }
+}
 
-    /// Release every uploaded shell mesh.
-    fn free_meshes(&mut self, renderer: &mut Renderer) {
-        for h in self.meshes.drain(..) {
-            renderer.free_mesh(h);
+/// The shell list this bench publishes for a tick, a view and the cutaway.
+///
+/// Material and Heat are ONE surface shell coloured per cell. The layer stack is one shell per
+/// layer kind, each standing at that column's OWN accumulated height — the shared builder
+/// answering a per-cell radius instead of a sphere's ([`ShellSpec::cell_radius`]), which is the
+/// only thing this bench's private globe module ever did differently. The cutaway drops a
+/// longitude wedge from everything above the mantle so the stack shows in section.
+///
+/// A free function, and inspectable by a gate: what the world is handed is the whole of what
+/// the bench decides about the picture, and it can be asserted without a GPU.
+fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<ShellSpec<'_>> {
+    let Some(w) = sim.world(tick) else { return Vec::new() };
+    let cells = &w.cells;
+    let dirs = &sim.sphere().dirs;
+    let outlines = sim.outlines();
+    // One surface sphere over the whole tiling — the Material / Heat reads.
+    fn sphere<'a>(
+        dirs: &'a [Vec3],
+        outlines: &'a [Vec<Vec3>],
+        color: Box<dyn Fn(usize) -> Option<[f32; 3]> + 'a>,
+    ) -> ShellSpec<'a> {
+        ShellSpec { dirs, outlines, radius: RADIUS, inset: 0.0, color, cell_radius: None }
+    }
+    match mode {
+        ViewMode::Material => {
+            vec![sphere(dirs, outlines, Box::new(|i| Some(appearance::material_color(&cells[i]))))]
+        }
+        ViewMode::Heat => {
+            vec![sphere(dirs, outlines, Box::new(|i| Some(appearance::cell_heat_color(&cells[i]))))]
+        }
+        ViewMode::Layers => {
+            // Each cell's layers are CLASSIFIED (composition + temp + pressure → what they ARE)
+            // and stacked OUTWARD at their PHYSICAL thickness (volume = mass ÷ density). The
+            // mantle IS the base ball (core = data inside it, never a nested sphere).
+            let tables = sim.tables();
+            let stacks: Vec<Vec<appearance::StackLayer>> =
+                cells.iter().map(|c| appearance::cell_stack(c, tables)).collect();
+            [LayerKind::Mantle, LayerKind::Crust, LayerKind::Ocean, LayerKind::Atmosphere]
+                .into_iter()
+                .map(|kind| {
+                    // ONE resolved row per cell — its drawn top and its ink — so the radius
+                    // answer and the colour answer cannot disagree about a column.
+                    let rows: Rc<Vec<(f32, Option<[f32; 3]>)>> = Rc::new(
+                        stacks
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| {
+                                let hit = s.iter().find(|l| l.kind == kind);
+                                let sliced = cut
+                                    && kind != LayerKind::Mantle
+                                    && flicker_globe::in_wedge(dirs[i]);
+                                let ink = if sliced { None } else { hit.map(|l| l.color) };
+                                (hit.map_or(RADIUS, |l| l.outer_r), ink)
+                            })
+                            .collect(),
+                    );
+                    let radii = Rc::clone(&rows);
+                    ShellSpec {
+                        dirs,
+                        outlines,
+                        radius: RADIUS,
+                        inset: 0.0,
+                        color: Box::new(move |i| rows[i].1),
+                        cell_radius: Some(Box::new(move |i| radii[i].0)),
+                    }
+                })
+                .collect()
         }
     }
 }
@@ -370,9 +445,9 @@ impl Scene for WorldScene {
         // The declarative HUD (S10): styles + the `hud_pocepochs.lua` tree, built
         // once. Each axis's band (lo/hi) is STATIC observer data, published once
         // as the `HAB` data global and baked into the gauge nodes as props;
-        // live values ride the Model each frame.
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        match ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES) {
+        // live values ride the Model each frame. (The styles themselves were read in `new` —
+        // the world is built from them.)
+        match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
                 load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.pocepochs`)
                 self.sim.ensure(0);
@@ -398,17 +473,18 @@ impl Scene for WorldScene {
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
-                self.script = Some(script);
+                // The host is dropped here: the parsed `UiNode` is fully owned data
+                // and every control draws in the engine, so nothing reads the VM again.
             }
             Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
         }
     }
 
     fn exit(&mut self, renderer: &mut Renderer) {
-        self.free_meshes(renderer);
+        self.world.free(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
         // habitability panel is a styled container, so the pointer over it sets
         // `hud_hit` — fed to the walker layer below as this frame's
@@ -425,8 +501,7 @@ impl Scene for WorldScene {
                 backspace: false,
                 wheel: input.mouse_wheel_delta,
             };
-            let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-            let frame = run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib);
+            let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
             over_hud = frame.results.is_on("hud_hit");
             self.hud_commands = frame.commands;
         }
@@ -482,10 +557,12 @@ impl Scene for WorldScene {
             )));
         }
 
-        // Orbit camera — raw pointer drag + wheel. No ActionSignal binding (exactly like
-        // the reference's raw mouse-look), so it stays a direct read, not a `signal_held`
-        // poll.
-        self.cam.update(input, true);
+        // The globe fills the window: this bench reserves no `rtt` viewport, so the SCENE
+        // gives the world the whole screen and the HUD composites over it. Everything else
+        // about the camera — the drag latch, the wheel, the bound look signals — is the
+        // world's, and the scene neither keeps one nor reads a device for it.
+        self.world.place(Some(Rect { pos: Vec2::ZERO, size: renderer.size() }));
+        self.world.update(dt.as_secs_f32(), input, &self.bindings, None);
 
         let play = input.key_down(Key::Space);
         let down = input.key_down(Key::Down);
@@ -517,13 +594,13 @@ impl Scene for WorldScene {
         }
         // V: cycle the surface view (material → heat → layer stack).
         if view && !self.prev_view {
-            self.mode = globe::cycle_view(self.mode);
-            self.dirty = true;
+            self.mode = appearance::cycle_view(self.mode);
+            self.publish_shells();
         }
         // Up: slice the layer stack open (a wedge cutaway through the shells).
         if cut_key && !self.prev_cut {
             self.cutaway = !self.cutaway;
-            self.dirty = true;
+            self.publish_shells();
         }
         self.prev_play = play;
         self.prev_down = down;
@@ -538,75 +615,14 @@ impl Scene for WorldScene {
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
-        // Rebuild the shell meshes from the current tick's world: one sparse shell per layer
-        // for the layer stack, a single surface shell otherwise — the poc-chemistry approach.
-        if self.dirty {
-            self.free_meshes(renderer);
-            self.sim.ensure(self.tick);
-            let mode = self.mode;
-            let cut = self.cutaway;
-            let world = self.sim.world(self.tick).expect("ensured this tick");
-            let tables = self.sim.tables();
-            let built: Vec<(Vec<MeshVertex>, Vec<u32>)> = {
-                let cells = &world.cells;
-                let dirs = &self.sim.sphere().dirs;
-                let outlines = self.sim.outlines();
-                let mut b: Vec<(Vec<MeshVertex>, Vec<u32>)> = Vec::new();
-                match mode {
-                    ViewMode::Material => b.push(globe::build_shell(dirs, outlines, |_| globe::RADIUS, |i| {
-                        Some(globe::material_color(&cells[i]))
-                    })),
-                    ViewMode::Heat => b.push(globe::build_shell(dirs, outlines, |_| globe::RADIUS, |i| {
-                        Some(globe::cell_heat_color(&cells[i]))
-                    })),
-                    ViewMode::Layers => {
-                        // Each cell's layers are CLASSIFIED (composition + temp + pressure → what
-                        // they ARE) and stacked OUTWARD at their PHYSICAL thickness (volume =
-                        // mass ÷ density). The mantle IS the base ball (core = data inside it,
-                        // never a nested sphere). The cutaway drops a wedge from the outer layers.
-                        let stacks: Vec<Vec<globe::StackLayer>> =
-                            cells.iter().map(|c| globe::cell_stack(c, tables)).collect();
-                        for kind in [
-                            LayerKind::Mantle,
-                            LayerKind::Crust,
-                            LayerKind::Ocean,
-                            LayerKind::Atmosphere,
-                        ] {
-                            let shell = globe::build_shell(
-                                dirs,
-                                outlines,
-                                |i| {
-                                    stacks[i]
-                                        .iter()
-                                        .find(|s| s.kind == kind)
-                                        .map(|s| s.outer_r)
-                                        .unwrap_or(globe::RADIUS)
-                                },
-                                |i| {
-                                    if cut && kind != LayerKind::Mantle && globe::in_wedge(dirs[i]) {
-                                        return None;
-                                    }
-                                    stacks[i].iter().find(|s| s.kind == kind).map(|s| s.color)
-                                },
-                            );
-                            if !shell.1.is_empty() {
-                                b.push(shell);
-                            }
-                        }
-                    }
-                }
-                b
-            };
-            self.meshes = built
-                .into_iter()
-                .map(|(v, i)| renderer.upload_mesh(&v, MeshIndices::U32(&i)))
-                .collect();
-            self.dirty = false;
-        }
-
-        renderer.set_camera(&self.cam.camera());
-        for &h in &self.meshes {
-            renderer.draw_mesh(h, Mat4::IDENTITY, MeshDrawOptions::default());
+        // The world goes down FIRST: `FrameGraph::execute` resets the shared per-frame draw
+        // queues, so an offscreen pass declared after a main-frame draw would throw that draw
+        // away. Everything the planet needs — camera, stage, meshes, target — is inside it.
+        {
+            let mut fg = FrameGraph::new();
+            let layer = renderer.layer();
+            self.world.render(renderer, &mut fg, layer);
+            fg.execute(renderer);
         }
 
         // ── The HUD: the walker commands stashed by `update` (readout text +
@@ -624,7 +640,7 @@ impl Scene for WorldScene {
 
         // Surface-view legend (top-right) — display only, no controls.
         if let Some(white) = self.white {
-            let entries = globe::legend_entries(self.mode);
+            let entries = appearance::legend_entries(self.mode);
             let (pad, sw, row_h, panel_w) = (10.0f32, 14.0f32, 20.0f32, 210.0f32);
             let panel_h = pad + 22.0 + entries.len() as f32 * row_h + pad;
             let px = renderer.size().x - panel_w - 16.0;
@@ -651,7 +667,7 @@ impl Scene for WorldScene {
                 renderer.draw_text("ELEMENT DISTRIBUTION", Vec2::new(px + pad, py + pad), 14.0, gold);
                 let mut ry = py + pad + 24.0;
                 for (num, sym, pct) in &self.element_dist {
-                    let c = globe::element_rgb(*num);
+                    let c = appearance::element_rgb(*num);
                     renderer.draw_sprite(white, Vec2::new(px + pad, ry + 2.0), Vec2::new(sw, sw), [c[0], c[1], c[2], 1.0]);
                     renderer.draw_text(&format!("{sym}   {pct:.1}%"), Vec2::new(px + pad + sw + 8.0, ry), 13.0, text);
                     ry += row_h;
@@ -699,7 +715,7 @@ mod tests {
         ))
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
-        let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
+        let script = ScriptHost::from_file(HUD_SCRIPT)
             .expect("hud_pocepochs.lua loads");
         load_ui_json(&script, HUD_UI_ELEMENTS);
         let mut scene = WorldScene::new();
@@ -769,6 +785,98 @@ mod tests {
         }
         let sum: f32 = dist.iter().map(|(_, _, p)| p).sum();
         assert!(sum > 50.0 && sum <= 100.5, "shares should cover most of the planet, got {sum:.1}%");
+    }
+
+    /// **The planet is the SHARED world, and the stack rides a per-cell radius.**
+    ///
+    /// This bench carried its own `globe.rs` (a second `RADIUS`, a second `in_wedge`, a second
+    /// shell builder) and its own `camera.rs` (a second `OrbitCam`) until they were folded back
+    /// into `flicker-globe`. The one thing that copy did differently was ask for the radius PER
+    /// COLUMN, so the layer stack could stand at each cell's own accumulated height — absorbed
+    /// as [`ShellSpec::cell_radius`]. This is the named home of that migration's proof:
+    ///
+    /// * the stage the bench names resolves (an authored name that resolves to nothing is the
+    ///   failure rule 4BB12A75 exists for),
+    /// * a surface read is ONE sphere — no per-cell radius, because there is nothing to stack,
+    /// * the layer stack is one shell per kind, every one of them answering per column, with
+    ///   the mantle at the base ball and the beds above standing proud of it,
+    /// * the cutaway takes the wedge out of everything above the mantle and nothing else, and
+    /// * the geometry budget is unchanged: the per-column framing emits exactly the vertices
+    ///   and triangles the sphere framing does, which is what "the picture did not change"
+    ///   means when it cannot be verified by eye.
+    #[test]
+    fn the_planet_is_the_shared_world_and_the_stack_rides_a_per_cell_radius() {
+        use flicker_globe::{build, StageLayer};
+
+        let scene = WorldScene::new();
+        assert_eq!(
+            scene.world.stage().layers,
+            vec![StageLayer::Shells],
+            "`stages.{STAGE_SOURCE}` is authored, and it says the SIMULATION publishes the shells"
+        );
+
+        let sim = &scene.sim;
+        for mode in [ViewMode::Material, ViewMode::Heat] {
+            let shells = shells_for(sim, 0, mode, false);
+            assert_eq!(shells.len(), 1, "a surface read is one shell");
+            assert!(shells[0].cell_radius.is_none(), "and a sphere — nothing to stack");
+            assert_eq!(shells[0].radius, RADIUS);
+            assert!((shells[0].color)(0).is_some(), "every cell is coloured; no holes");
+        }
+
+        // A cell that actually carries a mantle and something above it — the stack is emergent,
+        // so the gate finds one rather than assuming cell 0 has one.
+        let cells = &sim.world(0).expect("tick 0").cells;
+        let tables = sim.tables();
+        let stacked: Vec<Vec<appearance::StackLayer>> =
+            cells.iter().map(|c| appearance::cell_stack(c, tables)).collect();
+        let base = appearance::R_BASE;
+
+        let shells = shells_for(sim, 0, ViewMode::Layers, false);
+        assert_eq!(shells.len(), 4, "one shell per drawn layer kind");
+        for s in &shells {
+            assert!(s.cell_radius.is_some(), "every stack shell answers per COLUMN");
+        }
+        let mantle = &shells[0];
+        let mantle_cell = stacked
+            .iter()
+            .position(|s| s.iter().any(|l| l.kind == LayerKind::Mantle))
+            .expect("the tick-0 seed has a mantle somewhere");
+        let r = (mantle.cell_radius.as_ref().unwrap())(mantle_cell);
+        assert!((r - base).abs() < 1e-3, "the mantle IS the base ball at {base}, got {r}");
+        assert!((mantle.color)(mantle_cell).is_some(), "and it is drawn there");
+        // Anything above the mantle stands proud of it, at its own physical thickness.
+        for (i, stack) in stacked.iter().enumerate() {
+            if let Some(top) = stack.iter().find(|l| l.kind != LayerKind::Mantle) {
+                assert!(top.outer_r > base, "cell {i}: {:?} sits above the ball", top.kind);
+                break;
+            }
+        }
+
+        // The cutaway: a wedge cell loses every layer ABOVE the mantle, and only those.
+        let cut = shells_for(sim, 0, ViewMode::Layers, true);
+        let dirs = &sim.sphere().dirs;
+        let wedge = (0..cells.len())
+            .find(|&i| flicker_globe::in_wedge(dirs[i]) && !stacked[i].is_empty())
+            .expect("some cell lies in the cutaway wedge");
+        assert_eq!(
+            (cut[0].color)(wedge),
+            (shells[0].color)(wedge),
+            "the innermost shell is never cut — there is nothing beneath it to reveal"
+        );
+        for s in &cut[1..] {
+            assert_eq!((s.color)(wedge), None, "the wedge is open above the mantle");
+        }
+
+        // …and the absorbed framing costs nothing: same vertices, same triangles as the sphere
+        // it replaced. (The builder-tier twin of this lives in `flicker-globe`.)
+        let outlines = sim.outlines();
+        let per_column = build(dirs, outlines, |i| (mantle.cell_radius.as_ref().unwrap())(i), 0.0, |i| {
+            (mantle.color)(i)
+        });
+        let sphere = build(dirs, outlines, |_| base, 0.0, |i| (mantle.color)(i));
+        assert_eq!(per_column.0.len(), sphere.0.len(), "same vertex count as before the absorption");
+        assert_eq!(per_column.1, sphere.1, "same triangles, same winding");
     }
 
     #[test]

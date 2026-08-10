@@ -5,7 +5,7 @@
 //! layer later; the flat token→locale→text shape makes that a data-source swap.
 //!
 //! Resolution happens at the walker's DRAW boundary (`node_text`, `component_props`,
-//! placeholders), so Lua components and Rust-built trees receive FINAL text through
+//! placeholders), so Lua-declared and Rust-built trees receive FINAL text through
 //! the same helpers, and only display strings resolve — `bind` values and user text
 //! (chat) never do. `$token` resolves; `$$` escapes a literal `$`; a missing token
 //! passes through RAW — visibly wrong on screen and greppable, the strings analog of

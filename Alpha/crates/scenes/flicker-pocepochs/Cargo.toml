@@ -17,6 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 flicker = { path = "../../core/flicker" }
+# THE globe: the shell meshes, the authored stage, the offscreen target and the
+# orbit camera. This bench carried its own copy of all four until they were
+# folded back here (rule DDD070C7 — a third copy is what the next feature copies).
+flicker-globe = { path = "../../frontend/flicker-globe" }
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
 flicker-shell.workspace = true

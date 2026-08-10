@@ -1,39 +1,43 @@
 //! The **Rust component walker** — the engine half of the component-UI model.
 //!
 //! A screen declares a tree of [`UiNode`]s (via its Lua `tree()` builder, parsed
-//! by `flicker-script`); each control's BEHAVIOUR — draw, hit, geometry — lives
-//! in its `ui/<kind>.lua` component module (registered through
-//! [`UI_COMPONENT_MODULES`](crate::UI_COMPONENT_MODULES)). This module owns the
-//! generic machinery in between: it lays the tree out into rects, keeps the
-//! RETAINED draw cache (structural fingerprints — an unchanged node replays its
-//! cached commands) and uses it to BOUND the Lua dispatch (draw crosses only for
-//! invalidated nodes; hit only on input-active frames × candidate nodes, and a
-//! module-declared trivial `hit_shape` is answered here with zero crossings),
-//! applies each returned [`HitVerdict`] generically (claims / captures / focus /
-//! popups), routes results, and itself draws only the STRUCTURAL primitives —
-//! `text`, styled-container backgrounds, `list` layout + clip. A component's
-//! draw emits plain [`HudCommand`]s; the walker collects them into
-//! [`UiFrame::commands`] for the existing [`render_hud`](crate::render_hud).
-//! Interaction rides two-way name channels: a node's `bind` ↔ a `Model` key
-//! (values), its `action` → an event name, both returned in the
-//! [`UiFrame::results`] `ValueMap`.
+//! by `flicker-script`); every control's BEHAVIOUR — draw, hit, geometry — lives
+//! HERE, in the `draw_<kind>` arms and [`rust_hit_shape`] / [`rust_owns_hit`].
+//! This module also owns the generic machinery around them: it lays the tree out
+//! into rects, keeps the RETAINED draw cache (structural fingerprints — an
+//! unchanged node replays its cached commands), applies each [`HitVerdict`]
+//! generically (claims / captures / focus / popups), routes results, and draws
+//! the STRUCTURAL primitives — `text`, styled-container backgrounds, `list`
+//! layout + clip. A component's draw emits plain [`HudCommand`]s; the walker
+//! collects them into [`UiFrame::commands`] for the existing
+//! [`render_hud`](crate::render_hud). Interaction rides two-way name channels: a
+//! node's `bind` ↔ a `Model` key (values), its `action` → an event name, both
+//! returned in the [`UiFrame::results`] `ValueMap`.
+//!
+//! For a stretch of 2026-07/08 each control's draw + hit lived in a `ui/<kind>.lua`
+//! module the walker dispatched to across a `ComponentLibrary` seam, and the draw
+//! cache existed to BOUND those crossings. Every control is back in the engine, the
+//! module tier is deleted, and the seam with it (2026-08-10) — the cache stays,
+//! because bounding redraws is a win of its own.
 //!
 //! Components read their colours/sizes from the resolved `ui_elements.json` by a
 //! dotted `style` path (`"paperdoll.fit.slider"`) — so the palette stays in one
 //! place (Prism `theme.tokens`) and a node carries only its truly-local data.
 //!
-//! Adding a kind is Lua + data, never a Rust arm: a new `ui/<kind>.lua` module
-//! (`M.draw` + `M.hit` — the contract is documented in `ui/button.lua`'s header)
-//! plus its line in [`UI_COMPONENT_MODULES`](crate::UI_COMPONENT_MODULES). The
-//! per-control Rust draw/hit arms are gone (S4/S7); do not add one back.
+//! A COMPONENT's draw/layout/hit belongs HERE, in the engine — Aaron's ratified
+//! taxonomy (9C141E1C) says *"the walker's per-control draw + hit + bind code IS
+//! that Component's logic"*, and the 2026-08-09 ruling (BF0AF0C9) restored that
+//! after the 2026-07-30 inversion moved the controls into `ui/<kind>.lua`. Lua
+//! ORCHESTRATES: it positions nodes, names binds and actions, carries config —
+//! it does not own semantics. A new control joins `RUST_COMPONENT_KINDS`, gains a
+//! `draw_<kind>` arm here, and answers its hit either with a trivial
+//! [`rust_hit_shape`] or a bespoke arm ([`rust_owns_hit`]). There is no other
+//! tier to put one in.
 
 use std::collections::{HashMap, HashSet};
 
 use flicker_render::Vec2;
-use flicker_script::{
-    ComponentLibrary, FontRole, HitShape, HitVerdict, HudCommand, TextAlign, UiAnchor, UiNode,
-    Value, ValueMap,
-};
+use flicker_script::{FontRole, HudCommand, TextAlign, UiAnchor, UiNode, Value, ValueMap};
 use serde_json::Value as Json;
 
 /// The per-frame interaction snapshot handed to [`run_ui`] — the same data the
@@ -169,23 +173,23 @@ struct CacheEntry {
     /// prop's target, its `focus_group`). Built once when the entry is created —
     /// which keys a node reads is a property of the node, not of the frame.
     read_keys: Vec<String>,
-    /// The plain-data props the last real draw marshalled for a LUA component
-    /// (`None` for Rust-drawn kinds). The hit dispatch reuses these — patching only
-    /// the live fields (`bind_value`/`open`/`captured`) — instead of rebuilding the
-    /// whole map per hit call on an unchanged node.
+    /// The plain-data props the last real draw marshalled for a COMPONENT (`None`
+    /// for the structural kinds, which build none). The hit arm reuses these —
+    /// patching only the live fields (`bind_value`/`open`/`captured`) — instead of
+    /// rebuilding the whole map per hit call on an unchanged node.
     props: Option<Json>,
     /// Last frame this entry was used, for eviction.
     touched: u64,
 }
 
-/// The retained per-node draw cache — the mechanism that makes the Lua component
-/// dispatch **bounded** (draw-on-change), as ratified: a node re-enters Lua only when
-/// one of its inputs actually changed, so a still frame crosses the boundary zero
-/// times instead of once per node.
+/// The retained per-node draw cache — **draw-on-change**: a node re-runs its draw
+/// only when one of its inputs actually changed, so a still frame emits nothing and
+/// replays instead of rebuilding every node's commands.
 ///
-/// It caches EVERY node's draw, not just the Lua-dispatched ones: `text` is the most
-/// numerous kind in a real tree and its Rust arm formats a string and pushes a command
-/// every frame for a label that almost never changes.
+/// It was built to bound crossings into the `ui/<kind>.lua` tier (deleted
+/// 2026-08-10) and outlived it, because the saving was never really about Lua: a
+/// draw marshals a props map and formats strings, and `text` — the most numerous
+/// kind in a real tree — did that every frame for a label that almost never changes.
 #[derive(Default)]
 struct DrawCache {
     entries: HashMap<u64, CacheEntry>,
@@ -193,21 +197,14 @@ struct DrawCache {
     frame: u64,
 }
 
-/// How much work one [`run_ui_with`] pass actually did — the observable that keeps
-/// the bounded-dispatch guarantee honest (a test asserts `lua_draws == 0` on a still
+/// How much work one [`run_ui`] pass actually did — the observable that keeps the
+/// draw-on-change guarantee honest (a test asserts `redraw_nodes == 0` on a still
 /// frame). Counters, not timings, so they cost nothing in a release build.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UiStats {
-    /// Nodes that crossed into the Lua component library to draw this frame.
-    pub lua_draws: u32,
-    /// Nodes that crossed into the Lua component library to HIT-TEST this frame.
-    /// Bounded like the draws: dispatch happens only on input-active frames, and only
-    /// for candidate nodes (pointer near the rect / the open popup / a captured drag)
-    /// — an idle frame is 0.
-    pub lua_hits: u32,
-    /// Nodes redrawn this frame (Lua or Rust) — the rest replayed from the cache.
+    /// Nodes redrawn this frame — the rest replayed from the cache.
     pub redraw_nodes: u32,
-    /// Nodes laid out this frame (the denominator for the two above).
+    /// Nodes laid out this frame (the denominator for the above).
     pub nodes: u32,
 }
 
@@ -237,6 +234,25 @@ pub struct UiState {
     /// the release frame. `(bind, live value, the control's min — the echo
     /// default the resting report falls back to)`.
     drag_value: Option<(String, Value, f64)>,
+    /// **Local display ownership** (Aaron, 2026-08-07) — what a control SHOWS after the
+    /// user has committed to it, held here rather than re-derived from the scene's
+    /// model every frame. `bind -> (the committed value, the model's value when it was
+    /// committed)`.
+    ///
+    /// A control is not a view onto a Model key: it emits ONE event when a human moves
+    /// it, and it accepts a change when the underlying value itself moves. Without
+    /// this, the displayed position round-trips through the scene — the control shows
+    /// the stale model value on every frame the scene has not folded the edit back, and
+    /// a scene that publishes the key conditionally drags the control backwards.
+    ///
+    /// Both exits are self-clearing, which is what keeps the map the size of "controls
+    /// the user has touched recently" rather than the size of the tree:
+    /// * the model arrives at the committed value — the scene agreed, nothing left to
+    ///   hold;
+    /// * the model moves to something ELSE — an external change outranks the local
+    ///   edit, and the control follows the authority (this is also what makes a scene's
+    ///   clamp or snap visible instead of fighting the control).
+    local: HashMap<String, (Value, Option<Value>)>,
     /// Retained draw cache — the bounded-dispatch mechanism. Lives here because this
     /// is the walker's one across-frames object, and because a scene running two
     /// walker passes (a HUD and a floating chat panel) holds two `UiState`s and so
@@ -248,8 +264,8 @@ pub struct UiState {
     open: Option<String>,
     /// The id of the `text_field` that currently owns keyboard focus, or `None`.
     /// run_ui clears it at the top of any clicked frame; a click landing in a
-    /// text_field re-establishes it through the module's `focus` verdict
-    /// (`ui/text_field.lua` → [`apply_hit_verdict`]) — `Default` starts `None`.
+    /// text_field re-establishes it through that component's `focus` verdict
+    /// ([`hit_text_field`] → [`apply_hit_verdict`]) — `Default` starts `None`.
     focus: Option<String>,
     /// The pointer has taken over the input modality: REAL mouse activity
     /// (movement / click / wheel — not the first frame, not a resize) sets it;
@@ -259,20 +275,46 @@ pub struct UiState {
     /// focused node draws hot; while `true` only the pointer does. `pub(crate)`
     /// so the walker layer flips it without a second state home.
     pub(crate) pointer_mode: bool,
-    /// Previous frame's `(mouse, screen)` — the "did input actually change" test the
-    /// bounded HIT dispatch gates on. Screen rides along so a resize re-tests hover
-    /// under a stationary cursor. `None` (first frame) counts as changed.
+    /// Previous frame's `(mouse, screen)` — the "did the pointer actually move" test
+    /// the modality takeover reads. Screen rides along so a resize is not mistaken for
+    /// a move. `None` (first frame) counts as unmoved.
     last_mouse: Option<(Vec2, Vec2)>,
-    /// Previous frame's button-held state: the RELEASE edge is input activity too (a
-    /// capture dying changes verdicts), so the frame after a drag re-evaluates instead
-    /// of replaying the mid-drag memo.
-    last_down: bool,
-    /// Per-node (by [`Placed::key`]) result of the LAST component hit dispatch —
-    /// whether that node claimed the pointer. Idle frames replay this instead of
-    /// crossing into Lua, so `hud_hit` stays continuous at zero cost; an input-active
-    /// frame refreshes (candidate → dispatch) or clears (pointer left) each entry.
-    hit_memo: HashMap<u64, bool>,
+    /// Pad nudges recorded by the walker layer for the FOCUSED slider —
+    /// `(node id, direction ±1, coarse)` — applied by the next `run_ui` pass,
+    /// which is where the node's `step`/`min`/`max` live. THE component-level
+    /// controller channel every slider gets for free: d-pad on the slider's
+    /// own axis steps it, no scene wiring.
+    nudges: Vec<(String, i32, bool)>,
+    /// Result NAMES the walker layer drained last frame — applied by the next
+    /// `run_ui` pass, where an option strip (`tabs` / `pill_toggle`) naming one
+    /// as its `next_action` / `prev_action` advances its OWN bind by ±1 with
+    /// wrap. Same channel shape as [`Self::nudges`], and the same reason: the
+    /// NODE owns the range (here, its own children count), so the step is
+    /// computed where that lives. THE component-level stepping every option
+    /// strip gets for free — a click, a shoulder press and a pad Confirm on the
+    /// rail's hint button all converge on one numeric index write.
+    steps: Vec<String>,
+    /// The chord modifier is currently held (`ChordBegin` press…release) —
+    /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
+    /// keep working. A held chord scales a nudge to the coarse step.
+    pub(crate) chord: bool,
+    /// Live press-feedback flashes, `action/result name → intensity 0..1`
+    /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
+    /// click … Even if it does nothing, the visual cue is important UX"* — and
+    /// his follow-up ruling: this is a BUTTON behaviour, not a special kind).
+    /// Lit wherever an ACTION fires — a click in the hit pass, an activate
+    /// verdict, a pad `Confirm` on the focused node, or a declared signal
+    /// firing the same result name in the walker layer — and every control
+    /// whose `action` matches reads the intensity back as a `flash` draw prop.
+    /// A `Vec` because the live set is at most a few entries — a map's hashing
+    /// would cost more than the scan.
+    flashes: Vec<(String, f32)>,
 }
+
+/// How much a press flash fades per frame (per [`UiState::flash_tick`]): full
+/// glow to gone in 15 ticks ≈ a quarter second at 60 Hz — long enough to read,
+/// short enough that mashing a rail reads as pulses rather than a held light.
+const FLASH_DECAY: f32 = 1.0 / 15.0;
 
 impl UiState {
     /// A fresh, empty interaction state.
@@ -309,6 +351,46 @@ impl UiState {
     /// Drop keyboard focus (e.g. Escape leaves the chat input).
     pub fn clear_focus(&mut self) {
         self.focus = None;
+    }
+
+    /// Light the press flash for `key` (an action/result name, e.g. `page_next`)
+    /// at full intensity. Idempotent while lit: a repeat press restarts the fade
+    /// rather than stacking a second entry.
+    pub fn flash(&mut self, key: &str) {
+        match self.flashes.iter_mut().find(|(k, _)| k == key) {
+            Some(entry) => entry.1 = 1.0,
+            None => self.flashes.push((key.to_string(), 1.0)),
+        }
+    }
+
+    /// One tick of the fade: every live flash loses [`FLASH_DECAY`]; spent ones
+    /// leave the set. Called once per frame by the walker's `take_fired` — the
+    /// same once-per-dispatch cadence that records them.
+    pub fn flash_tick(&mut self) {
+        for (_, v) in &mut self.flashes {
+            *v -= FLASH_DECAY;
+        }
+        self.flashes.retain(|(_, v)| *v > 0.0);
+    }
+
+    /// The current intensity of `key`'s flash — `0.0` when not lit.
+    pub fn flash_intensity(&self, key: &str) -> f32 {
+        self.flashes.iter().find(|(k, _)| k == key).map_or(0.0, |(_, v)| *v)
+    }
+
+    /// Record a pad nudge for the focused slider `id` (`dir` +1 toward max,
+    /// −1 toward min; `coarse` = the chord modifier was held). Applied — and
+    /// stepped, clamped, written to the bind — by the next `run_ui` pass.
+    pub(crate) fn push_nudge(&mut self, id: &str, dir: i32, coarse: bool) {
+        self.nudges.push((id.to_string(), dir, coarse));
+    }
+
+    /// Record a result NAME the walker layer fired, for the next `run_ui` pass to
+    /// offer to every option strip as a possible `next_action` / `prev_action`
+    /// (see [`Self::steps`]). A name no strip claims steps nothing — drained
+    /// either way, so stale names never accumulate.
+    pub(crate) fn push_step(&mut self, name: &str) {
+        self.steps.push(name.to_string());
     }
 
     /// Whether the LAST input was nav-family (d-pad / arrows / tab / confirm)
@@ -379,8 +461,45 @@ pub struct UiFrame {
     /// PiP slots reserved by `rtt` nodes this frame — see [`RttSlot`]. Empty
     /// for a tree with no stages, so existing callers are unaffected.
     pub rtts: Vec<RttSlot>,
+    /// Every ID'd node's RESOLVED rect (`[x, y, w, h]`), in placement order —
+    /// what the layout actually gave each named control this frame. The
+    /// twice-burned lesson behind it: a control can be perfectly formed in the
+    /// TREE and still resolve to zero pixels, invisible and unclickable, with
+    /// every tree-shape gate green. A scene gate walks its real surface through
+    /// `run_ui` and asserts [`rect`](Self::rect) — presence AND extent — for
+    /// each control a user must be able to see and hit.
+    pub rects: Vec<(String, [f32; 4])>,
     /// How much drawing this pass actually did — see [`UiStats`].
     pub stats: UiStats,
+}
+
+impl UiFrame {
+    /// The rect the walker reserved for the `rtt` node with this `id`, as the
+    /// render-crate rect an offscreen pass composites into. `None` while the
+    /// viewport is off screen — which is also what lets a scene skip the pass
+    /// entirely that frame.
+    ///
+    /// This is THE hand-off for an RTT viewport (the walker reserves, the scene
+    /// fills), so it lives here rather than as a find/map dance every scene
+    /// repeats and one of them eventually gets subtly wrong.
+    pub fn rtt_rect(&self, id: &str) -> Option<flicker_render::Rect> {
+        self.rtts.iter().find(|s| s.id == id).map(|s| flicker_render::Rect {
+            pos: Vec2::new(s.x, s.y),
+            size: Vec2::new(s.w, s.h),
+        })
+    }
+
+    /// The rect the layout RESOLVED for the id'd node this frame — any node,
+    /// not only `rtt` (see [`rects`](Self::rects)). `None` when the node is
+    /// absent or hidden; a `Some` of zero extent is a control that exists and
+    /// cannot be seen or clicked, which is exactly what a surface gate asserts
+    /// against.
+    pub fn rect(&self, id: &str) -> Option<flicker_render::Rect> {
+        self.rects.iter().find(|(n, _)| n == id).map(|(_, r)| flicker_render::Rect {
+            pos: Vec2::new(r[0], r[1]),
+            size: Vec2::new(r[2], r[3]),
+        })
+    }
 }
 
 /// A geometry rect (pixels).
@@ -447,72 +566,14 @@ struct Placed<'a> {
 /// engine's published values (read by `bind`), `styles` the resolved
 /// `ui_elements.json` (colours/sizes by dotted `style` path), `input` the
 /// pointer snapshot, `state` the retained drag capture. Returns the draw
-/// commands + the results `ValueMap`. Components draw AND hit-test through the
-/// built-in embedded library ([`UI_COMPONENT_MODULES`](crate::UI_COMPONENT_MODULES))
-/// — see [`run_ui_with`] to substitute one.
+/// commands + the results `ValueMap`. Every component draws AND hit-tests in this
+/// module — there is no other tier to dispatch to.
 pub fn run_ui(
     tree: &UiNode,
     model: &ValueMap,
     styles: &Json,
     input: &UiInput,
     state: &mut UiState,
-) -> UiFrame {
-    run_ui_with(tree, model, styles, input, state, None)
-}
-
-// The built-in component library a `None` lib falls back to, so `run_ui` (and any
-// caller whose own host failed to load) still has working component draw + hit
-// logic — since S4 the per-control behaviour lives ONLY in `ui/<kind>.lua`, there
-// is no Rust twin left to fall back on. One per thread (the Luau VM is
-// single-threaded state), built lazily on first use.
-thread_local! {
-    static DEFAULT_LIB: Option<flicker_script::ScriptHost> =
-        match flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES) {
-            Ok(host) => Some(host),
-            Err(e) => {
-                tracing::error!("built-in ui component library failed to load: {e}");
-                None
-            }
-        };
-}
-
-/// Like [`run_ui`], but with an optional Lua [`ComponentLibrary`]: any node whose
-/// `component` kind the library `handles` has its DRAW and HIT dispatched to
-/// `ui/<kind>.lua` (component logic in Lua, rendering in Rust). Everything else —
-/// layout, retained state, generic hit plumbing, result routing — is identical.
-/// `None` falls back to the built-in embedded library (exactly what [`run_ui`]
-/// passes); a screen whose own `ScriptHost` carries the modules passes `Some(host)`
-/// so components and scene script share one VM.
-pub fn run_ui_with(
-    tree: &UiNode,
-    model: &ValueMap,
-    styles: &Json,
-    input: &UiInput,
-    state: &mut UiState,
-    lib: Option<&dyn ComponentLibrary>,
-) -> UiFrame {
-    match lib {
-        Some(lib) => run_ui_impl(tree, model, styles, input, state, Some(lib)),
-        None => DEFAULT_LIB.with(|dl| {
-            run_ui_impl(
-                tree,
-                model,
-                styles,
-                input,
-                state,
-                dl.as_ref().map(|h| h as &dyn ComponentLibrary),
-            )
-        }),
-    }
-}
-
-fn run_ui_impl(
-    tree: &UiNode,
-    model: &ValueMap,
-    styles: &Json,
-    input: &UiInput,
-    state: &mut UiState,
-    lib: Option<&dyn ComponentLibrary>,
 ) -> UiFrame {
     let screen = Rect { x: 0.0, y: 0.0, w: input.screen.x, h: input.screen.y };
     let mut placed = Vec::new();
@@ -533,19 +594,28 @@ fn run_ui_impl(
     // back lands in `results` exactly once, here — before the hit pass, so
     // `echo_binds` sees the key as written and the scene folds the one real change
     // this frame.
+    // Local display ownership (see `UiState::local`): a control the user has committed
+    // to keeps SHOWING what they set, so the display never waits on the scene to fold
+    // the edit back. Seeded into `results` before anything else reads it — the same
+    // seam commit-on-release uses — so `eff_value`, `echo_binds` and the draw all
+    // follow it with no further plumbing. Both retain arms drop the entry the moment
+    // it stops carrying information, so the map self-empties.
+    state.local.retain(|bind, (val, seen)| {
+        let now = model.get(bind);
+        // The scene arrived at the committed value: it agrees, so there is nothing
+        // left to hold and the ordinary model path takes over again.
+        // The model moved somewhere ELSE: an external change outranks the local edit.
+        now != Some(&*val) && now == seen.as_ref()
+    });
+    for (bind, (val, _)) in &state.local {
+        results.set(bind.clone(), val.clone());
+    }
     if !input.down {
         if let Some((bind, val, _)) = state.drag_value.take() {
             results.set(bind, val);
         }
         state.dragging.clear();
     }
-    // The bounded-dispatch gate for component HIT calls: Lua is entered only when the
-    // input could change a verdict — a click edge, a RELEASE edge (a capture just
-    // died), an actual pointer/screen change, a wheel tick (a `list` under a parked
-    // pointer must still scroll), or a held drag (which keeps writing while the
-    // button is down). A still frame replays each node's memoized `hit` instead
-    // (see `dispatch_component_hit`).
-    let pointer_moved = state.last_mouse != Some((input.mouse, input.screen));
     // Pointer takeover: REAL pointer activity — movement, a click, a wheel tick,
     // but not the first frame and not a resize — flips the modality so the
     // nav-focus highlight yields to hover. A nav signal flips it back
@@ -559,22 +629,18 @@ fn run_ui_impl(
         state.pointer_mode = true;
     }
     state.last_mouse = Some((input.mouse, input.screen));
-    let released = state.last_down && !input.down;
-    state.last_down = input.down;
-    let input_active = input.clicked
-        || released
-        || pointer_moved
-        || input.wheel != 0.0
-        || (input.down && !state.dragging.is_empty());
-    let mut lua_hits: u32 = 0;
     for p in &placed {
-        hit_node(p, model, input, state, styles, &mut results, &mut hud_hit, lib, input_active, &mut lua_hits);
+        hit_node(p, model, input, state, styles, &mut results, &mut hud_hit);
     }
     // The generic every-frame TYPED-FOLD: this frame's keyboard input flows into the
     // FOCUSED node's bound string, in Rust, whatever the pointer is doing — see
     // [`fold_typed`]. After the hit pass (a click that just focused a field folds the
     // same frame), before the echo (an edit must never be shadowed).
     fold_typed(&placed, model, input, state, &mut results);
+    // Take local ownership of anything a human just committed — after every write
+    // channel (hit verdicts, the release commit, typed text) and BEFORE the echo, so
+    // only real edits are seen here and an echo default can never be mistaken for one.
+    record_local(&placed, model, &results, state);
     // The generic every-frame BIND ECHO: every placed control with a `bind` whose key
     // no interaction wrote this frame reports its effective value, so an engine that
     // reads the keys unconditionally stays in sync on idle frames too (the paperdoll
@@ -624,14 +690,15 @@ fn run_ui_impl(
             cur_clip = p.clip;
         }
         let st = resolve_style(p.node, styles, model, &results);
-        // Does this node's draw read the pointer/focus at all? Only a Lua component
-        // does (it receives `hot`/`focused`/`mx`/`my` — which keeps a ported
-        // pointer-live kind like context_menu hover-fresh and a text_field's
-        // ring/caret focus-fresh); no remaining Rust draw arm consults the cursor.
-        let hot_matters = lib.is_some_and(|l| l.handles(&p.node.component));
+        // Does this node's draw read the pointer/focus at all? Every interactive
+        // COMPONENT does — it receives `hot`/`pressed`/`focused`/`mx`/`my` (which keeps
+        // a pointer-live kind like context_menu hover-fresh, a text_field's ring/caret
+        // focus-fresh, and a button's hover/press/flash states live). Structural boxes
+        // never consult the cursor.
+        let hot_matters = crate::is_rust_component(&p.node.component);
         // Fast path — an entry whose every input is unchanged replays verbatim. The
         // fingerprint is folded against the entry's OWN read-key list, borrowed in
-        // place, so a still frame allocates nothing and enters Lua zero times.
+        // place, so a still frame allocates nothing and redraws nothing.
         let replay = match cache.entries.get(&p.key) {
             Some(e) => {
                 node_fingerprint(
@@ -653,7 +720,7 @@ fn run_ui_impl(
         let fp =
             node_fingerprint(p, st, styles, &read_keys, model, &results, input, state, hot_matters);
         let start = commands.len();
-        let (crossed, props) = draw_node(p, model, &results, styles, input, state, lib, &mut commands);
+        let props = draw_node(p, model, &results, styles, input, state, &mut commands);
         // Lift this node's commands onto its sub-layer. Within one layer the 2D
         // pipelines draw ui-panels before sprites before text, so without this a
         // sprite (the Muse) would cover a same-layer panel (the popup); a higher
@@ -665,7 +732,6 @@ fn run_ui_impl(
             }
         }
         stats.redraw_nodes += 1;
-        stats.lua_draws += crossed as u32;
         cache.entries.insert(
             p.key,
             CacheEntry {
@@ -677,15 +743,11 @@ fn run_ui_impl(
             },
         );
     }
-    stats.lua_hits = lua_hits;
     // Evict what this frame did not touch, but only once the map has grown well past
     // the live tree — a screen that toggles between two panels should keep both cached,
     // while a tree that structurally churns must not leak.
     if cache.entries.len() > 2 * placed.len().max(16) {
         cache.entries.retain(|_, e| frame.wrapping_sub(e.touched) < 120);
-        // The hit memo keys the same node identities; prune it alongside so a
-        // structurally churning tree can't leak stale claims either.
-        state.hit_memo.retain(|k, _| cache.entries.contains_key(k));
     }
     state.cache = cache;
     // Restore the full frame after a trailing clipped run so nothing downstream inherits it.
@@ -737,6 +799,65 @@ fn run_ui_impl(
         });
     }
 
+    // Pad nudges — the walker layer's slider channel: step the FOCUSED
+    // slider's bind by the NODE's own `step` (`step_coarse` under the chord),
+    // clamped to its range, written as a committed result exactly like a
+    // stepper click (discrete gesture → immediate write; commit-on-release is
+    // for drags). Applied HERE because the node owns step/min/max, and LAST
+    // among the writes so the every-frame echo cannot put the resting value
+    // back over the step. A nudge for a hidden or vanished slider steps
+    // nothing — drained either way, so stale presses never accumulate.
+    for (id, dir, coarse) in std::mem::take(&mut state.nudges) {
+        let Some(p) =
+            placed.iter().find(|p| p.node.component == "slider" && p.node.id == id)
+        else {
+            continue;
+        };
+        let Some(bind) = p.node.bind.as_deref() else { continue };
+        let min = pnum(p.node, "min").unwrap_or(0.0);
+        let max = pnum(p.node, "max").unwrap_or(1.0);
+        let fine = pnum(p.node, "step").unwrap_or(1.0);
+        let step = if coarse { pnum(p.node, "step_coarse").unwrap_or(fine * 10.0) } else { fine };
+        let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(min);
+        results.set(bind.to_string(), (cur + f64::from(dir) * step).clamp(min, max));
+    }
+
+    // Strip stepping — THE OPTION STRIP OWNS ITS OWN STEPPING. A `tabs` /
+    // `pill_toggle` authoring `next_action` / `prev_action` advances its own bind
+    // by ±1 whenever the walker layer fired that result name (a shoulder signal,
+    // a pad Confirm on the rail's hint button, a bound key — all one channel).
+    // Wrap is over the strip's OWN children count, so a rail never learns how many
+    // entries it has and no scene owns a stepper. Applied HERE, beside the slider
+    // nudges and after the echo, for the same reason: the NODE owns the range, and
+    // the every-frame echo must not put the resting index back over the step.
+    for name in std::mem::take(&mut state.steps) {
+        for p in &placed {
+            if !matches!(p.node.component.as_str(), "tabs" | "pill_toggle") {
+                continue;
+            }
+            let dir = match (ptext(p.node, "next_action"), ptext(p.node, "prev_action")) {
+                (Some(n), _) if n == name => 1.0,
+                (_, Some(n)) if n == name => -1.0,
+                _ => continue,
+            };
+            let Some(bind) = p.node.bind.as_deref() else { continue };
+            let len = p.node.children.len() as f64;
+            if len <= 0.0 {
+                continue;
+            }
+            let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0);
+            results.set(bind.to_string(), (cur + dir).rem_euclid(len));
+        }
+    }
+
+    // Every id'd node's resolved rect, for `UiFrame::rect` — the layout's own
+    // answer to "did this control get pixels", harvestable by scene gates.
+    let rects: Vec<(String, [f32; 4])> = placed
+        .iter()
+        .filter(|p| !p.node.id.is_empty())
+        .map(|p| (p.node.id.clone(), [p.rect.x, p.rect.y, p.rect.w, p.rect.h]))
+        .collect();
+
     // Commit-on-release, the held half: the draw above consumed the live in-flight
     // value (the knob follows the hand), but the SCENE must keep seeing the resting
     // value until the button releases — so the live write is replaced by the model
@@ -747,7 +868,7 @@ fn run_ui_impl(
         }
     }
 
-    UiFrame { commands, results, rtts, stats }
+    UiFrame { commands, results, rtts, rects, stats }
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -777,8 +898,8 @@ fn resolve<'a>(
         // A `list` (scrolling region): children flow as a column shifted up by the
         // bound offset, and the whole subtree is clipped to the viewport (`inner`).
         // Content taller than the viewport scrolls. This LAYOUT is a structural
-        // primitive and stays Rust; the region's draw (backdrop + scrollbar) and hit
-        // (claim + wheel→offset) live in `ui/list.lua` like any other component.
+        // primitive and lives here; the region's own draw (backdrop + scrollbar) and
+        // hit (claim + wheel→offset) are the COMPONENT's, in `draw_list`/`hit_list`.
         "list" => {
             let content_h = scroll_content_h(node, model);
             let max = (content_h - inner.h).max(0.0);
@@ -802,7 +923,11 @@ fn resolve<'a>(
         // `cell` is THE box — one vertical-flow engine, one name. (It absorbed `column`
         // and `panel`: a vertical list is a `cell`, and a carved-stone panel is a `cell`
         // carrying a `style`. `row` remains only because its axis genuinely differs.)
-        "cell" => flow(node, inner, model, layer, clip, key, out, false),
+        // `panel` lays out exactly like `cell`: it IS a vertical box that happens to
+        // own a backdrop + a focus rim. Without this arm the walker would anchor-
+        // overlay its children (the generic fall-through), and a pane's contents
+        // would stack on top of one another instead of flowing down it.
+        "cell" | "panel" => flow(node, inner, model, layer, clip, key, out, false),
         // A 2-D track grid — the CSS-Grid generalisation of `flow` (see the Grid
         // section). Must sit before the `_` catch-all so its children are placed
         // into cells rather than anchor-overlaid.
@@ -859,13 +984,23 @@ fn flow<'a>(
         node.children.iter().enumerate().filter(|(_, c)| visible(c, model)).collect();
     let n = kids.len();
     let main = if horizontal { area.w } else { area.h };
+    let cross = if horizontal { area.h } else { area.w };
+
+    // A no-grow child's main extent: an `aspect` (w÷h) prop derives it from the
+    // CROSS extent — a square viewport in a row is exactly as wide as the row
+    // is tall, with no wrapper geometry — otherwise its measured size.
+    let main_of = |c: &UiNode| match pnum(c, "aspect") {
+        Some(a) if horizontal => cross * a as f32,
+        Some(a) => cross / (a as f32).max(1e-6),
+        None => child_main(c, model, horizontal),
+    };
 
     let mut fixed = 0.0;
     let mut grow_total = 0.0;
     for (_, c) in &kids {
         match c.grow {
             Some(g) => grow_total += g,
-            None => fixed += child_main(c, model, horizontal),
+            None => fixed += main_of(c),
         }
     }
     let free = main - fixed - node.gap * n.saturating_sub(1) as f32;
@@ -881,7 +1016,7 @@ fn flow<'a>(
         let len = match c.grow {
             Some(g) if grow_total > 0.0 => free * g / grow_total,
             Some(_) => 0.0,
-            None => child_main(c, model, horizontal),
+            None => main_of(c),
         };
         // Cross extent: full (stretch) or the child's measured cross size, pinned by `align`.
         let cross_full = if horizontal { area.h } else { area.w };
@@ -912,8 +1047,8 @@ fn flow<'a>(
 /// column (pad + inter-child gaps + each child's main size). The basis for the max
 /// scroll offset (`content_h - viewport_h`): `resolve` lays out and clamps with it,
 /// the fingerprint folds it (a row appearing must invalidate the bar), and
-/// `component_props` hands it to `ui/list.lua` as `content_h` so the module's
-/// scrollbar and wheel clamp can never disagree with the placement.
+/// `component_props` hands it to the component as `content_h` so [`draw_list`]'s
+/// scrollbar and [`hit_list`]'s wheel clamp can never disagree with the placement.
 fn scroll_content_h(node: &UiNode, model: &ValueMap) -> f32 {
     let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
     let gaps = node.gap * kids.len().saturating_sub(1) as f32;
@@ -975,7 +1110,7 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
             });
             Vec2::new(w, h)
         }
-        "cell" => {
+        "cell" | "panel" => {
             let h = node.height.unwrap_or_else(|| {
                 pad_y(node) * 2.0
                     + gaps
@@ -1412,9 +1547,9 @@ fn grid_measure(node: &UiNode, model: &ValueMap) -> Vec2 {
 /// own segments out inside its single rect. Their children therefore never appear in
 /// `placed`, so their props ride along in the parent's `component_props` — and the
 /// parent's [`DrawCache`] fingerprint must fold them in (nothing else would notice a
-/// changed segment label). The same class gets the click-edge candidate escape in
-/// [`dispatch_component_hit`]: rows a module lays past the node rect (a context
-/// menu's overflow) stay clickable.
+/// changed segment label). Rows such a control lays PAST its own rect (a context menu's
+/// overflow) stay clickable for free: its arm in [`hit_node`] runs for every placed
+/// node, so the component's own row math always gets the click.
 fn no_descend(kind: &str) -> bool {
     matches!(kind, "tabs" | "pill_toggle" | "select" | "context_menu")
 }
@@ -1435,14 +1570,60 @@ fn enabled(node: &UiNode, model: &ValueMap) -> bool {
 
 // ── Hit-test ─────────────────────────────────────────────────────────────────
 
-/// How far outside a node's rect the pointer still makes it a hit-dispatch
-/// CANDIDATE. The candidate set errs generous (a few pixels of slop cost one cheap
-/// Lua call on an input frame); the component's `M.hit` owns the tight verdict.
-const HIT_SLOP: f32 = 8.0;
+/// The trivial hit geometries a component can declare in [`rust_hit_shape`], so the
+/// walker answers its hover/claim generically instead of running a bespoke arm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HitShape {
+    /// The whole node rect is the interactive region: the walker claims the pointer
+    /// on rect-contains and, on a click inside, fires the node's `action` / toggles
+    /// its bool `bind` generically (button, panel, tile, action_slot).
+    Rect,
+    /// Presentational: never claims the pointer, never interacts (sprite, tooltip,
+    /// rune_corners, the read-out gauges).
+    None,
+}
+
+/// What one component's hit arm decided for this frame's pointer — the plain-data
+/// verdict [`apply_hit_verdict`] applies generically (each field maps onto
+/// walker-owned state or the results map; the arm never touches either directly).
+/// Every field is optional; `Default` is "nothing happened".
+#[derive(Clone, Debug, Default, PartialEq)]
+struct HitVerdict {
+    /// The pointer is over this component's TIGHT region (claims `hud_hit`).
+    hit: bool,
+    /// New value for the node's `bind` (a click toggled/picked/dragged it).
+    value: Option<Value>,
+    /// Fire the node's `action` (a click landed on its activating region).
+    activate: bool,
+    /// `Some(true)` grabs pointer capture for the node (a slider drag starts);
+    /// release-on-button-up stays the walker's generic rule.
+    capture: Option<bool>,
+    /// `Some(true)` opens this node's popup (`state.open`), `Some(false)` closes it.
+    open: Option<bool>,
+    /// `Some(true)` gives this node KEYBOARD focus (`state.focus` ← the node's `id`;
+    /// a node with no id cannot hold focus, so it is a no-op there). `Some(false)` /
+    /// `None` leave focus unchanged — CLEARING stays the walker's generic rule: any
+    /// fresh click drops focus up front, and the clicked field re-claims it here.
+    focus: Option<bool>,
+    /// Write the node's `bind` into its `focus_group` key (slider focus).
+    group_focus: bool,
+    /// Fire the `action` of the node's CHILD at this index — **1-based**, matching
+    /// the `props.children[i]` the component indexed to find the row (a context
+    /// menu's items are data children of the menu node, so the MENU receives the
+    /// dispatch and names the picked row here). `0`, out-of-range, or a child with
+    /// no/empty `action` is a silent no-op in the walker.
+    activate_child: Option<usize>,
+    /// A LOUD complaint about the node's authored data, raised by the component's own
+    /// arm and surfaced by the walker as a `tracing::warn!`. This is how authored data
+    /// the component cannot act on — an option whose `value` is the wrong TYPE, say —
+    /// says so instead of doing nothing (the fail-loud law for authored names). At
+    /// most one per verdict.
+    warn: Option<String>,
+}
 
 /// A node's retained-interaction identity — its `id`, else its `bind`, else `""`.
-/// One rule for pointer capture (`state.dragging`), the open popup (`state.open`),
-/// and the hit dispatch's candidate test.
+/// One rule for pointer capture (`state.dragging`) and the open popup
+/// (`state.open`).
 fn node_ident(node: &UiNode) -> &str {
     if !node.id.is_empty() {
         &node.id
@@ -1451,7 +1632,6 @@ fn node_ident(node: &UiNode) -> &str {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn hit_node(
     p: &Placed,
     model: &ValueMap,
@@ -1460,9 +1640,6 @@ fn hit_node(
     styles: &Json,
     results: &mut ValueMap,
     hud_hit: &mut bool,
-    lib: Option<&dyn ComponentLibrary>,
-    input_active: bool,
-    lua_hits: &mut u32,
 ) {
     let node = p.node;
     let r = p.rect;
@@ -1479,66 +1656,107 @@ fn hit_node(
     }
 
     match node.component.as_str() {
-        // `checkbox` / `toggle` / `radio` hit logic lives in `ui/<kind>.lua` (the
-        // dispatch arm below): tight box/pill/circle regions; idle echo is `echo_binds`.
-        // `button` / `tile` declare `hit_shape = "rect"` there instead — the dispatch
-        // arm answers them in Rust (hover claims; click fires action / toggles bind).
-        // `list` hit logic (rect claim + wheel→offset, clamped to the walker-measured
-        // `content_h` prop) lives in `ui/list.lua` via the dispatch arm below; the
-        // wheel tick crosses as a live patched prop, and a wheel frame counts as
-        // input-active so a parked pointer still scrolls. Its idle echo is
-        // `echo_binds` (number, default 0).
-        // `slider` hit logic (row claim + group focus, grab-band capture, drag-maps-
-        // value) lives in `ui/slider.lua` via the dispatch arm below; capture release
-        // and the focus/value echoes are the walker's generic rules. `stepper` (row
-        // claim + −/+ end-cell stepping) and `pill_toggle` (well claim + segment-cell
-        // pick) likewise live in their `ui/<kind>.lua` modules.
-        // `tabs` hit logic (strip claim + tab-cell pick) lives in `ui/tabs.lua` via
-        // the dispatch arm below, and `select`'s (field claim + open/close + option
-        // pick, with the popup BELOW the node rect) in `ui/select.lua` — the dispatch
-        // candidate set includes the open popup's owner, so those off-rect rows still
-        // receive their hits. Both idle echoes are `echo_binds`.
-        // `text_field` hit logic (well claim + a click inside taking keyboard focus
-        // through the verdict's `focus` field) lives in `ui/text_field.lua` via the
-        // dispatch arm below; the KEYBOARD stays walker-generic — `fold_typed` folds
-        // typed/backspace into the focused node's bind (never a Lua crossing) and
-        // `echo_binds` reports the value.
-        // `badge` hit logic (claim = its pill, possibly style-inset) lives in
-        // `ui/badge.lua`, and `context_menu`'s (menu-rect claim + child-action row
-        // pick via the verdict's `activate_child`; rows laid past the authored rect
-        // stay clickable through the click-edge candidate escape) in
-        // `ui/context_menu.lua` — both via the dispatch arm below.
-        // The ONE dispatch arm for every Lua-owned component kind — S7 (`scroll` →
-        // `list`) retired the last per-control Rust arm, so only the generic
-        // plumbing remains: drag-source above, this dispatch, and the styled-
-        // container claim below. A module-declared trivial shape is answered here in
-        // Rust — zero Lua crossings; everything else asks the module's `M.hit` for a
-        // verdict, bounded to input-active frames × candidate nodes.
-        k if lib.is_some_and(|l| l.handles(k)) => {
-            let lib = lib.expect("guarded by is_some_and");
-            match lib.hit_shape(k) {
-                // Presentational (sprite / tooltip / rune_corners): never claims,
-                // never interacts — exactly the old fall-through-to-nothing.
-                Some(HitShape::None) => {}
-                // Full-rect control (button / tile): hover claims; a click inside
-                // fires the node's `action` and/or toggles its bool `bind`.
-                Some(HitShape::Rect) => {
-                    if r.contains(input.mouse) {
-                        *hud_hit = true;
-                        if input.clicked && p.enabled {
-                            if let Some(action) = &node.action {
-                                results.set(action.clone(), true);
-                            }
-                            if let Some(bind) = &node.bind {
-                                let val = !eff_bool(results, model, bind);
-                                results.set(bind.clone(), val);
-                            }
-                        }
+        // ── Rust components that answer their own HIT ────────────────────────
+        // A checkbox's box, a toggle's pill and a radio's circle are each a SUB-RECT
+        // of the node, computed from the component's own props — geometry
+        // `rust_hit_shape` cannot express, so these kinds answer with a real verdict
+        // here instead (see [`rust_owns_hit`], which is also what the roster gate
+        // accepts in place of a declared shape). Their idle echo is `echo_binds`.
+        // An OPTION STRIP answers here for the other reason: a `pill_toggle`'s well is
+        // such a sub-rect too, and it, `tabs` and `select` all PICK the entry under the
+        // pointer rather than firing an action — a decision no trivial shape can carry.
+        // `select` also reaches PAST its rect (its popup lies below the field) and toggles
+        // `state.open`, so it is answered here every frame rather than only when the rect
+        // pre-filter would have let it through.
+        // The VALUE CONTROLS are here for the third reason — a click means something
+        // other than claim-and-fire. A `slider` claims its whole row and grabs group
+        // focus, but only its grab band CAPTURES, and a captured one keeps mapping the
+        // pointer into the bind between click edges (release and the echoes stay the
+        // walker's generic rules). A `stepper` steps only on its two end cells. A
+        // `text_field`'s region IS its rect, but its click takes KEYBOARD FOCUS where the
+        // trivial `Rect` arm would fire an action and toggle a string bind to a bool —
+        // the keyboard itself stays walker-generic (`fold_typed`, then `echo_binds`).
+        // A `list` is the fourth reason: its claim IS the whole rect, but the gesture it
+        // answers is the WHEEL, folded into the bound offset and clamped to the
+        // walker-measured `content_h`. Its idle echo is `echo_binds` (number, default 0).
+        // A `context_menu` is the fifth: only its authored rect CLAIMS, but its rows are
+        // child data it stacks itself and may lay PAST that rect, so the click has to be
+        // resolved against the component's own row math. Answering here — this arm runs
+        // for every placed node — is what delivers those clicks.
+        k if rust_owns_hit(k) => {
+            // ONE prop surface with the draw: `component_hit_props` hands back the
+            // draw cache's own map with `bind_value` patched to this instant, so the
+            // hit measures its box from exactly the props the box was drawn with —
+            // including an authored `box_bind`, which reading `node.props` would drop.
+            let props = component_hit_props(p, model, results, input, state, styles);
+            // The click edge is pre-gated on `enabled`: a disabled control still hovers
+            // (claims) but never writes.
+            let click = input.clicked && p.enabled;
+            // One arm, one dispatch table — the props assembly above is identical for
+            // every kind, exactly as it is in the draw dispatch.
+            let verdict = match k {
+                "toggle" => hit_toggle(input.mouse, r, &props, click),
+                "radio" => hit_radio(input.mouse, r, &props, click),
+                "pill_toggle" => hit_pill_toggle(input.mouse, r, &props, click),
+                "tabs" => hit_tabs(input.mouse, r, &props, click),
+                "select" => hit_select(input.mouse, r, &props, click),
+                // The one arm that also needs the RAW HELD state: a captured slider
+                // keeps mapping the pointer into its bind between click edges, which
+                // is the `down` half of the click/held pair.
+                "slider" => hit_slider(input.mouse, r, &props, click, input.down),
+                "stepper" => hit_stepper(input.mouse, r, &props, click),
+                "text_field" => hit_text_field(input.mouse, r, click),
+                // The one arm that never reads the click edge at all: a `list` folds
+                // this frame's WHEEL tick, which rides the props (patched live) rather
+                // than the button state.
+                "list" => hit_list(input.mouse, r, &props),
+                "context_menu" => hit_context_menu(input.mouse, r, &props, click),
+                // The other arm that ignores the click edge: a `badge` only CLAIMS its
+                // pill — it has no bind to write and no action to fire.
+                "badge" => hit_badge(input.mouse, r, &props),
+                _ => hit_checkbox(input.mouse, r, &props, click),
+            };
+            // ONE seam: a verdict touches state/results in exactly one place, so every
+            // control's interaction flows through identical plumbing.
+            apply_hit_verdict(verdict, p, state, results, hud_hit);
+        }
+        // A `badge` is above for the FIRST reason and nothing else: its claim region is
+        // the PILL a style may inset inside the node rect, and the verdict stops there —
+        // a chip claims so the scene cannot pick through it, and never binds or fires.
+        // `button`, `panel`, `tile` and `action_slot` declare a trivial geometry in
+        // [`rust_hit_shape`] instead, and this arm answers them generically (hover
+        // claims; a click fires the action / toggles the bind). Besides the bespoke arm
+        // above, only the generic plumbing remains — the drag-source, this arm, and the
+        // styled-container claim below.
+        // Presentational (sprite / tooltip / rune_corners and the read-out gauges):
+        // never claims, never interacts. Said out loud rather than left to the
+        // catch-all, because the [`HitShape::None`] declaration is what the roster
+        // gate accepts as "this control HAS answered its hit".
+        k if rust_hit_shape(k) == Some(HitShape::None) => {}
+        // Full-rect control (button / panel / tile / action_slot): hover claims; a
+        // click inside fires the node's `action` and/or toggles its bool `bind`.
+        k if rust_hit_shape(k) == Some(HitShape::Rect) => {
+            if r.contains(input.mouse) {
+                *hud_hit = true;
+                if input.clicked && p.enabled {
+                    if let Some(action) = &node.action {
+                        results.set(action.clone(), true);
+                        // Press feedback is a BUTTON behaviour: firing the action
+                        // lights its flash — the same flash a declared signal firing
+                        // this result name lights, so every activation path
+                        // acknowledges alike.
+                        state.flash(action);
+                        // …and feeds the strip-step channel, exactly as the signal
+                        // path does (`walker.rs` flash+push_step together). Without
+                        // this a MOUSE click on a rail hint flashed but never stepped
+                        // the strip — a click is an activation like any other.
+                        state.push_step(action);
+                    }
+                    if let Some(bind) = &node.bind {
+                        let val = !eff_bool(results, model, bind);
+                        results.set(bind.clone(), val);
                     }
                 }
-                None => dispatch_component_hit(
-                    lib, p, model, input, state, styles, results, hud_hit, input_active, lua_hits,
-                ),
             }
         }
         // A styled container (a panel) claims the pointer, so a click on the
@@ -1550,81 +1768,6 @@ fn hit_node(
             *hud_hit = true;
         }
         _ => {}
-    }
-}
-
-/// Dispatch one component's `M.hit` — the bounded way.
-///
-/// * **Idle frame** (`!input_active`): no Lua; replay the node's memoized `hit` so
-///   `hud_hit` stays continuous while the pointer rests on a control.
-/// * **Active frame, non-candidate**: the pointer is beyond the rect + slop and the
-///   node neither owns the open popup nor holds a capture — its claim is cleared
-///   without a crossing (every tight region except the open popup lies within the
-///   rect, and the popup's owner IS a candidate).
-/// * **Active frame, candidate**: cross into Lua with the cached draw props (live
-///   fields patched) and apply the verdict generically.
-///
-/// The candidate set deliberately includes the `state.open` owner (a `select`'s
-/// popup lies BELOW its node rect), every captured node (a slider drag keeps
-/// reporting while the pointer is off the track), and — on the click edge only —
-/// every children-as-data ([`no_descend`]) control: such a control lays its own
-/// rows out and may lay them PAST its authored rect (a context menu with more
-/// items than its height covers), geometry the walker cannot see, so its module's
-/// row math gets the final say on clicks. Click edges are rare, so move/idle
-/// frames stay rect-bounded and the still-frame zero-crossing guarantee holds.
-#[allow(clippy::too_many_arguments)]
-fn dispatch_component_hit(
-    lib: &dyn ComponentLibrary,
-    p: &Placed,
-    model: &ValueMap,
-    input: &UiInput,
-    state: &mut UiState,
-    styles: &Json,
-    results: &mut ValueMap,
-    hud_hit: &mut bool,
-    input_active: bool,
-    lua_hits: &mut u32,
-) {
-    let node = p.node;
-    let r = p.rect;
-    if !input_active {
-        if state.hit_memo.get(&p.key).copied().unwrap_or(false) {
-            *hud_hit = true;
-        }
-        return;
-    }
-    let m = input.mouse;
-    let near = m.x >= r.x - HIT_SLOP
-        && m.x <= r.x + r.w + HIT_SLOP
-        && m.y >= r.y - HIT_SLOP
-        && m.y <= r.y + r.h + HIT_SLOP;
-    let ident = node_ident(node);
-    let candidate = near
-        || state.open.as_deref() == Some(ident)
-        || state.dragging.contains(ident)
-        || (input.clicked && no_descend(&node.component));
-    if !candidate {
-        state.hit_memo.remove(&p.key);
-        return;
-    }
-    let props = component_hit_props(p, model, results, input, state, styles);
-    // The click edge crosses pre-gated on the node's enabled state, so a disabled
-    // control hovers (claims) but never acts — the rule every Rust arm applied.
-    let click = input.clicked && p.enabled;
-    *lua_hits += 1;
-    match lib.hit_component(
-        &node.component,
-        m.x,
-        m.y,
-        [r.x, r.y, r.w, r.h],
-        &props,
-        click,
-        input.down,
-    ) {
-        Ok(verdict) => apply_hit_verdict(verdict, p, state, results, hud_hit),
-        Err(e) => {
-            tracing::warn!("lua component '{}' hit failed ({e})", node.component);
-        }
     }
 }
 
@@ -1675,7 +1818,7 @@ fn component_hit_props(
 
 /// Apply one component's [`HitVerdict`] to the walker-owned channels — the ONLY
 /// place a verdict touches state/results, so every control's interaction flows
-/// through identical plumbing: `hit`→`hud_hit` (+ the idle-frame memo),
+/// through identical plumbing: `hit`→`hud_hit`,
 /// `value`→`bind`, `activate`→`action`, `group_focus`→`focus_group`,
 /// `capture`→`state.dragging` (release stays the generic button-up rule),
 /// `open`→`state.open` (closing only if this node still owns it),
@@ -1690,9 +1833,14 @@ fn apply_hit_verdict(
 ) {
     let node = p.node;
     let ident = node_ident(node);
-    state.hit_memo.insert(p.key, verdict.hit);
     if verdict.hit {
         *hud_hit = true;
+    }
+    // The component's own complaint about this node's authored data. Surfacing it
+    // here is what keeps an unusable authored value LOUD instead of a control that
+    // quietly does nothing.
+    if let Some(msg) = &verdict.warn {
+        tracing::warn!("ui: node {:?} ({}): {msg}", node.id, node.component);
     }
     if let (Some(val), Some(bind)) = (verdict.value, node.bind.as_deref()) {
         // Commit-on-release: a CAPTURED write (a slider drag, including the press
@@ -1700,7 +1848,7 @@ fn apply_hit_verdict(
         // The live value still lands in `results` so this frame's draw follows
         // the hand; the frame tail puts the resting model value back before the
         // scene reads `results`, and the release edge at the top of
-        // [`run_ui_impl`] performs the one real write. Uncaptured value writes
+        // [`run_ui`] performs the one real write. Uncaptured value writes
         // (a stepper click, a tab pick, a list wheel tick) stay immediate —
         // each is already a discrete, committed gesture.
         if state.dragging.contains(ident) || verdict.capture == Some(true) {
@@ -1711,6 +1859,8 @@ fn apply_hit_verdict(
     if verdict.activate {
         if let Some(action) = &node.action {
             results.set(action.clone(), true);
+            // Every activation path lights the action's flash (see the Rect arm).
+            state.flash(action);
         }
     }
     // A child-row activation (`activate_child`, 1-based): a children-as-data control
@@ -1725,6 +1875,7 @@ fn apply_hit_verdict(
             .filter(|a| !a.is_empty())
         {
             results.set(action.to_string(), true);
+            state.flash(action);
         }
     }
     if verdict.group_focus {
@@ -1757,9 +1908,9 @@ fn apply_hit_verdict(
 /// a backspace edge pops one char (`String::pop` — one CHARACTER, multibyte-safe),
 /// the result written into `results` for the engine to apply.
 ///
-/// Keyboard is NOT pointer: this runs unconditionally every frame, in Rust — a
-/// typing frame with a parked pointer is not input-active and never enters Lua, yet
-/// must still fold; the changed value then re-fingerprints the focused field, so it
+/// Keyboard is NOT pointer: this runs unconditionally every frame — a typing frame
+/// with a parked pointer is not input-active, so the hit pass skips every node, yet
+/// it must still fold; the changed value then re-fingerprints the focused field, so it
 /// (alone) redraws. Runs AFTER the hit pass, so a click that just focused the field
 /// folds the same frame, and BEFORE `echo_binds`, so the echo never shadows an edit.
 fn fold_typed(
@@ -1787,6 +1938,33 @@ fn fold_typed(
     }
 }
 
+/// Claim **local display ownership** for every bind a human just moved — the write
+/// half of [`UiState::local`].
+///
+/// A key sitting in `results` at this point can only have come from an interaction
+/// (a hit verdict, the release commit, a typed fold); the echo has not run yet, so
+/// there are no defaults to confuse with edits. A value equal to the model's is an
+/// echo of what the scene already believes and claims nothing.
+///
+/// A key we are already holding replays its own seed every frame — re-recording that
+/// would keep refreshing `seen` to track the model and quietly destroy the
+/// external-change exit. So only a value that differs from what we hold — a genuinely
+/// NEW edit — re-stamps the entry.
+fn record_local(placed: &[Placed], model: &ValueMap, results: &ValueMap, state: &mut UiState) {
+    for p in placed {
+        let Some(bind) = p.node.bind.as_deref() else { continue };
+        let Some(val) = results.get(bind) else { continue };
+        let seen = model.get(bind);
+        if seen == Some(val) {
+            continue;
+        }
+        if matches!(state.local.get(bind), Some((held, _)) if held == val) {
+            continue;
+        }
+        state.local.insert(bind.to_string(), (val.clone(), seen.cloned()));
+    }
+}
+
 /// The generic every-frame **bind echo** — the load-bearing contract that every
 /// placed control with a `bind` reports its effective value each frame (the
 /// paperdoll HUD reads the keys unconditionally and a test asserts it). Fills only
@@ -1796,8 +1974,9 @@ fn fold_typed(
 /// * bool controls (`checkbox`/`toggle`/`tile`) echo `false` when unset,
 /// * numeric controls (`slider`/`stepper`) echo their `min`,
 /// * `list` echoes its offset with a `0` default (top of the content),
-/// * `tabs` defaults to its first child's `value` (a strip always has one active),
-/// * text pickers (`radio`/`pill_toggle`/`select`) echo only what the model holds,
+/// * `tabs` defaults to its first child's numeric `value` (a strip always has one
+///   active); the index pickers (`pill_toggle`/`select`) echo the model's NUMBER,
+/// * the name picker (`radio`) echoes only the text the model holds,
 /// * `text_field` echoes the model's text with an empty-string default (a field
 ///   always reports — the focused frame's EDIT comes from [`fold_typed`], which
 ///   runs first and wins here by having already set the key).
@@ -1831,17 +2010,24 @@ fn echo_binds(placed: &[Placed], model: &ValueMap, results: &mut ValueMap) {
                 results.set(bind.to_string(), model.number(bind).unwrap_or(0.0));
             }
             "tabs" => {
-                let cur = model
-                    .text(bind)
-                    .map(str::to_string)
-                    .or_else(|| {
-                        node.children.first().and_then(|c| ptext(c, "value")).map(str::to_string)
-                    });
-                if let Some(v) = cur {
-                    results.set(bind.to_string(), v);
+                // Which segment is selected is an INDEX — a number — so the echo
+                // reports a number, defaulting to the first child's numeric `value`
+                // (a strip always has one active tab).
+                let first = node.children.first().and_then(|c| match c.props.get("value") {
+                    Some(Value::Number(n)) => Some(*n),
+                    _ => None,
+                });
+                if let Some(n) = model.number(bind).or(first) {
+                    results.set(bind.to_string(), n);
                 }
             }
-            "radio" | "pill_toggle" | "select" => {
+            "pill_toggle" | "select" => {
+                if let Some(n) = model.number(bind) {
+                    results.set(bind.to_string(), n);
+                }
+            }
+            "radio" => {
+                // The one NAME-keyed picker: a row's literal id, echoed as text.
                 if let Some(cur) = model.text(bind) {
                     results.set(bind.to_string(), cur.to_string());
                 }
@@ -1883,8 +2069,8 @@ fn read_keys_of(node: &UiNode) -> Vec<String> {
 }
 
 /// Fold every input of a node's draw into one number. Equal fingerprint ⇒ the node
-/// would emit byte-identical commands, so the cached ones are replayed and the Lua
-/// boundary is not crossed.
+/// would emit byte-identical commands, so the cached ones are replayed and the draw
+/// arm never runs.
 ///
 /// Allocation-free by construction: it reads `&str`s, `f32`s and `Value`s in place and
 /// never builds the props map — that map (and the marshalling behind it) is the cost
@@ -1960,7 +2146,7 @@ fn node_fingerprint(
     // `style_off`, a tab strip's active/idle pair, a text's `color`, a stage's `tint`,
     // a tooltip's `rune_color`) — plus `color_bind`, where the Model holds the path.
     h.json(st);
-    for key in ["style_off", "tab_active", "tab_idle", "color", "tint", "rune_color"] {
+    for key in ["style_off", "tab_active", "tab_idle", "glyph_style", "color", "tint", "rune_color"] {
         if let Some(path) = ptext(node, key) {
             h.json(jpath(styles, path));
         }
@@ -2001,6 +2187,15 @@ fn node_fingerprint(
             Some(v) => h.value(v),
             None => h.u64(u64::MAX),
         }
+    }
+
+    // A live press flash is a draw input: the glow fades a step per frame, so the
+    // node must re-fingerprint (and redraw) each tick or the first frame's glow
+    // would freeze on screen. Folded only for nodes that fire an ACTION (the
+    // flash is the button's activate acknowledgement), and as `0.0` when unlit —
+    // so the resting fingerprint is stable.
+    if let Some(action) = node.action.as_deref() {
+        h.f32(state.flash_intensity(action));
     }
 
     // A segmented control lays its own segments out, so its children are DATA it draws
@@ -2056,11 +2251,10 @@ fn display_prop_json(key: &str, v: &Value) -> Json {
     }
 }
 
-/// Assemble the plain-data props a Lua component receives for one node: its resolved
-/// style block, its label, and its hover/focus state. The walker owns style resolution
-/// and retained interaction state; the component owns how it DRAWS them. Grows per
-/// control as more kinds are ported (S2) — the one place the walker↔component prop
-/// contract lives.
+/// Assemble the plain-data props a component's draw receives for one node: its
+/// resolved style block, its label, and its hover/focus state. The walker owns style
+/// resolution and retained interaction state; the component owns how it DRAWS them —
+/// the one place the walker↔component prop contract lives.
 #[allow(clippy::too_many_arguments)]
 fn component_props(
     node: &UiNode,
@@ -2076,8 +2270,8 @@ fn component_props(
         || (state.nav_mode() && !node.id.is_empty() && state.focused() == Some(node.id.as_str()));
     // Start from the node's own scalar props (box / label_x / label_size / value / … —
     // each component reads whichever it needs), then overlay the walker-resolved fields.
-    // Display-text props resolve through the stringtable here, so a Lua component only
-    // ever sees FINAL text; value/bind channels never resolve (user text is data).
+    // Display-text props resolve through the stringtable here, so a component's draw
+    // only ever sees FINAL text; value/bind channels never resolve (user text is data).
     let mut props = serde_json::Map::new();
     for (k, v) in &node.props {
         props.insert(k.clone(), display_prop_json(k, v));
@@ -2129,9 +2323,10 @@ fn component_props(
     props.insert("layer".to_string(), serde_json::json!(0.0));
     props.insert("style".to_string(), st.clone());
     // Resolve the named alternate-style paths a control may carry (a tile's loaded-vs-
-    // empty `style_off`; a tab strip's `tab_active`/`tab_idle`) into their blocks, like
-    // `style`, so the component reads a resolved block rather than a path.
-    for key in ["style_off", "tab_active", "tab_idle"] {
+    // empty `style_off`; a tab strip's `tab_active`/`tab_idle`; a glyph-faced button's
+    // `glyph_style` — the atlas description) into their blocks, like `style`, so the
+    // component reads a resolved block rather than a path.
+    for key in ["style_off", "tab_active", "tab_idle", "glyph_style"] {
         if let Some(path) = ptext(node, key) {
             props.insert(key.to_string(), jpath(styles, path).clone());
         }
@@ -2219,15 +2414,24 @@ fn component_props(
             props.insert("bind_value".to_string(), value_to_json(v));
         }
     }
+    // Press feedback: an action-firing control reads its action's live flash
+    // intensity back as `flash` (0..1) — the button's activate acknowledgement,
+    // lit by a click, a Confirm, or a declared signal firing the same result
+    // name, even when the action wrapped to nowhere. Injected only while lit,
+    // so a resting button's props are byte-identical to before this mechanism
+    // existed.
+    if let Some(action) = node.action.as_deref() {
+        let intensity = state.flash_intensity(action);
+        if intensity > 0.0 {
+            props.insert("flash".to_string(), Json::from(f64::from(intensity)));
+        }
+    }
     Json::Object(props)
 }
 
-/// Draw one laid-out node. Returns whether the draw CROSSED into the Lua component
-/// library — the walker counts those into [`UiStats::lua_draws`], which is how the
-/// bounded-dispatch guarantee is asserted in tests — plus the component props it
-/// marshalled for a Lua kind, which the walker caches so the HIT dispatch can reuse
-/// them instead of rebuilding the map (see [`component_hit_props`]).
-#[allow(clippy::too_many_arguments)]
+/// Draw one laid-out node. Returns the component props it marshalled, which the
+/// walker caches so the HIT arms can reuse them instead of rebuilding the map
+/// (see [`component_hit_props`]).
 fn draw_node(
     p: &Placed,
     model: &ValueMap,
@@ -2235,38 +2439,48 @@ fn draw_node(
     styles: &Json,
     input: &UiInput,
     state: &UiState,
-    lib: Option<&dyn ComponentLibrary>,
     out: &mut Vec<HudCommand>,
-) -> (bool, Option<Json>) {
+) -> Option<Json> {
     let node = p.node;
     let r = p.rect;
     // `style_bind` (a Model key holding a dotted style path) wins over a literal `style`, so a
     // node's fill/border can follow its state — the non-interactive pipeline tabs pick active vs
     // idle this way, one node per tab instead of a stack of visibility-toggled panels.
     let st = resolve_style(node, styles, model, results);
-    // Lua component dispatch: a control OWNS its draw in `ui/<kind>.lua` (no Rust
-    // twins remain — S4). The walker hands it the resolved rect + plain-data props
-    // and renders what it emits. An absent library or a Lua error falls through to
-    // the STRUCTURAL arms below, so an interactive kind then draws only its styled
-    // box (or nothing) — a visible failure, never a silent second implementation.
-    let mut built_props: Option<Json> = None;
-    if let Some(lib) = lib {
-        if lib.handles(&node.component) {
-            let props = component_props(node, st, styles, model, results, input, state, r);
-            match lib.draw_component(&node.component, [r.x, r.y, r.w, r.h], &props) {
-                Ok(cmds) => {
-                    out.extend(cmds);
-                    return (true, Some(props));
-                }
-                Err(e) => tracing::warn!(
-                    "lua component '{}' draw failed ({e}); structural draw only",
-                    node.component
-                ),
-            }
-            built_props = Some(props);
-        }
-    }
     match node.component.as_str() {
+        // ── Rust components ──────────────────────────────────────────────
+        // Every control draws HERE, in the engine. There is no other tier.
+        k if crate::is_rust_component(k) => {
+            let props = component_props(node, st, styles, model, results, input, state, r);
+            // One arm, one dispatch table — the props assembly above is identical for
+            // every component, so listing kinds separately would only repeat it.
+            match k {
+                "panel" => draw_panel(r, &props, out),
+                "sprite" => draw_sprite(r, &props, out),
+                "rune_corners" => draw_rune_corners(r, &props, out),
+                "tooltip" => draw_tooltip(r, &props, out),
+                "checkbox" => draw_checkbox(r, &props, out),
+                "toggle" => draw_toggle(r, &props, out),
+                "radio" => draw_radio(r, &props, out),
+                "tile" => draw_tile(r, &props, out),
+                "pill_toggle" => draw_pill_toggle(r, &props, out),
+                "tabs" => draw_tabs(r, &props, out),
+                "select" => draw_select(r, &props, out),
+                "slider" => draw_slider(r, &props, out),
+                "stepper" => draw_stepper(r, &props, out),
+                "text_field" => draw_text_field(r, &props, out),
+                "list" => draw_list(r, &props, out),
+                "context_menu" => draw_context_menu(r, &props, out),
+                "gauge" => draw_gauge(r, &props, out),
+                "resource_gauge" => draw_resource_gauge(r, &props, out),
+                "stat_dot" => draw_stat_dot(r, &props, out),
+                "action_slot" => draw_action_slot(r, &props, out),
+                "medallion" => draw_medallion(r, &props, out),
+                "badge" => draw_badge(r, &props, out),
+                _ => draw_button(r, &props, out),
+            }
+            return Some(props);
+        }
         // Styled boxes — including `cell` (the generic layout box) and an `rtt`, whose
         // panel IS its PiP backdrop; the scene's frame graph blits the render target over
         // this (see `RttSlot`). All draw a bg ONLY when they carry a style — an unstyled
@@ -2276,10 +2490,10 @@ fn draw_node(
                 draw_panel_bg(r, st, out);
             }
         }
-        // (`list` — the scrolling region's backdrop + scrollbar — draws via
-        // `ui/list.lua` through the dispatch at the top of this fn, like every
-        // other component; only its column LAYOUT + viewport clip stay above in
-        // `resolve`. `list_lua_draw_is_byte_pinned` holds the bytes.)
+        // (`list` — the scrolling region's backdrop + scrollbar — draws in the
+        // engine arm above, like every other component; only its column LAYOUT +
+        // viewport clip stay here in `resolve`. `list_draw_is_byte_pinned` holds
+        // the bytes.)
         "text" => {
             let text = node_text(node, model, results);
             // Font size: an explicit `text_size` prop, else the node's layout height
@@ -2313,15 +2527,13 @@ fn draw_node(
             let wrap = if pbool(node, "wrap") { Some(r.w) } else { None };
             push_text(out, x, r.y, &text, size, color, align, node_font(node), pbool(node, "italic"), pbool(node, "bold"), pnum(node, "tracking").map(|n| n as f32).unwrap_or(-1.0), wrap);
         }
-        // Every interactive control (`button` / `text_field` / `select` / …) DRAWS
-        // via the Lua component library (`ui/<kind>.lua`), dispatched at the top of
-        // this fn — no per-control Rust draw arms remain, only the structural
-        // primitives above.
+        // Anything else is not a component kind at all (the roster gate in this
+        // module's tests holds every interactive kind to an arm above), so there is
+        // nothing to draw — only the structural primitives live down here.
         _ => {}
     }
-    (false, built_props)
+    None
 }
-
 
 /// Add a node's accumulated sub-layer onto one of its emitted commands (see the
 /// draw loop in [`run_ui`]). Every `HudCommand` carries a `layer`.
@@ -2368,23 +2580,2559 @@ fn draw_panel_bg(r: Rect, st: &Json, out: &mut Vec<HudCommand>) {
     });
 }
 
+// ── Components (the engine tier) ─────────────────────────────────────────────
+//
+// A COMPONENT owns its whole draw definition and lives HERE, in the engine.
+// Aaron's ratified taxonomy says so in as many words (9C141E1C: *"the walker's
+// per-control draw + hit + bind code IS that Component's logic"*), and the
+// 2026-08-09 ruling (BF0AF0C9) restored it after the 2026-07-30 inversion moved
+// these into `ui/<kind>.lua`. Lua ORCHESTRATES — position, callback hooks,
+// config metadata — it does not own semantics.
+//
+// A component draws into the `rect` the layout engine gives it and owns no
+// layout. Draw and hit read ONE plain-data `props` map (built by
+// `component_props`), so there is exactly one prop surface, not two.
+
+/// The trivial hit geometry a component declares, read by the one generic claim in
+/// [`hit_node`].
+///
+/// * [`HitShape::Rect`] — a full-rect control: its whole box is the interactive
+///   region and its only interaction is hover-claim + click-fires-`action`.
+/// * [`HitShape::None`] — presentational: never claims, never interacts.
+/// * `None` — not a Rust component, or one owning bespoke geometry: those answer
+///   through [`rust_owns_hit`] and their own arm in [`hit_node`] instead, and MUST NOT
+///   appear here (see that fn — the two answers are mutually exclusive).
+///
+/// An engine control MUST answer here or in [`rust_owns_hit`], or the walker stops
+/// treating it as interactive at all — the hover, the click and the focus ring go
+/// quiet at once, which is precisely what the button slice caught. The roster gate
+/// in this module's tests holds every kind to it.
+fn rust_hit_shape(kind: &str) -> Option<HitShape> {
+    match kind {
+        // A panel's whole box is its surface: the claim alone is the point, so a click
+        // on a pane's background does not pick through to the scene behind it. A tile
+        // is the other full-rect control: the whole slot cell is the target and a click
+        // inside toggles its bool bind. An action slot is the same shape of thing as a
+        // button — its rim, keybind tag and charge count are read-out, so a click
+        // anywhere on the recess casts.
+        "button" | "panel" | "tile" | "action_slot" => Some(HitShape::Rect),
+        // Pure decoration — never claims, never interacts. A tooltip that claimed would
+        // eat every click beneath the cursor it follows; a sprite is an image, not a
+        // surface, so clicks pass through to the scene behind it. The gauges, the stat
+        // dot and the portrait medallion are the READ-OUT half of that rule: they report
+        // state and are never targets, so a bar, a legend or a party portrait laid over
+        // the world does not eat the click that steers it.
+        "sprite" | "rune_corners" | "tooltip" | "gauge" | "resource_gauge" | "stat_dot"
+        | "medallion" => Some(HitShape::None),
+        _ => None,
+    }
+}
+
+/// The engine-tier components whose hit is a REAL verdict rather than a trivial shape —
+/// because their tight region is a sub-rect the component computes from its own props (a
+/// checkbox's box, a toggle's pill, a radio's circle, a pill toggle's well, a badge's
+/// chip — which a style may inset inside the node rect, and which CLAIMS and nothing
+/// else), or because a click does more than claim-and-fire (an option strip picks the
+/// cell under the pointer;
+/// a select opens, picks and closes; a slider claims the whole row but only its grab band
+/// starts a drag, and then maps the pointer into the bind for as long as it is held; a
+/// text field takes KEYBOARD FOCUS where the generic full-rect arm would have fired an
+/// action and toggled its string bind to a bool; a `list` claims its whole rect but folds
+/// a WHEEL tick into its bound offset, which no click-driven shape can express). Each
+/// owns an arm in [`hit_node`] — the Rust twin of a module's `M.hit` — returning a full
+/// [`HitVerdict`].
+///
+/// Such a kind must NEVER appear in [`rust_hit_shape`]: [`HitShape::Rect`] there would
+/// silently widen the tight region to the whole node rect, so a click on the caption
+/// row beside a 14px box would toggle the bind. The two answers are mutually
+/// exclusive, and the roster gate accepts a migrated control that gives EITHER.
+fn rust_owns_hit(kind: &str) -> bool {
+    matches!(
+        kind,
+        "checkbox"
+            | "toggle"
+            | "radio"
+            | "pill_toggle"
+            | "tabs"
+            | "select"
+            | "slider"
+            | "stepper"
+            | "text_field"
+            | "list"
+            | "context_menu"
+            | "badge"
+    )
+}
+
+/// The **panel** — the backdrop a pane IS, and the focus rim it wears.
+///
+/// A panel is the one component every multi-panel view is built from, and it owns
+/// exactly two things: its BACKDROP (from its own style block, so a pane's fill,
+/// radius and resting edge are a style token — never a caller's string) and its
+/// FOCUS RIM (from the walker-injected `focused` prop).
+///
+/// **The walker decides WHICH panel holds the cursor** (the left stick cycles
+/// `tab_group`); the panel decides what that LOOKS like. A scene never passes a rim
+/// style and never learns a rim exists — that split is what violation F2 was about
+/// (`2FE653F9`: *"THE SCENE SHOULD KNOW NOTHING ABOUT HOW A FUCKING COMPONENT
+/// WORKS"*), so keep it here.
+///
+/// It writes NO bind and NO action: a panel is a focus target and a backdrop.
+/// Anything interactive inside it is its own component, in its own node.
+fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let focused = props.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
+    // `{ resting, focused }` sub-blocks, each an ordinary container block. A style that
+    // carries the container keys DIRECTLY (no split) is used as-is for both states —
+    // the same fall-down-the-chain idiom `first_color` uses, so a plain panel style
+    // still draws rather than silently rendering nothing.
+    let block = if focused {
+        s.get("focused").or_else(|| s.get("resting")).unwrap_or(s)
+    } else {
+        s.get("resting").unwrap_or(s)
+    };
+    draw_panel_bg(r, block, out);
+}
+
+/// The **sprite** — an image node: blit the engine texture named by `tex` into the
+/// node's whole rect, tinted white × `alpha`. The menu's Muse plate is one of these.
+///
+/// It owns the BLIT and nothing else: the aspect lock, the anchor and the deliberate
+/// spill past the viewport (cover, never letterbox) are the walker's layout, and the
+/// node's `layer` prop is the walker's sub-layer — which is how one component serves a
+/// full-bleed backdrop and a 32px icon alike.
+///
+/// No `tex` draws NOTHING rather than texture 0 — the same rule the glyph face
+/// follows: a missing image must be visibly missing, never silently the wrong picture.
+fn draw_sprite(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let Some(tex) = props.get("tex").and_then(|v| v.as_f64()) else {
+        return;
+    };
+    out.push(HudCommand::Sprite {
+        tex: tex.floor() as u32,
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        color: [1.0, 1.0, 1.0, jnum(props, "alpha", 1.0)],
+        layer: 0.0,
+        // The WHOLE image: an atlas sub-rect is the glyph face's business, not this one's.
+        uv: [0.0, 0.0, 1.0, 1.0],
+    });
+}
+
+/// **Rune corners** — four Elder-Futhark glyphs inset from the rect's corners, the TOP
+/// pair in rune-light and the BOTTOM pair in dim bronze. The carved inlay a Prism frame
+/// wears: pure decoration, no bind, no action, no claim.
+///
+/// Each corner is its OWN prop with its own default, so a caller overrides exactly one
+/// — the `frame` template blanks `tr` with an EMPTY STRING on a closable frame so the
+/// glyph does not paint beneath the ✕ — without restating the set. An empty string is
+/// therefore a meaningful value, not a missing one, and must not fall back to the
+/// default (Lua's `or` agrees: `""` is truthy there).
+///
+/// The bottom pair is inset UP by a further glyph height so its box mirrors the top
+/// pair's — text is placed by its TOP edge, so subtracting `size` is what stops the
+/// bottom two hanging off the edge.
+fn draw_rune_corners(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let inset = jnum(s, "inset", 8.0);
+    // The node may pin a glyph size; otherwise the style's, else the default.
+    let size = jnum(props, "glyph_size", jnum(s, "size", 14.0));
+    let glow = first_color(s, &["top"], RUNE);
+    let bronze = first_color(s, &["bot"], DIM);
+    let by = r.y + r.h - inset - size;
+    // The right pair anchors at `w - inset` and draws right-aligned, so both edges hold
+    // the same visual margin without measuring a glyph.
+    for (key, dflt, x, y, color, align) in [
+        ("tl", "ᛞ", r.x + inset, r.y + inset, glow, TextAlign::Left),
+        ("tr", "ᛝ", r.x + r.w - inset, r.y + inset, glow, TextAlign::Right),
+        ("bl", "ᚨ", r.x + inset, by, bronze, TextAlign::Left),
+        ("br", "ᛟ", r.x + r.w - inset, by, bronze, TextAlign::Right),
+    ] {
+        let glyph = props.get(key).and_then(|v| v.as_str()).unwrap_or(dflt);
+        push_text(out, x, y, glyph, size, color, align, FontRole::Rune, false, false, -1.0, None);
+    }
+}
+
+/// The **tooltip** — a small info card: an optional styled backdrop, then an optional
+/// element RUNE at the top-left with the name headline beside it and a dim meta line
+/// below, in the text column right of the rune.
+///
+/// The SCENE positions it (the node's rect) and gates it (`visible_bind`); the card
+/// owns only what it looks like. Its three fields arrive ALREADY ABSENT when empty, so
+/// each row draws only when it has something to say — a runeless tip is a name and a
+/// meta line, never three rows with a hole in them.
+///
+/// It never claims the pointer: a cursor-following tip that claimed would eat every
+/// click underneath it.
+fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    // Backdrop through the one styled-box path, and ONLY when the node carries a style
+    // — an unstyled tip is bare text floating over whatever it sits on.
+    if !s.is_null() {
+        draw_panel_bg(r, s, out);
+    }
+    let inner = r.inset(jnum(s, "pad", 12.0));
+    let name_sz = jnum(s, "name_size", 16.0);
+    let meta_sz = jnum(s, "meta_size", 12.0);
+    let gap = jnum(s, "gap", 4.0);
+
+    // Optional element rune, top-left — the text column then indents past it so the
+    // glyph and the headline share one baseline.
+    let mut indent = 0.0;
+    if let Some(rune) = props.get("rune").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+        // `rune_color` arrives as a resolved rgba (the walker walks the dotted path),
+        // because a colour cannot ride as a scalar prop.
+        let color = first_color(props, &["rune_color"], RUNE);
+        push_text(out, inner.x, inner.y, rune, name_sz, color, TextAlign::Left, FontRole::Rune, false, false, -1.0, None);
+        indent = name_sz * 1.3 + 4.0;
+    }
+    if let Some(name) = props.get("name").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+        let color = first_color(s, &["name_color"], INK);
+        push_text(out, inner.x + indent, inner.y, name, name_sz, color, TextAlign::Left, FontRole::Display, false, false, -1.0, None);
+    }
+    if let Some(meta) = props.get("meta").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+        let color = first_color(s, &["meta_color"], DIM);
+        push_text(out, inner.x + indent, inner.y + name_sz + gap, meta, meta_sz, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    }
+}
+
+/// `a` moved toward `b` by `t` (0..1), per channel — the brighten-on-activate ramp.
+fn lerp_color(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+/// One atlas cell's uv sub-rect. Row-major over a `cols` x `rows` grid — the SAME
+/// arithmetic the sheet generator (`tools/gen_prism_pad_glyphs.py`) lays out with.
+fn cell_uv(idx: f32, cols: f32, rows: f32) -> [f32; 4] {
+    let (cx, cy) = (idx % cols, (idx / cols).floor());
+    [cx / cols, cy / rows, (cx + 1.0) / cols, (cy + 1.0) / rows]
+}
+
+/// The glyph face: one cell of the controller-icon atlas, square and centred.
+/// EVERYTHING about the atlas — texture, grid, name → cell map, colours — is the
+/// resolved `glyph_style` block (`ui_elements.json` → `pad_glyphs`); the node
+/// carries only WHICH glyph. An unknown name draws NOTHING rather than cell 0: a
+/// hint silently showing the wrong button is worse than one visibly missing.
+fn draw_glyph_face(r: Rect, props: &Json, flash: f32, out: &mut Vec<HudCommand>) {
+    let g = props.get("glyph_style").unwrap_or(&Json::Null);
+    let name = props.get("glyph").and_then(|v| v.as_str()).unwrap_or_default();
+    let idx = g.get("cells").and_then(|c| c.get(name)).and_then(|v| v.as_f64());
+    let (Some(tex), Some(idx)) = (g.get("tex").and_then(|v| v.as_f64()), idx) else {
+        return;
+    };
+    let size = jnum(props, "glyph_size", r.w.min(r.h)).min(r.w).min(r.h);
+    let box_ = Rect {
+        x: r.x + (r.w - size) * 0.5,
+        y: r.y + (r.h - size) * 0.5,
+        w: size,
+        h: size,
+    };
+    let mut color = first_color(g, &["color"], BRONZE);
+    if flash > 0.0 {
+        let lit = first_color(g, &["flash"], FLASH_LIT);
+        color = lerp_color(color, lit, flash);
+        // A soft glow swell behind the glyph, growing with the flash.
+        let grow = size * 0.3 * flash;
+        out.push(HudCommand::Panel {
+            x: box_.x - grow,
+            y: box_.y - grow,
+            w: box_.w + grow * 2.0,
+            h: box_.h + grow * 2.0,
+            color: [lit[0], lit[1], lit[2], 0.28 * flash],
+            color2: [lit[0], lit[1], lit[2], 0.28 * flash],
+            grad: 0.0,
+            radius: (size + grow * 2.0) * 0.28,
+            border: 0.0,
+            border_color: CLEAR,
+            feather: grow,
+            layer: 0.0,
+        });
+    }
+    out.push(HudCommand::Sprite {
+        tex: tex as u32,
+        x: box_.x,
+        y: box_.y,
+        w: box_.w,
+        h: box_.h,
+        color,
+        layer: 0.0,
+        uv: cell_uv(idx.floor() as f32, jnum(g, "cols", 4.0), jnum(g, "rows", 4.0)),
+    });
+}
+
+/// The **button** — an SDF panel slab + a centred FACE, with hover + pressed
+/// states (press = 1px nudge + `press_*` stops), an optional sapphire glow halo,
+/// and per-variant fill/border/label (primary / secondary / danger).
+///
+/// THE FACE is a label OR a glyph — a button is a button either way (Aaron,
+/// 2026-08-08: a rail hint *"IS a BUTTON, it just happens to be one that sends a
+/// prev/next signal … it has a different graphic"*). A node carrying `glyph`
+/// draws one cell of the controller-icon atlas instead of text; everything else
+/// about it — hit, action, hover, press, flash — is the same button.
+///
+/// PRESS FEEDBACK (`flash`) is the button's ACTIVATE acknowledgement: whenever
+/// this button's `action` fires — a click, a pad Confirm on focus, or a screen-
+/// declared signal firing the same result name — the walker injects a fading
+/// intensity (0..1, ~250 ms) and the face brightens toward the style's `flash`
+/// colour with a soft glow swell. The cue matters most exactly when the action
+/// changed nothing on screen (one page, wrapped).
+///
+/// The HIT is answered generically in Rust — a button's whole box is its
+/// interactive region and its only interaction is hover-claim + click-fires-
+/// `action`, so it needs no per-kind hit arm at all.
+fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let hot = props.get("hot").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pressed = props.get("pressed").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Activate feedback, injected by the walker only while a flash is live.
+    let flash = jnum(props, "flash", 0.0);
+
+    // DS press contract: the whole slab (glow included) nudges down 1px while
+    // held; `press_*` stops pick the darker fill, falling to the idle fill for
+    // variants that define none.
+    let r = if pressed { Rect { y: r.y + 1.0, ..r } } else { r };
+
+    // Optional sapphire glow halo behind the button, only on hover.
+    let glow = first_color(s, &["glow"], CLEAR);
+    if glow[3] > 0.0 && hot {
+        out.push(HudCommand::Panel {
+            x: r.x - 3.0,
+            y: r.y - 3.0,
+            w: r.w + 6.0,
+            h: r.h + 6.0,
+            color: glow,
+            color2: glow,
+            grad: 0.0,
+            radius: jnum(s, "radius", 3.0) + 3.0,
+            border: 0.0,
+            border_color: CLEAR,
+            feather: 4.0,
+            layer: 0.0,
+        });
+    }
+
+    // Fill / border / label pick their hover vs idle stops down the alias chain —
+    // the button OWNS this state→style logic.
+    let (top, bot, mut border, mut label_color) = if pressed {
+        let top = first_color(s, &["press_top", "fill_top", "cell", "fill"], SAP);
+        (
+            top,
+            first_color(s, &["press_bot", "fill_bot", "cell", "fill"], top),
+            first_color(s, &["press_border", "border"], CLEAR),
+            first_color(s, &["press_label", "label"], INK),
+        )
+    } else if hot {
+        let top = first_color(s, &["hover_top", "hot", "fill_top", "cell", "fill"], SAP);
+        (
+            top,
+            first_color(s, &["hover_bot", "hot", "fill_bot", "cell", "fill"], top),
+            first_color(s, &["hover_border", "border"], CLEAR),
+            first_color(s, &["hover_label", "label"], INK),
+        )
+    } else {
+        let top = first_color(s, &["fill_top", "cell", "fill"], SAP);
+        (
+            top,
+            first_color(s, &["fill_bot", "cell", "fill"], top),
+            first_color(s, &["border"], CLEAR),
+            first_color(s, &["label"], INK),
+        )
+    };
+
+    // Activate flash on the SLAB: the border brightens toward the lit colour, so a
+    // label button acknowledges exactly like a glyph button (one behaviour, every
+    // face). The glyph face adds its own glow swell in `draw_glyph_face`.
+    if flash > 0.0 {
+        let lit = first_color(s, &["flash"], FLASH_LIT);
+        border = lerp_color(border, lit, flash);
+        label_color = lerp_color(label_color, lit, flash);
+    }
+
+    out.push(HudCommand::Panel {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        color: top,
+        color2: bot,
+        grad: if top == bot { 0.0 } else { 1.0 },
+        radius: jnum(s, "radius", 3.0),
+        border: if border[3] > 0.0 { jnum(s, "border_w", 1.0) } else { 0.0 },
+        border_color: border,
+        feather: 0.0,
+        layer: 0.0,
+    });
+
+    // The face: a glyph when the node names one, the centred label otherwise.
+    if props.get("glyph").is_some_and(|v| !v.is_null()) {
+        draw_glyph_face(r, props, flash, out);
+        return;
+    }
+    let lsz = jnum(s, "label_size", jnum(props, "label_size", 14.0));
+    let label = props.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+    push_text(
+        out,
+        r.x + r.w * 0.5,
+        r.y + (r.h - lsz) * 0.5,
+        label,
+        lsz,
+        label_color,
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        -1.0,
+        None,
+    );
+}
 
 
 
 
 
-// (`draw_text_field` — the single-line input's Rust draw arm — was ported to
-// `ui/text_field.lua` in S6 and deleted; `text_field_lua_draw_is_byte_pinned`
-// carries its byte-level regression duty. Mid-string carets (grapheme-cluster
-// stepping) remain the recorded follow-up, now the module's.)
 
+/// A boxed picker's **box**: a `box`-sized square at the node rect's top-left, shared
+/// by `checkbox` and `radio`.
+///
+/// THE geometry — the draw and the hit both read it, so the mark can never sit where
+/// the click does not reach, and a caption laid beside it in the SAME node stays inert
+/// rather than becoming a second, invisible target.
+///
+/// `box` (default 14) is a NODE prop, not a style key: a row's tick size is part of the
+/// layout the row height was authored around, not part of its palette.
+fn box_rect(r: Rect, props: &Json) -> Rect {
+    let size = jnum(props, "box", 14.0);
+    Rect { x: r.x, y: r.y, w: size, h: size }
+}
+
+/// The row caption a boxed picker (`checkbox` / `radio`) wears to the RIGHT of its
+/// box, vertically centred on it. Empty copy draws nothing at all.
+///
+/// Decoration, never a target: the tight region is the box, so this text takes no
+/// hover state and carries no geometry the hit has to know about. The CALLER passes
+/// the colour, because that is the one thing the two pickers disagree on by default.
+///
+/// **props**: `label` · `label_x` (default `box` + `label_gap`, measured from the node
+/// rect's left edge) · `label_gap` (8) · `label_size` (13). Node props rather than
+/// style keys, so a dense list can tighten its gutter without a palette of its own.
+fn draw_box_caption(r: Rect, bx: Rect, props: &Json, color: [f32; 4], out: &mut Vec<HudCommand>) {
+    let Some(label) = props.get("label").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) else {
+        return;
+    };
+    let size = jnum(props, "label_size", 13.0);
+    let x = r.x + jnum(props, "label_x", bx.w + jnum(props, "label_gap", 8.0));
+    push_text(out, x, bx.y + (bx.h - size) * 0.5, label, size, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+}
+
+/// The **checkbox** — a square box, an inset tick while its bound bool is true, and an
+/// inert caption beside it.
+///
+/// The BOX is the control: [`box_rect`] is the whole of its geometry and
+/// [`hit_checkbox`] claims exactly that square, so a checkbox laid into a wide settings
+/// row leaves the rest of that row's clicks alone. The caption draws here only because
+/// it belongs to this node.
+///
+/// The tick is a filled inset square, not a glyph: one SDF panel, no font dependency,
+/// and it still reads at the 14px default where a vector check would turn to mud.
+///
+/// **props**: `box` (14) · `label` · `label_x` · `label_gap` (8) · `label_size` (13) ·
+/// `bind_value` — the bound bool, absent reading as unchecked.
+/// **style**: `box` (box fill) · `radius` (0) · `border` + `border_w` (1, the edge
+/// drawn only when `border` carries alpha) · `pad` (3, the tick's inset) · `check`
+/// (tick fill) · `check_radius` (0) · `label` (caption colour).
+fn draw_checkbox(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let bx = box_rect(r, props);
+    // The box, with a hairline edge only when the style authorises one.
+    let border = first_color(s, &["border"], CLEAR);
+    let radius = jnum(s, "radius", 0.0);
+    push_panel(out, bx, first_color(s, &["box"], PANEL), None, radius, border, jnum(s, "border_w", 1.0));
+
+    // The tick draws only for a TRUE bind: a box bound to a key the model has not set
+    // yet reads as OFF, never blank.
+    if props.get("bind_value").and_then(|v| v.as_bool()) == Some(true) {
+        // `Rect::inset` clamps a `pad` wider than half the box to a zero extent where
+        // the raw arithmetic would go negative — unreachable from any authored style,
+        // and the SDF prefers the clamp.
+        let tick = bx.inset(jnum(s, "pad", 3.0));
+        push_panel(out, tick, first_color(s, &["check"], INK), None, jnum(s, "check_radius", 0.0), CLEAR, 0.0);
+    }
+    draw_box_caption(r, bx, props, first_color(s, &["label"], INK), out);
+}
+
+/// The verdict a BOOL picker returns — a checkbox and a toggle differ only in WHERE
+/// their tight region is, so the decision itself is written once.
+///
+/// Hovering the region claims the pointer; a click inside writes the NEGATION of the
+/// bound value. An absent bind reads as false, so the first click on a key the model
+/// never set turns it ON — what an author expects of a box that drew unchecked.
+/// Reporting the value on idle frames is `echo_binds`'s job, not this one's.
+fn bool_pick(over: bool, click: bool, props: &Json) -> HitVerdict {
+    let mut v = HitVerdict { hit: over, ..Default::default() };
+    if over && click {
+        let on = props.get("bind_value").and_then(|b| b.as_bool()) == Some(true);
+        v.value = Some(Value::Bool(!on));
+    }
+    v
+}
+
+/// The checkbox's tight region is its BOX — a click on the caption row beside it is
+/// inert, and does not even claim.
+fn hit_checkbox(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    bool_pick(box_rect(r, props).contains(m), click, props)
+}
+
+/// A toggle's **pill**: the style-sized `w`×`h` switch at the node rect's left edge,
+/// vertically centred.
+///
+/// STYLE-owned rather than rect-owned, so a switch dropped into a full-width settings
+/// row stays a switch with room for a caption instead of becoming a 400px lozenge —
+/// and shared with the hit, which is what leaves the rest of that row inert rather
+/// than a second, invisible click target.
+fn toggle_pill(r: Rect, s: &Json) -> Rect {
+    let (w, h) = (jnum(s, "w", 50.0), jnum(s, "h", 25.0));
+    Rect { x: r.x, y: r.y + (r.h - h) * 0.5, w, h }
+}
+
+/// The **toggle** — a rounded pill switch: ON draws an `on_top`→`on_bot` gradient
+/// track with the knob at the RIGHT, OFF a flat `off_bg` track with the knob at the
+/// LEFT. The knob's SIDE is the state and the colour swap only reinforces it, which is
+/// why the switch still reads at a glance with the palette taken away.
+///
+/// Track stops, edge, knob fill and knob X all swing together on the one bit — the
+/// toggle OWNS that state→style mapping, exactly as the button owns its hover/press
+/// chain. `on_bot` falls back to the sapphire floor rather than to `on_top`, so a style
+/// naming only `on_top` still gets the ramp it was drawn for (the chain is preserved
+/// verbatim from the module it replaces).
+///
+/// The knob is the track inset by `knob_pad` all round, so its radius is half its side
+/// inside a track whose radius is half ITS height — concentric at any style `h`.
+///
+/// **props**: `bind_value` — the bound bool, absent reading as off.
+/// **style**: `w` (50) · `h` (25) · `radius` (half the pill height) · `border_w` (1) ·
+/// ON `on_top` / `on_bot` / `on_border` / `knob_on` · OFF `off_bg` / `off_bot`
+/// (defaults to `off_bg`, i.e. flat) / `off_border` / `knob_off` · `knob_pad` (3) ·
+/// `knob_radius` (half the knob's side).
+fn draw_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let pill = toggle_pill(r, s);
+    let pad = jnum(s, "knob_pad", 3.0);
+    let knob = (pill.h - 2.0 * pad).max(0.0);
+    let on = props.get("bind_value").and_then(|v| v.as_bool()) == Some(true);
+
+    let (track, track2, border, knob_fill, knob_x) = if on {
+        (
+            first_color(s, &["on_top"], SAP),
+            first_color(s, &["on_bot"], SAP),
+            first_color(s, &["on_border"], CLEAR),
+            first_color(s, &["knob_on"], RUNE),
+            // Right-aligned: the far edge, backed off by the knob and its gutter.
+            pill.x + pill.w - pad - knob,
+        )
+    } else {
+        let bg = first_color(s, &["off_bg"], STONE);
+        (
+            bg,
+            first_color(s, &["off_bot", "off_bg"], bg),
+            first_color(s, &["off_border"], CLEAR),
+            first_color(s, &["knob_off"], DIM),
+            pill.x + pad,
+        )
+    };
+    let border_w = jnum(s, "border_w", 1.0);
+    push_panel(out, pill, track, Some(track2), jnum(s, "radius", pill.h * 0.5), border, border_w);
+    let knob_r = Rect { x: knob_x, y: pill.y + pad, w: knob, h: knob };
+    push_panel(out, knob_r, knob_fill, None, jnum(s, "knob_radius", knob * 0.5), CLEAR, 0.0);
+}
+
+/// The toggle's tight region is its PILL — a click in the rest of the row it sits in
+/// is inert, and does not even claim.
+fn hit_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let pill = toggle_pill(r, props.get("style").unwrap_or(&Json::Null));
+    bool_pick(pill.contains(m), click, props)
+}
+
+/// The **radio** — one row of an exclusive group: a circle, a filled dot when this row
+/// IS the group's selection, and a caption naming the option.
+///
+/// It is a checkbox with the two differences that make it a different control. The
+/// geometry is ROUND — a radius of half the side, which the panel shader clamps to a
+/// circle — so the affordance says *one of these* where a square says *each of these*.
+/// And the mark is an EQUALITY, not a bool: this row's literal `value` against
+/// `bind_value`, the selection every row of the group shares through one `bind`. A row
+/// carrying no `value` can never be the selection, and drawing it permanently unlit is
+/// what makes that authoring hole visible.
+///
+/// Both sides of the comparison reach `props` through `value_to_json`, so it is
+/// type-exact — a numeric option never matches a text selection, the same no-coercion
+/// rule the module's `==` gave.
+///
+/// **props**: `box` (14) · `value` (this row's literal id) · `bind_value` (the group's
+/// selection) · `label` · `label_x` · `label_gap` (8) · `label_size` (13).
+/// **style**: `box` (circle fill) · `radius` (half the box side) · `border` +
+/// `border_w` (1) · `pad` (3, the dot's inset) · `check` (dot fill) · `check_radius`
+/// (half the dot's side) · `label` (caption colour).
+fn draw_radio(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let bx = box_rect(r, props);
+    let border = first_color(s, &["border"], CLEAR);
+    let fill = first_color(s, &["box"], PANEL);
+    push_panel(out, bx, fill, None, jnum(s, "radius", bx.w * 0.5), border, jnum(s, "border_w", 1.0));
+
+    let selected = props
+        .get("value")
+        .filter(|v| !v.is_null())
+        .is_some_and(|v| Some(v) == props.get("bind_value"));
+    if selected {
+        let dot = bx.inset(jnum(s, "pad", 3.0));
+        let dot_fill = first_color(s, &["check"], INK);
+        push_panel(out, dot, dot_fill, None, jnum(s, "check_radius", dot.w * 0.5), CLEAR, 0.0);
+    }
+    // The caption NAMES the option here, so — unlike a checkbox's, which is body copy
+    // in someone else's row — it is part of the choice and styles with it.
+    draw_box_caption(r, bx, props, first_color(s, &["label"], INK), out);
+}
+
+/// The radio's tight region is its CIRCLE (the caption row is inert), and a click
+/// inside selects THIS row: the verdict's value — the row's literal string id — sets
+/// the group key unconditionally, so the pick wins over every sibling's echo whatever
+/// the placement order (an echo only fills a key nobody wrote, and echoes run after the
+/// whole hit pass).
+///
+/// A non-string `value` selects nothing: the group key is the one NAME-keyed picker
+/// (`echo_binds` reports it as text), so writing a number there would set a selection
+/// no row could ever match.
+fn hit_radio(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let over = box_rect(r, props).contains(m);
+    let mut v = HitVerdict { hit: over, ..Default::default() };
+    if over && click {
+        if let Some(id) = props.get("value").and_then(|v| v.as_str()) {
+            v.value = Some(Value::Text(id.to_string()));
+        }
+    }
+    v
+}
+
+/// The **tile** — a slot cell: LIT from `style` when its enabling bind says the slot is
+/// loaded, EMPTY from `style_off` when it is not.
+///
+/// TWO style blocks, not one block styled two ways. A loaded equipment slot and an
+/// empty socket are different objects on the paperdoll, and giving each its own block
+/// lets a scene author them independently instead of smuggling a state flag through a
+/// colour. Inside the chosen block the fill is `hot` when the tile is loaded AND its
+/// bind is true, else `cell` — an empty tile never reads as selected however its bind
+/// happens to sit, because an unloaded slot cannot be the thing you picked. A node
+/// naming no `style_off` therefore goes to the const floor when unloaded: the one place
+/// a missing authored prop changes the picture rather than being invisible.
+///
+/// The caption ALWAYS draws — an empty one is an empty text command — because a slot
+/// whose art carries the meaning is the normal case, not the exception.
+///
+/// The HIT is the generic full-rect claim ([`rust_hit_shape`]): the whole cell is the
+/// target and a click toggles its bool bind, so it needs no per-kind hit arm.
+///
+/// **props**: `enabled` (walker-injected from `enabled_bind` — the slot is loaded) ·
+/// `bind_value` · `label` · `style_off` (the empty block, resolved like `style`).
+/// **style** / **style_off**: `cell` (resting fill) · `hot` (fill while loaded AND on) ·
+/// `radius` (0) · `border` + `border_w` (1, the edge drawn only when `border` carries
+/// alpha) · `label` (caption colour) · `label_size` (12).
+fn draw_tile(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let loaded = props.get("enabled").and_then(|v| v.as_bool()) == Some(true);
+    let s = props.get(if loaded { "style" } else { "style_off" }).unwrap_or(&Json::Null);
+    let on = loaded && props.get("bind_value").and_then(|v| v.as_bool()) == Some(true);
+    let fill = if on { first_color(s, &["hot"], SAP) } else { first_color(s, &["cell"], PANEL) };
+    let border = first_color(s, &["border"], CLEAR);
+    push_panel(out, r, fill, None, jnum(s, "radius", 0.0), border, jnum(s, "border_w", 1.0));
+
+    let size = jnum(s, "label_size", 12.0);
+    let label = props.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+    push_text(
+        out,
+        r.x + r.w * 0.5,
+        r.y + (r.h - size) * 0.5,
+        label,
+        size,
+        first_color(s, &["label"], INK),
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        -1.0,
+        None,
+    );
+}
+
+// ── Option strips (the children-as-data controls) ────────────────────────────
+//
+// ── THE STRIP-SELECTION BOUNDARY (stated here once, for every option strip) ──
+// "Which segment of an option strip is selected" is a 0-based NUMBER, end to end:
+// the child `value`, the bind, the model, the echo and the hit verdict all carry
+// the same index. An INDEX IS A NUMBER; a NAME (a radio row's literal id, e.g.
+// `sec_audio`) is TEXT, and `radio` is the only name-keyed picker. `tabs`,
+// `pill_toggle` and `select` are index-keyed and accept NOTHING else — a strip
+// whose option carries a non-number `value` warns ([`warn_once`] →
+// [`HitVerdict::warn`]) rather than clicking to nothing, because a component that
+// took both representations would make the fork the contract.
+//
+// Their options are the node's CHILDREN read as DATA ([`no_descend`]), never placed
+// nodes, so each strip lays its own cells out — which is why draw and hit share one
+// geometry fn per kind. A second copy of that arithmetic would drift, and the drift
+// reads as "the click landed one segment over".
+
+/// An option child's bound value: its numeric `value`, else `None`.
+///
+/// There is NO label fallback — a label is display text, an index is a number, and
+/// conflating them is the fork the strip boundary above exists to close.
+fn option_index(child: &Json) -> Option<f64> {
+    child.get("value").and_then(|v| v.as_f64())
+}
+
+/// The complaint a strip raises about an option whose `value` is not its index —
+/// 1-based like the `props.children[i]` the component walked, and naming the type it
+/// actually got, so an author can find the row without counting from zero.
+fn strip_value_warn(kind: &str, i: usize, child: &Json) -> String {
+    format!(
+        "{kind}: option {} `value` must be its numeric index, got {}",
+        i + 1,
+        lua_type(child.get("value"))
+    )
+}
+
+/// A pill toggle's **well**: a style-`h`-tall track, vertically centred in the node
+/// rect (the rect's own height when the style names none, and never taller than the
+/// rect it sits in). Shared by draw and hit, so the track that lights and the track
+/// that claims are one track.
+fn pill_well(r: Rect, s: &Json) -> Rect {
+    let sh = jnum(s, "h", r.h);
+    let h = if r.h > 0.0 { sh.min(r.h) } else { sh };
+    Rect { x: r.x, y: r.y + ((r.h - h) * 0.5).max(0.0), w: r.w, h }
+}
+
+/// The `i`-th of `n` segment **cells**: the well inset by `pad` all round, split into
+/// equal segments along x. Shared by draw and hit — the pad rim left over at the well's
+/// edges is deliberately part of neither cell, which is what makes a rim click claim
+/// the pointer while selecting nothing.
+fn pill_cell(well: Rect, pad: f32, n: usize, i: usize) -> Rect {
+    let cw = (well.w - pad * 2.0) / n as f32;
+    Rect { x: well.x + pad + i as f32 * cw, y: well.y + pad, w: cw, h: (well.h - pad * 2.0).max(0.0) }
+}
+
+/// The **pill toggle** — a segmented control: a rounded WELL (fill + hairline edge)
+/// split into one cell per option child, the selected cell wearing a floating gradient
+/// pill and every cell drawing its child's `label`.
+///
+/// Selection is `value == bind_value` compared AS AUTHORED — an index in practice (the
+/// strip boundary above), but the draw never narrows to a number, so a strip whose
+/// options and bind agree on some other representation still lights. The HIT does
+/// narrow, because what it writes leaves the control.
+///
+/// The WELL is the interactive region, not the cells: a click on the `pad` rim between
+/// them claims the pointer and selects nothing (see [`hit_pill_toggle`]), so a near-miss
+/// inside the control never picks through to the scene behind it.
+///
+/// **props**: `bind_value` (the selected index) · `children` (`{ value, label }` per
+/// segment).
+/// **style**: `h` (the node height — the well's track) · `pad` (3) · `radius` (15) ·
+/// `bg` (well fill) · `border` + `border_w` (1, the edge drawn only when `border`
+/// carries alpha) · `active_top` / `active_bot` (the selected pill's stops — `active_bot`
+/// falls back to the sapphire floor, NOT to `active_top`, so a style naming only the top
+/// stop still gets the ramp it was drawn for) · `active_inset` (1, the pill's horizontal
+/// inset within its cell) · `active_radius` (one under the well's) · `active_label` /
+/// `label` (segment label colours) · `label_size` (11).
+fn draw_pill_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let pad = jnum(s, "pad", 3.0);
+    let radius = jnum(s, "radius", 15.0);
+    let well = pill_well(r, s);
+
+    // The well: a `bg` fill and a hairline `border`.
+    let border = first_color(s, &["border"], CLEAR);
+    push_panel(out, well, first_color(s, &["bg"], PANEL), None, radius, border, jnum(s, "border_w", 1.0));
+
+    let kids = jkids(props);
+    if kids.is_empty() {
+        return;
+    }
+    let want = jopt(props, "bind_value");
+    let lsz = jnum(s, "label_size", 11.0);
+    for (i, child) in kids.iter().enumerate() {
+        let cell = pill_cell(well, pad, kids.len(), i);
+        // An absent `value` never wins — a segment nobody authored a value for must not
+        // look chosen just because the bind is unset too.
+        let active = matches!(jopt(child, "value"), Some(v) if Some(v) == want);
+        if active {
+            // The floating highlight: an `active_top`→`active_bot` gradient inset within
+            // the cell, its radius one under the well's so the two curves nest.
+            let inset = jnum(s, "active_inset", 1.0);
+            let pill = Rect {
+                x: cell.x + inset,
+                y: cell.y,
+                w: (cell.w - 2.0 * inset).max(0.0),
+                h: cell.h,
+            };
+            push_panel(
+                out,
+                pill,
+                first_color(s, &["active_top"], SAP),
+                Some(first_color(s, &["active_bot"], SAP)),
+                jnum(s, "active_radius", (radius - 1.0).max(0.0)),
+                CLEAR,
+                0.0,
+            );
+        }
+        let lc = if active {
+            first_color(s, &["active_label"], INK)
+        } else {
+            first_color(s, &["label"], DIM)
+        };
+        push_text(
+            out,
+            cell.x + cell.w * 0.5,
+            cell.y + (cell.h - lsz) * 0.5,
+            jstr(child, "label"),
+            lsz,
+            lc,
+            TextAlign::Center,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
+    }
+}
+
+/// The pill toggle's tight region is its WELL: hovering it claims the pointer, and a
+/// click inside a segment CELL selects that child's index. The pad rim claims without
+/// selecting, and the idle echo is the walker's generic pass ([`echo_binds`]).
+///
+/// The last matching cell wins, mirroring the scan order the strip has always had —
+/// cells never overlap, so it is only ever one.
+fn hit_pill_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let well = pill_well(r, s);
+    let mut v = HitVerdict { hit: well.contains(m), ..HitVerdict::default() };
+    if !click {
+        return v;
+    }
+    let kids = jkids(props);
+    let pad = jnum(s, "pad", 3.0);
+    for (i, child) in kids.iter().enumerate() {
+        if !pill_cell(well, pad, kids.len(), i).contains(m) {
+            continue;
+        }
+        // A segment's value is its INDEX — a number. Anything else is an authoring
+        // error that must SAY so, not click to nothing.
+        match option_index(child) {
+            Some(val) => v.value = Some(Value::Number(val)),
+            None => warn_once(&mut v, strip_value_warn("pill_toggle", i, child)),
+        }
+    }
+    v
+}
+
+/// The `i`-th of `n` tab **cells**: the strip inset by the node's `pad_x`/`pad_y`, split
+/// evenly along x with `gap` between cells. Shared by draw and hit — a click in the gap
+/// claims the strip and selects nothing precisely because both sides compute the same
+/// cells.
+///
+/// The inset is the strip's LITERAL arithmetic (not [`Rect::inset_xy`], which clamps):
+/// a strip padded past its own height must place its labels and its clicks at the same
+/// wrong y, not at two different ones.
+fn tab_cell(r: Rect, props: &Json, n: usize, i: usize) -> Rect {
+    let (px, py) = (jnum(props, "pad_x", 0.0), jnum(props, "pad_y", 0.0));
+    let gap = jnum(props, "gap", 0.0);
+    let inner =
+        Rect { x: r.x + px, y: r.y + py, w: r.w - 2.0 * px, h: r.h - 2.0 * py };
+    let tw = ((inner.w - gap * (n as f32 - 1.0)) / n as f32).max(0.0);
+    Rect { x: inner.x + i as f32 * (tw + gap), y: inner.y, w: tw, h: inner.h }
+}
+
+/// One tab **cell**: fill / border / label picked down the hover-vs-resting alias
+/// chains, then the optional `underline` rule along the bottom edge, then the centred
+/// label. The chains are why ONE cell renderer serves an active tab, an idle tab and a
+/// hovered one of either — the strip passes the block, the cell reads its state out of it.
+///
+/// **style**: `fill_top` / `fill_bot` (falling to `active_top` / `active_bot`, then
+/// `fill`) · `hover_top` / `hover_bot` (falling to `hot`, then the resting chain) ·
+/// `border` / `hover_border` + `border_w` (1) · `radius` (3) · `label` (falling from
+/// `hover_label` / `active_label`) · `label_size` (13) · `underline` + `underline_w` (2)
+/// + `underline_inset` (0, a rule shorter than its cell).
+fn draw_tab_cell(r: Rect, s: &Json, label: &str, hovered: bool, out: &mut Vec<HudCommand>) {
+    let (top, bot, border, lc) = if hovered {
+        let top = first_color(s, &["hover_top", "hot", "fill_top", "active_top", "fill"], PANEL);
+        (
+            top,
+            first_color(s, &["hover_bot", "hot", "fill_bot", "active_bot", "fill"], top),
+            first_color(s, &["hover_border", "border"], CLEAR),
+            first_color(s, &["hover_label", "active_label", "label"], INK),
+        )
+    } else {
+        let top = first_color(s, &["fill_top", "active_top", "fill"], PANEL);
+        (
+            top,
+            first_color(s, &["fill_bot", "active_bot", "fill"], top),
+            first_color(s, &["border"], CLEAR),
+            first_color(s, &["active_label", "label"], INK),
+        )
+    };
+    push_panel(out, r, top, Some(bot), jnum(s, "radius", 3.0), border, jnum(s, "border_w", 1.0));
+    // UNDERLINE variant: a style carrying `underline` marks its state with a rule along
+    // the cell's bottom edge instead of (or over) the filled pill. This is what a PAGE
+    // rail wants — the pill reads as a control, the underline as "where you are" — and
+    // it stays one component because the difference is entirely presentational.
+    let ul = first_color(s, &["underline"], CLEAR);
+    if ul[3] > 0.0 {
+        let uw = jnum(s, "underline_w", 2.0);
+        let inset = jnum(s, "underline_inset", 0.0);
+        push_rect(
+            out,
+            Rect { x: r.x + inset, y: r.y + r.h - uw, w: (r.w - 2.0 * inset).max(0.0), h: uw },
+            ul,
+        );
+    }
+    let lsz = jnum(s, "label_size", 13.0);
+    push_text(
+        out,
+        r.x + r.w * 0.5,
+        r.y + (r.h - lsz) * 0.5,
+        label,
+        lsz,
+        lc,
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        -1.0,
+        None,
+    );
+}
+
+/// The **tab strip** — an optional background bar (the node's own `style`), then one
+/// cell per tab child laid across the inner width: the cell whose `value` is the bound
+/// selection styles from `tab_active`, the rest from `tab_idle`, and every cell lights
+/// on hover.
+///
+/// Selection is `value == bind_value` compared AS AUTHORED (see [`draw_pill_toggle`]),
+/// with one extra rule: an EMPTY `value` never selects. A strip always shows one active
+/// tab, so a blank would make the first unauthored one look chosen.
+///
+/// The strip claims the pointer even BETWEEN cells (see [`hit_tabs`]) — a click in the
+/// gutter belongs to the rail, not to whatever lies behind it.
+///
+/// **props**: `bind_value` (the selected index) · `children` (`{ value, label }` — or
+/// `text` — per tab) · `tab_active` / `tab_idle` (the resolved per-state blocks) ·
+/// `gap` / `pad_x` / `pad_y` (the node's own layout metrics) · `mx` / `my` (the pointer,
+/// for per-cell hover).
+/// **style**: the strip's own background bar, drawn through [`draw_panel_bg`] and ONLY
+/// when the node carries one. Each cell's palette is [`draw_tab_cell`]'s.
+fn draw_tabs(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    // The strip's background bar, only when the node carries a style at all — an
+    // unstyled rail is its cells and nothing else.
+    if let Some(st) = jopt(props, "style") {
+        draw_panel_bg(r, st, out);
+    }
+    let kids = jkids(props);
+    if kids.is_empty() {
+        return;
+    }
+    let active_st = props.get("tab_active").unwrap_or(&Json::Null);
+    let idle_st = props.get("tab_idle").unwrap_or(&Json::Null);
+    let want = jopt(props, "bind_value");
+    let m = pointer(props);
+    for (i, child) in kids.iter().enumerate() {
+        let cell = tab_cell(r, props, kids.len(), i);
+        let active = matches!(jopt(child, "value"), Some(v) if *v != "" && Some(v) == want);
+        // `label` is the tab's copy; `text` is the older spelling the chat panel's strip
+        // still authors. A PRESENT-but-empty `label` wins, exactly as Lua's `or` chain had it.
+        let label = match jopt(child, "label") {
+            Some(l) => l.as_str().unwrap_or_default(),
+            None => jstr(child, "text"),
+        };
+        draw_tab_cell(cell, if active { active_st } else { idle_st }, label, cell.contains(m), out);
+    }
+}
+
+/// The tab strip's tight region is the WHOLE strip — it claims even between cells, so a
+/// click in the gutter does not pick through — and a click inside a tab CELL selects
+/// that child's index. The default-to-first echo on idle frames is the walker's generic
+/// pass ([`echo_binds`]).
+fn hit_tabs(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let kids = jkids(props);
+    for (i, child) in kids.iter().enumerate() {
+        if !tab_cell(r, props, kids.len(), i).contains(m) {
+            continue;
+        }
+        // A cell laid PAST the authored strip (a padded rail) still claims — the cell is
+        // the tab, and the strip rect is only its usual bound.
+        v.hit = true;
+        if !click {
+            continue;
+        }
+        // A tab's value is its INDEX — a number. Saying so is the whole point: a
+        // silently-ignored value is a tab that clicks to nothing.
+        match option_index(child) {
+            Some(val) => v.value = Some(Value::Number(val)),
+            None => warn_once(&mut v, strip_value_warn("tabs", i, child)),
+        }
+    }
+    v
+}
+
+/// A select's popup **outer rect**: flush under the field by the menu block's `gap`,
+/// `row_h` per option. Shared by draw and hit so they can never disagree.
+///
+/// It lies BELOW the node's own rect — the one thing about this control the walker has
+/// to know, which is why `state.open` keeps its owner interactive whatever the rect
+/// pre-filters say.
+fn select_menu(r: Rect, menu: &Json, n: usize) -> (Rect, f32) {
+    let row_h = jnum(menu, "row_h", 30.0);
+    let rect =
+        Rect { x: r.x, y: r.y + r.h + jnum(menu, "gap", 6.0), w: r.w, h: row_h * n as f32 };
+    (rect, row_h)
+}
+
+/// The `i`-th option **row**: full field width, stacked from the popup's top edge. The
+/// ROW is the region — both the hover test and the click test read it — while the band
+/// actually drawn is inset within it.
+fn select_row(r: Rect, menu: Rect, row_h: f32, i: usize) -> Rect {
+    Rect { x: r.x, y: menu.y + i as f32 * row_h, w: r.w, h: row_h }
+}
+
+/// Whether an option row is the SELECTED one: its INDEX equals the bound one. Both sides
+/// must be numbers ([`option_index`] refuses anything else), so a row carrying a
+/// non-index `value` matches only an ABSENT bind — preserved from the module it replaces,
+/// because a tier move must change nothing, not even a latent oddity.
+fn option_selected(child: &Json, bind: Option<&Json>) -> bool {
+    match (option_index(child), bind) {
+        (Some(v), Some(b)) => b.as_f64() == Some(v),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// The field's display text, and whether it is the (dim) PLACEHOLDER: the label of the
+/// option whose index is bound, else the node's `placeholder`.
+///
+/// The label is looked UP from the index and never stored as the selection — which is
+/// what keeps the two directions honest: the row SHOWS a label, the bind CARRIES a number.
+fn select_display<'a>(props: &'a Json, kids: &'a [Json]) -> (&'a str, bool) {
+    let picked = props
+        .get("bind_value")
+        .and_then(|v| v.as_f64())
+        .and_then(|cur| kids.iter().find(|k| option_index(k) == Some(cur)));
+    match picked {
+        Some(k) => (jstr(k, "label"), false),
+        None => (jstr(props, "placeholder"), true),
+    }
+}
+
+/// The field's downward **caret**: `steps` stacked 1px rules, each narrower than the
+/// last by `size / steps` — a triangle with no glyph-font dependency, so a dropdown
+/// needs no icon sheet. `steps` is both the row count and the taper, so the wedge keeps
+/// its proportions at any count.
+fn draw_select_caret(cx: f32, cy: f32, size: f32, steps: usize, color: [f32; 4], out: &mut Vec<HudCommand>) {
+    for i in 0..steps {
+        let w = size * (1.0 - i as f32 / steps as f32);
+        push_rect(out, Rect { x: cx - w * 0.5, y: cy - 1.0 + i as f32, w, h: 1.0 }, color);
+    }
+}
+
+/// The **select** — a dropdown: a FIELD (always drawn: panel, the selected option's
+/// label or a dim placeholder, and a downward caret) plus, while THIS select is the
+/// walker's open popup, a MENU of option rows lifted one sub-layer above the field.
+///
+/// The popup's commands are emitted at layer 0 like everything else and then lifted as
+/// a RUN through [`offset_layer`] — the walker's own mechanism, applied here to the part
+/// of one node that must cover the rest of it. Lifting the whole run (rather than each
+/// command as it is pushed) is what stops a later row label from being forgotten and
+/// painting underneath the popup it belongs to.
+///
+/// An option's `value` is its 0-based INDEX — a number; the `label` is what the row
+/// SHOWS and is never the value (see the strip boundary above).
+///
+/// **props**: `open` (walker-injected — is THIS select the open popup) · `bind_value`
+/// (the selected index) · `children` (`{ value, label }` options) · `placeholder` (the
+/// field's text when nothing is selected) · `mx` / `my` (the pointer, for row hover).
+/// **style**: two sub-blocks.
+/// `field`: `top` / `bot` (stops) · `border` + `border_w` (1) · `radius` (3) ·
+/// `pad_x` (14, the label's inset) · `label` / `placeholder` (falling through `caret`,
+/// then `label`) · `label_size` (15) · `caret` (falling to `label`) · `caret_size` (9) ·
+/// `caret_steps` (4) · `caret_inset` (16, from the field's right edge).
+/// `menu`: `top` / `bot` · `border` + `border_w` (1) · `radius` (3) · `gap` (6, under
+/// the field) · `row_h` (30) · `row_pad` (4, the band's inset each side) · `sel_bg` /
+/// `hover_bg` (row bands) · `sel_label` (falling to `label`) / `label` · `label_size`
+/// (15) · `pad_x` (14) · `lift` (1, the popup's sub-layer above the field).
+fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let base = props.get("style").unwrap_or(&Json::Null);
+    let field = base.get("field").unwrap_or(&Json::Null);
+    let menu = base.get("menu").unwrap_or(&Json::Null);
+    let kids = jkids(props);
+
+    // ── the field (always drawn) ──
+    let top = first_color(field, &["top"], PANEL);
+    let border = first_color(field, &["border"], CLEAR);
+    push_panel(
+        out,
+        r,
+        top,
+        Some(first_color(field, &["bot"], top)),
+        jnum(field, "radius", 3.0),
+        border,
+        jnum(field, "border_w", 1.0),
+    );
+    let lsz = jnum(field, "label_size", 15.0);
+    let (label, placeholder) = select_display(props, kids);
+    // A placeholder is not a label with a different colour — it falls down its OWN chain
+    // (`placeholder` → `caret` → `label`) so a block that never named one still dims.
+    let lc = if placeholder {
+        first_color(field, &["placeholder", "caret", "label"], DIM)
+    } else {
+        first_color(field, &["label"], INK)
+    };
+    let pad_x = jnum(field, "pad_x", 14.0);
+    push_text(out, r.x + pad_x, r.y + (r.h - lsz) * 0.5, label, lsz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    draw_select_caret(
+        r.x + r.w - jnum(field, "caret_inset", 16.0),
+        r.y + r.h * 0.5,
+        jnum(field, "caret_size", 9.0),
+        jnum(field, "caret_steps", 4.0).max(0.0) as usize,
+        first_color(field, &["caret", "label"], DIM),
+        out,
+    );
+
+    // ── the popup, only while THIS select is open ──
+    if props.get("open").and_then(|v| v.as_bool()) != Some(true) {
+        return;
+    }
+    let lifted = out.len();
+    let (m_rect, row_h) = select_menu(r, menu, kids.len());
+    let mtop = first_color(menu, &["top"], STONE);
+    let mborder = first_color(menu, &["border"], CLEAR);
+    push_panel(
+        out,
+        m_rect,
+        mtop,
+        Some(first_color(menu, &["bot"], mtop)),
+        jnum(menu, "radius", 3.0),
+        mborder,
+        jnum(menu, "border_w", 1.0),
+    );
+    let msz = jnum(menu, "label_size", 15.0);
+    let row_pad = jnum(menu, "row_pad", 4.0);
+    let row_x = jnum(menu, "pad_x", 14.0);
+    let cur = jopt(props, "bind_value");
+    let m = pointer(props);
+    for (i, child) in kids.iter().enumerate() {
+        let row = select_row(r, m_rect, row_h, i);
+        let selected = option_selected(child, cur);
+        // The selected row's band, else the hovered one's — inset each side so the
+        // popup's own edge stays visible around it. Selection wins over hover.
+        let band = if selected {
+            Some(first_color(menu, &["sel_bg"], SAP))
+        } else if row.contains(m) {
+            Some(first_color(menu, &["hover_bg"], STONE))
+        } else {
+            None
+        };
+        if let Some(color) = band {
+            push_rect(
+                out,
+                Rect { x: row.x + row_pad, y: row.y, w: row.w - 2.0 * row_pad, h: row.h },
+                color,
+            );
+        }
+        let rc = if selected {
+            first_color(menu, &["sel_label", "label"], INK)
+        } else {
+            first_color(menu, &["label"], INK)
+        };
+        push_text(out, r.x + row_x, row.y + (row_h - msz) * 0.5, jstr(child, "label"), msz, rc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    }
+    // Lift the whole popup run above the field. The walker adds the NODE's own sub-layer
+    // on top of this afterwards, so the +1 stays relative to the field wherever the
+    // select sits in a stacked screen.
+    let lift = jnum(menu, "lift", 1.0);
+    for c in &mut out[lifted..] {
+        offset_layer(c, lift);
+    }
+}
+
+/// The select's hit: the FIELD claims; while open the popup below it claims too. A click
+/// on the closed field OPENS it; while open, ANY click closes — matching the settings
+/// dropdown — and one inside the popup also picks the row under the pointer. The
+/// selected-value echo on idle frames is the walker's generic pass ([`echo_binds`]).
+fn hit_select(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let menu = props.get("style").and_then(|s| s.get("menu")).unwrap_or(&Json::Null);
+    let kids = jkids(props);
+    let open = props.get("open").and_then(|v| v.as_bool()) == Some(true);
+    let (m_rect, row_h) = select_menu(r, menu, kids.len());
+    let over_menu = open && m_rect.contains(m);
+    let mut v = HitVerdict { hit: r.contains(m) || over_menu, ..HitVerdict::default() };
+    if !click {
+        return v;
+    }
+    if !open {
+        if r.contains(m) {
+            v.open = Some(true);
+        }
+        return v;
+    }
+    // Open: every click closes. `apply_hit_verdict` only clears `state.open` when THIS
+    // node still owns it, so a stray close is inert rather than shutting someone else's.
+    v.open = Some(false);
+    if !over_menu {
+        return v;
+    }
+    for (i, child) in kids.iter().enumerate() {
+        if !select_row(r, m_rect, row_h, i).contains(m) {
+            continue;
+        }
+        // An option's value is its INDEX — a number. Anything else is an authoring
+        // error that must SAY so, not pick to nothing.
+        match option_index(child) {
+            Some(val) => v.value = Some(Value::Number(val)),
+            None => warn_once(&mut v, strip_value_warn("select", i, child)),
+        }
+    }
+    v
+}
+
+// ── Value controls (a number you drag, step, or type) ────────────────────────
+//
+// The three controls whose bind holds a VALUE rather than a choice. Two of them
+// (`slider` / `stepper`) render that value through [`fmt_val`], and all three own a
+// tight region their draw and hit share one geometry fn for — which is why neither
+// can declare a trivial [`rust_hit_shape`].
+
+/// Format a bound number the way a value readout shows it — shared by the slider's
+/// readout and the stepper's field.
+///
+/// `decimals` places (default 2), a leading `+` on a non-negative value when `plus` is
+/// set, then `suffix`. All three ride the NODE's own props, so a readout's format is
+/// authored WITH the control instead of guessed from the magnitude — which is what lets
+/// one row read `0.75` and the next `+3 dB`.
+fn fmt_val(v: f32, props: &Json) -> String {
+    // A negative `decimals` is nonsense authoring; the cast saturates it to 0 places
+    // rather than panicking (Lua's `string.format` errored on the built `"%.-1f"`).
+    let dec = jnum(props, "decimals", 2.0).floor().max(0.0) as usize;
+    let sign = if props.get("plus").and_then(|b| b.as_bool()) == Some(true) && v >= 0.0 {
+        "+"
+    } else {
+        ""
+    };
+    format!("{sign}{v:.dec$}{}", jstr(props, "suffix"))
+}
+
+/// A normalised position clamped into `0..=1` — how far along a rail the fill reaches,
+/// and how far along it a drag has landed.
+///
+/// Deliberately NOT `f32::clamp`, which PROPAGATES NaN — and both callers can be handed
+/// one by authored data: a degenerate `max == min` range makes the value fraction `0/0`,
+/// and a rail squeezed to zero width (caption + readout columns wider than the node)
+/// makes the pointer fraction the same. This order SWALLOWS it, because `f32::min` hands
+/// back the non-NaN operand, so the worst an impossible layout does is peg the control at
+/// its top end — never write a NaN into the Model, which nothing downstream would survive.
+#[allow(clippy::manual_clamp)]
+fn saturate(t: f32) -> f32 {
+    t.min(1.0).max(0.0)
+}
+
+/// Whether the slider stands UPRIGHT (`vertical`) rather than lying along the row.
+///
+/// One reader for the three places that fork on it — [`slider_track`], the draw and the
+/// hit — so the rail, the fill, the handle and the drag axis can never disagree about
+/// which way the control runs.
+///
+/// A strict bool, matching `config::flag`: the Lua tier tested this for TRUTHINESS, so
+/// an authored `"vertical": 1` used to stand the rail up and now does not. Every
+/// authored dial writes a real bool, so the tightening is invisible — but it is a
+/// tightening, and this is where it is written down.
+fn slider_vertical(props: &Json) -> bool {
+    props.get("vertical").and_then(|v| v.as_bool()) == Some(true)
+}
+
+/// The slider's **track** — the rail the fill and the handle sit on, and the rail a drag
+/// maps the pointer over. THE geometry: the draw and the hit both read it, so the value
+/// can never live somewhere the click cannot reach.
+///
+/// Horizontal: inset past the reserved `label_w` / `value_w` columns, `slider_h` tall
+/// (default: the whole row), vertically centred. Upright: the caption owns a band across
+/// the TOP and the rail takes the rest of the height, `slider_h` WIDE — that prop is the
+/// rail's CROSS size either way — horizontally centred. An EMPTY caption reserves no
+/// band, so a bare dial rails the full height.
+///
+/// **props**: `vertical` · `label` · `label_w` (0) · `value_w` (0) · `slider_h` (the row
+/// height lying down, 10 upright).
+/// **style**: `label_size` (13) · `label_gap` (8 — the upright caption's clearance).
+fn slider_track(r: Rect, props: &Json) -> Rect {
+    if slider_vertical(props) {
+        let s = props.get("style").unwrap_or(&Json::Null);
+        let top = if jstr(props, "label").is_empty() {
+            0.0
+        } else {
+            jnum(s, "label_size", 13.0) + jnum(s, "label_gap", 8.0)
+        };
+        let w = jnum(props, "slider_h", 10.0);
+        return Rect { x: r.x + (r.w - w) * 0.5, y: r.y + top, w, h: (r.h - top).max(0.0) };
+    }
+    let label_w = jnum(props, "label_w", 0.0);
+    let h = jnum(props, "slider_h", r.h);
+    Rect {
+        x: r.x + label_w,
+        y: r.y + (r.h - h) * 0.5,
+        w: (r.w - label_w - jnum(props, "value_w", 0.0)).max(0.0),
+        h,
+    }
+}
+
+/// The **slider** — a labelled value track: an optional caption column, a rail carrying
+/// the fill up to the value with a handle riding on it, and an optional value readout.
+///
+/// While FOCUSED (its `focus_group` currently holds this node's bind) the caption, rail
+/// and fill all recolour together. With no pointer on screen that recolour IS the cursor,
+/// which is why it is a full stop swap rather than a tint — the slider OWNS this
+/// state→style mapping exactly as the button owns its hover/press chain.
+///
+/// `vertical` stands the rail up: BOTTOM is min, TOP is max (a planet grows upward), the
+/// fill rises from the floor, the handle becomes a bar across the rail, and the caption
+/// moves to a band across the top. With `value_w` on, the RANGE marks sit beside the
+/// rail's ends and the LIVE value rides beside the handle — "what am I setting" answered
+/// at the point of motion instead of in a resting caption that only moves on commit.
+/// (That readout brightens while `captured`, which no DRAW props carry today: only
+/// [`component_hit_props`] patches that field in. The branch is ported faithfully and is
+/// inert until `component_props` injects it — the recorded follow-up, and a change to
+/// both tiers rather than part of this move.)
+///
+/// THE PAD CHANNEL is the walker's and every slider gets it for free: while this node
+/// holds focus, d-pad along its own axis steps the bind by `step` (`step_coarse` under
+/// the chord), clamped and committed like a stepper click. The cross axis still moves
+/// focus, so a slider is never a trap. It keys off the KIND, so this tier move is
+/// invisible to it.
+///
+/// **props**: `bind_value` (the bound number, absent reading as `min`) · `min` (0) ·
+/// `max` (1) · `label` · `label_w` (0) · `value_w` (0 — the readout is opt-in) ·
+/// `slider_h` · `vertical` · `captured` · `focused` · `decimals` / `plus` / `suffix`
+/// (the readout's format, see [`fmt_val`]).
+/// **style**: `track` / `focus_track` (rail fill) · `fill` / `focus_fill` (the filled
+/// run) · `fill_hi` (a highlight line along the fill's leading edge, drawn only when it
+/// carries alpha) + `fill_hi_w` (1) · `handle` + `handle_w` (9) + `handle_over` (4, the
+/// handle's overhang past the rail on each side) · `focus_label` (caption + live
+/// readout while lit) · `label_size` (13) · `label_gap` (8) · `value_color` (readout +
+/// range marks) · `value_size` (12) · `value_gap` (10, upright readout clearance) ·
+/// `range_size` (`value_size` − 2, floored at 8).
+fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let vertical = slider_vertical(props);
+    let focused = props.get("focused").and_then(|v| v.as_bool()) == Some(true);
+    let min = jnum(props, "min", 0.0);
+    let max = jnum(props, "max", 1.0);
+    let value = jnum(props, "bind_value", min);
+    let track = slider_track(r, props);
+
+    // The caption: the left column lying down, the band across the TOP upright — one
+    // prop, both orientations, the same focus recolour. Its resting colour is the ink
+    // const rather than a style key: no alias ever existed here, and inventing one now
+    // would repaint every block that already carries an unrelated `label`.
+    let lsz = jnum(s, "label_size", 13.0);
+    let label = jstr(props, "label");
+    if !label.is_empty() {
+        let lc = if focused { first_color(s, &["focus_label"], RUNE) } else { INK };
+        let ly = if vertical { r.y } else { r.y + (r.h - lsz) * 0.5 };
+        push_text(out, r.x, ly, label, lsz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    }
+
+    // Rail, the fill up to the value, then the handle riding on it.
+    let track_col = if focused {
+        first_color(s, &["focus_track"], STONE)
+    } else {
+        first_color(s, &["track"], STONE)
+    };
+    let fill_col =
+        if focused { first_color(s, &["focus_fill"], RUNE) } else { first_color(s, &["fill"], SAP) };
+    push_rect(out, track, track_col);
+    let t = saturate((value - min) / (max - min));
+    let hw = jnum(s, "handle_w", 9.0);
+    let over = jnum(s, "handle_over", 4.0);
+    let fill_hi = first_color(s, &["fill_hi"], CLEAR);
+    let hi_w = jnum(s, "fill_hi_w", 1.0);
+    let handle = first_color(s, &["handle"], SAP);
+    if vertical {
+        // The fill RISES from the floor of the rail; the handle is a bar across it.
+        let fh = track.h * t;
+        let fy = track.y + track.h - fh;
+        push_rect(out, Rect { y: fy, h: fh, ..track }, fill_col);
+        if fill_hi[3] > 0.0 && fh > 0.0 {
+            push_rect(out, Rect { y: fy, h: hi_w, ..track }, fill_hi);
+        }
+        let hy = track.y + track.h * (1.0 - t);
+        push_rect(
+            out,
+            Rect { x: track.x - over, y: hy - hw * 0.5, w: track.w + 2.0 * over, h: hw },
+            handle,
+        );
+        // The live readout rides BESIDE the handle, on the same `value_w` opt-in the
+        // horizontal form spends on a right column; the RANGE marks read off the rail's
+        // own ends on the FAR side, so the live number never collides with them.
+        if jnum(props, "value_w", 0.0) > 0.0 {
+            let vsz = jnum(s, "value_size", 12.0);
+            let gap = jnum(s, "value_gap", 10.0);
+            let live = props.get("captured").and_then(|v| v.as_bool()) == Some(true);
+            let vc = if live {
+                first_color(s, &["focus_label"], RUNE)
+            } else {
+                first_color(s, &["value_color"], DIM)
+            };
+            push_text(out, track.x + track.w + gap, hy - vsz * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+            let rsz = jnum(s, "range_size", (vsz - 2.0).max(8.0));
+            let rc = first_color(s, &["value_color"], DIM);
+            push_text(out, track.x - gap, track.y - rsz * 0.5, &fmt_val(max, props), rsz, rc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+            push_text(out, track.x - gap, track.y + track.h - rsz * 0.5, &fmt_val(min, props), rsz, rc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+        }
+        return;
+    }
+    let fw = track.w * t;
+    push_rect(out, Rect { w: fw, ..track }, fill_col);
+    if fill_hi[3] > 0.0 && fw > 0.0 {
+        push_rect(out, Rect { w: fw, h: hi_w, ..track }, fill_hi);
+    }
+    push_rect(
+        out,
+        Rect {
+            x: track.x + track.w * t - hw * 0.5,
+            y: track.y - over,
+            w: hw,
+            h: track.h + 2.0 * over,
+        },
+        handle,
+    );
+    // The readout, lying down: the right column the rail was already inset for (the
+    // upright form drew beside its handle above).
+    if jnum(props, "value_w", 0.0) > 0.0 {
+        let vsz = jnum(s, "value_size", 12.0);
+        let vc = first_color(s, &["value_color"], DIM);
+        push_text(out, r.x + r.w, r.y + (r.h - vsz) * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+    }
+}
+
+/// The slider's hit: the WHOLE row claims and, on a click, grabs group focus — but only
+/// the padded GRAB band (the rail ± `grab_pad`, so a press just off a thin rail still
+/// takes it) captures the drag. While captured and held, the pointer maps over the rail
+/// into the bound value even after it leaves the row, because the walker keeps a
+/// captured node dispatching.
+///
+/// Claiming the whole row while capturing only the band is the point: the caption and
+/// the readout are part of the control (clicking them focuses it) without being places
+/// a drag can start from and jump the value.
+///
+/// Everything the verdict names is walker-generic — `group_focus` writes the bind into
+/// the node's `focus_group`, `capture` holds `state.dragging` until the button-up edge
+/// releases it, and a captured `value` is commit-on-release, landing in `results` only
+/// for this frame's draw (see [`apply_hit_verdict`]).
+///
+/// **props**: `min` (0) · `max` (1) · `captured` · `grab_pad` (6) · plus everything
+/// [`slider_track`] reads.
+fn hit_slider(m: Vec2, r: Rect, props: &Json, click: bool, down: bool) -> HitVerdict {
+    let track = slider_track(r, props);
+    let vertical = slider_vertical(props);
+    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    if v.hit && click {
+        v.group_focus = true;
+        let pad = jnum(props, "grab_pad", 6.0);
+        let grab = if vertical {
+            Rect { x: track.x - pad, w: track.w + 2.0 * pad, ..track }
+        } else {
+            Rect { y: track.y - pad, h: track.h + 2.0 * pad, ..track }
+        };
+        // Only ever `Some(true)`: `Some(false)` would RELEASE a capture, and letting go
+        // is the walker's generic button-up rule, never a component's decision.
+        v.capture = grab.contains(m).then_some(true);
+    }
+    // The HELD state, not the click edge — the press frame takes the capture and this
+    // same frame maps it, then every held frame after keeps following the hand.
+    if down && (props.get("captured").and_then(|c| c.as_bool()) == Some(true) || v.capture == Some(true)) {
+        let (min, max) = (jnum(props, "min", 0.0), jnum(props, "max", 1.0));
+        let t = if vertical {
+            // Bottom is min, top is max: the upright rail maps its pointer INVERTED.
+            1.0 - saturate((m.y - track.y) / track.h)
+        } else {
+            saturate((m.x - track.x) / track.w)
+        };
+        v.value = Some(Value::Number(f64::from(min + t * (max - min))));
+        // A drag that has left the row still claims: the pointer belongs to this control
+        // until it is let go.
+        v.hit = true;
+    }
+    v
+}
+
+/// The stepper's **field** box and its two square END cells — THE geometry, shared by
+/// the draw and the hit so they can never disagree about which pixels step the value.
+///
+/// The field is inset past the optional caption column, `field_h` tall (default: the
+/// whole row) and vertically centred; each end button is as wide as the field is TALL,
+/// which is what keeps the two squares square at any authored row height.
+///
+/// **props**: `label_w` (0) · `field_h` (the row height) · `btn_w` (the field height —
+/// override it and the end cells stop being squares, which a dense row may want).
+fn stepper_cells(r: Rect, props: &Json) -> (Rect, Rect, Rect) {
+    let label_w = jnum(props, "label_w", 0.0);
+    let h = jnum(props, "field_h", r.h);
+    let field = Rect { x: r.x + label_w, y: r.y + (r.h - h) * 0.5, w: (r.w - label_w).max(0.0), h };
+    let bw = jnum(props, "btn_w", field.h);
+    (field, Rect { w: bw, ..field }, Rect { x: field.x + field.w - bw, w: bw, ..field })
+}
+
+/// The **stepper** — a −[value]+ numeric box: an optional caption column, then a field
+/// with two square end buttons painted over it and the formatted value centred between
+/// them.
+///
+/// It is the slider's discrete twin: the same bound number, the same `min`/`max`/format
+/// props, but EXACT — a click is worth precisely one `step`, where a drag is worth
+/// wherever the hand stopped. That is why the two end cells are the whole interactive
+/// region ([`hit_stepper`]) and the value between them is inert: a stepper that also
+/// jumped on a field click would be a slider with a bad rail.
+///
+/// The end buttons paint OVER the field rather than beside it, so the field's own fill
+/// shows only in the middle and the three boxes need no gutter arithmetic to line up.
+///
+/// **props**: `bind_value` (the bound number, absent reading as `min`) · `min` (0) ·
+/// `label` · `label_w` (0) · `field_h` · `btn_w` · `dec_glyph` (`-`) / `inc_glyph` (`+`,
+/// the end-button faces) · `decimals` / `plus` / `suffix` (see [`fmt_val`]).
+/// **style**: `field` / `box` (field fill — BOTH spellings, every authored stepper in
+/// the app uses `box`) · `btn` (end-cell fill) · `label` (caption + glyph ink) ·
+/// `value_color` (falls back to `label`) · `label_size` (13) · `glyph_size`
+/// (`label_size`) · `value_size` (`label_size`).
+fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let value = jnum(props, "bind_value", jnum(props, "min", 0.0));
+    let (field, minus, plus) = stepper_cells(r, props);
+    let lsz = jnum(s, "label_size", 13.0);
+    let label_col = first_color(s, &["label"], INK);
+
+    // The optional caption in the reserved left column — the slider's, to the pixel, so
+    // a stack of the two reads as one column of rows.
+    let label = jstr(props, "label");
+    if !label.is_empty() {
+        push_text(out, r.x, r.y + (r.h - lsz) * 0.5, label, lsz, label_col, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    }
+
+    // The field, then the two end buttons over it.
+    push_rect(out, field, first_color(s, &["field", "box"], PANEL));
+    let btn_col = first_color(s, &["btn"], STONE);
+    push_rect(out, minus, btn_col);
+    push_rect(out, plus, btn_col);
+
+    // The faces, then the value centred in the field. The glyphs are display FONT, not
+    // display copy: they are the control's own affordance rather than authored text, so
+    // they never pass through the stringtable.
+    let gsz = jnum(s, "glyph_size", lsz);
+    for (cell, key, dflt) in [(minus, "dec_glyph", "-"), (plus, "inc_glyph", "+")] {
+        let glyph = props.get(key).and_then(|v| v.as_str()).unwrap_or(dflt);
+        push_text(out, cell.x + cell.w * 0.5, cell.y + (cell.h - gsz) * 0.5, glyph, gsz, label_col, TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+    }
+    let vsz = jnum(s, "value_size", lsz);
+    let vc = first_color(s, &["value_color", "label"], label_col);
+    push_text(out, field.x + field.w * 0.5, field.y + (field.h - vsz) * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Center, FontRole::Body, false, false, -1.0, None);
+}
+
+/// The stepper's hit: the whole ROW claims, but only the two square end cells STEP — `-`
+/// down, `+` up, by `step` (default 1), clamped to `[min, max]` from the CURRENT bound
+/// value. A click on the value between them changes nothing (the every-frame echo still
+/// reports it), which is what makes the number safe to click on.
+///
+/// A discrete, committed gesture: [`apply_hit_verdict`] writes it straight through,
+/// where a captured slider's value would be held for the release edge.
+///
+/// The arithmetic runs in f64 — the width the bind actually is, and the width the
+/// walker's pad-nudge channel steps this same bind in — so a click and a d-pad tick
+/// land on exactly the same value instead of drifting apart in the last digit.
+///
+/// **props**: `bind_value` · `min` (0) · `max` (1) · `step` (1) · plus everything
+/// [`stepper_cells`] reads.
+fn hit_stepper(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    if !click {
+        return v;
+    }
+    let (_, minus, plus) = stepper_cells(r, props);
+    let dir = if minus.contains(m) {
+        -1.0
+    } else if plus.contains(m) {
+        1.0
+    } else {
+        return v;
+    };
+    let num = |key: &str, dflt: f64| props.get(key).and_then(|n| n.as_f64()).unwrap_or(dflt);
+    let (min, max) = (num("min", 0.0), num("max", 1.0));
+    // Clamped in the module's order — NOT `f64::clamp`, which PANICS on an inverted
+    // authored range where this quietly lets `min` win.
+    v.value = Some(Value::Number((num("bind_value", min) + dir * num("step", 1.0)).min(max).max(min)));
+    v
+}
+
+/// The **text field** — a single-line input in a sunk-black well: the well panel, then
+/// the bound string (or the dim `placeholder` while it is empty) left-aligned and
+/// vertically centred, plus a block caret at the end of the text while focused.
+///
+/// The BORDER is a state channel and the field owns the whole mapping: the rune-light
+/// focus ring while this field holds keyboard focus, the bronze hover edge under the
+/// pointer, else the resting edge. Focus outranks hover — a field you are typing in
+/// must not change appearance because the pointer drifted across it.
+///
+/// The caret is placed by REAL glyph measurement, never `chars × advance` (text ruling
+/// 2026-07-31): the whole buffer rides as the command's `prefix` and the render bridge
+/// measures the shaped Unicode string, so the bar lands after the last glyph in any
+/// script. Its right clamp keeps it inside the well when the text overruns.
+///
+/// The KEYBOARD is deliberately NOT here. Focus is held by the walker (`state.focus`,
+/// claimed through [`hit_text_field`]'s verdict and cleared by the generic clicked-frame
+/// rule), typed characters and backspace fold into the bound string in [`fold_typed`],
+/// and the every-frame report is [`echo_binds`] — so a typing frame with a parked
+/// pointer never needs an interaction pass at all.
+///
+/// The value is USER DATA: it is never resolved through the stringtable, while the
+/// placeholder — display copy — arrives already resolved.
+///
+/// **props**: `bind_value` (the bound string; a non-string bind reads as empty) ·
+/// `placeholder` · `focused` · `mx` / `my` (the pointer, for the hover edge) ·
+/// `text_pad` (8) · `caret_w` (2) · `label_size` (14, when the style names none).
+/// **style**: `top` / `fill_top` / `bg` · `bot` / `fill_bot` / `bg` (well fill stops) ·
+/// `radius` (3) · `border` (resting edge) + `border_w` (1) · `hover_border` ·
+/// `caret` / `focus_border` (the ring, and the caret's own colour) + `focus_border_w`
+/// (2) · `label` / `color` (value ink) · `placeholder` (empty-state ink) ·
+/// `label_size`.
+fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let focused = props.get("focused").and_then(|v| v.as_bool()) == Some(true);
+    // The pointer itself, NOT the walker's `hot` prop: `hot` folds keyboard focus in
+    // while the pad drives, so a pad-focused field would light the bronze hover edge
+    // underneath its own focus ring.
+    let hovered = r.contains(pointer(props));
+
+    let top = first_color(s, &["top", "fill_top", "bg"], STONE);
+    let bot = first_color(s, &["bot", "fill_bot", "bg"], top);
+    let (border, border_w) = if focused {
+        (first_color(s, &["caret", "focus_border", "border"], RUNE), jnum(s, "focus_border_w", 2.0))
+    } else if hovered {
+        (first_color(s, &["hover_border", "border"], DIM), jnum(s, "border_w", 1.0))
+    } else {
+        (first_color(s, &["border"], STONE), jnum(s, "border_w", 1.0))
+    };
+    push_panel(out, r, top, Some(bot), jnum(s, "radius", 3.0), border, border_w);
+
+    // The value, or the placeholder while it is empty. `label_size` reads the STYLE
+    // first and the node second: a field's copy sizes with its palette, but one dense
+    // row can still shrink its own.
+    let lsz = jnum(s, "label_size", jnum(props, "label_size", 14.0));
+    let pad = jnum(props, "text_pad", 8.0);
+    let value = jstr(props, "bind_value");
+    let (shown, color) = if value.is_empty() {
+        (jstr(props, "placeholder"), first_color(s, &["placeholder"], DIM))
+    } else {
+        (value, first_color(s, &["label", "color"], INK))
+    };
+    let (tx, ty) = (r.x + pad, r.y + (r.h - lsz) * 0.5);
+    push_text(out, tx, ty, shown, lsz, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+
+    if focused {
+        let cw = jnum(props, "caret_w", 2.0);
+        out.push(HudCommand::TextCaret {
+            x: tx,
+            y: ty,
+            w: cw,
+            h: lsz,
+            // The WHOLE buffer is the prefix — the bridge measures it and offsets the
+            // bar by the result, which is the entire reason this is its own command.
+            prefix: value.to_string(),
+            size: lsz,
+            color: first_color(s, &["caret"], RUNE),
+            layer: 0.0,
+            font: FontRole::Body,
+            max_x: r.x + r.w - pad - cw,
+        });
+    }
+}
+
+/// The text field's hit: the well claims on hover, and a click inside claims KEYBOARD
+/// focus through the verdict. The walker holds focus by node id, so its generic
+/// clicked-frame clear plus this claim is the whole focus life cycle — and a field
+/// authored without an `id` can never hold it (and so never shows a caret).
+///
+/// Deliberately NOT a [`HitShape::Rect`], even though its region IS the whole rect: that
+/// generic arm fires the node's `action` and TOGGLES its bind, and this control's bind
+/// holds the edited STRING — a rect claim would overwrite the buffer with a bool on
+/// every click, and would never claim focus at all.
+///
+/// Typed characters never arrive here: [`fold_typed`] owns the keyboard, in Rust, every
+/// frame — which is what keeps a typing frame with a parked pointer off the interaction
+/// path entirely. It reads no props, so it takes none.
+fn hit_text_field(m: Vec2, r: Rect, click: bool) -> HitVerdict {
+    let over = r.contains(m);
+    HitVerdict { hit: over, focus: (over && click).then_some(true), ..HitVerdict::default() }
+}
+
+// ── Containers (a surface that holds OTHER content) ──────────────────────────
+//
+// The two controls whose subject is a region rather than a value: a `list`
+// (a scrolling viewport with a bar) and a `context_menu` (a floating stack of
+// rows). Both share the container discipline — the component owns the SURFACE
+// (backdrop, bar, row washes) and the walker owns the placement — and both own a
+// bespoke hit for the same reason the value controls do: a wheel notch and a row
+// pick are not claim-and-fire.
+
+/// A `list`'s VIEWPORT: the node rect inset by its own pads (extents floored at 0,
+/// which [`Rect::inset_xy`] already guarantees). THE geometry — [`draw_list`]'s bar and
+/// [`hit_list`]'s clamp both measure from it, so the thumb can never disagree with the
+/// offset it maps.
+fn list_viewport(r: Rect, props: &Json) -> Rect {
+    r.inset_xy(jnum(props, "pad_x", 0.0), jnum(props, "pad_y", 0.0))
+}
+
+/// The **list** — a scrolling column region: an optional styled backdrop plus, when the
+/// content overflows the viewport, a right-edge scrollbar (track + proportional thumb
+/// with a grab floor).
+///
+/// The region owns only its SURFACE. The LAYOUT stays the walker's: [`resolve`] flows
+/// the children shifted by the bound offset and clips them to the viewport (a structural
+/// primitive), then hands this component the resulting [`scroll_content_h`] as
+/// `content_h` — the SAME number the placement used, so the bar here and the wheel clamp
+/// in [`hit_list`] can never disagree with where the rows actually landed.
+///
+/// The backdrop draws UNCLIPPED (the children carry the viewport clip, and the bar must
+/// stay visible at the edge) and ONLY when the node carries a style: an unstyled region
+/// is transparent structure. The bar reads its stops off that same block, falling to the
+/// neutral defaults when there is none — [`first_color`] / [`jnum`] on a `Null` behave
+/// exactly as a missing block does, so an unstyled region still gets a usable bar.
+///
+/// **props**: `bind_value` (the scroll offset, px) · `content_h` (walker-measured) ·
+/// `pad_x` / `pad_y` (the node's insets — the viewport is the padded rect).
+/// **style**: `bar_w` (4) · `bar_inset` (0, from the viewport's right edge) ·
+/// `thumb_min` (28, the grab floor) · `track` / `thumb` (the two bar colours) · plus the
+/// shared container backdrop keys ([`draw_panel_bg`]: `panel_bg` / `fill` / `border` /
+/// `radius` / …).
+fn draw_list(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    if !s.is_null() {
+        draw_panel_bg(r, s, out);
+    }
+    let inner = list_viewport(r, props);
+    let content_h = jnum(props, "content_h", 0.0);
+    let max = content_h - inner.h;
+    // Content that FITS gets no bar at all: there is nothing to scroll, and a permanent
+    // full-height thumb would only lie about that. Kept in this positive form (rather
+    // than an inverted early return) so a NaN `content_h` falls out here too.
+    if max > 0.0 {
+        let offset = jnum(props, "bind_value", 0.0).max(0.0).min(max);
+        let bw = jnum(s, "bar_w", 4.0);
+        let track =
+            Rect { x: inner.x + inner.w - bw - jnum(s, "bar_inset", 0.0), w: bw, ..inner };
+        push_rect(out, track, first_color(s, &["track"], STONE));
+        // Proportional thumb (viewport ÷ content, of the viewport) with a floor so a mile
+        // of content still leaves something to grab. The free travel shrinks by the same
+        // amount, which is what keeps a floored thumb parking exactly at the end.
+        let floor = jnum(s, "thumb_min", 28.0).min(inner.h);
+        let thumb_h = (inner.h * (inner.h / content_h)).max(floor).min(inner.h);
+        let ty = inner.y + (offset / max) * (inner.h - thumb_h);
+        push_rect(out, Rect { y: ty, h: thumb_h, ..track }, first_color(s, &["thumb"], SAP));
+    }
+}
+
+/// The list's hit. The WHOLE rect claims — a click on a scrolling region must not pick
+/// through to the scene behind it — and a wheel tick over it writes the offset: the
+/// current value minus wheel·speed, clamped to `[0, content − viewport]`.
+///
+/// Wheel-less frames return the bare CLAIM, deliberately: writing the offset every frame
+/// would have this control fight the scene for ownership of its own bind, so the value
+/// moves only when the wheel does. The write is uncaptured, so [`apply_hit_verdict`]
+/// commits it immediately — a notch is a discrete gesture, not a value in flight.
+///
+/// The value math runs in f64 (the stepper's rule, not the slider's): a notch ACCUMULATES
+/// into the model across ticks, and rounding the running offset through f32 every frame
+/// would drift a number the scene also reads. The geometry stays f32 — it is pixels, and
+/// it is shared with the draw.
+///
+/// The one control the walker's `click && enabled` pre-gate does not reach, because it
+/// answers no click: a wheel tick rides the PROPS, so a disabled region still scrolls.
+/// That is the behaviour as authored — `enabled` gates what a control WRITES on a press,
+/// and a scroll position is a view, not an edit.
+///
+/// **props**: `wheel` (this frame's tick — patched live by [`component_hit_props`], never
+/// cached) · `scroll_speed` (46 px per notch, off the NODE: how fast a region scrolls is
+/// authored behaviour, not skin) · `bind_value` · `content_h` · the viewport pads.
+fn hit_list(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
+    if !r.contains(m) {
+        return HitVerdict::default();
+    }
+    let mut v = HitVerdict { hit: true, ..HitVerdict::default() };
+    let wheel = jnum(props, "wheel", 0.0);
+    if wheel != 0.0 {
+        let max = (f64::from(jnum(props, "content_h", 0.0)) - f64::from(list_viewport(r, props).h))
+            .max(0.0);
+        let cur = props.get("bind_value").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        let speed = f64::from(jnum(props, "scroll_speed", 46.0));
+        // Clamped in the module's own order — NOT `f64::clamp`, whose `min > max`
+        // contract would panic if a future edit let the ceiling go negative.
+        v.value = Some(Value::Number((cur - f64::from(wheel) * speed).max(0.0).min(max)));
+    }
+    v
+}
+
+/// The `i`-th (0-based) menu **row**: a full-width, `row_h`-tall band stacked from the
+/// TOP of the menu rect — THE geometry, shared by [`draw_context_menu`] and
+/// [`hit_context_menu`] so a row's wash and its click region can never disagree. The same
+/// stacking [`select_row`] lays a popup's options with, which is why the two read as one
+/// control.
+///
+/// Deliberately UNBOUNDED by the rect: a menu with more items than its authored height
+/// covers lays rows past the bottom, and those rows are real (see [`hit_context_menu`]).
+fn menu_row(r: Rect, row_h: f32, i: usize) -> Rect {
+    Rect { y: r.y + i as f32 * row_h, h: row_h, ..r }
+}
+
+/// The **context menu** — a standalone floating menu (DS `ContextMenu`), the reusable
+/// form of the popup a `select` draws inline. THE NODE RECT IS THE MENU; its items ride
+/// as CHILD DATA, each carrying a `label` (or `text`), an optional right-aligned `hint`
+/// keybind, `active` / `disabled` bools, and a `divider` flag that spends the whole band
+/// on a hairline instead of a row.
+///
+/// It reuses the settings dropdown's menu block verbatim, so a menu and a `select` popup
+/// are the same object to the eye — that shared block is why the row washes inset by
+/// `row_pad` and the labels sit `pad_x` in, rather than at numbers of this component's
+/// own choosing.
+///
+/// Rows stack from the TOP at `row_h` and may run PAST the authored bottom: such a row
+/// still hover-washes here and still fires in [`hit_context_menu`], though only the
+/// authored rect ever CLAIMS the pointer.
+///
+/// FLOATING is the author's job, not the component's: a `layer` prop on the node lifts
+/// the whole subtree in [`run_ui`]. A `select` has to lift its popup internally because
+/// field and popup share one node; a context_menu owns its node, so it needs no internal
+/// lift and deliberately has none.
+///
+/// **props**: `children` (the rows) · `mx` / `my` (the pointer, for the hover wash).
+/// **style** (the shared menu block): `top` / `bot` (backdrop stops) · `border` +
+/// `border_w` (1) · `radius` (3) · `row_h` (30) · `row_pad` (4, the wash's inset each
+/// side) · `pad_x` (14, the label's inset) · `hint_pad` (falls to `pad_x`) ·
+/// `label_size` (15) · `label` / `sel_label` (falls to `label`) / `disabled` (falls to
+/// `label`) / `hint` · `sel_bg` / `hover_bg` (row washes) · `divider` (falls to `border`)
+/// + `divider_inset` (8) / `divider_h` (1, the hairline).
+fn draw_context_menu(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let st = props.get("style").unwrap_or(&Json::Null);
+
+    // Menu backdrop: top→bot fill, rounded, and a hairline edge only when the block gives
+    // one an alpha. Its stops are the popup's OWN `top`/`bot` keys, not the container
+    // alias chain — routing this through `draw_panel_bg` would silently honour
+    // `overlay`/`panel_bg`/`bg`/`fill` fallbacks a menu block never carried. Unlike a
+    // `list`, it draws unconditionally: a menu with no surface is not a menu.
+    let top = first_color(st, &["top"], STONE);
+    push_panel(
+        out,
+        r,
+        top,
+        Some(first_color(st, &["bot"], top)),
+        jnum(st, "radius", 3.0),
+        first_color(st, &["border"], CLEAR),
+        jnum(st, "border_w", 1.0),
+    );
+
+    let row_h = jnum(st, "row_h", 30.0);
+    let msz = jnum(st, "label_size", 15.0);
+    let row_pad = jnum(st, "row_pad", 4.0);
+    let pad_x = jnum(st, "pad_x", 14.0);
+    let m = pointer(props);
+    for (i, c) in jkids(props).iter().enumerate() {
+        let row = menu_row(r, row_h, i);
+        if jbool(c, "divider") {
+            // A divider spends its whole band on one centred hairline — no wash, no
+            // label, and (in the hit) no click.
+            let inset = jnum(st, "divider_inset", 8.0);
+            push_rect(
+                out,
+                Rect {
+                    x: r.x + inset,
+                    y: row.y + (row_h * 0.5).floor(),
+                    w: (r.w - 2.0 * inset).max(0.0),
+                    h: jnum(st, "divider_h", 1.0),
+                },
+                first_color(st, &["divider", "border"], DIM),
+            );
+            continue;
+        }
+        let (disabled, active) = (jbool(c, "disabled"), jbool(c, "active"));
+        // Row wash, inset each side so the menu's own edge stays visible around it: an
+        // active row takes the selection fill and KEEPS it under the pointer; only a live
+        // row hovers, so a disabled one never promises a click it will not honour.
+        let wash = if active {
+            Some(first_color(st, &["sel_bg"], SAP))
+        } else if !disabled && row.contains(m) {
+            Some(first_color(st, &["hover_bg"], STONE))
+        } else {
+            None
+        };
+        if let Some(color) = wash {
+            push_rect(
+                out,
+                Rect { x: r.x + row_pad, w: (r.w - 2.0 * row_pad).max(0.0), ..row },
+                color,
+            );
+        }
+        // Label (left): disabled dims, active takes the selected-label colour.
+        let lc = match (disabled, active) {
+            (true, _) => first_color(st, &["disabled", "label"], DIM),
+            (_, true) => first_color(st, &["sel_label", "label"], INK),
+            _ => first_color(st, &["label"], INK),
+        };
+        // `label` else `text`, by PRESENCE — an authored `label` shadows `text` even when
+        // it is not display copy, which is the module's own selection rule and `jstr`'s
+        // ruling about what counts as text.
+        let label = if jopt(c, "label").is_some() { jstr(c, "label") } else { jstr(c, "text") };
+        let ty = row.y + (row_h - msz) * 0.5;
+        push_text(out, r.x + pad_x, ty, label, msz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        // Optional right-aligned keybind hint, always dim — a shortcut is a reminder,
+        // never competition for the label. Only a STRING is a hint (a stray number would
+        // be an authoring error, and drawing nothing is how it shows).
+        if let Some(hint) = c.get("hint").and_then(|h| h.as_str()) {
+            let hc = first_color(st, &["hint"], DIM);
+            let hx = r.x + r.w - jnum(st, "hint_pad", pad_x);
+            push_text(out, hx, ty, hint, msz, hc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+        }
+    }
+}
+
+/// The context menu's hit. The AUTHORED rect claims the pointer — a gap, a divider or a
+/// disabled row must not pick through to the scene behind an open menu — while the ROW
+/// loop is deliberately ungated by that rect, so a menu taller than its authored box
+/// still fires the rows below it.
+///
+/// The verdict NAMES the picked row 1-based (`activate_child`) and the walker fires that
+/// CHILD's `action`: the items are data of the menu node, so the menu is the dispatch
+/// surface and the row is only an index. Dividers and disabled rows are inert.
+///
+/// No early exit — the LAST match wins, so a click exactly on a shared row edge (both
+/// bands contain it, [`Rect::contains`] being inclusive) resolves to the lower row rather
+/// than firing two.
+fn hit_context_menu(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
+    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    if !click {
+        return v;
+    }
+    let row_h = jnum(props.get("style").unwrap_or(&Json::Null), "row_h", 30.0);
+    for (i, c) in jkids(props).iter().enumerate() {
+        if !jbool(c, "divider") && !jbool(c, "disabled") && menu_row(r, row_h, i).contains(m) {
+            v.activate_child = Some(i + 1);
+        }
+    }
+    v
+}
+
+/// The **gauge** — a read-only condition read-out: a stone track with a highlighted
+/// *habitable band* between `lo` and `hi`, and a marker at the bound value — green
+/// (`marker_in`) while the reading sits INSIDE the band, caution-coloured (`marker`)
+/// outside it.
+///
+/// A missing or NEGATIVE reading means *no signal yet*, not zero: the bar is washed
+/// with `no_signal` and NO marker is drawn. That distinction is the whole point of the
+/// control — an unobserved axis must never read as one pinned at its floor, which is
+/// exactly what a marker parked at the left edge would claim.
+///
+/// The band is STATIC observer data authored on the NODE (`lo` / `hi` props — not a
+/// style, not a bind); only the value moves, which is why one proto serves all five
+/// habitability axes.
+///
+/// Presentational: the reading and the band live in the Model (the habitability
+/// observer publishes them), the gauge owns only how they DRAW, and it never claims
+/// the pointer.
+///
+/// **props**: `lo` (0.3) · `hi` (0.7) — the band, in bind units · `bind_value` — the
+/// reading (absent, non-numeric or negative ⇒ no signal).
+/// **style**: `track` (the bar) · `band` (the habitable zone) · `marker` +
+/// `marker_in` (the in-band colour, falling back to `marker`) · `marker_w` (4) ·
+/// `marker_over` (3 — how far the marker overhangs the track at each end) · `sheen` +
+/// `sheen_h` (1, the top hairline) · `no_signal` (the no-reading wash).
+fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let lo = jnum(props, "lo", 0.3);
+    let hi = jnum(props, "hi", 0.7);
+
+    push_rect(out, r, first_color(s, &["track"], WELL));
+    // The habitable band — the green zone in the middle of the bar.
+    push_rect(
+        out,
+        Rect { x: r.x + r.w * lo, y: r.y, w: r.w * (hi - lo), h: r.h },
+        first_color(s, &["band"], BAND),
+    );
+    // The top hairline. This and the `no_signal` wash below are gated on ALPHA where
+    // the module tested PRESENCE: a stop authored fully transparent painted an
+    // invisible rule there and emits nothing here — identical pixels, one command
+    // fewer, and the guard `resource_gauge` already used for its own sheen.
+    let sheen = first_color(s, &["sheen"], CLEAR);
+    if sheen[3] > 0.0 {
+        push_rect(out, Rect { h: jnum(s, "sheen_h", 1.0), ..r }, sheen);
+    }
+
+    // No signal yet: wash the whole bar out and stop. A NON-NUMERIC reading takes this
+    // branch too (the module's `type(value) ~= "number"` guard) — "the observer
+    // published nothing usable" and "the observer published nothing" are the same fact
+    // to a read-out, and so is a NaN.
+    let Some(value) =
+        props.get("bind_value").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| *v >= 0.0)
+    else {
+        let wash = first_color(s, &["no_signal"], CLEAR);
+        if wash[3] > 0.0 {
+            push_rect(out, r, wash);
+        }
+        return;
+    };
+
+    // The marker sits at the CLAMPED position but takes its colour from the RAW
+    // reading, so a value past the end of the track still reports out-of-band instead
+    // of being dragged into the green by the clamp.
+    let keys: &[&str] =
+        if value >= lo && value <= hi { &["marker_in", "marker"] } else { &["marker"] };
+    let mw = jnum(s, "marker_w", 4.0);
+    // A caliper ACROSS the bar rather than a fill inside it: the marker overhangs the
+    // track by `marker_over` at each end, which is what keeps it readable over the band.
+    let over = jnum(s, "marker_over", 3.0);
+    push_rect(
+        out,
+        Rect {
+            x: r.x + r.w * saturate(value) - mw * 0.5,
+            y: r.y - over,
+            w: mw,
+            h: r.h + over * 2.0,
+        },
+        first_color(s, keys, MARKER),
+    );
+}
+
+/// The **resource gauge** — the DS resource bar: a sunk stone track with a lit gradient
+/// fill, an optional caps label row above it (label left, readout right) and a `low`
+/// warning state that swaps the rim and the label to blood.
+///
+/// Distinct from [`draw_gauge`], which is a band-and-marker READ-OUT: this is a FILLED
+/// FRACTION. ONE style block serves every bar — `track` / `border` / `radius` / `pad` /
+/// `sheen` are shared and the TONE picks its own `<tone>_top` / `_bot` / `_label` /
+/// `_border` stops out of that same block (the badge precedent), so a new resource is a
+/// token triple, not a new component. Only `cast` authors a `<tone>_border` today (its
+/// bronze rim); every other tone falls through to the shared `border`, and dropping
+/// that head from the chain would silently strip the cast bar's rim.
+///
+/// The LABEL row is optional and reserves height off the top: a bar with no label IS
+/// the whole rect (the compact hotbar variant), and a label row that ate the node draws
+/// no track at all rather than a smeared one.
+///
+/// Presentational: a bar reports state and never claims the pointer.
+///
+/// **props**: `bind_value` — the fill fraction, clamped to 0..=1 · `tone` (`health`) —
+/// `health` / `mana` / `stamina` / `cast`, or any tone the block carries stops for; a
+/// non-string falls back to `health` · `label` — the caps row's copy, empty ⇒ no row ·
+/// `readout` — pre-formatted TEXT for the right of that row (a bound NUMBER reads as
+/// empty, the tightening `label` took when the button moved) · `low` — the warning state.
+/// **style**: `track` · `border` + `<tone>_border` + `low_border` · `border_w` (1, the
+/// rim drawn only when its colour carries alpha) · `radius` (10, capped at half the
+/// track height so a short bar reads as a capsule) · `pad` (2, the fill's inset) ·
+/// `<tone>_top` / `<tone>_bot` (the fill's two stops) · `sheen` + `sheen_inset` (1) +
+/// `sheen_h` (1) · `label_size` (10) · `label_gap` (6, the row's clearance over the
+/// track) · `<tone>_label` / `label` / `low_label` · `readout_size` (12) ·
+/// `readout_color`.
+fn draw_resource_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let tone = props.get("tone").and_then(|v| v.as_str()).unwrap_or("health");
+    let low = jbool(props, "low");
+
+    // The optional caps label row; the track takes whatever height is left.
+    let label_sz = jnum(s, "label_size", 10.0);
+    let (mut track_y, mut track_h) = (r.y, r.h);
+    let label = jstr(props, "label");
+    if !label.is_empty() {
+        let tone_label = format!("{tone}_label");
+        // The warning label is its OWN stop with no tone fallback — a blood label must
+        // never quietly come back as the resource's colour.
+        let label_color = if low {
+            first_color(s, &["low_label"], INK)
+        } else {
+            first_color(s, &[tone_label.as_str(), "label"], INK)
+        };
+        push_text(out, r.x, r.y, label, label_sz, label_color, TextAlign::Left, FontRole::Label, false, false, -1.0, None);
+        // The readout keeps the SHARED colour in every state: the label carries the tone
+        // and the warning, the number stays legible.
+        let readout = jstr(props, "readout");
+        if !readout.is_empty() {
+            let color = first_color(s, &["readout_color"], INK);
+            push_text(out, r.x + r.w, r.y, readout, jnum(s, "readout_size", 12.0), color, TextAlign::Right, FontRole::Label, false, false, -1.0, None);
+        }
+        let row = label_sz + jnum(s, "label_gap", 6.0);
+        track_y = r.y + row;
+        track_h = r.h - row;
+    }
+    // A label row that ate the whole node leaves no bar worth drawing.
+    if track_h <= 2.0 {
+        return;
+    }
+
+    // The sunk track: a flat well under a hairline rim, its radius capped at half the
+    // height so a short bar reads as a capsule rather than a clipped box.
+    let radius = jnum(s, "radius", 10.0).min(track_h * 0.5);
+    let tone_border = format!("{tone}_border");
+    let border = if low {
+        first_color(s, &["low_border", "border"], CLEAR)
+    } else {
+        first_color(s, &[tone_border.as_str(), "border"], CLEAR)
+    };
+    let track = Rect { x: r.x, y: track_y, w: r.w, h: track_h };
+    push_panel(out, track, first_color(s, &["track"], WELL), None, radius, border, jnum(s, "border_w", 1.0));
+
+    // The lit fill: the tone's two-stop gradient inset by `pad`, plus a sheen along its
+    // top edge. A sub-pixel fill is dropped — a bar at half a percent would otherwise
+    // draw a sliver that reads as a rounding artefact rather than as a value.
+    let pad = jnum(s, "pad", 2.0);
+    let frac = saturate(props.get("bind_value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+    let fw = (r.w - 2.0 * pad) * frac;
+    if fw > 1.0 {
+        let (tone_top, tone_bot) = (format!("{tone}_top"), format!("{tone}_bot"));
+        let top = first_color(s, &[tone_top.as_str()], INK);
+        let bot = first_color(s, &[tone_bot.as_str()], top);
+        let fr = Rect { x: r.x + pad, y: track_y + pad, w: fw, h: track_h - 2.0 * pad };
+        push_panel(out, fr, top, Some(bot), (radius - pad).max(0.0), CLEAR, 0.0);
+        let sheen = first_color(s, &["sheen"], CLEAR);
+        if sheen[3] > 0.0 {
+            let inset = jnum(s, "sheen_inset", 1.0);
+            push_rect(
+                out,
+                Rect { x: fr.x + inset, w: (fr.w - 2.0 * inset).max(0.0), h: jnum(s, "sheen_h", 1.0), ..fr },
+                sheen,
+            );
+        }
+    }
+}
+
+/// The **stat dot** — the DS Septisigil gem-dot, keyed by prism hue (white / yellow /
+/// red / orange / black / blue / green). One colour means one stat AND its two schools,
+/// so the same dot serves a stat list, a school tag and a legend without any of them
+/// agreeing on a second vocabulary.
+///
+/// Hues are a NESTED block (`hues.<name>` — a `fill` + `glow` pair off the `sig_*`
+/// ramp), read straight off that block, which is why the module's local `col()` needed
+/// no Rust twin: [`first_color`] already is that reader. The name INDEXES the block, so
+/// the `blue` default fires only for an ABSENT `hue` — a mistyped bind delivering a
+/// number misses (a key `hues` cannot hold) and the flat floors show through, exactly
+/// as the module's `(s.hues or {})[props.hue or "blue"] or {}` did.
+///
+/// The glow ring is ON by default and `glow = false` flattens it — a legend row wants
+/// the colour, not the light. Only a real `false` opts out, so a bind delivering
+/// something else still glows.
+///
+/// Presentational: a dot is a legend, and never claims the pointer.
+///
+/// **props**: `hue` (`blue`) — names a `hues.<name>` block · `glow` — `false` flattens
+/// the ring.
+/// **style**: `hues.<name>.fill` / `.glow` · `border` (the gem's rim colour) ·
+/// `border_w` (1) · `radius` (half the dot — a rounded sigil is a smaller radius) ·
+/// `glow_pad` (4, how far the ring stands off the gem) · `glow_feather` (5).
+fn draw_stat_dot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    // The largest inscribed square, centred — a true circle in any slot.
+    let d = r.w.min(r.h);
+    let (cx, cy) = (r.x + (r.w - d) * 0.5, r.y + (r.h - d) * 0.5);
+    let name = match props.get("hue") {
+        // Absent / null / `false` are the Lua-falsy cases the `or "blue"` default was
+        // written for; any other non-name is a lookup that misses on purpose.
+        None | Some(Json::Null) | Some(Json::Bool(false)) => Some("blue"),
+        Some(Json::String(n)) => Some(n.as_str()),
+        _ => None,
+    };
+    let hue = name.and_then(|n| s.get("hues").and_then(|h| h.get(n))).unwrap_or(&Json::Null);
+    let radius = jnum(s, "radius", d * 0.5);
+
+    // The glow is on unless the node says EXACTLY `false`: opting out is a deliberate
+    // authoring act, so anything else (absent, or a non-bool) still lights.
+    if props.get("glow").and_then(|v| v.as_bool()) != Some(false) {
+        let glow = first_color(hue, &["glow"], CLEAR);
+        if glow[3] > 0.0 {
+            let pad = jnum(s, "glow_pad", 4.0);
+            // A feathered disc standing `pad` off the gem on every side. Its radius
+            // tracks the gem's, so a rounded-square sigil keeps a matching halo.
+            out.push(HudCommand::Panel {
+                x: cx - pad,
+                y: cy - pad,
+                w: d + pad * 2.0,
+                h: d + pad * 2.0,
+                color: glow,
+                color2: glow,
+                grad: 0.0,
+                radius: radius + pad,
+                border: 0.0,
+                border_color: CLEAR,
+                feather: jnum(s, "glow_feather", 5.0),
+                layer: 0.0,
+            });
+        }
+    }
+
+    // The gem, rimmed at `border_w` UNCONDITIONALLY — not through [`push_panel`]'s
+    // alpha gate, because the two differ here: the shader's band replaces the outer
+    // ring with the border colour, so a transparent rim cuts a 1px notch out of the
+    // gem's edge. That is how a dot with no authored `border` has always drawn, and
+    // `border_w: 0` is the way to ask for a flat disc instead.
+    let fill = first_color(hue, &["fill"], SIG_BLUE);
+    out.push(HudCommand::Panel {
+        x: cx,
+        y: cy,
+        w: d,
+        h: d,
+        color: fill,
+        color2: fill,
+        grad: 0.0,
+        radius,
+        border: jnum(s, "border_w", 1.0),
+        border_color: first_color(s, &["border"], CLEAR),
+        feather: 0.0,
+        layer: 0.0,
+    });
+}
+
+/// The **action slot** — the DS ActionSlot: a sunk hotbar recess with a faint bronze
+/// rim one step inside it, a centred rune glyph over a rune-light halo, a keybind tag
+/// top-left, a charge count bottom-right, and a cooldown veil that recedes as `cd`
+/// falls 1→0. `active` lights the sapphire edge and its glow.
+///
+/// The DS cooldown is a CONIC wipe and the engine has no arc primitive, so the veil is
+/// a top-down vertical wipe (the interior's height × `cd`) — the same information in
+/// one rect. That substitution is deliberate, and is why the veil is one panel rather
+/// than a fan of them.
+///
+/// The HIT is the generic full-rect claim ([`rust_hit_shape`]): the whole recess is the
+/// target and a click fires the node's `action`. A slot has no sub-region — the rim,
+/// the tag and the count are all read-out, so a click anywhere on it casts.
+///
+/// **props** (each also arrives through the generic `<name>_bind` channel): `rune` —
+/// the ability glyph · `key` — the keybind tag · `charges` — the count; a NUMBER
+/// truncates toward zero (the `%d` it was formatted with) and a STRING passes through
+/// (a `"3/5"`, an `"∞"`) · `cd` — the cooldown fraction, clamped to 0..=1 · `active` —
+/// the lit-ring state.
+/// **style**: `radius` (4) · `bg_top` / `bg_bot` (the recess gradient) · `border` /
+/// `active_border` (falling back to `border`, so a block naming one edge still rims a
+/// lit slot) / `border_w` (1, the edge drawn only when its colour carries alpha) ·
+/// `active_glow` + `glow_pad` (3) + `glow_feather` (4) · `rim` + `rim_w` (1) · `inset`
+/// (1 — how far inside the slab the rim and the veil sit, the inner radius following) ·
+/// `rune_color` · `rune_scale` (0.42 of the slot height) · `rune_halo` + `halo_scale`
+/// (1.2 of the glyph) + `halo_feather` (6) · `key_color` / `key_size` (10) / `key_x` (4)
+/// / `key_y` (2) · `charge_color` / `charge_size` (11) / `charge_x` (5, from the right
+/// edge) / `charge_y` (2, from the bottom) · `cd_veil`.
+fn draw_action_slot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let active = jbool(props, "active");
+    let radius = jnum(s, "radius", 4.0);
+
+    // An ACTIVE slot glows BEFORE the slab, exactly like a hovered button: a feathered
+    // disc standing `glow_pad` off every edge, its radius tracking the slab's.
+    if active {
+        let glow = first_color(s, &["active_glow"], CLEAR);
+        if glow[3] > 0.0 {
+            let pad = jnum(s, "glow_pad", 3.0);
+            out.push(HudCommand::Panel {
+                x: r.x - pad,
+                y: r.y - pad,
+                w: r.w + pad * 2.0,
+                h: r.h + pad * 2.0,
+                color: glow,
+                color2: glow,
+                grad: 0.0,
+                radius: radius + pad,
+                border: 0.0,
+                border_color: CLEAR,
+                feather: jnum(s, "glow_feather", 4.0),
+                layer: 0.0,
+            });
+        }
+    }
+
+    // The recess itself: a dark vertical slab whose edge swaps to sapphire while active.
+    let border = if active {
+        first_color(s, &["active_border", "border"], CLEAR)
+    } else {
+        first_color(s, &["border"], CLEAR)
+    };
+    let top = first_color(s, &["bg_top"], STONE_BTN);
+    let bot = first_color(s, &["bg_bot"], WELL);
+    push_panel(out, r, top, Some(bot), radius, border, jnum(s, "border_w", 1.0));
+
+    // The recess INTERIOR — one step in from the slab, with the radius stepped down to
+    // match. The bronze rim and the cooldown veil are the two things that live in it, so
+    // they share the one `inset` rather than agreeing on a literal twice.
+    let inset = jnum(s, "inset", 1.0);
+    let inner = r.inset(inset);
+    let inner_radius = (radius - inset).max(0.0);
+    let rim = first_color(s, &["rim"], CLEAR);
+    if rim[3] > 0.0 {
+        push_panel(out, inner, CLEAR, None, inner_radius, rim, jnum(s, "rim_w", 1.0));
+    }
+
+    // The rune glyph, centred, over its halo. The size is a FRACTION of the slot height
+    // rounded to whole pixels — a glyph on a half pixel reads as a smudge.
+    let rune = jstr(props, "rune");
+    if !rune.is_empty() {
+        let gsz = (r.h * jnum(s, "rune_scale", 0.42) + 0.5).floor();
+        let halo = first_color(s, &["rune_halo"], CLEAR);
+        if halo[3] > 0.0 {
+            let hw = gsz * jnum(s, "halo_scale", 1.2);
+            out.push(HudCommand::Panel {
+                x: r.x + (r.w - hw) * 0.5,
+                y: r.y + (r.h - hw) * 0.5,
+                w: hw,
+                h: hw,
+                color: halo,
+                color2: halo,
+                grad: 0.0,
+                radius: hw * 0.5,
+                border: 0.0,
+                border_color: CLEAR,
+                feather: jnum(s, "halo_feather", 6.0),
+                layer: 0.0,
+            });
+        }
+        push_text(out, r.x + r.w * 0.5, r.y + (r.h - gsz) * 0.5, rune, gsz, first_color(s, &["rune_color"], BRONZE), TextAlign::Center, FontRole::Rune, false, false, -1.0, None);
+    }
+
+    // The keybind tag, top-left.
+    let key = jstr(props, "key");
+    if !key.is_empty() {
+        let ksz = jnum(s, "key_size", 10.0);
+        push_text(out, r.x + jnum(s, "key_x", 4.0), r.y + jnum(s, "key_y", 2.0), key, ksz, first_color(s, &["key_color"], BRONZE), TextAlign::Left, FontRole::Label, false, false, -1.0, None);
+    }
+
+    // The charge count, bottom-right. A NUMBER is truncated toward zero — the `%d` the
+    // module formatted it with — and a STRING is passed through, so a slot can read
+    // "3/5" or "∞" as well as "3". Anything else has nothing to say and draws no row.
+    let charges = match jopt(props, "charges") {
+        Some(Json::Number(n)) => n.as_f64().map(|v| (v as i64).to_string()).unwrap_or_default(),
+        Some(Json::String(t)) => t.clone(),
+        _ => String::new(),
+    };
+    if !charges.is_empty() {
+        let csz = jnum(s, "charge_size", 11.0);
+        let y = r.y + r.h - csz - jnum(s, "charge_y", 2.0);
+        push_text(out, r.x + r.w - jnum(s, "charge_x", 5.0), y, &charges, csz, first_color(s, &["charge_color"], BRONZE), TextAlign::Right, FontRole::Label, false, false, -1.0, None);
+    }
+
+    // The cooldown veil: a top-down wipe over the `cd` fraction of the interior.
+    // Unguarded by the veil colour's alpha, exactly as the module drew it — a block
+    // naming no `cd_veil` still spends its one transparent command while cooling.
+    let cd = saturate(jnum(props, "cd", 0.0));
+    if cd > 0.0 {
+        let veil = Rect { h: inner.h * cd, ..inner };
+        push_panel(out, veil, first_color(s, &["cd_veil"], CLEAR), None, inner_radius, CLEAR, 0.0);
+    }
+}
+
+/// The **medallion** — the DS PortraitMedallion: a circular gem well set in a metal
+/// ring. The ring is a named VARIANT (`bronze` / `sapphire` / `danger` / `ghost` /
+/// `gold` — a metal gradient pair under `style.rings`), and the sapphire one, the
+/// active-player ring, adds an outer glow disc and a rune-light outline.
+///
+/// Variants are a NESTED block read straight off `rings.<name>`, which is why the
+/// module's local `col()` needed no Rust twin — [`first_color`] already is that reader
+/// (the `stat_dot` hue precedent). The name INDEXES the block, so the `bronze` default
+/// fires only for an ABSENT `ring`: a mistyped bind delivering a number misses (a key
+/// `rings` cannot hold) and the flat bronze floors show through, exactly as the
+/// module's `(s.rings or {})[props.ring or "bronze"] or {}` did.
+///
+/// The well shows a rune glyph. A texture PORTRAIT waits on a circular sprite mask
+/// (a primitive gap, logged in the Engine catalog) — the tier move is not the place to
+/// close it.
+///
+/// Presentational: a medallion is a read-out and never claims the pointer.
+///
+/// **props**: `ring` (`bronze`) — names a `rings.<name>` block, also via `ring_bind` ·
+/// `rune` — the glyph in the well · `rune_color` — a resolved rgba override (a dotted
+/// path prop), winning over the style's.
+/// **style**: `rings.<name>.top` / `.bot` (the metal pair) / `.glow` / `.halo` ·
+/// `glow_pad` (5, how far the glow disc and the halo outline stand off the ring) ·
+/// `glow_feather` (8) · `halo_w` (1) · `ring_w` (3, the metal band's width) · `bg_top`
+/// / `bg_bot` (the well's gradient) · `rim` + `rim_w` (2) · `rune_color` ·
+/// `rune_scale` (0.5 of the medallion's diameter).
+fn draw_medallion(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    // The largest inscribed square, centred — a true circle in any slot.
+    let d = r.w.min(r.h);
+    let disc = Rect { x: r.x + (r.w - d) * 0.5, y: r.y + (r.h - d) * 0.5, w: d, h: d };
+    let name = match props.get("ring") {
+        // Absent / null / `false` are the Lua-falsy cases the `or "bronze"` default was
+        // written for; any other non-name is a lookup that misses on purpose.
+        None | Some(Json::Null) | Some(Json::Bool(false)) => Some("bronze"),
+        Some(Json::String(n)) => Some(n.as_str()),
+        _ => None,
+    };
+    let ring = name.and_then(|n| s.get("rings").and_then(|r| r.get(n))).unwrap_or(&Json::Null);
+
+    // The ACTIVE ring's light, outside the metal: a feathered glow disc under a thin
+    // rune-light outline, both standing `glow_pad` off the ring on every side.
+    let pad = jnum(s, "glow_pad", 5.0);
+    let halo_box = disc.inset(-pad);
+    let halo_radius = halo_box.w * 0.5;
+    let glow = first_color(ring, &["glow"], CLEAR);
+    if glow[3] > 0.0 {
+        out.push(HudCommand::Panel {
+            x: halo_box.x,
+            y: halo_box.y,
+            w: halo_box.w,
+            h: halo_box.h,
+            color: glow,
+            color2: glow,
+            grad: 0.0,
+            radius: halo_radius,
+            border: 0.0,
+            border_color: CLEAR,
+            feather: jnum(s, "glow_feather", 8.0),
+            layer: 0.0,
+        });
+    }
+    let halo = first_color(ring, &["halo"], CLEAR);
+    if halo[3] > 0.0 {
+        push_panel(out, halo_box, CLEAR, None, halo_radius, halo, jnum(s, "halo_w", 1.0));
+    }
+
+    // The metal ring: a full-round slab in the variant's gradient pair.
+    let ring_top = first_color(ring, &["top"], BRONZE);
+    push_panel(out, disc, ring_top, Some(first_color(ring, &["bot"], BRONZE_DIM)), d * 0.5, CLEAR, 0.0);
+
+    // The gem well inside the band: a dark radial look drawn as a vertical pair. A band
+    // wider than the medallion leaves no well worth drawing.
+    let well = disc.inset(jnum(s, "ring_w", 3.0));
+    if well.w > 2.0 {
+        let well_top = first_color(s, &["bg_top"], CLEAR);
+        let well_bot = first_color(s, &["bg_bot"], well_top);
+        // Rimmed UNCONDITIONALLY, not through [`push_panel`]'s alpha gate: the shader's
+        // band replaces the well's outer ring with the border colour, so a transparent
+        // `rim` deliberately cuts the well's edge back to the metal behind it. That is
+        // how a medallion with no authored rim has always drawn (the `stat_dot` gem
+        // reads the same way); `rim_w: 0` is the way to ask for a flat well instead.
+        out.push(HudCommand::Panel {
+            x: well.x,
+            y: well.y,
+            w: well.w,
+            h: well.h,
+            color: well_top,
+            color2: well_bot,
+            grad: if well_bot == well_top { 0.0 } else { 1.0 },
+            radius: well.w * 0.5,
+            border: jnum(s, "rim_w", 2.0),
+            border_color: first_color(s, &["rim"], CLEAR),
+            feather: 0.0,
+            layer: 0.0,
+        });
+    }
+
+    // The rune glyph, centred in the well. Its size is a FRACTION of the medallion,
+    // rounded to whole pixels — a glyph on a half pixel reads as a smudge.
+    let rune = jstr(props, "rune");
+    if !rune.is_empty() {
+        let gsz = (d * jnum(s, "rune_scale", 0.5) + 0.5).floor();
+        // A dotted `rune_color` prop (already resolved to rgba by the walker) overrides
+        // the style block's — one unit's affinity colour without a style block per unit.
+        let color = first_color(props, &["rune_color"], first_color(s, &["rune_color"], RUNE));
+        push_text(out, disc.x + d * 0.5, disc.y + (d - gsz) * 0.5, rune, gsz, color, TextAlign::Center, FontRole::Rune, false, false, -1.0, None);
+    }
+}
+
+/// A badge's **pill**: `pad`-inset horizontally, the style's `h` tall (never taller
+/// than the node), vertically centred in the node rect.
+///
+/// THE geometry — [`draw_badge`] and [`hit_badge`] both read it, so what the eye sees
+/// and what the pointer claims can never drift apart, and the rim a style insets stays
+/// inert instead of becoming an invisible target. STYLE-owned rather than rect-owned so
+/// a chip dropped into a tall row stays a chip; an `h`-less style fills the node.
+fn badge_pill(r: Rect, s: &Json) -> Rect {
+    let pad = jnum(s, "pad", 0.0);
+    let sh = jnum(s, "h", r.h);
+    // A node with no height yet (measured before layout) leaves the style's own height
+    // standing alone rather than clamping the chip to nothing.
+    let h = if r.h > 0.0 { sh.min(r.h) } else { sh };
+    Rect { x: r.x + pad, y: r.y + ((r.h - h) * 0.5).max(0.0), w: (r.w - pad * 2.0).max(0.0), h }
+}
+
+/// The **badge** — a small rounded chip with a centred label: a `solid` badge fills
+/// bronze, otherwise its `tone` picks a background/label pair out of the one block.
+///
+/// TONE IS A PREFIX, not a fixed enum: any `tone` reads its own `<tone>_bg` /
+/// `<tone>_label` stops and falls through to the `neutral` pair when the block carries
+/// none — so a new chip colour is a token pair in `ui_elements.json`, not a new arm
+/// here (the pattern `resource_gauge` names as "the badge precedent"). The two DS tones
+/// that carry their own missing-key floor, `accent` (sapphire) and `bronze` (stone),
+/// keep it: their chains are exactly the module's, so a block naming only one of them
+/// still gets the colour it was drawn for.
+///
+/// `solid` WINS over any tone — the loudest state a badge has, and a row that sets both
+/// means the loud one.
+///
+/// **props**: `label` — the chip's copy · `solid` — the filled-bronze state (a STRICT
+/// bool) · `tone` (`neutral`) — the stop prefix · `label_size` (11, the style's own
+/// `label_size` overriding it).
+/// **style**: `pad` (0) · `h` (the node's height) · `radius` (half the pill — a full
+/// capsule) · `border` + `border_w` (1, the edge drawn only when `border` carries
+/// alpha) · `<tone>_bg` / `<tone>_label` · `solid_bg` / `solid_label` · `label_size`.
+fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = props.get("style").unwrap_or(&Json::Null);
+    let pill = badge_pill(r, s);
+
+    let (bg, label_color) = if jbool(props, "solid") {
+        (first_color(s, &["solid_bg"], INK), first_color(s, &["solid_label"], STONE))
+    } else {
+        // A non-string `tone` (a mistyped bind) reads as `neutral`, exactly as the
+        // module's two string compares both failing did.
+        match props.get("tone").and_then(|v| v.as_str()).unwrap_or("neutral") {
+            "accent" => {
+                (first_color(s, &["accent_bg"], SAP), first_color(s, &["accent_label"], INK))
+            }
+            "bronze" => {
+                (first_color(s, &["bronze_bg"], STONE), first_color(s, &["bronze_label"], INK))
+            }
+            other => {
+                let (bg, label) = (format!("{other}_bg"), format!("{other}_label"));
+                (
+                    first_color(s, &[bg.as_str(), "neutral_bg"], PANEL),
+                    first_color(s, &[label.as_str(), "neutral_label"], DIM),
+                )
+            }
+        }
+    };
+
+    let border = first_color(s, &["border"], CLEAR);
+    push_panel(out, pill, bg, None, jnum(s, "radius", pill.h * 0.5), border, jnum(s, "border_w", 1.0));
+    // The style's size wins over the node's, which is the one prop a dense strip tunes.
+    let lsz = jnum(s, "label_size", jnum(props, "label_size", 11.0));
+    push_text(out, pill.x + pill.w * 0.5, pill.y + (pill.h - lsz) * 0.5, jstr(props, "label"), lsz, label_color, TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+}
+
+/// The badge's tight region is its PILL — a style that insets the chip (`pad` / `h`)
+/// leaves the rim around it inert rather than claiming it.
+///
+/// A badge only CLAIMS: it is a status chip over UI surface, so the scene must not pick
+/// through it, but it writes no bind and fires no action. That is the whole verdict —
+/// which is why it needs a bespoke arm rather than [`HitShape::Rect`], whose claim
+/// would be the node rect and whose click would fire an action a chip does not have.
+fn hit_badge(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
+    let pill = badge_pill(r, props.get("style").unwrap_or(&Json::Null));
+    HitVerdict { hit: pill.contains(m), ..Default::default() }
+}
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
 
-/// A pill-toggle's geometry: the rounded **well** (a style-`h`-tall track centred
-/// in the node rect) plus one **cell** rect per option child — the inner strip
-/// (well inset by the style `pad`) split into equal segments. Draw & hit share it
-/// so they agree exactly, mirroring settings.lua's pill/segment draw.
+/// A numeric control's authored range — `min` (0) and `max` (1) off the node's own
+/// props. Read by the pad-nudge channel, the stepper/slider echo default (`min`) and
+/// commit-on-release, so all three agree on what "resting" means.
+///
+/// (The pill-toggle geometry doc that sat here belongs to [`pill_well`] /
+/// [`pill_cell`], where that arithmetic now lives again.)
 fn slider_range(node: &UiNode) -> (f32, f32) {
     (
         pnum(node, "min").map(|n| n as f32).unwrap_or(0.0),
@@ -2489,6 +5237,76 @@ fn first_color(v: &Json, keys: &[&str], dflt: [f32; 4]) -> [f32; 4] {
     dflt
 }
 
+/// A prop that is PRESENT — the `props.k ~= nil` test, in the engine.
+///
+/// A tree authored in Lua cannot hold a `nil` field at all, so an author who writes
+/// one means "authored nothing"; a null that survives the JSON marshal must read as
+/// ABSENT here too, or a control would treat that nothing as a value.
+fn jopt<'a>(v: &'a Json, key: &str) -> Option<&'a Json> {
+    v.get(key).filter(|x| !x.is_null())
+}
+
+/// A prop's display TEXT, else `""` — the engine twin of the `child.label or ""` idiom.
+///
+/// Only a JSON *string* is text: a numeric `label` reads as EMPTY rather than being
+/// coerced, exactly as [`draw_button`]'s label has since it moved to the engine tier.
+/// Display copy is a string — and a number showing up where copy belongs is a bug in
+/// the authored tree, not something to paper over.
+fn jstr<'a>(v: &'a Json, key: &str) -> &'a str {
+    v.get(key).and_then(|s| s.as_str()).unwrap_or_default()
+}
+
+/// A prop that is a JSON `true`, else false — the engine twin of a component's
+/// `props.k == true` test.
+///
+/// STRICT on purpose, exactly as those `== true` comparisons were: only a real boolean
+/// counts, so a stray number or string in a row's authored data never quietly turns it
+/// inert (which, for a menu row's `disabled`, would be a click that goes nowhere with
+/// nothing on screen to explain it).
+fn jbool(v: &Json, key: &str) -> bool {
+    v.get(key).and_then(|b| b.as_bool()).unwrap_or(false)
+}
+
+/// A control's option CHILDREN — the plain `{ value, label }` maps [`component_props`]
+/// passes down for the children-as-data kinds ([`no_descend`]). Empty when it has none.
+fn jkids(props: &Json) -> &[Json] {
+    props.get("children").and_then(|k| k.as_array()).map_or(&[][..], |k| k.as_slice())
+}
+
+/// The pointer, for a component that lights a sub-region it laid out itself (a tab cell,
+/// an option row). The walker injects `mx`/`my` every frame; the unreachable fallback
+/// keeps a props map built without one (a unit test) from hovering the origin.
+fn pointer(props: &Json) -> Vec2 {
+    Vec2::new(jnum(props, "mx", f32::NEG_INFINITY), jnum(props, "my", f32::NEG_INFINITY))
+}
+
+/// The LUA type name of an authored prop — for a component's complaint about it. The
+/// tree an author wrote is a Lua table however the engine happens to marshal it, so
+/// the complaint names the type they can see in their own file, not the JSON it
+/// arrived as.
+fn lua_type(v: Option<&Json>) -> &'static str {
+    match v {
+        None | Some(Json::Null) => "nil",
+        Some(Json::Bool(_)) => "boolean",
+        Some(Json::Number(_)) => "number",
+        Some(Json::String(_)) => "string",
+        Some(Json::Array(_) | Json::Object(_)) => "table",
+    }
+}
+
+/// Record a LOUD complaint about a node's authored DATA on the verdict, which
+/// [`apply_hit_verdict`] surfaces as a `tracing::warn!`. The FIRST wins, so a
+/// component says it once per node per hit.
+///
+/// This is the fail-loud path for data a component cannot act on (an option whose `value`
+/// is the wrong TYPE). A control that instead shrugged would leave the author staring at
+/// a strip that clicks to nothing, which is the difference between authorable and not.
+fn warn_once(v: &mut HitVerdict, msg: String) {
+    if v.warn.is_none() {
+        v.warn = Some(msg);
+    }
+}
+
 // Node-prop readers — thin wrappers over the shared `config` surface (read `node.props`).
 fn ptext<'a>(node: &'a UiNode, key: &str) -> Option<&'a str> {
     crate::config::text(&node.props, key)
@@ -2523,19 +5341,72 @@ fn eff_text<'a>(results: &'a ValueMap, model: &'a ValueMap, key: &str) -> Option
 }
 
 /// The effective value of a bound key — this frame's result edit, else the model — as a
-/// plain [`Value`], for [`component_props`] to hand a Lua component (checkbox → bool,
+/// plain [`Value`], for [`component_props`] to hand a component (checkbox → bool,
 /// slider → number, select → text).
 fn eff_value<'a>(results: &'a ValueMap, model: &'a ValueMap, key: &str) -> Option<&'a Value> {
     results.get(key).or_else(|| model.get(key))
 }
 
-/// A [`Value`] as its natural JSON scalar, for marshalling a prop to a Lua component.
+/// A [`Value`] as its natural JSON scalar, for marshalling a prop into a props map.
 fn value_to_json(v: &Value) -> Json {
     match v {
         Value::Bool(b) => Json::Bool(*b),
         Value::Number(n) => serde_json::json!(n),
         Value::Text(t) => Json::String(t.clone()),
     }
+}
+
+/// One flat tinted **rect** — the command-level sibling of [`push_panel`] /
+/// [`push_text`].
+///
+/// The legacy primitive, and still the right one for a 1px rule or a flat band: a
+/// [`HudCommand::Rect`] is the white texture tinted, with no radius, border or gradient
+/// to pay for. A component reaching for a corner radius wants [`push_panel`] instead.
+///
+/// Emitted at layer 0 like every other component command — the walker lifts a node's
+/// whole run onto its sub-layer afterwards, and a component that stacks WITHIN itself
+/// (a select's popup over its field) lifts its own run with [`offset_layer`].
+fn push_rect(out: &mut Vec<HudCommand>, r: Rect, color: [f32; 4]) {
+    out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color, layer: 0.0 });
+}
+
+/// One rounded-rect SDF **panel** with explicit colours — the command-level sibling
+/// of [`push_text`].
+///
+/// [`draw_panel_bg`] is the STYLE-BLOCK path: it reads a container's fill/border down
+/// the key-alias chains and draws its backdrop. This is the path a component takes
+/// once it has already PICKED its colours and is drawing a sub-box of its own rect —
+/// a checkbox's box, a toggle's knob — where the alias chain belongs to the component,
+/// not to the block.
+///
+/// `fill2` names the second gradient stop (`None` = solid) and `grad` follows the
+/// emitter's own default: 0 when the two stops match, 1 (vertical) when they differ.
+/// The edge draws at `border_w` px ONLY when `border` carries alpha — a transparent
+/// border colour means NO edge, never an invisible hairline eating a pixel of fill.
+fn push_panel(
+    out: &mut Vec<HudCommand>,
+    r: Rect,
+    fill: [f32; 4],
+    fill2: Option<[f32; 4]>,
+    radius: f32,
+    border: [f32; 4],
+    border_w: f32,
+) {
+    let fill2 = fill2.unwrap_or(fill);
+    out.push(HudCommand::Panel {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        color: fill,
+        color2: fill2,
+        grad: if fill == fill2 { 0.0 } else { 1.0 },
+        radius,
+        border: if border[3] > 0.0 { border_w } else { 0.0 },
+        border_color: border,
+        feather: 0.0,
+        layer: 0.0,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2548,6 +5419,37 @@ fn push_text(out: &mut Vec<HudCommand>, x: f32, y: f32, text: &str, size: f32, c
 const INK: [f32; 4] = [0.871, 0.847, 0.788, 1.0];
 const PANEL: [f32; 4] = [0.078, 0.09, 0.122, 1.0];
 const RUNE: [f32; 4] = [0.435, 0.592, 1.0, 1.0];
+const SAP: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
+const CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+/// Glyph-face resting tint — mirrors `$bronze`. The authored source is
+/// `pad_glyphs.color` in `ui_elements.json`; this is only the missing-key floor.
+const BRONZE: [f32; 4] = [0.722, 0.592, 0.353, 1.0];
+/// The dim half of the bronze pair — mirrors `$bronze_dim`; a medallion ring's bottom
+/// gradient stop when its variant block names no `bot`.
+const BRONZE_DIM: [f32; 4] = [0.431, 0.353, 0.204, 1.0];
+/// Activate-flash lit colour — mirrors `$rune_glow_hi` (`pad_glyphs.flash`).
+const FLASH_LIT: [f32; 4] = [0.616, 0.722, 1.0, 1.0];
+/// Dimmed ink — secondary/meta copy and the bottom rune pair. Mirrors `$ink_dim`.
+const DIM: [f32; 4] = [0.561, 0.541, 0.49, 1.0];
+/// The sunken stone a switch rests in — a toggle's OFF track. Mirrors `$stone1`
+/// (`settings.controls.toggle.off_bg` is the authored source; this is the floor).
+const STONE: [f32; 4] = [0.055, 0.063, 0.086, 1.0];
+/// The sunk-well floor — mirrors `$well`. A condition gauge's track, a resource bar's
+/// channel and an action slot's recess floor all bottom out here when their block names
+/// no `track` / `bg_bot`.
+const WELL: [f32; 4] = [0.039, 0.047, 0.063, 1.0];
+/// Raised button stone — mirrors `$stone_btn`; an action slot's lit top stop when its
+/// block names no `bg_top`. (Distinct from [`STONE`], the darker `$stone1` a switch
+/// rests in — the two are different tokens, not a rounding of each other.)
+const STONE_BTN: [f32; 4] = [0.125, 0.141, 0.18, 1.0];
+/// A condition gauge's habitable band — the translucent green zone. No `$token`
+/// mirrors it; the authored `pocepochs.hab.gauge` block carries the literal.
+const BAND: [f32; 4] = [0.184, 0.616, 0.357, 0.55];
+/// A condition gauge's out-of-band marker — mirrors `$stam_hi`.
+const MARKER: [f32; 4] = [0.941, 0.804, 0.416, 1.0];
+/// The septisigil blue gem — mirrors `$sig_blue`; a stat dot's hue when its block
+/// names none.
+const SIG_BLUE: [f32; 4] = [0.176, 0.373, 0.69, 1.0];
 
 #[cfg(test)]
 mod tests {
@@ -2611,59 +5513,12 @@ mod tests {
         UiInput { wheel, ..input_at(x, y, false) }
     }
 
-    // ── Draw cache (bounded dispatch) ────────────────────────────────────────
+    // ── Draw cache (draw on change) ──────────────────────────────────────────
     //
-    // The ratified rule is that a node crosses into Lua only when one of its inputs
-    // changed. These tests hold the walker to it: `UiStats` reports the crossings, and
-    // a counting library double proves the counter and the gate agree rather than both
-    // being wrong in the same direction.
-
-    /// A `ComponentLibrary` that tallies real dispatches and forwards to a live one.
-    struct CountingLib {
-        inner: flicker_script::ScriptHost,
-        draws: std::cell::Cell<u32>,
-        hits: std::cell::Cell<u32>,
-    }
-
-    impl ComponentLibrary for CountingLib {
-        fn handles(&self, kind: &str) -> bool {
-            self.inner.handles(kind)
-        }
-        fn hit_shape(&self, kind: &str) -> Option<HitShape> {
-            self.inner.hit_shape(kind)
-        }
-        fn draw_component(
-            &self,
-            kind: &str,
-            rect: [f32; 4],
-            props: &Json,
-        ) -> Result<Vec<HudCommand>, flicker_script::ScriptError> {
-            self.draws.set(self.draws.get() + 1);
-            self.inner.draw_component(kind, rect, props)
-        }
-        fn hit_component(
-            &self,
-            kind: &str,
-            mx: f32,
-            my: f32,
-            rect: [f32; 4],
-            props: &Json,
-            click: bool,
-            down: bool,
-        ) -> Result<HitVerdict, flicker_script::ScriptError> {
-            self.hits.set(self.hits.get() + 1);
-            self.inner.hit_component(kind, mx, my, rect, props, click, down)
-        }
-    }
-
-    fn counting_lib() -> CountingLib {
-        CountingLib {
-            inner: flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-                .expect("component library"),
-            draws: std::cell::Cell::new(0),
-            hits: std::cell::Cell::new(0),
-        }
-    }
+    // The ratified rule is that a node is redrawn only when one of its inputs changed;
+    // every other node replays its cached commands. These tests hold the walker to it
+    // through `UiStats::redraw_nodes`, and pin the replay byte-for-byte where the
+    // commands themselves are the point.
 
     #[test]
     fn a_sizeless_text_row_reserves_glyph_size_plus_leading() {
@@ -2702,9 +5557,9 @@ mod tests {
 
     #[test]
     fn display_strings_resolve_through_the_stringtable() {
-        // `$token` display props resolve at the draw boundary — for the Rust text
-        // primitive AND for props crossing into a Lua component — while a bound
-        // VALUE (user data) passes through untouched.
+        // `$token` display props resolve at the draw boundary — for the `text`
+        // primitive AND for a component's own label prop — while a bound VALUE
+        // (user data) passes through untouched.
         let _g = crate::strings::test_guard();
         crate::strings::load_str(r#"{ "walker_go": { "en-us": "GO!" } }"#, "en-us");
 
@@ -2728,14 +5583,12 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![col];
 
-        let lib = counting_lib();
-        let f = run_ui_with(
+        let f = run_ui(
             &page,
             &ValueMap::new(),
             &styles(),
             &input_at(-9.0, -9.0, false),
             &mut UiState::new(),
-            Some(&lib),
         );
         let texts: Vec<&str> = f
             .commands
@@ -2749,36 +5602,31 @@ mod tests {
         assert_eq!(
             texts.iter().filter(|t| **t == "GO!").count(),
             2,
-            "the Lua button's label crossed already-resolved: {texts:?}"
+            "the button's label prop resolved too: {texts:?}"
         );
         assert!(!texts.iter().any(|t| t.contains('$')), "no raw sigil reached a command: {texts:?}");
     }
 
     #[test]
-    fn a_still_frame_redraws_nothing_and_never_enters_lua() {
+    fn a_still_frame_redraws_nothing() {
         // Redraw counts fold `strings::generation()` into every fingerprint, so hold
         // the stringtable guard: a concurrent test's `load_str` mid-test would bump the
         // generation and force spurious redraws (an order-dependent flake).
         let _g = crate::strings::test_guard();
         // The blocking defect this cache exists to fix: the second frame of an
-        // unchanged screen used to re-marshal and re-run every component's Lua draw.
-        let lib = counting_lib();
+        // unchanged screen used to re-marshal and re-run every component's draw.
         let page = tree();
         let model = ValueMap::new().with("flag", true);
         let mut state = UiState::new();
         let go = |state: &mut UiState| {
-            run_ui_with(&page, &model, &styles(), &input_at(-9.0, -9.0, false), state, Some(&lib))
+            run_ui(&page, &model, &styles(), &input_at(-9.0, -9.0, false), state)
         };
 
         let first = go(&mut state);
         assert_eq!(first.stats.redraw_nodes, first.stats.nodes, "cold frame draws every node");
-        assert!(first.stats.lua_draws >= 2, "checkbox + button dispatch to Lua: {:?}", first.stats);
-        let drawn_after_first = lib.draws.get();
 
         let second = go(&mut state);
         assert_eq!(second.stats.redraw_nodes, 0, "an unchanged frame redraws nothing");
-        assert_eq!(second.stats.lua_draws, 0, "…and crosses into Lua zero times");
-        assert_eq!(lib.draws.get(), drawn_after_first, "the library really was not called");
         assert_eq!(second.commands, first.commands, "the replay is byte-identical");
     }
 
@@ -2789,107 +5637,86 @@ mod tests {
         // generation and force spurious redraws (an order-dependent flake).
         let _g = crate::strings::test_guard();
         // Flipping one bound value must not disturb its neighbours' cached commands.
-        let lib = counting_lib();
         let page = tree();
         let mut state = UiState::new();
         let off = ValueMap::new().with("flag", false);
         let on = ValueMap::new().with("flag", true);
         let input = input_at(-9.0, -9.0, false);
 
-        run_ui_with(&page, &off, &styles(), &input, &mut state, Some(&lib));
-        let flipped = run_ui_with(&page, &on, &styles(), &input, &mut state, Some(&lib));
+        run_ui(&page, &off, &styles(), &input, &mut state);
+        let flipped = run_ui(&page, &on, &styles(), &input, &mut state);
         assert_eq!(flipped.stats.redraw_nodes, 1, "only the checkbox reads `flag`");
-        assert_eq!(flipped.stats.lua_draws, 1, "and only it re-enters Lua");
     }
 
-    // ── Hit dispatch (bounded) ───────────────────────────────────────────────
+    // ── Hit + the draw cache together ────────────────────────────────────────
     //
-    // S4's twin of the draw-cache tests: component HIT logic lives in Lua, but the
-    // walker enters it only on input-active frames, and only for candidate nodes.
-    // These use inline probe components so the guarantees hold independent of which
-    // real controls have migrated.
-
-    /// A minimal verdict component: claims on rect-hover; a click toggles its bound
-    /// bool and fires its action.
-    const PROBE_COMPONENT: &str = r#"
-        local M = {}
-        function M.draw(cmds, r, props) end
-        function M.hit(mx, my, r, props, click, down)
-          local over = mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
-          local v = { hit = over }
-          if over and click then
-            v.value = not (props.bind_value == true)
-            v.activate = true
-          end
-          return v
-        end
-        return M
-    "#;
+    // The hit pass runs every frame for every placed node and the draw pass replays
+    // whatever did not change, so a pointer parked on a control keeps its claim while
+    // costing zero redraws. These hold that pair against real engine controls.
 
     #[test]
-    fn an_idle_frame_dispatches_zero_hits_and_keeps_hud_hit() {
+    fn an_idle_frame_redraws_nothing_and_keeps_hud_hit() {
         let _g = crate::strings::test_guard();
-        // Pointer resting on the checkbox: the second, unchanged frame must not cross
-        // into Lua for hits OR draws, yet `hud_hit` stays claimed (memo continuity).
-        let lib = counting_lib();
+        // Pointer resting on the checkbox: the second, unchanged frame redraws nothing,
+        // yet `hud_hit` stays claimed — the claim's continuity comes from RECOMPUTING
+        // the verdict each frame, which an engine-tier arm does for free.
         let page = tree();
         let model = ValueMap::new().with("flag", true);
         let mut state = UiState::new();
         // (22,22) is inside the checkbox's 14×14 box at (16,16).
         let over = input_at(22.0, 22.0, false);
 
-        let first = run_ui_with(&page, &model, &styles(), &over, &mut state, Some(&lib));
+        let first = run_ui(&page, &model, &styles(), &over, &mut state);
         assert!(first.results.is_on("hud_hit"), "pointer over the box claims");
-        let hits_after_first = lib.hits.get();
 
-        let second = run_ui_with(&page, &model, &styles(), &over, &mut state, Some(&lib));
-        assert_eq!(second.stats.lua_hits, 0, "still frame: zero hit crossings");
-        assert_eq!(second.stats.lua_draws, 0, "still frame: zero draw crossings");
-        assert_eq!(lib.hits.get(), hits_after_first, "the library really was not called");
+        let second = run_ui(&page, &model, &styles(), &over, &mut state);
+        assert_eq!(second.stats.redraw_nodes, 0, "still frame: nothing redraws");
         assert!(second.results.is_on("hud_hit"), "the claim survives the idle frame");
     }
 
     #[test]
-    fn verdict_dispatch_is_bounded_and_applies_generically() {
-        // Two probe nodes stacked in a column; the pointer sits on the FIRST. Only
-        // that node is a candidate (the second is beyond the slop), so exactly one
-        // Lua hit call happens on the move frame — and zero once the pointer rests.
-        let lib = flicker_script::ScriptHost::library(&[("ui.probe", PROBE_COMPONENT)])
-            .expect("probe library");
-        let mk = |id: &str, bind: &str, action: &str| {
-            let mut n = node("probe");
+    fn a_verdict_routes_its_value_for_the_pointed_at_node_only() {
+        // The generic verdict plumbing (`apply_hit_verdict`), held over two stacked
+        // checkboxes: the pointer sits on the FIRST. Hovering its BOX claims, a click
+        // routes the verdict's `value` into that node's bind — and the sibling under
+        // neither the pointer nor the click says nothing but its idle echo.
+        let mk = |id: &str, bind: &str| {
+            let mut n = node("checkbox");
             n.id = id.into();
             n.size = Some(20.0);
             n.bind = Some(bind.into());
-            n.action = Some(action.into());
-            n
+            prop(n, "box", Value::Number(14.0))
         };
         let mut col = node("cell");
         col.anchor = Some(UiAnchor::TopLeft);
         col.width = Some(120.0);
-        col.children = vec![mk("p1", "b1", "a1"), mk("p2", "b2", "a2")];
+        col.children = vec![mk("p1", "b1"), mk("p2", "b2")];
         let mut page = node("screen");
         page.children = vec![col];
         let model = ValueMap::new();
         let mut state = UiState::new();
+        let styles = serde_json::json!({});
 
-        // Move frame: pointer lands on p1 (rows are y 0..20 and 20..40).
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, false), &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 1, "only the hovered node dispatches");
-        assert!(f.results.is_on("hud_hit"), "the probe claimed the pointer");
+        // Move frame: the pointer lands inside p1's 14×14 box (rows are y 0..20 and
+        // 20..40, each box pinned to its row's top-left).
+        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, false), &mut state);
+        assert!(f.results.is_on("hud_hit"), "the box claimed the pointer");
 
-        // Rest frame: zero crossings, claim continuity.
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, false), &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 0, "idle frame never enters Lua");
+        // Rest frame: the claim is recomputed, not remembered, so it survives.
+        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, false), &mut state);
         assert!(f.results.is_on("hud_hit"));
 
-        // Click frame: the verdict's value/activate route into bind/action — and only
-        // for the clicked node.
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state, Some(&lib));
-        assert!(f.results.is_on("b1"), "verdict value wrote the bind");
-        assert!(f.results.is_on("a1"), "verdict activate fired the action");
-        assert!(f.results.get("b2").is_none(), "the un-clicked sibling stays silent");
-        assert!(!f.results.is_on("a2"));
+        // Click frame: the verdict's value routes into the bind — for that node alone.
+        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, true), &mut state);
+        assert!(f.results.is_on("b1"), "verdict value wrote the clicked node's bind");
+        assert!(!f.results.is_on("b2"), "the un-clicked sibling only echoes its rest value");
+
+        // A click on the caption row BESIDE the box is inert — the tight region is the
+        // box, not the row, so nothing claims and nothing writes.
+        let mut fresh = UiState::new();
+        let f = run_ui(&page, &model, &styles, &input_at(90.0, 6.0, true), &mut fresh);
+        assert!(!f.results.is_on("hud_hit"), "the caption row is not a target");
+        assert!(!f.results.is_on("b1"), "…and it writes nothing");
     }
 
     /// `label_bind` resolves like `text_bind` — the bound twin of `label`.
@@ -2931,30 +5758,15 @@ mod tests {
         assert_eq!(node_text(&missing, &model, &ValueMap::new()), "");
     }
 
-    /// A focus-claiming component: a click inside asks for keyboard focus — the
-    /// verdict channel a Lua `text_field` claims focus through.
-    const FOCUS_COMPONENT: &str = r#"
-        local M = {}
-        function M.draw(cmds, r, props) end
-        function M.hit(mx, my, r, props, click, down)
-          local over = mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
-          local v = { hit = over }
-          if over and click then v.focus = true end
-          return v
-        end
-        return M
-    "#;
-
     #[test]
     fn a_focus_verdict_claims_state_focus_and_needs_an_id() {
-        let lib = flicker_script::ScriptHost::library(&[("ui.focal", FOCUS_COMPONENT)])
-            .expect("focal library");
-        // Two stacked focal nodes: one with an id, one with only a bind — focus is
-        // held BY id, so the id-less one cannot take it.
-        let mut named = node("focal");
+        // Two stacked `text_field`s — the engine control whose verdict claims KEYBOARD
+        // focus: one carries an id, the other only a bind. Focus is held BY id, so the
+        // id-less one cannot take it.
+        let mut named = node("text_field");
         named.id = "f1".into();
         named.size = Some(20.0);
-        let mut anon = node("focal");
+        let mut anon = node("text_field");
         anon.bind = Some("nb".into());
         anon.size = Some(20.0);
         let mut col = node("cell");
@@ -2967,99 +5779,34 @@ mod tests {
         let mut state = UiState::new();
 
         // Click the named node → its verdict claims focus.
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state, Some(&lib));
+        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state);
         assert!(f.results.is_on("hud_hit"));
         assert_eq!(state.focused(), Some("f1"), "focus=true set state.focus to the node id");
 
         // A non-click frame leaves focus alone.
-        run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, false), &mut state, Some(&lib));
+        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, false), &mut state);
         assert_eq!(state.focused(), Some("f1"), "focus persists across idle frames");
 
         // Clicking the ID-LESS node: the clicked frame clears focus up front, and an
         // empty-id claim is a no-op — nothing re-establishes it.
-        run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 26.0, true), &mut state, Some(&lib));
+        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 26.0, true), &mut state);
         assert_eq!(state.focused(), None, "an id-less node cannot hold focus");
 
         // Re-claim, then click empty space: the generic click-away rule clears.
-        run_ui_with(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state, Some(&lib));
+        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state);
         assert_eq!(state.focused(), Some("f1"));
-        run_ui_with(&page, &model, &serde_json::json!({}), &input_at(400.0, 300.0, true), &mut state, Some(&lib));
+        run_ui(&page, &model, &serde_json::json!({}), &input_at(400.0, 300.0, true), &mut state);
         assert_eq!(state.focused(), None, "clicking away clears focus generically");
     }
 
-    /// A capture component: a click grabs the pointer; while held it reports the
-    /// pointer x as its value — even after the pointer leaves the rect.
-    const GRAB_COMPONENT: &str = r#"
-        local M = {}
-        function M.draw(cmds, r, props) end
-        function M.hit(mx, my, r, props, click, down)
-          local over = mx >= r.x and mx <= r.x + r.w and my >= r.y and my <= r.y + r.h
-          local v = { hit = over }
-          if click and over then v.capture = true end
-          if down and (props.captured == true or v.capture == true) then v.value = mx end
-          return v
-        end
-        return M
-    "#;
-
+    /// The **generic full-rect claim** ([`HitShape::Rect`]) — held over a `tile`, the
+    /// engine control that declares it and carries both channels: hovering claims, a
+    /// click inside fires the node's `action` AND toggles its bool `bind`. (Capture and
+    /// commit-on-release, the other generic channels, are held over a real `slider` in
+    /// `slider_drag_captures_and_commits_on_release`.)
     #[test]
-    fn captured_node_keeps_dispatching_off_rect_until_release() {
-        let lib = flicker_script::ScriptHost::library(&[("ui.grab", GRAB_COMPONENT)])
-            .expect("grab library");
-        let mut g = node("grab");
-        g.id = "g".into();
-        g.bind = Some("gx".into());
-        g.width = Some(100.0);
-        g.height = Some(20.0);
-        g.anchor = Some(UiAnchor::TopLeft);
-        let mut page = node("screen");
-        page.children = vec![g];
-        let model = ValueMap::new();
-        let mut state = UiState::new();
-
-        // Press inside → capture; the value goes IN FLIGHT (commit-on-release),
-        // and results report the resting default (no model value, min defaults 0).
-        let press = UiInput { mouse: Vec2::new(30.0, 10.0), clicked: true, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &press, &mut state, Some(&lib));
-        assert_eq!(f.results.number("gx"), Some(0.0), "press holds the value back");
-        assert!(f.results.is_on("hud_hit"));
-
-        // Held, pointer far off the rect: the capture keeps it a candidate, so the
-        // verdict keeps flowing into the in-flight slot (the select-popup/
-        // slider-drag escape from the rect pre-filter).
-        let held = UiInput { mouse: Vec2::new(500.0, 300.0), clicked: false, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &held, &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 1, "the captured node still dispatches");
-        assert_eq!(f.results.number("gx"), Some(0.0), "still no emission while held");
-        let live = state.drag_value.as_ref().expect("the drag tracks off-rect");
-        assert_eq!(live.1, Value::Number(500.0), "the in-flight value follows the hand");
-        assert!(f.results.is_on("hud_hit"), "a live capture claims the pointer");
-
-        // Release (pointer unmoved): capture clears generically; no dispatch — and
-        // the withheld value commits, exactly once, on this edge.
-        let release = UiInput { mouse: Vec2::new(500.0, 300.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &release, &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 0, "release frame is idle — no crossing");
-        assert_eq!(f.results.number("gx"), Some(500.0), "release commits the dragged value");
-        assert!(state.drag_value.is_none(), "the in-flight value is spent");
-        assert!(!f.results.is_on("hud_hit"), "claim dropped with the capture");
-    }
-
-    /// A rect-shaped chip: the walker answers its hit in Rust — zero crossings —
-    /// firing `action` and toggling a bool `bind` on a click inside.
-    const CHIP_COMPONENT: &str = r#"
-        local M = {}
-        M.hit_shape = "rect"
-        function M.draw(cmds, r, props) end
-        function M.hit(mx, my, r) return true end
-        return M
-    "#;
-
-    #[test]
-    fn a_rect_hit_shape_answers_in_rust_with_zero_crossings() {
-        let lib = flicker_script::ScriptHost::library(&[("ui.chip", CHIP_COMPONENT)])
-            .expect("chip library");
-        let mut c = node("chip");
+    fn a_rect_hit_shape_claims_fires_and_toggles() {
+        let mut c = node("tile");
         c.id = "c".into();
         c.bind = Some("lit".into());
         c.action = Some("poke".into());
@@ -3071,14 +5818,13 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(25.0, 10.0, true), &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 0, "a trivial shape never enters Lua");
+        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(25.0, 10.0, true), &mut state);
         assert!(f.results.is_on("hud_hit"), "the rect claims the pointer");
         assert!(f.results.is_on("poke"), "click inside fires the action");
         assert!(f.results.is_on("lit"), "click inside toggles the bool bind");
 
         // Outside: no claim, no fire.
-        let f = run_ui_with(&page, &model, &serde_json::json!({}), &input_at(200.0, 200.0, true), &mut state, Some(&lib));
+        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(200.0, 200.0, true), &mut state);
         assert!(!f.results.is_on("hud_hit"));
         assert!(!f.results.is_on("poke"));
     }
@@ -3091,15 +5837,14 @@ mod tests {
         let _g = crate::strings::test_guard();
         // Hover is a draw input (`hot`), so moving onto a control must invalidate that
         // control — and nothing else.
-        let lib = counting_lib();
         let page = tree();
         let model = ValueMap::new().with("flag", false);
         let mut state = UiState::new();
 
-        run_ui_with(&page, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state, Some(&lib));
+        run_ui(&page, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state);
         // (20, 45) is inside the button: the column sits at 16,16 with a 20px checkbox
         // above a 24px button.
-        let hover = run_ui_with(&page, &model, &styles(), &input_at(20.0, 45.0, false), &mut state, Some(&lib));
+        let hover = run_ui(&page, &model, &styles(), &input_at(20.0, 45.0, false), &mut state);
         assert_eq!(hover.stats.redraw_nodes, 1, "only the button's hover state changed: {:?}", hover.stats);
     }
 
@@ -3111,15 +5856,14 @@ mod tests {
         let _g = crate::strings::test_guard();
         // Loomforge and the chat panel rebuild their whole `UiNode` tree every frame, so
         // cache identity has to be structural, not the address of a retained node.
-        let lib = counting_lib();
         let model = ValueMap::new().with("flag", true);
         let input = input_at(-9.0, -9.0, false);
         let mut state = UiState::new();
 
-        run_ui_with(&tree(), &model, &styles(), &input, &mut state, Some(&lib));
-        let rebuilt = run_ui_with(&tree(), &model, &styles(), &input, &mut state, Some(&lib));
+        let first = run_ui(&tree(), &model, &styles(), &input, &mut state);
+        let rebuilt = run_ui(&tree(), &model, &styles(), &input, &mut state);
         assert_eq!(rebuilt.stats.redraw_nodes, 0, "an equal tree rebuilt from scratch replays");
-        assert_eq!(rebuilt.stats.lua_draws, 0, "…without re-entering Lua");
+        assert_eq!(rebuilt.commands, first.commands, "…and the replay is byte-identical");
     }
 
     #[test]
@@ -3131,19 +5875,18 @@ mod tests {
         // Cached commands carry RESOLVED colours, so a hot-reloaded `ui_elements.json`
         // must invalidate them — while an equal tree rebuilt at a new address must not
         // (the fingerprint folds block CONTENT, never its address).
-        let lib = counting_lib();
         let page = tree();
         let model = ValueMap::new().with("flag", true);
         let input = input_at(-9.0, -9.0, false);
         let mut state = UiState::new();
 
-        run_ui_with(&page, &model, &styles(), &input, &mut state, Some(&lib));
-        let same = run_ui_with(&page, &model, &styles(), &input, &mut state, Some(&lib));
+        run_ui(&page, &model, &styles(), &input, &mut state);
+        let same = run_ui(&page, &model, &styles(), &input, &mut state);
         assert_eq!(same.stats.redraw_nodes, 0, "an equal styles tree still replays");
 
         let mut restyled = styles();
         restyled["btn"]["fill_top"] = serde_json::json!([1.0, 0.0, 0.0, 1.0]);
-        let reloaded = run_ui_with(&page, &model, &restyled, &input, &mut state, Some(&lib));
+        let reloaded = run_ui(&page, &model, &restyled, &input, &mut state);
         assert_eq!(reloaded.stats.redraw_nodes, 1, "only the button reads `btn`: {:?}", reloaded.stats);
     }
 
@@ -3201,7 +5944,6 @@ mod tests {
         let _g = crate::strings::test_guard();
         // A segmented control's children are DATA it draws itself, never placed nodes —
         // so nothing but the parent's own fingerprint can notice they changed.
-        let lib = counting_lib();
         let seg = |label: &str| {
             let mut opt = node("option");
             opt = prop(opt, "value", Value::Text("a".into()));
@@ -3222,10 +5964,10 @@ mod tests {
         let styles = serde_json::json!({});
         let mut state = UiState::new();
 
-        run_ui_with(&seg("ONE"), &model, &styles, &input, &mut state, Some(&lib));
-        let same = run_ui_with(&seg("ONE"), &model, &styles, &input, &mut state, Some(&lib));
+        run_ui(&seg("ONE"), &model, &styles, &input, &mut state);
+        let same = run_ui(&seg("ONE"), &model, &styles, &input, &mut state);
         assert_eq!(same.stats.redraw_nodes, 0, "an unchanged strip replays");
-        let renamed = run_ui_with(&seg("TWO"), &model, &styles, &input, &mut state, Some(&lib));
+        let renamed = run_ui(&seg("TWO"), &model, &styles, &input, &mut state);
         assert_eq!(renamed.stats.redraw_nodes, 1, "a renamed segment redraws the strip");
     }
 
@@ -3300,10 +6042,11 @@ mod tests {
         page
     }
 
-    /// `ui/list.lua`'s neutral bar fallbacks (track / thumb when the style block
-    /// carries neither) — pinned here so a module palette drift fails a test.
-    const STONE: [f32; 4] = [0.055, 0.063, 0.086, 1.0];
-    const SAP: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
+    // The bar's neutral fallbacks (track / thumb when the style block carries neither)
+    // are `super::{STONE, SAP}`, in scope through the `use super::*` above. The
+    // test-local COPIES that stood here while the bar lived in `ui/list.lua` were
+    // deleted with the port: shadowing the real consts would have made these pins
+    // agree with themselves rather than with the component.
 
     /// The two bar rects (track, thumb) a frame drew, in emit order.
     fn bar_rects(cmds: &[HudCommand]) -> Vec<(f32, f32, f32, f32, [f32; 4])> {
@@ -3350,6 +6093,31 @@ mod tests {
         let f = run_ui(&tall, &m, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
         let bars = bar_rects(&f.commands);
         assert_eq!(bars[1], (252.0, 100.0, 4.0, 28.0, SAP), "thumb has a 28px floor");
+    }
+
+    #[test]
+    fn list_bar_width_inset_and_grab_floor_are_authorable() {
+        // The bar's three metrics are style keys whose DEFAULTS are the values the
+        // control shipped with (4 / 0 / 28) — so authoring them changes the bar and
+        // authoring nothing changes nothing (the sibling tests pin the defaults).
+        // 256×128 viewport, 64 rows of 64 → content 4096: the proportional thumb is 4px,
+        // well under any floor, so `thumb_min` is what sizes it.
+        let styles = serde_json::json!({
+            "well": { "bar_w": 10, "bar_inset": 6, "thumb_min": 40,
+                      "track": [0.25, 0.5, 0.75, 1.0], "thumb": [1.0, 0.5, 0.25, 1.0] }
+        });
+        let page = scroll_fixture(256.0, 128.0, 64, 64.0, Some("well"));
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("sy", 0.0),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        let bars = bar_rects(&f.commands);
+        // x = inner right (256) − bar_w (10) − bar_inset (6) = 240.
+        assert_eq!(bars[0], (240.0, 0.0, 10.0, 128.0, [0.25, 0.5, 0.75, 1.0]), "authored track");
+        assert_eq!(bars[1], (240.0, 0.0, 10.0, 40.0, [1.0, 0.5, 0.25, 1.0]), "authored grab floor");
     }
 
     #[test]
@@ -3445,13 +6213,12 @@ mod tests {
         assert!(at40.stats.redraw_nodes >= 4, "the moved rows really redrew: {:?}", at40.stats);
     }
 
-    // (The transient S7 parity test — the Rust `scroll` draw arm vs `ui/list.lua`,
-    // byte for byte across styled/unstyled × short/long content × offsets
-    // 0/mid/max/over-max — gated the port and was deleted with the Rust arm; the
-    // byte-pinned draw below and the behaviour tests around it carry the duty.)
+    // (This pin is the SAME command list the Lua module emitted before the draw came
+    // back to the engine in the 2026-08-09 restoration — it passed unchanged across the
+    // move, which is the proof that a control's tier is invisible to what it draws.)
     #[test]
-    fn list_lua_draw_is_byte_pinned() {
-        // Both draw branches at the byte level, outliving the deleted Rust arm: a
+    fn list_draw_is_byte_pinned() {
+        // Both draw branches at the byte level: a
         // styled overflowing region (backdrop + track + thumb + viewport clip) and
         // an unstyled fitting one (nothing but the clip toggles). pad 4 in a
         // 256×128 box → inner 248×120; 2×116 rows → content 8+232 = 240 (twice the
@@ -3548,35 +6315,31 @@ mod tests {
     }
 
     #[test]
-    fn a_wheel_tick_is_input_active_and_scrolls_under_a_parked_pointer() {
+    fn a_wheel_tick_scrolls_under_a_parked_pointer_without_a_crossing() {
         let _g = crate::strings::test_guard();
-        // The S7 gate extension: a wheel tick with a motionless pointer must count
-        // as input activity (the list under the cursor scrolls), while wheel-less
-        // still frames keep the S4 zero-crossing guarantee.
-        let lib = counting_lib();
+        // A wheel tick with a motionless pointer must still scroll the list under the
+        // cursor, while a wheel-less still frame redraws nothing at all.
         let page = scroll_fixture(256.0, 128.0, 4, 64.0, None);
         let m = ValueMap::new().with("sy", 0.0);
         let styles = serde_json::json!({});
         let mut state = UiState::new();
         let over = input_at(100.0, 60.0, false);
 
-        run_ui_with(&page, &m, &styles, &over, &mut state, Some(&lib));
-        let still = run_ui_with(&page, &m, &styles, &over, &mut state, Some(&lib));
-        assert_eq!(still.stats.lua_hits, 0, "a wheel-less still frame never enters Lua");
-        assert_eq!(still.stats.lua_draws, 0);
-        assert!(still.results.is_on("hud_hit"), "the claim survives via the memo");
+        run_ui(&page, &m, &styles, &over, &mut state);
+        let still = run_ui(&page, &m, &styles, &over, &mut state);
+        assert_eq!(still.stats.redraw_nodes, 0, "a wheel-less still frame redraws nothing");
+        assert!(still.results.is_on("hud_hit"), "the claim survives the still frame");
 
-        // Wheel tick, pointer unmoved: dispatch happens and one notch scrolls the
-        // bind by the default 46px speed, and the moved thumb redraws the region.
-        let f = run_ui_with(&page, &m, &styles, &input_wheel(100.0, 60.0, -1.0), &mut state, Some(&lib));
-        assert!(f.stats.lua_hits >= 1, "the wheel tick alone is input-active: {:?}", f.stats);
+        // Wheel tick, pointer unmoved: one notch scrolls the bind by the default 46px
+        // speed, and the moved thumb redraws the region.
+        let f = run_ui(&page, &m, &styles, &input_wheel(100.0, 60.0, -1.0), &mut state);
         assert_eq!(f.results.number("sy"), Some(46.0), "one notch × the default speed");
         assert!(f.results.is_on("hud_hit"));
         assert!(f.stats.redraw_nodes >= 1, "the scrolled region redrew: {:?}", f.stats);
 
         // A wheel tick with the pointer OFF the region scrolls nothing.
         let mut fresh = UiState::new();
-        let f = run_ui_with(&page, &m, &styles, &input_wheel(400.0, 300.0, -1.0), &mut fresh, Some(&lib));
+        let f = run_ui(&page, &m, &styles, &input_wheel(400.0, 300.0, -1.0), &mut fresh);
         assert_eq!(f.results.number("sy"), Some(0.0), "off-region wheel only echoes");
     }
 
@@ -3596,18 +6359,114 @@ mod tests {
 
     #[test]
     fn button_click_fires_action_and_claims_mouse() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
         let t = tree();
         let model = ValueMap::new().with("flag", false);
         let mut state = UiState::new();
         // Column at (16,16) width 120: checkbox rows y 16..36, button y 36..60.
         let frame =
-            run_ui_with(&t, &model, &styles(), &input_at(50.0, 48.0, true), &mut state, Some(&lib));
+            run_ui(&t, &model, &styles(), &input_at(50.0, 48.0, true), &mut state);
         assert!(frame.results.is_on("go"), "button action fired");
         assert!(frame.results.is_on("hud_hit"), "pointer over UI claims the mouse");
         assert!(!frame.commands.is_empty(), "something was drawn");
         assert!(!frame.results.is_on("flag"), "checkbox untouched by a button click");
+    }
+
+    /// THE ENGINE ROSTER GATE — held against EVERY control the engine claims, so a new
+    /// one cannot land half-wired.
+    ///
+    /// The button slice discovered that a control's kind gated three separate walker
+    /// decisions, and satisfying only the draw broke the others silently. One of the
+    /// three — "it has LEFT `UI_COMPONENT_MODULES`" — retired with that list on
+    /// 2026-08-10: there is no second tier to leave, so it is now true by construction
+    /// rather than by assertion. The two that still bite:
+    /// 1. it is a LEGAL kind, so every authored tree and proto can name it;
+    /// 2. it answers the HIT in Rust — either by declaring a trivial geometry in
+    ///    [`rust_hit_shape`] or by owning a bespoke arm ([`rust_owns_hit`]) — without
+    ///    which the walker stops treating it as interactive at all (no hover, no
+    ///    click, no action). The two are mutually exclusive: a control with a tight
+    ///    sub-rect region must NOT declare `Rect`, which would widen it to the node.
+    #[test]
+    fn every_engine_component_is_legal_and_answers_its_hit_in_rust() {
+        for kind in crate::rust_component_kinds() {
+            assert!(crate::is_known_kind(kind), "{kind} must be a legal authored kind");
+            assert!(
+                rust_hit_shape(kind).is_some() || rust_owns_hit(kind),
+                "{kind} must answer its hit in Rust — a declared shape or a bespoke \
+                 arm — or it stops being interactive"
+            );
+            assert!(
+                !(rust_hit_shape(kind).is_some() && rust_owns_hit(kind)),
+                "{kind} answers its hit twice; a bespoke region must not also declare \
+                 a trivial shape, which would widen it to the whole node rect"
+            );
+        }
+    }
+
+    /// A `panel` wears the walker's focus as a STYLE, and nothing else: the engine decides
+    /// which pane holds the cursor, the panel decides what that looks like. A scene never
+    /// passes a rim (violation F2) — so the two states must differ HERE, in the component,
+    /// or that rim has nowhere legitimate to come from.
+    #[test]
+    fn panel_draws_its_own_focus_rim_from_the_walker_prop() {
+        let style = serde_json::json!({
+            "resting": { "fill": [0.0, 0.0, 0.0, 1.0], "border": [0.0, 0.0, 0.0, 0.0] },
+            "focused": { "fill": [0.0, 0.0, 0.0, 1.0], "border": [1.0, 1.0, 1.0, 1.0] },
+        });
+        let border_of = |focused: bool| {
+            let props = serde_json::json!({ "style": style, "focused": focused });
+            let mut out = Vec::new();
+            draw_panel(Rect { x: 0.0, y: 0.0, w: 40.0, h: 20.0 }, &props, &mut out);
+            match out.first().expect("a panel drew its backdrop") {
+                HudCommand::Panel { border, border_color, .. } => (*border, *border_color),
+                other => panic!("expected a Panel command, got {other:?}"),
+            }
+        };
+        let (resting_w, _) = border_of(false);
+        let (focused_w, focused_color) = border_of(true);
+        assert_eq!(resting_w, 0.0, "a resting pane wears no rim");
+        assert!(focused_w > 0.0, "a focused pane wears one");
+        assert_eq!(focused_color, [1.0, 1.0, 1.0, 1.0], "and it is the focused block's edge");
+
+        // A style with NO resting/focused split is used as-is for both states, so a plain
+        // container style still draws rather than silently rendering nothing.
+        let plain = serde_json::json!({ "style": { "fill": [0.2, 0.2, 0.2, 1.0] } });
+        let mut out = Vec::new();
+        draw_panel(Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 }, &plain, &mut out);
+        assert_eq!(out.len(), 1, "an unsplit panel style still draws its backdrop");
+    }
+
+    /// `button` keeps its BEHAVIOUR now that the engine owns its draw and hit — the
+    /// action fires, the pointer is claimed, and the slab is really drawn.
+    #[test]
+    fn button_draws_in_rust() {
+        // A button-ONLY tree, so nothing else's commands can stand in for the
+        // button's own draw.
+        let btn = {
+            let mut n = node("button");
+            n.id = "btn".into();
+            n.size = Some(24.0);
+            n.action = Some("go".into());
+            n = prop(n, "label", Value::Text("GO".into()));
+            prop(n, "style", Value::Text("btn".into()))
+        };
+        let mut col = node("cell");
+        col.anchor = Some(UiAnchor::TopLeft);
+        col.offset = [16.0, 16.0];
+        col.width = Some(120.0);
+        col.children = vec![btn];
+        let mut t = node("screen");
+        t.children = vec![col];
+
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        // Column at (16,16) width 120 → the button occupies y 16..40.
+        let frame =
+            run_ui(&t, &model, &styles(), &input_at(50.0, 28.0, true), &mut state);
+
+        assert!(frame.results.is_on("go"), "the Rust button still fires its action");
+        assert!(frame.results.is_on("hud_hit"), "and still claims the pointer");
+        assert!(!frame.commands.is_empty(), "and drew something");
+        assert_eq!(frame.stats.redraw_nodes, frame.stats.nodes, "and the cold frame drew it all");
     }
 
     #[test]
@@ -3646,10 +6505,13 @@ mod tests {
         let f = run_ui(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state);
         assert!(f.results.is_on("sel"), "tile click toggles its bind on");
 
-        // Click outside: no claim, no toggle — but the echo still reports.
-        let f = run_ui(&page, &model, &st, &input_at(300.0, 300.0, true), &mut state);
+        // Click outside: no claim, no toggle — but the echo still reports. The scene
+        // has folded the toggle above by now, so `on` is what BOTH the model and the
+        // control hold; an outside click must leave it there rather than toggle again.
+        let folded = ValueMap::new().with("sel", true);
+        let f = run_ui(&page, &folded, &st, &input_at(300.0, 300.0, true), &mut state);
         assert!(!f.results.is_on("hud_hit"));
-        assert!(!f.results.is_on("sel"), "outside click leaves the bind alone");
+        assert!(f.results.is_on("sel"), "outside click leaves the bind alone");
         assert!(f.results.get("sel").is_some(), "bind echoes on an off-pointer frame");
     }
 
@@ -3808,18 +6670,15 @@ mod tests {
 
         let model = ValueMap::new().with("choice", "a");
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         // Column at (16,16): row A circle 16..30 × 16..30, row B circle 16..30 ×
         // 36..50. Click inside row B's circle → the group selects "b".
-        let frame = run_ui_with(
+        let frame = run_ui(
             &page,
             &model,
             &styles(),
             &input_at(22.0, 42.0, true),
             &mut state,
-            Some(&lib),
         );
         assert_eq!(frame.results.text("choice"), Some("b"), "clicking row B selects b");
         assert!(frame.results.is_on("hud_hit"), "the radio circle claims the pointer");
@@ -3836,27 +6695,27 @@ mod tests {
         );
 
         // A frame with the pointer off every row leaves the selection intact: each
-        // row echoes the model's current value, none overwrites it with its own.
-        let frame = run_ui_with(
+        // row echoes the group's current value, none overwrites it with its own. The
+        // scene has folded the pick above, so that value is now "b".
+        let picked = ValueMap::new().with("choice", "b");
+        let frame = run_ui(
             &page,
-            &model,
+            &picked,
             &styles(),
             &input_at(300.0, 300.0, false),
             &mut state,
-            Some(&lib),
         );
-        assert_eq!(frame.results.text("choice"), Some("a"), "no-click frame echoes current selection");
+        assert_eq!(frame.results.text("choice"), Some("b"), "no-click frame echoes current selection");
 
         // The radio's TIGHT region is its circle: a click on row B's LABEL area
         // (inside the node rect, right of the 14×14 circle) neither selects nor
         // claims — while the group key still echoes.
-        let frame = run_ui_with(
+        let frame = run_ui(
             &page,
             &model,
             &styles(),
             &input_at(70.0, 42.0, true),
             &mut state,
-            Some(&lib),
         );
         assert_eq!(frame.results.text("choice"), Some("a"), "label-row click does not select");
         assert!(!frame.results.is_on("hud_hit"), "label-row click does not claim");
@@ -3888,11 +6747,15 @@ mod tests {
         assert_eq!(frame.results.number("qty"), Some(4.0), "− steps down by step");
         assert!(frame.results.is_on("hud_hit"), "pointer over the stepper claims the mouse");
 
-        // + button (right square): 5 → 6.
+        // + button (right square): 5 → 6. Its own `UiState`: this is the other button
+        // acting on the same resting 5, not a second press after the one above (which
+        // the control still holds at 4 until the scene folds it).
+        let mut state = UiState::new();
         let frame = run_ui(&page, &model, &st, &input_at(108.0, 12.0, true), &mut state);
         assert_eq!(frame.results.number("qty"), Some(6.0), "+ steps up by step");
 
         // No click (pointer between the buttons) → echoes the bound value.
+        let mut state = UiState::new();
         let frame = run_ui(&page, &model, &st, &input_at(60.0, 12.0, false), &mut state);
         assert_eq!(frame.results.number("qty"), Some(5.0), "reports current value each frame");
 
@@ -3942,8 +6805,8 @@ mod tests {
 
     #[test]
     fn pill_toggle_click_selects_segment_value() {
-        let opt = |value: &str, label: &str| {
-            let n = prop(node("option"), "value", Value::Text(value.into()));
+        let opt = |value: f64, label: &str| {
+            let n = prop(node("option"), "value", Value::Number(value));
             prop(n, "label", Value::Text(label.into()))
         };
         let mut pill = node("pill_toggle");
@@ -3954,7 +6817,7 @@ mod tests {
         pill.anchor = Some(UiAnchor::TopLeft);
         pill = prop(pill, "style", Value::Text("pill".into()));
         // Options are CHILD data nodes (value+label), not placed sub-widgets.
-        pill.children = vec![opt("low", "Low"), opt("med", "Med"), opt("high", "High")];
+        pill.children = vec![opt(0.0, "Low"), opt(1.0, "Med"), opt(2.0, "High")];
 
         let mut page = node("screen");
         page.children = vec![pill];
@@ -3967,13 +6830,13 @@ mod tests {
                 "active_label": [0.9, 0.9, 0.95, 1.0], "label": [0.5, 0.5, 0.5, 1.0], "label_size": 11
             }
         });
-        let model = ValueMap::new().with("mode", "low");
+        let model = ValueMap::new().with("mode", 0.0);
         let mut state = UiState::new();
 
         // Pill at (0,0) 180×30. Inner strip x 3..177 (174 wide) → 3 cells of 58:
-        // low 3..61, med 61..119, high 119..177. Click the middle cell → "med".
+        // low 3..61, med 61..119, high 119..177. Click the middle cell → index 1.
         let frame = run_ui(&page, &model, &styles, &input_at(90.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.text("mode"), Some("med"), "middle segment selects its value");
+        assert_eq!(frame.results.number("mode"), Some(1.0), "middle segment selects its index");
         assert!(frame.results.is_on("hud_hit"), "pointer over the pill claims the mouse");
 
         // Every drawn panel stays within the 180×30 node rect (well + highlight).
@@ -3987,27 +6850,29 @@ mod tests {
         }
 
         // No click → echoes the current selection unchanged (two-way sync each frame).
-        let frame = run_ui(&page, &model, &styles, &input_at(90.0, 15.0, false), &mut state);
-        assert_eq!(frame.results.text("mode"), Some("low"), "non-click frame reports current value");
+        // The scene has folded the pick above, so the current selection is "med".
+        let picked = ValueMap::new().with("mode", 1.0);
+        let frame = run_ui(&page, &picked, &styles, &input_at(90.0, 15.0, false), &mut state);
+        assert_eq!(frame.results.number("mode"), Some(1.0), "non-click frame reports current value");
 
         // A click OUTSIDE every cell leaves the selection untouched.
-        let frame = run_ui(&page, &model, &styles, &input_at(300.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.text("mode"), Some("low"), "a miss doesn't change the value");
+        let frame = run_ui(&page, &picked, &styles, &input_at(300.0, 15.0, true), &mut state);
+        assert_eq!(frame.results.number("mode"), Some(1.0), "a miss doesn't change the value");
 
         // A click on the well's PAD RIM (x=1 < the 3px pad, inside the well) claims
         // the pointer but lands in no segment — the selection stays put.
         let frame = run_ui(&page, &model, &styles, &input_at(1.0, 15.0, true), &mut state);
         assert!(frame.results.is_on("hud_hit"), "the well rim still claims");
-        assert_eq!(frame.results.text("mode"), Some("low"), "rim click selects nothing");
+        assert_eq!(frame.results.number("mode"), Some(0.0), "rim click selects nothing");
     }
 
     #[test]
     fn tabs_click_selects_value_and_defaults_to_first() {
         // Three tabs (a|b|c) bound to "tab", a 300×30 strip at the origin: three
         // even 100px cells. Children are pure data carriers (value + label).
-        let mk = |value: &str, label: &str| {
+        let mk = |value: f64, label: &str| {
             let mut t = node("tab");
-            t = prop(t, "value", Value::Text(value.into()));
+            t = prop(t, "value", Value::Number(value));
             prop(t, "label", Value::Text(label.into()))
         };
         let mut tabs = node("tabs");
@@ -4018,7 +6883,7 @@ mod tests {
         tabs.anchor = Some(UiAnchor::TopLeft);
         tabs = prop(tabs, "tab_active", Value::Text("ta".into()));
         tabs = prop(tabs, "tab_idle", Value::Text("ti".into()));
-        tabs.children = vec![mk("a", "A"), mk("b", "B"), mk("c", "C")];
+        tabs.children = vec![mk(0.0, "A"), mk(1.0, "B"), mk(2.0, "C")];
         let mut page = node("tabs_page");
         page.children = vec![tabs];
 
@@ -4029,15 +6894,17 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        // Click the middle cell (x 100..200) → selects its value "b".
+        // Click the middle cell (x 100..200) → selects its index 1.
         let frame = run_ui(&page, &model, &st, &input_at(150.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.text("tab"), Some("b"), "clicking tab 2 writes its value");
+        assert_eq!(frame.results.number("tab"), Some(1.0), "clicking tab 2 writes its index");
         assert!(frame.results.is_on("hud_hit"), "pointer over the strip claims the mouse");
 
         // No prior value + pointer off the strip → reports the first tab (a strip
-        // always has one active tab), and claims nothing.
+        // always has one active tab), and claims nothing. Its own `UiState`: "no prior
+        // value" means no prior PICK either, and the click above is one.
+        let mut state = UiState::new();
         let frame = run_ui(&page, &model, &st, &input_at(400.0, 400.0, false), &mut state);
-        assert_eq!(frame.results.text("tab"), Some("a"), "unset bind defaults to the first tab");
+        assert_eq!(frame.results.number("tab"), Some(0.0), "unset bind defaults to the first tab");
         assert!(!frame.results.is_on("hud_hit"), "pointer off the strip doesn't claim the mouse");
 
         // Every drawn cell / label stays within the 300×30 strip rect.
@@ -4062,9 +6929,9 @@ mod tests {
         // (300 − 40) / 3 = 86.67: a 20..40, b 40+66.67.. etc. Precisely: inner x
         // 10..310, cells at 10..96.67, 116.67..203.33, 223.33..310. A click in the
         // 96.67..116.67 gap (or the 0..10 pad) claims the strip but selects nothing.
-        let mk = |value: &str, label: &str| {
+        let mk = |value: f64, label: &str| {
             let t = node("tab");
-            let t = prop(t, "value", Value::Text(value.into()));
+            let t = prop(t, "value", Value::Number(value));
             prop(t, "label", Value::Text(label.into()))
         };
         let mut tabs = node("tabs");
@@ -4077,24 +6944,24 @@ mod tests {
         tabs.pad_x = Some(10.0);
         tabs = prop(tabs, "tab_active", Value::Text("ta".into()));
         tabs = prop(tabs, "tab_idle", Value::Text("ti".into()));
-        tabs.children = vec![mk("a", "A"), mk("b", "B"), mk("c", "C")];
+        tabs.children = vec![mk(0.0, "A"), mk(1.0, "B"), mk(2.0, "C")];
         let mut page = node("tabs_page");
         page.children = vec![tabs];
         let st = serde_json::json!({
             "ta": { "fill_top": [0.2,0.3,0.5,1.0] },
             "ti": { "fill_top": [0.09,0.10,0.13,1.0] }
         });
-        let model = ValueMap::new().with("tab", "c");
+        let model = ValueMap::new().with("tab", 2.0);
         let mut state = UiState::new();
 
         // Click in the gap between cell 1 and cell 2 (x ≈ 106).
         let frame = run_ui(&page, &model, &st, &input_at(106.0, 15.0, true), &mut state);
         assert!(frame.results.is_on("hud_hit"), "the strip claims between cells");
-        assert_eq!(frame.results.text("tab"), Some("c"), "a gap click selects nothing");
+        assert_eq!(frame.results.number("tab"), Some(2.0), "a gap click selects nothing");
 
-        // Click inside cell 2 (x ≈ 160) → selects "b".
+        // Click inside cell 2 (x ≈ 160) → selects index 1.
         let frame = run_ui(&page, &model, &st, &input_at(160.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.text("tab"), Some("b"), "cell click selects its value");
+        assert_eq!(frame.results.number("tab"), Some(1.0), "cell click selects its index");
     }
 
     fn select_styles_json() -> Json {
@@ -4110,9 +6977,9 @@ mod tests {
     // popup (into `state.open`); an option click writes that option's `value` and
     // closes; the closed field's panel stays within the node rect.
     fn select_tree() -> UiNode {
-        let opt = |val: &str, label: &str| {
+        let opt = |i: f64, label: &str| {
             let mut n = node("option");
-            n = prop(n, "value", Value::Text(val.into()));
+            n = prop(n, "value", Value::Number(i));
             prop(n, "label", Value::Text(label.into()))
         };
         let mut sel = node("select");
@@ -4123,7 +6990,7 @@ mod tests {
         sel.anchor = Some(UiAnchor::TopLeft);
         sel = prop(sel, "placeholder", Value::Text("Choose…".into()));
         sel = prop(sel, "style", Value::Text("controls".into()));
-        sel.children = vec![opt("a", "Alpha"), opt("b", "Beta")];
+        sel.children = vec![opt(0.0, "Alpha"), opt(1.0, "Beta")];
         let mut page = node("screen");
         page.children = vec![sel];
         page
@@ -4135,12 +7002,10 @@ mod tests {
         let styles = select_styles_json();
         let model = ValueMap::new(); // no initial selection
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         // Closed: idle pointer far away. The field panel fills the node rect exactly
         // and is the ONLY panel (no popup rows drawn while closed).
-        let f0 = run_ui_with(&t, &model, &styles, &input_at(400.0, 400.0, false), &mut state, Some(&lib));
+        let f0 = run_ui(&t, &model, &styles, &input_at(400.0, 400.0, false), &mut state);
         assert!(state.open.is_none(), "starts closed");
         let panels: Vec<_> = f0
             .commands
@@ -4153,20 +7018,20 @@ mod tests {
         assert_eq!(panels, vec![(0.0, 0.0, 200.0, 40.0)], "closed = just the field panel, within the node rect");
 
         // Click the field (0..200 × 0..40) → opens into state.open, writes nothing yet.
-        let f1 = run_ui_with(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state, Some(&lib));
+        let f1 = run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
         assert_eq!(state.open.as_deref(), Some("sel"), "clicking the field opens the menu");
         assert!(f1.results.is_on("hud_hit"), "the field claims the pointer");
 
         // Menu open (state persists). Rows start at y = 40 + 6 = 46, row_h 30:
         // row 0 = 46..76 (Alpha), row 1 = 76..106 (Beta). Click Beta.
-        let f2 = run_ui_with(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state, Some(&lib));
-        assert_eq!(f2.results.text("mode"), Some("b"), "clicking Beta writes its value");
+        let f2 = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state);
+        assert_eq!(f2.results.number("mode"), Some(1.0), "clicking Beta writes its index");
         assert!(state.open.is_none(), "picking an option closes the menu");
 
         // A click outside a re-opened menu just closes it (writes nothing new).
-        run_ui_with(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state, Some(&lib)); // re-open
+        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state); // re-open
         assert_eq!(state.open.as_deref(), Some("sel"));
-        run_ui_with(&t, &model, &styles, &input_at(600.0, 500.0, true), &mut state, Some(&lib)); // click far outside
+        run_ui(&t, &model, &styles, &input_at(600.0, 500.0, true), &mut state); // click far outside
         assert!(state.open.is_none(), "a click outside closes the menu");
     }
 
@@ -4175,33 +7040,32 @@ mod tests {
         // The popup lies BELOW the select's own 200×40 rect (rows at y 46..106): a
         // naive rect pre-filter would drop it. Hovering a row must claim the pointer
         // (and keep claiming on an idle frame); clicking it must pick.
+        //
+        // `select`'s hit arm runs in `hit_node` for every placed node, with no
+        // candidate pre-filter to escape — which is what lets the off-rect popup
+        // rows answer at all.
         let t = select_tree();
         let styles = select_styles_json();
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         // Open via a field click.
-        run_ui_with(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state, Some(&lib));
+        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
         assert_eq!(state.open.as_deref(), Some("sel"));
 
-        // Hover row 1 (y=90 — outside the node rect): the popup claims. The open
-        // owner stays a CANDIDATE despite the rect pre-filter, so the select still
-        // receives the dispatch.
-        let f = run_ui_with(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state, Some(&lib));
+        // Hover row 1 (y=90 — outside the node rect): the popup claims. `hit_select`
+        // reaches PAST the node rect, which is why the select is answered every frame
+        // rather than only when a rect test would have let it through.
+        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state);
         assert!(f.results.is_on("hud_hit"), "the open popup claims outside the node rect");
-        assert_eq!(f.stats.lua_hits, 1, "the open select received the hit dispatch");
 
-        // Idle frame (nothing moved): the claim persists without re-dispatch.
-        let f = run_ui_with(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state, Some(&lib));
+        // Idle frame (nothing moved): the claim persists.
+        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state);
         assert!(f.results.is_on("hud_hit"), "the claim survives an idle frame");
-        assert_eq!(f.stats.lua_hits, 0, "…at zero Lua crossings");
 
         // Click the hovered row: Beta is picked and the menu closes.
-        let f = run_ui_with(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state, Some(&lib));
-        assert_eq!(f.stats.lua_hits, 1, "the click reached the select's M.hit");
-        assert_eq!(f.results.text("mode"), Some("b"), "the row outside the rect picks");
+        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state);
+        assert_eq!(f.results.number("mode"), Some(1.0), "the row outside the rect picks");
         assert!(state.open.is_none(), "picking closes the menu");
     }
 
@@ -4209,14 +7073,12 @@ mod tests {
     fn select_open_menu_rows_are_lifted_above_the_field() {
         let t = select_tree();
         let styles = select_styles_json();
-        let model = ValueMap::new().with("mode", "a");
+        let model = ValueMap::new().with("mode", 0.0);
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
         // Force it open, then draw: the field is layer 0, the popup panel + rows layer 1.
-        run_ui_with(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state, Some(&lib));
+        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
         assert_eq!(state.open.as_deref(), Some("sel"));
-        let frame = run_ui_with(&t, &model, &styles, &input_at(0.0, 0.0, false), &mut state, Some(&lib));
+        let frame = run_ui(&t, &model, &styles, &input_at(0.0, 0.0, false), &mut state);
         // First panel = field (layer 0); a later panel = the popup (layer 1).
         let panel_layers: Vec<f32> = frame
             .commands
@@ -4228,6 +7090,26 @@ mod tests {
             .collect();
         assert_eq!(panel_layers.first(), Some(&0.0), "field sits on the base layer");
         assert!(panel_layers.contains(&1.0), "popup panel is lifted a sub-layer");
+
+        // The popup's TEXT is lifted with it. The render pass is ascending-layer
+        // painter's order ACROSS pipelines, so a row label left behind on layer 0 would
+        // be painted over by its own backdrop — an open dropdown showing selection bands
+        // and no option text. A panel-only assertion would sail straight through that.
+        let row_texts: Vec<(f32, &str)> = frame
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Text { layer, text, .. } => Some((*layer, text.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            row_texts.iter().any(|(l, t)| *t == "Alpha" && *l == 1.0)
+                && row_texts.iter().any(|(l, t)| *t == "Beta" && *l == 1.0),
+            "every option label rides the popup's sub-layer: {row_texts:?}"
+        );
+        // …and the field's own label stays on the base layer beneath it.
+        assert_eq!(row_texts.first().map(|(l, _)| *l), Some(0.0), "the field label is not lifted");
     }
 
     #[test]
@@ -4311,6 +7193,425 @@ mod tests {
     // The per-facet pins around the oracle test above: placeholder / borders /
     // caret / the typed-fold's frame discipline. Written against the Rust arms
     // and held green through the Lua port — they are the port's contract.
+
+    /// **A rail click selects a NUMERIC value.** A roster-driven strip numbers
+    /// its entries (value = index); highlighting already compared numbers, so a
+    /// string-only click gate was a rail that showed the selection but could
+    /// never change it — the silent dead channel the populous page/tab rails
+    /// shipped with. Both strip kinds carry the same contract.
+    #[test]
+    fn a_click_on_a_strip_selects_a_numeric_value() {
+        for kind in ["tabs", "pill_toggle"] {
+            let mut strip = node(kind);
+            strip.id = "rail".into();
+            strip.bind = Some("pick".into());
+            strip.width = Some(300.0);
+            strip.height = Some(40.0);
+            strip.anchor = Some(UiAnchor::TopLeft);
+            let mut first = node("option");
+            first = prop(first, "value", Value::Number(0.0));
+            first = prop(first, "label", Value::Text("A".into()));
+            let mut second = node("option");
+            second = prop(second, "value", Value::Number(1.0));
+            second = prop(second, "label", Value::Text("B".into()));
+            strip.children = vec![first, second];
+            let mut page = node("screen");
+            page.children = vec![strip];
+
+            let model = ValueMap::new().with("pick", 0.0);
+            let styles = serde_json::json!({});
+            // Idle: the echo reports the resting selection — that is the
+            // contract the dispatcher's changed-value test leans on.
+            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+            assert_eq!(f.results.number("pick"), Some(0.0), "{kind}: idle echoes the resting value");
+            // A click in the SECOND cell writes that entry's numeric value.
+            let f = run_ui(&page, &model, &styles, &input_at(225.0, 20.0, true), &mut UiState::new());
+            assert_eq!(f.results.number("pick"), Some(1.0), "{kind}: the click selects index 1");
+        }
+    }
+
+    /// A 300×40 option strip of `kind` at the origin, bound to `pick`, whose two
+    /// options carry the `value`s given — the fixture the strip-representation gates
+    /// share.
+    fn strip_page(kind: &str, values: [Value; 2]) -> UiNode {
+        let [a, b] = values;
+        let mut strip = node(kind);
+        strip.id = "rail".into();
+        strip.bind = Some("pick".into());
+        strip.width = Some(300.0);
+        strip.height = Some(40.0);
+        strip.anchor = Some(UiAnchor::TopLeft);
+        let mut first = prop(node("option"), "value", a);
+        first = prop(first, "label", Value::Text("A".into()));
+        let mut second = prop(node("option"), "value", b);
+        second = prop(second, "label", Value::Text("B".into()));
+        strip.children = vec![first, second];
+        let mut page = node("screen");
+        page.children = vec![strip];
+        page
+    }
+
+    /// **The abandoned representation fails LOUD.** Which segment of an option strip
+    /// is selected is an INDEX, and an index is a NUMBER — in the option's `value`, on
+    /// the bind, in the model and in the verdict. A strip that also accepted a text
+    /// `value` would make the fork its contract, so each of the three index strips
+    /// (`tabs` / `pill_toggle` / `select`) refuses a non-number and says so through
+    /// `warn_once` → `HitVerdict.warn`, instead of clicking to nothing.
+    ///
+    /// All three answer their hit in the engine, so the refusal is asserted against
+    /// the Rust arm itself.
+    ///
+    /// (`radio` is the one NAME-keyed picker and is deliberately not in this list.)
+    #[test]
+    fn a_strip_option_with_a_non_numeric_value_warns_and_never_writes() {
+        let styles = serde_json::json!({});
+        type StripHit = fn(Vec2, Rect, &Json, bool) -> HitVerdict;
+        // `select` picks from a POPUP, so it needs the extra frame that opens it; the
+        // two strips pick straight from the cell under the pointer.
+        for (kind, opens, hit) in [
+            ("tabs", false, hit_tabs as StripHit),
+            ("pill_toggle", false, hit_pill_toggle as StripHit),
+            ("select", true, hit_select as StripHit),
+        ] {
+            let page = strip_page(kind, [Value::Number(0.0), Value::Text("b".into())]);
+            let model = ValueMap::new().with("pick", 0.0);
+            let mut state = UiState::new();
+            // The pointer sits on the SECOND option: cell 2 of the strips (x 225),
+            // popup row 2 of the select (y 40 + 6 + 45).
+            let at = if opens { input_at(150.0, 91.0, true) } else { input_at(225.0, 20.0, true) };
+            if opens {
+                run_ui(&page, &model, &styles, &input_at(150.0, 20.0, true), &mut state);
+            }
+            let f = run_ui(&page, &model, &styles, &at, &mut state);
+            assert_eq!(
+                f.results.text("pick"),
+                None,
+                "{kind}: a text `value` is never written to the bind"
+            );
+            assert_eq!(
+                f.results.number("pick"),
+                Some(0.0),
+                "{kind}: the bind still reports the resting index"
+            );
+
+            // …and the refusal is LOUD: the component's own complaint rides the verdict
+            // (the walker turns it into a `tracing::warn!`).
+            let props = serde_json::json!({
+                "children": [
+                    { "value": 0.0, "label": "A" },
+                    { "value": "b", "label": "B" },
+                ],
+                "open": true,
+                "bind_value": 0.0,
+            });
+            let v = hit(at.mouse, Rect { x: 0.0, y: 0.0, w: 300.0, h: 40.0 }, &props, true);
+            assert_eq!(v.value, None, "{kind}: no value is written for a text option");
+            assert!(v.warn.is_some(), "{kind}: the refusal warns — it never fails to nothing");
+        }
+    }
+
+    /// **The knobs the strips gained on their way into the engine are REAL.** Each was
+    /// a literal buried in the module the control replaced; each is now a style key
+    /// whose DEFAULT is that same literal — so nothing moved on screen, and a caller who
+    /// wants it moved now has somewhere to say so. Both halves are asserted: the default
+    /// still draws the old picture, and the key actually moves it.
+    #[test]
+    fn promoted_strip_style_keys_are_real_knobs() {
+        let opts = serde_json::json!([{ "value": 0.0, "label": "A" }, { "value": 1.0, "label": "B" }]);
+        let panels = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32, f32, f32)> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    HudCommand::Panel { x, y, w, h, radius, layer, .. } => {
+                        Some((*x, *y, *w, *h, *radius, *layer))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let rects = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32, f32)> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    HudCommand::Rect { x, y, w, h, layer, .. } => Some((*x, *y, *w, *h, *layer)),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // ── pill_toggle: where the floating highlight sits inside its cell ──
+        // A 180×30 well, pad 3 → two 87px cells from x 3.
+        let pill_rect = Rect { x: 0.0, y: 0.0, w: 180.0, h: 30.0 };
+        let pill = |style: Json| {
+            let mut out = Vec::new();
+            let props =
+                serde_json::json!({ "style": style, "children": opts.clone(), "bind_value": 0.0 });
+            draw_pill_toggle(pill_rect, &props, &mut out);
+            out
+        };
+        let base = serde_json::json!({ "pad": 3, "h": 30, "radius": 15, "active_top": [0.1,0.2,0.3,1.0] });
+        assert_eq!(
+            panels(&pill(base))[1],
+            (4.0, 3.0, 85.0, 24.0, 14.0, 0.0),
+            "default highlight: 1px in, radius one under the well's"
+        );
+        let tuned = serde_json::json!({
+            "pad": 3, "h": 30, "radius": 15, "active_top": [0.1,0.2,0.3,1.0],
+            "active_inset": 5, "active_radius": 2
+        });
+        assert_eq!(
+            panels(&pill(tuned))[1],
+            (8.0, 3.0, 77.0, 24.0, 2.0, 0.0),
+            "`active_inset` / `active_radius` move it"
+        );
+
+        // ── tabs: how far the underline rule runs inside its cell ──
+        let strip = Rect { x: 0.0, y: 0.0, w: 200.0, h: 30.0 };
+        let underline = |inset: Json| {
+            let mut out = Vec::new();
+            let props = serde_json::json!({
+                "style": null,
+                "tab_active": { "underline": [0.6,0.7,1.0,1.0], "underline_w": 3, "underline_inset": inset },
+                "tab_idle": {},
+                "children": [{ "value": 0.0, "label": "A" }],
+                "bind_value": 0.0, "gap": 0.0, "pad_x": 0.0, "pad_y": 0.0
+            });
+            draw_tabs(strip, &props, &mut out);
+            rects(&out)[0]
+        };
+        assert_eq!(underline(Json::Null), (0.0, 27.0, 200.0, 3.0, 0.0), "default: the full cell width");
+        assert_eq!(underline(serde_json::json!(6)), (6.0, 27.0, 188.0, 3.0, 0.0), "`underline_inset` shortens it");
+
+        // ── select: the popup's drop + sub-layer, the field's and rows' insets ──
+        let mut sel = Vec::new();
+        let props = serde_json::json!({
+            "style": {
+                "field": { "pad_x": 20, "caret_inset": 30, "caret_size": 12 },
+                "menu": { "gap": 12, "lift": 3, "row_h": 30, "row_pad": 10, "pad_x": 25,
+                          "sel_bg": [0.2,0.3,0.5,1.0] }
+            },
+            "children": opts.clone(), "bind_value": 0.0, "open": true, "placeholder": "…"
+        });
+        draw_select(Rect { x: 0.0, y: 0.0, w: 200.0, h: 40.0 }, &props, &mut sel);
+        assert_eq!(
+            panels(&sel)[1],
+            (0.0, 52.0, 200.0, 60.0, 3.0, 3.0),
+            "`menu.gap` drops the popup under the field and `menu.lift` raises it"
+        );
+        let all = rects(&sel);
+        assert_eq!(all[0], (164.0, 19.0, 12.0, 1.0, 0.0), "`caret_inset` / `caret_size` place the caret");
+        assert_eq!(
+            all.last().copied(),
+            Some((10.0, 52.0, 180.0, 30.0, 3.0)),
+            "`menu.row_pad` insets the selected row's band, lifted with the popup"
+        );
+        let texts: Vec<(f32, f32)> = sel
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Text { x, layer, .. } => Some((*x, *layer)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts[0], (20.0, 0.0), "`field.pad_x` insets the field's own label");
+        assert!(
+            texts[1..].iter().all(|t| *t == (25.0, 3.0)),
+            "`menu.pad_x` insets every row label, and each rides the popup's layer: {texts:?}"
+        );
+    }
+
+    /// **A focused panel draws its OWN rim.** The real [`draw_panel`], the real
+    /// `panel` style block: with the walker's focus on the pane the component
+    /// reaches for the `focused` sub-block (the 2px sapphire border), and without
+    /// it the `resting` one (the 1px edge). The CALLER passes no style string, no
+    /// rim, no focus flag — a scene that computed a pane's rim is exactly the
+    /// second focus system this component exists to end.
+    #[test]
+    fn a_focused_panel_draws_its_own_rim() {
+        let styles = crate::load_styles(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/sensorium/resources/ui_elements.json"
+        ));
+        let resting = styles["panel"]["resting"]["border_w"].as_f64().expect("panel.resting");
+        let focus_w = styles["panel"]["focused"]["border_w"].as_f64().expect("panel.focused");
+        assert_ne!(resting, focus_w, "the two states must be distinguishable at all");
+
+        let mut pane = node("panel");
+        pane.id = "pop_left".into();
+        pane.tab_group = "pop_left".into();
+        pane = prop(pane, "style", Value::Text("panel".into()));
+        pane.width = Some(200.0);
+        pane.height = Some(120.0);
+        pane.anchor = Some(UiAnchor::TopLeft);
+        assert!(
+            !pane.props.keys().any(|k| k == "focused" || k.ends_with("_style")),
+            "the caller passes no focus flag and no rim style — only the block name"
+        );
+        let mut page = node("screen");
+        page.children = vec![pane];
+
+        let border_of = |state: &mut UiState| {
+            let f = run_ui(
+                &page,
+                &ValueMap::new(),
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                state,
+            );
+            f.commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Panel { border, .. } => Some(f64::from(*border)),
+                    _ => None,
+                })
+                .expect("the panel drew its backdrop")
+        };
+
+        let mut idle = UiState::new();
+        assert_eq!(border_of(&mut idle), resting, "an unfocused pane rests");
+        let mut focused = UiState::new();
+        focused.request_focus("pop_left");
+        assert_eq!(border_of(&mut focused), focus_w, "the focused pane draws its own rim");
+    }
+
+    /// **A rail hint press steps the strip by one, and wraps** — over the REAL
+    /// `paged_menu`. The control owns its stepping: the walker records the fired
+    /// result name (`tab_next` — the same name the RB hint button's `action`
+    /// fires and the same one the shoulder signal carries), and the NEXT pass
+    /// advances that strip's own bind by +1 with wrap over its OWN children.
+    /// No scene owns a stepper, and no count is written down anywhere.
+    #[test]
+    fn a_rail_hint_press_steps_the_strip_by_one_and_wraps() {
+        let styles = serde_json::json!({});
+        let reg = crate::builtin_templates();
+        let option = |i: usize| {
+            let o = prop(node("option"), "value", Value::Number(i as f64));
+            prop(o, "label", Value::Text(format!("$t{i}")))
+        };
+        let mut menu = UiNode { template: Some("paged_menu".into()), ..Default::default() };
+        menu.slots.insert("pages".into(), vec![option(0), option(1)]);
+        menu.slots.insert("tabs".into(), vec![option(0), option(1), option(2)]);
+        let mut screen = node("screen");
+        screen.children = vec![crate::expand(menu, &reg)];
+
+        // The strips authored their own stepping — the SAME names the hint buttons fire.
+        let all = {
+            fn walk<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
+                out.push(n);
+                for c in &n.children {
+                    walk(c, out);
+                }
+                for g in n.slots.values() {
+                    for c in g {
+                        walk(c, out);
+                    }
+                }
+            }
+            let mut v = Vec::new();
+            walk(&screen, &mut v);
+            v
+        };
+        let rail = all.iter().find(|n| n.id == "paged_tabs").expect("the tab rail");
+        assert_eq!(rail.props.get("next_action"), Some(&Value::Text("tab_next".into())));
+        assert_eq!(rail.props.get("prev_action"), Some(&Value::Text("tab_prev".into())));
+        let hints: Vec<&str> = all
+            .iter()
+            .filter(|n| n.props.contains_key("glyph"))
+            .filter_map(|n| n.action.as_deref())
+            .collect();
+        assert!(
+            hints.contains(&"tab_next") && hints.contains(&"tab_prev"),
+            "the rail hints fire the very names the strip steps on — one channel"
+        );
+
+        // Three tabs, resting on 0: three presses walk 1 → 2 → 0.
+        let mut state = UiState::new();
+        let mut model = ValueMap::new().with("tab", 0.0).with("paged_tabs_shown", true);
+        for want in [1.0, 2.0, 0.0] {
+            state.push_step("tab_next");
+            let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+            assert_eq!(f.results.number("tab"), Some(want), "the strip stepped itself");
+            model = model.with("tab", want); // the scene folded it back
+        }
+        // Backwards wraps too, over the PAGE rail's own (different) length.
+        state.push_step("page_prev");
+        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(f.results.number("page"), Some(1.0), "two pages: 0 − 1 wraps to 1");
+        // A name no strip claims steps nothing, and never accumulates.
+        state.push_step("something_else");
+        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(f.results.number("tab"), Some(0.0), "an unclaimed name is inert");
+        assert_eq!(f.results.number("page"), Some(0.0));
+    }
+
+    /// A MOUSE CLICK on a rail hint steps the strip — the click path feeds the
+    /// strip-step channel exactly as the signal path does. Regression for the bug
+    /// Aaron found in-window (2026-08-10): a hint FLASHED on click but never advanced
+    /// the page, because only the signal path called `push_step` and a click set the
+    /// result alone. A click is an activation like any other.
+    #[test]
+    fn a_mouse_click_on_a_rail_hint_steps_the_strip() {
+        let styles = serde_json::json!({});
+        let option = |i: usize| prop(node("option"), "value", Value::Number(i as f64));
+
+        let mut hint = node("button");
+        hint.action = Some("idx_next".into());
+        hint.size = Some(24.0);
+
+        let mut strip = node("tabs");
+        strip.id = "strip".into();
+        strip.bind = Some("idx".into());
+        strip = prop(strip, "next_action", Value::Text("idx_next".into()));
+        strip.children = vec![option(0), option(1), option(2)];
+        strip.size = Some(24.0);
+
+        let mut col = node("cell");
+        col.anchor = Some(UiAnchor::TopLeft);
+        col.offset = [16.0, 16.0];
+        col.width = Some(200.0);
+        col.children = vec![hint, strip];
+        let mut screen = node("screen");
+        screen.children = vec![col];
+
+        let mut state = UiState::new();
+        let model = ValueMap::new().with("idx", 0.0);
+        // The hint is the first child: y 16..40. Click it.
+        let f1 = run_ui(&screen, &model, &styles, &input_at(50.0, 28.0, true), &mut state);
+        // The step channel is one-frame (like the signal path): fold f1's value and run
+        // once more without a click so a same-frame OR next-frame step both land.
+        let model = model.with("idx", f1.results.number("idx").unwrap_or(0.0));
+        let f2 = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(
+            f2.results.number("idx"),
+            Some(1.0),
+            "a mouse click on the hint stepped the strip — a click is an activation"
+        );
+    }
+
+    /// **A strip selection is reported as a NUMBER.** The every-frame echo is the
+    /// channel the selection travels on an idle frame, so it carries the same one
+    /// representation the click does — never a stringified index.
+    #[test]
+    fn echo_binds_reports_a_strip_selection_as_a_number() {
+        let styles = serde_json::json!({});
+        for kind in ["tabs", "pill_toggle", "select"] {
+            let page = strip_page(kind, [Value::Number(0.0), Value::Number(1.0)]);
+            let model = ValueMap::new().with("pick", 1.0);
+            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+            assert_eq!(f.results.number("pick"), Some(1.0), "{kind}: the echo is a number");
+            assert_eq!(f.results.text("pick"), None, "{kind}: the echo is never text");
+        }
+        // `radio` is the exception that proves the boundary: a row's literal NAME is
+        // text, and its echo stays text.
+        let mut radio = node("radio");
+        radio.id = "r".into();
+        radio.bind = Some("sec".into());
+        radio.width = Some(200.0);
+        radio.height = Some(30.0);
+        radio.anchor = Some(UiAnchor::TopLeft);
+        let mut page = node("screen");
+        page.children = vec![radio];
+        let model = ValueMap::new().with("sec", "sec_audio");
+        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        assert_eq!(f.results.text("sec"), Some("sec_audio"), "radio echoes the row NAME as text");
+    }
 
     /// One text_field (bind "name", id "name_field") at (10,10) 200×40 under a screen.
     fn text_field_tree() -> UiNode {
@@ -4453,8 +7754,12 @@ mod tests {
     fn typing_with_the_pointer_parked_folds_in_rust_and_redraws_the_field() {
         let _g = crate::strings::test_guard();
         // Keyboard ≠ pointer: a typing frame with a parked pointer is NOT
-        // input-active, so it crosses into Lua for zero HIT calls — the fold is
-        // Rust — yet the value updates and the field (alone) redraws.
+        // input-active, so the hit pass runs for zero nodes — the fold is
+        // unconditional — yet the value updates and the field (alone) redraws.
+        //
+        // `redraw_nodes` is the assertion: it proves the field re-rendered AND that
+        // nothing else did, so neither a field that silently stopped drawing nor a
+        // tree that redrew wholesale would pass.
         let page = text_field_tree();
         let styles = text_field_styles();
         let mut state = UiState::new();
@@ -4471,10 +7776,8 @@ mod tests {
         typing.typed = "Q".into();
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
         assert_eq!(f.results.text("name"), Some("Q"), "the parked-pointer frame still folds");
-        assert_eq!(f.stats.lua_hits, 0, "the fold is Rust — no hit crossing");
         assert_eq!(f.stats.redraw_nodes, 1, "exactly the field redraws for the new value");
-        assert_eq!(f.stats.lua_draws, 1, "…one Lua draw crossing: the field's own");
-        assert!(f.results.is_on("hud_hit"), "the resting claim survives via the memo");
+        assert!(f.results.is_on("hud_hit"), "the resting claim survives the typing frame");
     }
 
     #[test]
@@ -4526,15 +7829,14 @@ mod tests {
         assert_eq!(f.stats.redraw_nodes, 1);
     }
 
-    // (The transient S6 parity test — `draw_text_field` vs the Lua module, byte for
-    // byte across placeholder/valued/hovered/focused/focused-away states — gated the
-    // port and was deleted with the Rust arm; the byte-pinned draw below and the
-    // behaviour tests above carry the regression duty.)
     #[test]
-    fn text_field_lua_draw_is_byte_pinned() {
-        // Both draw branches at the byte level, outliving the deleted Rust arm:
-        // a focused, valued field (well + label-coloured value + measured caret)
-        // and an empty resting field (well + dim resolved placeholder, no caret).
+    fn text_field_draw_is_byte_pinned() {
+        // Both draw branches at the byte level, held across the field's two tier
+        // moves (Rust → `ui/text_field.lua` in S6, back to `draw_text_field` under
+        // ruling BF0AF0C9): a focused, valued field (well + label-coloured value +
+        // measured caret) and an empty resting field (well + dim resolved
+        // placeholder, no caret). It runs through `run_ui`, so it is the ENGINE arm
+        // under test now, and the numbers below did not move.
         let page = text_field_tree();
         let styles = text_field_styles();
         let text = |s: &str, color: [f32; 4]| HudCommand::Text {
@@ -4609,11 +7911,7 @@ mod tests {
 
         let model = ValueMap::new().with("caption", "\u{25c9}  Skin");
         let mut state = UiState::new();
-        // Buttons DRAW via the Lua component now, so give the walker the component library.
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("button component library");
-        let f =
-            run_ui_with(&b, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state, Some(&lib));
+        let f = run_ui(&b, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state);
         let drew = f.commands.iter().any(
             |c| matches!(c, HudCommand::Text { text, .. } if text.contains("Skin")),
         );
@@ -4621,13 +7919,12 @@ mod tests {
 
         // With no bind, the literal label still wins — existing buttons are unaffected.
         let plain = prop(node("button"), "label", Value::Text("GO".into()));
-        let f = run_ui_with(
+        let f = run_ui(
             &plain,
             &ValueMap::new(),
             &styles(),
             &input_at(-9.0, -9.0, false),
             &mut state,
-            Some(&lib),
         );
         assert!(f
             .commands
@@ -4635,13 +7932,99 @@ mod tests {
             .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "GO")));
     }
 
-    /// A checkbox always draws its box; the inset `check` tick appears ONLY when its
-    /// bound value is true — dispatched to `ui/checkbox.lua` (box = 1 panel, box + tick =
-    /// 2). Also proves `bind_value` + the merged node props (`box`/`label`) cross.
+    /// **The promoted knobs are live.** Restoring these four controls to the engine also
+    /// gave each the parameters its module had hardcoded — a corner radius, an edge
+    /// width, a caption gutter, a knob inset — every one defaulting to the literal it
+    /// replaced, so nothing moved. A promoted key that no arm actually reads would be
+    /// API surface that silently does nothing (the fail-quiet hole the authored-name law
+    /// exists to close), so each is asserted here to change the picture.
     #[test]
-    fn checkbox_lua_ticks_when_bound_true() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn boolean_controls_honour_their_promoted_keys() {
+        let r = Rect { x: 0.0, y: 0.0, w: 120.0, h: 20.0 };
+
+        // checkbox — box radius + authored edge width, the tick's own radius, and the
+        // caption's gutter and colour.
+        let props = serde_json::json!({
+            "style": { "box": [0.1,0.1,0.1,1.0], "radius": 4, "border": [1.0,0.0,0.0,1.0],
+                       "border_w": 3, "check": [1.0,1.0,1.0,1.0], "check_radius": 2,
+                       "label": [0.0,1.0,0.0,1.0], "pad": 3 },
+            "box": 14, "label": "L", "label_gap": 20, "bind_value": true
+        });
+        let mut out = Vec::new();
+        draw_checkbox(r, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { radius: box_r, border, border_color, .. }, HudCommand::Panel { radius: tick_r, .. }, HudCommand::Text { x, color, .. }] =>
+            {
+                assert_eq!(*box_r, 4.0, "the box takes the style radius");
+                assert_eq!((*border, *border_color), (3.0, [1.0, 0.0, 0.0, 1.0]), "authored edge width");
+                assert_eq!(*tick_r, 2.0, "the tick takes its own radius");
+                assert_eq!(*x, 34.0, "the caption sits `box` + `label_gap` from the rect edge");
+                assert_eq!(*color, [0.0, 1.0, 0.0, 1.0], "…in the style's caption colour");
+            }
+            other => panic!("checkbox drew {other:?}"),
+        }
+
+        // toggle — knob inset (which sizes AND places the knob), both radii, the edge
+        // width, and the OFF track's second gradient stop.
+        let props = serde_json::json!({
+            "style": { "w": 50, "h": 25, "knob_pad": 5, "radius": 2, "knob_radius": 1,
+                       "off_bg": [0.1,0.1,0.1,1.0], "off_bot": [0.0,0.0,1.0,1.0],
+                       "off_border": [1.0,1.0,1.0,1.0], "border_w": 4 },
+            "bind_value": false
+        });
+        let mut out = Vec::new();
+        draw_toggle(r, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { radius: track_r, border, color2, grad, .. }, HudCommand::Panel { x, y, w, h, radius: knob_r, .. }] =>
+            {
+                assert_eq!((*track_r, *border), (2.0, 4.0), "track radius + authored edge width");
+                assert_eq!((*color2, *grad), ([0.0, 0.0, 1.0, 1.0], 1.0), "`off_bot` ramps the OFF track");
+                assert_eq!((*x, *w, *h), (5.0, 15.0, 15.0), "`knob_pad` insets and sizes the knob");
+                assert_eq!(*y, r.y + (r.h - 25.0) * 0.5 + 5.0, "…on both axes");
+                assert_eq!(*knob_r, 1.0, "the knob takes its own radius");
+            }
+            other => panic!("toggle drew {other:?}"),
+        }
+
+        // radio — a SQUARE radio: both round defaults are style-owned, not baked in.
+        let props = serde_json::json!({
+            "style": { "box": [0.1,0.1,0.1,1.0], "check": [1.0,1.0,1.0,1.0],
+                       "radius": 0, "check_radius": 0 },
+            "box": 14, "label": "", "value": "a", "bind_value": "a"
+        });
+        let mut out = Vec::new();
+        draw_radio(r, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { radius: box_r, .. }, HudCommand::Panel { radius: dot_r, .. }] => {
+                assert_eq!((*box_r, *dot_r), (0.0, 0.0), "a radio can be authored square");
+            }
+            other => panic!("radio drew {other:?}"),
+        }
+
+        // tile — a rounded, edged slot cell.
+        let props = serde_json::json!({
+            "style": { "cell": [0.2,0.2,0.2,1.0], "radius": 6,
+                       "border": [1.0,1.0,0.0,1.0], "border_w": 2 },
+            "enabled": true, "label": ""
+        });
+        let mut out = Vec::new();
+        draw_tile(r, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { radius, border, border_color, .. }, HudCommand::Text { .. }] => {
+                assert_eq!(*radius, 6.0, "the cell takes the style radius");
+                assert_eq!((*border, *border_color), (2.0, [1.0, 1.0, 0.0, 1.0]), "and an authored edge");
+            }
+            other => panic!("tile drew {other:?}"),
+        }
+    }
+
+    /// A checkbox always draws its box; the inset `check` tick appears ONLY when its
+    /// bound value is true — drawn by the ENGINE arm (box = 1 panel, box + tick = 2).
+    /// Also proves `bind_value` + the merged node props (`box`/`label`) still reach the
+    /// component: the walker assembles ONE prop surface, and the restoration must not
+    /// change what a control receives.
+    #[test]
+    fn checkbox_ticks_when_bound_true() {
         let styles = serde_json::json!({
             "cb": { "box": [0.1, 0.1, 0.1, 1.0], "check": [0.2, 0.9, 0.3, 1.0],
                     "border": [0.3, 0.3, 0.3, 1.0], "pad": 3 }
@@ -4660,7 +8043,7 @@ mod tests {
 
         let panels = |checked: bool| {
             let model = ValueMap::new().with("flag", checked);
-            run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib))
+            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
                 .commands
                 .iter()
                 .filter(|c| matches!(c, HudCommand::Panel { .. }))
@@ -4669,18 +8052,16 @@ mod tests {
         assert_eq!(panels(false), 1, "unchecked: just the box");
         assert_eq!(panels(true), 2, "checked: box + tick");
 
-        // The row label (a merged node prop) reaches the Lua component.
+        // The row label (a merged node prop) reaches the component's draw.
         let model = ValueMap::new().with("flag", false);
-        let f = run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib));
+        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
         assert!(f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Enable")));
     }
 
     /// A toggle's knob sits at the RIGHT of the pill when its bound value is true, at the
-    /// LEFT when false — dispatched to `ui/toggle.lua`.
+    /// LEFT when false — drawn by the ENGINE arm.
     #[test]
-    fn toggle_lua_knob_shifts_with_bound_value() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn toggle_knob_shifts_with_bound_value() {
         let styles = serde_json::json!({
             "tg": { "w": 50, "h": 24, "on_top": [0.1, 0.3, 0.6, 1.0], "off_bg": [0.1, 0.1, 0.1, 1.0],
                     "knob_on": [0.9, 0.9, 1.0, 1.0], "knob_off": [0.5, 0.5, 0.5, 1.0] }
@@ -4696,7 +8077,7 @@ mod tests {
         // The knob is the small SQUARE panel (w == h, smaller than the 24px pill height).
         let knob_x = |on: bool| {
             let model = ValueMap::new().with("on", on);
-            run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib))
+            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
                 .commands
                 .iter()
                 .find_map(|c| match c {
@@ -4709,11 +8090,10 @@ mod tests {
     }
 
     /// A tile fills from `style` when its enabled binding is loaded, and from `style_off`
-    /// when it is not — dispatched to `ui/tile.lua` (proves `enabled` + `style_off` cross).
+    /// when it is not — drawn by the ENGINE arm (proves `enabled` + the resolved
+    /// `style_off` block still reach the component).
     #[test]
-    fn tile_lua_swaps_style_when_not_loaded() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn tile_swaps_style_when_not_loaded() {
         let styles = serde_json::json!({
             "on":  { "cell": [0.2, 0.2, 0.2, 1.0] },
             "off": { "cell": [0.9, 0.0, 0.0, 1.0] }
@@ -4730,7 +8110,7 @@ mod tests {
         page.children = vec![tile];
         let fill = |loaded: bool| {
             let model = ValueMap::new().with("loaded", loaded).with("sel", false);
-            run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib))
+            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
                 .commands
                 .iter()
                 .find_map(|c| match c {
@@ -4744,12 +8124,12 @@ mod tests {
     }
 
     /// A pill_toggle draws its well, plus a highlight panel on the segment whose child
-    /// `value` equals the bound selection — dispatched to `ui/pill_toggle.lua` (proves the
-    /// `children` list crosses).
+    /// `value` equals the bound selection — proving the children-as-data list reaches the
+    /// engine-tier draw, and that selection compares the value AS AUTHORED (this strip
+    /// is driven with TEXT values, which the DRAW must still match even though the HIT
+    /// narrows a written index to a number).
     #[test]
-    fn pill_toggle_lua_lights_the_selected_segment() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn pill_toggle_lights_the_selected_segment() {
         let styles = serde_json::json!({
             "pt": { "bg": [0.1, 0.1, 0.1, 1.0], "active_top": [0.2, 0.4, 0.7, 1.0],
                     "label": [0.6, 0.6, 0.6, 1.0], "active_label": [1.0, 1.0, 1.0, 1.0] }
@@ -4770,23 +8150,20 @@ mod tests {
 
         let panels = |selected: &str| {
             let model = ValueMap::new().with("mode", selected);
-            run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib))
-                .commands
-                .iter()
-                .filter(|c| matches!(c, HudCommand::Panel { .. }))
-                .count()
+            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+            assert!(f.stats.redraw_nodes >= 1, "the pill really drew this frame");
+            f.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count()
         };
         assert_eq!(panels("none"), 1, "no active segment: just the well");
         assert_eq!(panels("run"), 2, "the selected segment adds a highlight panel");
     }
 
     /// A tab strip styles the cell whose child `value` == the bound selection from
-    /// `tab_active`, the rest from `tab_idle` — dispatched to `ui/tabs.lua` (proves the
-    /// resolved `tab_active`/`tab_idle` blocks + the `children` list cross).
+    /// `tab_active`, the rest from `tab_idle` — proving the resolved per-state blocks
+    /// and the children-as-data list both reach the engine-tier draw, and (like the pill
+    /// above) that the draw's selection compare stays value-as-authored.
     #[test]
-    fn tabs_lua_styles_the_selected_tab_active() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn tabs_style_the_selected_tab_active() {
         let styles = serde_json::json!({
             "active": { "fill_top": [0.2, 0.4, 0.7, 1.0], "label": [1.0, 1.0, 1.0, 1.0] },
             "idle":   { "fill_top": [0.1, 0.1, 0.1, 1.0], "label": [0.5, 0.5, 0.5, 1.0] }
@@ -4807,7 +8184,8 @@ mod tests {
         page.children = vec![strip];
 
         let model = ValueMap::new().with("sel", "a");
-        let f = run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib));
+        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        assert!(f.stats.redraw_nodes >= 1, "the strip really drew this frame");
         let fills: Vec<[f32; 4]> = f
             .commands
             .iter()
@@ -4822,11 +8200,9 @@ mod tests {
     }
 
     /// A slider's fill rect spans the track proportionally to its bound value (mapped
-    /// through min/max) — dispatched to `ui/slider.lua`.
+    /// through min/max) — drawn by the engine-tier arm.
     #[test]
-    fn slider_lua_fills_to_the_bound_value() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn slider_fills_to_the_bound_value_in_rust() {
         let styles = serde_json::json!({
             "sl": { "track": [0.1, 0.1, 0.1, 1.0], "fill": [0.2, 0.4, 0.7, 1.0], "handle": [0.9, 0.9, 1.0, 1.0] }
         });
@@ -4843,8 +8219,9 @@ mod tests {
         // Rects, in order: track (full width 100), fill (value-scaled), handle.
         let fill_w = |v: f64| {
             let model = ValueMap::new().with("v", v);
-            let cmds = run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib)).commands;
-            let widths: Vec<f32> = cmds.iter().filter_map(|c| match c {
+            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+            assert!(f.stats.redraw_nodes >= 1, "the slider really drew this frame");
+            let widths: Vec<f32> = f.commands.iter().filter_map(|c| match c {
                 HudCommand::Rect { w, .. } => Some(*w),
                 _ => None,
             }).collect();
@@ -4855,11 +8232,9 @@ mod tests {
     }
 
     /// A stepper draws its field + two end buttons (3 rects) and the value formatted with
-    /// `decimals`/`suffix` — dispatched to `ui/stepper.lua`.
+    /// `decimals`/`suffix` — in the engine tier.
     #[test]
-    fn stepper_lua_draws_field_buttons_and_formatted_value() {
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
+    fn stepper_draws_field_buttons_and_formatted_value() {
         let styles = serde_json::json!({
             "st": { "field": [0.1, 0.1, 0.1, 1.0], "btn": [0.2, 0.2, 0.2, 1.0], "label": [1.0, 1.0, 1.0, 1.0] }
         });
@@ -4874,7 +8249,8 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![sp];
         let model = ValueMap::new().with("n", 60.0);
-        let f = run_ui_with(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new(), Some(&lib));
+        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        assert!(f.stats.redraw_nodes >= 1, "the stepper really drew this frame");
         let rects = f.commands.iter().filter(|c| matches!(c, HudCommand::Rect { .. })).count();
         assert_eq!(rects, 3, "field background + two end buttons");
         assert!(
@@ -5042,6 +8418,62 @@ mod tests {
         assert!(state.dragging.is_empty(), "capture released");
     }
 
+    /// **A captured node keeps answering once the pointer LEAVES its rect**, until
+    /// the button-up edge releases it. Dragging a slider and sliding off the row is
+    /// the ordinary way to use one, and the hit pass is otherwise rect-gated — so
+    /// without the capture short-circuit the value would freeze the instant the hand
+    /// wandered, which is the bug this pins.
+    ///
+    /// The gate that used to hold this asserted the retired Lua crossing counter
+    /// (`lua_hits == 1` for the off-rect node). It re-pins the same invariant through
+    /// the BEHAVIOUR instead: the in-flight value keeps tracking an off-rect pointer,
+    /// and the release commits from out there.
+    #[test]
+    fn a_captured_slider_keeps_tracking_off_rect_until_release() {
+        let mut sl = node("slider");
+        sl.id = "s".into();
+        sl.bind = Some("v".into());
+        sl.width = Some(200.0);
+        sl.height = Some(20.0);
+        sl.anchor = Some(UiAnchor::TopLeft);
+        sl = prop(sl, "slider_h", Value::Number(12.0));
+        sl = prop(sl, "min", Value::Number(0.0));
+        sl = prop(sl, "max", Value::Number(100.0));
+        let mut page = node("screen");
+        page.children = vec![sl];
+
+        let st = serde_json::json!({});
+        let model = ValueMap::new().with("v", 0.0);
+        let mut state = UiState::new();
+
+        // Press on the rail (row is x 0..200, y 0..20) — captures.
+        run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
+        assert!(state.dragging.contains("s"), "the grab-band press captures");
+
+        // Still held, but the pointer has left the row entirely (y = 400, far below
+        // it). A rect test would drop this node; the capture keeps it dispatching.
+        let off = |x: f32, down: bool| UiInput {
+            mouse: Vec2::new(x, 400.0),
+            clicked: false,
+            down,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let f = run_ui(&page, &model, &st, &off(180.0, true), &mut state);
+        assert_eq!(f.results.number("v"), Some(0.0), "commit-on-release still holds off-rect");
+        let live = state.drag_value.as_ref().expect("the off-rect drag still holds a value");
+        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
+        assert!(n > 80.0, "the value tracks the pointer's x even off the row: {n}");
+
+        // Release from out there: the one real write lands, and the capture ends.
+        let f = run_ui(&page, &model, &st, &off(180.0, false), &mut state);
+        let v = f.results.number("v").expect("an off-rect release still commits");
+        assert!(v > 80.0, "release commits the off-rect dragged value: {v}");
+        assert!(state.dragging.is_empty(), "capture released");
+    }
+
     /// A labelled slider row (label column + track + value column, like the fit
     /// gadget's): the whole ROW claims and focuses, but only the padded GRAB band
     /// (track ±6px) captures a drag.
@@ -5107,6 +8539,84 @@ mod tests {
         let focused = ValueMap::new().with("v", 25.0).with("fit_focus", "v");
         let f = run_ui(&page, &focused, &st, &input_at(700.0, 500.0, false), &mut state);
         assert_eq!(f.results.text("fit_focus"), Some("v"), "focus echoes off-pointer");
+    }
+
+    /// Local display ownership: a committed control does NOT wait on the scene. The
+    /// model here NEVER moves — the scene has not folded the edit back (or publishes
+    /// the key conditionally, which is the same thing from the control's side) — and
+    /// the slider still holds what the user set instead of snapping to the stale 25.
+    #[test]
+    fn a_committed_value_survives_a_model_that_never_catches_up() {
+        let (page, st) = grab_slider();
+        let stale = ValueMap::new().with("v", 25.0);
+        let mut state = UiState::new();
+
+        run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
+        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let f = run_ui(&page, &stale, &st, &up, &mut state);
+        let committed = f.results.number("v").expect("release commits");
+        assert!((committed - 50.0).abs() < 2.0, "release commits: {committed}");
+
+        // The frames that used to snap back. Nothing has changed the model, so nothing
+        // has the standing to move the control.
+        for frame in 0..3 {
+            let f = run_ui(&page, &stale, &st, &input_at(700.0, 500.0, false), &mut state);
+            let v = f.results.number("v").expect("a bound control always reports");
+            assert!(
+                (v - committed).abs() < f32::EPSILON as f64,
+                "frame {frame} after release fell back to the stale model: {v}",
+            );
+        }
+    }
+
+    /// The other half of the contract: local ownership yields to the AUTHORITY. A
+    /// model that moves on its own — an external change, or the scene clamping the
+    /// commit to something it will actually honour — takes the control with it.
+    #[test]
+    fn an_external_model_change_outranks_the_local_edit() {
+        let (page, st) = grab_slider();
+        let stale = ValueMap::new().with("v", 25.0);
+        let mut state = UiState::new();
+
+        run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
+        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        run_ui(&page, &stale, &st, &up, &mut state);
+
+        // The scene honours the edit as 40 (a clamp, a snap-to-step, a sim talking
+        // back) rather than the 50 the pointer asked for.
+        let clamped = ValueMap::new().with("v", 40.0);
+        let f = run_ui(&page, &clamped, &st, &input_at(700.0, 500.0, false), &mut state);
+        assert_eq!(f.results.number("v"), Some(40.0), "the control follows the authority");
+        assert!(state.local.is_empty(), "an overruled entry stops being held");
+
+        // And the ordinary agreement case: the scene arrives at exactly what was
+        // committed, so the entry has nothing left to carry.
+        let mut state = UiState::new();
+        run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
+        run_ui(&page, &stale, &st, &up, &mut state);
+        let agreed = ValueMap::new().with("v", 50.0);
+        let f = run_ui(&page, &agreed, &st, &input_at(700.0, 500.0, false), &mut state);
+        assert_eq!(f.results.number("v"), Some(50.0));
+        assert!(state.local.is_empty(), "the scene agreed — nothing left to hold");
+    }
+
+    /// The grab-band slider both ownership tests drive: track x 80..260, y 14..26,
+    /// grab band y 8..32; a press at (170, 10) maps to 50 of 0..100.
+    fn grab_slider() -> (UiNode, Json) {
+        let mut sl = node("slider");
+        sl.id = "s".into();
+        sl.bind = Some("v".into());
+        sl.width = Some(300.0);
+        sl.height = Some(40.0);
+        sl.anchor = Some(UiAnchor::TopLeft);
+        sl = prop(sl, "slider_h", Value::Number(12.0));
+        sl = prop(sl, "label_w", Value::Number(80.0));
+        sl = prop(sl, "value_w", Value::Number(40.0));
+        sl = prop(sl, "min", Value::Number(0.0));
+        sl = prop(sl, "max", Value::Number(100.0));
+        let mut page = node("screen");
+        page.children = vec![sl];
+        (page, serde_json::json!({}))
     }
 
     #[test]
@@ -5185,9 +8695,7 @@ mod tests {
 
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
-        let frame = run_ui_with(&page, &model, &styles(), &input_at(0.0, 0.0, false), &mut state, Some(&lib));
+        let frame = run_ui(&page, &model, &styles(), &input_at(0.0, 0.0, false), &mut state);
 
         // The sprite blits tex 4 at 1.14 × the 600px screen height = 684px, square, layer 0.
         let (tex, w, h, slayer) = frame
@@ -5311,10 +8819,8 @@ mod tests {
         });
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
-        let frame = run_ui_with(&page, &model, &styles, &input_at(400.0, 400.0, false), &mut state, Some(&lib));
+        let frame = run_ui(&page, &model, &styles, &input_at(400.0, 400.0, false), &mut state);
 
         // Exactly four Rune-font glyphs, emitted in TL, TR, BL, BR order.
         let runes: Vec<(&str, f32, f32, [f32; 4])> = frame
@@ -5382,15 +8888,13 @@ mod tests {
         });
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         let mut page = node("screen");
         page.children = vec![tip.clone()];
 
         // Click squarely over the card (rect 20,20 .. 240,84; centre ≈ 130,52) — a
         // presentational tip claims nothing.
-        let frame = run_ui_with(&page, &model, &styles, &input_at(130.0, 52.0, true), &mut state, Some(&lib));
+        let frame = run_ui(&page, &model, &styles, &input_at(130.0, 52.0, true), &mut state);
         assert!(!frame.results.is_on("hud_hit"), "a presentational tooltip never steals the pointer");
 
         // The backdrop panel fills the node rect (the single Panel command).
@@ -5436,7 +8940,7 @@ mod tests {
         plain.props.remove("rune");
         let mut page2 = node("screen");
         page2.children = vec![plain];
-        let frame = run_ui_with(&page2, &model, &styles, &input_at(-9.0, -9.0, false), &mut state, Some(&lib));
+        let frame = run_ui(&page2, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
         assert!(
             frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Emberlash")),
             "name still drawn without a rune"
@@ -5468,8 +8972,6 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
         state.request_focus("go");
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
         let first_fill = |frame: &UiFrame| {
             frame
                 .commands
@@ -5483,19 +8985,19 @@ mod tests {
 
         // Frame 1: pointer parked far away, never moved — nav mode, the seed lights.
         let f1 =
-            run_ui_with(&page, &model, &st, &input_at(500.0, 400.0, false), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(500.0, 400.0, false), &mut state);
         assert!(state.nav_mode(), "entry state is nav modality");
         assert_eq!(first_fill(&f1)[0], 0.9, "seeded nav focus draws the hover state");
 
         // Frame 2: the pointer MOVES (still outside the rect) — takeover, highlight yields.
         let f2 =
-            run_ui_with(&page, &model, &st, &input_at(510.0, 400.0, false), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(510.0, 400.0, false), &mut state);
         assert!(!state.nav_mode(), "real pointer movement takes the modality over");
         assert_eq!(first_fill(&f2)[0], 0.1, "the focused button unlights under pointer modality");
 
         // Frame 3: hover the button — pointer hover works on the very same node.
         let f3 =
-            run_ui_with(&page, &model, &st, &input_at(60.0, 20.0, false), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(60.0, 20.0, false), &mut state);
         assert_eq!(first_fill(&f3)[0], 0.9, "pointer hover lights it in pointer modality");
     }
 
@@ -5523,12 +9025,11 @@ mod tests {
         });
         let model = ValueMap::new().with("mp", 0.5);
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         let frame =
-            run_ui_with(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
         assert!(!frame.results.is_on("hud_hit"), "a read-only gauge never claims the pointer");
+        assert!(frame.stats.redraw_nodes >= 1, "the bar really drew this frame");
         let panels: Vec<_> = frame
             .commands
             .iter()
@@ -5546,11 +9047,160 @@ mod tests {
         );
     }
 
+    /// The `gauge` was the one restored control with NO coverage at all — a pure
+    /// read-out that nothing else in the suite would notice going quiet. It draws in the
+    /// engine, it marks the reading in the band's colour or the caution one, and a
+    /// NEGATIVE reading is *no signal yet* rather than a value pinned at the floor.
+    #[test]
+    fn gauge_marks_its_reading_and_washes_out_with_no_signal() {
+        // One habitability axis: a 200×12 bar with a 0.3..0.7 band, pointer parked on it
+        // with the button down (a read-out must ignore both).
+        let mut g = node("gauge");
+        g.id = "g".into();
+        g.width = Some(200.0);
+        g.height = Some(12.0);
+        g.anchor = Some(UiAnchor::TopLeft);
+        g.bind = Some("temp".into());
+        g = prop(g, "lo", Value::Number(0.3));
+        g = prop(g, "hi", Value::Number(0.7));
+        g = prop(g, "style", Value::Text("gauge".into()));
+        let mut page = node("screen");
+        page.children = vec![g];
+
+        let st = serde_json::json!({
+            "gauge": {
+                "track": [0.08, 0.09, 0.12, 0.95], "band": [0.18, 0.62, 0.36, 0.55],
+                "marker": [0.94, 0.8, 0.42, 1.0], "marker_in": [0.18, 0.62, 0.36, 1.0],
+                "no_signal": [0.06, 0.06, 0.09, 0.72], "sheen": [0.9, 0.94, 1.0, 0.1]
+            }
+        });
+        let mut state = UiState::new();
+        let read = |v: f64, state: &mut UiState| {
+            let model = ValueMap::new().with("temp", v);
+            let frame =
+                run_ui(&page, &model, &st, &input_at(100.0, 6.0, true), state);
+            assert!(!frame.results.is_on("hud_hit"), "a read-out never claims the pointer");
+            assert!(frame.stats.redraw_nodes >= 1, "the gauge really drew this frame");
+            frame
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    HudCommand::Rect { x, w, color, .. } => Some((*x, *w, *color)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Inside the band: track + band + sheen, then a marker in the in-band colour.
+        let inside = read(0.5, &mut state);
+        assert_eq!(inside.len(), 4, "track + band + sheen + marker: {inside:?}");
+        assert!((inside[1].0 - 60.0).abs() < 0.01, "the band starts at `lo` along the track");
+        assert!((inside[1].1 - 80.0).abs() < 0.01, "…and spans `hi - lo`");
+        assert!((inside[3].0 - 98.0).abs() < 0.01, "the marker is centred on the reading");
+        assert_eq!(inside[3].2, [0.18, 0.62, 0.36, 1.0], "an in-band reading marks green");
+
+        // Outside it, the caution stop — the `marker_in` alias must not leak out here.
+        let outside = read(0.9, &mut state);
+        assert_eq!(outside[3].2, [0.94, 0.8, 0.42, 1.0], "an out-of-band reading marks caution");
+
+        // Negative = NO SIGNAL: the wash covers the bar and no marker is drawn at all.
+        let quiet = read(-1.0, &mut state);
+        assert_eq!(quiet.len(), 4, "track + band + sheen + wash: {quiet:?}");
+        assert_eq!(quiet[3].2, [0.06, 0.06, 0.09, 0.72], "the last rect is the wash…");
+        assert!((quiet[3].1 - 200.0).abs() < 0.01, "…covering the whole bar, marker-free");
+    }
+
+    /// **The promoted knobs are live.** Restoring the two gauges and the stat dot also
+    /// gave each the parameters its module had hardcoded — the marker's overhang, the
+    /// caps row's clearance, the sheen's inset and height, the glow's stand-off and
+    /// feather — every one defaulting to the literal it replaced, so nothing moved on
+    /// screen. A promoted key no arm actually reads would be API surface that silently
+    /// does nothing, so each is asserted here to change the picture.
+    #[test]
+    fn gauge_group_honours_its_promoted_keys() {
+        // gauge — `marker_w` + `marker_over` size the caliper, `sheen_h` the top rule.
+        let props = serde_json::json!({
+            "style": { "track": [0.1,0.1,0.1,1.0], "band": [0.0,1.0,0.0,0.5],
+                       "marker": [1.0,1.0,0.0,1.0], "marker_w": 6, "marker_over": 5,
+                       "sheen": [1.0,1.0,1.0,0.2], "sheen_h": 3 },
+            "lo": 0.25, "hi": 0.75, "bind_value": 1.0
+        });
+        let mut out = Vec::new();
+        draw_gauge(Rect { x: 0.0, y: 10.0, w: 100.0, h: 20.0 }, &props, &mut out);
+        match &out[..] {
+            [_, _, HudCommand::Rect { h: sheen_h, .. }, HudCommand::Rect { x, y, w, h, .. }] => {
+                assert_eq!(*sheen_h, 3.0, "`sheen_h` thickens the top rule");
+                assert_eq!((*x, *w), (97.0, 6.0), "`marker_w` sizes the caliper, centred on the value");
+                assert_eq!((*y, *h), (5.0, 30.0), "`marker_over` overhangs the track at both ends");
+            }
+            other => panic!("gauge drew {other:?}"),
+        }
+
+        // resource_gauge — `label_gap` clears the caps row, `border_w` sets the rim, and
+        // `sheen_inset` / `sheen_h` size the highlight over the fill.
+        let props = serde_json::json!({
+            "style": { "track": [0.1,0.1,0.1,1.0], "border": [1.0,0.0,0.0,1.0], "border_w": 3,
+                       "radius": 4, "pad": 2, "label_size": 10, "label_gap": 20,
+                       "mana_top": [0.0,0.0,1.0,1.0], "mana_bot": [0.0,0.0,0.5,1.0],
+                       "sheen": [1.0,1.0,1.0,0.2], "sheen_inset": 4, "sheen_h": 2 },
+            "tone": "mana", "label": "MP", "bind_value": 1.0
+        });
+        let mut out = Vec::new();
+        draw_resource_gauge(Rect { x: 0.0, y: 0.0, w: 100.0, h: 60.0 }, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Text { .. }, HudCommand::Panel { y: track_y, h: track_h, border, .. }, HudCommand::Panel { color2, grad, .. }, HudCommand::Rect { x, w, h, .. }] =>
+            {
+                assert_eq!((*track_y, *track_h), (30.0, 30.0), "`label_gap` clears the caps row");
+                assert_eq!(*border, 3.0, "`border_w` sets the track's rim");
+                assert_eq!((*color2, *grad), ([0.0, 0.0, 0.5, 1.0], 1.0), "the tone's second stop ramps the fill");
+                assert_eq!((*x, *w, *h), (6.0, 88.0, 2.0), "`sheen_inset` + `sheen_h` size the highlight");
+            }
+            other => panic!("resource_gauge drew {other:?}"),
+        }
+
+        // stat_dot — `glow_pad` stands the ring off the gem, `glow_feather` softens it,
+        // and `radius` + `border_w` make a rounded sigil out of the same component.
+        let props = serde_json::json!({
+            "style": { "hues": { "red": { "fill": [1.0,0.0,0.0,1.0], "glow": [1.0,0.0,0.0,0.5] } },
+                       "border": [0.0,0.0,0.0,0.5], "border_w": 2, "radius": 3,
+                       "glow_pad": 6, "glow_feather": 9 },
+            "hue": "red"
+        });
+        let mut out = Vec::new();
+        draw_stat_dot(Rect { x: 0.0, y: 0.0, w: 20.0, h: 16.0 }, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { x, w, radius: glow_r, feather, .. }, HudCommand::Panel { radius: gem_r, border, .. }] =>
+            {
+                assert_eq!((*x, *w), (-4.0, 28.0), "`glow_pad` stands the ring off the gem");
+                assert_eq!((*glow_r, *feather), (9.0, 9.0), "…and `glow_feather` softens it");
+                assert_eq!((*gem_r, *border), (3.0, 2.0), "a rounded sigil with an authored rim");
+            }
+            other => panic!("stat_dot drew {other:?}"),
+        }
+
+        // A mistyped bind (a NUMBER hue) indexes `hues` with a key it cannot hold: the
+        // lookup MISSES and the flat floor shows through — it does not quietly resolve
+        // the default block, which would draw a glow the author never asked for.
+        let props = serde_json::json!({
+            "style": { "hues": { "blue": { "fill": [0.0,0.0,1.0,1.0], "glow": [0.0,0.0,1.0,0.5] } } },
+            "hue": 3
+        });
+        let mut out = Vec::new();
+        draw_stat_dot(Rect { x: 0.0, y: 0.0, w: 16.0, h: 16.0 }, &props, &mut out);
+        match &out[..] {
+            [HudCommand::Panel { color, .. }] => {
+                assert_eq!(*color, SIG_BLUE, "no block, no glow — just the const floor");
+            }
+            other => panic!("a missed hue drew {other:?}"),
+        }
+    }
+
     #[test]
     fn action_slot_receives_generic_binds_and_claims_clicks() {
         // The generic `<name>_bind` channel: cd_bind/charges_bind values arrive as
         // `cd`/`charges`, sizing the cooldown veil and the charge count; the slot
-        // itself is a rect control that fires its action on click.
+        // itself is a rect control that fires its action on click — drawn and hit in
+        // the ENGINE since the slots slice.
         let mut a = node("action_slot");
         a.id = "slot1".into();
         a.width = Some(58.0);
@@ -5576,11 +9226,9 @@ mod tests {
         });
         let model = ValueMap::new().with("cd1", 0.25).with("ch1", 3.0);
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         let frame =
-            run_ui_with(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state);
         assert!(frame.results.is_on("hud_hit"), "the slot claims the pointer");
         assert!(frame.results.is_on("cast_1"), "click fires the slot's action");
         let veil = frame
@@ -5597,6 +9245,7 @@ mod tests {
             frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "3")),
             "bound charge count renders as an integer"
         );
+        assert!(frame.stats.redraw_nodes >= 1, "the slot really drew this frame");
     }
 
     #[test]
@@ -5636,11 +9285,9 @@ mod tests {
         });
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         let frame =
-            run_ui_with(&page, &model, &st, &input_at(29.0, 29.0, true), &mut state, Some(&lib));
+            run_ui(&page, &model, &st, &input_at(29.0, 29.0, true), &mut state);
         assert!(!frame.results.is_on("hud_hit"), "presentational kinds never claim");
         let panels =
             frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count();
@@ -5649,6 +9296,7 @@ mod tests {
             frame.commands.iter().any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
             "the medallion rune renders in the Rune face"
         );
+        assert!(frame.stats.redraw_nodes >= 1, "both really drew this frame");
     }
 
     #[test]
@@ -5676,12 +9324,11 @@ mod tests {
         });
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let lib = flicker_script::ScriptHost::library(crate::UI_COMPONENT_MODULES)
-            .expect("component library");
 
         // Pointer over the pill → the badge claims the mouse (scene can't pick through).
-        let frame = run_ui_with(&page, &model, &st, &input_at(30.0, 10.0, true), &mut state, Some(&lib));
+        let frame = run_ui(&page, &model, &st, &input_at(30.0, 10.0, true), &mut state);
         assert!(frame.results.is_on("hud_hit"), "pointer over the badge claims the mouse");
+        assert!(frame.stats.redraw_nodes >= 1, "the chip really drew this frame");
 
         // The pill uses the accent tone's bg, a pill radius (≈ h/2), and stays inside the
         // 60×20 node rect.
@@ -5725,7 +9372,7 @@ mod tests {
         b2 = prop(b2, "style", Value::Text("badge".into()));
         let mut page2 = node("screen");
         page2.children = vec![b2];
-        let frame = run_ui_with(&page2, &model, &st, &input_at(500.0, 500.0, false), &mut state, Some(&lib));
+        let frame = run_ui(&page2, &model, &st, &input_at(500.0, 500.0, false), &mut state);
         let fill = frame
             .commands
             .iter()
@@ -5735,6 +9382,43 @@ mod tests {
             })
             .expect("solid badge drew its pill");
         assert_eq!(fill, [0.72, 0.59, 0.35, 1.0], "solid overrides tone → solid_bg (bronze)");
+
+        // TONE IS A PREFIX: a tone the arm never names reads its own `<tone>_bg` when the
+        // block carries one, and falls through to the neutral pair when it does not — so
+        // a new chip colour is a token pair, not a new arm. The fall-through half is what
+        // the module did for every unknown tone, and must not change.
+        let toned = |style: &Json, tone: &str| {
+            let mut b = node("badge");
+            b.width = Some(60.0);
+            b.height = Some(20.0);
+            b.anchor = Some(UiAnchor::TopLeft);
+            b = prop(b, "label", Value::Text("!".into()));
+            b = prop(b, "tone", Value::Text(tone.into()));
+            b = prop(b, "style", Value::Text("badge".into()));
+            let mut page = node("screen");
+            page.children = vec![b];
+            let mut state = UiState::new();
+            let f = run_ui(&page, &ValueMap::new(), style, &input_at(500.0, 500.0, false), &mut state);
+            f.commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Panel { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .expect("badge drew its pill")
+        };
+        let mut with_danger = st.clone();
+        with_danger["badge"]["danger_bg"] = serde_json::json!([0.55, 0.11, 0.11, 1.0]);
+        assert_eq!(
+            toned(&with_danger, "danger"),
+            [0.55, 0.11, 0.11, 1.0],
+            "a tone reads its own `<tone>_bg` stop"
+        );
+        assert_eq!(
+            toned(&st, "danger"),
+            [0.08, 0.09, 0.12, 1.0],
+            "and falls through to the neutral pair when the block names none"
+        );
     }
 
     // ── Add inside `mod tests`, alongside the other per-kind tests. Uses the same
@@ -6000,14 +9684,13 @@ mod tests {
         assert!(f.results.is_on("hud_hit"));
     }
 
-    // (The transient S5 parity test — `draw_context_menu` vs the Lua module, byte
-    // for byte across hover/active/divider/disabled/plain/off-menu pointer states —
-    // gated the port and was deleted with the Rust arm; the byte-pinned draw below
-    // and the behaviour tests above carry the regression duty.)
+    // (This pin is the SAME command list the Lua module emitted before the draw came
+    // back to the engine in the 2026-08-09 restoration — it passed unchanged across the
+    // move, which is the proof that a control's tier is invisible to what it draws.)
     #[test]
-    fn context_menu_lua_draw_is_byte_pinned() {
+    fn context_menu_draw_is_byte_pinned() {
         // The full command list for a 3-row menu (plain+hint · active · divider),
-        // pointer on row 0 — the byte-level pin that outlives the deleted Rust arm.
+        // pointer on row 0.
         let mut cut = prop(node("item"), "label", Value::Text("Cut".into()));
         cut.action = Some("cut".into());
         cut = prop(cut, "hint", Value::Text("X".into()));
@@ -6075,30 +9758,102 @@ mod tests {
     }
 
     #[test]
-    fn a_visible_context_menu_idles_at_zero_crossings() {
+    fn a_warm_context_menu_moves_its_hover_wash_with_the_pointer() {
+        // The hover wash is drawn from `mx`/`my`, so a menu that is CACHED from a
+        // previous frame must still re-fingerprint when the pointer moves within it —
+        // `hot_matters` (component.rs's draw loop) is what folds the pointer in, and it
+        // asks `is_rust_component`. Two frames sharing one
+        // `UiState` is the only way to see that: every other menu test builds a fresh
+        // state, so the cache is always cold and a frozen wash would go unnoticed.
         let _g = crate::strings::test_guard();
-        // An on-screen (open) context menu with the pointer resting on it: the
-        // second, unchanged frame crosses into Lua zero times for BOTH draw and hit,
-        // yet the surface keeps its claim (memo continuity).
-        let lib = counting_lib();
+        let page = context_menu_tree();
+        let styles = context_menu_styles();
+        let model = ValueMap::new();
+        let mut state = UiState::new();
+        let wash_ys = |f: &UiFrame| -> Vec<f32> {
+            f.commands
+                .iter()
+                .filter_map(|c| match c {
+                    HudCommand::Rect { y, color, .. } if *color == [0.1, 0.15, 0.25, 1.0] => {
+                        Some(*y)
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Row 0 (y 0..30), then row 4 (y 120..150) — both live rows, so both wash.
+        let first = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, false), &mut state);
+        assert_eq!(wash_ys(&first), vec![0.0], "the cold frame washes the hovered row");
+        let moved = run_ui(&page, &model, &styles, &input_at(100.0, 135.0, false), &mut state);
+        assert_eq!(wash_ys(&moved), vec![120.0], "a warm menu's wash follows the pointer");
+        assert!(moved.stats.redraw_nodes >= 1, "the moved pointer redrew it: {:?}", moved.stats);
+    }
+
+    #[test]
+    fn context_menu_row_metrics_are_authorable() {
+        // The row insets the module hardcoded are style keys whose DEFAULTS are the
+        // shipped values (row_pad 4 · pad_x 14 · hint falling to pad_x · divider inset 8,
+        // hairline 1) — `context_menu_draw_is_byte_pinned` holds those defaults, so this
+        // only has to show the knobs reach the geometry. 200-wide menu, row_h 30.
+        let mut styles = context_menu_styles();
+        for (k, v) in
+            [("row_pad", 10.0), ("pad_x", 20.0), ("hint_pad", 6.0), ("divider_inset", 24.0), ("divider_h", 3.0)]
+        {
+            styles["menu"][k] = serde_json::json!(v);
+        }
+        let f = run_ui(
+            &context_menu_tree(),
+            &ValueMap::new(),
+            &styles,
+            &input_at(100.0, 15.0, false),
+            &mut UiState::new(),
+        );
+        let rect_at = |color: [f32; 4]| {
+            f.commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Rect { x, y, w, h, color: c2, .. } if *c2 == color => {
+                        Some((*x, *y, *w, *h))
+                    }
+                    _ => None,
+                })
+                .expect("that wash / hairline drew")
+        };
+        assert_eq!(rect_at([0.1, 0.15, 0.25, 1.0]), (10.0, 0.0, 180.0, 30.0), "row_pad insets the wash");
+        assert_eq!(rect_at([0.3, 0.3, 0.3, 1.0]), (24.0, 75.0, 152.0, 3.0), "the hairline's inset + weight");
+        let text_x = |s: &str| {
+            f.commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Text { text, x, .. } if text == s => Some(*x),
+                    _ => None,
+                })
+                .expect("that label drew")
+        };
+        assert_eq!(text_x("Cut"), 20.0, "pad_x insets the label");
+        assert_eq!(text_x("X"), 194.0, "hint_pad insets the keybind from the right edge");
+    }
+
+    #[test]
+    fn a_visible_context_menu_idles_without_redrawing() {
+        // An on-screen context menu with the pointer resting on it: the cold frame
+        // draws it, and the second, unchanged frame replays from the draw cache
+        // without redrawing while the surface keeps its claim.
+        let _g = crate::strings::test_guard();
         let page = context_menu_tree();
         let styles = context_menu_styles();
         let model = ValueMap::new();
         let mut state = UiState::new();
         let over = input_at(100.0, 15.0, false);
 
-        let first = run_ui_with(&page, &model, &styles, &over, &mut state, Some(&lib));
+        let first = run_ui(&page, &model, &styles, &over, &mut state);
         assert!(first.results.is_on("hud_hit"), "pointer over the menu claims");
-        assert!(first.stats.lua_draws >= 1, "cold frame draws the menu via Lua");
-        let hits_after = lib.hits.get();
-        let draws_after = lib.draws.get();
+        assert!(first.stats.redraw_nodes >= 1, "the cold frame really drew it: {:?}", first.stats);
 
-        let second = run_ui_with(&page, &model, &styles, &over, &mut state, Some(&lib));
-        assert_eq!(second.stats.lua_hits, 0, "idle frame: zero hit crossings");
-        assert_eq!(second.stats.lua_draws, 0, "idle frame: zero draw crossings");
+        let second = run_ui(&page, &model, &styles, &over, &mut state);
         assert_eq!(second.stats.redraw_nodes, 0, "idle frame: nothing redraws");
-        assert_eq!(lib.hits.get(), hits_after, "the library really was not hit");
-        assert_eq!(lib.draws.get(), draws_after, "the library really was not drawn");
+        assert_eq!(second.commands, first.commands, "…and the replay is byte-identical");
         assert!(second.results.is_on("hud_hit"), "the claim survives the idle frame");
     }
 
@@ -6629,5 +10384,276 @@ mod tests {
     #[allow(dead_code)]
     fn _uses_hashmap() -> HashMap<String, Value> {
         HashMap::new()
+    }
+
+    // ── The values group's byte pins ─────────────────────────────────────────
+    //
+    // `slider` / `stepper` / `text_field` came back to the engine tier under ruling
+    // BF0AF0C9. A transient harness gated that move by diffing each new arm against
+    // the `ui/<kind>.lua` module it replaced, command for command, across every
+    // branch — and was deleted with the port (as its S6 predecessor was), because a
+    // permanent test may not depend on modules the tier sweep is about to remove.
+    // These pins inherit its duty for the two kinds that had none: the numbers below
+    // ARE the module's output, transcribed after that diff came back clean.
+
+    fn pin_rect(x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) -> HudCommand {
+        HudCommand::Rect { x, y, w, h, color, layer: 0.0 }
+    }
+
+    fn pin_text(
+        x: f32,
+        y: f32,
+        text: &str,
+        size: f32,
+        color: [f32; 4],
+        align: TextAlign,
+        font: FontRole,
+    ) -> HudCommand {
+        HudCommand::Text {
+            x,
+            y,
+            text: text.to_string(),
+            size,
+            color,
+            layer: 0.0,
+            align,
+            font,
+            italic: false,
+            bold: false,
+            tracking: -1.0,
+            wrap: None,
+        }
+    }
+
+    /// The full slider palette, every stop distinguishable so a pin can tell which
+    /// alias the arm actually picked.
+    fn pinned_slider_style() -> Json {
+        serde_json::json!({
+            "track": [0.1, 0.11, 0.12, 1.0], "fill": [0.2, 0.4, 0.7, 1.0],
+            "fill_hi": [0.6, 0.8, 1.0, 0.5], "handle": [0.9, 0.9, 1.0, 1.0],
+            "focus_track": [0.2, 0.2, 0.3, 1.0], "focus_fill": [0.4, 0.6, 1.0, 1.0],
+            "focus_label": [0.5, 0.7, 1.0, 1.0], "value_color": [0.4, 0.4, 0.35, 1.0],
+            "label_size": 15, "value_size": 11, "handle_w": 7
+        })
+    }
+
+    #[test]
+    fn slider_draw_is_byte_pinned() {
+        const INK_C: [f32; 4] = [0.871, 0.847, 0.788, 1.0];
+        const TRACK: [f32; 4] = [0.1, 0.11, 0.12, 1.0];
+        const FILL: [f32; 4] = [0.2, 0.4, 0.7, 1.0];
+        const HI: [f32; 4] = [0.6, 0.8, 1.0, 0.5];
+        const HANDLE: [f32; 4] = [0.9, 0.9, 1.0, 1.0];
+        const VALUE: [f32; 4] = [0.4, 0.4, 0.35, 1.0];
+        let draw = |r: Rect, props: &Json| {
+            let mut out = Vec::new();
+            draw_slider(r, props, &mut out);
+            out
+        };
+
+        // LYING DOWN, a full row at (12,20) 300×40: an 80px caption column, a 40px
+        // readout column, a 12px rail centred between them, the value 2.5 of −10..10
+        // (t = 0.625) and a `+`-signed one-decimal readout with a suffix.
+        let row = Rect { x: 12.0, y: 20.0, w: 300.0, h: 40.0 };
+        let props = serde_json::json!({
+            "style": pinned_slider_style(), "label": "SIZE", "layer": 0.0,
+            "label_w": 80.0, "value_w": 40.0, "slider_h": 12.0,
+            "min": -10.0, "max": 10.0, "bind_value": 2.5,
+            "decimals": 1.0, "suffix": " kg", "plus": true
+        });
+        assert_eq!(
+            draw(row, &props),
+            vec![
+                // Caption: the rect's left edge, centred on the 15px line.
+                pin_text(12.0, 32.5, "SIZE", 15.0, INK_C, TextAlign::Left, FontRole::Body),
+                // Rail: x 12+80, w 300−80−40, y centred for a 12px height.
+                pin_rect(92.0, 34.0, 180.0, 12.0, TRACK),
+                // Fill to 0.625 of 180, then the 1px highlight along its top edge.
+                pin_rect(92.0, 34.0, 112.5, 12.0, FILL),
+                pin_rect(92.0, 34.0, 112.5, 1.0, HI),
+                // Handle: 7 wide, centred on the fill's end, overhanging 4px each side.
+                pin_rect(201.0, 30.0, 7.0, 20.0, HANDLE),
+                // Readout: right-aligned on the row's own right edge.
+                pin_text(312.0, 34.5, "+2.5 kg", 11.0, VALUE, TextAlign::Right, FontRole::Body),
+            ],
+            "the horizontal slider draw is byte-stable"
+        );
+
+        // UPRIGHT at (40,10) 60×200: the caption owns a band across the top (15px line
+        // + an 8px gap), the rail takes the remaining 177px, BOTTOM is min — value 4 of
+        // 1..9 fills 0.375 of the rail FROM THE FLOOR — the handle is a bar, the live
+        // readout rides beside it and the range marks sit off the rail's far side.
+        let dial = Rect { x: 40.0, y: 10.0, w: 60.0, h: 200.0 };
+        let props = serde_json::json!({
+            "style": pinned_slider_style(), "label": "POP", "layer": 0.0, "vertical": true,
+            "slider_h": 10.0, "value_w": 44.0, "min": 1.0, "max": 9.0,
+            "bind_value": 4.0, "decimals": 0.0
+        });
+        assert_eq!(
+            draw(dial, &props),
+            vec![
+                pin_text(40.0, 10.0, "POP", 15.0, INK_C, TextAlign::Left, FontRole::Body),
+                pin_rect(65.0, 33.0, 10.0, 177.0, TRACK),
+                pin_rect(65.0, 143.625, 10.0, 66.375, FILL),
+                pin_rect(65.0, 143.625, 10.0, 1.0, HI),
+                pin_rect(61.0, 140.125, 18.0, 7.0, HANDLE),
+                pin_text(85.0, 138.125, "4", 11.0, VALUE, TextAlign::Left, FontRole::Body),
+                // Range marks: `value_size` − 2, the MAX at the top (a planet grows up).
+                pin_text(55.0, 28.5, "9", 9.0, VALUE, TextAlign::Right, FontRole::Body),
+                pin_text(55.0, 205.5, "1", 9.0, VALUE, TextAlign::Right, FontRole::Body),
+            ],
+            "the upright slider draw is byte-stable"
+        );
+    }
+
+    #[test]
+    fn stepper_draw_is_byte_pinned() {
+        const INK_C: [f32; 4] = [0.871, 0.847, 0.788, 1.0];
+        let draw = |r: Rect, props: &Json| {
+            let mut out = Vec::new();
+            draw_stepper(r, props, &mut out);
+            out
+        };
+        let row = Rect { x: 12.0, y: 20.0, w: 160.0, h: 28.0 };
+
+        // Bare style, no caption: every fallback const and default fires — the panel
+        // floor for the field, the stone floor for the end cells, ink for all three
+        // faces, a 13px line and `value_size` falling back to it.
+        assert_eq!(
+            draw(row, &serde_json::json!({ "style": {}, "label": "", "layer": 0.0, "bind_value": 0.5 })),
+            vec![
+                pin_rect(12.0, 20.0, 160.0, 28.0, PANEL),
+                pin_rect(12.0, 20.0, 28.0, 28.0, STONE),
+                pin_rect(144.0, 20.0, 28.0, 28.0, STONE),
+                pin_text(26.0, 27.5, "-", 13.0, INK_C, TextAlign::Center, FontRole::Label),
+                pin_text(158.0, 27.5, "+", 13.0, INK_C, TextAlign::Center, FontRole::Label),
+                pin_text(92.0, 27.5, "0.50", 13.0, INK_C, TextAlign::Center, FontRole::Body),
+            ],
+            "the unstyled stepper draw is byte-stable"
+        );
+
+        // Styled with a caption column and a shorter field. `box` is the spelling every
+        // authored stepper in the app uses — dropping that alias would black out all of
+        // them, so it is pinned here rather than left to the `field` name alone.
+        let props = serde_json::json!({
+            "style": {
+                "box": [0.1, 0.11, 0.12, 1.0], "btn": [0.2, 0.2, 0.24, 1.0],
+                "label": [0.9, 0.88, 0.8, 1.0], "value_color": [0.5, 0.5, 0.45, 1.0],
+                "label_size": 15, "value_size": 11
+            },
+            "label": "FPS", "layer": 0.0, "label_w": 60.0, "field_h": 20.0,
+            "min": 0.0, "max": 240.0, "bind_value": 60.0, "decimals": 0.0, "suffix": " fps"
+        });
+        assert_eq!(
+            draw(row, &props),
+            vec![
+                pin_text(12.0, 26.5, "FPS", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Left, FontRole::Body),
+                // Field: past the 60px caption column, 20 tall and centred in the row.
+                pin_rect(72.0, 24.0, 100.0, 20.0, [0.1, 0.11, 0.12, 1.0]),
+                // Each end cell is as wide as the field is TALL — square at any height.
+                pin_rect(72.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0]),
+                pin_rect(152.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0]),
+                pin_text(82.0, 26.5, "-", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
+                pin_text(162.0, 26.5, "+", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
+                pin_text(122.0, 28.5, "60 fps", 11.0, [0.5, 0.5, 0.45, 1.0], TextAlign::Center, FontRole::Body),
+            ],
+            "the styled stepper draw is byte-stable"
+        );
+    }
+
+    /// **The knobs these three gained on their way into the engine are REAL** — the
+    /// same gate the option strips hold ([`promoted_strip_style_keys_are_real_knobs`]).
+    /// Each was a literal buried in the module the control replaced; each is now a key
+    /// whose DEFAULT is that same literal, so nothing moved on screen and a caller who
+    /// wants it moved has somewhere to say so. Both halves are asserted: the pins above
+    /// prove the defaults still draw the old picture, and this proves the keys move it.
+    #[test]
+    fn promoted_value_control_keys_are_real_knobs() {
+        let rects = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32)> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    HudCommand::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let texts = |cmds: &[HudCommand]| -> Vec<(f32, f32, String, f32)> {
+            cmds.iter()
+                .filter_map(|c| match c {
+                    HudCommand::Text { x, y, text, size, .. } => {
+                        Some((*x, *y, text.clone(), *size))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let row = Rect { x: 0.0, y: 0.0, w: 200.0, h: 20.0 };
+
+        // `handle_over` — the handle's overhang past the rail, 4px on each side.
+        let over = |style: Json| {
+            let mut out = Vec::new();
+            draw_slider(row, &serde_json::json!({ "style": style, "label": "", "bind_value": 0.0 }), &mut out);
+            rects(&out)[2]
+        };
+        assert_eq!(over(serde_json::json!({})).3, 28.0, "the default still overhangs 4px each side");
+        assert_eq!(over(serde_json::json!({ "handle_over": 0.0 })).3, 20.0, "0 flushes it to the rail");
+
+        // `fill_hi_w` — the highlight line's thickness along the fill's leading edge.
+        let hi = |style: Json| {
+            let mut out = Vec::new();
+            draw_slider(row, &serde_json::json!({ "style": style, "label": "", "bind_value": 1.0 }), &mut out);
+            rects(&out)[2].3
+        };
+        let lit = serde_json::json!({ "fill_hi": [1.0, 1.0, 1.0, 1.0] });
+        assert_eq!(hi(lit.clone()), 1.0, "the default highlight is a 1px rule");
+        let mut thick = lit.clone();
+        thick["fill_hi_w"] = serde_json::json!(3.0);
+        assert_eq!(hi(thick), 3.0, "…and `fill_hi_w` thickens it");
+
+        // `grab_pad` — how far off a thin rail a press still takes the drag.
+        let grabbed = |pad: Json, my: f32| {
+            let props = serde_json::json!({ "style": {}, "label": "", "slider_h": 4.0, "grab_pad": pad });
+            hit_slider(Vec2::new(100.0, my), row, &props, true, true).capture == Some(true)
+        };
+        assert!(grabbed(Json::Null, 4.0), "the default band reaches 6px above the rail");
+        assert!(!grabbed(serde_json::json!(0.0), 4.0), "…and `grab_pad` 0 tightens it to the rail");
+
+        // `btn_w` — the stepper's end cells stop being squares when a row says so.
+        let cells = |props: Json| {
+            let mut out = Vec::new();
+            draw_stepper(row, &props, &mut out);
+            rects(&out)
+        };
+        assert_eq!(cells(serde_json::json!({ "style": {}, "label": "" }))[1].2, 20.0, "square by default");
+        let wide = cells(serde_json::json!({ "style": {}, "label": "", "btn_w": 40.0 }));
+        assert_eq!((wide[1].2, wide[2].0), (40.0, 160.0), "`btn_w` widens both ends");
+
+        // `dec_glyph` / `inc_glyph` — the two faces, ASCII by default.
+        let faces = |props: Json| {
+            let mut out = Vec::new();
+            draw_stepper(row, &props, &mut out);
+            let t = texts(&out);
+            (t[0].2.clone(), t[1].2.clone())
+        };
+        assert_eq!(faces(serde_json::json!({ "style": {}, "label": "" })), ("-".into(), "+".into()));
+        let arrows = serde_json::json!({ "style": {}, "label": "", "dec_glyph": "◀", "inc_glyph": "▶" });
+        assert_eq!(faces(arrows), ("◀".to_string(), "▶".to_string()), "the faces are authorable");
+
+        // `focus_border_w` — the text field's focus ring, 2px against a 1px rest.
+        let ring = |props: Json| {
+            let mut out = Vec::new();
+            draw_text_field(row, &props, &mut out);
+            match out[0] {
+                HudCommand::Panel { border, .. } => border,
+                _ => panic!("the well draws first"),
+            }
+        };
+        let lit_border = serde_json::json!({ "border": [1.0, 1.0, 1.0, 1.0] });
+        assert_eq!(ring(serde_json::json!({ "style": lit_border, "mx": -9.0, "my": -9.0 })), 1.0);
+        let mut focused = serde_json::json!({ "style": lit_border, "mx": -9.0, "my": -9.0 });
+        focused["focused"] = Json::Bool(true);
+        assert_eq!(ring(focused.clone()), 2.0, "the focus ring is 2px by default");
+        focused["style"]["focus_border_w"] = serde_json::json!(4.0);
+        assert_eq!(ring(focused), 4.0, "…and the style can thicken it");
     }
 }

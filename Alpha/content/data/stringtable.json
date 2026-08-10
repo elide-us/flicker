@@ -1,794 +1,2246 @@
 {
-  "ap_67_bone_reference_this_asset_has_none": { "en-us": "67-bone reference; this asset has none," },
-  "ap_a_soul_given_form_mesh_skeleton_and_stat": { "en-us": "A soul given form — mesh, skeleton and stat-thread." },
-  "ap_absent": { "en-us": "(absent)" },
-  "ap_accessory": { "en-us": "Accessory" },
-  "ap_all": { "en-us": "All" },
-  "ap_and_fit_are_authored_in_the_paperdoll": { "en-us": "and fit are authored in the paperdoll." },
-  "ap_animation": { "en-us": "Animation" },
-  "ap_asset": { "en-us": "Asset" },
-  "ap_attach_mount_so_the_set_is_not_persisted": { "en-us": "`attach` mount, so the SET is not persisted yet." },
-  "ap_attach_points": { "en-us": "Attach Points" },
-  "ap_authored_here_flicker_rig_carries_a_sing": { "en-us": "Authored here; flicker.rig carries a single" },
-  "ap_auto_inferred": { "en-us": "auto-inferred" },
-  "ap_badge_blocked": { "en-us": "BLOCKED" },
-  "ap_badge_clip": { "en-us": "CLIP" },
-  "ap_badge_garment": { "en-us": "GARMENT" },
-  "ap_badge_passed": { "en-us": "PASSED" },
-  "ap_badge_pending": { "en-us": "PENDING" },
-  "ap_badge_points": { "en-us": "POINTS" },
-  "ap_badge_static": { "en-us": "STATIC" },
-  "ap_bake_skin": { "en-us": "BAKE SKIN" },
-  "ap_belt_waist": { "en-us": "Belt · Waist" },
-  "ap_bind_the_piece_to_a_socket_then_place_it": { "en-us": "Bind the piece to a socket, then place it: offset, rotation and scale." },
-  "ap_blocked": { "en-us": "Blocked:" },
-  "ap_bone_map": { "en-us": "BONE MAP" },
-  "ap_bones": { "en-us": "bones" },
-  "ap_bones_edited": { "en-us": "Bones edited" },
-  "ap_character": { "en-us": "Character" },
-  "ap_chest": { "en-us": "Chest" },
-  "ap_choose_a_workflow": { "en-us": "CHOOSE A WORKFLOW" },
-  "ap_choose_the_kind_of_asset_you_are_importi": { "en-us": "Choose the kind of asset you are importing to begin." },
-  "ap_class": { "en-us": "Class:" },
-  "ap_class_word": { "en-us": "Class" },
-  "ap_clay_engine": { "en-us": "CLAY ENGINE" },
-  "ap_clayworks_bench": { "en-us": "Clayworks Bench" },
-  "ap_clip": { "en-us": "Clip" },
-  "ap_clips": { "en-us": "CLIPS" },
-  "ap_clips_in_this_folder": { "en-us": "CLIPS IN THIS FOLDER" },
-  "ap_clips_title": { "en-us": "Clips" },
-  "ap_collision": { "en-us": "Collision" },
-  "ap_conform_has_not_run": { "en-us": "Conform has not run." },
-  "ap_conform_runs_when_this_stage_is_reached": { "en-us": "Conform runs when this stage is reached." },
-  "ap_dropped": { "en-us": "Dropped" },
-  "ap_duration": { "en-us": "Duration" },
-  "ap_engine_requirements": { "en-us": "ENGINE REQUIREMENTS" },
-  "ap_export_bakes_the_static_prop_mesh_its_so": { "en-us": "Export bakes the static prop mesh; its socket" },
-  "ap_export_skins_this_garment_onto_the_base": { "en-us": "Export SKINS this garment onto the base body" },
-  "ap_export_to_staging": { "en-us": "EXPORT → STAGING" },
-  "ap_exported": { "en-us": "EXPORTED ✓" },
-  "ap_exported_word": { "en-us": "Exported" },
-  "ap_fbx_bvh_clip": { "en-us": "FBX · BVH · Clip" },
-  "ap_fbx_glb_attach_point": { "en-us": "FBX · GLB · Attach Point" },
-  "ap_fbx_glb_rigged": { "en-us": "FBX · GLB · Rigged" },
-  "ap_fbx_glb_static": { "en-us": "FBX · GLB · Static" },
-  "ap_flagged": { "en-us": "flagged" },
-  "ap_foot_l": { "en-us": "Foot · L" },
-  "ap_foot_r": { "en-us": "Foot · R" },
-  "ap_forearm_l": { "en-us": "Forearm · L" },
-  "ap_forearm_r": { "en-us": "Forearm · R" },
-  "ap_found": { "en-us": "found" },
-  "ap_gizmo_mode": { "en-us": "GIZMO MODE" },
-  "ap_grip_hand_l": { "en-us": "Grip · Hand L" },
-  "ap_grip_hand_r": { "en-us": "Grip · Hand R" },
-  "ap_hand_l": { "en-us": "Hand · L" },
-  "ap_hand_r": { "en-us": "Hand · R" },
-  "ap_head": { "en-us": "Head" },
-  "ap_holster_hip_l": { "en-us": "Holster · Hip L" },
-  "ap_holster_hip_r": { "en-us": "Holster · Hip R" },
-  "ap_import": { "en-us": "Import" },
-  "ap_import_next_piece": { "en-us": "IMPORT NEXT PIECE" },
-  "ap_in_place": { "en-us": "In-Place" },
-  "ap_inferred": { "en-us": "Inferred" },
-  "ap_limbs_aligned": { "en-us": "Limbs aligned" },
-  "ap_load_an_asset_folder_to_begin": { "en-us": "Load an asset folder to begin." },
-  "ap_map_the_source_skeleton_to_the_internal": { "en-us": "Map the source skeleton to the internal rig and tune bone offsets." },
-  "ap_meshes_in_this_folder": { "en-us": "MESHES IN THIS FOLDER" },
-  "ap_mirror_joints": { "en-us": "Mirror joints" },
-  "ap_motion_inscribed_upon_a_skeleton_already": { "en-us": "Motion inscribed upon a skeleton already woven." },
-  "ap_mount_socket": { "en-us": "MOUNT SOCKET" },
-  "ap_nearest_vertex_weight_transfer_fit_baked": { "en-us": "(nearest-vertex weight transfer, fit baked in)." },
-  "ap_neck": { "en-us": "Neck" },
-  "ap_need_review": { "en-us": "need review" },
-  "ap_no_asset_loaded": { "en-us": "No asset loaded" },
-  "ap_no_bone_selected": { "en-us": "no bone selected" },
-  "ap_no_point_selected": { "en-us": "no point selected" },
-  "ap_no_source_folder_open": { "en-us": "No source folder open." },
-  "ap_not_exported": { "en-us": "Not exported." },
-  "ap_objects_of_the_world_answering_to_no_bea": { "en-us": "Objects of the world, answering to no bearer." },
-  "ap_of": { "en-us": "of" },
-  "ap_off_x": { "en-us": "Off X" },
-  "ap_off_y": { "en-us": "Off Y" },
-  "ap_off_z": { "en-us": "Off Z" },
-  "ap_offset": { "en-us": "offset" },
-  "ap_offset_cm": { "en-us": "OFFSET · cm" },
-  "ap_offset_x": { "en-us": "Offset X" },
-  "ap_offset_y": { "en-us": "Offset Y" },
-  "ap_offset_z": { "en-us": "Offset Z" },
-  "ap_over_budget": { "en-us": "Over budget:" },
-  "ap_parent": { "en-us": "parent:" },
-  "ap_parents_resolve_after_conform_renames": { "en-us": "Parents resolve after Conform renames the rig." },
-  "ap_pelvis": { "en-us": "Pelvis" },
-  "ap_points_resolve_to_a_bone": { "en-us": "points resolve to a bone." },
-  "ap_position_hold_holster_and_belt_attach_po": { "en-us": "Position hold, holster and belt attach points on the standard rig." },
-  "ap_preview_both_variants_pick_what_commit_k": { "en-us": "Preview both variants — Commit keeps what you pick: one, the other, or both." },
-  "ap_prop": { "en-us": "Prop" },
-  "ap_reference_body": { "en-us": "Reference body" },
-  "ap_renamed": { "en-us": "Renamed" },
-  "ap_req_all_bones_mapped_or_reviewed": { "en-us": "all bones mapped or reviewed" },
-  "ap_req_at_least_one_variant_selected": { "en-us": "at least one variant selected" },
-  "ap_req_attach_points_on_valid_parents": { "en-us": "attach points on valid parents" },
-  "ap_req_clip_retargets_onto_the_reference": { "en-us": "clip retargets onto the reference skeleton" },
-  "ap_req_conform_has_not_run": { "en-us": "conform has not run" },
-  "ap_req_garment_mesh_present": { "en-us": "garment mesh present" },
-  "ap_req_prop_mesh_present": { "en-us": "prop mesh present" },
-  "ap_req_skeleton_conforms": { "en-us": "skeleton conforms" },
-  "ap_req_skins_onto_the_canonical_base": { "en-us": "skins onto the canonical base · fit refined in the paperdoll" },
-  "ap_req_socket_fit_authored_in_the_paperdoll": { "en-us": "socket + fit authored in the paperdoll" },
-  "ap_req_source_bones_unmapped": { "en-us": "source bone(s) unmapped" },
-  "ap_req_textures_masks_resolved": { "en-us": "textures & masks resolved" },
-  "ap_reset_bone": { "en-us": "RESET BONE" },
-  "ap_retarget_runs_when_this_stage_is_reached": { "en-us": "Retarget runs when this stage is reached." },
-  "ap_review_export": { "en-us": "Review & Export" },
-  "ap_rig_attach_points": { "en-us": "RIG ATTACH POINTS" },
-  "ap_rigging_maps_a_biped_skeleton_onto_the": { "en-us": "Rigging maps a biped skeleton onto the" },
-  "ap_roll": { "en-us": "Roll" },
-  "ap_root_motion": { "en-us": "Root Motion" },
-  "ap_rotate": { "en-us": "Rotate" },
-  "ap_rotate_deg": { "en-us": "ROTATE · deg" },
-  "ap_rotate_x": { "en-us": "Rotate X" },
-  "ap_rotate_y": { "en-us": "Rotate Y" },
-  "ap_rotate_z": { "en-us": "Rotate Z" },
-  "ap_scabbard_back": { "en-us": "Scabbard · Back" },
-  "ap_scale": { "en-us": "SCALE" },
-  "ap_scale_gizmo": { "en-us": "Scale" },
-  "ap_scale_x": { "en-us": "Scale X" },
-  "ap_scale_y": { "en-us": "Scale Y" },
-  "ap_scale_z": { "en-us": "Scale Z" },
-  "ap_select_a_workflow_to_begin": { "en-us": "SELECT A WORKFLOW TO BEGIN" },
-  "ap_select_workflow": { "en-us": "Select Workflow" },
-  "ap_shin_l": { "en-us": "Shin · L" },
-  "ap_shin_r": { "en-us": "Shin · R" },
-  "ap_shoulder_l": { "en-us": "Shoulder · L" },
-  "ap_skeleton": { "en-us": "Skeleton" },
-  "ap_so_it_is_skipped": { "en-us": "so it is SKIPPED." },
-  "ap_socket_word": { "en-us": "Socket" },
-  "ap_source_internal_rig": { "en-us": "Source → Internal rig" },
-  "ap_tag_auto": { "en-us": "auto" },
-  "ap_tag_mapped": { "en-us": "mapped" },
-  "ap_tag_review": { "en-us": "review" },
-  "ap_target": { "en-us": "target" },
-  "ap_thigh_l": { "en-us": "Thigh · L" },
-  "ap_thigh_r": { "en-us": "Thigh · R" },
-  "ap_translate": { "en-us": "Translate" },
-  "ap_translate_x": { "en-us": "Translate X" },
-  "ap_translate_y": { "en-us": "Translate Y" },
-  "ap_translate_z": { "en-us": "Translate Z" },
-  "ap_tri_budget": { "en-us": "-tri budget." },
-  "ap_triangles": { "en-us": "Triangles" },
-  "ap_tris": { "en-us": "tris" },
-  "ap_unclassified": { "en-us": "unclassified" },
-  "ap_unmapped": { "en-us": "Unmapped:" },
-  "ap_unresolved": { "en-us": "unresolved" },
-  "ap_upper_chest": { "en-us": "Upper chest" },
-  "ap_variants": { "en-us": "Variants" },
-  "ap_verify_engine_requirements_then_export": { "en-us": "Verify engine requirements, then export to staging for the Quartermaster." },
-  "ap_verts": { "en-us": "verts" },
-  "ap_weapon_socket_l": { "en-us": "Weapon socket · L" },
-  "ap_weapon_socket_r": { "en-us": "Weapon socket · R" },
-  "ap_what_manner_of_thing_will_you_weave_into": { "en-us": "What manner of thing will you weave into this scene?" },
-  "ap_within_the": { "en-us": "Within the" },
-  "ap_world": { "en-us": "World" },
-  "ap_worn_things_blades_circlets_loomsilk_bou": { "en-us": "Worn things — blades, circlets, loomsilk — bound to a bearer." },
-  "atc_cmd_title": { "en-us": "COMMAND CONTROLS" },
-  "atc_col_alt": { "en-us": "ALT" },
-  "atc_col_fuel": { "en-us": "FUEL" },
-  "atc_col_hdg": { "en-us": "HDG" },
-  "atc_col_id": { "en-us": "ID" },
-  "atc_col_kind": { "en-us": "T" },
-  "atc_col_route": { "en-us": "ROUTE" },
-  "atc_dispatch": { "en-us": "DISPATCH" },
-  "atc_end_altitude": { "en-us": "WRONG DEPARTURE ALTITUDE" },
-  "atc_end_cleared": { "en-us": "AIRSPACE CLEAR" },
-  "atc_end_conflict": { "en-us": "CLOSE ENCOUNTER" },
-  "atc_end_exit": { "en-us": "WRONG DEPARTURE POINT" },
-  "atc_end_fuel": { "en-us": "OUT OF FUEL" },
-  "atc_ev_around": { "en-us": "going around" },
-  "atc_ev_departed": { "en-us": "departed" },
-  "atc_ev_entered": { "en-us": "checking in" },
-  "atc_ev_landed": { "en-us": "landed" },
-  "atc_ev_lowfuel": { "en-us": "low on fuel" },
-  "atc_ev_ready": { "en-us": "ready for take-off" },
-  "atc_field_cmd": { "en-us": "COMMAND" },
-  "atc_field_flight": { "en-us": "FLIGHT" },
-  "atc_field_value": { "en-us": "VALUE" },
-  "atc_hint_pick": { "en-us": "select a flight and a command" },
-  "atc_line_altitude": { "en-us": "left the area off ten thousand feet." },
-  "atc_line_cleared": { "en-us": "Every flight handled." },
-  "atc_line_conflict": { "en-us": "came within the separation minimum." },
-  "atc_line_exit": { "en-us": "left the area at the wrong point." },
-  "atc_line_fuel": { "en-us": "ran the tanks dry." },
-  "atc_log_title": { "en-us": "TRANSMISSIONS" },
-  "atc_new_game": { "en-us": "NEW SESSION" },
-  "atc_over_sub": { "en-us": "AIR TRAFFIC CONTROL" },
-  "atc_over_title": { "en-us": "SESSION OVER" },
-  "atc_pick_cmd": { "en-us": "— select —" },
-  "atc_pick_flight": { "en-us": "— select —" },
-  "atc_pick_value": { "en-us": "—" },
-  "atc_rej_air": { "en-us": "already airborne" },
-  "atc_rej_dir": { "en-us": "wrong way for that altitude" },
-  "atc_rej_flight": { "en-us": "no such flight" },
-  "atc_rej_ground": { "en-us": "still on the ground" },
-  "atc_rej_range": { "en-us": "out of range" },
-  "atc_score_departed": { "en-us": "departed" },
-  "atc_score_landed": { "en-us": "landed" },
-  "atc_score_sweeps": { "en-us": "sweeps" },
-  "atc_stat_down": { "en-us": "LANDED" },
-  "atc_stat_left": { "en-us": "INBOUND" },
-  "atc_stat_out": { "en-us": "DEPARTED" },
-  "atc_stat_sweep": { "en-us": "SWEEP" },
-  "atc_status_title": { "en-us": "FLIGHT STATUS" },
-  "atc_verb_ah": { "en-us": "Ascend & Hold" },
-  "atc_verb_ct": { "en-us": "Cleared for Take-off" },
-  "atc_verb_dh": { "en-us": "Descend & Hold" },
-  "atc_verb_ha": { "en-us": "Hold at A" },
-  "atc_verb_hb": { "en-us": "Hold at B" },
-  "atc_verb_tl": { "en-us": "Turn Left" },
-  "atc_verb_tr": { "en-us": "Turn Right" },
-  "chem_air": { "en-us": "Air" },
-  "chem_air_none": { "en-us": "airless" },
-  "chem_air_veils": { "en-us": "Air veils" },
-  "chem_ax_atmosphere": { "en-us": "Atmosphere" },
-  "chem_ax_hydrosphere": { "en-us": "Hydrosphere" },
-  "chem_ax_interior": { "en-us": "Interior" },
-  "chem_ax_ocean_ph": { "en-us": "Ocean pH" },
-  "chem_ax_surface": { "en-us": "Surface temp" },
-  "chem_axes_in_band": { "en-us": "axes in band" },
-  "chem_axhi_alkaline": { "en-us": "alkaline" },
-  "chem_axhi_drowned": { "en-us": "drowned" },
-  "chem_axhi_hothouse": { "en-us": "hothouse" },
-  "chem_axhi_magma": { "en-us": "magma ocean" },
-  "chem_axhi_runaway": { "en-us": "runaway" },
-  "chem_axlo_acidic": { "en-us": "acidic" },
-  "chem_axlo_dead": { "en-us": "dead/frozen" },
-  "chem_axlo_desert": { "en-us": "desert" },
-  "chem_axlo_frozen": { "en-us": "frozen" },
-  "chem_axlo_thin": { "en-us": "too thin" },
-  "chem_balanced": { "en-us": "balanced ✓" },
-  "chem_bench_title": { "en-us": "GOD MODE · WORLD FORGE" },
-  "chem_boundary": { "en-us": "BOUNDARY INPUTS" },
-  "chem_broken": { "en-us": "BROKEN ✗" },
-  "chem_bulk_seed_btn": { "en-us": "BULK SEED" },
-  "chem_cells": { "en-us": "cells" },
-  "chem_coal": { "en-us": "coal" },
-  "chem_conservation_ledger": { "en-us": "CONSERVATION LEDGER" },
-  "chem_continental": { "en-us": "continental" },
-  "chem_core": { "en-us": "core" },
-  "chem_crust": { "en-us": "crust" },
-  "chem_cutaway": { "en-us": "Cutaway" },
-  "chem_differentiated": { "en-us": "differentiated" },
-  "chem_erode_off": { "en-us": "RAIN OFF" },
-  "chem_erode_on": { "en-us": "RAIN ON" },
-  "chem_ev_born": { "en-us": "plate born" },
-  "chem_ev_died": { "en-us": "plate died" },
-  "chem_ev_merge": { "en-us": "merged" },
-  "chem_ev_split": { "en-us": "split" },
-  "chem_events_head": { "en-us": "WORLD EVENTS" },
-  "chem_field_coast": { "en-us": "COAST" },
-  "chem_field_core": { "en-us": "CORE" },
-  "chem_field_heat": { "en-us": "HEAT" },
-  "chem_field_motion": { "en-us": "MOTION" },
-  "chem_field_ore": { "en-us": "ORE" },
-  "chem_field_plates": { "en-us": "PLATES" },
-  "chem_field_rain": { "en-us": "RAIN" },
-  "chem_field_relief": { "en-us": "RELIEF" },
-  "chem_field_seams": { "en-us": "SEAMS" },
-  "chem_field_strata": { "en-us": "STRATA" },
-  "chem_forge": { "en-us": "FORGE WORLD" },
-  "chem_freq_96_92_162_cells_bulk_accretion_seed": { "en-us": "freq 96 · 92,162 cells · bulk-accretion seed · building on the sim thread" },
-  "chem_gate_at": { "en-us": "at" },
-  "chem_gate_close": { "en-us": "CLOSE" },
-  "chem_gate_console": { "en-us": "SIMULATION GATES" },
-  "chem_gate_console_sub": { "en-us": "A held gate stays shut whatever the chemistry says. Release it and the world decides." },
-  "chem_gate_effect": { "en-us": "The run stopped here so you could look. Carry on when you have." },
-  "chem_gate_opened": { "en-us": "OPENED" },
-  "chem_gate_paused_title": { "en-us": "THE WORLD CHANGED" },
-  "chem_gate_resume": { "en-us": "CARRY ON" },
-  "chem_gate_shut": { "en-us": "SHUT" },
-  "chem_gate_watch_head": { "en-us": "Watch for:" },
-  "chem_gates_btn": { "en-us": "GATES…" },
-  "chem_gates_chip": { "en-us": "GATES" },
-  "chem_generating_planet": { "en-us": "GENERATING PLANET…" },
-  "chem_greenhouse": { "en-us": "greenhouse" },
-  "chem_grid": { "en-us": "Graticule" },
-  "chem_held": { "en-us": "HELD" },
-  "chem_hold": { "en-us": "HOLD" },
-  "chem_in_band": { "en-us": "in band" },
-  "chem_infall": { "en-us": "INFALL" },
-  "chem_inspect": { "en-us": "INSPECT" },
-  "chem_ledger_atmosphere": { "en-us": "Atmosphere" },
-  "chem_ledger_core": { "en-us": "Core" },
-  "chem_ledger_crust": { "en-us": "Crust" },
-  "chem_ledger_escaped": { "en-us": "Escaped" },
-  "chem_ledger_mantle": { "en-us": "Mantle" },
-  "chem_ledger_ocean": { "en-us": "Ocean" },
-  "chem_legend_bare": { "en-us": "bare mantle" },
-  "chem_legend_beds": { "en-us": "beds" },
-  "chem_legend_coastline": { "en-us": "bright = coastline" },
-  "chem_legend_cold": { "en-us": "coldest" },
-  "chem_legend_diff_done": { "en-us": "core drained" },
-  "chem_legend_diff_none": { "en-us": "undifferentiated" },
-  "chem_legend_dry": { "en-us": "dry" },
-  "chem_legend_exposed": { "en-us": "exposed floor" },
-  "chem_legend_hot": { "en-us": "hottest" },
-  "chem_legend_land": { "en-us": "land" },
-  "chem_legend_motion_col": { "en-us": "colour = plate" },
-  "chem_legend_motion_dir": { "en-us": "arrow = drift heading" },
-  "chem_legend_motion_len": { "en-us": "length = progress to next hex" },
-  "chem_legend_ocean_bed": { "en-us": "ocean bed" },
-  "chem_legend_ore_bg": { "en-us": "ordinary rock" },
-  "chem_legend_ore_rich": { "en-us": "richest seam (log)" },
-  "chem_legend_plate_each": { "en-us": "each colour = one plate" },
-  "chem_legend_plate_loose": { "en-us": "loose rock, no plate" },
-  "chem_legend_seam_conv": { "en-us": "convergent · colliding" },
-  "chem_legend_seam_div": { "en-us": "divergent · opening" },
-  "chem_legend_seam_int": { "en-us": "plate interior" },
-  "chem_legend_seam_trans": { "en-us": "transform · sliding" },
-  "chem_legend_shelf": { "en-us": "shelf · drowned continent" },
-  "chem_life": { "en-us": "Life" },
-  "chem_life_barren": { "en-us": "barren" },
-  "chem_life_decomposers": { "en-us": "decomposers" },
-  "chem_life_floral": { "en-us": "megaflora" },
-  "chem_life_microbial": { "en-us": "microbial" },
-  "chem_life_supporting": { "en-us": "LIFE-SUPPORTING" },
-  "chem_lv_arc": { "en-us": "ARC RETURN" },
-  "chem_lv_core_heat": { "en-us": "CORE HEAT" },
-  "chem_lv_crust_gen": { "en-us": "CRUST GEN" },
-  "chem_lv_decomposer": { "en-us": "DECOMPOSER" },
-  "chem_lv_erosion": { "en-us": "EROSION" },
-  "chem_lv_eruption": { "en-us": "ERUPTION" },
-  "chem_lv_leach": { "en-us": "LEACH" },
-  "chem_lv_outgas": { "en-us": "OUTGAS" },
-  "chem_lv_production": { "en-us": "BIO GROWTH" },
-  "chem_lv_stellar": { "en-us": "STAR" },
-  "chem_lv_veneer": { "en-us": "VENEER" },
-  "chem_lv_yield": { "en-us": "YIELD STRAIN" },
-  "chem_mantle": { "en-us": "mantle" },
-  "chem_mean_elevation": { "en-us": "mean elevation" },
-  "chem_no_signal_yet": { "en-us": "no signal yet" },
-  "chem_observed": { "en-us": "observed" },
-  "chem_oils": { "en-us": "oils" },
-  "chem_out_of_band": { "en-us": "out of band" },
-  "chem_pause": { "en-us": "❚❚ PAUSE" },
-  "chem_paused": { "en-us": "PAUSED" },
-  "chem_pco2": { "en-us": "pCO₂" },
-  "chem_plates": { "en-us": "plates" },
-  "chem_play": { "en-us": "▶ PLAY" },
-  "chem_playing": { "en-us": "PLAYING" },
-  "chem_preset_earth": { "en-us": "EARTH" },
-  "chem_preset_europa": { "en-us": "EUROPA" },
-  "chem_preset_mars": { "en-us": "MARS" },
-  "chem_preset_mercury": { "en-us": "MERCURY" },
-  "chem_processes": { "en-us": "PROCESSES" },
-  "chem_prog_bound": { "en-us": "compounds bound" },
-  "chem_prog_core": { "en-us": "core" },
-  "chem_prog_lid": { "en-us": "lid" },
-  "chem_prog_water": { "en-us": "water delivered" },
-  "chem_radiogenic": { "en-us": "radiogenic" },
-  "chem_rate": { "en-us": "RATE" },
-  "chem_rates": { "en-us": "RATES" },
-  "chem_release": { "en-us": "RELEASE" },
-  "chem_reseed": { "en-us": "RESEED" },
-  "chem_reset": { "en-us": "RESET" },
-  "chem_running": { "en-us": "running" },
-  "chem_sea_level": { "en-us": "sea level" },
-  "chem_seed_console": { "en-us": "THE STARTER" },
-  "chem_seed_note": { "en-us": "New-world knobs — nothing moves until FORGE births a fresh planet from them." },
-  "chem_size": { "en-us": "SIZE" },
-  "chem_starter_btn": { "en-us": "STARTER…" },
-  "chem_strata": { "en-us": "strata" },
-  "chem_submerged": { "en-us": "submerged" },
-  "chem_tick": { "en-us": "tick" },
-  "chem_tile_head": { "en-us": "TILE INSPECTOR" },
-  "chem_tissue": { "en-us": "tissue" },
-  "chem_waiting": { "en-us": "waiting" },
-  "chem_water": { "en-us": "WATER" },
-  "chem_water_life": { "en-us": "life" },
-  "chem_water_line": { "en-us": "WATER" },
-  "chem_water_sea": { "en-us": "sea" },
-  "chem_water_sky": { "en-us": "sky" },
-  "chem_water_stone": { "en-us": "stone" },
-  "chem_why_biosphere_open": { "en-us": "A standing sea under a temperate sky: the world can hold life now." },
-  "chem_why_biosphere_shut": { "en-us": "The sea or the air is gone. Nothing is fixing carbon any more." },
-  "chem_why_carbonsink_open": { "en-us": "A sea stands: it can begin drinking the carbon out of the sky." },
-  "chem_why_coreformation_shut": { "en-us": "The iron has finished sinking, or the mantle is too cold to sort itself." },
-  "chem_why_generic": { "en-us": "A process's own conditions were met, or stopped being met." },
-  "chem_why_lateveneer_open": { "en-us": "A core exists for the late metals to have arrived after — the gold is on its way." },
-  "chem_why_maturation_open": { "en-us": "Stacks are deep enough to bury things — what is buried can start cooking into fuel." },
-  "chem_why_outgassing_shut": { "en-us": "The whole surface has frozen over. Bulk degassing is done; only vents reach the sky." },
-  "chem_why_volcanism_open": { "en-us": "A crust has frozen over hot mantle — melt finally has a lid to come through." },
-  "chem_why_volcanism_shut": { "en-us": "The interior has cooled past the melt floor. There will be no more eruptions." },
-  "chem_why_watercycle_open": { "en-us": "There is water somewhere to move — sea and sky can start trading it." },
-  "confirm_display_title": { "en-us": "Keep Display?" },
-  "conflict_apply_rest": { "en-us": "Apply to the remaining conflicts" },
-  "conflict_existing": { "en-us": "EXISTING" },
-  "conflict_exists_in": { "en-us": "already exists in" },
-  "conflict_incoming": { "en-us": "INCOMING" },
-  "conflict_keep_both": { "en-us": "KEEP BOTH" },
-  "conflict_replace": { "en-us": "REPLACE" },
-  "conflict_skip": { "en-us": "SKIP" },
-  "conflict_title": { "en-us": "NAME CONFLICT" },
-  "ct_accuracy": { "en-us": "Accuracy" },
-  "ct_average": { "en-us": "Average" },
-  "ct_best": { "en-us": "Best" },
-  "ct_click_the_targets": { "en-us": "click the targets" },
-  "ct_click_trainer": { "en-us": "CLICK TRAINER" },
-  "ct_esc_menu": { "en-us": "Esc  ·  menu" },
-  "ct_hits": { "en-us": "Hits" },
-  "ct_misses": { "en-us": "Misses" },
-  "ct_reaction": { "en-us": "Reaction" },
-  "ct_reset": { "en-us": "RESET" },
-  "ctx_cut": { "en-us": "Cut" },
-  "ctx_hint_cut": { "en-us": "Y+LT" },
-  "ctx_hint_new_folder": { "en-us": "Y+Up" },
-  "ctx_hint_open": { "en-us": "A" },
-  "ctx_hint_paste": { "en-us": "Y+RT" },
-  "ctx_hint_rename": { "en-us": "Y+B" },
-  "ctx_new_folder": { "en-us": "New folder" },
-  "ctx_open": { "en-us": "Open" },
-  "ctx_paste": { "en-us": "Paste into" },
-  "ctx_rename": { "en-us": "Rename" },
-  "dm_coming_soon": { "en-us": "COMING SOON" },
-  "menu_back": { "en-us": "BACK" },
-  "menu_build_world": { "en-us": "BUILD THE WORLD" },
-  "menu_demo_caption": { "en-us": "DEMO BUILD · CLAY ENGINE" },
-  "menu_developer_mode": { "en-us": "DEVELOPER MODE" },
-  "menu_elideus_productions_clay_engine": { "en-us": "ELIDEUS PRODUCTIONS · CLAY ENGINE" },
-  "menu_explore_world": { "en-us": "EXPLORE THE WORLD" },
-  "menu_keep": { "en-us": "KEEP" },
-  "menu_load": { "en-us": "LOAD" },
-  "menu_main_menu": { "en-us": "MAIN MENU" },
-  "menu_prism": { "en-us": "Prism" },
-  "menu_quit": { "en-us": "QUIT" },
-  "menu_resume": { "en-us": "RETURN TO WORLD" },
-  "menu_revert": { "en-us": "REVERT" },
-  "menu_reverting_in": { "en-us": "Reverting in" },
-  "menu_select_a_scene": { "en-us": "Select a Scene" },
-  "menu_settings": { "en-us": "SETTINGS" },
-  "menu_the_seven_shards": { "en-us": "THE SEVEN SHARDS" },
-  "pause_esc_to_return": { "en-us": "ESC TO RETURN" },
-  "pause_gather_yourself_the_world_runs_on": { "en-us": "GATHER YOURSELF · THE WORLD RUNS ON" },
-  "pause_sanctum": { "en-us": "Sanctum" },
-  "pc_airborne": { "en-us": "airborne" },
-  "pc_arrows": { "en-us": "arrows" },
-  "pc_cam": { "en-us": "Cam" },
-  "pc_camera_driven_lod": { "en-us": "Camera-driven LOD" },
-  "pc_celestial_cycle": { "en-us": "Celestial Cycle" },
-  "pc_celestial_paths_advent": { "en-us": "Celestial paths (Advent)" },
-  "pc_cell": { "en-us": "Cell" },
-  "pc_cluster": { "en-us": "cluster" },
-  "pc_cluster_editor": { "en-us": "Cluster Editor" },
-  "pc_cluster_field": { "en-us": "Cluster field" },
-  "pc_clusters": { "en-us": "clusters" },
-  "pc_constellations": { "en-us": "Constellations" },
-  "pc_controls": { "en-us": "Controls" },
-  "pc_corner": { "en-us": "Corner" },
-  "pc_corner_vector_arrows": { "en-us": "Corner-vector arrows" },
-  "pc_corners": { "en-us": "corners" },
-  "pc_debug_overlays": { "en-us": "Debug Overlays" },
-  "pc_diag": { "en-us": "Diag" },
-  "pc_epoch": { "en-us": "Epoch" },
-  "pc_esc": { "en-us": "Esc" },
-  "pc_fly_mode": { "en-us": "Fly mode" },
-  "pc_fog": { "en-us": "Fog" },
-  "pc_for_the_menu": { "en-us": "for the menu" },
-  "pc_grid": { "en-us": "Grid" },
-  "pc_ground_y": { "en-us": "ground y" },
-  "pc_grounded": { "en-us": "grounded" },
-  "pc_latitude": { "en-us": "Latitude" },
-  "pc_local_corner": { "en-us": "◆ Local corner" },
-  "pc_lod": { "en-us": "lod" },
-  "pc_lod_billboards": { "en-us": "LOD billboards" },
-  "pc_mode_fly": { "en-us": "fly" },
-  "pc_mode_walk": { "en-us": "walk" },
-  "pc_moon": { "en-us": "Moon" },
-  "pc_move": { "en-us": "Move" },
-  "pc_move_speed": { "en-us": "Move speed" },
-  "pc_nav": { "en-us": "nav" },
-  "pc_navmesh_wireframe": { "en-us": "Navmesh wireframe" },
-  "pc_none": { "en-us": "none" },
-  "pc_pick": { "en-us": "Pick" },
-  "pc_pitch": { "en-us": "pitch" },
-  "pc_planets_ecliptic": { "en-us": "Planets / ecliptic" },
-  "pc_press": { "en-us": "Press" },
-  "pc_readout": { "en-us": "Readout" },
-  "pc_scrub_the_celestial_timeline_to_test_orb": { "en-us": "Scrub the celestial timeline to test orbit alignments." },
-  "pc_sky_the_paired_hands": { "en-us": "Sky · the paired hands" },
-  "pc_speed": { "en-us": "Speed" },
-  "pc_sun": { "en-us": "Sun" },
-  "pc_surface_walk": { "en-us": "Surface walk" },
-  "pc_units_s": { "en-us": "units / s" },
-  "pc_view": { "en-us": "View" },
-  "pc_voxel": { "en-us": "voxel" },
-  "pc_voxels": { "en-us": "voxels" },
-  "pc_walk": { "en-us": "Walk" },
-  "pc_walk_mode": { "en-us": "Walk mode" },
-  "pc_wireframe_overlay": { "en-us": "Wireframe overlay" },
-  "pc_world_independent": { "en-us": "World · independent" },
-  "pc_wx": { "en-us": "wX" },
-  "pc_wx_y_z_world_space": { "en-us": "wX / Y / Z world space" },
-  "pc_wy": { "en-us": "wY" },
-  "pc_wz": { "en-us": "wZ" },
-  "pc_yaw": { "en-us": "yaw" },
-  "pc_year": { "en-us": "Year" },
-  "pd_animate": { "en-us": "Animate" },
-  "pd_attack": { "en-us": "ATTACK" },
-  "pd_blend_xfade": { "en-us": "Blend xfade" },
-  "pd_bones": { "en-us": "bones" },
-  "pd_boot_l": { "en-us": "Boot L" },
-  "pd_boot_r": { "en-us": "Boot R" },
-  "pd_chest": { "en-us": "Chest" },
-  "pd_collision": { "en-us": "Collision" },
-  "pd_fit_prefix": { "en-us": "FIT · " },
-  "pd_glove_l": { "en-us": "Glove L" },
-  "pd_glove_r": { "en-us": "Glove R" },
-  "pd_hair": { "en-us": "Hair" },
-  "pd_inventory": { "en-us": "INVENTORY" },
-  "pd_l_hand": { "en-us": "L Hand" },
-  "pd_legs": { "en-us": "Legs" },
-  "pd_mesh": { "en-us": "Mesh" },
-  "pd_neck": { "en-us": "Neck" },
-  "pd_pitch": { "en-us": "Pitch" },
-  "pd_r_hand": { "en-us": "R Hand" },
-  "pd_record_all_to_content": { "en-us": "RECORD ALL TO CONTENT" },
-  "pd_roll": { "en-us": "Roll" },
-  "pd_size": { "en-us": "Size" },
-  "pd_skeleton": { "en-us": "Skeleton" },
-  "pd_tall": { "en-us": "Tall" },
-  "pd_textures": { "en-us": "Textures" },
-  "pd_thick": { "en-us": "Thick" },
-  "pd_verts": { "en-us": "verts" },
-  "pd_wide": { "en-us": "Wide" },
-  "pd_x_lat": { "en-us": "X (lat)" },
-  "pd_y_depth": { "en-us": "Y (depth)" },
-  "pd_yaw": { "en-us": "Yaw" },
-  "pd_z_up": { "en-us": "Z (up)" },
-  "poc_flicker_planet_simulation": { "en-us": "FLICKER · PLANET SIMULATION" },
-  "poc_life_supporting_conditions": { "en-us": "LIFE-SUPPORTING CONDITIONS" },
-  "qm_caret_closed": { "en-us": "▸" },
-  "qm_caret_leaf": { "en-us": " " },
-  "qm_caret_open": { "en-us": "▾" },
-  "qm_class_bake": { "en-us": "Cluster bake" },
-  "qm_class_clip": { "en-us": "Animation" },
-  "qm_class_doc": { "en-us": "Document" },
-  "qm_class_epoch": { "en-us": "World" },
-  "qm_class_flight": { "en-us": "Cinematic" },
-  "qm_class_folder": { "en-us": "Folder" },
-  "qm_class_font": { "en-us": "Font" },
-  "qm_class_pack": { "en-us": "Combat pack" },
-  "qm_class_rbp": { "en-us": "Base pose" },
-  "qm_class_rig": { "en-us": "Model" },
-  "qm_class_texture": { "en-us": "Texture" },
-  "qm_class_unknown": { "en-us": "Unknown" },
-  "qm_col_name": { "en-us": "NAME" },
-  "qm_col_size": { "en-us": "SIZE" },
-  "qm_col_type": { "en-us": "TYPE" },
-  "qm_dash": { "en-us": "—" },
-  "qm_did_move": { "en-us": "Moved" },
-  "qm_did_newfolder": { "en-us": "New folder" },
-  "qm_did_promote": { "en-us": "Promoted" },
-  "qm_did_rename": { "en-us": "Renamed" },
-  "qm_err_bad_name": { "en-us": "A name cannot contain a path separator." },
-  "qm_err_empty_name": { "en-us": "A name cannot be empty." },
-  "qm_err_exists": { "en-us": "Something with that name is already there." },
-  "qm_err_into_self": { "en-us": "A folder cannot be moved inside itself." },
-  "qm_err_name_taken": { "en-us": "That name is already used here." },
-  "qm_err_promote_partial": { "en-us": "A promote ships the whole asset — answer Replace, or resolve the collision in Files first." },
-  "qm_fact_bones": { "en-us": "Bones" },
-  "qm_fact_clips": { "en-us": "Clips" },
-  "qm_fact_files": { "en-us": "Files" },
-  "qm_fact_points": { "en-us": "Points" },
-  "qm_fact_size": { "en-us": "Size" },
-  "qm_fact_textures": { "en-us": "Textures" },
-  "qm_fact_verts": { "en-us": "Verts" },
-  "qm_holding": { "en-us": "HOLDING" },
-  "qm_items": { "en-us": "ITEMS" },
-  "qm_review_empty": { "en-us": "Staging is empty — the pipelines have nothing awaiting review." },
-  "qm_review_facts": { "en-us": "ASSET FACTS" },
-  "qm_review_promote": { "en-us": "PROMOTE" },
-  "qm_review_queue": { "en-us": "STAGING QUEUE" },
-  "qm_review_target": { "en-us": "Promote to" },
-  "qm_route": { "en-us": "staging → package" },
-  "qm_tab_files": { "en-us": "FILES" },
-  "qm_tab_review": { "en-us": "REVIEW" },
-  "qm_title": { "en-us": "Quartermaster Bench" },
-  "qm_tree_header": { "en-us": "CONTENT TREES" },
-  "qm_warn_missing_textures": { "en-us": "referenced textures are missing beside the rig" },
-  "qm_warn_off_canon": { "en-us": "skeleton is off-canon — its bone count differs from the reference" },
-  "qm_warn_target_occupied": { "en-us": "target already exists in the package — promoting will ask Replace / Keep both / Skip" },
-  "sb_approaching": { "en-us": "approaching" },
-  "sb_drag_rotate_wheel_zoom_space_replay_fly": { "en-us": "drag rotate · wheel zoom · Space replay fly-in · Esc pause" },
-  "sb_flicker_solarbirth": { "en-us": "flicker · solarbirth" },
-  "sb_planets_inner_outer": { "en-us": "planets (inner → outer):" },
-  "sb_settled": { "en-us": "settled" },
-  "sb_the_prism_system": { "en-us": "the Prism system" },
-  "set_actions": { "en-us": "ACTIONS" },
-  "set_active_profile": { "en-us": "Active Profile" },
-  "set_adventurer_and_rts_shared_kit": { "en-us": "Adventurer & RTS shared kit" },
-  "set_adventurer_camera_angle_60_120": { "en-us": "Adventurer camera angle · 60–120°" },
-  "set_adventurer_camera_turn_speed": { "en-us": "Adventurer camera turn speed" },
-  "set_aim_sensitivity": { "en-us": "Aim Sensitivity" },
-  "set_all_settings_have_been_reset_to_their_de": { "en-us": "All settings have been reset to their default values." },
-  "set_ambient": { "en-us": "Ambient" },
-  "set_apply": { "en-us": "APPLY" },
-  "set_audio": { "en-us": "AUDIO" },
-  "set_borderless_window": { "en-us": "Borderless Window" },
-  "set_brightness": { "en-us": "Brightness" },
-  "set_cancel": { "en-us": "Cancel" },
-  "set_cancel_2": { "en-us": "CANCEL" },
-  "set_cap_the_maximum_frames_per_second": { "en-us": "Cap the maximum frames per second" },
-  "set_categories": { "en-us": "CATEGORIES" },
-  "set_choose_a_control_profile": { "en-us": "Choose a control profile" },
-  "set_commander_camera_scroll_rate": { "en-us": "Commander camera scroll rate" },
-  "set_commander_rts": { "en-us": "COMMANDER · RTS" },
-  "set_confirm": { "en-us": "Confirm" },
-  "set_controller": { "en-us": "CONTROLLER" },
-  "set_controller_profile": { "en-us": "CONTROLLER PROFILE" },
-  "set_crouch": { "en-us": "Crouch" },
-  "set_default": { "en-us": "Default" },
-  "set_defaults_restored": { "en-us": "Defaults Restored" },
-  "set_discard": { "en-us": "DISCARD" },
-  "set_display": { "en-us": "DISPLAY" },
-  "set_display_mode": { "en-us": "Display Mode" },
-  "set_do_you_want_to_save_your_changes": { "en-us": "Do you want to save your changes?" },
-  "set_edge_pan": { "en-us": "Edge Pan" },
-  "set_edge_pan_speed": { "en-us": "Edge Pan Speed" },
-  "set_effects": { "en-us": "Effects" },
-  "set_field_of_view": { "en-us": "Field of View" },
-  "set_flip_the_up_down_axis": { "en-us": "Flip the up/down axis" },
-  "set_frame_rate_limit": { "en-us": "Frame Rate Limit" },
-  "set_fullscreen": { "en-us": "Fullscreen" },
-  "set_gamma_of_the_rendered_scene": { "en-us": "Gamma of the rendered scene" },
-  "set_graphics_quality": { "en-us": "Graphics Quality" },
-  "set_high": { "en-us": "High" },
-  "set_how_the_game_fills_your_screen": { "en-us": "How the game fills your screen" },
-  "set_image": { "en-us": "IMAGE" },
-  "set_input": { "en-us": "INPUT" },
-  "set_interact": { "en-us": "Interact" },
-  "set_interface": { "en-us": "INTERFACE" },
-  "set_inventory": { "en-us": "Inventory" },
-  "set_invert_vertical_look": { "en-us": "Invert Vertical Look" },
-  "set_jump": { "en-us": "Jump" },
-  "set_keyboard": { "en-us": "KEYBOARD" },
-  "set_kicker_audio": { "en-us": "MIXING & OUTPUT" },
-  "set_kicker_input": { "en-us": "BINDINGS & DEVICES" },
-  "set_kicker_video": { "en-us": "DISPLAY & RENDERING" },
-  "set_look_sensitivity": { "en-us": "Look Sensitivity" },
-  "set_low": { "en-us": "Low" },
-  "set_master_preset_for_all_render_features": { "en-us": "Master preset for all render features" },
-  "set_master_volume": { "en-us": "Master Volume" },
-  "set_medium": { "en-us": "Medium" },
-  "set_menu": { "en-us": "Menu" },
-  "set_mouse": { "en-us": "MOUSE" },
-  "set_move_backward": { "en-us": "Move Backward" },
-  "set_move_down": { "en-us": "Move Down" },
-  "set_move_forward": { "en-us": "Move Forward" },
-  "set_move_up": { "en-us": "Move Up" },
-  "set_movement": { "en-us": "MOVEMENT" },
-  "set_multiplier_while_channelling_aiming": { "en-us": "Multiplier while channelling / aiming" },
-  "set_music": { "en-us": "Music" },
-  "set_no_audio_modules_exist_in_the_clay_engin": { "en-us": "No audio modules exist in the Clay Engine yet. These controls are a layout preview and are inactive." },
-  "set_not_yet_implemented": { "en-us": "NOT YET IMPLEMENTED" },
-  "set_ok": { "en-us": "OK" },
-  "set_output": { "en-us": "OUTPUT" },
-  "set_output_device": { "en-us": "Output Device" },
-  "set_performance": { "en-us": "PERFORMANCE" },
-  "set_pick_a_starting_layout_above_rebind_indi": { "en-us": "Pick a starting layout above. Rebind individual keys in the Keyboard tab — your changes are saved with the profile." },
-  "set_pointer": { "en-us": "POINTER" },
-  "set_press_any_key_to_bind_esc_to_cancel_back": { "en-us": "Press any key to bind  ·  Esc to cancel  ·  Backspace to unbind" },
-  "set_preview": { "en-us": "PREVIEW" },
-  "set_primary_action": { "en-us": "Primary Action" },
-  "set_prism_clay_engine": { "en-us": "PRISM · CLAY ENGINE" },
-  "set_quit": { "en-us": "Quit" },
-  "set_reload": { "en-us": "Reload" },
-  "set_rendering_resolution_of_the_viewport": { "en-us": "Rendering resolution of the viewport" },
-  "set_resolution": { "en-us": "Resolution" },
-  "set_restore_defaults": { "en-us": "RESTORE DEFAULTS" },
-  "set_save_and_close": { "en-us": "SAVE AND CLOSE" },
-  "set_save_and_close_2": { "en-us": "SAVE & CLOSE" },
-  "set_scroll_the_map_when_the_cursor_nears_the": { "en-us": "Scroll the map when the cursor nears the edge" },
-  "set_secondary_action": { "en-us": "Secondary Action" },
-  "set_settings": { "en-us": "Settings" },
-  "set_sprint": { "en-us": "Sprint" },
-  "set_strafe_left": { "en-us": "Strafe Left" },
-  "set_strafe_right": { "en-us": "Strafe Right" },
-  "set_subtitles": { "en-us": "Subtitles" },
-  "set_sync_frames_to_the_display_to_prevent_te": { "en-us": "Sync frames to the display to prevent tearing" },
-  "set_system_default": { "en-us": "System Default" },
-  "set_title_audio": { "en-us": "Audio" },
-  "set_title_input": { "en-us": "Input" },
-  "set_title_video": { "en-us": "Video" },
-  "set_ultra": { "en-us": "Ultra" },
-  "set_unlimited": { "en-us": "Unlimited" },
-  "set_unsaved_changes": { "en-us": "Unsaved Changes" },
-  "set_vertical_sync": { "en-us": "Vertical Sync" },
-  "set_video": { "en-us": "VIDEO" },
-  "set_voice": { "en-us": "Voice" },
-  "set_volume": { "en-us": "VOLUME" },
-  "set_windowed": { "en-us": "Windowed" },
-  "set_world_map": { "en-us": "World Map" },
-  "settings_applied": { "en-us": "SETTINGS APPLIED" },
-  "sw_amt": { "en-us": "amt" },
-  "sw_ao": { "en-us": "Occlusion" },
-  "sw_blend_add": { "en-us": "Add" },
-  "sw_blend_base": { "en-us": "Base" },
-  "sw_blend_diff": { "en-us": "Diff" },
-  "sw_blend_max": { "en-us": "Max" },
-  "sw_blend_min": { "en-us": "Min" },
-  "sw_blend_mul": { "en-us": "Mul" },
-  "sw_blend_overlay": { "en-us": "Overlay" },
-  "sw_blend_screen": { "en-us": "Screen" },
-  "sw_body_plane": { "en-us": "Plane" },
-  "sw_body_sphere": { "en-us": "Sphere" },
-  "sw_ch1": { "en-us": "CH1" },
-  "sw_ch2": { "en-us": "CH2" },
-  "sw_ch3": { "en-us": "CH3" },
-  "sw_ch4": { "en-us": "CH4" },
-  "sw_ch5": { "en-us": "CH5" },
-  "sw_ch6": { "en-us": "CH6" },
-  "sw_channel_rack": { "en-us": "Channel Rack" },
-  "sw_commit": { "en-us": "Commit" },
-  "sw_commit_done": { "en-us": "Staged" },
-  "sw_commit_failed": { "en-us": "Failed" },
-  "sw_commit_idle": { "en-us": "Ready" },
-  "sw_commit_working": { "en-us": "Baking…" },
-  "sw_contrast": { "en-us": "Contrast" },
-  "sw_gain": { "en-us": "Gain" },
-  "sw_glow": { "en-us": "Glow" },
-  "sw_glow_band": { "en-us": "Glow band" },
-  "sw_invert": { "en-us": "Invert" },
-  "sw_lacunarity": { "en-us": "Lacunarity" },
-  "sw_map_ao": { "en-us": "AO" },
-  "sw_map_base": { "en-us": "Base" },
-  "sw_map_emit": { "en-us": "Emit" },
-  "sw_map_height": { "en-us": "Height" },
-  "sw_map_lit": { "en-us": "Lit" },
-  "sw_map_metal": { "en-us": "Metal" },
-  "sw_map_normal": { "en-us": "Normal" },
-  "sw_map_rough": { "en-us": "Rough" },
-  "sw_material": { "en-us": "Material" },
-  "sw_metal_mod": { "en-us": "Metal mod" },
-  "sw_metalness": { "en-us": "Metalness" },
-  "sw_next": { "en-us": "›" },
-  "sw_oct": { "en-us": "oct" },
-  "sw_output_stage": { "en-us": "Output Stage" },
-  "sw_prev": { "en-us": "‹" },
-  "sw_relief": { "en-us": "Relief" },
-  "sw_reseed": { "en-us": "Reseed" },
-  "sw_roll": { "en-us": "Roll" },
-  "sw_rough_mod": { "en-us": "Rough mod" },
-  "sw_roughness": { "en-us": "Roughness" },
-  "sw_scale": { "en-us": "scale" },
-  "sw_size": { "en-us": "Size" },
-  "sw_spin": { "en-us": "Spin" },
-  "sw_src_billow": { "en-us": "Billow" },
-  "sw_src_fbm": { "en-us": "fBm" },
-  "sw_src_ridged": { "en-us": "Ridged" },
-  "sw_src_stripe": { "en-us": "Stripe" },
-  "sw_src_value": { "en-us": "Value" },
-  "sw_src_worley": { "en-us": "Worley" },
-  "sw_title": { "en-us": "SABLEWORK" },
-  "sw_unbound": { "en-us": "Unbound" },
-  "sw_voice": { "en-us": "Selected Voice" },
-  "sw_warp": { "en-us": "warp" },
-  "toast_undo": { "en-us": "UNDO" },
-  "w_epoch_composition": { "en-us": "Composition" },
-  "w_epoch_differentiation": { "en-us": "Differentiation" },
-  "w_epoch_erosion": { "en-us": "Erosion" },
-  "w_epoch_hydrosphere": { "en-us": "Hydrosphere" },
-  "w_epoch_mineralization": { "en-us": "Mineralization" },
-  "w_epoch_tectonics": { "en-us": "Tectonics" },
-  "wf_back": { "en-us": "BACK" },
-  "wf_discard_cancel": { "en-us": "KEEP EDITING" },
-  "wf_discard_confirm": { "en-us": "DISCARD" },
-  "wf_discard_msg": { "en-us": "DISCARDS CHANGES" },
-  "wf_discard_title": { "en-us": "ARE YOU SURE?" },
-  "wf_next": { "en-us": "NEXT" },
-  "wf_restart": { "en-us": "RESTART" },
-  "wf_step_attach": { "en-us": "Attach" },
-  "wf_step_clip": { "en-us": "Clip" },
-  "wf_step_mount": { "en-us": "Mount" },
-  "wf_step_review": { "en-us": "Review" },
-  "wf_step_rig": { "en-us": "Rig" },
-  "wf_step_task": { "en-us": "Workflow" }
+ "ap_67_bone_reference_this_asset_has_none": {
+  "en-us": "67-bone reference; this asset has none,"
+ },
+ "ap_a_soul_given_form_mesh_skeleton_and_stat": {
+  "en-us": "A soul given form — mesh, skeleton and stat-thread."
+ },
+ "ap_absent": {
+  "en-us": "(absent)"
+ },
+ "ap_accessory": {
+  "en-us": "Accessory"
+ },
+ "ap_all": {
+  "en-us": "All"
+ },
+ "ap_and_fit_are_authored_in_the_paperdoll": {
+  "en-us": "and fit are authored in the paperdoll."
+ },
+ "ap_animation": {
+  "en-us": "Animation"
+ },
+ "ap_asset": {
+  "en-us": "Asset"
+ },
+ "ap_attach_mount_so_the_set_is_not_persisted": {
+  "en-us": "`attach` mount, so the SET is not persisted yet."
+ },
+ "ap_attach_points": {
+  "en-us": "Attach Points"
+ },
+ "ap_authored_here_flicker_rig_carries_a_sing": {
+  "en-us": "Authored here; flicker.rig carries a single"
+ },
+ "ap_auto_inferred": {
+  "en-us": "auto-inferred"
+ },
+ "ap_badge_blocked": {
+  "en-us": "BLOCKED"
+ },
+ "ap_badge_clip": {
+  "en-us": "CLIP"
+ },
+ "ap_badge_garment": {
+  "en-us": "GARMENT"
+ },
+ "ap_badge_passed": {
+  "en-us": "PASSED"
+ },
+ "ap_badge_pending": {
+  "en-us": "PENDING"
+ },
+ "ap_badge_points": {
+  "en-us": "POINTS"
+ },
+ "ap_badge_static": {
+  "en-us": "STATIC"
+ },
+ "ap_bake_skin": {
+  "en-us": "BAKE SKIN"
+ },
+ "ap_belt_waist": {
+  "en-us": "Belt · Waist"
+ },
+ "ap_bind_the_piece_to_a_socket_then_place_it": {
+  "en-us": "Bind the piece to a socket, then place it: offset, rotation and scale."
+ },
+ "ap_blocked": {
+  "en-us": "Blocked:"
+ },
+ "ap_bone_map": {
+  "en-us": "BONE MAP"
+ },
+ "ap_bones": {
+  "en-us": "bones"
+ },
+ "ap_bones_edited": {
+  "en-us": "Bones edited"
+ },
+ "ap_character": {
+  "en-us": "Character"
+ },
+ "ap_chest": {
+  "en-us": "Chest"
+ },
+ "ap_choose_a_workflow": {
+  "en-us": "CHOOSE A WORKFLOW"
+ },
+ "ap_choose_the_kind_of_asset_you_are_importi": {
+  "en-us": "Choose the kind of asset you are importing to begin."
+ },
+ "ap_class": {
+  "en-us": "Class:"
+ },
+ "ap_class_word": {
+  "en-us": "Class"
+ },
+ "ap_clay_engine": {
+  "en-us": "CLAY ENGINE"
+ },
+ "ap_clayworks_bench": {
+  "en-us": "Clayworks Bench"
+ },
+ "ap_clip": {
+  "en-us": "Clip"
+ },
+ "ap_clips": {
+  "en-us": "CLIPS"
+ },
+ "ap_clips_in_this_folder": {
+  "en-us": "CLIPS IN THIS FOLDER"
+ },
+ "ap_clips_title": {
+  "en-us": "Clips"
+ },
+ "ap_collision": {
+  "en-us": "Collision"
+ },
+ "ap_conform_has_not_run": {
+  "en-us": "Conform has not run."
+ },
+ "ap_conform_runs_when_this_stage_is_reached": {
+  "en-us": "Conform runs when this stage is reached."
+ },
+ "ap_dropped": {
+  "en-us": "Dropped"
+ },
+ "ap_duration": {
+  "en-us": "Duration"
+ },
+ "ap_engine_requirements": {
+  "en-us": "ENGINE REQUIREMENTS"
+ },
+ "ap_export_bakes_the_static_prop_mesh_its_so": {
+  "en-us": "Export bakes the static prop mesh; its socket"
+ },
+ "ap_export_skins_this_garment_onto_the_base": {
+  "en-us": "Export SKINS this garment onto the base body"
+ },
+ "ap_export_to_staging": {
+  "en-us": "EXPORT → STAGING"
+ },
+ "ap_exported": {
+  "en-us": "EXPORTED ✓"
+ },
+ "ap_exported_word": {
+  "en-us": "Exported"
+ },
+ "ap_fbx_bvh_clip": {
+  "en-us": "FBX · BVH · Clip"
+ },
+ "ap_fbx_glb_attach_point": {
+  "en-us": "FBX · GLB · Attach Point"
+ },
+ "ap_fbx_glb_rigged": {
+  "en-us": "FBX · GLB · Rigged"
+ },
+ "ap_fbx_glb_static": {
+  "en-us": "FBX · GLB · Static"
+ },
+ "ap_flagged": {
+  "en-us": "flagged"
+ },
+ "ap_foot_l": {
+  "en-us": "Foot · L"
+ },
+ "ap_foot_r": {
+  "en-us": "Foot · R"
+ },
+ "ap_forearm_l": {
+  "en-us": "Forearm · L"
+ },
+ "ap_forearm_r": {
+  "en-us": "Forearm · R"
+ },
+ "ap_found": {
+  "en-us": "found"
+ },
+ "ap_gizmo_mode": {
+  "en-us": "GIZMO MODE"
+ },
+ "ap_grip_hand_l": {
+  "en-us": "Grip · Hand L"
+ },
+ "ap_grip_hand_r": {
+  "en-us": "Grip · Hand R"
+ },
+ "ap_hand_l": {
+  "en-us": "Hand · L"
+ },
+ "ap_hand_r": {
+  "en-us": "Hand · R"
+ },
+ "ap_head": {
+  "en-us": "Head"
+ },
+ "ap_holster_hip_l": {
+  "en-us": "Holster · Hip L"
+ },
+ "ap_holster_hip_r": {
+  "en-us": "Holster · Hip R"
+ },
+ "ap_import": {
+  "en-us": "Import"
+ },
+ "ap_import_next_piece": {
+  "en-us": "IMPORT NEXT PIECE"
+ },
+ "ap_in_place": {
+  "en-us": "In-Place"
+ },
+ "ap_inferred": {
+  "en-us": "Inferred"
+ },
+ "ap_limbs_aligned": {
+  "en-us": "Limbs aligned"
+ },
+ "ap_load_an_asset_folder_to_begin": {
+  "en-us": "Load an asset folder to begin."
+ },
+ "ap_map_the_source_skeleton_to_the_internal": {
+  "en-us": "Map the source skeleton to the internal rig and tune bone offsets."
+ },
+ "ap_meshes_in_this_folder": {
+  "en-us": "MESHES IN THIS FOLDER"
+ },
+ "ap_mirror_joints": {
+  "en-us": "Mirror joints"
+ },
+ "ap_motion_inscribed_upon_a_skeleton_already": {
+  "en-us": "Motion inscribed upon a skeleton already woven."
+ },
+ "ap_mount_socket": {
+  "en-us": "MOUNT SOCKET"
+ },
+ "ap_nearest_vertex_weight_transfer_fit_baked": {
+  "en-us": "(nearest-vertex weight transfer, fit baked in)."
+ },
+ "ap_neck": {
+  "en-us": "Neck"
+ },
+ "ap_need_review": {
+  "en-us": "need review"
+ },
+ "ap_no_asset_loaded": {
+  "en-us": "No asset loaded"
+ },
+ "ap_no_bone_selected": {
+  "en-us": "no bone selected"
+ },
+ "ap_no_point_selected": {
+  "en-us": "no point selected"
+ },
+ "ap_no_source_folder_open": {
+  "en-us": "No source folder open."
+ },
+ "ap_not_exported": {
+  "en-us": "Not exported."
+ },
+ "ap_objects_of_the_world_answering_to_no_bea": {
+  "en-us": "Objects of the world, answering to no bearer."
+ },
+ "ap_of": {
+  "en-us": "of"
+ },
+ "ap_off_x": {
+  "en-us": "Off X"
+ },
+ "ap_off_y": {
+  "en-us": "Off Y"
+ },
+ "ap_off_z": {
+  "en-us": "Off Z"
+ },
+ "ap_offset": {
+  "en-us": "offset"
+ },
+ "ap_offset_cm": {
+  "en-us": "OFFSET · cm"
+ },
+ "ap_offset_x": {
+  "en-us": "Offset X"
+ },
+ "ap_offset_y": {
+  "en-us": "Offset Y"
+ },
+ "ap_offset_z": {
+  "en-us": "Offset Z"
+ },
+ "ap_over_budget": {
+  "en-us": "Over budget:"
+ },
+ "ap_parent": {
+  "en-us": "parent:"
+ },
+ "ap_parents_resolve_after_conform_renames": {
+  "en-us": "Parents resolve after Conform renames the rig."
+ },
+ "ap_pelvis": {
+  "en-us": "Pelvis"
+ },
+ "ap_points_resolve_to_a_bone": {
+  "en-us": "points resolve to a bone."
+ },
+ "ap_position_hold_holster_and_belt_attach_po": {
+  "en-us": "Position hold, holster and belt attach points on the standard rig."
+ },
+ "ap_preview_both_variants_pick_what_commit_k": {
+  "en-us": "Preview both variants — Commit keeps what you pick: one, the other, or both."
+ },
+ "ap_prop": {
+  "en-us": "Prop"
+ },
+ "ap_reference_body": {
+  "en-us": "Reference body"
+ },
+ "ap_renamed": {
+  "en-us": "Renamed"
+ },
+ "ap_req_all_bones_mapped_or_reviewed": {
+  "en-us": "all bones mapped or reviewed"
+ },
+ "ap_req_at_least_one_variant_selected": {
+  "en-us": "at least one variant selected"
+ },
+ "ap_req_attach_points_on_valid_parents": {
+  "en-us": "attach points on valid parents"
+ },
+ "ap_req_clip_retargets_onto_the_reference": {
+  "en-us": "clip retargets onto the reference skeleton"
+ },
+ "ap_req_conform_has_not_run": {
+  "en-us": "conform has not run"
+ },
+ "ap_req_garment_mesh_present": {
+  "en-us": "garment mesh present"
+ },
+ "ap_req_prop_mesh_present": {
+  "en-us": "prop mesh present"
+ },
+ "ap_req_skeleton_conforms": {
+  "en-us": "skeleton conforms"
+ },
+ "ap_req_skins_onto_the_canonical_base": {
+  "en-us": "skins onto the canonical base · fit refined in the paperdoll"
+ },
+ "ap_req_socket_fit_authored_in_the_paperdoll": {
+  "en-us": "socket + fit authored in the paperdoll"
+ },
+ "ap_req_source_bones_unmapped": {
+  "en-us": "source bone(s) unmapped"
+ },
+ "ap_req_textures_masks_resolved": {
+  "en-us": "textures & masks resolved"
+ },
+ "ap_reset_bone": {
+  "en-us": "RESET BONE"
+ },
+ "ap_retarget_runs_when_this_stage_is_reached": {
+  "en-us": "Retarget runs when this stage is reached."
+ },
+ "ap_review_export": {
+  "en-us": "Review & Export"
+ },
+ "ap_rig_attach_points": {
+  "en-us": "RIG ATTACH POINTS"
+ },
+ "ap_rigging_maps_a_biped_skeleton_onto_the": {
+  "en-us": "Rigging maps a biped skeleton onto the"
+ },
+ "ap_roll": {
+  "en-us": "Roll"
+ },
+ "ap_root_motion": {
+  "en-us": "Root Motion"
+ },
+ "ap_rotate": {
+  "en-us": "Rotate"
+ },
+ "ap_rotate_deg": {
+  "en-us": "ROTATE · deg"
+ },
+ "ap_rotate_x": {
+  "en-us": "Rotate X"
+ },
+ "ap_rotate_y": {
+  "en-us": "Rotate Y"
+ },
+ "ap_rotate_z": {
+  "en-us": "Rotate Z"
+ },
+ "ap_scabbard_back": {
+  "en-us": "Scabbard · Back"
+ },
+ "ap_scale": {
+  "en-us": "SCALE"
+ },
+ "ap_scale_gizmo": {
+  "en-us": "Scale"
+ },
+ "ap_scale_x": {
+  "en-us": "Scale X"
+ },
+ "ap_scale_y": {
+  "en-us": "Scale Y"
+ },
+ "ap_scale_z": {
+  "en-us": "Scale Z"
+ },
+ "ap_select_a_workflow_to_begin": {
+  "en-us": "SELECT A WORKFLOW TO BEGIN"
+ },
+ "ap_select_workflow": {
+  "en-us": "Select Workflow"
+ },
+ "ap_shin_l": {
+  "en-us": "Shin · L"
+ },
+ "ap_shin_r": {
+  "en-us": "Shin · R"
+ },
+ "ap_shoulder_l": {
+  "en-us": "Shoulder · L"
+ },
+ "ap_skeleton": {
+  "en-us": "Skeleton"
+ },
+ "ap_so_it_is_skipped": {
+  "en-us": "so it is SKIPPED."
+ },
+ "ap_socket_word": {
+  "en-us": "Socket"
+ },
+ "ap_source_internal_rig": {
+  "en-us": "Source → Internal rig"
+ },
+ "ap_tag_auto": {
+  "en-us": "auto"
+ },
+ "ap_tag_mapped": {
+  "en-us": "mapped"
+ },
+ "ap_tag_review": {
+  "en-us": "review"
+ },
+ "ap_target": {
+  "en-us": "target"
+ },
+ "ap_thigh_l": {
+  "en-us": "Thigh · L"
+ },
+ "ap_thigh_r": {
+  "en-us": "Thigh · R"
+ },
+ "ap_translate": {
+  "en-us": "Translate"
+ },
+ "ap_translate_x": {
+  "en-us": "Translate X"
+ },
+ "ap_translate_y": {
+  "en-us": "Translate Y"
+ },
+ "ap_translate_z": {
+  "en-us": "Translate Z"
+ },
+ "ap_tri_budget": {
+  "en-us": "-tri budget."
+ },
+ "ap_triangles": {
+  "en-us": "Triangles"
+ },
+ "ap_tris": {
+  "en-us": "tris"
+ },
+ "ap_unclassified": {
+  "en-us": "unclassified"
+ },
+ "ap_unmapped": {
+  "en-us": "Unmapped:"
+ },
+ "ap_unresolved": {
+  "en-us": "unresolved"
+ },
+ "ap_upper_chest": {
+  "en-us": "Upper chest"
+ },
+ "ap_variants": {
+  "en-us": "Variants"
+ },
+ "ap_verify_engine_requirements_then_export": {
+  "en-us": "Verify engine requirements, then export to staging for the Quartermaster."
+ },
+ "ap_verts": {
+  "en-us": "verts"
+ },
+ "ap_weapon_socket_l": {
+  "en-us": "Weapon socket · L"
+ },
+ "ap_weapon_socket_r": {
+  "en-us": "Weapon socket · R"
+ },
+ "ap_what_manner_of_thing_will_you_weave_into": {
+  "en-us": "What manner of thing will you weave into this scene?"
+ },
+ "ap_within_the": {
+  "en-us": "Within the"
+ },
+ "ap_world": {
+  "en-us": "World"
+ },
+ "ap_worn_things_blades_circlets_loomsilk_bou": {
+  "en-us": "Worn things — blades, circlets, loomsilk — bound to a bearer."
+ },
+ "chem_air": {
+  "en-us": "Air"
+ },
+ "chem_air_none": {
+  "en-us": "airless"
+ },
+ "chem_air_veils": {
+  "en-us": "Air veils"
+ },
+ "chem_ax_atmosphere": {
+  "en-us": "Atmosphere"
+ },
+ "chem_ax_hydrosphere": {
+  "en-us": "Hydrosphere"
+ },
+ "chem_ax_interior": {
+  "en-us": "Interior"
+ },
+ "chem_ax_ocean_ph": {
+  "en-us": "Ocean pH"
+ },
+ "chem_ax_surface": {
+  "en-us": "Surface temp"
+ },
+ "chem_axes_in_band": {
+  "en-us": "axes in band"
+ },
+ "chem_axhi_alkaline": {
+  "en-us": "alkaline"
+ },
+ "chem_axhi_drowned": {
+  "en-us": "drowned"
+ },
+ "chem_axhi_hothouse": {
+  "en-us": "hothouse"
+ },
+ "chem_axhi_magma": {
+  "en-us": "magma ocean"
+ },
+ "chem_axhi_runaway": {
+  "en-us": "runaway"
+ },
+ "chem_axlo_acidic": {
+  "en-us": "acidic"
+ },
+ "chem_axlo_dead": {
+  "en-us": "dead/frozen"
+ },
+ "chem_axlo_desert": {
+  "en-us": "desert"
+ },
+ "chem_axlo_frozen": {
+  "en-us": "frozen"
+ },
+ "chem_axlo_thin": {
+  "en-us": "too thin"
+ },
+ "chem_balanced": {
+  "en-us": "balanced ✓"
+ },
+ "chem_bench_title": {
+  "en-us": "GOD MODE · WORLD FORGE"
+ },
+ "chem_boundary": {
+  "en-us": "BOUNDARY INPUTS"
+ },
+ "chem_broken": {
+  "en-us": "BROKEN ✗"
+ },
+ "chem_bulk_seed_btn": {
+  "en-us": "BULK SEED"
+ },
+ "chem_cells": {
+  "en-us": "cells"
+ },
+ "chem_coal": {
+  "en-us": "coal"
+ },
+ "chem_conservation_ledger": {
+  "en-us": "CONSERVATION LEDGER"
+ },
+ "chem_continental": {
+  "en-us": "continental"
+ },
+ "chem_core": {
+  "en-us": "core"
+ },
+ "chem_crust": {
+  "en-us": "crust"
+ },
+ "chem_cutaway": {
+  "en-us": "Cutaway"
+ },
+ "chem_differentiated": {
+  "en-us": "differentiated"
+ },
+ "chem_erode_off": {
+  "en-us": "RAIN OFF"
+ },
+ "chem_erode_on": {
+  "en-us": "RAIN ON"
+ },
+ "chem_ev_born": {
+  "en-us": "plate born"
+ },
+ "chem_ev_died": {
+  "en-us": "plate died"
+ },
+ "chem_ev_merge": {
+  "en-us": "merged"
+ },
+ "chem_ev_split": {
+  "en-us": "split"
+ },
+ "chem_events_head": {
+  "en-us": "WORLD EVENTS"
+ },
+ "chem_field_coast": {
+  "en-us": "COAST"
+ },
+ "chem_field_core": {
+  "en-us": "CORE"
+ },
+ "chem_field_heat": {
+  "en-us": "HEAT"
+ },
+ "chem_field_motion": {
+  "en-us": "MOTION"
+ },
+ "chem_field_ore": {
+  "en-us": "ORE"
+ },
+ "chem_field_plates": {
+  "en-us": "PLATES"
+ },
+ "chem_field_rain": {
+  "en-us": "RAIN"
+ },
+ "chem_field_relief": {
+  "en-us": "RELIEF"
+ },
+ "chem_field_seams": {
+  "en-us": "SEAMS"
+ },
+ "chem_field_strata": {
+  "en-us": "STRATA"
+ },
+ "chem_forge": {
+  "en-us": "FORGE WORLD"
+ },
+ "chem_freq_96_92_162_cells_bulk_accretion_seed": {
+  "en-us": "freq 96 · 92,162 cells · bulk-accretion seed · building on the sim thread"
+ },
+ "chem_gate_at": {
+  "en-us": "at"
+ },
+ "chem_gate_close": {
+  "en-us": "CLOSE"
+ },
+ "chem_gate_console": {
+  "en-us": "SIMULATION GATES"
+ },
+ "chem_gate_console_sub": {
+  "en-us": "A held gate stays shut whatever the chemistry says. Release it and the world decides."
+ },
+ "chem_gate_effect": {
+  "en-us": "The run stopped here so you could look. Carry on when you have."
+ },
+ "chem_gate_opened": {
+  "en-us": "OPENED"
+ },
+ "chem_gate_paused_title": {
+  "en-us": "THE WORLD CHANGED"
+ },
+ "chem_gate_resume": {
+  "en-us": "CARRY ON"
+ },
+ "chem_gate_shut": {
+  "en-us": "SHUT"
+ },
+ "chem_gate_watch_head": {
+  "en-us": "Watch for:"
+ },
+ "chem_gates_btn": {
+  "en-us": "GATES…"
+ },
+ "chem_gates_chip": {
+  "en-us": "GATES"
+ },
+ "chem_generating_planet": {
+  "en-us": "GENERATING PLANET…"
+ },
+ "chem_greenhouse": {
+  "en-us": "greenhouse"
+ },
+ "chem_grid": {
+  "en-us": "Graticule"
+ },
+ "chem_held": {
+  "en-us": "HELD"
+ },
+ "chem_hold": {
+  "en-us": "HOLD"
+ },
+ "chem_in_band": {
+  "en-us": "in band"
+ },
+ "chem_infall": {
+  "en-us": "INFALL"
+ },
+ "chem_inspect": {
+  "en-us": "INSPECT"
+ },
+ "chem_ledger_atmosphere": {
+  "en-us": "Atmosphere"
+ },
+ "chem_ledger_core": {
+  "en-us": "Core"
+ },
+ "chem_ledger_crust": {
+  "en-us": "Crust"
+ },
+ "chem_ledger_escaped": {
+  "en-us": "Escaped"
+ },
+ "chem_ledger_mantle": {
+  "en-us": "Mantle"
+ },
+ "chem_ledger_ocean": {
+  "en-us": "Ocean"
+ },
+ "chem_legend_bare": {
+  "en-us": "bare mantle"
+ },
+ "chem_legend_beds": {
+  "en-us": "beds"
+ },
+ "chem_legend_coastline": {
+  "en-us": "bright = coastline"
+ },
+ "chem_legend_cold": {
+  "en-us": "coldest"
+ },
+ "chem_legend_diff_done": {
+  "en-us": "core drained"
+ },
+ "chem_legend_diff_none": {
+  "en-us": "undifferentiated"
+ },
+ "chem_legend_dry": {
+  "en-us": "dry"
+ },
+ "chem_legend_exposed": {
+  "en-us": "exposed floor"
+ },
+ "chem_legend_hot": {
+  "en-us": "hottest"
+ },
+ "chem_legend_land": {
+  "en-us": "land"
+ },
+ "chem_legend_motion_col": {
+  "en-us": "colour = plate"
+ },
+ "chem_legend_motion_dir": {
+  "en-us": "arrow = drift heading"
+ },
+ "chem_legend_motion_len": {
+  "en-us": "length = progress to next hex"
+ },
+ "chem_legend_ocean_bed": {
+  "en-us": "ocean bed"
+ },
+ "chem_legend_ore_bg": {
+  "en-us": "ordinary rock"
+ },
+ "chem_legend_ore_rich": {
+  "en-us": "richest seam (log)"
+ },
+ "chem_legend_plate_each": {
+  "en-us": "each colour = one plate"
+ },
+ "chem_legend_plate_loose": {
+  "en-us": "loose rock, no plate"
+ },
+ "chem_legend_seam_conv": {
+  "en-us": "convergent · colliding"
+ },
+ "chem_legend_seam_div": {
+  "en-us": "divergent · opening"
+ },
+ "chem_legend_seam_int": {
+  "en-us": "plate interior"
+ },
+ "chem_legend_seam_trans": {
+  "en-us": "transform · sliding"
+ },
+ "chem_legend_shelf": {
+  "en-us": "shelf · drowned continent"
+ },
+ "chem_life": {
+  "en-us": "Life"
+ },
+ "chem_life_barren": {
+  "en-us": "barren"
+ },
+ "chem_life_decomposers": {
+  "en-us": "decomposers"
+ },
+ "chem_life_floral": {
+  "en-us": "megaflora"
+ },
+ "chem_life_microbial": {
+  "en-us": "microbial"
+ },
+ "chem_life_supporting": {
+  "en-us": "LIFE-SUPPORTING"
+ },
+ "chem_lv_arc": {
+  "en-us": "ARC RETURN"
+ },
+ "chem_lv_core_heat": {
+  "en-us": "CORE HEAT"
+ },
+ "chem_lv_crust_gen": {
+  "en-us": "CRUST GEN"
+ },
+ "chem_lv_decomposer": {
+  "en-us": "DECOMPOSER"
+ },
+ "chem_lv_erosion": {
+  "en-us": "EROSION"
+ },
+ "chem_lv_eruption": {
+  "en-us": "ERUPTION"
+ },
+ "chem_lv_leach": {
+  "en-us": "LEACH"
+ },
+ "chem_lv_outgas": {
+  "en-us": "OUTGAS"
+ },
+ "chem_lv_production": {
+  "en-us": "BIO GROWTH"
+ },
+ "chem_lv_stellar": {
+  "en-us": "STAR"
+ },
+ "chem_lv_veneer": {
+  "en-us": "VENEER"
+ },
+ "chem_lv_yield": {
+  "en-us": "YIELD STRAIN"
+ },
+ "chem_mantle": {
+  "en-us": "mantle"
+ },
+ "chem_mean_elevation": {
+  "en-us": "mean elevation"
+ },
+ "chem_no_signal_yet": {
+  "en-us": "no signal yet"
+ },
+ "chem_observed": {
+  "en-us": "observed"
+ },
+ "chem_oils": {
+  "en-us": "oils"
+ },
+ "chem_out_of_band": {
+  "en-us": "out of band"
+ },
+ "chem_pause": {
+  "en-us": "❚❚ PAUSE"
+ },
+ "chem_paused": {
+  "en-us": "PAUSED"
+ },
+ "chem_pco2": {
+  "en-us": "pCO₂"
+ },
+ "chem_plates": {
+  "en-us": "plates"
+ },
+ "chem_play": {
+  "en-us": "▶ PLAY"
+ },
+ "chem_playing": {
+  "en-us": "PLAYING"
+ },
+ "chem_preset_earth": {
+  "en-us": "EARTH"
+ },
+ "chem_preset_europa": {
+  "en-us": "EUROPA"
+ },
+ "chem_preset_mars": {
+  "en-us": "MARS"
+ },
+ "chem_preset_mercury": {
+  "en-us": "MERCURY"
+ },
+ "chem_preset_venus": {
+  "en-us": "VENUS"
+ },
+ "chem_processes": {
+  "en-us": "PROCESSES"
+ },
+ "chem_prog_bound": {
+  "en-us": "compounds bound"
+ },
+ "chem_prog_core": {
+  "en-us": "core"
+ },
+ "chem_prog_lid": {
+  "en-us": "lid"
+ },
+ "chem_prog_water": {
+  "en-us": "water delivered"
+ },
+ "chem_radiogenic": {
+  "en-us": "radiogenic"
+ },
+ "chem_rate": {
+  "en-us": "RATE"
+ },
+ "chem_rates": {
+  "en-us": "RATES"
+ },
+ "chem_release": {
+  "en-us": "RELEASE"
+ },
+ "chem_reseed": {
+  "en-us": "RESEED"
+ },
+ "chem_reset": {
+  "en-us": "RESET"
+ },
+ "chem_running": {
+  "en-us": "running"
+ },
+ "chem_sea_level": {
+  "en-us": "sea level"
+ },
+ "chem_seed_console": {
+  "en-us": "THE STARTER"
+ },
+ "chem_seed_note": {
+  "en-us": "New-world knobs — nothing moves until FORGE births a fresh planet from them."
+ },
+ "chem_size": {
+  "en-us": "SIZE"
+ },
+ "chem_starter_btn": {
+  "en-us": "STARTER…"
+ },
+ "chem_strata": {
+  "en-us": "strata"
+ },
+ "chem_submerged": {
+  "en-us": "submerged"
+ },
+ "chem_tick": {
+  "en-us": "tick"
+ },
+ "chem_tile_head": {
+  "en-us": "TILE INSPECTOR"
+ },
+ "chem_tissue": {
+  "en-us": "tissue"
+ },
+ "chem_waiting": {
+  "en-us": "waiting"
+ },
+ "chem_water": {
+  "en-us": "WATER"
+ },
+ "chem_water_life": {
+  "en-us": "life"
+ },
+ "chem_water_line": {
+  "en-us": "WATER"
+ },
+ "chem_water_sea": {
+  "en-us": "sea"
+ },
+ "chem_water_sky": {
+  "en-us": "sky"
+ },
+ "chem_water_stone": {
+  "en-us": "stone"
+ },
+ "chem_why_biosphere_open": {
+  "en-us": "A standing sea under a temperate sky: the world can hold life now."
+ },
+ "chem_why_biosphere_shut": {
+  "en-us": "The sea or the air is gone. Nothing is fixing carbon any more."
+ },
+ "chem_why_carbonsink_open": {
+  "en-us": "A sea stands: it can begin drinking the carbon out of the sky."
+ },
+ "chem_why_coreformation_shut": {
+  "en-us": "The iron has finished sinking, or the mantle is too cold to sort itself."
+ },
+ "chem_why_generic": {
+  "en-us": "A process's own conditions were met, or stopped being met."
+ },
+ "chem_why_lateveneer_open": {
+  "en-us": "A core exists for the late metals to have arrived after — the gold is on its way."
+ },
+ "chem_why_maturation_open": {
+  "en-us": "Stacks are deep enough to bury things — what is buried can start cooking into fuel."
+ },
+ "chem_why_outgassing_shut": {
+  "en-us": "The whole surface has frozen over. Bulk degassing is done; only vents reach the sky."
+ },
+ "chem_why_volcanism_open": {
+  "en-us": "A crust has frozen over hot mantle — melt finally has a lid to come through."
+ },
+ "chem_why_volcanism_shut": {
+  "en-us": "The interior has cooled past the melt floor. There will be no more eruptions."
+ },
+ "chem_why_watercycle_open": {
+  "en-us": "There is water somewhere to move — sea and sky can start trading it."
+ },
+ "confirm_display_title": {
+  "en-us": "Keep Display?"
+ },
+ "conflict_apply_rest": {
+  "en-us": "Apply to the remaining conflicts"
+ },
+ "conflict_existing": {
+  "en-us": "EXISTING"
+ },
+ "conflict_exists_in": {
+  "en-us": "already exists in"
+ },
+ "conflict_incoming": {
+  "en-us": "INCOMING"
+ },
+ "conflict_keep_both": {
+  "en-us": "KEEP BOTH"
+ },
+ "conflict_replace": {
+  "en-us": "REPLACE"
+ },
+ "conflict_skip": {
+  "en-us": "SKIP"
+ },
+ "conflict_title": {
+  "en-us": "NAME CONFLICT"
+ },
+ "ct_accuracy": {
+  "en-us": "Accuracy"
+ },
+ "ct_average": {
+  "en-us": "Average"
+ },
+ "ct_best": {
+  "en-us": "Best"
+ },
+ "ct_click_the_targets": {
+  "en-us": "click the targets"
+ },
+ "ct_click_trainer": {
+  "en-us": "CLICK TRAINER"
+ },
+ "ct_esc_menu": {
+  "en-us": "Esc  ·  menu"
+ },
+ "ct_hits": {
+  "en-us": "Hits"
+ },
+ "ct_misses": {
+  "en-us": "Misses"
+ },
+ "ct_reaction": {
+  "en-us": "Reaction"
+ },
+ "ct_reset": {
+  "en-us": "RESET"
+ },
+ "ctx_cut": {
+  "en-us": "Cut"
+ },
+ "ctx_hint_cut": {
+  "en-us": "Y+LT"
+ },
+ "ctx_hint_new_folder": {
+  "en-us": "Y+Up"
+ },
+ "ctx_hint_open": {
+  "en-us": "A"
+ },
+ "ctx_hint_paste": {
+  "en-us": "Y+RT"
+ },
+ "ctx_hint_rename": {
+  "en-us": "Y+B"
+ },
+ "ctx_new_folder": {
+  "en-us": "New folder"
+ },
+ "ctx_open": {
+  "en-us": "Open"
+ },
+ "ctx_paste": {
+  "en-us": "Paste into"
+ },
+ "ctx_rename": {
+  "en-us": "Rename"
+ },
+ "dm_coming_soon": {
+  "en-us": "COMING SOON"
+ },
+ "menu_back": {
+  "en-us": "BACK"
+ },
+ "menu_build_world": {
+  "en-us": "BUILD THE WORLD"
+ },
+ "menu_demo_caption": {
+  "en-us": "DEMO BUILD · CLAY ENGINE"
+ },
+ "menu_developer_mode": {
+  "en-us": "DEVELOPER MODE"
+ },
+ "menu_elideus_productions_clay_engine": {
+  "en-us": "ELIDEUS PRODUCTIONS · CLAY ENGINE"
+ },
+ "menu_explore_world": {
+  "en-us": "EXPLORE THE WORLD"
+ },
+ "menu_game_master": {
+  "en-us": "GAME MASTER"
+ },
+ "menu_keep": {
+  "en-us": "KEEP"
+ },
+ "menu_load": {
+  "en-us": "LOAD"
+ },
+ "menu_main_menu": {
+  "en-us": "MAIN MENU"
+ },
+ "menu_prism": {
+  "en-us": "Prism"
+ },
+ "menu_quit": {
+  "en-us": "QUIT"
+ },
+ "menu_resume": {
+  "en-us": "RETURN TO WORLD"
+ },
+ "menu_revert": {
+  "en-us": "REVERT"
+ },
+ "menu_reverting_in": {
+  "en-us": "Reverting in"
+ },
+ "menu_select_a_scene": {
+  "en-us": "Select a Scene"
+ },
+ "menu_settings": {
+  "en-us": "SETTINGS"
+ },
+ "menu_the_seven_shards": {
+  "en-us": "THE SEVEN SHARDS"
+ },
+ "pause_esc_to_return": {
+  "en-us": "ESC TO RETURN"
+ },
+ "pause_gather_yourself_the_world_runs_on": {
+  "en-us": "GATHER YOURSELF · THE WORLD RUNS ON"
+ },
+ "pause_sanctum": {
+  "en-us": "Sanctum"
+ },
+ "pc_airborne": {
+  "en-us": "airborne"
+ },
+ "pc_arrows": {
+  "en-us": "arrows"
+ },
+ "pc_cam": {
+  "en-us": "Cam"
+ },
+ "pc_camera_driven_lod": {
+  "en-us": "Camera-driven LOD"
+ },
+ "pc_celestial_cycle": {
+  "en-us": "Celestial Cycle"
+ },
+ "pc_celestial_paths_advent": {
+  "en-us": "Celestial paths (Advent)"
+ },
+ "pc_cell": {
+  "en-us": "Cell"
+ },
+ "pc_cluster": {
+  "en-us": "cluster"
+ },
+ "pc_cluster_editor": {
+  "en-us": "Cluster Editor"
+ },
+ "pc_cluster_field": {
+  "en-us": "Cluster field"
+ },
+ "pc_clusters": {
+  "en-us": "clusters"
+ },
+ "pc_constellations": {
+  "en-us": "Constellations"
+ },
+ "pc_controls": {
+  "en-us": "Controls"
+ },
+ "pc_corner": {
+  "en-us": "Corner"
+ },
+ "pc_corner_vector_arrows": {
+  "en-us": "Corner-vector arrows"
+ },
+ "pc_corners": {
+  "en-us": "corners"
+ },
+ "pc_debug_overlays": {
+  "en-us": "Debug Overlays"
+ },
+ "pc_diag": {
+  "en-us": "Diag"
+ },
+ "pc_epoch": {
+  "en-us": "Epoch"
+ },
+ "pc_esc": {
+  "en-us": "Esc"
+ },
+ "pc_fly_mode": {
+  "en-us": "Fly mode"
+ },
+ "pc_fog": {
+  "en-us": "Fog"
+ },
+ "pc_for_the_menu": {
+  "en-us": "for the menu"
+ },
+ "pc_grid": {
+  "en-us": "Grid"
+ },
+ "pc_ground_y": {
+  "en-us": "ground y"
+ },
+ "pc_grounded": {
+  "en-us": "grounded"
+ },
+ "pc_latitude": {
+  "en-us": "Latitude"
+ },
+ "pc_local_corner": {
+  "en-us": "◆ Local corner"
+ },
+ "pc_lod": {
+  "en-us": "lod"
+ },
+ "pc_lod_billboards": {
+  "en-us": "LOD billboards"
+ },
+ "pc_mode_fly": {
+  "en-us": "fly"
+ },
+ "pc_mode_walk": {
+  "en-us": "walk"
+ },
+ "pc_moon": {
+  "en-us": "Moon"
+ },
+ "pc_move": {
+  "en-us": "Move"
+ },
+ "pc_move_speed": {
+  "en-us": "Move speed"
+ },
+ "pc_nav": {
+  "en-us": "nav"
+ },
+ "pc_navmesh_wireframe": {
+  "en-us": "Navmesh wireframe"
+ },
+ "pc_none": {
+  "en-us": "none"
+ },
+ "pc_pick": {
+  "en-us": "Pick"
+ },
+ "pc_pitch": {
+  "en-us": "pitch"
+ },
+ "pc_planets_ecliptic": {
+  "en-us": "Planets / ecliptic"
+ },
+ "pc_press": {
+  "en-us": "Press"
+ },
+ "pc_readout": {
+  "en-us": "Readout"
+ },
+ "pc_scrub_the_celestial_timeline_to_test_orb": {
+  "en-us": "Scrub the celestial timeline to test orbit alignments."
+ },
+ "pc_sky_the_paired_hands": {
+  "en-us": "Sky · the paired hands"
+ },
+ "pc_speed": {
+  "en-us": "Speed"
+ },
+ "pc_sun": {
+  "en-us": "Sun"
+ },
+ "pc_surface_walk": {
+  "en-us": "Surface walk"
+ },
+ "pc_units_s": {
+  "en-us": "units / s"
+ },
+ "pc_view": {
+  "en-us": "View"
+ },
+ "pc_voxel": {
+  "en-us": "voxel"
+ },
+ "pc_voxels": {
+  "en-us": "voxels"
+ },
+ "pc_walk": {
+  "en-us": "Walk"
+ },
+ "pc_walk_mode": {
+  "en-us": "Walk mode"
+ },
+ "pc_wireframe_overlay": {
+  "en-us": "Wireframe overlay"
+ },
+ "pc_world_independent": {
+  "en-us": "World · independent"
+ },
+ "pc_wx": {
+  "en-us": "wX"
+ },
+ "pc_wx_y_z_world_space": {
+  "en-us": "wX / Y / Z world space"
+ },
+ "pc_wy": {
+  "en-us": "wY"
+ },
+ "pc_wz": {
+  "en-us": "wZ"
+ },
+ "pc_yaw": {
+  "en-us": "yaw"
+ },
+ "pc_year": {
+  "en-us": "Year"
+ },
+ "pd_animate": {
+  "en-us": "Animate"
+ },
+ "pd_attack": {
+  "en-us": "ATTACK"
+ },
+ "pd_blend_xfade": {
+  "en-us": "Blend xfade"
+ },
+ "pd_bones": {
+  "en-us": "bones"
+ },
+ "pd_boot_l": {
+  "en-us": "Boot L"
+ },
+ "pd_boot_r": {
+  "en-us": "Boot R"
+ },
+ "pd_chest": {
+  "en-us": "Chest"
+ },
+ "pd_collision": {
+  "en-us": "Collision"
+ },
+ "pd_fit_prefix": {
+  "en-us": "FIT · "
+ },
+ "pd_glove_l": {
+  "en-us": "Glove L"
+ },
+ "pd_glove_r": {
+  "en-us": "Glove R"
+ },
+ "pd_hair": {
+  "en-us": "Hair"
+ },
+ "pd_inventory": {
+  "en-us": "INVENTORY"
+ },
+ "pd_l_hand": {
+  "en-us": "L Hand"
+ },
+ "pd_legs": {
+  "en-us": "Legs"
+ },
+ "pd_mesh": {
+  "en-us": "Mesh"
+ },
+ "pd_neck": {
+  "en-us": "Neck"
+ },
+ "pd_pitch": {
+  "en-us": "Pitch"
+ },
+ "pd_r_hand": {
+  "en-us": "R Hand"
+ },
+ "pd_record_all_to_content": {
+  "en-us": "RECORD ALL TO CONTENT"
+ },
+ "pd_roll": {
+  "en-us": "Roll"
+ },
+ "pd_size": {
+  "en-us": "Size"
+ },
+ "pd_skeleton": {
+  "en-us": "Skeleton"
+ },
+ "pd_tall": {
+  "en-us": "Tall"
+ },
+ "pd_textures": {
+  "en-us": "Textures"
+ },
+ "pd_thick": {
+  "en-us": "Thick"
+ },
+ "pd_verts": {
+  "en-us": "verts"
+ },
+ "pd_wide": {
+  "en-us": "Wide"
+ },
+ "pd_x_lat": {
+  "en-us": "X (lat)"
+ },
+ "pd_y_depth": {
+  "en-us": "Y (depth)"
+ },
+ "pd_yaw": {
+  "en-us": "Yaw"
+ },
+ "pd_z_up": {
+  "en-us": "Z (up)"
+ },
+ "poc_flicker_planet_simulation": {
+  "en-us": "FLICKER · PLANET SIMULATION"
+ },
+ "poc_life_supporting_conditions": {
+  "en-us": "LIFE-SUPPORTING CONDITIONS"
+ },
+ "pop_page_world": {
+  "en-us": "World"
+ },
+ "pop_seams_randomize": {
+  "en-us": "RANDOMIZE SEAMS"
+ },
+ "pop_size": {
+  "en-us": "SIZE"
+ },
+ "pop_stat_diameter": {
+  "en-us": "DIAMETER · MI"
+ },
+ "pop_stat_hexes": {
+  "en-us": "HEXES"
+ },
+ "pop_stat_tile": {
+  "en-us": "TILE WIDTH · MI"
+ },
+ "pop_tab_map": {
+  "en-us": "Map"
+ },
+ "pop_tab_seams": {
+  "en-us": "Seams"
+ },
+ "qm_caret_closed": {
+  "en-us": "▸"
+ },
+ "qm_caret_leaf": {
+  "en-us": " "
+ },
+ "qm_caret_open": {
+  "en-us": "▾"
+ },
+ "qm_class_bake": {
+  "en-us": "Cluster bake"
+ },
+ "qm_class_clip": {
+  "en-us": "Animation"
+ },
+ "qm_class_doc": {
+  "en-us": "Document"
+ },
+ "qm_class_epoch": {
+  "en-us": "World"
+ },
+ "qm_class_flight": {
+  "en-us": "Cinematic"
+ },
+ "qm_class_folder": {
+  "en-us": "Folder"
+ },
+ "qm_class_font": {
+  "en-us": "Font"
+ },
+ "qm_class_pack": {
+  "en-us": "Combat pack"
+ },
+ "qm_class_rbp": {
+  "en-us": "Base pose"
+ },
+ "qm_class_rig": {
+  "en-us": "Model"
+ },
+ "qm_class_texture": {
+  "en-us": "Texture"
+ },
+ "qm_class_unknown": {
+  "en-us": "Unknown"
+ },
+ "qm_col_name": {
+  "en-us": "NAME"
+ },
+ "qm_col_size": {
+  "en-us": "SIZE"
+ },
+ "qm_col_type": {
+  "en-us": "TYPE"
+ },
+ "qm_dash": {
+  "en-us": "—"
+ },
+ "qm_did_move": {
+  "en-us": "Moved"
+ },
+ "qm_did_newfolder": {
+  "en-us": "New folder"
+ },
+ "qm_did_promote": {
+  "en-us": "Promoted"
+ },
+ "qm_did_rename": {
+  "en-us": "Renamed"
+ },
+ "qm_err_bad_name": {
+  "en-us": "A name cannot contain a path separator."
+ },
+ "qm_err_empty_name": {
+  "en-us": "A name cannot be empty."
+ },
+ "qm_err_exists": {
+  "en-us": "Something with that name is already there."
+ },
+ "qm_err_into_self": {
+  "en-us": "A folder cannot be moved inside itself."
+ },
+ "qm_err_name_taken": {
+  "en-us": "That name is already used here."
+ },
+ "qm_err_promote_partial": {
+  "en-us": "A promote ships the whole asset — answer Replace, or resolve the collision in Files first."
+ },
+ "qm_fact_bones": {
+  "en-us": "Bones"
+ },
+ "qm_fact_clips": {
+  "en-us": "Clips"
+ },
+ "qm_fact_files": {
+  "en-us": "Files"
+ },
+ "qm_fact_points": {
+  "en-us": "Points"
+ },
+ "qm_fact_size": {
+  "en-us": "Size"
+ },
+ "qm_fact_textures": {
+  "en-us": "Textures"
+ },
+ "qm_fact_verts": {
+  "en-us": "Verts"
+ },
+ "qm_holding": {
+  "en-us": "HOLDING"
+ },
+ "qm_items": {
+  "en-us": "ITEMS"
+ },
+ "qm_review_empty": {
+  "en-us": "Staging is empty — the pipelines have nothing awaiting review."
+ },
+ "qm_review_facts": {
+  "en-us": "ASSET FACTS"
+ },
+ "qm_review_promote": {
+  "en-us": "PROMOTE"
+ },
+ "qm_review_queue": {
+  "en-us": "STAGING QUEUE"
+ },
+ "qm_review_target": {
+  "en-us": "Promote to"
+ },
+ "qm_route": {
+  "en-us": "staging → package"
+ },
+ "qm_tab_files": {
+  "en-us": "FILES"
+ },
+ "qm_tab_review": {
+  "en-us": "REVIEW"
+ },
+ "qm_title": {
+  "en-us": "Quartermaster Bench"
+ },
+ "qm_tree_header": {
+  "en-us": "CONTENT TREES"
+ },
+ "qm_warn_missing_textures": {
+  "en-us": "referenced textures are missing beside the rig"
+ },
+ "qm_warn_off_canon": {
+  "en-us": "skeleton is off-canon — its bone count differs from the reference"
+ },
+ "qm_warn_target_occupied": {
+  "en-us": "target already exists in the package — promoting will ask Replace / Keep both / Skip"
+ },
+ "sb_approaching": {
+  "en-us": "approaching"
+ },
+ "sb_drag_rotate_wheel_zoom_space_replay_fly": {
+  "en-us": "drag rotate · wheel zoom · Space replay fly-in · Esc pause"
+ },
+ "sb_flicker_solarbirth": {
+  "en-us": "flicker · solarbirth"
+ },
+ "sb_planets_inner_outer": {
+  "en-us": "planets (inner → outer):"
+ },
+ "sb_settled": {
+  "en-us": "settled"
+ },
+ "sb_the_prism_system": {
+  "en-us": "the Prism system"
+ },
+ "set_actions": {
+  "en-us": "ACTIONS"
+ },
+ "set_active_profile": {
+  "en-us": "Active Profile"
+ },
+ "set_adventurer_and_rts_shared_kit": {
+  "en-us": "Adventurer & RTS shared kit"
+ },
+ "set_adventurer_camera_angle_60_120": {
+  "en-us": "Adventurer camera angle · 60–120°"
+ },
+ "set_adventurer_camera_turn_speed": {
+  "en-us": "Adventurer camera turn speed"
+ },
+ "set_aim_sensitivity": {
+  "en-us": "Aim Sensitivity"
+ },
+ "set_all_settings_have_been_reset_to_their_de": {
+  "en-us": "All settings have been reset to their default values."
+ },
+ "set_ambient": {
+  "en-us": "Ambient"
+ },
+ "set_apply": {
+  "en-us": "APPLY"
+ },
+ "set_audio": {
+  "en-us": "AUDIO"
+ },
+ "set_borderless_window": {
+  "en-us": "Borderless Window"
+ },
+ "set_brightness": {
+  "en-us": "Brightness"
+ },
+ "set_cancel": {
+  "en-us": "Cancel"
+ },
+ "set_cancel_2": {
+  "en-us": "CANCEL"
+ },
+ "set_cap_the_maximum_frames_per_second": {
+  "en-us": "Cap the maximum frames per second"
+ },
+ "set_categories": {
+  "en-us": "CATEGORIES"
+ },
+ "set_choose_a_control_profile": {
+  "en-us": "Choose a control profile"
+ },
+ "set_commander_camera_scroll_rate": {
+  "en-us": "Commander camera scroll rate"
+ },
+ "set_commander_rts": {
+  "en-us": "COMMANDER · RTS"
+ },
+ "set_confirm": {
+  "en-us": "Confirm"
+ },
+ "set_controller": {
+  "en-us": "CONTROLLER"
+ },
+ "set_controller_profile": {
+  "en-us": "CONTROLLER PROFILE"
+ },
+ "set_crouch": {
+  "en-us": "Crouch"
+ },
+ "set_default": {
+  "en-us": "Default"
+ },
+ "set_defaults_restored": {
+  "en-us": "Defaults Restored"
+ },
+ "set_discard": {
+  "en-us": "DISCARD"
+ },
+ "set_display": {
+  "en-us": "DISPLAY"
+ },
+ "set_display_mode": {
+  "en-us": "Display Mode"
+ },
+ "set_do_you_want_to_save_your_changes": {
+  "en-us": "Do you want to save your changes?"
+ },
+ "set_edge_pan": {
+  "en-us": "Edge Pan"
+ },
+ "set_edge_pan_speed": {
+  "en-us": "Edge Pan Speed"
+ },
+ "set_effects": {
+  "en-us": "Effects"
+ },
+ "set_field_of_view": {
+  "en-us": "Field of View"
+ },
+ "set_flip_the_up_down_axis": {
+  "en-us": "Flip the up/down axis"
+ },
+ "set_frame_rate_limit": {
+  "en-us": "Frame Rate Limit"
+ },
+ "set_fullscreen": {
+  "en-us": "Fullscreen"
+ },
+ "set_gamma_of_the_rendered_scene": {
+  "en-us": "Gamma of the rendered scene"
+ },
+ "set_graphics_quality": {
+  "en-us": "Graphics Quality"
+ },
+ "set_high": {
+  "en-us": "High"
+ },
+ "set_how_the_game_fills_your_screen": {
+  "en-us": "How the game fills your screen"
+ },
+ "set_image": {
+  "en-us": "IMAGE"
+ },
+ "set_input": {
+  "en-us": "INPUT"
+ },
+ "set_interact": {
+  "en-us": "Interact"
+ },
+ "set_interface": {
+  "en-us": "INTERFACE"
+ },
+ "set_inventory": {
+  "en-us": "Inventory"
+ },
+ "set_invert_vertical_look": {
+  "en-us": "Invert Vertical Look"
+ },
+ "set_jump": {
+  "en-us": "Jump"
+ },
+ "set_keyboard": {
+  "en-us": "KEYBOARD"
+ },
+ "set_kicker_audio": {
+  "en-us": "MIXING & OUTPUT"
+ },
+ "set_kicker_input": {
+  "en-us": "BINDINGS & DEVICES"
+ },
+ "set_kicker_video": {
+  "en-us": "DISPLAY & RENDERING"
+ },
+ "set_look_sensitivity": {
+  "en-us": "Look Sensitivity"
+ },
+ "set_low": {
+  "en-us": "Low"
+ },
+ "set_master_preset_for_all_render_features": {
+  "en-us": "Master preset for all render features"
+ },
+ "set_master_volume": {
+  "en-us": "Master Volume"
+ },
+ "set_medium": {
+  "en-us": "Medium"
+ },
+ "set_menu": {
+  "en-us": "Menu"
+ },
+ "set_mouse": {
+  "en-us": "MOUSE"
+ },
+ "set_move_backward": {
+  "en-us": "Move Backward"
+ },
+ "set_move_down": {
+  "en-us": "Move Down"
+ },
+ "set_move_forward": {
+  "en-us": "Move Forward"
+ },
+ "set_move_up": {
+  "en-us": "Move Up"
+ },
+ "set_movement": {
+  "en-us": "MOVEMENT"
+ },
+ "set_multiplier_while_channelling_aiming": {
+  "en-us": "Multiplier while channelling / aiming"
+ },
+ "set_music": {
+  "en-us": "Music"
+ },
+ "set_no_audio_modules_exist_in_the_clay_engin": {
+  "en-us": "No audio modules exist in the Clay Engine yet. These controls are a layout preview and are inactive."
+ },
+ "set_not_yet_implemented": {
+  "en-us": "NOT YET IMPLEMENTED"
+ },
+ "set_ok": {
+  "en-us": "OK"
+ },
+ "set_output": {
+  "en-us": "OUTPUT"
+ },
+ "set_output_device": {
+  "en-us": "Output Device"
+ },
+ "set_performance": {
+  "en-us": "PERFORMANCE"
+ },
+ "set_pick_a_starting_layout_above_rebind_indi": {
+  "en-us": "Pick a starting layout above. Rebind individual keys in the Keyboard tab — your changes are saved with the profile."
+ },
+ "set_pointer": {
+  "en-us": "POINTER"
+ },
+ "set_press_any_key_to_bind_esc_to_cancel_back": {
+  "en-us": "Press any key to bind  ·  Esc to cancel  ·  Backspace to unbind"
+ },
+ "set_preview": {
+  "en-us": "PREVIEW"
+ },
+ "set_primary_action": {
+  "en-us": "Primary Action"
+ },
+ "set_prism_clay_engine": {
+  "en-us": "PRISM · CLAY ENGINE"
+ },
+ "set_quit": {
+  "en-us": "Quit"
+ },
+ "set_reload": {
+  "en-us": "Reload"
+ },
+ "set_rendering_resolution_of_the_viewport": {
+  "en-us": "Rendering resolution of the viewport"
+ },
+ "set_resolution": {
+  "en-us": "Resolution"
+ },
+ "set_restore_defaults": {
+  "en-us": "RESTORE DEFAULTS"
+ },
+ "set_save_and_close": {
+  "en-us": "SAVE AND CLOSE"
+ },
+ "set_save_and_close_2": {
+  "en-us": "SAVE & CLOSE"
+ },
+ "set_scroll_the_map_when_the_cursor_nears_the": {
+  "en-us": "Scroll the map when the cursor nears the edge"
+ },
+ "set_secondary_action": {
+  "en-us": "Secondary Action"
+ },
+ "set_settings": {
+  "en-us": "Settings"
+ },
+ "set_sprint": {
+  "en-us": "Sprint"
+ },
+ "set_strafe_left": {
+  "en-us": "Strafe Left"
+ },
+ "set_strafe_right": {
+  "en-us": "Strafe Right"
+ },
+ "set_subtitles": {
+  "en-us": "Subtitles"
+ },
+ "set_sync_frames_to_the_display_to_prevent_te": {
+  "en-us": "Sync frames to the display to prevent tearing"
+ },
+ "set_system_default": {
+  "en-us": "System Default"
+ },
+ "set_title_audio": {
+  "en-us": "Audio"
+ },
+ "set_title_input": {
+  "en-us": "Input"
+ },
+ "set_title_video": {
+  "en-us": "Video"
+ },
+ "set_ultra": {
+  "en-us": "Ultra"
+ },
+ "set_unlimited": {
+  "en-us": "Unlimited"
+ },
+ "set_unsaved_changes": {
+  "en-us": "Unsaved Changes"
+ },
+ "set_vertical_sync": {
+  "en-us": "Vertical Sync"
+ },
+ "set_video": {
+  "en-us": "VIDEO"
+ },
+ "set_voice": {
+  "en-us": "Voice"
+ },
+ "set_volume": {
+  "en-us": "VOLUME"
+ },
+ "set_windowed": {
+  "en-us": "Windowed"
+ },
+ "set_world_map": {
+  "en-us": "World Map"
+ },
+ "settings_applied": {
+  "en-us": "SETTINGS APPLIED"
+ },
+ "sw_amt": {
+  "en-us": "amt"
+ },
+ "sw_ao": {
+  "en-us": "Occlusion"
+ },
+ "sw_blend_add": {
+  "en-us": "Add"
+ },
+ "sw_blend_base": {
+  "en-us": "Base"
+ },
+ "sw_blend_diff": {
+  "en-us": "Diff"
+ },
+ "sw_blend_max": {
+  "en-us": "Max"
+ },
+ "sw_blend_min": {
+  "en-us": "Min"
+ },
+ "sw_blend_mul": {
+  "en-us": "Mul"
+ },
+ "sw_blend_overlay": {
+  "en-us": "Overlay"
+ },
+ "sw_blend_screen": {
+  "en-us": "Screen"
+ },
+ "sw_body_plane": {
+  "en-us": "Plane"
+ },
+ "sw_body_sphere": {
+  "en-us": "Sphere"
+ },
+ "sw_ch1": {
+  "en-us": "CH1"
+ },
+ "sw_ch2": {
+  "en-us": "CH2"
+ },
+ "sw_ch3": {
+  "en-us": "CH3"
+ },
+ "sw_ch4": {
+  "en-us": "CH4"
+ },
+ "sw_ch5": {
+  "en-us": "CH5"
+ },
+ "sw_ch6": {
+  "en-us": "CH6"
+ },
+ "sw_channel_rack": {
+  "en-us": "Channel Rack"
+ },
+ "sw_commit": {
+  "en-us": "Commit"
+ },
+ "sw_commit_done": {
+  "en-us": "Staged"
+ },
+ "sw_commit_failed": {
+  "en-us": "Failed"
+ },
+ "sw_commit_idle": {
+  "en-us": "Ready"
+ },
+ "sw_commit_working": {
+  "en-us": "Baking…"
+ },
+ "sw_contrast": {
+  "en-us": "Contrast"
+ },
+ "sw_gain": {
+  "en-us": "Gain"
+ },
+ "sw_glow": {
+  "en-us": "Glow"
+ },
+ "sw_glow_band": {
+  "en-us": "Glow band"
+ },
+ "sw_invert": {
+  "en-us": "Invert"
+ },
+ "sw_lacunarity": {
+  "en-us": "Lacunarity"
+ },
+ "sw_map_ao": {
+  "en-us": "AO"
+ },
+ "sw_map_base": {
+  "en-us": "Base"
+ },
+ "sw_map_emit": {
+  "en-us": "Emit"
+ },
+ "sw_map_height": {
+  "en-us": "Height"
+ },
+ "sw_map_lit": {
+  "en-us": "Lit"
+ },
+ "sw_map_metal": {
+  "en-us": "Metal"
+ },
+ "sw_map_normal": {
+  "en-us": "Normal"
+ },
+ "sw_map_rough": {
+  "en-us": "Rough"
+ },
+ "sw_material": {
+  "en-us": "Material"
+ },
+ "sw_metal_mod": {
+  "en-us": "Metal mod"
+ },
+ "sw_metalness": {
+  "en-us": "Metalness"
+ },
+ "sw_next": {
+  "en-us": "›"
+ },
+ "sw_oct": {
+  "en-us": "oct"
+ },
+ "sw_output_stage": {
+  "en-us": "Output Stage"
+ },
+ "sw_prev": {
+  "en-us": "‹"
+ },
+ "sw_relief": {
+  "en-us": "Relief"
+ },
+ "sw_reseed": {
+  "en-us": "Reseed"
+ },
+ "sw_roll": {
+  "en-us": "Roll"
+ },
+ "sw_rough_mod": {
+  "en-us": "Rough mod"
+ },
+ "sw_roughness": {
+  "en-us": "Roughness"
+ },
+ "sw_scale": {
+  "en-us": "scale"
+ },
+ "sw_size": {
+  "en-us": "Size"
+ },
+ "sw_spin": {
+  "en-us": "Spin"
+ },
+ "sw_src_billow": {
+  "en-us": "Billow"
+ },
+ "sw_src_fbm": {
+  "en-us": "fBm"
+ },
+ "sw_src_ridged": {
+  "en-us": "Ridged"
+ },
+ "sw_src_stripe": {
+  "en-us": "Stripe"
+ },
+ "sw_src_value": {
+  "en-us": "Value"
+ },
+ "sw_src_worley": {
+  "en-us": "Worley"
+ },
+ "sw_title": {
+  "en-us": "SABLEWORK"
+ },
+ "sw_unbound": {
+  "en-us": "Unbound"
+ },
+ "sw_voice": {
+  "en-us": "Selected Voice"
+ },
+ "sw_warp": {
+  "en-us": "warp"
+ },
+ "toast_undo": {
+  "en-us": "UNDO"
+ },
+ "ui_pane_empty": {
+  "en-us": "EMPTY"
+ },
+ "w_epoch_composition": {
+  "en-us": "Composition"
+ },
+ "w_epoch_differentiation": {
+  "en-us": "Differentiation"
+ },
+ "w_epoch_erosion": {
+  "en-us": "Erosion"
+ },
+ "w_epoch_hydrosphere": {
+  "en-us": "Hydrosphere"
+ },
+ "w_epoch_mineralization": {
+  "en-us": "Mineralization"
+ },
+ "w_epoch_tectonics": {
+  "en-us": "Tectonics"
+ },
+ "wf_back": {
+  "en-us": "BACK"
+ },
+ "wf_discard_cancel": {
+  "en-us": "KEEP EDITING"
+ },
+ "wf_discard_confirm": {
+  "en-us": "DISCARD"
+ },
+ "wf_discard_msg": {
+  "en-us": "DISCARDS CHANGES"
+ },
+ "wf_discard_title": {
+  "en-us": "ARE YOU SURE?"
+ },
+ "wf_next": {
+  "en-us": "NEXT"
+ },
+ "wf_restart": {
+  "en-us": "RESTART"
+ },
+ "wf_step_attach": {
+  "en-us": "Attach"
+ },
+ "wf_step_clip": {
+  "en-us": "Clip"
+ },
+ "wf_step_mount": {
+  "en-us": "Mount"
+ },
+ "wf_step_review": {
+  "en-us": "Review"
+ },
+ "wf_step_rig": {
+  "en-us": "Rig"
+ },
+ "wf_step_task": {
+  "en-us": "Workflow"
+ }
 }

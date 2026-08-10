@@ -28,16 +28,15 @@ use flicker::render::{
     build_textured_verts, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, PbrMaps,
     QuadGrid, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
 };
-use flicker::scene::{Scene, Transition};
-use flicker::script::{ComponentLibrary, HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::scene::{Scene, SceneInput, Transition};
+use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui_with, Surface, Surfaces, UiInput, UiIntents,
-    UiState, WalkerHandler, UI_COMPONENT_MODULES,
+    load_styles, load_ui_json, render_hud, run_ui, Surface, Surfaces, UiInput, UiIntents,
+    UiState, WalkerHandler,
 };
-// The HUD renders through `run_ui_with` (Lua component dispatch); `run_ui` and the
-// strings module (fixture tokens + the Model-channel gate scan) are test-only.
+// The strings module (fixture tokens + the Model-channel gate scan) is test-only.
 #[cfg(test)]
-use flicker::ui::{run_ui, strings};
+use flicker::ui::strings;
 use glam::Mat4;
 
 use flicker_input_core::{ActionSignal, Fired, Resolver};
@@ -796,9 +795,6 @@ struct Viewer {
     slots: Vec<Slot>,
     /// Always-worn props with no inventory cell (`SHEATHS`).
     sheaths: Vec<Slot>,
-    /// The Lua HUD (`hud_paperdoll.lua` + `UI.paperdoll`): inventory bar, view toggles, and
-    /// the stat readout. Replaces the POC keypress toggles + `draw_text` overlay.
-    script: Option<ScriptHost>,
     /// The HUD's component tree, parsed ONCE from the script's `tree()` at load
     /// (step 4's lazy build-once — re-pulled only if the screen restructures, which
     /// paperdoll's static HUD never does). The walker runs this every frame.
@@ -973,7 +969,6 @@ impl Viewer {
             last_world: Mat4::IDENTITY,
             slots,
             sheaths,
-            script: None,
             ui_tree: None,
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
@@ -1718,12 +1713,11 @@ impl Scene for Viewer {
         self.grid = Some(QuadGrid::editor(renderer));
 
         // The in-scene Lua HUD: inventory bar + view toggles + stat readout. A failure
-        // here leaves `script: None` and the scene simply renders without a HUD.
+        // here leaves `ui_tree: None` and the scene simply renders without a HUD.
         // The Prism-token-resolved styles the component walker resolves node `style`
         // paths against (the same tree Lua reads via the `UI` global).
         self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        self.script = match ScriptHost::from_file_with_modules(HUD_SCRIPT_PATH, UI_COMPONENT_MODULES)
-        {
+        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
                 load_ui_json(&s, HUD_UI_ELEMENTS); // layout constants (`UI.paperdoll`)
                 // Build the component tree ONCE (step 4 lazy build-once): the walker
@@ -1739,13 +1733,11 @@ impl Scene for Viewer {
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
                 tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
-                Some(s)
             }
             Err(e) => {
                 tracing::error!("HUD script failed to load ({e}); scene runs without a HUD");
-                None
             }
-        };
+        }
 
         tracing::info!(
             "flicker-paperdoll: {} bones, {} clips, {} submeshes, {} textures",
@@ -1756,7 +1748,7 @@ impl Scene for Viewer {
         );
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, _renderer: &Renderer) -> Transition {
         // NOTE Esc/Menu → pause is no longer edge-detected here: the resolver owns the
         // press edge and the `RootHandler` consumes `Menu` in the dispatch below, turning
         // it into `Transition::Push(PauseScene)`. The orbit camera is likewise NOT updated
@@ -1831,10 +1823,9 @@ impl Scene for Viewer {
                 wheel: input.mouse_wheel_delta,
             };
             let frame = {
-                // Disjoint field borrows: `ui_tree`/`ui_styles`/`script` read, `ui_state` mutated.
+                // Disjoint field borrows: `ui_tree`/`ui_styles` read, `ui_state` mutated.
                 let tree = self.ui_tree.as_ref().unwrap();
-                let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-                run_ui_with(tree, &model, &self.ui_styles, &snap, &mut self.ui_state, lib)
+                run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state)
             };
             // `hud_hit` = cursor over any UI region, OR a slider drag in progress
             // (captures until release). That click must not ALSO pick the scene behind
@@ -3494,7 +3485,7 @@ mod tests {
     }
 
     /// The HUD script must load and run. Without this a Lua error is INVISIBLE: `init`
-    /// logs it and leaves `script: None`, so the scene just renders with no HUD at all
+    /// logs it and leaves `ui_tree: None`, so the scene just renders with no HUD at all
     /// and every build/clippy run still passes.
     #[test]
     fn hud_script_runs_with_model() {

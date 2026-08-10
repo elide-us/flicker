@@ -1,13 +1,12 @@
 # Authoring a Prism screen
 
-**A screen is a Lua table. Every control's behaviour is one `ui/<kind>.lua` module.
-Every reusable surface is one entry in `ui_templates.json`. The Rust walker owns
-layout, caching, dispatch, and routing — and nothing else.**
+**A screen is a Lua table. Every reusable surface is one entry in
+`ui_templates.json`. The Rust engine owns everything else — layout, each
+control's draw and hit, caching, and routing.**
 
-That split is what this system buys you: a new screen is *data*, a new control is
-*one Lua file*, a new surface is *one JSON proto*, and none of the three needs a
-recompile of the other two. This guide is what a person needs to author one
-without opening the walker.
+That split is what this system buys you: a new screen is *data*, a new surface is
+*one JSON proto*, and neither needs a recompile. This guide is what a person
+needs to author one without opening the walker.
 
 > **Scope.** This is the *usage* guide. The design of record — the ratified
 > vocabulary, the ownership split, the convergence history — lives in the MCP
@@ -24,7 +23,7 @@ without opening the walker.
 5. [The four channels](#the-four-channels)
 6. [Layout](#layout)
 7. [Component catalog](#component-catalog)
-8. [Writing a component](#writing-a-component) — `ui/<kind>.lua`
+8. [Writing a component](#writing-a-component) — a `draw_<kind>` arm
 9. [Templates are data](#templates-are-data) — `ui_templates.json`
 10. [Surfaces](#surfaces) — declaring what a screen shows
 11. [Intents](#intents) — the UI *is* the input declaration
@@ -67,7 +66,7 @@ Four things are happening, and they are the whole system:
 
 | In the table | What owns it |
 |---|---|
-| `component` kind (`cell`, `text`, `button`) | the walker places it; a Lua module in `ui/<kind>.lua` draws + hit-tests it |
+| `component` kind (`cell`, `text`, `button`) | the walker places it, then draws + hit-tests it in `component.rs` |
 | `style = "menu.panel"` / `color = "menu.title"` | a **dotted path** into `ui_elements.json`; colours resolve from `theme.tokens` at draw |
 | `$hello_title` | a **stringtable token**; the active locale's text resolves at draw |
 | `text_bind` / `action` / `on_menu` | **name channels** into the scene's Rust Model + results |
@@ -90,7 +89,7 @@ One name per concept. These are locked; a synonym in new code is a defect.
 | **Workflow** | an Orchestration **with an ordinal**: ordered step surfaces + needs/yields gates + the document contract. Definitions are data (`ui_workflows.json`). |
 | **Step** | one stop of a Workflow: an id, a `$token` rail title, its surface, and its `needs`/`yields` document contract. |
 | **Template** | a whole surface as pure DATA: a parameterised tree in `ui_templates.json`. |
-| **Component** | the logic owner, a configurable black box. *Interactive* components live in `ui/<kind>.lua`; *structural* ones (`frame`, `card`, `option_grid`) are Rust composition builders. |
+| **Component** | the logic owner, a configurable black box. *Interactive* components are `draw_<kind>` arms in `component.rs`; *structural* ones (`frame`, `card`, `option_grid`) are Rust composition builders. |
 | **Primitive** | no logic: the layout resolver, the HudCommand renderers (panel SDF / rect / sprite / **text** / caret / clip), point-in-rect, measure_text. |
 
 **Folded names.** These were renamed; the old ones do not parse:
@@ -98,11 +97,16 @@ One name per concept. These are locked; a synonym in new code is a defect.
 | Retired | Use |
 |---|---|
 | `stage` / `StageSlot` | `rtt` |
-| `panel` | `cell` (a cell carrying a `style`) |
+| `panel` (as a synonym for a styled box) | `cell` (a cell carrying a `style`) — but see below: `panel` is now a **kind of its own** |
 | `column` | `cell` |
 | `page` | `screen` |
 | `scroll` | `list` |
 | `element` | survives **only** in the filename `ui_elements.json` |
+
+**`panel` came back, and it is not the old name.** A `panel` is the FOCUSABLE
+pane of a multi-panel view: it draws its own backdrop *and* its own focus rim
+from the `panel` style block, choosing between them by the focus the walker
+holds. A styled box that is not a pane is still a `cell`.
 
 The one deliberate exception: the top-level **`stages`** section of
 `ui_elements.json` keeps its name — it is sub-scene *lighting config* keyed by an
@@ -171,16 +175,17 @@ Three tokens go into `Alpha/content/data/stringtable.json`:
 
 ```rust
 self.styles = load_styles(HUD_UI_ELEMENTS);
-let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)?;
+let script = ScriptHost::from_file(HUD_SCRIPT)?;
 load_ui_json(&script, HUD_UI_ELEMENTS);            // the `UI` global for the script
 let tree = expand(script.ui_tree()?.unwrap(), &builtin_templates());  // templates → nodes
 self.intents = UiIntents::of(&tree);               // collects `on_menu`
 self.tree = Some(tree);
-self.script = Some(script);                        // RETAINED: it is also the component library
+self.script = Some(script);                        // RETAINED: it owns the data globals
 ```
 
-`script` is kept alive deliberately — the same VM that built the tree serves as
-the `ComponentLibrary` the walker dispatches each node's draw/hit into.
+`script` is kept alive deliberately — it owns the `UI` global and any data
+globals the screen publishes. Drawing needs nothing from it: every control draws
+in the engine.
 
 ### 4 — walk it, every frame
 
@@ -196,8 +201,7 @@ let snap = UiInput {
     typed: String::new(), backspace: false,
     wheel: input.mouse_wheel_delta,
 };
-let lib = self.script.as_ref().map(|h| h as &dyn ComponentLibrary);
-let frame = run_ui_with(&tree, &model, &self.styles, &snap, &mut self.ui_state, lib);
+let frame = run_ui(&tree, &model, &self.styles, &snap, &mut self.ui_state);
 
 self.commands = frame.commands;                          // → render_hud in render()
 let over_hud  = frame.results.is_on("hud_hit");          // UI ate the pointer
@@ -216,11 +220,11 @@ if self.fired_sigs.iter().any(|n| n == "pause_open") {
 }
 ```
 
-**What Rust does per frame, in order** (`run_ui_impl`):
+**What Rust does per frame, in order** (`run_ui`):
 
 1. `resolve` — lay the tree into rects, skipping `visible_bind`-false subtrees.
-2. hit pass — bounded dispatch into each candidate component's `M.hit`; verdicts
-   fold into `results` and `UiState`.
+2. hit pass — each candidate component answers a `HitVerdict`; verdicts fold
+   into `results` and `UiState`.
 3. `fold_typed` — this frame's keyboard text into the focused node's `bind`.
 4. `echo_binds` — every placed control with a `bind` reports its effective value.
 5. draw pass — each node whose fingerprint changed redraws; the rest replay from
@@ -247,12 +251,13 @@ canonical reference, and the largest).
 This is the one thing to internalise, because it decides what your screen costs
 and what your component may assume.
 
-**Lua is entered draw-on-change and hit-on-input. Never per node per frame.**
+**A component redraws on change and hit-tests on input. Never per node per
+frame.**
 
 ### Draw
 
-Every node — Lua-drawn *and* Rust-drawn — has a cache entry holding its emitted
-commands plus a fingerprint of every input its draw reads:
+Every node has a cache entry holding its emitted commands plus a fingerprint of
+every input its draw reads:
 
 - the node's rect, layer, enabled flag, clip;
 - its resolved style block (by **content**, so a rebuilt or hot-reloaded styles
@@ -262,40 +267,43 @@ commands plus a fingerprint of every input its draw reads:
 - for children-as-data kinds (`tabs`, `pill_toggle`, `select`, `context_menu`),
   its children's props;
 - the stringtable generation (a language switch invalidates exactly the text);
-- pointer position, **only** for Lua-dispatched kinds, and only rounded to whole
-  pixels, and only while the node is hot or open.
+- pointer position, **only** for interactive components (a structural box never
+  consults the cursor), and only rounded to whole pixels, and only while the node
+  is hot or open.
 
-Unchanged fingerprint ⇒ verbatim replay, zero crossings. A still frame is
-`lua_draws == 0` and `redraw_nodes == 0` — asserted by tests, observable through
-`UiFrame.stats` (`UiStats { lua_draws, lua_hits, redraw_nodes, nodes }`).
+Unchanged fingerprint ⇒ verbatim replay, nothing redrawn. A still frame is
+`redraw_nodes == 0` — asserted by tests, observable through `UiFrame.stats`.
 
 The naming convention is load-bearing: **a prop ending in `_bind` holds a Model
 key**. Name a new one `foo_bind` and the cache covers it the day you author it.
 
 ### Hit
 
-Lua is entered for a hit only when *both*:
+Every placed node's hit arm runs every frame, in the engine — recomputing a
+verdict costs nothing, so `hud_hit` simply stays continuous while a pointer
+rests on a control. That is also what lets an arm reach PAST its own node rect:
+a `select`'s popup lies below its field, a `context_menu` may lay rows past its
+height, and a captured `slider` keeps mapping the pointer once the drag leaves
+the track — none of which the walker's geometry could have pre-filtered for.
 
-- the frame is **input-active** — a click edge, a release edge, actual
-  pointer/screen movement, a wheel tick, or a held drag; and
-- the node is a **candidate** — pointer within its rect + 8px slop, **or** it
-  owns the open popup (a `select`'s menu lies below its rect), **or** it holds a
-  pointer capture (a slider drag off the track), **or**, on a click edge only, it
-  is a children-as-data kind (a `context_menu` may lay rows past its rect).
-
-Idle frames replay a per-node memo so `hud_hit` stays continuous at zero cost.
+(The bounded, candidate-gated dispatch this replaced existed to keep per-frame
+crossings into the `ui/<kind>.lua` tier affordable. That tier is gone —
+2026-08-10 — and its gate with it.)
 
 ### The escape hatch
 
-A component that declares `M.hit_shape` never crosses at all:
+A kind listed in `rust_hit_shape` needs no hit arm at all — the walker answers
+the whole claim generically:
 
-| `hit_shape` | Walker behaviour | Used by |
+| `HitShape` | Walker behaviour | Used by |
 |---|---|---|
-| `"rect"` | hover claims; click fires `action` and/or toggles a bool `bind` | `button`, `tile` |
-| `"none"` | never claims, never interacts | `sprite`, `tooltip`, `rune_corners`, `gauge` |
-| *(absent)* | dispatch `M.hit` for a verdict | everything else |
+| `Rect` | hover claims; click fires `action` and/or toggles a bool `bind` | `button`, `panel`, `tile`, `action_slot` |
+| `None` | never claims, never interacts | `sprite`, `tooltip`, `rune_corners`, `gauge` |
+| *(absent)* | run the kind's bespoke hit arm for a verdict | everything else |
 
-`hit_shape` is probed **once** at library build. A typo there is a build error.
+The two are mutually exclusive: a control with a tight sub-rect region declares
+neither shape and owns its arm (`rust_owns_hit`). Getting that wrong is a test
+failure, not a silent widening.
 
 ---
 
@@ -309,7 +317,7 @@ The Lua↔Rust boundary is exactly four channels, and scalars only
 | 1 | **Tree** | Lua → Rust, once | `M.tree()` → a `UiNode` tree, parsed and cached |
 | 2 | **Model** | Rust → Lua, per frame | the `ValueMap` a node's `bind` / `*_bind` reads |
 | 3 | **Results** | Rust ← walk | fired `action`s, edited `bind` values, `hud_hit`, drag payload |
-| 4 | **Component props / commands** | Rust ↔ Lua, bounded | `M.draw(cmds, rect, props)` and `M.hit(...)` → `HitVerdict` |
+| 4 | **Component props / commands** | Rust ↔ Rust | `draw_<kind>(rect, props, out)` and the hit arms → `HitVerdict` |
 
 Per-node wiring props:
 
@@ -341,12 +349,30 @@ whether or not it was touched, with its kind's own absent-value default:
 | `checkbox` / `toggle` / `tile` | the model's bool, default `false` |
 | `slider` / `stepper` | the model's number, default the node's `min` |
 | `list` | the offset, default `0` |
-| `tabs` | the model's text, else the **first child's `value`** |
-| `radio` / `pill_toggle` / `select` | the model's text if present, else nothing |
+| `tabs` | the model's **number**, else the **first child's numeric `value`** |
+| `pill_toggle` / `select` | the model's **number** if present, else nothing |
+| `radio` | the model's **text** if present, else nothing |
 | `text_field` | the model's text, default `""` |
 
 So a scene may read its result keys unconditionally. Clicks always win: the hit
 pass runs first and the echo only fills keys nothing wrote.
+
+### AN INDEX IS A NUMBER
+
+`tabs`, `pill_toggle` and `select` pick a position in an **ordered collection**,
+so their `option` children carry a **numeric** `value` and the bind reports a
+number — in the roster, in the node, on the bind, in `results`, and in the
+scene's own field. Author `value = 0, 1, 2 …`, publish
+`m.set(bind, index as f64)`, and read `results.number(bind)`.
+
+A non-numeric option value is **not** accepted as an alternative spelling: the
+component skips it, `results` stays empty, and a warning names the node and the
+offending type. Accepting both representations is worse than picking the wrong
+one — it entrenches the fork instead of fixing it.
+
+`radio` is the exception, and the only one: it matches a **name**, not a
+position, so its `value` is text. If what you are picking has a stable name
+rather than an order, reach for `radio`; if it has an order, it is a number.
 
 ---
 
@@ -417,12 +443,13 @@ Every kind a tree may legally name. Anything else is a typo the
 | `text` | one line | `text` \| `text_bind`, `prefix`, `text_size`, `color`/`color_bind`, `font` (`body`/`display`/`label`/`rune`), `align`, `italic`, `bold`, `tracking`, `wrap` |
 | `option` | **data only**, never drawn — a child entry of `select`/`pill_toggle`/`tabs` | `value`, `label` |
 
-### Interactive — 22 kinds (each is one `ui/<kind>.lua`)
+### Interactive — 23 kinds (each is a `draw_<kind>` arm in `component.rs`)
 
 | Kind | Purpose | Common props |
 |---|---|---|
 | `button` | clickable labelled slab (`hit_shape = "rect"`) | `id`, `action`, `label`\|`text_bind`, `size`, `label_size`, `style`, `style_bind`, `enabled_bind` |
 | `tile` | grid slot that lights when filled (`hit_shape = "rect"`) | `label`, `bind`, `style`, `style_off` |
+| `panel` | a focusable PANE: its own backdrop, and its own rim when the walker's panel cursor is on it. No bind, no action — see [multi-panel views](#multi-panel-views--the-recipe) | `id`, `tab_group`, `nav_ordinal`, `pad`, `style` (default `panel`) |
 | `checkbox` | labelled tick box | `bind`, `label`, `label_size`, `label_x`, `style` |
 | `toggle` | on/off pill | `bind`, `size`, `style`, `enabled_bind` |
 | `radio` | one-of-many (matches `value`) | `bind`, `value`, `label`, `style` |
@@ -441,74 +468,61 @@ Every kind a tree may legally name. Anything else is a typo the
 | `stat_dot` | one Septisigil gem-dot keyed by prism hue (`hit_shape = "none"`) | `hue`/`_bind`, `glow`, `style` |
 | `badge` | small status chip | `label`, `tone`, `solid`, `label_size`, `style` |
 | `tooltip` | hover/info bubble (`hit_shape = "none"`) | `rune`/`rune_bind`, `name`/`name_bind`, `meta`/`meta_bind`, `rune_color` |
+| *(controller-input icons)* | **not a kind** — a `button` wearing an atlas glyph. Give it `glyph` + `glyph_style` and it draws the icon instead of a label; its activate flash is the ordinary button one, keyed on its `action`, so a click, a pad Confirm and a bound shoulder signal all light it | on a `button`: `glyph` (name, e.g. `lt`), `glyph_style` (normally `pad_glyphs` — atlas, cell map, colours), `glyph_size` |
 | `sprite` | textured quad (`hit_shape = "none"`) | `tex`, `alpha`, `aspect` |
 | `rune_corners` | the four carved corner glyphs (`hit_shape = "none"`) | `style`, `glyph_size`, `tl`/`tr`/`bl`/`br` |
 
 > `list`'s *layout* (the offset shift and the viewport clip) is a walker
 > primitive; its *draw* (backdrop + scrollbar) and *hit* (claim + wheel→offset)
-> are `ui/list.lua`. The walker hands it the measured `content_h`, so the bar can
+> are `draw_list` + its hit arm. The walker hands it the measured `content_h`, so the bar can
 > never disagree with the placement.
 
 ---
 
 ## Writing a component
 
-One kind = one file = one geometry. Adding one is additive: no enum, no walker
-edit.
+One kind = one `draw_<kind>` arm = one geometry, all in
+`flicker-widgets/src/component.rs`. Adding one is additive: no new file, no new
+tier.
 
-```lua
--- Alpha/content/sensorium/scripts/ui/knob.lua
-local core = require("ui.core")
-local knob = {}
+```rust
+// 1. component.rs — the draw arm. You get the RESOLVED rect; never compute a
+//    position from a parent.
+fn draw_knob(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+    let s = &props["style"];
+    push_panel(out, r, first_color(s, &["hover_fill", "fill"], PANEL), jnum(s, "radius", 3.0));
+    push_text(out, r.x + r.w * 0.5, r.y, text_of(props, "label"), 14.0,
+              first_color(s, &["label"], INK), TextAlign::Center, FontRole::Label, …);
+}
 
--- Optional: declare a trivial shape and the walker answers in Rust, zero crossings.
--- knob.hit_shape = "rect"   -- or "none"
+// 2. wire it into the dispatch table in `draw_node`:
+"knob" => draw_knob(r, &props, out),
 
-function knob.draw(cmds, r, props)
-  local s = props.style or {}
-  core.panel(cmds, r, {
-    fill   = core.first_color(s, { "hover_fill", "fill" }, { 0.1, 0.1, 0.1, 1 }),
-    radius = core.jnum(s, "radius", 3),
-    layer  = props.layer,
-  })
-  core.text(cmds, r.x + r.w * 0.5, r.y, props.label, 14,
-            core.first_color(s, { "label" }, { 1, 1, 1, 1 }), "center", "label", props.layer)
-end
+// 3. answer its HIT — a trivial geometry in `rust_hit_shape`:
+"knob" => Some(HitShape::Rect),
+//    …or a bespoke arm in `hit_node` when the tight region is a sub-rect
+//    (declare it in `rust_owns_hit`; the two are mutually exclusive).
 
-function knob.hit(mx, my, r, props, click, down)
-  local over = core.point_in(mx, my, r)
-  local v = { hit = over }
-  if over and click then v.value = not (props.bind_value == true); v.activate = true end
-  return v
-end
-
-return knob
+// 4. add "knob" to RUST_COMPONENT_KINDS in lib.rs — that list IS the legal
+//    vocabulary, so this is what makes `knob` a nameable kind.
 ```
 
-Then register it in `UI_COMPONENT_MODULES` (`flicker-widgets/src/lib.rs`) — one
-line, `("ui.knob", include_str!(".../ui/knob.lua"))` — and add its style block to
-`ui_elements.json`. Registration is what makes `knob` a legal kind.
+Then add its style block to `ui_elements.json`. The roster gate
+(`every_engine_component_is_legal_and_answers_its_hit_in_rust`) holds every kind
+to steps 3 and 4 — a control that draws but never answers its hit is not
+interactive at all, and that gate is what catches it.
 
-### `M.draw(cmds, rect, props)`
+Geometry must be **one function shared by draw and hit** (see `track_rect` for
+the slider) — that is the whole point of one control living in one place.
 
-Emit plain-data HudCommands into `cmds`. You get the **resolved** rect; you never
-compute a position from a parent. Emitters in `ui.core`:
+### Colours
 
-| Emitter | Draws |
-|---|---|
-| `core.panel(cmds, r, s)` | the SDF rounded-rect: fill + 2-stop gradient + border + feather |
-| `core.panel_bg(cmds, r, s, layer)` | a container backdrop from a style block's standard keys |
-| `core.rect(cmds, r, c, layer)` | flat tinted rect (1px rules, ticks) |
-| `core.sprite(cmds, r, tex, alpha, layer)` | textured quad |
-| `core.text(cmds, x, y, str, size, c, align, font, layer)` | one line in a face role |
-| `core.caret(cmds, x, y, w, h, prefix, size, c, layer, font, max_x)` | a **measured** caret — the render bridge shapes `prefix` and places the bar after it |
-
-Helpers: `core.point_in(px, py, r)` · `core.first_color(s, keys, dflt)` (the alias
-chain — `hover_top` → `hot` → `fill_top` → `cell` → `fill`) · `core.jnum(s, k,
-dflt)` · `core.fmt_val(v, props)` · `core.rgba(c)`.
-
-`core.caret` exists because caret position **must** be measured, never estimated
-from character count. Do not reintroduce `chars × advance`.
+A component reads its colours from its **resolved style block** (already
+`$token`-expanded rgba). The `const INK / PANEL / SAP / …` fallbacks at the
+bottom of `component.rs` are the missing-key floor only, and each is a byte copy
+of a named `theme.tokens` entry — pinned by
+`component_consts_mirror_their_named_theme_tokens`, so a new one must name its
+token (or be declared token-less) or the build fails.
 
 ### What arrives in `props`
 
@@ -537,14 +551,18 @@ The list is fixed: `label`, `text`, `title`, `subtitle`, `footer`, `placeholder`
 `hint`, `name`, `meta`, `prefix` — on the node *and* on its data children. Bind
 values and user text (a chat buffer) never resolve.
 
-### `M.hit(mx, my, rect, props, click, down)` → `HitVerdict`
+Carets are **measured**, never estimated: emit `HudCommand::Text` with the
+prefix and let the render bridge place the bar. Do not reintroduce
+`chars × advance`.
 
-`click` is this frame's press edge, **already gated** on the node's enabled state.
-`down` is the raw held state. Return `true`/`nil`/a table:
+### The hit verdict
+
+A bespoke hit arm returns a `HitVerdict`. `click` is this frame's press edge,
+**already gated** on the node's enabled state; `down` is the raw held state.
 
 | Field | Effect |
 |---|---|
-| `hit` | pointer is in your **tight** region → claims `hud_hit` (+ the idle memo) |
+| `hit` | pointer is in your **tight** region → claims `hud_hit` |
 | `value` | new value for the node's `bind` |
 | `activate` | fire the node's `action` |
 | `activate_child = i` | fire child `i`'s `action` — **1-based**, matching `props.children[i]` |
@@ -553,11 +571,9 @@ values and user text (a chat buffer) never resolve.
 | `focus = true` | take keyboard focus (needs an `id`; clearing is the walker's clicked-frame rule) |
 | `group_focus` | write this node's `bind` into its `focus_group` key |
 
-A non-scalar `value` is a contract error. Geometry must be **one function shared
-by `draw` and `hit`** (see `track_rect` in `ui/slider.lua`) — that is the whole
-point of one control living in one file.
+A non-scalar `value` is a contract error.
 
-One caveat worth knowing: `M.hit` reads the props from your node's **last real
+One caveat worth knowing: a hit reads the props from your node's **last real
 draw**, with only `bind_value`/`open`/`captured`/`wheel` patched live. On the
 exact frame a geometry prop changes, hit lags draw by one frame — deliberate: the
 user clicked what they *saw*.
@@ -587,7 +603,10 @@ unchanged.
 
 ### The protos
 
-Thirteen live in `Alpha/content/sensorium/resources/ui_templates.json`:
+Sixteen general-purpose protos live in
+`Alpha/content/sensorium/resources/ui_templates.json` (the file also carries each
+bench's own protos — `godmode_*`, `clayworks_*`, `pop_size_dial`, `stat_row` —
+which are library for that bench, not vocabulary for a new screen):
 
 | Template | Shape | Slots | Key props |
 |---|---|---|---|
@@ -602,20 +621,61 @@ Thirteen live in `Alpha/content/sensorium/resources/ui_templates.json`:
 | `unit_frame` | portrait medallion + name/subtitle + a gauge stack | `gauges` | `tone` (style variant), `pad`, `gap`, `portrait` (medallion size), `ring`, `rune`/`_bind`, `name`/`_bind`, `name_size`, `subtitle` |
 | `command_card` | heading + a grid of `action_slot`s | `slots` | `style`, `pad`, `gap`, `heading`/`_size`/`_color`, `cols` (track string), `slot_gap` |
 | `resource_readout` | one horizontal strip of readout items | `items` | `style`, `h`, `pad_x`, `gap` |
-| `side_by_side_rtt` | two framed RTT viewports in a row | — | `id` (→ `<id>_left`/`_right`), `left_source`/`right_source`, `left_live_bind`/`right_live_bind`, `style`, `gap` |
-| `quad_rtt_view` | one framed RTT viewport | — | `quad_id`, `source`, `style`, `width`/`height`, `live`/`live_bind`, `tint` |
+| `paged_menu` | controller-first page/tab CONTAINER: title · page rail (LT/RT, underlined) · tab rail (LB/RB, collapses when `tabs_shown` is off) · one content region · pad-glyph footer legend | `header`, `pages` (`option` children), `tabs` (`option` children), `content` | `eyebrow`, `title`/`title_size`, `page_bind` (default `page`), `tab_bind` (default `tab`), `tabs_shown` (visible-bind key), `pad`, `gap`, `header_h`, `rail_h`/`rail_gap`, `tab_h`/`tab_w`/`tab_gap`, `content_pad`, `legend_h` |
+| `default_page` | a page root: the `screen` + its page chrome `frame`, declaring only the signals a page may legally own | `content` | `id`, `on_menu`, `on_page_next`/`on_page_prev`, `on_tab_next`/`on_tab_prev`, `runes`, `style` |
+| `multi_view` | **the N-panel arrangement** — a row with ONE `panes` slot spliced as N siblings | `panes` | `gap` |
+| `ui_panel` | one pane of a `multi_view`: the `panel` component around a `content` slot | `content` | `id`, `tab_group`, `nav_ordinal`, `title`, `pad`, `placeholder`, `style` |
+| `rtt_panel` | the viewport pane: the SAME `panel` node holding one `rtt` (`<id>_rtt`) | — | `id`, `tab_group`, `nav_ordinal`, `source`, `aspect`, `live_bind`, `pad`, `style`, `rtt_style` |
 
-Both RTT protos default `style` to **`rtt_holder`** — the neutral template-tier
-namespace for an offscreen-view slot's chrome. Do not point them back at a
+`rtt_panel` defaults `rtt_style` to **`rtt_holder`** — the neutral template-tier
+namespace for an offscreen-view slot's chrome. Do not point it back at a
 per-bench block; that forks the palette.
 
 Instanced by a shipped screen today: `window` (settings, assetpipeline) ·
 `workbench` (assetpipeline) · `choice_dialog` (settings, menu, assetpipeline) ·
-`popup_panel` / `popup_menu` (menu). The other eight — `workflow`,
-`tabbed_window`, `game_hud`, `unit_frame`, `command_card`, `resource_readout`,
-`quad_rtt_view`, and `side_by_side_rtt` (test-only) — are authored library with
-no screen instancing them yet, so there is no worked example to copy: read the
-proto in `ui_templates.json` and check its props against the table above.
+`popup_panel` / `popup_menu` (menu) · `default_page` / `paged_menu` /
+`multi_view` / `ui_panel` / `rtt_panel` (Populous). The other six — `workflow`,
+`tabbed_window`, `game_hud`, `unit_frame`, `command_card` and `resource_readout`
+— are authored library with no screen instancing them yet, so there is no worked
+example to copy: read the proto in `ui_templates.json` and check its props
+against the table above.
+
+### Multi-panel views — the recipe
+
+A bench that shows several things side by side composes **exactly three** protos,
+and its Rust never learns which pane is focused:
+
+```rust
+// One `multi_view`; its `panes` slot holds N siblings, in reading order.
+let mut view = instance(MULTI_VIEW);
+view.slots.insert("panes".into(), vec![
+    pane(UI_PANEL,  "pop_left",  /* content: a slider instance   */),
+    pane(RTT_PANEL, "pop_view",  /* source: "populous_globe"     */),
+    pane(UI_PANEL,  "pop_right", /* content: three `stat_row`s   */),
+]);
+```
+
+1. **`multi_view` is pure layout.** It has no pane count, no privileged kind and
+   no focus param: one pane, two or ten is the same proto with a different slot.
+2. **A pane's `id` IS its `tab_group`.** That single fact is what makes it a
+   panel: the walker's panel cursor (the left stick / `PanelNext`/`PanelPrev`)
+   cycles the groups, and the `panel` component draws its own rim from the focus
+   the walker holds. A scene passes an id, a group and content — **never a style,
+   never a rim, never a `focused` flag**.
+3. **Ordinals order the inside of a pane.** The pane itself sits at `nav_ordinal`
+   0 so cycling into a group lands ON the pane; its controls take 1, 2, 3 …, and
+   the d-pad walks them.
+4. **A viewport is a pane like any other.** `rtt_panel` is the identical `panel`
+   node holding one `rtt`; read its rect back as
+   `frame.rtt_rect("<id>_rtt")` and hand it to the offscreen pass.
+5. **An empty pane is honest.** Leave the slot unfilled and the localized
+   `$ui_pane_empty` placeholder shows — a well, not a void.
+
+The retired shape, for recognition: a proto with fixed left/right slots around a
+hardwired centre `rtt` (`tri_pane_rtt`), plus a scene-side pane enum, a
+scene-chosen rim style and a scene-owned enter/exit mode. If you find that shape
+anywhere, it is drift — the arrangement is `multi_view`, and focus is the
+walker's.
 
 Three stay **Rust builders** (their output is computed, not templatable — the
 `frame` grid needs generated track strings, `option_grid` chunks rows):
@@ -630,6 +690,21 @@ Three stay **Rust builders** (their output is computed, not templatable — the
 `tabbed_window` is a `window`, `workflow` is a `workbench` — protos compose
 protos, up to `MAX_TEMPLATE_DEPTH = 8`. Only a template resolving *from within*
 another template's output counts toward the bound; ordinary tree depth is free.
+
+**`frame` is the docking container.** Nine named regions on a 3×3 border grid, with
+per-edge track sizes — that is where a surface with a header, side panels, a
+viewport and a footer comes from. `n`/`s` are the bands, `w`/`e` the side panels,
+`center` the content, and the four corners the rune clearance. Reach for it before
+composing a layout out of rows: a header is `n`, not the first row of `center`.
+The Populous bench is the worked example, and it is three `frame`-family nodes
+deep by design: `default_page`'s outer `frame` carries the page chrome (corner
+runes on), the `paged_menu` docks into it, and a second `frame` inside that
+(runes **off** — corners never stack) holds the page's own content, which is one
+`multi_view`.
+
+Note that `n` and `s` occupy the top-/bottom-**centre** cell only, flanked by the
+corner cells. Widening `w`/`e` into real panels therefore widens the corners too,
+and the bands read as sitting *between* the panels rather than spanning the frame.
 
 ### The proto schema
 
@@ -723,6 +798,25 @@ Screen { id = "hello", on_menu = "pause_open", on_cancel = "hello_close", … }
   names `AttackLight`. There is no second name table — the suffix folds onto the
   serde variant names.
 - **Only the root declares.** A child's `on_*` props stay ordinary component props.
+- **Declare only what you dispatch.** A declared name with no arm in the scene's
+  result handling is dead hardware; a fired name that resolves to nothing is the
+  failure the fail-loud rule exists for.
+- **Some signals are never yours.** `Confirm`, `Cancel`, `Nav*`, `Panel*` and
+  `ChordBegin` belong to the WALKER, on every screen. The walker consumes a
+  declared intent and returns *before* the activation path, so declaring one of
+  these does not add behaviour — it removes behaviour, statically. God Mode
+  states the rule at the point of temptation:
+
+  > **Declare only what you dispatch.** And note what is NOT here: `on_confirm`.
+  > Confirm stays the walker's, because it is what ACTIVATES the focused control
+  > — a bench full of buttons that stole Confirm for one of them would have a pad
+  > that can move the focus ring and never press anything.
+
+  Two gates hold the two channels this can travel:
+  `no_proto_declares_a_walker_owned_signal` (the template file) and
+  `no_scene_reads_a_device_or_names_a_pane_style` (every scene's own source).
+  Both derive the vocabulary from `walker_owned(signal)` — the walker's own
+  answer — so neither can drift from what the layer actually consumes.
 - An unknown suffix, a non-string value, or an empty name is **warned and
   skipped** — the vocabulary-gate philosophy: a typo is a log line, never a silent
   dead binding.
@@ -1094,8 +1188,7 @@ new screen wires both into its own test — this is the step that makes a screen
 ```rust
 #[test]
 fn the_hello_screen_is_clean() {
-    let script = ScriptHost::from_file_with_modules(HUD_SCRIPT, UI_COMPONENT_MODULES)
-        .expect("hud_hello.lua loads");
+    let script = ScriptHost::from_file(HUD_SCRIPT).expect("hud_hello.lua loads");
     load_ui_json(&script, HUD_UI_ELEMENTS);
     // publish any data globals `tree()` reads (ROSTER, HAB, MENU, …) first
     let tree = script.ui_tree().expect("tree builds").expect("script exposes tree()");
@@ -1121,6 +1214,18 @@ with no alphabetic character, and pure `%`-format strings (`"%d"`, `"%.2f%%"`).
 Build the tree the test walks **the same way the scene does** — same globals, same
 `expand`. A gate that walks a fixture instead of the real tree proves nothing
 about what ships.
+
+**Two more run once for the whole workspace**, so a new bench inherits them
+without wiring anything:
+
+- `no_proto_declares_a_walker_owned_signal` — no proto anywhere offers a
+  walker-owned `on_*` as a param.
+- `no_scene_reads_a_device_or_names_a_pane_style` — no scene reads a gamepad
+  directly (only the controller tester, whose subject IS the device), names the
+  retired `tri_pane.*` pane palette, grows its own shell builder or orbit camera,
+  or declares a walker-owned signal. The last clause carries a **closed list** of
+  the benches not yet migrated: it fails when a new name appears *and* when a
+  listed one migrates without shrinking the list.
 
 **A workflow bench wires a third:** `wf.ungated_steps(&tree)`, once per definition
 it can dispatch — every step whose surface key nothing in the tree gates on. It
@@ -1179,7 +1284,7 @@ drift — do not "fix" them without a ruling, and do not copy them into new work
 
 | Exception | Why |
 |---|---|
-| **`text` and styled-container backgrounds stay Rust primitives** | There is no `ui/text.lua` by ruling. `text` is the most numerous kind in a real tree, and container backdrops are the shared `draw_panel_bg`. A Lua component draws the same backdrop through `core.panel_bg`, so both paths emit identical commands. |
+| **`text` and styled-container backgrounds are walker primitives, not Components** | `text` is the most numerous kind in a real tree and container backdrops are the shared `draw_panel_bg`, so the walker draws both itself rather than routing them through a `draw_<kind>` arm. They are the one place a "control" has no component arm to find. |
 | **`flicker-world`'s `world_ui.lua` + `widgets.lua`** | The last immediate-mode control surface: per-epoch structural slider rows plus a duration-weighted timeline scrubber with multi-key-bound geometry — no walker channel expresses it, so converting is a redesign. It is the ONE remaining consumer of the trimmed legacy `Widgets` global (slider/stepper/dropdown/button); `widgets.lua` dies with that conversion. |
 | **`logo.lua` stays immediate** | Its timeline needs Model-driven texture switching plus per-frame fit-scale geometry. It returns no `M.tree()`. |
 | **loomforge (and the floating chat panel) rebuild the tree every frame** | Load-bearing: the bench mutates its document mid-frame and its node ids encode *filtered* list positions read against post-mutation state, so a retained tree would need revision plumbing across every mutation funnel. This costs nothing: cache identity is **structural** (an id, else the parent key folded with kind + sibling index), not the address of a retained node, so a rebuilt-but-identical tree replays at `redraw_nodes == 0`. Its `UiIntents` are still collected **once** — root props are static even when the tree is not. |
@@ -1192,8 +1297,9 @@ drift — do not "fix" them without a ruling, and do not copy them into new work
 ### Silent failures — the ones to grep for first
 
 The system fails loudly for a mistyped **component kind** (the `unknown_kinds`
-gate), a mistyped **`on_<signal>`** (warn + skip), a mistyped **`hit_shape`**
-(build error), and a missing **string token** (renders raw + warns). Everything
+gate), a mistyped **`on_<signal>`** (warn + skip), a component that answers
+**neither** `rust_hit_shape` nor `rust_owns_hit` (the roster gate — a test
+failure), and a missing **string token** (renders raw + warns). Everything
 below is still silent. When a control "does nothing", check these in order:
 
 - **A `bind` / `action` / `text_bind` name is a plain string with no compiler
@@ -1219,9 +1325,6 @@ below is still silent. When a control "does nothing", check these in order:
   definitions' step ids. Add a step to `ui_workflows.json` and its chip is still
   missing until you add the id to the rail's list. (Its *subtree* is covered:
   that mismatch is a build failure via `ungated_steps` — wire that gate.)
-- **A `component = "core"` node passes `unknown_kinds`.** The gate's known-kind
-  set is derived from the module registry, which carries the shared `ui.core`
-  library alongside the real kinds; `core` has no `draw`, so it renders nothing.
 - **A workflow name that no definition matches keeps the running workflow**
   (warn), and a `ui_workflows.json` that fails to parse yields an **empty map**
   (warn) — every lookup misses at once rather than one loudly.
@@ -1258,7 +1361,8 @@ surfaces + orchestration: `…/surfaces.rs` · workflows: `…/workflow.rs` +
 `Alpha/content/sensorium/resources/ui_workflows.json` · intents: `…/intents.rs` ·
 strings: `…/strings.rs` + `Alpha/content/data/stringtable.json` · node schema +
 the Lua seam: `Alpha/crates/scripting/flicker-script/src/lib.rs` · components:
-`Alpha/content/sensorium/scripts/ui/*.lua` · styles + palette:
+`…/component.rs` (`draw_<kind>` / `rust_hit_shape` / `rust_owns_hit`) ·
+styles + palette:
 `Alpha/content/sensorium/resources/ui_elements.json` · surface protos:
 `Alpha/content/sensorium/resources/ui_templates.json` · a live workflow bench:
 `Alpha/crates/scenes/flicker-assetpipeline/src/lib.rs` (`build_tree`) + its

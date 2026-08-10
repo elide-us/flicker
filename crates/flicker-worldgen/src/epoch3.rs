@@ -168,9 +168,11 @@ const SUBDUCT_ACCRETE: f64 = 0.15;
 /// Plate drift speed used to calibrate the iteration → time mapping (cm/year; Earth
 /// plates run ~2–10, 5 is a mid value).
 const PLATE_SPEED_CM_YR: f32 = 5.0;
-/// One hex across in cm (49.65 mi). A plate crossing one hex ≈ `HEX_CM /
-/// PLATE_SPEED` years ≈ 1.6 My — the physical anchor for the tectonic timeline.
-const HEX_CM: f32 = 49.65 * 160_934.4;
+/// One hex across in cm (≈49.65 mi) — **the span canon restated, never a second
+/// typing**: this used to be `49.65 * 160_934.4`, which differed from the real
+/// chain (2048 px × 128 ft) by 2.4 m and fed a second tick clock that agreed
+/// with the chemistry crate's only by rounding coincidence.
+const HEX_CM: f32 = (flicker_poc_chemistry::TILE_SPAN_M * 100.0) as f32;
 /// **Real time one drift iteration represents** (million years): the crust advects
 /// `ADVECT_FRAC` of a hex, and a full hex of plate motion takes `HEX_CM/PLATE_SPEED`
 /// years. So iteration N of the tectonic scrubber = `N × MY_PER_TECTONIC_STEP` My.

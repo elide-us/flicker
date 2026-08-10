@@ -66,19 +66,68 @@ pub enum TemplateDef {
 pub type TemplateRegistry = HashMap<String, TemplateDef>;
 
 /// The embedded data-template protos (`ui_templates.json`), parsed ONCE. The file
-/// rides `include_str!` exactly like the `ui/*.lua` component modules in `lib.rs`,
-/// so a client binary needs no content path to resolve the built-in templates. A
+/// rides `include_str!` rather than a runtime read, so a client binary needs no
+/// content path to resolve the built-in templates. A
 /// parse failure warns and yields an empty `templates` map (best-effort, like every
 /// loader here) — the affected templates then fail visibly as "unknown template".
 static TEMPLATE_DATA: LazyLock<serde_json::Value> = LazyLock::new(|| {
-    serde_json::from_str(include_str!(
+    let data: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../content/sensorium/resources/ui_templates.json"
     ))
     .unwrap_or_else(|e| {
         tracing::error!("ui_templates.json parse failed: {e}");
         serde_json::json!({ "templates": {} })
-    })
+    });
+    // Validate ONCE, at first touch: an authored construct that can never work
+    // must be loud (rule: a name that fails to NOTHING is the difference between
+    // authorable and not). This ran silent for a full day once — `paged_menu`
+    // shipped with both rails authored `"children": "@pages"`, and every rail
+    // rendered empty until the first adopting scene went looking.
+    if let Some(templates) = data.get("templates").and_then(serde_json::Value::as_object) {
+        for (name, proto) in templates {
+            for path in dead_param_children(proto) {
+                tracing::error!(
+                    "ui_templates.json: `{name}` authors children as a PARAM at {path} — \
+                     a param is always a scalar and this key will be REMOVED, so the \
+                     node renders empty. Use a slot: \
+                     children: [{{ \"component\": \"slot\", \"name\": … }}]"
+                );
+            }
+        }
+    }
+    data
 });
+
+/// Every place in `proto` where a `children` key is authored as a `@param`
+/// substitution — a construct that is dead BY CONSTRUCTION: params resolve
+/// through `Value` (bool / number / text, nothing else), so a param can never
+/// carry nodes and `substitute` removes the key. Children come from SLOTS.
+/// Returned as JSON paths so the error names the exact spot.
+fn dead_param_children(proto: &serde_json::Value) -> Vec<String> {
+    fn walk(v: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(s)) = map.get("children") {
+                    if s.starts_with('@') {
+                        out.push(format!("{path}/children"));
+                    }
+                }
+                for (k, c) in map {
+                    walk(c, &format!("{path}/{k}"), out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, c) in items.iter().enumerate() {
+                    walk(c, &format!("{path}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(proto, "", &mut out);
+    out
+}
 
 /// The built-in template set: every key of the embedded `ui_templates.json` as a
 /// [`TemplateDef::Data`] proto, plus the surviving Rust builders. Builders are
@@ -600,7 +649,9 @@ fn window_controls(action: &str, style: &str, label: &str) -> UiNode {
 ///
 /// Slots (all optional): `center`, `n`, `s`, `w`, `e`, `nw`, `ne`, `sw`, `se`. Props
 /// (all optional): `style` (dotted-path PREFIX, default `"settings"` →
-/// `settings.window` / `.runes`); `w` / `h` (fixed frame size in px) OR `w_frac` /
+/// `settings.window` / `.runes`); `runes` (bool, default `true` — `false` omits the
+/// corner-rune overlay, for an inner frame nested inside an already-runed page);
+/// `w` / `h` (fixed frame size in px) OR `w_frac` /
 /// `h_frac` (a responsive fraction of the parent/screen — a fixed axis wins over its
 /// `*_frac`); `edge` (default size, px, for ALL four edge tracks — default `30.0`,
 /// which is `settings.runes` `inset(14)` + `size(16)`, the corner-rune box extent, so
@@ -684,15 +735,11 @@ fn frame(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNo
     }
 
     // ── rune-inlay overlay: fills the frame; glyphs at the four corners ──
-    let mut runes = with_style(elem("rune_corners"), Some(sty("runes").as_str()));
-    runes.anchor = Some(UiAnchor::TopLeft);
-    runes = with_num(runes, "width_frac", 1.0);
-    runes = with_num(runes, "height_frac", 1.0);
-    // A closable frame's ✕ owns the top-right corner — blank the `tr` glyph so it doesn't
-    // paint beneath the button.
-    if closable {
-        runes = with_text(runes, "tr", "");
-    }
+    // Toggleable: `runes = false` omits the overlay entirely — an INNER frame (a
+    // content panel inside an already-runed page) would otherwise stack a second
+    // set of corners inside the first. Only an explicit `false` disarms them:
+    // absent keeps the default ON, because the runes are the Prism frame identity.
+    let runes_on = !matches!(p.get("runes"), Some(Value::Bool(false)));
 
     // ── frame: a styled STACK overlaying the border grid + the rune inlays ──
     // The stack itself carries `settings.window` and draws through `draw_panel_bg`
@@ -715,7 +762,19 @@ fn frame(_ctx: &BuildCtx, p: &HashMap<String, Value>, slots: &mut Slots) -> UiNo
             frame = with_num(frame, "height_frac", hf);
         }
     }
-    frame.children = vec![grid, runes];
+    frame.children = vec![grid];
+    if runes_on {
+        let mut runes = with_style(elem("rune_corners"), Some(sty("runes").as_str()));
+        runes.anchor = Some(UiAnchor::TopLeft);
+        runes = with_num(runes, "width_frac", 1.0);
+        runes = with_num(runes, "height_frac", 1.0);
+        // A closable frame's ✕ owns the top-right corner — blank the `tr` glyph
+        // so it doesn't paint beneath the button.
+        if closable {
+            runes = with_text(runes, "tr", "");
+        }
+        frame.children.push(runes);
+    }
     frame
 }
 
@@ -1094,6 +1153,16 @@ mod tests {
         n
     }
 
+    /// Every node of an expanded tree, depth-first — so a gate can assert over the
+    /// WHOLE surface rather than the handful of children it happens to index.
+    fn flatten(n: &UiNode) -> Vec<&UiNode> {
+        let mut out = vec![n];
+        for c in &n.children {
+            out.extend(flatten(c));
+        }
+        out
+    }
+
     /// A template node: `template` set, `slots` filled.
     fn template_node(name: &str, slots: Vec<(&str, Vec<UiNode>)>) -> UiNode {
         let mut n = elem("template"); // component is ignored when `template` is set
@@ -1103,6 +1172,16 @@ mod tests {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
+        n
+    }
+
+    /// A slot-less instance carrying text props — for asserting what a proto does
+    /// with a param it is HANDED (a param it does not declare must not appear).
+    fn template_node_with_props(name: &str, props: &[(&str, &str)]) -> UiNode {
+        let mut n = template_node(name, vec![]);
+        for (k, v) in props {
+            n.props.insert((*k).to_string(), Value::Text((*v).to_string()));
+        }
         n
     }
 
@@ -1127,6 +1206,738 @@ mod tests {
         );
     }
 
+    /// The controller-first `paged_menu`: both shoulder rails present with their
+    /// glyph-faced BUTTON hints, the page rail marked by an UNDERLINE rather
+    /// than a pill, and every drawn string a stringtable token. The gates that
+    /// matter for a proto meant to be adopted by other scenes: nothing
+    /// unexpanded survives, no kind is unknown, and no raw English leaks in.
+    ///
+    /// The page content is a **`frame`**, because that is the shape this proto
+    /// exists to host: `paged_menu` is the page/tab CONTROL and the docking
+    /// container is `frame`, so a page is one docked frame in the `content`
+    /// slot. Splicing a bare leaf would pass while telling us nothing — nesting
+    /// the real container is what proves a page can dock.
+    /// **No proto may author `children` as a param — across the whole file.**
+    /// A param resolves through `Value` (scalar-only), so `"children": "@x"` is
+    /// dead by construction: the key is removed and the node renders empty. This
+    /// shipped once — `paged_menu`'s BOTH rails — and passed its gate, because
+    /// the gate never counted the entries. This test is the file-wide channel
+    /// cover: a new proto making the same mistake fails here, by name and path,
+    /// before any scene adopts it.
+    #[test]
+    fn no_proto_authors_children_as_a_param() {
+        let templates = TEMPLATE_DATA
+            .get("templates")
+            .and_then(serde_json::Value::as_object)
+            .expect("ui_templates.json parses with a templates map");
+        assert!(!templates.is_empty(), "the embedded template file is not empty");
+        let dead: Vec<String> = templates
+            .iter()
+            .flat_map(|(name, proto)| {
+                dead_param_children(proto).into_iter().map(move |p| format!("{name}{p}"))
+            })
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "children authored as a param can never carry nodes — use a slot: {dead:?}"
+        );
+    }
+
+    /// **THE DIAL IS A NODE CONTRACT, and it lives in the template tier.** An
+    /// instance of `pop_size_dial` passes only its identity, its range and where
+    /// it sits in the focus order; everything that decides how the control
+    /// BEHAVES is authored in the proto. That split is the whole reason a bench
+    /// can own a size dial without owning a slider, so it is asserted here —
+    /// beside the proto — rather than inside the one bench that happens to
+    /// instance it today (its previous home was `flicker-populous`'s scene test).
+    ///
+    /// The two step sizes are the load-bearing pair: they are the PAD's channel
+    /// (d-pad steps `step`, the held chord steps `step_coarse`), and a bench that
+    /// had to pass them would be a bench deciding what a controller feels like.
+    #[test]
+    fn the_size_dial_proto_carries_the_whole_control_contract() {
+        let reg = builtin_templates();
+        let mut inst = template_node("pop_size_dial", vec![]);
+        for (k, v) in [("id", "c_size"), ("bind", "pop_freq"), ("label", "$pop_size_label"),
+                       ("tab_group", "pop_left")] {
+            inst.props.insert(k.to_string(), Value::Text(v.to_string()));
+        }
+        inst.props.insert("min".to_string(), Value::Number(8.0));
+        inst.props.insert("max".to_string(), Value::Number(64.0));
+        let out = expand(inst, &reg);
+
+        assert_eq!(out.component, "slider", "the dial IS the shared slider component");
+        assert_eq!(out.id, "c_size");
+        let text = |k: &str| match out.props.get(k) {
+            Some(Value::Text(t)) => t.clone(),
+            other => panic!("{k} is not text: {other:?}"),
+        };
+        let num = |k: &str| match out.props.get(k) {
+            Some(Value::Number(n)) => *n,
+            other => panic!("{k} is not a number: {other:?}"),
+        };
+        // What the INSTANCE names: one Model key, one range, one focus group.
+        assert_eq!(out.bind.as_deref(), Some("pop_freq"), "the roster names the Model key once");
+        assert_eq!((num("min"), num("max")), (8.0, 64.0));
+        assert_eq!(out.tab_group, "pop_left");
+        // What the PROTO owns: the pad's two step sizes, the upright geometry,
+        // the readout precision, the template-tier skin, and the order that puts
+        // the control after the panel it sits in.
+        assert_eq!(num("step"), 1.0, "the d-pad's fine step is authored, not passed");
+        assert_eq!(num("step_coarse"), 10.0, "and the held chord's coarse step with it");
+        assert_eq!(out.props.get("vertical"), Some(&Value::Bool(true)), "an upright dial");
+        assert_eq!(num("decimals"), 0.0, "a grid frequency is a whole number");
+        assert_eq!(text("style"), "slider", "the template-tier skin — never a bench namespace");
+        assert_eq!(out.nav_ordinal, 1, "the control follows its panel in the group");
+        assert_eq!(out.grow, Some(1.0), "it claims the pane's free height");
+        // …and nothing about FOCUS or state arrives from outside: no rim, no
+        // focused flag, no style override the walker would have to respect.
+        assert!(
+            !out.props.keys().any(|k| k == "focused" || k == "style_bind"),
+            "the component owns its own appearance: {:?}",
+            out.props.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// **NO SCENE READS A DEVICE OR NAMES A PANE STYLE.** A source-level sweep of
+    /// every scene crate — the channel three separate defects travelled, closed
+    /// in one gate so none of them can grow back quietly:
+    ///
+    /// * `input.gamepad(` / `.gamepad(0)` — a scene reaching past the input map
+    ///   for a stick. The camera reads BOUND SIGNALS (`signal_axis`); a raw read
+    ///   re-applies the deadzone a second time, which is a bug you can only find
+    ///   by measuring. `flicker-controllertester` is exempt and only it: that
+    ///   bench IS the device visualizer, so reading the device is its subject.
+    /// * `tri_pane.` — the retired per-bench pane palette. There is ONE pane
+    ///   palette now (`panel.resting` / `panel.focused`) and the PANEL draws
+    ///   itself from the focus the walker holds; a scene naming a pane skin is a
+    ///   scene deciding what focus looks like.
+    /// * a walker-owned `on_*` declaration — Confirm, Cancel, `Nav*`, `Panel*`
+    ///   and `ChordBegin` mean one thing on every screen. The proto channel is
+    ///   covered by `no_proto_declares_a_walker_owned_signal`; this is the other
+    ///   channel, a scene's own props. **Three benches have not migrated yet**
+    ///   and are named below as a closed list — the gate fails both when a NEW
+    ///   scene falls in and when one of the three climbs out without updating
+    ///   the list, so the backlog cannot rot in either direction (rule 98232A50).
+    /// * a private globe: `fn build_shell` / `struct OrbitCam` in a scene. There
+    ///   is ONE globe in Prism (`flicker-globe`) and it was three copies twice.
+    #[test]
+    fn no_scene_reads_a_device_or_names_a_pane_style() {
+        use flicker_input_core::ActionSignal;
+        use std::path::{Path, PathBuf};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
+        let root = root.canonicalize().expect("Alpha/crates/scenes resolves");
+
+        fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("scene dir reads").flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    rust_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        files.sort();
+        assert!(files.len() > 20, "the sweep found the scene crates: {}", files.len());
+        let crate_of = |p: &Path| -> String {
+            p.strip_prefix(&root)
+                .ok()
+                .and_then(|r| r.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        };
+
+        // The walker's OWN answer to "whose signal is this", folded into the two
+        // shapes a DECLARATION takes in Rust — the `(prop, result)` pair a bench
+        // folds into its root, and a direct `props.insert`. Never a second list
+        // here that could drift from what the layer actually consumes; and
+        // naming the SHAPE rather than the bare string is what lets a migrated
+        // bench's own absence gate mention the signal it is disowning.
+        let owned: Vec<String> = ActionSignal::ALL
+            .iter()
+            .copied()
+            .filter(|s| crate::walker_owned(*s))
+            .flat_map(|s| {
+                let mut key = String::from("on");
+                for c in s.name().chars() {
+                    if c.is_uppercase() {
+                        key.push('_');
+                    }
+                    key.extend(c.to_lowercase());
+                }
+                [format!("(\"{key}\", \""), format!("insert(\"{key}\"")]
+            })
+            .collect();
+        assert!(
+            owned.iter().any(|k| k == "(\"on_confirm\", \"")
+                && owned.iter().any(|k| k == "insert(\"on_panel_next\""),
+            "the fold produced the declaration shapes a scene writes: {owned:?}"
+        );
+
+        // A scene camera that is NOT the globe's: Solar Birth's `OrbitCam` is a
+        // cinematic POSE HOLDER — the `.flight` player drives it and hands over to
+        // the pointer mid-shot — and it frames a solar system, not a planet at
+        // `flicker_globe::RADIUS`. Folding it in is a real change to the shared
+        // camera's contract, so it is named here rather than waved through.
+        const CAMERAS_NOT_THE_GLOBES: [&str; 1] = ["flicker-solarbirth"];
+
+        // The scenes that still declare a walker-owned signal, each with what
+        // blocks it. Migrating one is a REAL bench change, not a prop edit.
+        const NOT_YET_MIGRATED: [&str; 3] = [
+            // its whole interaction model rides nav/confirm/cancel, and its
+            // context menu is one component whose rows are not focusable
+            "flicker-quartermaster",
+            // its tree carries no `tab_group` at all, so `walker.cancelled()`
+            // would never fire — templates need focus groups first
+            "flicker-godmode",
+            // never calls `with_nav`, so dropping `on_confirm` leaves pad-A dead
+            "flicker-assetpipeline",
+        ];
+
+        let (mut devices, mut panes, mut globes) = (Vec::new(), Vec::new(), Vec::new());
+        let mut declarers: Vec<String> = Vec::new();
+        for f in &files {
+            let krate = crate_of(f);
+            let src = std::fs::read_to_string(f).expect("scene source reads");
+            for (n, line) in src.lines().enumerate() {
+                let at = format!("{}:{}", f.strip_prefix(&root).unwrap().display(), n + 1);
+                if krate != "flicker-controllertester"
+                    && (line.contains("input.gamepad(") || line.contains(".gamepad(0)"))
+                {
+                    devices.push(at.clone());
+                }
+                if line.contains("tri_pane.") {
+                    panes.push(at.clone());
+                }
+                if line.contains("fn build_shell")
+                    || (line.contains("struct OrbitCam")
+                        && !CAMERAS_NOT_THE_GLOBES.contains(&krate.as_str()))
+                {
+                    globes.push(at.clone());
+                }
+                if owned.iter().any(|o| line.contains(o.as_str())) && !declarers.contains(&krate)
+                {
+                    declarers.push(krate.clone());
+                }
+            }
+        }
+        assert!(devices.is_empty(), "a scene reached past the input map for a device: {devices:?}");
+        assert!(panes.is_empty(), "a scene named the retired pane palette: {panes:?}");
+        assert!(globes.is_empty(), "a scene grew its own globe again: {globes:?}");
+        declarers.sort();
+        let mut expected: Vec<String> = NOT_YET_MIGRATED.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            declarers, expected,
+            "the walker-owned backlog moved. A NEW name means a scene stole a walker signal; a \
+             MISSING name means a bench migrated and this list must shrink with it"
+        );
+    }
+
+    /// **No proto declares a WALKER-OWNED signal — anywhere, at any depth.** The
+    /// template file is one of the two channels a screen declaration travels
+    /// (the other is a scene's own `on_*` props), so the gate covers the CHANNEL
+    /// rather than one bench: a proto offering `on_confirm` as a param is a hole
+    /// any page can fall into, and the walker consumes a declared intent and
+    /// returns BEFORE the activation path — so falling in kills every button on
+    /// that page, statically (violation F1, 2026-08-09). Confirm, Cancel, `Nav*`,
+    /// `Panel*` and `ChordBegin` mean one thing on every screen in Prism.
+    #[test]
+    fn no_proto_declares_a_walker_owned_signal() {
+        use flicker_input_core::ActionSignal;
+
+        // The vocabulary, derived from the WALKER's own answer — never a second
+        // list here that could drift away from what the layer actually consumes.
+        let owned: Vec<String> = ActionSignal::ALL
+            .iter()
+            .copied()
+            .filter(|s| crate::walker_owned(*s))
+            .map(|s| {
+                let mut out = String::from("on");
+                for c in s.name().chars() {
+                    if c.is_uppercase() {
+                        out.push('_');
+                    }
+                    out.extend(c.to_lowercase());
+                }
+                out
+            })
+            .collect();
+        assert!(
+            owned.iter().any(|k| k == "on_confirm") && owned.iter().any(|k| k == "on_panel_next"),
+            "the fold produced the prop spelling the intents layer reads: {owned:?}"
+        );
+
+        fn walk(v: &serde_json::Value, owned: &[String], path: &str, out: &mut Vec<String>) {
+            match v {
+                serde_json::Value::Object(map) => {
+                    for (k, child) in map {
+                        if owned.iter().any(|o| o == k) {
+                            out.push(format!("{path}.{k}"));
+                        }
+                        walk(child, owned, &format!("{path}.{k}"), out);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for (i, child) in items.iter().enumerate() {
+                        walk(child, owned, &format!("{path}[{i}]"), out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let templates = TEMPLATE_DATA
+            .get("templates")
+            .and_then(serde_json::Value::as_object)
+            .expect("ui_templates.json parses with a templates map");
+        let mut found = Vec::new();
+        for (name, proto) in templates {
+            walk(proto, &owned, name, &mut found);
+        }
+        assert!(
+            found.is_empty(),
+            "these protos name a signal the WALKER owns — remove the key, the walker \
+             already answers it: {found:?}"
+        );
+    }
+
+    #[test]
+    fn paged_menu_docks_a_frame_page_between_both_shoulder_rails() {
+        let reg = builtin_templates();
+        let page = template_node(
+            "frame",
+            vec![
+                ("n", vec![leaf("slider")]),
+                ("w", vec![leaf("list")]),
+                ("center", vec![leaf("rtt")]),
+                ("e", vec![leaf("list")]),
+                ("s", vec![leaf("button")]),
+            ],
+        );
+        let inst = template_node(
+            "paged_menu",
+            vec![
+                ("pages", vec![leaf("option"), leaf("option"), leaf("option")]),
+                ("tabs", vec![leaf("option"), leaf("option")]),
+                ("content", vec![page]),
+            ],
+        );
+        let out = expand(inst, &reg);
+
+        let all = flatten(&out);
+        // The rail hints are ordinary BUTTONS wearing atlas glyphs (Aaron
+        // 2026-08-08: a nav hint "IS a BUTTON … it just has a different
+        // graphic" — no separate nav-hint kind). LT + RT on the page rail, LB +
+        // RB on the tab rail — and NOTHING else: the proto is the page/tab
+        // control only (no header row, no footer legend), so a fifth glyph here
+        // is chrome creeping back in.
+        let hints: Vec<&&UiNode> =
+            all.iter().filter(|n| n.props.contains_key("glyph")).collect();
+        assert_eq!(hints.len(), 4, "the two rails' hints, and nothing else");
+        assert!(
+            hints.iter().all(|n| n.component == "button"),
+            "a rail hint is a plain `button` — never a bespoke nav kind"
+        );
+        // Every glyph face reads the ONE atlas description; none carries its own
+        // copy — and each hint's `action` IS the rail's result name, so a click,
+        // a pad Confirm and the shoulder signal converge on the same dispatch
+        // and light the same activate flash.
+        for (glyph, action) in
+            [("lt", "page_prev"), ("rt", "page_next"), ("lb", "tab_prev"), ("rb", "tab_next")]
+        {
+            let hint = all
+                .iter()
+                .find(|n| n.props.get("glyph") == Some(&Value::Text(glyph.to_string())))
+                .unwrap_or_else(|| panic!("the {glyph} hint is placed"));
+            assert_eq!(hint.action.as_deref(), Some(action), "the {glyph} hint fires `{action}`");
+            assert_eq!(
+                hint.props.get("glyph_style"),
+                Some(&Value::Text("pad_glyphs".to_string())),
+                "the {glyph} face resolves the shared `pad_glyphs` atlas block"
+            );
+        }
+
+        // The page rail is a `tabs` strip styled to underline; the tab rail is the pill
+        // group. Two rails, two readings, one selection idiom.
+        let page = all
+            .iter()
+            .find(|n| n.id == "paged_pages")
+            .expect("the page rail is placed");
+        assert_eq!(page.component, "tabs");
+        assert_eq!(
+            page.props.get("tab_active"),
+            Some(&Value::Text("paged_menu.page_active".to_string())),
+        );
+        let tabs = all
+            .iter()
+            .find(|n| n.id == "paged_tabs")
+            .expect("the tab rail is placed");
+        assert_eq!(tabs.component, "pill_toggle");
+
+        // **Both rails carry the entries the instance gave them.** Asserting only
+        // that the strips EXIST is what let both rails ship empty: they were
+        // authored as `"children": "@pages"`, and a param can only ever hold a
+        // scalar, so the substitution removed the key and every page/tab rail
+        // rendered blank. Counting is the difference between a gate and a
+        // rubber stamp — a rail is its entries.
+        assert_eq!(page.children.len(), 3, "the page rail carries its three pages");
+        assert_eq!(tabs.children.len(), 2, "the tab rail carries its two tabs");
+
+        // The page docked, and every one of the frame's five filled regions
+        // arrived — header band, both side panels, the viewport and the footer.
+        // A `content` slot that swallowed its instance would still pass the rail
+        // assertions above, so this is the one that catches it.
+        assert!(
+            all.iter().any(|n| n.component == "rtt"),
+            "the page's centre region reached the tree"
+        );
+        assert_eq!(
+            all.iter().filter(|n| n.component == "list").count(),
+            2,
+            "both side panels dock (w and e)"
+        );
+        assert!(
+            all.iter().any(|n| n.component == "slider")
+                && all.iter().any(|n| n.component == "button"),
+            "the page's header and footer bands dock (n and s)"
+        );
+        assert!(
+            !all.iter().any(|n| n.template.is_some()),
+            "nothing unexpanded survives the one seam"
+        );
+        assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+        assert!(
+            crate::raw_display_literals(&out).is_empty(),
+            "{:?}",
+            crate::raw_display_literals(&out)
+        );
+    }
+
+    /// The PTT's two rails are each switchable OFF, and both default ON so nothing
+    /// changes for a caller that passes neither flag (Aaron 2026-08-10: settings wants
+    /// tabs-only, the main menu wants pages-only, benches want both). The glyph count
+    /// is the read: 4 hints = both rails, 2 = one, 0 = neither — a rail present but
+    /// empty would still show its two shoulder hints, so counting them proves the whole
+    /// rail collapsed rather than merely lost its entries.
+    #[test]
+    fn paged_menu_rails_toggle_off_independently_and_default_on() {
+        let reg = builtin_templates();
+        let glyphs = |hide: &[(&str, bool)]| -> Vec<String> {
+            let mut inst = template_node(
+                "paged_menu",
+                vec![
+                    ("pages", vec![leaf("option"), leaf("option")]),
+                    ("tabs", vec![leaf("option"), leaf("option")]),
+                    ("content", vec![leaf("button")]),
+                ],
+            );
+            for (k, v) in hide {
+                inst.props.insert((*k).to_string(), Value::Bool(*v));
+            }
+            let out = expand(inst, &reg);
+            let mut gs: Vec<String> = flatten(&out)
+                .iter()
+                .filter_map(|n| n.props.get("glyph"))
+                .filter_map(|v| match v {
+                    Value::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect();
+            gs.sort();
+            gs
+        };
+
+        assert_eq!(glyphs(&[]), ["lb", "lt", "rb", "rt"], "default: both rails present");
+        assert_eq!(glyphs(&[("hide_tabs", true)]), ["lt", "rt"], "tabs off → page rail only");
+        assert_eq!(glyphs(&[("hide_pages", true)]), ["lb", "rb"], "pages off → tab rail only");
+        assert_eq!(
+            glyphs(&[("hide_pages", true), ("hide_tabs", true)]),
+            [] as [String; 0],
+            "both off → neither rail, but the content region still expands"
+        );
+        // Passing the flags as `false` is the same as not passing them — the negated
+        // `when` keeps the rail. A caller must not have to know the polarity to get the
+        // default.
+        assert_eq!(
+            glyphs(&[("hide_pages", false), ("hide_tabs", false)]),
+            ["lb", "lt", "rb", "rt"],
+            "explicit false is the default too"
+        );
+    }
+
+    /// **The default page** — the shape every new page starts as (Aaron
+    /// 2026-08-08): ONE full-screen `frame` and the pause-menu declaration,
+    /// nothing else. The proto root IS the screen node and carries
+    /// `on_menu = "pause_open"` as data, so a scene that instances it handles
+    /// the menu signal from its first frame; an unfilled instance is an EMPTY
+    /// frame — chrome only, no content, no controls. `content` docks into the
+    /// frame's centre cell, the one growth path.
+    #[test]
+    fn default_page_is_a_menued_empty_frame_until_content_docks() {
+        let reg = builtin_templates();
+
+        // Bare instance: the empty frame, already declaring its menu intent.
+        let out = expand(template_node("default_page", vec![]), &reg);
+        assert_eq!(out.component, "screen", "the proto root is the screen node");
+        assert_eq!(
+            out.props.get("on_menu"),
+            Some(&Value::Text("pause_open".to_string())),
+            "the menu declaration ships IN the template, never per scene"
+        );
+        // The RAIL intents are OPTIONAL params: absent they VANISH, so a bare
+        // page declares exactly the menu and nothing else (declare only what you
+        // dispatch — a page with no rails must not bind their signals).
+        for k in ["on_page_next", "on_page_prev", "on_tab_next", "on_tab_prev"] {
+            assert!(!out.props.contains_key(k), "`{k}` must vanish on a bare page");
+        }
+        // …and the WALKER-OWNED signals are not params at all, at any value: the
+        // proto cannot offer a hole a page could fall into (violation F1).
+        let filled = expand(
+            template_node_with_props(
+                "default_page",
+                &[
+                    ("on_confirm", "nope"),
+                    ("on_cancel", "nope"),
+                    ("on_panel_next", "nope"),
+                    ("on_panel_prev", "nope"),
+                    ("on_nav_up", "nope"),
+                    ("on_nav_down", "nope"),
+                    ("on_nav_left", "nope"),
+                    ("on_nav_right", "nope"),
+                ],
+            ),
+            &reg,
+        );
+        for k in [
+            "on_confirm",
+            "on_cancel",
+            "on_panel_next",
+            "on_panel_prev",
+            "on_nav_up",
+            "on_nav_down",
+            "on_nav_left",
+            "on_nav_right",
+        ] {
+            assert!(
+                !filled.props.contains_key(k),
+                "`{k}` is the walker's — the proto must not carry it even when asked"
+            );
+        }
+        let all = flatten(&out);
+        assert!(
+            all.iter().any(|n| n.component == "rune_corners"),
+            "the frame chrome is real — backdrop and corner runes draw"
+        );
+        let grid = all
+            .iter()
+            .find(|n| n.component == "grid")
+            .expect("the frame's border grid is placed");
+        assert!(grid.children.is_empty(), "an unfilled default page is an EMPTY frame");
+        assert!(!all.iter().any(|n| n.template.is_some()), "nothing unexpanded survives");
+        assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+        assert!(
+            crate::raw_display_literals(&out).is_empty(),
+            "{:?}",
+            crate::raw_display_literals(&out)
+        );
+
+        // Content docks into the frame's CENTRE cell, and a page WITH rails
+        // passes its rail intents through to the root — the same declaration
+        // channel the menu rides, just opt-in.
+        let mut inst = template_node("default_page", vec![("content", vec![leaf("rtt")])]);
+        inst.props.insert("on_page_next".to_string(), Value::Text("page_next".to_string()));
+        let filled = expand(inst, &reg);
+        assert_eq!(
+            filled.props.get("on_page_next"),
+            Some(&Value::Text("page_next".to_string())),
+            "a supplied rail intent lands on the screen root"
+        );
+        let all = flatten(&filled);
+        let content = all.iter().find(|n| n.component == "rtt").expect("the content slot splices");
+        assert_eq!(content.props.get("col"), Some(&Value::Number(1.0)), "the centre column");
+        assert_eq!(content.props.get("row"), Some(&Value::Number(1.0)), "the centre row");
+    }
+
+    /// **The frame's corner runes are toggleable.** Default ON (the Prism frame
+    /// identity); an explicit `runes = false` omits the overlay — the inner-frame
+    /// case, where a content panel inside an already-runed page would otherwise
+    /// stack a second set of corners.
+    #[test]
+    fn frame_runes_default_on_and_toggle_off() {
+        let reg = builtin_templates();
+        let on = expand(template_node("frame", vec![]), &reg);
+        assert!(
+            flatten(&on).iter().any(|n| n.component == "rune_corners"),
+            "an unconfigured frame keeps its runes"
+        );
+        let mut inst = template_node("frame", vec![]);
+        inst.props.insert("runes".to_string(), Value::Bool(false));
+        let off = expand(inst, &reg);
+        assert!(
+            !flatten(&off).iter().any(|n| n.component == "rune_corners"),
+            "`runes = false` omits the overlay entirely"
+        );
+    }
+
+    /// **ONE template for 1, 2, 3 and N panes** (Aaron's spec). `multi_view`'s
+    /// single `panes` slot splices its nodes as N SIBLINGS, so the count lives
+    /// nowhere: instance it with one pane, two, three or four and the row simply
+    /// has that many children. And NO pane kind is privileged — the view holds
+    /// `ui_panel`s and `rtt_panel`s alike and never learns which is which — the
+    /// property the retired fixed-arrangement protos could not have, each having
+    /// hardwired its own centre `rtt`.
+    #[test]
+    fn multi_view_serves_one_two_three_and_four_panes() {
+        let reg = builtin_templates();
+
+        let pane = |id: &str, group: &str| {
+            let mut n = template_node("ui_panel", vec![]);
+            n.props.insert("id".to_string(), Value::Text(id.to_string()));
+            n.props.insert("tab_group".to_string(), Value::Text(group.to_string()));
+            n
+        };
+        for count in 1..=4usize {
+            let panes: Vec<UiNode> =
+                (0..count).map(|i| pane(&format!("p{i}"), &format!("g{i}"))).collect();
+            let out = expand(template_node("multi_view", vec![("panes", panes)]), &reg);
+            assert_eq!(out.component, "row", "a multi-view is one row of panes");
+            assert_eq!(out.children.len(), count, "{count} panes splice as {count} siblings");
+            assert!(
+                out.children.iter().all(|c| c.component == "panel"),
+                "every pane is the ONE panel component"
+            );
+            for (i, c) in out.children.iter().enumerate() {
+                assert_eq!(c.id, format!("p{i}"));
+                assert_eq!(c.tab_group, format!("g{i}"), "each pane is its own focus group");
+            }
+            assert!(!flatten(&out).iter().any(|n| n.template.is_some()));
+            assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+        }
+
+        // No pane kind is privileged: an RTT pane and a UI pane are siblings in
+        // the same slot, in whatever order the caller wrote them.
+        let mut view = template_node("rtt_panel", vec![]);
+        view.props.insert("id".to_string(), Value::Text("mid".to_string()));
+        view.props.insert("tab_group".to_string(), Value::Text("g_mid".to_string()));
+        view.props.insert("source".to_string(), Value::Text("populous_globe".to_string()));
+        let out = expand(
+            template_node("multi_view", vec![("panes", vec![pane("l", "g_l"), view, pane("r", "g_r")])]),
+            &reg,
+        );
+        let ids: Vec<&str> = out.children.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["l", "mid", "r"], "authoring order, no privileged slot");
+        assert!(out.children.iter().all(|c| c.component == "panel"));
+
+        // An UNFILLED view is an honest well: the localized placeholder, never a void.
+        let bare = expand(template_node("multi_view", vec![]), &reg);
+        assert_eq!(bare.children.len(), 1);
+        assert_eq!(
+            bare.children[0].props.get("text"),
+            Some(&Value::Text("$ui_pane_empty".to_string()))
+        );
+        assert!(crate::raw_display_literals(&bare).is_empty());
+    }
+
+    /// **A proto-authored `nav_ordinal` REACHES the field.** The whole channel,
+    /// end to end: a proto's `@nav_ordinal=<n>` default, a caller-passed
+    /// ordinal, and a plain authored literal must all arrive as that ordinal on
+    /// the expanded node — because `nav_ordinal` is what orders the d-pad inside
+    /// a focus group, and a wrong one is invisible.
+    ///
+    /// It was wrong everywhere until 2026-08-09. The substituter builds every
+    /// numeric prop with `Number::from_f64`, and the JSON node parser read this
+    /// one field with `as_u64`, which rejects a float — so every templated
+    /// ordinal silently became 0 and every proto-authored control sat at its
+    /// group's entry point. Nothing caught it: 0 is also the default, so the
+    /// failure looked exactly like success. The gate lives HERE, on the template
+    /// tier, because that is the channel the drift travelled (rule 8634C200) —
+    /// the parse seam has its own float gate in flicker-script.
+    #[test]
+    fn a_proto_authored_nav_ordinal_reaches_the_field() {
+        let reg = builtin_templates();
+
+        // (1) THE DEFAULT: `pop_size_dial` authors `@nav_ordinal=1` so the dial
+        // follows its panel in the group; the caller passes no ordinal at all.
+        let mut dial = template_node("pop_size_dial", vec![]);
+        for (k, v) in [("id", "d"), ("bind", "d"), ("label", "$pop_size"), ("tab_group", "g")] {
+            dial.props.insert(k.to_string(), Value::Text(v.to_string()));
+        }
+        let out = expand(dial, &reg);
+        assert_eq!(out.component, "slider");
+        assert_eq!(out.nav_ordinal, 1, "the proto's own default reaches the field");
+        assert_eq!(out.tab_group, "g");
+
+        // (2) THE PASSED VALUE, which arrives as a float-shaped number — the
+        // shape that used to be dropped.
+        let mut pane = template_node("ui_panel", vec![]);
+        pane.props.insert("id".to_string(), Value::Text("p".to_string()));
+        pane.props.insert("tab_group".to_string(), Value::Text("g".to_string()));
+        pane.props.insert("nav_ordinal".to_string(), Value::Number(4.0));
+        assert_eq!(expand(pane, &reg).nav_ordinal, 4, "a passed ordinal reaches the field");
+
+        // (3) …and the pane's own default is still the group's entry point, so
+        // cycling into a group lands ON the pane before its controls.
+        let mut bare = template_node("ui_panel", vec![]);
+        bare.props.insert("id".to_string(), Value::Text("p".to_string()));
+        bare.props.insert("tab_group".to_string(), Value::Text("g".to_string()));
+        assert_eq!(expand(bare, &reg).nav_ordinal, 0);
+    }
+
+    /// **Both pane kinds share ONE focus contract.** `ui_panel` and `rtt_panel`
+    /// expand to the SAME `panel` node carrying `id` + `tab_group` +
+    /// `nav_ordinal` — so the walker's panel cursor and the rim it draws work
+    /// identically over a control pane and a viewport pane, and neither takes a
+    /// style or a focus flag from its caller. The viewport's rect is still
+    /// reserved under `<id>_rtt`.
+    #[test]
+    fn an_rtt_panel_and_a_ui_panel_share_the_same_focus_contract() {
+        let reg = builtin_templates();
+        let inst = |name: &str| {
+            let mut n = template_node(name, vec![]);
+            n.props.insert("id".to_string(), Value::Text("pane".to_string()));
+            n.props.insert("tab_group".to_string(), Value::Text("grp".to_string()));
+            n.props.insert("nav_ordinal".to_string(), Value::Number(0.0));
+            n.props.insert("source".to_string(), Value::Text("populous_globe".to_string()));
+            expand(n, &reg)
+        };
+        for name in ["ui_panel", "rtt_panel"] {
+            let out = inst(name);
+            assert_eq!(out.component, "panel", "{name} IS a panel");
+            assert_eq!(out.id, "pane");
+            assert_eq!(out.tab_group, "grp", "{name} is a focus GROUP for the panel cursor");
+            assert_eq!(out.nav_ordinal, 0, "the pane sits at the group's lowest ordinal");
+            assert_eq!(
+                out.props.get("style"),
+                Some(&Value::Text("panel".to_string())),
+                "{name} wears the ONE panel block — the component picks resting/focused"
+            );
+            assert!(
+                !out.props.contains_key("focused"),
+                "{name} takes no focus flag: the walker owns focus, the panel draws it"
+            );
+            assert!(crate::unknown_kinds(&out).is_empty(), "{:?}", crate::unknown_kinds(&out));
+        }
+        // The viewport's rect is reserved under `<id>_rtt`.
+        let rtt = inst("rtt_panel");
+        let view = flatten(&rtt).into_iter().find(|n| n.component == "rtt").expect("the viewport");
+        assert_eq!(view.id, "pane_rtt", "UiFrame::rtt_rect(\"<id>_rtt\")");
+        assert_eq!(view.props.get("source"), Some(&Value::Text("populous_globe".to_string())));
+
+        // An empty ui_panel is the localized placeholder; a filled one replaces it.
+        let empty = inst("ui_panel");
+        assert!(flatten(&empty).iter().any(|n| n.props.get("text")
+            == Some(&Value::Text("$ui_pane_empty".to_string()))));
+        let mut filled = template_node("ui_panel", vec![("content", vec![leaf("slider")])]);
+        filled.props.insert("id".to_string(), Value::Text("pane".to_string()));
+        let filled = expand(filled, &reg);
+        assert!(flatten(&filled).iter().any(|n| n.component == "slider"));
+        assert!(!flatten(&filled).iter().any(|n| n.props.get("text")
+            == Some(&Value::Text("$ui_pane_empty".to_string()))));
+    }
+
     #[test]
     fn game_hud_expands_five_anchored_regions_with_typed_offsets() {
         let reg = builtin_templates();
@@ -1141,7 +1952,7 @@ mod tests {
         );
         assert!(out.children[2].children.iter().any(|c| c.component == "action_slot"));
         // Absent intent params vanish rather than surviving as "@on_menu" literals.
-        assert!(out.props.get("on_menu").is_none());
+        assert!(!out.props.contains_key("on_menu"));
     }
 
     #[test]
@@ -1969,122 +2780,4 @@ mod tests {
         assert!(buttons.children.iter().all(|b| b.component == "button"));
     }
 
-    #[test]
-    fn side_by_side_rtt_emits_two_styled_stages_in_a_row() {
-        let reg = builtin_templates();
-        // A template node with the two sources, a gap, and a left-only live bind.
-        let mut node = template_node("side_by_side_rtt", vec![]);
-        node.id = "cmp".to_string();
-        node.props
-            .insert("left_source".to_string(), Value::Text("inplace".to_string()));
-        node.props
-            .insert("right_source".to_string(), Value::Text("rootmotion".to_string()));
-        node.props.insert("gap".to_string(), Value::Number(12.0));
-        node.props
-            .insert("left_live_bind".to_string(), Value::Text("left_live".to_string()));
-        let out = expand(node, &reg);
-
-        // Root: a growing row carrying exactly the two panels, gap from the prop.
-        assert_eq!(out.component, "row");
-        assert_eq!(out.grow, Some(1.0));
-        assert_eq!(out.gap, 12.0);
-        assert_eq!(out.children.len(), 2);
-
-        let (left, right) = (&out.children[0], &out.children[1]);
-        // Both are styled `rtt`s, each grown to share the row, ids from the prefix.
-        assert_eq!(left.component, "rtt");
-        assert_eq!(right.component, "rtt");
-        assert_eq!(left.grow, Some(1.0));
-        assert_eq!(right.grow, Some(1.0));
-        assert_eq!(left.id, "cmp_left");
-        assert_eq!(right.id, "cmp_right");
-        // Each side's `source` routed to the matching stage.
-        assert_eq!(p_text(&left.props, "source"), Some("inplace"));
-        assert_eq!(p_text(&right.props, "source"), Some("rootmotion"));
-        // Default framed-holder style on both (no `style` prop supplied).
-        assert_eq!(p_text(&left.props, "style"), Some("rtt_holder"));
-        assert_eq!(p_text(&right.props, "style"), Some("rtt_holder"));
-        // Optional per-side `live_bind`: present on the left, absent on the right.
-        assert_eq!(p_text(&left.props, "live_bind"), Some("left_live"));
-        assert!(!right.props.contains_key("live_bind"));
-    }
-
-    /// Read a `Text` prop off a built node (the tests-module twin of the walker's
-    /// private `ptext`, which is not visible here).
-    fn text_prop<'a>(n: &'a UiNode, key: &str) -> Option<&'a str> {
-        match n.props.get(key) {
-            Some(Value::Text(t)) => Some(t.as_str()),
-            _ => None,
-        }
-    }
-
-    /// A `quad_rtt_view` with only a `source` expands to ONE styled `rtt` node
-    /// that grows to fill its slot, defaults to the shared `rtt_holder`
-    /// frame, defaults its slot id to the node's own id, and forwards `source` +
-    /// the `live_bind` / `tint` pass-throughs for the walker's stage pass.
-    #[test]
-    fn quad_rtt_view_frames_a_growing_stage_slot() {
-        let reg = builtin_templates();
-        let mut node = template_node("quad_rtt_view", vec![]);
-        node.id = "editor_quad".to_string();
-        node.props
-            .insert("source".to_string(), Value::Text("turntable".to_string()));
-        node.props
-            .insert("live_bind".to_string(), Value::Text("quad_live".to_string()));
-        node.props.insert(
-            "tint".to_string(),
-            Value::Text("assetpipeline.holder.tint".to_string()),
-        );
-        let out = expand(node, &reg);
-
-        // One `rtt` node — a thin holder, no children and no leftover slots.
-        assert_eq!(out.component, "rtt");
-        assert!(out.children.is_empty());
-        assert!(out.slots.is_empty());
-        // Default frame style + forwarded source / liveness / tint props.
-        assert_eq!(text_prop(&out, "style"), Some("rtt_holder"));
-        assert_eq!(text_prop(&out, "source"), Some("turntable"));
-        assert_eq!(text_prop(&out, "live_bind"), Some("quad_live"));
-        assert_eq!(text_prop(&out, "tint"), Some("assetpipeline.holder.tint"));
-        // Slot id defaults to the node's own id; the holder grows to fill its slot.
-        assert_eq!(out.id, "editor_quad");
-        assert_eq!(out.grow, Some(1.0));
-        assert_eq!(out.width, None);
-        assert_eq!(out.height, None);
-    }
-
-    /// The overrides: an explicit `quad_id` becomes the slot id, a `style` prop
-    /// replaces the default frame, a fixed size authored STRUCTURALLY on the
-    /// instance node (the only form the Lua/JSON parsers produce — both consume
-    /// `width`/`height` structurally) rides `overlay_placement` onto the stage,
-    /// and a literal `live` bool rides through verbatim.
-    #[test]
-    fn quad_rtt_view_honours_quad_id_style_and_fixed_size() {
-        let reg = builtin_templates();
-        let mut node = template_node("quad_rtt_view", vec![]);
-        node.id = "node_id".to_string();
-        node.width = Some(512.0);
-        node.height = Some(512.0);
-        node.props
-            .insert("quad_id".to_string(), Value::Text("kiln_grid".to_string()));
-        node.props.insert(
-            "style".to_string(),
-            Value::Text("loomforge.clip_stage".to_string()),
-        );
-        node.props
-            .insert("source".to_string(), Value::Text("lighting".to_string()));
-        node.props.insert("live".to_string(), Value::Bool(false));
-        let out = expand(node, &reg);
-
-        assert_eq!(out.component, "rtt");
-        // `quad_id` wins over the node id; the explicit style overrides the default.
-        assert_eq!(out.id, "kiln_grid");
-        assert_eq!(text_prop(&out, "style"), Some("loomforge.clip_stage"));
-        assert_eq!(text_prop(&out, "source"), Some("lighting"));
-        // The instance's structural size lands on the stage via `overlay_placement`.
-        assert_eq!(out.width, Some(512.0));
-        assert_eq!(out.height, Some(512.0));
-        // Literal liveness bool rides through as a `Bool` value.
-        assert_eq!(out.props.get("live"), Some(&Value::Bool(false)));
-    }
 }
