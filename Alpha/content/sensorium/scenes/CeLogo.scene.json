@@ -1,10 +1,41 @@
 {
-  "_comment": "SCENE FILE — the engine splash, the second half of the intro chain (see TegLogo.scene.json for the format). It names the SAME `splash` behaviour its sibling does and fires the same result (`done`); only the image and the routing differ, which is the point: two scenes, one behaviour, and neither of them named in Rust. This one hands off to the main menu.",
+  "_comment": "SCENE FILE — the engine splash. The `tree` below is the arrangement — one full-bleed `splash` component (the Rust widgets kind that owns all drawing). The PAIR SCRIPT (scripts/CeLogo.lua) is a module like every pair script: its arrange() sets the splash node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed; `exit` = the player backed out (Cancel/Esc).",
   "behaviour": "splash",
-  "params": {
-    "image": "package/sensorium/assets/clay_engine_infinity_grey.png"
-  },
   "exits": {
-    "done": { "to": "Main", "mode": "replace" }
+    "next": {
+      "to": "Main",
+      "mode": "replace"
+    },
+    "exit": {
+      "to": "Main",
+      "mode": "replace"
+    }
+  },
+  "styles": {
+    "logo": {
+      "backdrop": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "children": [
+      {
+        "component": "splash",
+        "id": "splash",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "fit": 0.9,
+        "backdrop": "logo.backdrop"
+      }
+    ]
   }
 }

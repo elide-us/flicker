@@ -8,7 +8,7 @@ publish = false
 # unified `prism-alpha` launcher. Draws a live controller diagram (face buttons, d-pad,
 # bumpers, triggers and sticks light up / move as you press them) plus a keyboard + mouse
 # readout, using only engine services (the vector UI panel + text). No Lua HUD, so it
-# touches no `ui_elements.json`.
+# touches no `ui_theme.json`.
 [lib]
 name = "flicker_controllertester"
 path = "src/lib.rs"

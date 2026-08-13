@@ -1,0 +1,23 @@
+[package]
+name = "flicker-componentcatalog"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+# The UI TEST scene (library only) — a workbench that shows one demo copy of every
+# Rust widget component with all features enabled, driven by the unified `prism-alpha`
+# launcher. No standalone binary; depends only on engine services (the `flicker`
+# umbrella + the front-end shell for PauseScene/Theme). A Developer-realm bench.
+[lib]
+name = "flicker_componentcatalog"
+path = "src/lib.rs"
+
+[dependencies]
+flicker = { path = "../../core/flicker" }
+# The new input model + the event bus this scene routes its Esc + nav + clicks
+# through (input-P3: no owned resolver — it dispatches the pump's `signals.events`).
+flicker-input-core.workspace = true
+flicker-input-router.workspace = true
+flicker-shell.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

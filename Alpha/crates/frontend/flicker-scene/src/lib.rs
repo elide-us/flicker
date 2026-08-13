@@ -21,6 +21,15 @@
 //! because [`Scene::enter`] / [`Scene::exit`] need `&mut Renderer` (to upload /
 //! free GPU resources) while `update` only borrows it immutably.
 //!
+//! # Lifecycle phase
+//!
+//! The manager is also the application **kernel**: it tracks a [`Phase`]
+//! (`Starting → Loading → Running ⇄ Paused → Unloading → Stopping`) — the app-state
+//! authority. Today the phase is DERIVED from the stack and only OBSERVED (read via
+//! [`SceneManager::phase`]); nothing gates on it yet, so runtime behaviour is
+//! unchanged. It is the seam later steps use to stream resources, freeze the
+//! simulation while paused, and shut down.
+//!
 //! # Transitions
 //!
 //! * [`Transition::Replace`] — swap the top scene (logo → menu → loading →
@@ -38,32 +47,23 @@
 use std::time::Duration;
 
 use flicker_app::{App, CursorImage};
-use flicker_input_core::InputState;
-pub use flicker_input_router::{InputEvent, RouteCtx};
-use flicker_render::Renderer;
+use flicker_input_core::{InputContext, InputState};
+pub use flicker_app::{FrameInput, InputEvent, RouteCtx};
 
-/// The resolved discrete input for one frame, handed to the active scene by the
-/// [`SceneManager`].
+/// The resolved discrete input a scene receives each frame — the central event pump's
+/// [`FrameInput`], surfaced under the scene vocabulary.
 ///
 /// This is the seam that DECOUPLES input from the scene (Input Standardization,
-/// 2026-08-10): the manager owns the pipeline — device snapshot → [`Resolver`] →
-/// active [`InputContext`] — and hands the scene the already-resolved signal
-/// [`events`](Self::events) plus the [`route`](Self::route) scratch it routes them
-/// into. A scene NEVER re-resolves and never owns a `Resolver`; it composes its
-/// handler chain (the UI walker + its own gameplay base) and calls
-/// `Router::dispatch(signals.events, chain, signals.route)`. Context push/pop the
-/// chain requests into `route` are applied by the manager against the ONE shared
-/// context stack after `update` returns.
-///
-/// [`Resolver`]: flicker_input_core::Resolver
-/// [`InputContext`]: flicker_input_core::InputContext
-pub struct SceneInput<'a> {
-    /// This frame's resolved signal events, for the scene's active context.
-    pub events: &'a [InputEvent<'a>],
-    /// The router scratch the scene routes `events` into; the manager reconciles
-    /// its context requests against the shared stack after the scene returns.
-    pub route: &'a mut RouteCtx,
-}
+/// 2026-08-10): the RUNNER owns the pipeline — device snapshot → `Resolver` → active
+/// [`InputContext`] — and threads the already-resolved signal `events` + the `route`
+/// scratch down through the [`SceneManager`] to the active scene. A scene NEVER
+/// re-resolves and never owns a `Resolver`; it composes its handler chain (the UI
+/// walker + its own gameplay base) and routes `signals.events` through it. Context
+/// requests the chain pushes into `route` are reconciled by the runner against the ONE
+/// shared context stack after the frame.
+pub type SceneInput<'a> = FrameInput<'a>;
+
+use flicker_render::Renderer;
 
 /// One screen / mode of the application — a logo, a menu, the game, a pause
 /// modal, and so on. Scenes are owned by the [`SceneManager`] on a stack.
@@ -88,6 +88,13 @@ pub trait Scene {
         renderer: &Renderer,
     ) -> Transition;
 
+    /// The [`InputContext`] this scene's active surface owns — the runner resolves the
+    /// pump's events for it. `None` (default) = the `World` base. A menu returns
+    /// `Menu`; gameplay leaves it at the base. Only the TOP scene's is consulted.
+    fn input_context(&self) -> Option<InputContext> {
+        None
+    }
+
     /// Draw the scene. Overlays draw over whatever is already on screen.
     fn render(&mut self, renderer: &mut Renderer);
 
@@ -100,6 +107,15 @@ pub trait Scene {
     /// that fully covers the screen).
     fn is_overlay(&self) -> bool {
         false
+    }
+
+    /// Where a fired result NAME routes this scene — consulted by the kernel when the
+    /// scene returns [`Transition::Fire`]. Default `None`: the scene declares no
+    /// destination for that result, and the kernel logs and stays put. A scene backed by
+    /// a scene file returns its file's `exits` lookup here, so the chain lives in DATA
+    /// and the scene names an INTENT rather than constructing its successor.
+    fn route(&self, _result: &str) -> Option<Transition> {
+        None
     }
 }
 
@@ -138,6 +154,12 @@ pub enum Transition {
         /// Which stack reshape to perform once the id resolves.
         mode: GotoMode,
     },
+    /// Fire a named RESULT and let the KERNEL decide where it goes — it consults the
+    /// active scene's [`route`](Scene::route) (the scene file's authored `exits`) and
+    /// enacts the destination. This is how a scene names an INTENT (`"done"`, `"quit"`)
+    /// with zero knowledge of its successor; contrast the `Box`-carrying moves above,
+    /// which force the departing scene to construct its own successor.
+    Fire(String),
 }
 
 /// How a [`Transition::Goto`] reshapes the stack once its id resolves — the three
@@ -161,11 +183,39 @@ pub enum GotoMode {
 /// mechanism here and the roster there.
 pub type SceneResolver = Box<dyn Fn(&str) -> Option<Box<dyn Scene>>>;
 
+/// The application kernel's lifecycle phase — the app-state authority (Aaron 2026-08-10).
+///
+/// The kernel is always in exactly ONE phase. Today it is DERIVED from the flow the
+/// stack already drives and merely OBSERVED (nothing gates on it yet), so runtime
+/// behaviour is unchanged; it is the seam later steps use to stream resources
+/// (`Loading`/`Unloading`), freeze the simulation (`Paused`), and shut down
+/// (`Stopping`). Read it with [`SceneManager::phase`]. All six states are enumerated
+/// now (Aaron's map); `Loading`/`Unloading` are ENTERED by the resource-lifecycle step,
+/// so today's synchronous transitions settle straight to `Running`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Before the first scene is live — window, renderer, and kernel coming up.
+    Starting,
+    /// Bringing a scene's resources in (its [`Scene::enter`]).
+    Loading,
+    /// The active scene is live: updating and rendering each frame.
+    Running,
+    /// The active scene is suspended beneath an overlay — e.g. a pause menu.
+    Paused,
+    /// Releasing a departing scene's resources (its [`Scene::exit`]).
+    Unloading,
+    /// Shutting down — no scene left to run.
+    Stopping,
+}
+
 /// Owns the scene stack and drives it as a [`flicker_app::App`].
 pub struct SceneManager {
     stack: Vec<Box<dyn Scene>>,
     pending: Transition,
     quit: bool,
+    /// The kernel's current lifecycle [`Phase`]. Starts at [`Phase::Starting`]; the
+    /// first [`Scene::enter`] (from [`App::init`]) settles it to [`Phase::Running`].
+    phase: Phase,
     cursor: Option<CursorImage>,
     /// Resolves [`Transition::Goto`] ids. `None` = no roster wired, so id-addressed
     /// transitions cannot be served (they log and do nothing).
@@ -181,6 +231,7 @@ impl SceneManager {
             stack: vec![initial],
             pending: Transition::None,
             quit: false,
+            phase: Phase::Starting,
             cursor: None,
             resolver: None,
         }
@@ -203,6 +254,7 @@ impl SceneManager {
             stack: vec![initial],
             pending: Transition::None,
             quit: false,
+            phase: Phase::Starting,
             cursor: None,
             resolver: Some(resolver),
         })
@@ -229,33 +281,14 @@ impl SceneManager {
     /// because `enter`/`exit` need `&mut Renderer`.
     fn apply_pending(&mut self, renderer: &mut Renderer) {
         let pending = std::mem::replace(&mut self.pending, Transition::None);
-        // Resolve an id-addressed `Goto` into the concrete reshape it names, BEFORE the
-        // stack is touched — so the three moves below stay the only places the stack
-        // changes shape, and a `Goto` is provably nothing more than a late-bound
-        // `Replace`/`ReplaceRoot`/`Push`.
-        let pending = match pending {
-            Transition::Goto { id, mode } => match self.resolve(&id) {
-                Some(next) => match mode {
-                    GotoMode::Replace => Transition::Replace(next),
-                    GotoMode::ReplaceRoot => Transition::ReplaceRoot(next),
-                    GotoMode::Push => Transition::Push(next),
-                },
-                // Fail LOUD and stay put. Silently doing nothing would look like a
-                // hung splash screen; advancing to some fallback would hide the typo.
-                None => {
-                    tracing::error!(
-                        "scene id '{id}' is not in the roster — transition ignored; \
-                         register it, or fix the id the departing scene named"
-                    );
-                    Transition::None
-                }
-            },
-            other => other,
-        };
+        // Resolve any INDIRECTION — a fired result (`Fire`) or an id-addressed `Goto` —
+        // into a concrete stack move BEFORE the stack is touched, so the arms below stay
+        // the only place the stack changes shape.
+        let pending = self.resolve_indirection(pending);
         match pending {
             Transition::None | Transition::Quit => {}
-            // Resolved above into one of the three concrete moves; unreachable here.
-            Transition::Goto { .. } => {}
+            // Resolved above into a concrete move; unreachable here.
+            Transition::Fire(_) | Transition::Goto { .. } => {}
             Transition::Replace(mut next) => {
                 if let Some(mut top) = self.stack.pop() {
                     top.exit(renderer);
@@ -287,6 +320,52 @@ impl SceneManager {
                 }
             }
         }
+        // Come to rest in the phase the reshaped stack now implies (Running / Paused /
+        // Stopping). A `None`/`Quit` transition re-settles harmlessly to the same phase.
+        self.settle_phase();
+    }
+
+    /// Resolve an indirect [`Transition`] — a fired result or an id-addressed `Goto` —
+    /// down to a concrete stack move, BEFORE the stack is touched. `Fire(name)` asks the
+    /// ACTIVE scene where its result routes ([`Scene::route`], backed by the scene file's
+    /// authored exits): the scene names an intent, the KERNEL decides. `Goto{id}` builds
+    /// the named scene through the roster. The two can chain (a fired result routes to a
+    /// `Goto`), so this loops until it reaches a concrete move; an unrouted fire or a
+    /// missing id is a loud no-op.
+    fn resolve_indirection(&self, mut pending: Transition) -> Transition {
+        loop {
+            pending = match pending {
+                Transition::Fire(name) => match self.stack.last().and_then(|s| s.route(&name)) {
+                    Some(next) => next,
+                    None => {
+                        tracing::warn!(
+                            "the active scene fired result '{name}', but its file routes \
+                             it nowhere — ignored; add an `exits` entry for it"
+                        );
+                        return Transition::None;
+                    }
+                },
+                Transition::Goto { id, mode } => match self.resolve(&id) {
+                    Some(next) => {
+                        return match mode {
+                            GotoMode::Replace => Transition::Replace(next),
+                            GotoMode::ReplaceRoot => Transition::ReplaceRoot(next),
+                            GotoMode::Push => Transition::Push(next),
+                        };
+                    }
+                    // Fail LOUD and stay put. Silently doing nothing would look like a
+                    // hung splash screen; advancing to some fallback would hide the typo.
+                    None => {
+                        tracing::error!(
+                            "scene id '{id}' is not in the roster — transition ignored; \
+                             register it, or fix the id the departing scene named"
+                        );
+                        return Transition::None;
+                    }
+                },
+                concrete => return concrete,
+            };
+        }
     }
 
     /// Build the scene registered under `id`, if a roster is wired and knows it.
@@ -303,6 +382,22 @@ impl SceneManager {
     fn visible_start(&self) -> usize {
         let overlays: Vec<bool> = self.stack.iter().map(|s| s.is_overlay()).collect();
         visible_start_in(&overlays)
+    }
+
+    /// The kernel's current lifecycle [`Phase`] — the app-state authority. Observed
+    /// today (nothing gates on it yet); the seam later steps drive resource streaming,
+    /// pause, and shutdown from.
+    #[must_use]
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Settle the phase to what the stack now implies, once a frame's transition has been
+    /// applied: `Stopping` when nothing is left to run, `Paused` when the top scene is an
+    /// overlay (the scene beneath it is frozen), else `Running`.
+    fn settle_phase(&mut self) {
+        let top_overlay = self.stack.last().map(|s| s.is_overlay());
+        self.phase = settled_phase(self.quit, top_overlay);
     }
 }
 
@@ -321,27 +416,51 @@ fn visible_start_in(overlays: &[bool]) -> usize {
     (0..overlays.len()).rposition(|i| !overlays[i]).unwrap_or(0)
 }
 
+/// The settled [`Phase`] implied by the stack after a transition — factored out (like
+/// [`visible_start_in`]) so the kernel's phase logic is unit-testable without a GPU
+/// [`Renderer`]. `top_overlay` is the top scene's [`Scene::is_overlay`], or `None` when
+/// the stack is empty. A requested exit (`quit`) outranks everything: it is `Stopping`
+/// whatever is on the stack.
+fn settled_phase(quit: bool, top_overlay: Option<bool>) -> Phase {
+    match (quit, top_overlay) {
+        (true, _) => Phase::Stopping,
+        (false, None) => Phase::Stopping, // empty stack → nothing left to run
+        (false, Some(true)) => Phase::Paused, // an overlay on top freezes the scene beneath
+        (false, Some(false)) => Phase::Running,
+    }
+}
+
 impl App for SceneManager {
     fn init(&mut self, renderer: &mut Renderer) {
         if let Some(top) = self.stack.last_mut() {
             top.enter(renderer);
         }
+        // The first scene is now live: Starting → Running (settle_phase derives it).
+        self.settle_phase();
     }
 
     fn cursor(&self) -> Option<CursorImage> {
         self.cursor.clone()
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, renderer: &Renderer) {
+    /// The runner resolves the pump's events for THIS — the top scene's context.
+    fn active_context(&self) -> Option<InputContext> {
+        self.stack.last().and_then(|s| s.input_context())
+    }
+
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut FrameInput,
+        renderer: &Renderer,
+    ) {
         if let Some(top) = self.stack.last_mut() {
-            // S1 scaffold (Input Standardization): the manager will own the
-            // pipeline (Resolver + shared context stack) and resolve `events` here
-            // for the active scene's context. Until each scene is converted it still
-            // resolves internally and IGNORES these, so the seam is in place with
-            // behaviour unchanged — an empty event set and a fresh route.
-            let mut route = RouteCtx::new();
-            let mut signals = SceneInput { events: &[], route: &mut route };
-            let transition = top.update(dt, input, &mut signals, renderer);
+            // Forward the runner's resolved signals to the top scene — the manager is
+            // pure plumbing here; the pipeline (Resolver + shared context stack) lives
+            // in the runner. Scenes not yet converted ignore `signals` and still
+            // resolve internally, so behaviour is unchanged until each is migrated.
+            let transition = top.update(dt, input, signals, renderer);
             if matches!(transition, Transition::Quit) {
                 self.quit = true;
             }
@@ -409,5 +528,97 @@ mod tests {
         assert_eq!(visible_start_in(&[false, false]), 1); // two opaque → only the top
         assert_eq!(visible_start_in(&[false, false, true]), 1); // opaque, opaque, overlay
         assert_eq!(visible_start_in(&[true]), 0); // overlay with nothing under it
+    }
+
+    /// The kernel's phase is a pure function of "is it quitting" + "what is on top",
+    /// and a freshly built kernel is [`Phase::Starting`] until its first scene enters.
+    /// (The `enter` / `apply_pending` wiring needs a GPU `Renderer`, so it is exercised
+    /// in-window; the derivation carries the logic and is tested here.)
+    #[test]
+    fn kernel_phase_machine() {
+        use super::{settled_phase, Phase, Scene, SceneInput, SceneManager, Transition};
+
+        assert_eq!(settled_phase(false, Some(false)), Phase::Running); // one full scene
+        assert_eq!(settled_phase(false, Some(true)), Phase::Paused); // overlay → frozen beneath
+        assert_eq!(settled_phase(false, None), Phase::Stopping); // empty stack → nothing to run
+        assert_eq!(settled_phase(true, Some(false)), Phase::Stopping); // quit outranks a live scene
+        assert_eq!(settled_phase(true, Some(true)), Phase::Stopping); // quit outranks an overlay
+
+        struct Stub;
+        impl Scene for Stub {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &mut SceneInput,
+                _: &flicker_render::Renderer,
+            ) -> Transition {
+                Transition::None
+            }
+            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+        }
+        assert_eq!(SceneManager::new(Box::new(Stub)).phase(), Phase::Starting);
+    }
+
+    /// A fired result routes through the ACTIVE scene's [`Scene::route`] (its file exits)
+    /// to a concrete move; a result the scene routes nowhere is a loud no-op. Exercises
+    /// the whole `Fire → route → Goto → resolve` chain without a GPU.
+    #[test]
+    fn fire_routes_through_the_active_scenes_exits() {
+        use super::{GotoMode, Scene, SceneInput, SceneManager, Transition};
+
+        /// Routes ANY fired result to a `Replace`-`Goto` of the scene id `"next"`.
+        struct Router;
+        impl Scene for Router {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &mut SceneInput,
+                _: &flicker_render::Renderer,
+            ) -> Transition {
+                Transition::None
+            }
+            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+            fn route(&self, _result: &str) -> Option<Transition> {
+                Some(Transition::Goto { id: "next".into(), mode: GotoMode::Replace })
+            }
+        }
+        /// Routes nothing (the default [`Scene::route`]).
+        struct Plain;
+        impl Scene for Plain {
+            fn update(
+                &mut self,
+                _: std::time::Duration,
+                _: &flicker_input_core::InputState,
+                _: &mut SceneInput,
+                _: &flicker_render::Renderer,
+            ) -> Transition {
+                Transition::None
+            }
+            fn render(&mut self, _: &mut flicker_render::Renderer) {}
+        }
+
+        let mgr = SceneManager::new(Box::new(Router)).with_resolver(Box::new(
+            |id: &str| -> Option<Box<dyn Scene>> {
+                (id == "next").then(|| Box::new(Plain) as Box<dyn Scene>)
+            },
+        ));
+        assert!(
+            matches!(
+                mgr.resolve_indirection(Transition::Fire("done".into())),
+                Transition::Replace(_)
+            ),
+            "a fired result routes through the scene's exits into a concrete move"
+        );
+
+        let plain = SceneManager::new(Box::new(Plain));
+        assert!(
+            matches!(
+                plain.resolve_indirection(Transition::Fire("nowhere".into())),
+                Transition::None
+            ),
+            "a result the scene routes nowhere is dropped (loud no-op)"
+        );
     }
 }

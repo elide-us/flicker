@@ -1,0 +1,141 @@
+{
+  "_comment": "⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant bench's style blocks, vendored OUT of ui_theme.json (a scene's values belong in its scene file). They move into this bench's own .scene.json at its migration — do not grow this file. Colors are $token refs into ui_theme.json's theme.tokens; a `theme` key here is refused as a palette fork.",
+  "sablework": {
+    "_comment": "flicker-sablework 'Sablework Bench' HUD (hud_sablework.lua) — the texture SYNTHESIZER console. Three columns: LEFT the 6-voice CHANNEL RACK (per row: on-toggle, source pill, scale/octaves/warp sliders, blend pill, amount), CENTRE the tiled swatch preview + map selector, RIGHT the OUTPUT STAGE (relief/roughness/metalness/AO) over the selected voice's fine knobs. The preview RECT lives here under `preview` and is read by BOTH the Lua (which frames it) and the Rust scene (which draws the swatch sprites into it) — one source of truth, so the frame and the image cannot drift apart. Every colour is a $token and every label a stringtable $token (the one palette + one string source).",
+    "col": {
+      "label": "$dim_soft",
+      "title": "$ink_bright",
+      "value": "$ink",
+      "dim": "$dim",
+      "accent": "$rune_glow_hi",
+      "bronze": "$bronze",
+      "bronze_deep": "$bronze_deep",
+      "off": "$faint"
+    },
+    "panel": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 4
+    },
+    "well": {
+      "fill_top": "$stone0",
+      "fill_bot": "$stone0",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 3
+    },
+    "frame": {
+      "fill_top": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "fill_bot": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "border": "$bronze_deep",
+      "border_w": 1,
+      "radius": 3
+    },
+    "row": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "border": "$edge1",
+      "border_w": 1,
+      "radius": 3
+    },
+    "row_sel": {
+      "fill_top": "$stone4",
+      "fill_bot": "$stone2",
+      "border": "$sap_border",
+      "border_w": 1,
+      "radius": 3
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 14
+    },
+    "button": {
+      "fill_top": "$stone4",
+      "fill_bot": "$stone2",
+      "border": "$edge3",
+      "border_w": 1,
+      "radius": 3
+    },
+    "button_on": {
+      "fill_top": "$sap_hover",
+      "fill_bot": "$sap_base",
+      "border": "$sap_border",
+      "border_w": 1,
+      "radius": 3
+    },
+    "layout": {
+      "_comment": "The bench rides the SHARED `workbench` template (ui_templates.json) like Clayworks and Loomforge — frame + header + tab bar + [viewport | rail] + footer. These are that template's slot dimensions; the frame's own chrome comes from the default `settings` style, which is why no window colours are redefined here.",
+      "margin": 20,
+      "gap": 12,
+      "pad": 14,
+      "rack_w": 620,
+      "out_w": 330,
+      "header_h": 46,
+      "header_pad": 12,
+      "header_gap": 8,
+      "tab_h": 34,
+      "tab_pad": 6,
+      "tab_gap": 4,
+      "body_pad": 12,
+      "body_gap": 12,
+      "footer_h": 52,
+      "footer_pad": 12,
+      "footer_gap": 8,
+      "footer_btn_h": 28,
+      "title_h": 30,
+      "title_size": 17,
+      "section_h": 20,
+      "section_size": 11,
+      "label_size": 12,
+      "value_size": 12,
+      "row_h": 22,
+      "slider_h": 7,
+      "track_h": 20
+    },
+    "rack": {
+      "section": "$sw_channel_rack",
+      "voice_h": 74,
+      "name_w": 42,
+      "pill_w": 84,
+      "knob_label_w": 44,
+      "knob_value_w": 38,
+      "knob_w": 176,
+      "amount_w": 176
+    },
+    "preview": {
+      "_comment": "The swatch. `tiles` is how many times the scene repeats the baked swatch per axis BEFORE uploading, so the seam is visible in one sprite node instead of nine. The Lua sizes the well; the scene reads `tiles` to build the image. w/h square, so the tiling reads honestly.",
+      "w": 600,
+      "h": 600,
+      "tiles": 3,
+      "map_bar_h": 28,
+      "map_btn_w": 92
+    },
+    "out": {
+      "section": "$sw_output_stage",
+      "voice_section": "$sw_voice",
+      "knob_label_w": 96,
+      "knob_value_w": 46
+    }
+  }
+}

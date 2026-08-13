@@ -155,12 +155,9 @@ use std::time::Duration;
 
 use flicker::render::{Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{
-    HudCommand, UiAnchor, UiNode, Value, ValueMap,
-};
+use flicker::script::{HudCommand, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui, TemplateRegistry, UiInput,
-    UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Key, Resolver,
@@ -170,8 +167,8 @@ use flicker_shell::{PauseScene, Theme};
 
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 const TOP_BAR_H: f32 = 52.0;
 const TAB_BAR_H: f32 = 44.0;
@@ -181,8 +178,6 @@ const TREE_W: f32 = 340.0;
 const ROW_H: f32 = 32.0;
 const LIST_ROW_H: f32 = 34.0;
 const HEADER_H: f32 = 32.0;
-/// The Review facts rail width.
-const REVIEW_RAIL_W: f32 = 360.0;
 
 /// The bench's two pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -317,10 +312,6 @@ pub struct Quartermaster {
     /// The last mutation's outcome, for the status line.
     last_error: Option<String>,
 
-    /// The template registry `build_tree` expands against — built once; the
-    /// protos it points at are the parse-once embedded `ui_templates.json`.
-    templates: TemplateRegistry,
-
     bindings: ContextualBindings,
     chord: ChordLayer,
     gamepad_config: GamepadConfig,
@@ -366,7 +357,6 @@ impl Quartermaster {
             toasts: Vec::new(),
             menu: None,
             menu_sel: 0,
-            templates: builtin_templates(),
             expanded: Vec::new(),
             tree: Vec::new(),
             tree_sel: 0,
@@ -1199,637 +1189,11 @@ impl Quartermaster {
         m
     }
 
-    /// This frame's chrome. Rebuilt every frame because node ids encode
-    /// positions in the CURRENT listing — the sanctioned Rust-tree case.
-    pub fn build_tree(&self, screen: Vec2) -> UiNode {
-        let mut page = node("screen");
-        // The screen's input DECLARATION (S9). Everything the bench reacts to is
-        // named here as data, so a pad chord, a key and a click are the same
-        // event by the time the scene sees them.
-        for (signal, result) in [
-            ("on_menu", "pause_open"),
-            ("on_confirm", "confirm"),
-            ("on_cancel", "cancel"),
-            ("on_nav_up", "nav_up"),
-            ("on_nav_down", "nav_down"),
-            ("on_nav_left", "nav_left"),
-            ("on_nav_right", "nav_right"),
-            ("on_panel_next", "panel_next"),
-            ("on_panel_prev", "panel_prev"),
-            ("on_tab_next", "tab_next"),
-            ("on_tab_prev", "tab_prev"),
-            // The chord layer's editor verbs. A pad chord, a Ctrl-key and a
-            // menu click all arrive at the dispatcher as these same names.
-            ("on_cut", "cut"),
-            ("on_paste", "paste"),
-            ("on_undo", "undo"),
-            ("on_redo", "redo"),
-            ("on_create_folder", "create_folder"),
-            ("on_rename", "rename"),
-            ("on_context_menu", "menu_open"),
-        ] {
-            page.props.insert(signal.into(), Value::Text(result.into()));
-        }
-        page.children = vec![
-            self.top_bar(screen),
-            self.tab_bar(screen),
-            self.crumb_bar(screen),
-            self.body(screen),
-            self.status_bar(screen),
-            // The context menu floats over the bench, under the toasts.
-            self.item_context_menu(),
-            // Confirmations float over the bench; each row gates itself.
-            self.toast_stack(),
-            // Last, so it paints over everything; `has_prompt` gates it.
-            self.conflict_dialog(),
-        ];
-        // Expanded HERE, not at the call sites, so the scene and every test walk
-        // the SAME tree — the one seam the drift gates demand. A template-free
-        // tree passes through unchanged, so the rest of the bench is unaffected.
-        expand(page, &self.templates)
-    }
-
-    fn top_bar(&self, screen: Vec2) -> UiNode {
-        let mut bar = node("row");
-        bar.id = "top_bar".into();
-        bar.anchor = Some(UiAnchor::TopLeft);
-        bar.width = Some(screen.x);
-        bar.height = Some(TOP_BAR_H);
-        bar.pad = 16.0;
-        bar.gap = 12.0;
-        bar = prop(bar, "style", text_val("quartermaster.top_bar"));
-
-        let title = label("$qm_title", 21.0, "quartermaster.title.color", Some(260.0));
-        let route = label("$qm_route", 11.0, "quartermaster.badge.color", Some(220.0));
-        let mut spacer = node("cell");
-        spacer.grow = Some(1.0);
-        bar.children = vec![title, route, spacer];
-        bar
-    }
-
-    fn tab_bar(&self, screen: Vec2) -> UiNode {
-        let mut bar = node("row");
-        bar.id = "tab_bar".into();
-        bar.anchor = Some(UiAnchor::TopLeft);
-        bar.offset = [0.0, TOP_BAR_H];
-        bar.width = Some(screen.x);
-        bar.height = Some(TAB_BAR_H);
-        bar.pad = 6.0;
-        bar.gap = 4.0;
-        bar = prop(bar, "style", text_val("quartermaster.tab_bar"));
-        bar.children = Tab::ALL
-            .iter()
-            .map(|t| {
-                let mut b = node("button");
-                b.id = t.id().into();
-                b.action = Some(t.id().into());
-                b.size = Some(150.0);
-                b = prop(b, "label", text_val(t.token()));
-                let style = if *t == self.tab {
-                    "quartermaster.tab_active"
-                } else {
-                    "quartermaster.tab_idle"
-                };
-                prop(b, "style", text_val(style))
-            })
-            .collect();
-        bar
-    }
-
-    fn crumb_bar(&self, screen: Vec2) -> UiNode {
-        let mut bar = node("row");
-        bar.id = "crumb_bar".into();
-        bar.anchor = Some(UiAnchor::TopLeft);
-        bar.offset = [0.0, TOP_BAR_H + TAB_BAR_H];
-        bar.width = Some(screen.x);
-        bar.height = Some(CRUMB_H);
-        bar.pad = 20.0;
-        bar.gap = 8.0;
-        bar = prop(bar, "style", text_val("quartermaster.crumb_bar"));
-
-        let mut crumbs = node("text");
-        crumbs.id = "crumbs".into();
-        crumbs = prop(crumbs, "text_bind", text_val("crumbs"));
-        crumbs = prop(crumbs, "size", Value::Number(13.0));
-        crumbs = prop(crumbs, "color", text_val("quartermaster.crumb.color"));
-        bar.children = vec![crumbs];
-        bar
-    }
-
-    fn body(&self, screen: Vec2) -> UiNode {
-        let top = TOP_BAR_H + TAB_BAR_H + CRUMB_H;
-        let h = (screen.y - top - STATUS_H).max(0.0);
-        match self.tab {
-            Tab::Files => self.files_body(screen, top, h),
-            Tab::Review => self.review_body(screen, top, h),
-        }
-    }
-
-    fn files_body(&self, screen: Vec2, top: f32, h: f32) -> UiNode {
-        let mut row = node("row");
-        row.id = "files_body".into();
-        row.anchor = Some(UiAnchor::TopLeft);
-        row.offset = [0.0, top];
-        row.width = Some(screen.x);
-        row.height = Some(h);
-        row.children = vec![self.tree_pane(h), self.list_pane((screen.x - TREE_W).max(0.0), h)];
-        row
-    }
-
-    /// The folder tree. A sibling of the list, never nested inside it — a
-    /// `list` REPLACES the inherited clip, so nesting two would clip wrong.
-    fn tree_pane(&self, h: f32) -> UiNode {
-        let mut pane = node("cell");
-        pane.id = "tree_pane".into();
-        pane.width = Some(TREE_W);
-        pane.height = Some(h);
-        pane = prop(pane, "style", text_val(pane_style(self.pane == Pane::Tree)));
-
-        let mut scroll = node("list");
-        scroll.id = "tree_list".into();
-        scroll.bind = Some("tree_scroll".into());
-        scroll.grow = Some(1.0);
-        scroll.pad = 8.0;
-        scroll.children = self.tree.iter().enumerate().map(|(i, t)| self.tree_row(i, t)).collect();
-
-        pane.children =
-            vec![label("$qm_tree_header", 11.0, "quartermaster.header.color", None), scroll];
-        pane
-    }
-
-    /// The collision prompt — ONE instance node of the `conflict_dialog` data
-    /// proto (`ui_templates.json`), choice_dialog's modal sibling. The proto owns
-    /// the composition and the fixed `conflict_*` bind/action/token vocabulary;
-    /// this bench only gates it (`visible_bind`), skins it, publishes the binds
-    /// (`hud_model`) and consumes the three actions (`apply_results`). Always in
-    /// the tree so node ids stay stable and the drift gates see it while closed.
-    /// The confirmation bank — ONE instance of the `toast_stack` proto. The
-    /// proto owns the layout and the `toast_<i>_*` bind vocabulary; the bench
-    /// only pages its live toasts into those binds and lets the rows' Undo
-    /// buttons fire the same `undo` result the chord does.
-    /// The focused-item context menu — ONE instance of the `item_context_menu`
-    /// proto. Its rows' actions ARE the bench's verb names, so a menu pick and a
-    /// chord are the same event by the time the dispatcher sees them.
-    ///
-    /// `paste_disabled` rides a TEMPLATE PARAM rather than a bind: the walker
-    /// copies data-children props verbatim without model resolution, and the
-    /// per-frame re-expansion is what keeps it live.
-    fn item_context_menu(&self) -> UiNode {
-        let mut n = UiNode { template: Some("item_context_menu".into()), ..Default::default() };
-        n.id = "item_menu".into();
-        n = prop(n, "on_bind", text_val("has_menu"));
-        n = prop(n, "paste_disabled", Value::Bool(self.clipboard.is_none()));
-        // The pad cursor's highlight rides the same per-row param mechanic as
-        // `disabled`: data-children props are not model-resolved, and the
-        // per-frame re-expansion is what keeps it live.
-        for (i, (_, row)) in MENU_ROWS.iter().enumerate() {
-            n = prop(n, &format!("active_{row}"), Value::Bool(self.menu_sel == i));
-        }
-        let at = self.menu.unwrap_or(Vec2::new(0.0, 0.0));
-        n = prop(n, "x", Value::Number(f64::from(at.x)));
-        n = prop(n, "y", Value::Number(f64::from(at.y)));
-        n
-    }
-
-    fn toast_stack(&self) -> UiNode {
-        let mut n = UiNode { template: Some("toast_stack".into()), ..Default::default() };
-        n.id = "toast_stack".into();
-        n
-    }
-
-    fn conflict_dialog(&self) -> UiNode {
-        let mut n = UiNode { template: Some("conflict_dialog".into()), ..Default::default() };
-        n.id = "conflict_dialog".into();
-        n.visible_bind = Some("has_prompt".into());
-        n = prop(n, "overlay_style", text_val("quartermaster.scrim"));
-        n = prop(n, "card_style", text_val("quartermaster.card"));
-        n = prop(n, "check_style", text_val("quartermaster.checkbox"));
-        n
-    }
-
-    fn tree_row(&self, i: usize, t: &TreeRow) -> UiNode {
-        let mut stack = node("stack");
-        stack.height = Some(ROW_H);
-        stack.id = format!("treerow_{i}");
-
-        let mut wash = node("cell");
-        // `visible_bind`, `tab_group` and `nav_ordinal` are FIELDS on UiNode, not
-        // props — a prop of the same name is silently ignored by the walker.
-        wash.visible_bind = Some(format!("tree_{i}_sel"));
-        // See `list_row`: a childless `cell` measures to zero height and draws an
-        // invisible wash unless it is given the row height.
-        wash.height = Some(ROW_H);
-        wash = prop(wash, "width_frac", Value::Number(1.0));
-        wash = prop(wash, "style", text_val("quartermaster.rowsel"));
-
-        // The click target spans the row and is NEVER gated on selection —
-        // gating it would make every unselected row unclickable.
-        let mut hit = node("button");
-        hit.id = format!("tree_hit_{i}");
-        hit.action = Some(format!("tree_open_{i}"));
-        hit.size = Some(ROW_H);
-        hit = prop(hit, "width_frac", Value::Number(1.0));
-        hit = prop(hit, "style", text_val("quartermaster.rowsel_off"));
-        hit.tab_group = Pane::Tree.id().into();
-        hit.nav_ordinal = i as u32;
-
-        // A `stack` hugs its largest child, so a row left to measure itself
-        // collapses to its content width and nothing inside can distribute —
-        // `width_frac` is what makes the row span the pane.
-        let mut inner = node("row");
-        inner = prop(inner, "width_frac", Value::Number(1.0));
-        inner.gap = 8.0;
-        // Indent with a leading SPACER, never with `pad`: `pad` insets all FOUR
-        // sides, so a deep row also grew VERTICALLY and overlapped its
-        // neighbours (`Strafe` over `RootMotion`, `muse` over `epochs`). The
-        // spacer moves the caret right without touching the row's height.
-        inner.pad_y = Some(0.0);
-        let mut indent = node("cell");
-        indent.size = Some(t.depth as f32 * 18.0);
-        let mut caret = node("text");
-        caret = prop(caret, "text_bind", text_val(format!("tree_{i}_caret")));
-        caret = prop(caret, "size", Value::Number(11.0));
-        caret = prop(caret, "color", text_val("quartermaster.caret.color"));
-        let mut name = node("text");
-        name = prop(name, "text_bind", text_val(format!("tree_{i}_name")));
-        name = prop(name, "size", Value::Number(14.0));
-        name = prop(name, "color", text_val("quartermaster.tree.color"));
-        inner.children = vec![indent, caret, name];
-
-        stack.children = vec![wash, hit, inner];
-        stack
-    }
-
-    fn list_pane(&self, w: f32, h: f32) -> UiNode {
-        let mut pane = node("cell");
-        pane.id = "list_pane".into();
-        pane.width = Some(w);
-        pane.height = Some(h);
-        pane = prop(pane, "style", text_val(pane_style(self.pane == Pane::List)));
-
-        let mut scroll = node("list");
-        scroll.id = "file_list".into();
-        scroll.bind = Some("list_scroll".into());
-        scroll.grow = Some(1.0);
-        let (first, last) = self.visible_range();
-        let mut kids: Vec<UiNode> = Vec::new();
-        // A spacer stands in for the rows above the window so the walker's
-        // measured content height stays truthful and the scrollbar is honest.
-        if first > 0 {
-            let mut spacer = node("cell");
-            spacer.height = Some(first as f32 * LIST_ROW_H);
-            kids.push(spacer);
-        }
-        kids.extend(
-            self.rows[first..last].iter().enumerate().map(|(n, r)| self.list_row(first + n, r)),
-        );
-        if last < self.rows.len() {
-            let mut spacer = node("cell");
-            spacer.height = Some((self.rows.len() - last) as f32 * LIST_ROW_H);
-            kids.push(spacer);
-        }
-        scroll.children = kids;
-
-        pane.children = vec![self.list_header(), scroll];
-        pane
-    }
-
-    fn list_header(&self) -> UiNode {
-        let mut header = node("row");
-        header.id = "list_header".into();
-        header.height = Some(HEADER_H);
-        header.pad = 20.0;
-        header.gap = 14.0;
-        header = prop(header, "style", text_val("quartermaster.list_header"));
-        header.children = [
-            ("sort_name", "$qm_col_name", 0.0),
-            ("sort_type", "$qm_col_type", 190.0),
-            ("sort_size", "$qm_col_size", 130.0),
-        ]
-        .iter()
-        .map(|(id, token, w)| {
-            let mut b = node("button");
-            b.id = (*id).into();
-            b.action = Some((*id).into());
-            if *w > 0.0 {
-                b.size = Some(*w);
-            } else {
-                b.grow = Some(1.0);
-            }
-            b = prop(b, "label", text_val(*token));
-            prop(b, "style", text_val("quartermaster.col_header"))
-        })
-        .collect();
-        header
-    }
-
-    fn list_row(&self, i: usize, _row: &Row) -> UiNode {
-        let mut stack = node("stack");
-        stack.height = Some(LIST_ROW_H);
-        stack.id = format!("listrow_{i}");
-
-        let mut wash = node("cell");
-        wash.visible_bind = Some(format!("row_{i}_sel"));
-        // A childless `cell` MEASURES to its content, so a wash left to itself is
-        // a ZERO-HEIGHT rectangle: bound correctly, published correctly, drawn —
-        // and invisible. It must be told the row height.
-        wash.height = Some(LIST_ROW_H);
-        wash = prop(wash, "width_frac", Value::Number(1.0));
-        wash = prop(wash, "style", text_val("quartermaster.rowsel"));
-
-        let mut hit = node("button");
-        hit.id = format!("row_hit_{i}");
-        hit.action = Some(format!("row_pick_{i}"));
-        hit.size = Some(LIST_ROW_H);
-        hit = prop(hit, "width_frac", Value::Number(1.0));
-        hit = prop(hit, "style", text_val("quartermaster.rowsel_off"));
-        hit.tab_group = Pane::List.id().into();
-        hit.nav_ordinal = i as u32;
-
-        // Spans the row (see `tree_row`) — without this the three columns bunch
-        // at the left edge instead of lining up under their headers.
-        let mut inner = node("row");
-        inner = prop(inner, "width_frac", Value::Number(1.0));
-        inner.pad = 20.0;
-        inner.gap = 14.0;
-        // While this row is being renamed the caption becomes an editable field
-        // in place; every other row is untouched.
-        let renaming = self.rename.as_ref().is_some_and(|r| r.path == _row.path);
-        let mut name = if renaming {
-            let mut f = node("text_field");
-            f.id = RENAME_ID.into();
-            // `bind` is a FIELD: it names the Model key holding the draft.
-            f.bind = Some("rename_draft".into());
-            f = prop(f, "size", Value::Number(14.0));
-            f = prop(
-                f,
-                "style",
-                text_val(if self.last_error.is_some() {
-                    "quartermaster.rename_bad"
-                } else {
-                    "quartermaster.rename"
-                }),
-            );
-            f
-        } else {
-            let mut t = node("text");
-            t = prop(t, "text_bind", text_val(format!("row_{i}_name")));
-            t = prop(t, "color_bind", text_val(format!("row_{i}_color")));
-            t = prop(t, "size", Value::Number(14.0));
-            t
-        };
-        // The name carries the CLASS COLOUR — the derived classification IS the
-        // colour, so a glance down the column reads as content types.
-        name.grow = Some(1.0);
-        let mut kind = node("text");
-        kind = prop(kind, "text_bind", text_val(format!("row_{i}_type")));
-        kind = prop(kind, "size", Value::Number(11.0));
-        kind = prop(kind, "color", text_val("quartermaster.meta.color"));
-        kind.width = Some(190.0);
-        let mut size = node("text");
-        size = prop(size, "text_bind", text_val(format!("row_{i}_size")));
-        size = prop(size, "size", Value::Number(12.0));
-        size = prop(size, "color", text_val("quartermaster.meta.color"));
-        size.width = Some(130.0);
-        inner.children = vec![name, kind, size];
-
-        stack.children = vec![wash, hit, inner];
-        stack
-    }
-
-    /// CM5 — the Review page: the staging QUEUE (left), the selected asset's
-    /// summary, warnings and the Promote control (centre), its FACTS (right).
-    /// Rebuilt per frame from live data, exactly like the Files listing — node
-    /// ids encode positions in the CURRENT queue (the sanctioned Rust-tree case).
-    fn review_body(&self, screen: Vec2, top: f32, h: f32) -> UiNode {
-        let mut row = node("row");
-        row.id = "review_body".into();
-        row.anchor = Some(UiAnchor::TopLeft);
-        row.offset = [0.0, top];
-        row.width = Some(screen.x);
-        row.height = Some(h);
-        row.children = vec![
-            self.review_queue_pane(h),
-            self.review_center_pane((screen.x - TREE_W - REVIEW_RAIL_W).max(220.0), h),
-            self.review_facts_pane(h),
-        ];
-        row
-    }
-
-    /// The staging queue — every promotable asset folder, cursor-lit.
-    fn review_queue_pane(&self, h: f32) -> UiNode {
-        let mut pane = node("cell");
-        pane.id = "review_queue".into();
-        pane.width = Some(TREE_W);
-        pane.height = Some(h);
-        pane = prop(pane, "style", text_val(pane_style(true)));
-
-        let mut scroll = node("list");
-        scroll.id = "review_queue_list".into();
-        scroll.grow = Some(1.0);
-        scroll.pad = 8.0;
-        scroll.children = self
-            .queue
-            .iter()
-            .enumerate()
-            .map(|(i, q)| {
-                let mut b = node("button");
-                b.id = format!("rv_row_{i}");
-                b.action = Some(format!("rv_pick_{i}"));
-                b.height = Some(LIST_ROW_H);
-                // Name and bulk are DATA; the class rides its own token label
-                // in the centre pane.
-                b = prop(
-                    b,
-                    "label",
-                    text_val(format!(
-                        "{}  \u{00b7}  {}  \u{00b7}  {}",
-                        q.name,
-                        q.files,
-                        human_bytes(q.bytes)
-                    )),
-                );
-                let style = if i == self.review_sel {
-                    "quartermaster.tab_active"
-                } else {
-                    "quartermaster.tab_idle"
-                };
-                prop(b, "style", text_val(style))
-            })
-            .collect();
-
-        pane.children =
-            vec![label("$qm_review_queue", 11.0, "quartermaster.header.color", None), scroll];
-        pane
-    }
-
-    /// The selected asset: what it is, where Promote lands it, what is wrong
-    /// with it — and the Promote control itself (pad-focusable).
-    fn review_center_pane(&self, w: f32, h: f32) -> UiNode {
-        let mut pane = node("cell");
-        pane.id = "review_center".into();
-        pane.width = Some(w);
-        pane.height = Some(h);
-        pane.pad = 20.0;
-        pane.gap = 10.0;
-        pane = prop(pane, "style", text_val(pane_style(false)));
-
-        let Some(f) = self.facts.as_ref() else {
-            pane.children =
-                vec![label("$qm_review_empty", 14.0, "quartermaster.meta.color", None)];
-            return pane;
-        };
-        let name = self.queue.get(self.review_sel).map(|q| q.name.clone()).unwrap_or_default();
-        let mut kids = Vec::new();
-        let mut title = node("text");
-        title.id = "rv_name".into();
-        title = prop(title, "text", text_val(name));
-        title = prop(title, "size", Value::Number(20.0));
-        title = prop(title, "color", text_val("quartermaster.title.color"));
-        kids.push(title);
-        kids.push(label(&f.class_token, 12.0, "quartermaster.badge.color", None));
-
-        // "Promote to" + the mirrored target path (data, never composed copy).
-        let mut target_row = node("row");
-        target_row.gap = 8.0;
-        let mut tpath = node("text");
-        tpath.id = "rv_target".into();
-        tpath = prop(tpath, "text", text_val(f.target_display.clone()));
-        tpath = prop(tpath, "size", Value::Number(12.0));
-        tpath = prop(tpath, "color", text_val("quartermaster.meta.color"));
-        target_row.children = vec![
-            label("$qm_review_target", 12.0, "quartermaster.header.color", Some(110.0)),
-            tpath,
-        ];
-        kids.push(target_row);
-
-        // Warnings — real facts, worst first; silence when there are none.
-        for (i, wtok) in f.warnings.iter().enumerate() {
-            let mut wl = label(wtok, 13.0, "quartermaster.error.color", None);
-            wl.id = format!("rv_warn_{i}");
-            kids.push(wl);
-        }
-
-        let mut spacer = node("cell");
-        spacer.grow = Some(1.0);
-        kids.push(spacer);
-
-        // The Promote control — a declared action, pad-reachable (tab_group).
-        let mut go = node("button");
-        go.id = "promote".into();
-        go.action = Some("promote".into());
-        go.size = Some(220.0);
-        go.height = Some(40.0);
-        go = prop(go, "label", text_val("$qm_review_promote"));
-        go = prop(go, "style", text_val("quartermaster.tab_active"));
-        go = prop(go, "tab_group", text_val("review"));
-        go = prop(go, "nav_ordinal", Value::Number(0.0));
-        kids.push(go);
-
-        pane.children = kids;
-        pane
-    }
-
-    /// The facts rail: parsed counts as aligned label+value lines (the labels
-    /// are resolved tokens, the values are data — the sanctioned shape).
-    fn review_facts_pane(&self, h: f32) -> UiNode {
-        let mut pane = node("cell");
-        pane.id = "review_facts".into();
-        pane.width = Some(REVIEW_RAIL_W);
-        pane.height = Some(h);
-        pane.pad = 16.0;
-        pane.gap = 6.0;
-        pane = prop(pane, "style", text_val(pane_style(false)));
-
-        let mut kids =
-            vec![label("$qm_review_facts", 11.0, "quartermaster.header.color", None)];
-        if let Some(f) = self.facts.as_ref() {
-            let r = |t: &str| flicker::ui::strings::resolve(t).into_owned();
-            let mut line = |id: &str, text: String| {
-                let mut n = node("text");
-                n.id = id.into();
-                n = prop(n, "text", text_val(text));
-                n = prop(n, "size", Value::Number(13.0));
-                n = prop(n, "color", text_val("quartermaster.meta.color"));
-                kids.push(n);
-            };
-            line("rv_fact_files", format!("{:<10}{}", r("$qm_fact_files"), f.files));
-            line("rv_fact_size", format!("{:<10}{}", r("$qm_fact_size"), human_bytes(f.bytes)));
-            if let Some(b) = f.bones {
-                line("rv_fact_bones", format!("{:<10}{}", r("$qm_fact_bones"), b));
-            }
-            if let Some(v) = f.verts {
-                line("rv_fact_verts", format!("{:<10}{}", r("$qm_fact_verts"), v));
-            }
-            if let Some(c) = f.clips {
-                line("rv_fact_clips", format!("{:<10}{}", r("$qm_fact_clips"), c));
-            }
-            if let Some(a) = f.attach_points {
-                line("rv_fact_points", format!("{:<10}{}", r("$qm_fact_points"), a));
-            }
-            if f.textures_listed > 0 {
-                line(
-                    "rv_fact_textures",
-                    format!(
-                        "{:<10}{} \u{00b7} {}",
-                        r("$qm_fact_textures"),
-                        f.textures_listed - f.textures_missing,
-                        f.textures_listed
-                    ),
-                );
-            }
-        }
-        pane.children = kids;
-        pane
-    }
-
-    fn status_bar(&self, screen: Vec2) -> UiNode {
-        let mut bar = node("row");
-        bar.id = "status_bar".into();
-        bar.anchor = Some(UiAnchor::TopLeft);
-        bar.offset = [0.0, (screen.y - STATUS_H).max(0.0)];
-        bar.width = Some(screen.x);
-        bar.height = Some(STATUS_H);
-        bar.pad = 20.0;
-        bar.gap = 10.0;
-        bar = prop(bar, "style", text_val("quartermaster.status_bar"));
-
-        let mut count = node("text");
-        count.id = "status_count".into();
-        count = prop(count, "text_bind", text_val("count"));
-        count = prop(count, "size", Value::Number(11.0));
-        count = prop(count, "color", text_val("quartermaster.meta.color"));
-
-        let mut spacer = node("cell");
-        spacer.grow = Some(1.0);
-
-        // The pending move, shown only while something is held.
-        let mut clip_label = label("$qm_holding", 11.0, "quartermaster.clip.color", None);
-        clip_label.visible_bind = Some("has_clip".into());
-        let mut clip_name = node("text");
-        clip_name.id = "status_clip".into();
-        clip_name = prop(clip_name, "text_bind", text_val("clip_name"));
-        clip_name.visible_bind = Some("has_clip".into());
-        clip_name = prop(clip_name, "size", Value::Number(11.0));
-        clip_name = prop(clip_name, "color", text_val("quartermaster.clip.color"));
-
-        // A refused mutation says so rather than failing silently.
-        let mut err = node("text");
-        err.id = "status_error".into();
-        err = prop(err, "text_bind", text_val("error"));
-        err.visible_bind = Some("has_error".into());
-        err = prop(err, "size", Value::Number(11.0));
-        err = prop(err, "color", text_val("quartermaster.error.color"));
-
-        bar.children = vec![
-            label("$qm_items", 11.0, "quartermaster.meta.color", None),
-            count,
-            spacer,
-            err,
-            clip_label,
-            clip_name,
-        ];
-        bar
+    /// This frame's chrome. The template tier this bench composed against has been
+    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
+    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
+    pub fn build_tree(&self, _screen: Vec2) -> UiNode {
+        UiNode { component: "screen".to_string(), id: "quartermaster".to_string(), ..Default::default() }
     }
 
     /// Fold this frame's walker results into bench state. ONE dispatcher: a pad
@@ -2040,7 +1404,7 @@ impl Scene for Quartermaster {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         self.refresh();
         renderer.window().set_title("Quartermaster Bench");
     }
@@ -2087,7 +1451,7 @@ impl Scene for Quartermaster {
         self.tick = self.tick.wrapping_add(1);
         // CM5: the staging queue follows the disk — a light 1 s poll (a few
         // dozen dirents); the selection survives by path.
-        if self.tab == Tab::Review && self.tick % 60 == 0 {
+        if self.tab == Tab::Review && self.tick.is_multiple_of(60) {
             self.refresh_queue();
         }
         self.ev.clear();
@@ -2180,62 +1544,18 @@ pub fn scene() -> Box<dyn Scene> {
 
 // ── small node helpers (the Rust-tree idiom) ──
 
-fn node(component: &str) -> UiNode {
-    UiNode { component: component.to_string(), ..Default::default() }
-}
-
-fn prop(mut n: UiNode, key: &str, value: Value) -> UiNode {
-    n.props.insert(key.to_string(), value);
-    n
-}
-
-fn text_val(s: impl Into<String>) -> Value {
-    Value::Text(s.into())
-}
-
-/// A `text` node carrying a `$token`; `color_path` is a dotted path into the
-/// resolved style JSON, never an inline colour.
-fn label(token: &str, size: f32, color_path: &str, width: Option<f32>) -> UiNode {
-    let mut n = node("text");
-    n = prop(n, "text", text_val(token));
-    n = prop(n, "size", Value::Number(f64::from(size)));
-    n = prop(n, "color", text_val(color_path));
-    n.width = width;
-    n
-}
-
-fn pane_style(focused: bool) -> &'static str {
-    if focused {
-        "quartermaster.pane_focused"
-    } else {
-        "quartermaster.pane"
-    }
-}
-
 /// What the Review tab knows about the SELECTED staged asset — parsed once per
-/// selection. Counts come from the primary rig json; warnings are `$token`s the
-/// tree resolves at publish, worst first.
+/// selection. The UI that displayed its counts has been removed; what survives is
+/// the cache key (`dir`) and the honest `warnings` the bench still surfaces.
 struct ReviewFacts {
     dir: PathBuf,
-    /// `package/<rel>` — where Promote will land it, shown as data.
-    target_display: String,
-    files: usize,
-    bytes: u64,
-    class_token: String,
-    bones: Option<usize>,
-    verts: Option<usize>,
-    clips: Option<usize>,
-    attach_points: Option<usize>,
-    textures_listed: usize,
-    textures_missing: usize,
+    /// `$token`s naming what is wrong with the asset, worst first.
     warnings: Vec<&'static str>,
 }
 
 impl ReviewFacts {
     fn of(item: &QueueItem, roots: &Roots) -> Self {
         let files = fs_model::files_under(&item.dir);
-        let bytes: u64 =
-            files.iter().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum();
         // The primary json: the asset's own file where present, else the first.
         let primary = files
             .iter()
@@ -2244,19 +1564,14 @@ impl ReviewFacts {
                 s.contains(&item.name) && s.contains(".json")
             })
             .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
-        let (mut bones, mut verts, mut clips, mut attach_points) = (None, None, None, None);
-        let (mut textures_listed, mut textures_missing) = (0usize, 0usize);
+        let mut bones = None;
+        let mut textures_missing = 0usize;
         if let Some(p) = primary {
             let logical = fs_model::logical(p);
             if let Ok(text) = flicker_content::package::read_text(&logical) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                    let count = |x: &serde_json::Value| x.as_array().map(|a| a.len());
-                    bones = count(&v["skeleton"]["bones"]);
-                    verts = count(&v["mesh"]["vertices"]);
-                    clips = count(&v["clips"]);
-                    attach_points = count(&v["attach_points"]);
+                    bones = v["skeleton"]["bones"].as_array().map(|a| a.len());
                     if let Some(texs) = v["source"]["textures"].as_array() {
-                        textures_listed = texs.len();
                         textures_missing = texs
                             .iter()
                             .filter_map(|t| t.as_str())
@@ -2278,23 +1593,7 @@ impl ReviewFacts {
         if target_dir.exists() {
             warnings.push("$qm_warn_target_occupied");
         }
-        Self {
-            dir: item.dir.clone(),
-            target_display: PathBuf::from("package")
-                .join(&item.rel)
-                .to_string_lossy()
-                .into_owned(),
-            files: files.len(),
-            bytes,
-            class_token: format!("$qm_class_{}", item.class.id()),
-            bones,
-            verts,
-            clips,
-            attach_points,
-            textures_listed,
-            textures_missing,
-            warnings,
-        }
+        Self { dir: item.dir.clone(), warnings }
     }
 }
 
@@ -2405,7 +1704,6 @@ fn human_bytes(b: u64) -> String {
 mod tests {
     use super::*;
     use flicker_content::PackageClass;
-    use flicker_input_core::ActionSignal;
 
     fn scratch(name: &str) -> (Quartermaster, PathBuf) {
         let d = std::env::temp_dir().join(format!("flicker_qmbench_{name}"));
@@ -2478,9 +1776,6 @@ mod tests {
         assert_eq!(qm.tab(), Tab::Files);
         qm.cycle_tab();
         assert_eq!(qm.tab(), Tab::Review);
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        assert!(find_id(&tree, "review_body").is_some(), "the Review body is shown");
-        assert!(find_id(&tree, "files_body").is_none());
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2492,72 +1787,6 @@ mod tests {
         assert_eq!(qm.sort(), (SortKey::Name, true), "same key flips");
         qm.sort_by(SortKey::Size);
         assert_eq!(qm.sort(), (SortKey::Size, false), "a new key starts ascending");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// A `list` REPLACES the inherited scissor rather than intersecting it, so a
-    /// list inside a list clips wrong. The tree and the file list must stay
-    /// siblings — this pins that.
-    #[test]
-    fn the_two_lists_are_siblings_never_nested() {
-        let (qm, d) = scratch("clip");
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        fn walk(n: &UiNode, lists: usize, deepest: &mut usize) {
-            let lists = lists + usize::from(n.component == "list");
-            *deepest = (*deepest).max(lists);
-            for c in &n.children {
-                walk(c, lists, deepest);
-            }
-        }
-        let mut deepest = 0;
-        walk(&tree, 0, &mut deepest);
-        assert_eq!(deepest, 1, "no list is nested inside another");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// Only the visible window becomes UI — a folder of hundreds of files must
-    /// not build hundreds of row nodes.
-    #[test]
-    fn a_big_folder_only_builds_its_visible_window() {
-        let d = std::env::temp_dir().join("flicker_qmbench_window");
-        let _ = std::fs::remove_dir_all(&d);
-        let roots = Roots { package: d.join("package"), staging: d.join("staging") };
-        std::fs::create_dir_all(&roots.package).unwrap();
-        std::fs::create_dir_all(&roots.staging).unwrap();
-        for i in 0..400 {
-            flicker_content::package::write_text(
-                &roots.package.join(format!("clip_{i:03}.json")),
-                r#"{"clips":[{"name":"x"}]}"#,
-            )
-            .unwrap();
-        }
-        let qm = Quartermaster::with_roots(roots);
-        assert_eq!(qm.rows().len(), 400);
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        let rows = count_ids_prefixed(&tree, "listrow_");
-        assert!(rows < 60, "windowed to the viewport, built {rows} rows of 400");
-        assert!(rows > 5, "but it did build the visible ones ({rows})");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    #[test]
-    fn the_screen_declares_its_intents_as_data() {
-        let (qm, d) = scratch("intents");
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        let intents = UiIntents::of(&tree);
-        for (sig, name) in [
-            (ActionSignal::Menu, "pause_open"),
-            (ActionSignal::Confirm, "confirm"),
-            (ActionSignal::Cancel, "cancel"),
-            (ActionSignal::NavUp, "nav_up"),
-            (ActionSignal::NavDown, "nav_down"),
-            (ActionSignal::PanelNext, "panel_next"),
-            (ActionSignal::PanelPrev, "panel_prev"),
-            (ActionSignal::TabNext, "tab_next"),
-            (ActionSignal::TabPrev, "tab_prev"),
-        ] {
-            assert_eq!(intents.result_for(sig), Some(name), "{sig:?} must be declared");
-        }
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2579,34 +1808,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// Nothing may escape the screen at either shipped resolution.
-    #[test]
-    fn the_chrome_fits_both_reference_resolutions() {
-        let (qm, d) = scratch("geometry");
-        fn walk(n: &UiNode, screen: Vec2, over: &mut Vec<String>) {
-            if let Some(w) = n.width {
-                if w > screen.x + 0.5 {
-                    over.push(format!("{} w={w}", n.id));
-                }
-            }
-            if let Some(h) = n.height {
-                if h > screen.y + 0.5 {
-                    over.push(format!("{} h={h}", n.id));
-                }
-            }
-            for c in &n.children {
-                walk(c, screen, over);
-            }
-        }
-        for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(1280.0, 720.0)] {
-            let tree = qm.build_tree(screen);
-            let mut over = Vec::new();
-            walk(&tree, screen, &mut over);
-            assert!(over.is_empty(), "chrome overflows {screen:?}: {over:?}");
-        }
-        let _ = std::fs::remove_dir_all(d);
-    }
-
     /// Run the REAL walker over the REAL tree and styles, and read back where
     /// text actually landed. Layout bugs are invisible to a tree-shape
     /// assertion — this is the only way to prove alignment without a window.
@@ -2622,7 +1823,7 @@ mod tests {
         flicker::ui::strings::load_str(&strings, "en-us");
 
         let tree = qm.build_tree(screen);
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let mut state = UiState::default();
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
@@ -2647,61 +1848,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    /// The listing's columns must line up under their headers, and the rows must
-    /// span the pane rather than bunching at the left edge.
-    ///
-    /// Regression: the row's inner `row` carried no `width_frac`, so — a `stack`
-    /// hugging its largest child — it measured to its CONTENT and the `grow`
-    /// column had nothing to distribute into. Aaron saw it as "text alignment
-    /// is off" on the first smoke test.
-    #[test]
-    fn the_listing_columns_span_the_pane_and_line_up() {
-        let (qm, d) = scratch("align");
-        let screen = Vec2::new(1920.0, 1080.0);
-        let text = drawn_text(&qm, screen);
-        assert!(!text.is_empty(), "the walker drew no text at all");
-
-        // The listing's ROWS, by geometry: right of the tree pane and below the
-        // column header. (The header's own labels are `button` captions, which
-        // are centre-anchored, so their x is not comparable to a row cell's.)
-        let header_bottom = TOP_BAR_H + TAB_BAR_H + CRUMB_H + HEADER_H;
-        let rows_bottom = screen.y - STATUS_H;
-        let row_cells: Vec<&(f32, f32, String)> = text
-            .iter()
-            .filter(|(x, y, _)| *x > TREE_W && *y > header_bottom && *y < rows_bottom)
-            .collect();
-        assert!(!row_cells.is_empty(), "no text drawn in the listing rows: {text:?}");
-
-        // Spanning: a bunched row leaves the right of the pane bare.
-        let rightmost = row_cells.iter().map(|(x, _, _)| *x).fold(f32::MIN, f32::max);
-        assert!(
-            rightmost > screen.x * 0.6,
-            "row text stops at x={rightmost} — the columns bunched at the left instead of spanning"
-        );
-
-        // Alignment: every row shares the SAME three column origins.
-        let mut xs: Vec<i32> = row_cells.iter().map(|(x, _, _)| x.round() as i32).collect();
-        xs.sort_unstable();
-        xs.dedup();
-        assert_eq!(
-            xs.len(),
-            3,
-            "expected 3 shared column origins (name/type/size), got {xs:?} from {row_cells:?}"
-        );
-
-        // And the same holds at the smaller reference resolution.
-        let narrow = Vec2::new(1280.0, 720.0);
-        let mut nxs: Vec<i32> = drawn_text(&qm, narrow)
-            .iter()
-            .filter(|(x, y, _)| *x > TREE_W && *y > header_bottom && *y < narrow.y - STATUS_H)
-            .map(|(x, _, _)| x.round() as i32)
-            .collect();
-        nxs.sort_unstable();
-        nxs.dedup();
-        assert_eq!(nxs.len(), 3, "columns drift at 1280×720: {nxs:?}");
-        let _ = std::fs::remove_dir_all(d);
     }
 
     /// The design asks for the basename to be PRESELECTED. The text field has
@@ -2823,126 +1969,6 @@ mod tests {
         // The two that DO reach it.
         qm.apply_results(&on("rename_cancel"));
         assert!(!qm.is_renaming());
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// The context menu opens on the declared intent, is instanced from the
-    /// proto, and its rows carry the bench's OWN verb names — so a menu pick and
-    /// a chord are one event at the dispatcher.
-    #[test]
-    fn the_context_menu_opens_from_the_intent_and_offers_the_bench_verbs() {
-        let (mut qm, d) = scratch("menu");
-        assert!(!qm.is_menu_open(), "closed on a settled bench");
-
-        qm.apply_results(&on("menu_open"));
-        assert!(qm.is_menu_open(), "the declared intent opens it");
-
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
-            if pred(n) {
-                hits.push(n);
-            }
-            for c in &n.children {
-                find(c, pred, hits);
-            }
-        }
-        let mut raw = vec![];
-        find(&tree, &|n| n.template.is_some(), &mut raw);
-        assert!(raw.is_empty(), "unexpanded template nodes");
-
-        let mut menus = vec![];
-        find(&tree, &|n| n.component == "context_menu", &mut menus);
-        assert_eq!(menus.len(), 1, "one menu, instanced from the proto");
-        assert_eq!(menus[0].visible_bind.as_deref(), Some("has_menu"), "gated by the bench");
-        let actions: Vec<_> =
-            menus[0].children.iter().filter_map(|r| r.action.as_deref()).collect();
-        for v in ["confirm", "rename", "cut", "paste", "create_folder"] {
-            assert!(actions.contains(&v), "{v} missing from {actions:?}");
-        }
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// Paste is offered only when something is actually held — and the state is
-    /// re-derived every frame, so picking up an item enables the row.
-    #[test]
-    fn the_menus_paste_row_follows_the_clipboard() {
-        let (mut qm, d) = scratch("menupaste");
-        qm.open_menu();
-
-        fn paste_disabled(qm: &Quartermaster) -> Option<bool> {
-            let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-            fn find<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
-                if n.component == "context_menu" {
-                    out.push(n);
-                }
-                for c in &n.children {
-                    find(c, out);
-                }
-            }
-            let mut m = vec![];
-            find(&tree, &mut m);
-            let row = m[0].children.iter().find(|r| r.action.as_deref() == Some("paste"))?;
-            match row.props.get("disabled") {
-                Some(Value::Bool(b)) => Some(*b),
-                _ => Some(false),
-            }
-        }
-        assert_eq!(paste_disabled(&qm), Some(true), "nothing held — Paste is dead");
-        qm.nav(1);
-        qm.cut();
-        assert_eq!(paste_disabled(&qm), Some(false), "holding one — Paste is live");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// THE CONTROLLER BASELINE for the menu: open it, walk it with the d-pad,
-    /// pick with Confirm — no pointer anywhere. The cursor skips the divider and
-    /// any dead row, and the highlight rides the same per-row param the pick
-    /// reads, so what is lit is what runs.
-    #[test]
-    fn the_menu_is_walkable_and_pickable_from_a_pad_alone() {
-        let (mut qm, d) = scratch("menupad");
-        qm.apply_results(&on("menu_open"));
-
-        fn active_rows(qm: &Quartermaster) -> Vec<usize> {
-            let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-            fn find<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
-                if n.component == "context_menu" {
-                    out.push(n);
-                }
-                for c in &n.children {
-                    find(c, out);
-                }
-            }
-            let mut m = vec![];
-            find(&tree, &mut m);
-            m[0]
-                .children
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| matches!(r.props.get("active"), Some(Value::Bool(true))))
-                .map(|(i, _)| i)
-                .collect()
-        }
-
-        // Exactly one row is lit, and it starts on the first.
-        assert_eq!(active_rows(&qm), vec![0], "opens with the first row lit");
-
-        // The d-pad walks it. Paste (proto row 3) is DEAD with an empty clipboard,
-        // so the cursor steps straight over it to New folder (proto row 5) —
-        // never onto the divider at row 4.
-        qm.apply_results(&on("nav_down"));
-        assert_eq!(active_rows(&qm), vec![1], "→ Rename");
-        qm.apply_results(&on("nav_down"));
-        assert_eq!(active_rows(&qm), vec![2], "→ Cut");
-        qm.apply_results(&on("nav_down"));
-        assert_eq!(active_rows(&qm), vec![5], "skipped dead Paste AND the divider");
-
-        // Confirm picks what is lit — and the listing cursor never moved while
-        // the menu was steering.
-        assert!(!qm.can_undo());
-        qm.apply_results(&on("confirm"));
-        assert!(!qm.is_menu_open(), "the pick closed the menu");
-        assert!(qm.can_undo(), "and New folder ran");
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -3120,36 +2146,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The Review page is a real, gated tree: fully expanded, promote declared
-    /// as an action, the queue rows pickable, and every string a token or data.
-    #[test]
-    fn the_review_page_tree_is_expanded_and_carries_the_promote_control() {
-        let (mut qm, d) = scratch("reviewtree");
-        stage_asset(&d, "NewThing", true);
-        qm.tab = Tab::Review;
-        qm.refresh_queue();
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
-            if pred(n) {
-                hits.push(n);
-            }
-            for c in &n.children {
-                find(c, pred, hits);
-            }
-        }
-        let mut raw = vec![];
-        find(&tree, &|n| n.template.is_some(), &mut raw);
-        assert!(raw.is_empty(), "unexpanded template nodes");
-        let mut promote = vec![];
-        find(&tree, &|n| n.id == "promote", &mut promote);
-        assert_eq!(promote.len(), 1, "the Promote control is in the tree");
-        assert_eq!(promote[0].action.as_deref(), Some("promote"));
-        let mut rows = vec![];
-        find(&tree, &|n| n.action.as_deref() == Some("rv_pick_0"), &mut rows);
-        assert_eq!(rows.len(), 1, "the queue row is pickable");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
     /// A chord verb fired while the menu is up closes it AND runs — one event,
     /// one dispatcher, whether it came from a row click or the keyboard.
     #[test]
@@ -3270,177 +2266,6 @@ mod tests {
         // than long-expired — the safe direction: a confirmation lingers instead
         // of vanishing before it is read.
         assert!(toast_alive(u64::MAX, 0), "a born-ahead toast shows rather than vanishing");
-    }
-
-    /// The stack is instanced from the proto, and its rows' Undo buttons fire the
-    /// same result the chord does — so a click and a chord are indistinguishable.
-    #[test]
-    fn the_toast_stack_is_instanced_and_its_undo_is_the_chord_result() {
-        let (mut qm, d) = scratch("toastproto");
-        qm.create_folder();
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-
-        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
-            if pred(n) {
-                hits.push(n);
-            }
-            for c in &n.children {
-                find(c, pred, hits);
-            }
-        }
-        let mut raw = vec![];
-        find(&tree, &|n| n.template.is_some(), &mut raw);
-        assert!(raw.is_empty(), "unexpanded template nodes in the built tree");
-
-        let mut undos = vec![];
-        find(&tree, &|n| n.action.as_deref() == Some("undo"), &mut undos);
-        assert_eq!(undos.len(), TOAST_SLOTS, "one inline Undo per slot");
-
-        // And that result really is the undo verb: firing it takes the folder back.
-        assert!(qm.can_undo());
-        qm.apply_results(&on("undo"));
-        assert!(!qm.can_undo(), "the toast's Undo is the same verb as the chord");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// The dialog is DATA, not code (Aaron's ruling after the primitives
-    /// violation): `build_tree` returns the EXPANDED tree, and the expansion of
-    /// the one `conflict_dialog` instance node must yield the proto's real
-    /// chrome — `expand`'s failure mode is a warn + empty screen, which every
-    /// gate passes silently, so presence has to be asserted positively.
-    #[test]
-    fn the_conflict_dialog_is_instanced_from_the_proto() {
-        let (qm, d) = scratch("proto");
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-
-        fn find<'a>(n: &'a UiNode, pred: &dyn Fn(&UiNode) -> bool, hits: &mut Vec<&'a UiNode>) {
-            if pred(n) {
-                hits.push(n);
-            }
-            for c in &n.children {
-                find(c, pred, hits);
-            }
-        }
-        // No template node survived expansion (a typo'd name would also be
-        // reported by the unknown_kinds gate as `template:<name>`).
-        let mut raw = vec![];
-        find(&tree, &|n| n.template.is_some(), &mut raw);
-        assert!(raw.is_empty(), "unexpanded template nodes in the built tree");
-
-        // The proto's chrome is present and still gated by the bench's key.
-        let mut dialog = vec![];
-        find(&tree, &|n| n.visible_bind.as_deref() == Some("has_prompt"), &mut dialog);
-        assert_eq!(dialog.len(), 1, "one gated dialog root");
-        let mut popup = vec![];
-        find(&tree, &|n| n.id == "conflict_popup", &mut popup);
-        assert_eq!(popup.len(), 1, "the proto's popup expanded into the tree");
-        let mut actions = vec![];
-        find(&tree, &|n| {
-            matches!(
-                n.action.as_deref(),
-                Some("conflict_skip" | "conflict_keep_both" | "conflict_replace")
-            )
-        }, &mut actions);
-        assert_eq!(actions.len(), 3, "the three resolutions are wired");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// Tree rows must not OVERLAP. Indentation used a uniform `pad`, which insets
-    /// all four sides — so a deep row grew vertically, overran its fixed-height
-    /// stack and collided with its neighbours (`Strafe` over `RootMotion`,
-    /// `muse` over `epochs`, visible in Aaron's 2026-08-02 smoke test). Indent
-    /// belongs on a leading spacer, which cannot touch the row's height.
-    #[test]
-    fn tree_rows_are_evenly_spaced_at_every_depth() {
-        let (mut qm, d) = scratch("treespace");
-        // Expand everything reachable so the deep rows (the ones that collided)
-        // are actually in the built tree.
-        for _ in 0..4 {
-            for i in 0..qm.tree_view().len() {
-                qm.apply_results(&on(&format!("tree_open_{i}")));
-            }
-        }
-        let screen = Vec2::new(1920.0, 1080.0);
-        let text = drawn_text(&qm, screen);
-
-        // Tree-pane captions only: left of the listing, below the chrome.
-        let mut ys: Vec<i32> = text
-            .iter()
-            .filter(|(x, y, _)| {
-                *x < TREE_W
-                    && *y > TOP_BAR_H + TAB_BAR_H + CRUMB_H
-                    && *y < screen.y - STATUS_H
-            })
-            .map(|(_, y, _)| y.round() as i32)
-            .collect();
-        ys.sort_unstable();
-        ys.dedup();
-        assert!(ys.len() > 3, "expected several tree rows, got {ys:?}");
-
-        // Every gap between consecutive rows is the SAME — a row that grew with
-        // its depth shows up here as a wider (or negative) gap.
-        let gaps: Vec<i32> = ys.windows(2).map(|w| w[1] - w[0]).collect();
-        let first = gaps[0];
-        assert!(
-            gaps.iter().all(|g| (*g - first).abs() <= 1),
-            "tree rows are unevenly spaced (depth is inflating row height): gaps={gaps:?} ys={ys:?}"
-        );
-        let _ = std::fs::remove_dir_all(d);
-    }
-
-    /// The selection wash must actually DRAW. The bind being on the right field
-    /// and the Model publishing `true` prove nothing about pixels — this walks
-    /// the real tree and counts the wash's own `panel_bg` ($accent_wash) in the
-    /// emitted commands.
-    ///
-    /// NOTE for anyone who repeats this: an earlier pass filtered candidates on
-    /// `x > TREE_W` and concluded the wash never drew. A `width_frac = 1` wash
-    /// starts at EXACTLY `TREE_W`, so the filter hid the very command it was
-    /// looking for. Match on the colour, not on a strict inequality.
-    #[test]
-    fn exactly_one_selection_wash_is_drawn() {
-        let (qm, d) = scratch("wash");
-        let screen = Vec2::new(1920.0, 1080.0);
-        let tree = qm.build_tree(screen);
-        let styles = load_styles(HUD_UI_ELEMENTS);
-        let mut state = UiState::default();
-        let snap = UiInput {
-            mouse: Vec2::new(-1.0, -1.0),
-            clicked: false,
-            down: false,
-            screen,
-            typed: String::new(),
-            backspace: false,
-            wheel: 0.0,
-        };
-        let frame = run_ui(&tree, &qm.hud_model(), &styles, &snap, &mut state);
-        // $accent_wash — the one colour only `quartermaster.rowsel` carries.
-        let washes: Vec<(f32, f32, f32, f32)> = frame
-            .commands
-            .iter()
-            .filter_map(|c| match c {
-                HudCommand::Panel { x, y, w, h, color, .. }
-                    if (color[0] - 0.141).abs() < 1e-3
-                        && (color[2] - 0.471).abs() < 1e-3
-                        && (color[3] - 0.1).abs() < 1e-3 =>
-                {
-                    Some((*x, *y, *w, *h))
-                }
-                _ => None,
-            })
-            .collect();
-
-        // The listing holds focus by default, so exactly ONE listing row is
-        // washed and no tree row is.
-        assert_eq!(
-            washes.len(),
-            1,
-            "expected exactly one drawn selection wash, got {washes:?}"
-        );
-        let (_, _, w, h) = washes[0];
-        assert!(h > 0.0, "the wash drew with zero height — invisible: {washes:?}");
-        assert!(w > 0.0, "the wash drew with zero width — invisible: {washes:?}");
-        let _ = std::fs::remove_dir_all(d);
     }
 
     /// Stage a collision: `Alpha.json` cut from `cwd`, with an occupant of the
@@ -3587,42 +2412,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// REGRESSION: `visible_bind`, `tab_group` and `nav_ordinal` are FIELDS on
-    /// `UiNode`, not props — setting a prop of the same name compiles, reads
-    /// fine, and is silently ignored. The selection wash was therefore drawn on
-    /// EVERY row, and no row registered as a nav focusable.
-    #[test]
-    fn rows_carry_their_bind_and_nav_wiring_as_fields() {
-        let (qm, d) = scratch("fields");
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
-
-        // The walker's own collector is the authority on what is focusable.
-        let focusables = flicker::ui::focusables_of(&tree, &qm.hud_model());
-        for pane in Pane::ALL {
-            assert!(
-                focusables.iter().any(|f| f.group == pane.id()),
-                "no focusable registered for the {:?} pane — d-pad nav would do nothing",
-                pane
-            );
-        }
-
-        // Exactly one row's wash may be bound to each selection key, and the
-        // key must be the FIELD the walker reads.
-        fn washes(n: &UiNode, out: &mut Vec<String>) {
-            if let Some(b) = &n.visible_bind {
-                out.push(b.clone());
-            }
-            for c in &n.children {
-                washes(c, out);
-            }
-        }
-        let mut binds = Vec::new();
-        washes(&tree, &mut binds);
-        assert!(binds.iter().any(|b| b.starts_with("row_")), "row selection washes are bound");
-        assert!(binds.iter().any(|b| b.starts_with("tree_")), "tree selection washes are bound");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
     /// THE controller baseline for mutation: pick up, navigate, put down, take
     /// back — all on a single focus, with no pointer and no multi-select.
     #[test]
@@ -3762,29 +2551,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// Every verb reaches the bench as a declared intent, so a pad chord, a
-    /// Ctrl-key and a menu item are indistinguishable at the dispatcher.
-    #[test]
-    fn the_editor_verbs_are_declared_and_dispatch() {
-        let (qm, d) = scratch("verbs");
-        let intents = UiIntents::of(&qm.build_tree(Vec2::new(1920.0, 1080.0)));
-        for (sig, name) in [
-            (ActionSignal::Cut, "cut"),
-            (ActionSignal::Paste, "paste"),
-            (ActionSignal::Undo, "undo"),
-            (ActionSignal::Redo, "redo"),
-            (ActionSignal::CreateFolder, "create_folder"),
-        ] {
-            assert_eq!(intents.result_for(sig), Some(name), "{sig:?} must be declared");
-        }
-
-        // And the dispatcher acts on the fired NAME, not on a key.
-        let (mut qm, _) = scratch("verbs2");
-        qm.apply_results(&on("create_folder"));
-        assert!(qm.can_undo(), "the fired intent name mutated the tree");
-        let _ = std::fs::remove_dir_all(d);
-    }
-
     /// The MISSING gate kind, closed for this screen: `raw_display_literals`
     /// proves every display string IS a `$token`, but nothing proves the token
     /// RESOLVES — a typo'd or unadded token ships as raw `$qm_…` on screen.
@@ -3824,15 +2590,13 @@ mod tests {
         m
     }
 
-    fn find_id<'a>(n: &'a UiNode, id: &str) -> Option<&'a UiNode> {
-        if n.id == id {
-            return Some(n);
-        }
-        n.children.iter().find_map(|c| find_id(c, id))
-    }
+}
 
-    fn count_ids_prefixed(n: &UiNode, prefix: &str) -> usize {
-        usize::from(n.id.starts_with(prefix))
-            + n.children.iter().map(|c| count_ids_prefixed(c, prefix)).sum::<usize>()
-    }
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
 }

@@ -120,7 +120,13 @@ impl DiscreteSource for WindowSource {
 /// arm did (`runner.rs:111`).
 fn apply_op(op: &KbmOp, out: &mut InputState) {
     match op {
-        KbmOp::CursorMoved(pos) => out.mouse_position = *pos,
+        KbmOp::CursorMoved(pos) => {
+            // Accumulate this frame's motion (the pointer-look delta) against the
+            // retained position, then advance the position. `mouse_position` holds the
+            // previous sample (it survives across frames), so the difference is the move.
+            out.mouse_delta += *pos - out.mouse_position;
+            out.mouse_position = *pos;
+        }
         KbmOp::MouseButton { button, down } => {
             if out.mouse_button_down(*button) != *down {
                 out.push_edge(InputEdge::Mouse { button: *button, down: *down });
@@ -470,11 +476,22 @@ mod tests {
         assert_eq!(input.mouse_position, Vec2::new(3.0, 4.0));
         // Wheel accumulates across events in a frame.
         assert!((input.mouse_wheel_delta - 2.0).abs() < f32::EPSILON);
+        // The pointer-look delta is this frame's MOTION (from the origin, here).
+        assert_eq!(input.mouse_delta, Vec2::new(3.0, 4.0));
         // Buffer is emptied by the drain.
         assert!(src.buffer.is_empty());
 
         // A second drain with no new events is a no-op (held state persists).
         src.drain_into(&mut input);
         assert_eq!(input.mouse_position, Vec2::new(3.0, 4.0));
+
+        // The per-frame reset clears the motion delta (like the wheel); a later move
+        // then accumulates against the RETAINED position — a MOTION, not an absolute.
+        input.clear_frame_edges();
+        assert_eq!(input.mouse_delta, Vec2::ZERO);
+        src.buffer.push(KbmOp::CursorMoved(Vec2::new(10.0, 9.0)));
+        src.drain_into(&mut input);
+        assert_eq!(input.mouse_delta, Vec2::new(7.0, 5.0), "delta is (10,9) - (3,4)");
+        assert_eq!(input.mouse_position, Vec2::new(10.0, 9.0));
     }
 }

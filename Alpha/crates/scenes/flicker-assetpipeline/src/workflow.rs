@@ -1,3 +1,8 @@
+//! ⛔ RETIRED FROM THE ENGINE (Aaron, 2026-08-12) — this runtime was VENDORED into
+//! its ONLY consumer (this dormant bench) when flicker-widgets dropped the
+//! Workflow/Orchestration construct; it dies entirely when this bench migrates to
+//! the scene-def + Lua system. Do not grow it; do not re-export it.
+//!
 //! The **Workflow** — an Orchestration with an ordinal (Aaron, ratified
 //! 2026-08-01): a LINEAR sequence of step surfaces + gates + the document
 //! contract, wrapping ONE [`Surfaces`] exclusive group. Branching is deliberately
@@ -31,9 +36,9 @@
 //! `wf_<id>_style` (a dotted style path for `style_bind` rail chips:
 //! `workflow.chip.active` / `.visited` / `.todo`).
 
-use crate::surfaces::{Surface, Surfaces};
+use flicker::ui::{Surface, Surfaces};
 use flicker_input_router::RouteCtx;
-use flicker_script::ValueMap;
+use flicker::script::ValueMap;
 use std::collections::HashMap;
 
 /// One declared step of a workflow: its stable `id`, its rail title (a
@@ -119,7 +124,7 @@ struct WorkflowsFile {
 }
 
 /// Load the workflow definitions from `ui_workflows.json` content (durable
-/// resources — the sibling of `ui_templates.json`). Best-effort like every
+/// content under `content/sensorium/resources/`). Best-effort like every
 /// loader in this crate: a parse error warns and yields an empty map rather
 /// than taking the bench down.
 pub fn workflows_from_json(json: &str) -> HashMap<String, WorkflowDef> {
@@ -300,7 +305,7 @@ impl Workflow {
             } else {
                 "todo"
             };
-            m.set(format!("wf_{}_title", s.id), crate::strings::resolve(&s.title).into_owned());
+            m.set(format!("wf_{}_title", s.id), flicker::ui::strings::resolve(&s.title).into_owned());
             m.set(format!("wf_{}_style", s.id), format!("workflow.chip.{state}"));
             // Rail MEMBERSHIP: true for every step of the running definition, so
             // the rail derives from the data — a chip's visible_bind names this,
@@ -321,8 +326,8 @@ impl Workflow {
     /// a step that would flip its surface and render NOTHING. Wire this into the
     /// screen's drift-gate test (`assert!(wf.ungated_steps(&tree).is_empty())`)
     /// so a definition/tree mismatch is a build failure, not a blank page.
-    pub fn ungated_steps(&self, tree: &flicker_script::UiNode) -> Vec<String> {
-        fn gates(n: &flicker_script::UiNode, key: &str) -> bool {
+    pub fn ungated_steps(&self, tree: &flicker::script::UiNode) -> Vec<String> {
+        fn gates(n: &flicker::script::UiNode, key: &str) -> bool {
             n.visible_bind.as_deref() == Some(key) || n.children.iter().any(|c| gates(c, key))
         }
         self.steps
@@ -415,7 +420,6 @@ mod tests {
 
     #[test]
     fn publish_reports_rail_footer_and_exclusive_surfaces() {
-        let _g = crate::strings::test_guard();
         let mut w = Workflow::new(steps());
         let doc = ValueMap::new().with("source", "s");
         let mut m = ValueMap::new();
@@ -436,8 +440,10 @@ mod tests {
         assert!(m.is_on("wf_can_next"));
         assert_eq!(m.text("wf_task_style"), Some("workflow.chip.active"));
         assert_eq!(m.text("wf_conform_style"), Some("workflow.chip.todo"));
-        // An unloaded token resolves to its raw name — visible, greppable.
-        assert_eq!(m.text("wf_task_title"), Some("$wf_step_task"));
+        // (Raw-token fallback for an UNLOADED table is a strings-module property,
+        // tested there — not asserted here, where sibling tests load the real table
+        // process-wide.)
+        assert!(m.text("wf_task_title").is_some());
 
         w.handle(&fired("wf_next"), &doc);
         let mut m = ValueMap::new();

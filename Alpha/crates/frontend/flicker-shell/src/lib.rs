@@ -23,7 +23,7 @@
 //! exactly two things: [`Theme`] (to draw its loading widget and to hand to the
 //! [`PauseScene`] it pushes) and [`take_pending_input`] (to pick up input
 //! settings changes made in the pause menu). Everything else — the shell
-//! scripts, the `ui_elements.json` layout, and the publisher/engine logos — is
+//! scripts, the `ui_theme.json` layout, and the publisher/engine logos — is
 //! embedded in the crate, so a new client inherits the front-end with no copied
 //! files.
 
@@ -32,7 +32,8 @@ mod shell;
 mod theme;
 
 pub use shell::{
-    input_controls, run, take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo,
-    ShellConfig, REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER,
+    builtin_behaviours, current_world_map, input_controls, input_profile, run,
+    take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo, ShellConfig,
+    REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER,
 };
 pub use theme::Theme;

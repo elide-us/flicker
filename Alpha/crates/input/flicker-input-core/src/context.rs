@@ -97,8 +97,17 @@ impl InputContext {
     /// [`chord`]: crate::chord
     pub const Chord: InputContext = InputContext(7);
 
+    /// The FLIGHT PATH (on-rails cinematic) camera — the flight-camera vehicle ON its
+    /// rail. The camera is driven along an authored flight; the LEFT STICK modulates
+    /// THROTTLE (rail speed ≤5×), a Look gesture (right stick / RMB-drag) DROPS OUT to
+    /// [`Flying`](Self::Flying) (the same vehicle off the rail), and Interact restarts
+    /// the flight. Paired 1:1 with `Flying`, the two modes of one flight camera (MCP
+    /// `3B4DB4C2`: input context = vehicle/mode type). Off the rail, `Flying` reads the
+    /// left stick as ZOOM and look as PAN.
+    pub const FlightPath: InputContext = InputContext(8);
+
     /// First id available to consumer-defined contexts (built-ins occupy `0..FIRST_CUSTOM`).
-    pub const FIRST_CUSTOM: u16 = 8;
+    pub const FIRST_CUSTOM: u16 = 9;
 
     /// Register/refer to a consumer-defined context by raw id. Callers should
     /// use ids `>= FIRST_CUSTOM` to avoid colliding with the built-ins.
@@ -128,6 +137,7 @@ impl InputContext {
         ("Flying", InputContext::Flying),
         ("Vehicle", InputContext::Vehicle),
         ("Chord", InputContext::Chord),
+        ("FlightPath", InputContext::FlightPath),
     ];
 
     /// Resolve a built-in context NAME to its [`InputContext`], or `None` if the name
@@ -229,6 +239,14 @@ impl ContextualBindings {
         self
     }
 
+    /// Replace one context's map IN PLACE, preserving the active-context stack — the
+    /// pump's settings-rebind seam (input-P3): the runner re-reads the committed World
+    /// map and writes it here each frame, so a live rebind reaches every scene consuming
+    /// the pump without any scene owning a `Resolver`. `with` is the build-time twin.
+    pub fn set_map(&mut self, context: InputContext, map: InputMap) {
+        self.maps.insert(context, map);
+    }
+
     /// The context currently on top of the stack.
     pub fn active(&self) -> InputContext {
         self.stack.last().copied().unwrap_or(InputContext::World)
@@ -295,6 +313,23 @@ impl ContextualBindings {
             .bindings_for(signal)
             .iter()
             .map(|&b| binding_axis(b, s, cfg))
+            .fold(0.0f32, f32::max)
+    }
+
+    /// The pointer-look DELTA for `signal` in the active context (pixels this frame)
+    /// — the mouse channel beside [`signal_axis`](Self::signal_axis)'s stick rate.
+    /// Sums the `MouseMotion` bindings' gated, directional deltas (largest wins, as
+    /// `signal_axis` does). Zero unless a `MouseMotion` is bound to `signal` and its
+    /// gate (if any) is held. A camera ADDS this (frame-absolute, no `dt`) to
+    /// `signal_axis` (a rate, ×`dt`): a stick is a deflection integrated over time, a
+    /// mouse move is a delta already made this frame. Keeping mouse-look a BOUND
+    /// signal (not a raw poll) is what lets "handle the signal, not the key" hold for
+    /// the mouse too.
+    pub fn signal_pointer_delta(&self, signal: ActionSignal, s: &InputState) -> f32 {
+        self.active_map()
+            .bindings_for(signal)
+            .iter()
+            .map(|&b| b.mouse_delta_axis(s))
             .fold(0.0f32, f32::max)
     }
 
@@ -469,6 +504,14 @@ impl InputProfile {
                     // Menus fire on RELEASE (escape a mis-press before letting go, spec §3.2).
                     ContextBindings { map: menu_map(), default_event: EventKind::Release, signals: Vec::new() },
                 ),
+                // The flight-camera VEHICLE contexts (3B4DB4C2): part of the built-in set so
+                // the shared pump can resolve them when a scene (Solar Birth) declares one —
+                // the scene no longer owns a private resolver (input-P3, 0569DA9B). Both are
+                // Press-default: their throttle/zoom/look signals are CONTINUOUS (queried via
+                // `signal_axis`/`signal_pointer_delta`, not edges), and only Interact (restart)
+                // + Menu (pause) ride the edge stream.
+                ("FlightPath".to_string(), ContextBindings::simple(InputMap::flight_path())),
+                ("Flying".to_string(), ContextBindings::simple(InputMap::flying())),
             ],
             controls: AbstractControls::default(),
             gamepad: GamepadConfig::default(),
@@ -532,7 +575,7 @@ impl Default for InputProfile {
 /// Small on purpose — a menu mostly reuses `World` via the fall-through; this only adds
 /// the nav / confirm intents a menu needs (spec §7.1 "a simple Menu map").
 fn menu_map() -> InputMap {
-    use crate::device::{GamepadButton, Key};
+    use crate::device::{AxisDirection, GamepadAxis, GamepadButton, Key};
     let mut m = InputMap::empty();
     // Keyboard.
     m.bind(ActionSignal::Confirm, InputBinding::Key(Key::Enter));
@@ -551,6 +594,19 @@ fn menu_map() -> InputMap {
     // the ONE shared definition, also carried by the `World` preset for bench
     // chrome (see `InputMap::bind_menu_rails`).
     m.bind_menu_rails();
+    // The LEFT STICK cycles PANELS (the walker's panel cursor) — so the pad crosses from
+    // the menu's nav buttons over to the scene-selector list. The rails above are the
+    // tab/page scales; this is the panel scale, the SAME left-stick convention the
+    // bench-nav tier uses (`bind_bench_nav`), bound here because the Menu context is not a
+    // superset of World and would otherwise leave the panel signal dead hardware.
+    m.bind(
+        ActionSignal::PanelPrev,
+        InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Negative },
+    );
+    m.bind(
+        ActionSignal::PanelNext,
+        InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Positive },
+    );
     m.bind(ActionSignal::Confirm, InputBinding::GamepadButton(GamepadButton::South));
     m.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
     m
@@ -808,5 +864,32 @@ mod tests {
             back.active_map().action_for(InputBinding::Key(Key::W)),
             Some(ActionSignal::MoveForward),
         );
+    }
+
+    /// Mouse-look is a BOUND signal now, not a raw poll: under the WASD default the
+    /// `Look*` signals resolve from mouse motion — but only the RIGHT-drag (left-click
+    /// stays free for select-target), and only through the pointer-delta channel, never
+    /// the stick `signal_axis` rate channel.
+    #[test]
+    fn mouse_look_is_a_bound_signal_gated_on_rmb() {
+        use crate::device::MouseButton;
+        use glam::Vec2;
+        let cb = ContextualBindings::new(InputMap::wasd_and_mouse());
+        let cfg = GamepadConfig::default();
+        let mut s = InputState::new();
+        s.mouse_delta = Vec2::new(12.0, -3.0); // moved right + up this frame
+
+        // RMB UP → mouse-look is silent (a plain cursor never turns the camera).
+        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookRight, &s), 0.0);
+
+        // RMB DOWN → the motion resolves on the look signals, split by direction.
+        s.set_mouse_button(MouseButton::Right, true);
+        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookRight, &s), 12.0);
+        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookLeft, &s), 0.0);
+        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookUp, &s), 3.0, "screen y-down: up = -y");
+        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookDown, &s), 0.0);
+
+        // …and it never leaks into the stick RATE channel (`signal_axis` stays 0..1).
+        assert_eq!(cb.signal_axis(ActionSignal::LookRight, &s, &cfg), 0.0);
     }
 }

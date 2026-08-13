@@ -2,7 +2,7 @@
 //!
 //! A stage is a panel whose fill is a render-to-texture sub-scene: something says WHERE
 //! (a walker `stage` node reserving a [`RttSlot`], or the scene-owned canvas placing a
-//! card), the shared `stages` block in `ui_elements.json` says WHAT, and `FrameGraph`
+//! card), the shared `stages` block in `ui_theme.json` says WHAT, and `FrameGraph`
 //! decides WHEN. This module owns the WHAT→GPU half: parsing the authored sources,
 //! posing the doll, and declaring the offscreen passes.
 //!
@@ -439,7 +439,7 @@ mod tests {
     fn real_styles() -> Json {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_elements.json"
+            "/../../../content/sensorium/resources/ui_theme.json"
         );
         flicker::ui::load_styles(path)
     }

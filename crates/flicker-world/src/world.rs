@@ -40,7 +40,7 @@ pub const EPOCH_LABELS: [&str; 6] = [
 
 /// The tunable epoch knobs: `(epoch index 0..6, param id, default, min, max)`. The
 /// id is the contract shared by [`generate`] (reads it), the HUD model (publishes
-/// the current value), and `ui_elements.json` (label; its slider range must match
+/// the current value), and `ui_theme.json` (label; its slider range must match
 /// the `(min, max)` here). Defaults mirror each epoch struct's `Default`; the
 /// `(min, max)` band is the reasonable range [`mutate_params`] re-rolls within on
 /// reseed.

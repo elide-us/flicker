@@ -21,7 +21,7 @@ flicker-input-core.workspace = true
 # own panel holds focus, and passes everything else down.
 flicker-input-router.workspace = true
 # The offscreen view: matrices for the draw, the authored stage read out of
-# `ui_elements.json`, and a warning when a named stage resolves to nothing.
+# `ui_theme.json`, and a warning when a named stage resolves to nothing.
 glam.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

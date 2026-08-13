@@ -7,15 +7,16 @@
 //! ```text
 //! [ROOT] RootHandler    declares the World base context (no consuming arms)
 //! [1]    WalkerHandler   the HUD readout — carries the screen's DECLARED intents
-//!                        (`on_menu = "pause_open"` on the hud_solarbirth.lua
+//!                        (`on_menu = "pause_open"` on the solarbirth.scene.json
 //!                        root)   [flicker-widgets]
 //! ```
 //!
 //! The `WalkerHandler` layer is constructed in `update` (it borrows the retained
-//! `UiState`), so it is not defined here. The orbit camera (drag-rotate /
-//! wheel-zoom) and the Space replay stay POLLED off the raw snapshot in `update` —
-//! they read mouse drag / a bespoke key, not mapped action signals, so they need
-//! no handler (spec §9 "kept polled off the bus").
+//! `UiState`), so it is not defined here. Camera look/zoom/throttle and the flight
+//! REPLAY are all MAPPED signals now (input-P3): replay is `Interact`, and the
+//! continuous channels come from the pump's `signals.axis` / `signals.pointer_delta`.
+//! Only the orbit camera's RMB-drag + wheel stay polled off the raw snapshot — the
+//! sanctioned analog-pointer channel, which needs no handler.
 //!
 //! [`InputHandler`]: flicker_input_router::InputHandler
 
@@ -29,13 +30,16 @@ pub const ROOT: usize = 0;
 /// **[ROOT]** The scene-mode root. Declares the base `World` context — nothing
 /// more. Its hardcoded `Menu`-press arm died with S10: the pause-open binding is
 /// DATA on the screen root now (`on_menu = "pause_open"` in
-/// `hud_solarbirth.lua`), consumed by the walker layer below and mapped onto the
+/// `solarbirth.scene.json`), consumed by the walker layer below and mapped onto the
 /// pause push by the scene.
 pub struct RootHandler;
 
 impl InputHandler for RootHandler {
     fn declares_context(&self) -> Option<InputContext> {
-        Some(InputContext::World)
+        // The scene is a flight-camera vehicle (MCP 3B4DB4C2) with two modes: it STARTS
+        // on the rail (`FlightPath`), dropping out to `Flying` on a look gesture. The
+        // root declares the entry context; the resolved events carry the live active one.
+        Some(InputContext::FlightPath)
     }
 
     fn handle(&mut self, _ev: &InputEvent, _rc: &mut RouteCtx) -> Flow {
@@ -53,17 +57,18 @@ mod tests {
     use super::*;
 
     fn ev<'a>(signal: ActionSignal, kind: EventKind, raw: &'a InputState) -> InputEvent<'a> {
-        InputEvent::new(signal, kind, InputContext::World, raw)
+        InputEvent::new(signal, kind, InputContext::FlightPath, raw)
     }
 
     #[test]
-    fn root_declares_world_and_consumes_nothing() {
+    fn root_declares_flightpath_and_consumes_nothing() {
         // S10: the root's Menu arm is DEAD — the pause binding is data on the
-        // screen root (`on_menu = "pause_open"`), consumed by the walker layer.
+        // screen root (`on_menu = "pause_open"`), consumed by the walker layer. The
+        // scene enters on the rail (`FlightPath` context, MCP 3B4DB4C2).
         let raw = InputState::new();
         let mut rc = RouteCtx::new();
         let mut root = RootHandler;
-        assert_eq!(root.declares_context(), Some(InputContext::World));
+        assert_eq!(root.declares_context(), Some(InputContext::FlightPath));
         assert_eq!(
             root.handle(&ev(ActionSignal::Menu, EventKind::Press, &raw), &mut rc),
             Flow::Pass

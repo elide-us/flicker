@@ -20,15 +20,76 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use flicker_input_core::InputState;
+use flicker_input_core::{
+    ContextualBindings, Fired, GamepadConfig, InputContext, InputMap, InputState, Resolver,
+};
 use flicker_input_device::{DiscreteSource, GamepadSource, WindowSource};
+use flicker_input_router::{apply_context_requests, InputEvent, RouteCtx};
 use flicker_render::Renderer;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
-use crate::App;
+use crate::{App, FrameInput};
+
+/// The central event pump — the device→signal MECHANISM the runner owns ONCE for the
+/// whole app (Input Standardization, 2026-08-10), instead of every scene owning a copy.
+///
+/// Built from the player's profile and injected via [`run_with_input`]; the plain
+/// [`run`] leaves it absent (the app then gets empty events, the pre-pump behaviour).
+struct InputPump {
+    resolver: Resolver,
+    /// The full context registry + active-context stack. `World` is the immovable
+    /// base; the pump syncs the top to the app's declared [`active_context`] each frame.
+    ///
+    /// [`active_context`]: crate::App::active_context
+    bindings: ContextualBindings,
+    gamepad: GamepadConfig,
+    /// Monotonic resolver tick (edge timing); wraps.
+    tick: u64,
+    /// Reused fired-signal buffer — no per-frame alloc.
+    fired: Vec<Fired>,
+    /// Settings-rebind seam (input-P3 / S1c): pulls the current committed `World` map
+    /// each frame (the shell reads it from the player's profile), which the pump writes
+    /// into `bindings` so a live rebind reaches every scene consuming the pump — no
+    /// scene owns a resolver. `None` = nothing to adopt this frame.
+    rebind: Box<dyn FnMut() -> Option<InputMap>>,
+}
+
+impl InputPump {
+    /// Resolve this frame's snapshot into signal events for `ctx` (the active surface's
+    /// context, `None` = the base). The returned events borrow `input`.
+    fn resolve<'a>(&mut self, input: &'a InputState, ctx: Option<InputContext>) -> Vec<InputEvent<'a>> {
+        // Settings-rebind (S1c): adopt the latest committed World map before resolving,
+        // so a key rebound in the pause→settings overlay takes effect live. Non-draining
+        // (it reads the profile, never the scene-facing `take_pending_input`), so a scene
+        // still polling its own rebind is unaffected during the migration.
+        if let Some(world) = (self.rebind)() {
+            self.bindings.set_map(InputContext::World, world);
+        }
+        self.tick = self.tick.wrapping_add(1);
+        // Sync the active context to the app's declaration: unwind to the World base,
+        // then push the declared context. `pop` stops at the base, so this terminates.
+        while self.bindings.pop().is_some() {}
+        if let Some(c) = ctx {
+            if c != self.bindings.active() {
+                self.bindings.push(c);
+            }
+        }
+        self.fired.clear();
+        self.resolver
+            .resolve_frame(&self.bindings, &self.gamepad, input, self.tick, &mut self.fired);
+        let active = self.bindings.active();
+        self.fired.iter().map(|f| InputEvent::from_fired(f, active, input)).collect()
+    }
+
+    /// Reconcile the handler chain's context requests into the shared stack (focus is
+    /// the scene's, applied by its walker during dispatch).
+    fn apply(&mut self, route: &RouteCtx) {
+        let _ = apply_context_requests(&mut self.bindings, &route.requests);
+    }
+}
 
 struct Runner<A: App> {
     app: A,
@@ -43,6 +104,8 @@ struct Runner<A: App> {
     /// The active pad + the 120 Hz analog hub — GameController on macOS, gilrs
     /// elsewhere. Held buttons via `drain_into`; the analog cache via `tick_analog`.
     gamepad: GamepadSource,
+    /// The central signal pump — present when the app is run via [`run_with_input`].
+    pump: Option<InputPump>,
 }
 
 impl<A: App> ApplicationHandler for Runner<A> {
@@ -153,7 +216,26 @@ impl<A: App> ApplicationHandler for Runner<A> {
                     .unwrap_or(Duration::ZERO);
                 self.last_update = Some(now);
 
-                self.app.update(dt, &self.input, renderer);
+                // Central event pump: resolve this frame's snapshot into signal events
+                // for the app's active context, hand them to `update` alongside the
+                // route scratch, then reconcile the route's context requests. With no
+                // pump (plain `run`) the app gets an empty set — the pre-pump path.
+                let ctx = self.app.active_context();
+                let mut route = RouteCtx::new();
+                let events = match self.pump.as_mut() {
+                    Some(pump) => pump.resolve(&self.input, ctx),
+                    None => Vec::new(),
+                };
+                // The continuous-query surface (input-P3): a scene consuming the pump
+                // reads analog axes / pointer-delta from the pump's active-context
+                // bindings (synced by `resolve` above), not a private resolver. `None`
+                // with no pump — queries read zero, like the empty event set.
+                let cont = self.pump.as_ref().map(|p| (&p.bindings, &p.gamepad));
+                let mut signals = FrameInput::new(&events, &mut route, cont);
+                self.app.update(dt, &self.input, &mut signals, renderer);
+                if let Some(pump) = self.pump.as_mut() {
+                    pump.apply(&route);
+                }
                 // Reset every per-frame edge (ordered transition log, text entry,
                 // mouse) in one call; held state survives.
                 self.input.clear_frame_edges();
@@ -217,8 +299,41 @@ pub fn last_window_geometry() -> Option<WindowGeometry> {
     LAST_WINDOW_GEOMETRY.lock().ok().and_then(|g| *g)
 }
 
-/// Run the application. Blocks until the event loop exits.
+/// Run the application with NO central input pump — the app receives an empty event
+/// set each frame (the pre-Input-Standardization path, for apps that still poll the
+/// raw [`InputState`]). Blocks until the event loop exits.
 pub fn run<A: App>(app: A) -> Result<()> {
+    run_inner(app, None)
+}
+
+/// Run the application with the central event pump wired to `bindings` + `gamepad`
+/// (built by the caller from the player's profile). Each frame the runner resolves the
+/// device snapshot into signal events for the app's [`active_context`](App::active_context)
+/// and hands them to [`App::update`] via [`FrameInput`]. Blocks until the loop exits.
+///
+/// `rebind` is polled each frame for the current committed `World` map (the caller reads
+/// it from the player's profile); when it returns `Some`, the pump adopts it in place so
+/// a live settings-rebind reaches every scene consuming the pump (input-P3 / S1c).
+pub fn run_with_input<A: App>(
+    app: A,
+    bindings: ContextualBindings,
+    gamepad: GamepadConfig,
+    rebind: impl FnMut() -> Option<InputMap> + 'static,
+) -> Result<()> {
+    run_inner(
+        app,
+        Some(InputPump {
+            resolver: Resolver::new(),
+            bindings,
+            gamepad,
+            tick: 0,
+            fired: Vec::new(),
+            rebind: Box::new(rebind),
+        }),
+    )
+}
+
+fn run_inner<A: App>(app: A, pump: Option<InputPump>) -> Result<()> {
     let event_loop = EventLoop::new().context("failed to create winit event loop")?;
     event_loop.set_control_flow(ControlFlow::Poll);
 
@@ -231,6 +346,7 @@ pub fn run<A: App>(app: A) -> Result<()> {
         last_update: None,
         window_source: WindowSource::new(),
         gamepad: GamepadSource::new(),
+        pump,
     };
 
     event_loop

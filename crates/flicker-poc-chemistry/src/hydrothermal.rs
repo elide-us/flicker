@@ -239,8 +239,8 @@ impl Stage for Hydrothermal {
 
         // Nothing stays in solution between ticks: whatever is still held comes out
         // where it stands.
-        for cell in 0..n {
-            let left = std::mem::take(&mut load[cell]);
+        for (cell, slot) in load.iter_mut().enumerate().take(n) {
+            let left = std::mem::take(slot);
             if !left.is_empty() {
                 precipitate(world, cell, left.into_iter().collect());
             }

@@ -20,7 +20,7 @@
 //! module tier is deleted, and the seam with it (2026-08-10) — the cache stays,
 //! because bounding redraws is a win of its own.
 //!
-//! Components read their colours/sizes from the resolved `ui_elements.json` by a
+//! Components read their colours/sizes from the resolved `ui_theme.json` by a
 //! dotted `style` path (`"paperdoll.fit.slider"`) — so the palette stays in one
 //! place (Prism `theme.tokens`) and a node carries only its truly-local data.
 //!
@@ -287,8 +287,8 @@ pub struct UiState {
     nudges: Vec<(String, i32, bool)>,
     /// Result NAMES the walker layer drained last frame — applied by the next
     /// `run_ui` pass, where an option strip (`tabs` / `pill_toggle`) naming one
-    /// as its `next_action` / `prev_action` advances its OWN bind by ±1 with
-    /// wrap. Same channel shape as [`Self::nudges`], and the same reason: the
+    /// as its `next_action` / `prev_action` advances its OWN bind by ±1, CLAMPED
+    /// at the ends (a linear rail never wraps). Same channel shape as [`Self::nudges`], the same reason: the
     /// NODE owns the range (here, its own children count), so the step is
     /// computed where that lives. THE component-level stepping every option
     /// strip gets for free — a click, a shoulder press and a pad Confirm on the
@@ -298,6 +298,13 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
+    /// Pane LOCK — the four-context pane model (MCP 0EFF5464). While `false` the LEFT
+    /// STICK cycles panes (`PanelNext`/`PanelPrev`) and a pane feeds its interior
+    /// nothing; a `Confirm` on a pane (an actionless focused container) ENTERS it, and
+    /// the left stick then belongs to that pane's interior — its viewport camera, which
+    /// the scene gates on [`entered`](Self::entered). `Cancel` exits. The d-pad (`Nav*`)
+    /// is the in-pane cursor and stays live in BOTH states (menus navigate with it).
+    pub(crate) entered: bool,
     /// Live press-feedback flashes, `action/result name → intensity 0..1`
     /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
     /// click … Even if it does nothing, the visual cue is important UX"* — and
@@ -309,6 +316,15 @@ pub struct UiState {
     /// A `Vec` because the live set is at most a few entries — a map's hashing
     /// would cost more than the scan.
     flashes: Vec<(String, f32)>,
+    /// Action NAMES a POINTER click activated this frame (a button/toggle/context
+    /// row the hit pass fired). Recorded by [`run_ui`]'s hit pass, drained by the
+    /// walker's [`take_fired`](crate::WalkerHandler::take_fired) — the ONE
+    /// activation channel — so a click and a pad `Confirm` converge on the same
+    /// `sig_<name>` mirror (rule 37722F91 "all input events are signals"; pump P2,
+    /// MCP `0569DA9B`). Cleared at the top of every `run_ui` pass, so a scene that
+    /// never runs a walker (never drains) can accumulate at most one frame of
+    /// clicks rather than leaking.
+    fired_pointer: Vec<String>,
 }
 
 /// How much a press flash fades per frame (per [`UiState::flash_tick`]): full
@@ -336,6 +352,14 @@ impl UiState {
     /// The id of the `text_field` that currently owns keyboard focus, if any.
     pub fn focused(&self) -> Option<&str> {
         self.focus.as_deref()
+    }
+
+    /// The pane LOCK state (MCP 0EFF5464): `true` once a `Confirm` has ENTERED the
+    /// focused pane, so the left stick belongs to that pane's interior. A multi-pane
+    /// scene gates its viewport camera on `entered() && focused() == <pane id>`;
+    /// `Cancel` clears it. Navigating between panes is only possible while `false`.
+    pub fn entered(&self) -> bool {
+        self.entered
     }
 
     /// Programmatically give keyboard focus to a `text_field` by its node `id` —
@@ -391,6 +415,22 @@ impl UiState {
     /// either way, so stale names never accumulate.
     pub(crate) fn push_step(&mut self, name: &str) {
         self.steps.push(name.to_string());
+    }
+
+    /// Record that a POINTER click activated action `name` this frame — the hit
+    /// pass calls this wherever it fires an `action` (the `Rect` arm, an `activate`
+    /// verdict, a context-menu child). The walker's `take_fired` drains it, so the
+    /// click rides the ONE activation channel to the `sig_<name>` mirror exactly
+    /// like a pad `Confirm` (rule 37722F91; pump P2).
+    pub(crate) fn record_pointer_fire(&mut self, name: &str) {
+        self.fired_pointer.push(name.to_string());
+    }
+
+    /// Drain this frame's pointer activations (see [`Self::record_pointer_fire`]).
+    /// Called by the walker's `take_fired` — the pointer names it appends to the
+    /// one drain the scene reads.
+    pub(crate) fn take_pointer_fired(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.fired_pointer)
     }
 
     /// Whether the LAST input was nav-family (d-pad / arrows / tab / confirm)
@@ -564,7 +604,7 @@ struct Placed<'a> {
 
 /// Lay out, hit-test, and draw a component `tree` for one frame. `model` is the
 /// engine's published values (read by `bind`), `styles` the resolved
-/// `ui_elements.json` (colours/sizes by dotted `style` path), `input` the
+/// `ui_theme.json` (colours/sizes by dotted `style` path), `input` the
 /// pointer snapshot, `state` the retained drag capture. Returns the draw
 /// commands + the results `ValueMap`. Every component draws AND hit-tests in this
 /// module — there is no other tier to dispatch to.
@@ -629,6 +669,11 @@ pub fn run_ui(
         state.pointer_mode = true;
     }
     state.last_mouse = Some((input.mouse, input.screen));
+    // This frame's pointer activations start empty — the hit pass below records
+    // each fired `action` (the walker drains them into the one `sig_<name>` mirror,
+    // rule 37722F91 / pump P2). Cleared here, not in `take_fired`, so a scene that
+    // runs no walker cannot accumulate stale clicks across frames.
+    state.fired_pointer.clear();
     for p in &placed {
         hit_node(p, model, input, state, styles, &mut results, &mut hud_hit);
     }
@@ -826,10 +871,13 @@ pub fn run_ui(
     // `pill_toggle` authoring `next_action` / `prev_action` advances its own bind
     // by ±1 whenever the walker layer fired that result name (a shoulder signal,
     // a pad Confirm on the rail's hint button, a bound key — all one channel).
-    // Wrap is over the strip's OWN children count, so a rail never learns how many
-    // entries it has and no scene owns a stepper. Applied HERE, beside the slider
-    // nudges and after the echo, for the same reason: the NODE owns the range, and
-    // the every-frame echo must not put the resting index back over the step.
+    // The step CLAMPS at the ends — next stops on the last entry, prev on the first;
+    // a linear rail must NEVER wrap (right→leftmost / left→rightmost is an
+    // unexpected-UX anti-pattern, Aaron 2026-08-12). The bound is the strip's OWN
+    // children count, so a rail never learns how many entries it has and no scene owns
+    // a stepper. Applied HERE, beside the slider nudges and after the echo, for the
+    // same reason: the NODE owns the range, and the every-frame echo must not put the
+    // resting index back over the step.
     for name in std::mem::take(&mut state.steps) {
         for p in &placed {
             if !matches!(p.node.component.as_str(), "tabs" | "pill_toggle") {
@@ -846,7 +894,10 @@ pub fn run_ui(
                 continue;
             }
             let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0);
-            results.set(bind.to_string(), (cur + dir).rem_euclid(len));
+            // CLAMP at the ends — next stops on the last entry, prev on the first; a
+            // linear rail must NOT wrap (right→leftmost / left→rightmost is an
+            // unexpected-UX anti-pattern, Aaron 2026-08-12).
+            results.set(bind.to_string(), (cur + dir).clamp(0.0, len - 1.0));
         }
     }
 
@@ -932,6 +983,53 @@ fn resolve<'a>(
         // section). Must sit before the `_` catch-all so its children are placed
         // into cells rather than anchor-overlaid.
         "grid" => grid_arrange(node, inner, model, layer, clip, key, out),
+        // The carved modal slab: its authored `children` are the ITEMS (buttons/rows the
+        // scene supplies), flowed vertically below the drawn title block. The title /
+        // subtitle / divider / footer are CHROME the component draws (not placed nodes),
+        // so only the items are placed here — starting at `items_top`, spaced by
+        // `items_gap`, keyed by each item's original sibling index.
+        "popup_panel" => {
+            let c = popup_chrome(node, rect);
+            let mut y = c.items_top;
+            for (i, child) in node.children.iter().enumerate().filter(|(_, c)| visible(c, model)) {
+                let mh = child_main(child, model, false);
+                let r = Rect { x: c.inner_x, y, w: c.inner_w, h: mh };
+                resolve(child, r, model, layer, clip, child_key(key, child, i), out);
+                y += mh + c.items_gap;
+            }
+        }
+        // The two-rail page/tab control (PTT): a vertical column of [page rail][rule]
+        // [tab rail][content]. The rails are AUTHORED child components (the first `tabs`
+        // = page rail, the first `pill_toggle` = tab rail) that the walker PLACES at the
+        // band rects; every other child flows in the content region. The gutter hints and
+        // the rule are chrome the component draws, not placed nodes.
+        "paged_menu" => {
+            let lay = paged_layout(node, rect, model);
+            let mut content: Vec<(usize, &UiNode)> = Vec::new();
+            let mut tabs_done = false;
+            let mut pills_done = false;
+            for (i, child) in node.children.iter().enumerate() {
+                if !visible(child, model) {
+                    continue;
+                }
+                match child.component.as_str() {
+                    "tabs" if !tabs_done => {
+                        tabs_done = true;
+                        if let Some(rail) = lay.page_rail {
+                            resolve(child, rail, model, layer, clip, child_key(key, child, i), out);
+                        }
+                    }
+                    "pill_toggle" if !pills_done => {
+                        pills_done = true;
+                        if let Some(pill) = lay.tab_pill {
+                            resolve(child, pill, model, layer, clip, child_key(key, child, i), out);
+                        }
+                    }
+                    _ => content.push((i, child)),
+                }
+            }
+            flow_kids(node, &content, lay.content, model, layer, clip, key, out, false);
+        }
         // page / stack / anything else: overlay children, each placed by its own anchor.
         _ => {
             // Index over ALL children (not just the visible ones) so a sibling toggling
@@ -982,6 +1080,26 @@ fn flow<'a>(
     // when a sibling above it hides.
     let kids: Vec<(usize, &UiNode)> =
         node.children.iter().enumerate().filter(|(_, c)| visible(c, model)).collect();
+    flow_kids(node, &kids, area, model, layer, clip, key, out, horizontal);
+}
+
+/// The flow engine over an EXPLICIT (index, child) list — so a composite that owns a
+/// SUBSET of its children (a `paged_menu`'s content region, once its rails are placed
+/// separately) can share the same grow/align/gap distribution, with each child keeping
+/// its own `child_key` from its ORIGINAL sibling index. [`flow`] is the whole-`children`
+/// caller. Gap and align read from `node`, exactly as before.
+#[allow(clippy::too_many_arguments)]
+fn flow_kids<'a>(
+    node: &'a UiNode,
+    kids: &[(usize, &'a UiNode)],
+    area: Rect,
+    model: &ValueMap,
+    layer: f32,
+    clip: Option<[f32; 4]>,
+    key: u64,
+    out: &mut Vec<Placed<'a>>,
+    horizontal: bool,
+) {
     let n = kids.len();
     let main = if horizontal { area.w } else { area.h };
     let cross = if horizontal { area.h } else { area.w };
@@ -997,7 +1115,7 @@ fn flow<'a>(
 
     let mut fixed = 0.0;
     let mut grow_total = 0.0;
-    for (_, c) in &kids {
+    for (_, c) in kids {
         match c.grow {
             Some(g) => grow_total += g,
             None => fixed += main_of(c),
@@ -1012,7 +1130,7 @@ fn flow<'a>(
     // `align` (left/center/right), which is read at DRAW; `flow` only reads it on the parent.
     let align = ptext(node, "align");
     let mut pos = if horizontal { area.x } else { area.y };
-    for (i, c) in &kids {
+    for (i, c) in kids {
         let len = match c.grow {
             Some(g) if grow_total > 0.0 => free * g / grow_total,
             Some(_) => 0.0,
@@ -1080,18 +1198,43 @@ fn anchored(node: &UiNode, parent: Rect, model: &ValueMap) -> Rect {
         },
         None => (w_given.unwrap_or(m.x), h_given.unwrap_or(m.y)),
     };
-    let a = node.anchor.unwrap_or(UiAnchor::TopLeft);
+    let (a, off) = placement(node, model);
     let x = match a {
         UiAnchor::TopLeft | UiAnchor::Left | UiAnchor::BottomLeft => parent.x,
         UiAnchor::Top | UiAnchor::Center | UiAnchor::Bottom => parent.x + (parent.w - w) * 0.5,
         UiAnchor::TopRight | UiAnchor::Right | UiAnchor::BottomRight => parent.x + parent.w - w,
-    } + node.offset[0];
+    } + off[0];
     let y = match a {
         UiAnchor::TopLeft | UiAnchor::Top | UiAnchor::TopRight => parent.y,
         UiAnchor::Left | UiAnchor::Center | UiAnchor::Right => parent.y + (parent.h - h) * 0.5,
         UiAnchor::BottomLeft | UiAnchor::Bottom | UiAnchor::BottomRight => parent.y + parent.h - h,
-    } + node.offset[1];
+    } + off[1];
     Rect { x, y, w, h }
+}
+
+/// A node's placement — anchor + pixel offset — where a per-id ARRANGE BIND overrides the
+/// value the JSON authored. A scene's Lua `arrange()` (and any per-user layout override)
+/// publishes `<id>_anchor` / `<id>_off_x` / `<id>_off_y` into the model; when present they
+/// win, so a player can move a component the scene file centred. An id-less node, or one
+/// with no such bind, keeps its authored placement — unbound trees are unchanged. Only
+/// [`anchored`] (absolutely-placed nodes) consults this, so the per-frame lookup touches a
+/// handful of overlay nodes, not the whole tree.
+fn placement(node: &UiNode, model: &ValueMap) -> (UiAnchor, [f32; 2]) {
+    if node.id.is_empty() {
+        return (node.anchor.unwrap_or(UiAnchor::TopLeft), node.offset);
+    }
+    let anchor = model
+        .text(&format!("{}_anchor", node.id))
+        .and_then(UiAnchor::from_name)
+        .or(node.anchor)
+        .unwrap_or(UiAnchor::TopLeft);
+    let ox = model
+        .number(&format!("{}_off_x", node.id))
+        .map_or(node.offset[0], |n| n as f32);
+    let oy = model
+        .number(&format!("{}_off_y", node.id))
+        .map_or(node.offset[1], |n| n as f32);
+    (anchor, [ox, oy])
 }
 
 /// A node's intrinsic box — explicit `width`/`height` win; a container measures
@@ -1134,6 +1277,20 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
         // tracks sum from their cells); without this arm it would collapse to the
         // leaf `width.or(size)` and every auto track would break.
         "grid" => grid_measure(node, model),
+        // The modal slab is an anchored overlay sized to its content: a fixed `panel_w`
+        // wide and tall enough for the drawn title block + the stacked items + the footer.
+        // Shares [`popup_chrome`] with resolve/draw so the reserved space can never drift.
+        "popup_panel" => {
+            let w = pnum(node, "panel_w").unwrap_or(404.0) as f32;
+            let c = popup_chrome(node, Rect { x: 0.0, y: 0.0, w, h: 0.0 });
+            let items: f32 = kids.iter().map(|k| child_main(k, model, false)).sum::<f32>()
+                + c.items_gap * kids.len().saturating_sub(1) as f32;
+            let footer = if c.has_footer { c.gap + text_line_h(c.footer_size) } else { 0.0 };
+            // `items_top` (relative to y=0) already carries the top pad + title block +
+            // the gap before the items; the footer block and bottom pad close it out.
+            let h = node.height.unwrap_or(c.items_top + items + footer + c.pad);
+            Vec2::new(node.width.unwrap_or(w), h)
+        }
         // A size-less text row reserves glyph size + leading (text ruling 2026-07-31):
         // the `size = text_size + 10` arithmetic templates used to carry is the ENGINE's
         // default, so template data holds no math. An explicit size/height wins (wrapped
@@ -1619,6 +1776,13 @@ struct HitVerdict {
     /// says so instead of doing nothing (the fail-loud law for authored names). At
     /// most one per verdict.
     warn: Option<String>,
+    /// Fire an ARBITRARY result name through the full activation channel — the twin of
+    /// the generic full-rect arm's fire (`results.set` + flash + strip-step +
+    /// pointer-mirror), for a component whose click activates a name that is NOT its own
+    /// `action`. A `paged_menu`'s hint gutter fires the neighbouring rail's
+    /// `prev_action`/`next_action`, so the rail steps itself on the very name a shoulder
+    /// signal or a pad Confirm on that rail would carry — one channel.
+    fire: Option<String>,
 }
 
 /// A node's retained-interaction identity — its `id`, else its `bind`, else `""`.
@@ -1714,6 +1878,10 @@ fn hit_node(
                 // The other arm that ignores the click edge: a `badge` only CLAIMS its
                 // pill — it has no bind to write and no action to fire.
                 "badge" => hit_badge(input.mouse, r, &props),
+                // The PTT: claims its whole frame, and a click in a hint gutter FIRES the
+                // neighbouring rail's step name (read live off the rail child) — so the
+                // rail steps itself, exactly as the old hint button did.
+                "paged_menu" => hit_paged_menu(input.mouse, r, node, model, click),
                 _ => hit_checkbox(input.mouse, r, &props, click),
             };
             // ONE seam: a verdict touches state/results in exactly one place, so every
@@ -1751,6 +1919,11 @@ fn hit_node(
                         // this a MOUSE click on a rail hint flashed but never stepped
                         // the strip — a click is an activation like any other.
                         state.push_step(action);
+                        // …and rides the ONE activation channel to the `sig_<name>`
+                        // mirror: the walker's `take_fired` drains this so a click on
+                        // `mode_<realm>` mirrors `sig_mode_<realm>` for menu.lua just
+                        // like a pad Confirm would (rule 37722F91 / pump P2).
+                        state.record_pointer_fire(action);
                     }
                     if let Some(bind) = &node.bind {
                         let val = !eff_bool(results, model, bind);
@@ -1861,6 +2034,8 @@ fn apply_hit_verdict(
             results.set(action.clone(), true);
             // Every activation path lights the action's flash (see the Rect arm).
             state.flash(action);
+            // …and rides the one activation channel to the mirror (rule 37722F91).
+            state.record_pointer_fire(action);
         }
     }
     // A child-row activation (`activate_child`, 1-based): a children-as-data control
@@ -1876,7 +2051,19 @@ fn apply_hit_verdict(
         {
             results.set(action.to_string(), true);
             state.flash(action);
+            // …and rides the one activation channel to the mirror (rule 37722F91).
+            state.record_pointer_fire(action);
         }
+    }
+    // An arbitrary named fire (a `paged_menu` hint gutter → the rail's step name): the
+    // SAME full channel the generic Rect arm runs for a button's `action`, `push_step`
+    // included, so the neighbouring rail advances this frame. Without the strip-step a
+    // click would flash but never step (the bug rule 37722F91 / the Rect arm both fixed).
+    if let Some(name) = &verdict.fire {
+        results.set(name.clone(), true);
+        state.flash(name);
+        state.push_step(name);
+        state.record_pointer_fire(name);
     }
     if verdict.group_focus {
         if let (Some(fg), Some(bind)) = (focus_group(node), node.bind.as_deref()) {
@@ -2130,6 +2317,15 @@ fn node_fingerprint(
         h.f32(scroll_content_h(node, model));
     }
 
+    // A splash's alpha ramp is driven by the scene clock (`Model.elapsed`) — a
+    // model read with no `*_bind` prop naming it, so it is folded by KIND, the
+    // same way `list` folds its content height. The CURRENT alpha rather than the
+    // raw clock, so the hold plateau (and the fully-faded tails) still replay
+    // while the ramps redraw every frame they actually change.
+    if node.component == "splash" {
+        h.f32(splash_alpha_of(node, model));
+    }
+
     // The node's own scalar props, order-independently (a HashMap has no stable order,
     // so each entry is hashed alone and the results XOR-folded).
     let mut props_fold = 0u64;
@@ -2331,6 +2527,49 @@ fn component_props(
             props.insert(key.to_string(), jpath(styles, path).clone());
         }
     }
+    // The composites carry chrome styles WITH BUILDER DEFAULTS, so a bare
+    // `{component: "popup_panel", title, children}` still draws its slab and a bare
+    // `paged_menu` its rule + glyph hints. Resolved here (with the default path when the
+    // node authors none) rather than in the loop above, which only resolves what is
+    // present and so could not carry a default.
+    match node.component.as_str() {
+        "popup_panel" => {
+            for (key, dflt) in [("panel_style", "modal.panel"), ("divider_style", "modal.divider")] {
+                props.insert(key.to_string(), jpath(styles, ptext(node, key).unwrap_or(dflt)).clone());
+            }
+            // The title/subtitle/footer colours are dotted paths (a colour cannot ride as
+            // a scalar prop) — resolved to rgba here, like a `text` node's `color`, since
+            // the draw fn has no `styles` handle.
+            for (key, dflt) in [
+                ("title_color", "modal.title.color"),
+                ("subtitle_color", "modal.subtitle.color"),
+                ("footer_color", "modal.footer.color"),
+            ] {
+                let c = json_color(jpath(styles, ptext(node, key).unwrap_or(dflt)), INK);
+                props.insert(format!("{key}_rgba"), serde_json::json!([c[0], c[1], c[2], c[3]]));
+            }
+            // A live subtitle: `subtitle_bind` names the Model key whose CURRENT text
+            // the chrome draws (the display-confirm countdown). Resolved here because
+            // the draw fn has no model handle — the same reason as the colours above.
+            if let Some(bind) = ptext(node, "subtitle_bind") {
+                if let Some(t) = model.text(bind) {
+                    props.insert("subtitle_live".to_string(), serde_json::json!(t));
+                }
+            }
+        }
+        "paged_menu" => {
+            props.insert("rule_style".to_string(), jpath(styles, ptext(node, "rule_style").unwrap_or("paged_menu.rule")).clone());
+            props.insert("glyph_style".to_string(), jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone());
+        }
+        "splash" => {
+            // `backdrop` is a dotted style path (a colour cannot ride as a scalar
+            // prop); default = the scene styles' `logo.backdrop`, falling back to
+            // opaque black in `draw_splash` when unauthored.
+            let c = json_color(jpath(styles, ptext(node, "backdrop").unwrap_or("logo.backdrop")), [0.0, 0.0, 0.0, 1.0]);
+            props.insert("backdrop_rgba".to_string(), serde_json::json!([c[0], c[1], c[2], c[3]]));
+        }
+        _ => {}
+    }
     // The pointer + the node's layout metrics, for a component that sub-lays-out its
     // children or hovers a sub-region (tabs' per-tab hover, a select's option rows).
     props.insert("mx".to_string(), serde_json::json!(input.mouse.x));
@@ -2357,6 +2596,14 @@ fn component_props(
     props.insert(
         "focused".to_string(),
         Json::Bool(!node.id.is_empty() && state.focused() == Some(node.id.as_str())),
+    );
+    // "entered": the focused pane is LOCKED (0EFF5464) — the panel draws its distinct
+    // entered rim (the mode's required render affordance), the scene feeds its camera.
+    props.insert(
+        "entered".to_string(),
+        Json::Bool(
+            state.entered() && !node.id.is_empty() && state.focused() == Some(node.id.as_str()),
+        ),
     );
     if let (Some(fg), Some(bind)) = (ptext(node, "focus_group"), node.bind.as_deref()) {
         props.insert("focused".to_string(), Json::Bool(eff_text(results, model, fg) == Some(bind)));
@@ -2457,6 +2704,7 @@ fn draw_node(
             match k {
                 "panel" => draw_panel(r, &props, out),
                 "sprite" => draw_sprite(r, &props, out),
+                "splash" => draw_splash(r, node, model, &props, out),
                 "rune_corners" => draw_rune_corners(r, &props, out),
                 "tooltip" => draw_tooltip(r, &props, out),
                 "checkbox" => draw_checkbox(r, &props, out),
@@ -2477,6 +2725,8 @@ fn draw_node(
                 "action_slot" => draw_action_slot(r, &props, out),
                 "medallion" => draw_medallion(r, &props, out),
                 "badge" => draw_badge(r, &props, out),
+                "popup_panel" => draw_popup_panel(r, node, &props, out),
+                "paged_menu" => draw_paged_menu(r, node, model, &props, out),
                 _ => draw_button(r, &props, out),
             }
             return Some(props);
@@ -2615,7 +2865,10 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // inside toggles its bool bind. An action slot is the same shape of thing as a
         // button — its rim, keybind tag and charge count are read-out, so a click
         // anywhere on the recess casts.
-        "button" | "panel" | "tile" | "action_slot" => Some(HitShape::Rect),
+        // A `popup_panel` is a full-rect claim like a `panel`: its slab must not pick
+        // through to the scene behind the modal, and its items are their own child nodes
+        // that answer their own clicks. It writes no bind and fires no action of its own.
+        "button" | "panel" | "tile" | "action_slot" | "popup_panel" | "splash" => Some(HitShape::Rect),
         // Pure decoration — never claims, never interacts. A tooltip that claimed would
         // eat every click beneath the cursor it follows; a sprite is an image, not a
         // surface, so clicks pass through to the scene behind it. The gauges, the stat
@@ -2661,6 +2914,12 @@ fn rust_owns_hit(kind: &str) -> bool {
             | "list"
             | "context_menu"
             | "badge"
+            // A `paged_menu` owns its hit for the fifth reason and one of its own: the
+            // four hint GUTTERS are sub-rects it lays out itself, and a click in one fires
+            // the neighbouring rail's step name (`prev_action`/`next_action`) rather than
+            // an action or bind of the menu node — geometry and a dispatch no trivial
+            // shape can carry.
+            | "paged_menu"
     )
 }
 
@@ -2682,11 +2941,15 @@ fn rust_owns_hit(kind: &str) -> bool {
 fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     let focused = props.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-    // `{ resting, focused }` sub-blocks, each an ordinary container block. A style that
-    // carries the container keys DIRECTLY (no split) is used as-is for both states —
-    // the same fall-down-the-chain idiom `first_color` uses, so a plain panel style
-    // still draws rather than silently rendering nothing.
-    let block = if focused {
+    let entered = props.get("entered").and_then(|v| v.as_bool()).unwrap_or(false);
+    // `{ resting, focused, entered }` sub-blocks, each an ordinary container block. The
+    // ENTERED block (the pane is LOCKED — 0EFF5464) draws a rim distinct from FOCUSED
+    // (navigating-to), so the pad player can SEE the mode. A style that carries the
+    // container keys DIRECTLY (no split) is used as-is; each state falls down the chain
+    // (entered → focused → resting → the block), so a plain panel style still draws.
+    let block = if entered {
+        s.get("entered").or_else(|| s.get("focused")).or_else(|| s.get("resting")).unwrap_or(s)
+    } else if focused {
         s.get("focused").or_else(|| s.get("resting")).unwrap_or(s)
     } else {
         s.get("resting").unwrap_or(s)
@@ -2717,6 +2980,68 @@ fn draw_sprite(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         color: [1.0, 1.0, 1.0, jnum(props, "alpha", 1.0)],
         layer: 0.0,
         // The WHOLE image: an atlas sub-rect is the glyph face's business, not this one's.
+        uv: [0.0, 0.0, 1.0, 1.0],
+    });
+}
+
+/// **Splash** — ONE full-bleed image that fades in, holds, then fades out: the
+/// intro-logo component. The DRAWING logic lives here (the fifth-plus component,
+/// same as the other four dozen); the scene's pair script CONFIGURES it from its
+/// `arrange()` — the entry's `image` / `fade_in` / `hold` / `fade_out` prop
+/// overrides, which the engine applies onto this node's props.
+///
+/// Props: `tex` (texture index), `fade_in` / `hold` / `fade_out` (seconds),
+/// `fit` (0..1 of the rect the image may fill), `backdrop_rgba` (resolved by
+/// `component_props`). Model: `elapsed` (seconds), `img_w` / `img_h` (the
+/// image's native pixels, published by the scene at load).
+///
+/// The alpha ramp is the exact timeline the two splash scripts used to carry in
+/// duplicate: linear rise over `fade_in`, flat 1.0 through `hold`, linear fall
+/// over `fade_out`.
+pub(crate) fn splash_alpha(elapsed: f32, fade_in: f32, hold: f32, fade_out: f32) -> f32 {
+    let alpha = if elapsed < fade_in {
+        if fade_in <= 0.0 { 1.0 } else { elapsed / fade_in }
+    } else if elapsed > fade_in + hold {
+        if fade_out <= 0.0 { 0.0 } else { 1.0 - (elapsed - fade_in - hold) / fade_out }
+    } else {
+        1.0
+    };
+    alpha.clamp(0.0, 1.0)
+}
+
+/// The splash node's CURRENT ramp alpha: its timeline props (with `fade_out`
+/// falling back to `fade_in`, exactly as the draw defaults) against the scene
+/// clock (`Model.elapsed`). THE one reader for both the draw and the cache
+/// fingerprint, so the default chain can never fork between them.
+fn splash_alpha_of(node: &UiNode, model: &ValueMap) -> f32 {
+    let fade_in = pnum(node, "fade_in").unwrap_or(0.6) as f32;
+    let hold = pnum(node, "hold").unwrap_or(1.2) as f32;
+    let fade_out = pnum(node, "fade_out").unwrap_or(f64::from(fade_in)) as f32;
+    let elapsed = model.number("elapsed").unwrap_or(0.0) as f32;
+    splash_alpha(elapsed, fade_in, hold, fade_out)
+}
+
+fn draw_splash(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut Vec<HudCommand>) {
+    let bg = first_color(props, &["backdrop_rgba"], [0.0, 0.0, 0.0, 1.0]);
+    out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color: bg, layer: 0.0 });
+
+    let Some(tex) = pnum(node, "tex") else { return };
+    let fit = pnum(node, "fit").unwrap_or(0.9) as f32;
+    let alpha = splash_alpha_of(node, model);
+
+    // Contain-fit the image's native size inside `fit` of the rect, centred.
+    let iw = model.number("img_w").unwrap_or(1.0).max(1.0) as f32;
+    let ih = model.number("img_h").unwrap_or(1.0).max(1.0) as f32;
+    let scale = (r.w * fit / iw).min(r.h * fit / ih);
+    let (w, h) = (iw * scale, ih * scale);
+    out.push(HudCommand::Sprite {
+        tex: tex.floor() as u32,
+        x: r.x + (r.w - w) * 0.5,
+        y: r.y + (r.h - h) * 0.5,
+        w,
+        h,
+        color: [1.0, 1.0, 1.0, alpha],
+        layer: 0.0,
         uv: [0.0, 0.0, 1.0, 1.0],
     });
 }
@@ -2817,7 +3142,7 @@ fn cell_uv(idx: f32, cols: f32, rows: f32) -> [f32; 4] {
 
 /// The glyph face: one cell of the controller-icon atlas, square and centred.
 /// EVERYTHING about the atlas — texture, grid, name → cell map, colours — is the
-/// resolved `glyph_style` block (`ui_elements.json` → `pad_glyphs`); the node
+/// resolved `glyph_style` block (`ui_theme.json` → `pad_glyphs`); the node
 /// carries only WHICH glyph. An unknown name draws NOTHING rather than cell 0: a
 /// hint silently showing the wrong button is worse than one visibly missing.
 fn draw_glyph_face(r: Rect, props: &Json, flash: f32, out: &mut Vec<HudCommand>) {
@@ -3438,6 +3763,15 @@ fn hit_pill_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     v
 }
 
+/// Whether a `tabs` rail stacks its cells TOP-TO-BOTTOM (`vertical`) instead of laying
+/// them left-to-right. ONE reader for the axis, so the drawn rows and the clickable rows
+/// (both go through [`tab_cell`]) can never disagree. A strict bool, exactly like
+/// [`slider_vertical`] — a real `true` stands the rail up, anything else is the default
+/// horizontal strip. `pill_toggle` never reads it (it stays horizontal-only).
+fn tabs_vertical(props: &Json) -> bool {
+    props.get("vertical").and_then(|v| v.as_bool()) == Some(true)
+}
+
 /// The `i`-th of `n` tab **cells**: the strip inset by the node's `pad_x`/`pad_y`, split
 /// evenly along x with `gap` between cells. Shared by draw and hit — a click in the gap
 /// claims the strip and selects nothing precisely because both sides compute the same
@@ -3446,11 +3780,20 @@ fn hit_pill_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
 /// The inset is the strip's LITERAL arithmetic (not [`Rect::inset_xy`], which clamps):
 /// a strip padded past its own height must place its labels and its clicks at the same
 /// wrong y, not at two different ones.
+///
+/// A `vertical` rail (see [`tabs_vertical`]) instead stacks the cells DOWN the strip: each
+/// spans the full inner WIDTH and takes an equal share of the inner HEIGHT, `gap` between
+/// rows — the exact y-axis mirror of the horizontal split. One helper, so draw and hit
+/// follow the same axis.
 fn tab_cell(r: Rect, props: &Json, n: usize, i: usize) -> Rect {
     let (px, py) = (jnum(props, "pad_x", 0.0), jnum(props, "pad_y", 0.0));
     let gap = jnum(props, "gap", 0.0);
     let inner =
         Rect { x: r.x + px, y: r.y + py, w: r.w - 2.0 * px, h: r.h - 2.0 * py };
+    if tabs_vertical(props) {
+        let th = ((inner.h - gap * (n as f32 - 1.0)) / n as f32).max(0.0);
+        return Rect { x: inner.x, y: inner.y + i as f32 * (th + gap), w: inner.w, h: th };
+    }
     let tw = ((inner.w - gap * (n as f32 - 1.0)) / n as f32).max(0.0);
     Rect { x: inner.x + i as f32 * (tw + gap), y: inner.y, w: tw, h: inner.h }
 }
@@ -5065,7 +5408,7 @@ fn badge_pill(r: Rect, s: &Json) -> Rect {
 ///
 /// TONE IS A PREFIX, not a fixed enum: any `tone` reads its own `<tone>_bg` /
 /// `<tone>_label` stops and falls through to the `neutral` pair when the block carries
-/// none — so a new chip colour is a token pair in `ui_elements.json`, not a new arm
+/// none — so a new chip colour is a token pair in `ui_theme.json`, not a new arm
 /// here (the pattern `resource_gauge` names as "the badge precedent"). The two DS tones
 /// that carry their own missing-key floor, `accent` (sapphire) and `bronze` (stone),
 /// keep it: their chains are exactly the module's, so a block naming only one of them
@@ -5123,6 +5466,324 @@ fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 fn hit_badge(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
     let pill = badge_pill(r, props.get("style").unwrap_or(&Json::Null));
     HitVerdict { hit: pill.contains(m), ..Default::default() }
+}
+
+// ── Composites (engine-drawn assemblies) ─────────────────────────────────────
+//
+// A `popup_panel` (the carved modal slab) and a `paged_menu` (the two-rail page/tab
+// control, "PTT"). Each was a template BUILDER that `expand()` spliced into a `cell`
+// tree; now the engine lays it out, draws it and hit-tests it at walk time from the one
+// resolved-block prop surface every component obeys (201F4F51 P1). Layout / draw / hit
+// share a per-kind geometry helper, so the reserved chrome space can never drift.
+
+/// A single drawn text line's reserved height — glyph size + the walker's default
+/// `leading` (10), the SAME basis [`measure`]'s `text` arm uses, so the chrome a
+/// composite DRAWS lines up with where an equivalent `text` node would have flowed.
+fn text_line_h(size: f32) -> f32 {
+    size + 10.0
+}
+
+/// The vertical geometry a [`popup_panel`] reserves for its drawn chrome, computed ONCE
+/// for resolve (which places the items below it), measure (which sizes the slab) and
+/// draw (which paints it). `title` is always reserved — empty copy still holds its line,
+/// faithful to the builder; `subtitle`/`divider`/`footer` reserve space only when
+/// authored. Positions are absolute (from `rect`), so measure passes a `y = 0` rect and
+/// reads `items_top` as the top block's height.
+struct PopupChrome {
+    inner_x: f32,
+    inner_w: f32,
+    pad: f32,
+    gap: f32,
+    items_gap: f32,
+    title_y: f32,
+    title_size: f32,
+    subtitle_y: Option<f32>,
+    subtitle_size: f32,
+    divider_y: Option<f32>,
+    items_top: f32,
+    has_footer: bool,
+    footer_size: f32,
+}
+
+fn popup_chrome(node: &UiNode, rect: Rect) -> PopupChrome {
+    let pad = pnum(node, "panel_pad").unwrap_or(38.0) as f32;
+    let gap = pnum(node, "panel_gap").unwrap_or(16.0) as f32;
+    let items_gap = pnum(node, "items_gap").unwrap_or(12.0) as f32;
+    let title_size = pnum(node, "title_size").unwrap_or(52.0) as f32;
+    let subtitle_size = pnum(node, "subtitle_size").unwrap_or(11.0) as f32;
+    let footer_size = pnum(node, "footer_size").unwrap_or(10.0) as f32;
+    // A subtitle reserves its line when authored statically OR bound live
+    // (`subtitle_bind` — the display-confirm countdown). A bound line always shows,
+    // so LAYOUT needs no model handle to know it is there.
+    let has_subtitle = ptext(node, "subtitle").is_some_and(|s| !s.is_empty())
+        || ptext(node, "subtitle_bind").is_some();
+    let has_footer = ptext(node, "footer").is_some_and(|s| !s.is_empty());
+
+    let mut y = rect.y + pad;
+    let title_y = y;
+    y += text_line_h(title_size);
+    let subtitle_y = if has_subtitle {
+        y += gap;
+        let sy = y;
+        y += text_line_h(subtitle_size);
+        Some(sy)
+    } else {
+        None
+    };
+    let divider_y = if pbool(node, "divider") {
+        y += gap;
+        let dy = y;
+        y += 1.0;
+        Some(dy)
+    } else {
+        None
+    };
+    y += gap; // the gap between the title block and the first item
+    PopupChrome {
+        inner_x: rect.x + pad,
+        inner_w: (rect.w - pad * 2.0).max(0.0),
+        pad,
+        gap,
+        items_gap,
+        title_y,
+        title_size,
+        subtitle_y,
+        subtitle_size,
+        divider_y,
+        items_top: y,
+        has_footer,
+        footer_size,
+    }
+}
+
+/// The **popup panel** — the carved modal slab the pause / confirm / menu popups build
+/// on. It DRAWS its chrome — the styled backdrop, an always-present centred title, an
+/// optional subtitle, an optional 1px divider and an optional footer — while its ITEMS
+/// are the authored child nodes the walker placed (and draws) as ordinary controls. The
+/// panel writes no bind and fires no action; it claims its whole rect ([`rust_hit_shape`]
+/// = `Rect`) so a click on the slab does not pick through to the scene behind it.
+fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudCommand>) {
+    if let Some(st) = jopt(props, "panel_style") {
+        draw_panel_bg(r, st, out);
+    }
+    let c = popup_chrome(node, r);
+    let cx = c.inner_x + c.inner_w * 0.5;
+    // Title — always drawn (empty copy centres nothing, faithful to the proto's `@title=`).
+    let title = crate::strings::resolve(ptext(node, "title").unwrap_or_default());
+    push_text(out, cx, c.title_y, &title, c.title_size, first_color(props, &["title_color_rgba"], INK), TextAlign::Center, FontRole::Display, false, false, -1.0, None);
+    if let Some(sy) = c.subtitle_y {
+        // A bound subtitle's LIVE text (injected by `component_props`) wins over the
+        // authored static copy; both resolve $tokens the same way.
+        let sub = match jopt(props, "subtitle_live").and_then(|v| v.as_str()) {
+            Some(live) => crate::strings::resolve(live),
+            None => crate::strings::resolve(ptext(node, "subtitle").unwrap_or_default()),
+        };
+        push_text(out, cx, sy, &sub, c.subtitle_size, first_color(props, &["subtitle_color_rgba"], DIM), TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+    }
+    if let Some(dy) = c.divider_y {
+        if let Some(ds) = jopt(props, "divider_style") {
+            draw_panel_bg(Rect { x: c.inner_x, y: dy, w: c.inner_w, h: 1.0 }, ds, out);
+        }
+    }
+    if c.has_footer {
+        let foot = crate::strings::resolve(ptext(node, "footer").unwrap_or_default());
+        // Pinned to the slab's bottom edge (its measured height reserved this line + the
+        // bottom pad), so it sits below the last item wherever the item count lands.
+        let fy = r.y + r.h - c.pad - text_line_h(c.footer_size);
+        push_text(out, cx, fy, &foot, c.footer_size, first_color(props, &["footer_color_rgba"], DIM), TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+    }
+}
+
+/// The sub-rects a [`paged_menu`] lays out inside its padded frame — computed ONCE so
+/// resolve (places the authored rails + content), draw (backdrop + rule + hints) and hit
+/// (the four hint gutters) can never disagree. Each rail rect is `Some` only when that
+/// rail is actually shown: the PAGE rail needs a `tabs` child and `!hide_pages`; the RULE
+/// needs a `pill_toggle` child and `!hide_tabs`; the TAB rail needs those AND `tabs_shown`
+/// (its collapse rides that gate, exactly as the builder's `visible_bind` did).
+struct PagedLayout {
+    page_rail: Option<Rect>, // where the `tabs` child is placed (middle of the page band)
+    lt: Option<Rect>,
+    rt: Option<Rect>,
+    rule: Option<Rect>,
+    tab_pill: Option<Rect>, // where the `pill_toggle` child is placed
+    lb: Option<Rect>,
+    rb: Option<Rect>,
+    content: Rect,
+}
+
+fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
+    // LEFT page-rail mode (`page_side: "left"`): the PAGE rail stands up as a fixed-width
+    // LEFT COLUMN (the authored `vertical` `tabs` child), a 1px vertical rule divides it
+    // from the RIGHT area, and that right area carries the ORDINARY horizontal band layout —
+    // the tab rail (still horizontal, with its LB/RB hints) over the content. There are NO
+    // LT/RT page-hint gutters here (a vertical category rail is clicked directly, and still
+    // page-cycles via signals). Branched at the very top so the default top-rail path below
+    // stays byte-for-byte identical.
+    if ptext(node, "page_side") == Some("left") {
+        return paged_layout_left(node, outer, model);
+    }
+    // The frame inset is the node's own `pad` structural field (scene-authored
+    // arrangement), read via the standard `inner` insets like every other container.
+    let inner = outer.inset_xy(pad_x(node), pad_y(node));
+    let child = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
+    let has_page = child("tabs").is_some() && !pbool(node, "hide_pages");
+    let has_tabsec = child("pill_toggle").is_some() && !pbool(node, "hide_tabs");
+    let tabs_open = has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
+
+    let mut y = inner.y;
+    let (mut page_rail, mut lt, mut rt) = (None, None, None);
+    if has_page {
+        let rail_h = pnum(node, "rail_h").unwrap_or(42.0) as f32;
+        let hw = pnum(node, "hint_w").unwrap_or(54.0) as f32;
+        let rgap = pnum(node, "rail_gap").unwrap_or(30.0) as f32;
+        lt = Some(Rect { x: inner.x, y, w: hw, h: rail_h });
+        rt = Some(Rect { x: inner.x + inner.w - hw, y, w: hw, h: rail_h });
+        page_rail = Some(Rect { x: inner.x + hw + rgap, y, w: (inner.w - 2.0 * (hw + rgap)).max(0.0), h: rail_h });
+        y += rail_h;
+    }
+    let mut rule = None;
+    if has_tabsec {
+        rule = Some(Rect { x: inner.x, y, w: inner.w, h: 1.0 });
+        y += 1.0;
+    }
+    let (mut tab_pill, mut lb, mut rb) = (None, None, None);
+    if tabs_open {
+        let tab_h = pnum(node, "tab_h").unwrap_or(44.0) as f32;
+        let hw2 = pnum(node, "hint_w2").unwrap_or(46.0) as f32;
+        let tgap = pnum(node, "tab_gap").unwrap_or(20.0) as f32;
+        // The pill carries its own width (its `size` in the horizontal band); the
+        // [LB · pill · RB] cluster is centred, exactly as the builder's grow spacers did.
+        let pill_w = child("pill_toggle").map(|c| child_main(c, model, true)).unwrap_or(0.0);
+        let cluster = 2.0 * hw2 + 2.0 * tgap + pill_w;
+        let cx = inner.x + ((inner.w - cluster) * 0.5).max(0.0);
+        lb = Some(Rect { x: cx, y, w: hw2, h: tab_h });
+        tab_pill = Some(Rect { x: cx + hw2 + tgap, y, w: pill_w, h: tab_h });
+        rb = Some(Rect { x: cx + hw2 + tgap + pill_w + tgap, y, w: hw2, h: tab_h });
+        y += tab_h;
+    }
+    let content = Rect { x: inner.x, y, w: inner.w, h: (inner.y + inner.h - y).max(0.0) };
+    PagedLayout { page_rail, lt, rt, rule, tab_pill, lb, rb, content }
+}
+
+/// [`paged_layout`] for `page_side: "left"` — the vertical-page-rail variant. Splits the
+/// padded frame into a fixed `page_w`-wide LEFT COLUMN (where the `vertical` `tabs` page
+/// rail is placed) and a RIGHT area, with a 1px vertical `rule` + a small `page_gap`
+/// between them; the right area then gets the SAME `[LB · pill · RB]` tab band over grow-
+/// content the top-rail path lays inside `inner`, only WITHOUT a page band or its LT/RT
+/// gutters (`lt`/`rt` = `None`). No page rail (no `tabs` child, or `hide_pages`) collapses
+/// the column so the right area is the whole inner — the axis twin of the top path dropping
+/// its page band. Duplicates the tab-band math on purpose: the top path stays untouched.
+fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
+    let inner = outer.inset_xy(pad_x(node), pad_y(node));
+    let child = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
+    let has_page = child("tabs").is_some() && !pbool(node, "hide_pages");
+    let has_tabsec = child("pill_toggle").is_some() && !pbool(node, "hide_tabs");
+    let tabs_open = has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
+
+    // The left column + the vertical rule, and the right area that remains.
+    let (page_rail, rule, right) = if has_page {
+        let page_w = pnum(node, "page_w").unwrap_or(200.0) as f32;
+        let gap = pnum(node, "page_gap").unwrap_or(12.0) as f32;
+        let page_rail = Rect { x: inner.x, y: inner.y, w: page_w, h: inner.h };
+        let rule = Rect { x: inner.x + page_w, y: inner.y, w: 1.0, h: inner.h };
+        let rx = inner.x + page_w + gap + 1.0;
+        let right = Rect { x: rx, y: inner.y, w: (inner.x + inner.w - rx).max(0.0), h: inner.h };
+        (Some(page_rail), Some(rule), right)
+    } else {
+        (None, None, inner)
+    };
+
+    // The tab rail + content, laid horizontally inside the RIGHT area — the identical
+    // centred cluster + grow-content the top path lays inside `inner`, minus the page band.
+    let mut y = right.y;
+    let (mut tab_pill, mut lb, mut rb) = (None, None, None);
+    if tabs_open {
+        let tab_h = pnum(node, "tab_h").unwrap_or(44.0) as f32;
+        let hw2 = pnum(node, "hint_w2").unwrap_or(46.0) as f32;
+        let tgap = pnum(node, "tab_gap").unwrap_or(20.0) as f32;
+        let pill_w = child("pill_toggle").map(|c| child_main(c, model, true)).unwrap_or(0.0);
+        let cluster = 2.0 * hw2 + 2.0 * tgap + pill_w;
+        let cx = right.x + ((right.w - cluster) * 0.5).max(0.0);
+        lb = Some(Rect { x: cx, y, w: hw2, h: tab_h });
+        tab_pill = Some(Rect { x: cx + hw2 + tgap, y, w: pill_w, h: tab_h });
+        rb = Some(Rect { x: cx + hw2 + tgap + pill_w + tgap, y, w: hw2, h: tab_h });
+        y += tab_h;
+    }
+    let content = Rect { x: right.x, y, w: right.w, h: (right.y + right.h - y).max(0.0) };
+    PagedLayout { page_rail, lt: None, rt: None, rule, tab_pill, lb, rb, content }
+}
+
+/// One rail hint — a single atlas cell (from the resolved `glyph_style` block) centred
+/// in its gutter rect, the SAME emit convention [`draw_button`] uses for a glyph face.
+fn draw_paged_hint(rect: Option<Rect>, name: &str, size: f32, glyph_style: &Json, flash: f32, out: &mut Vec<HudCommand>) {
+    let Some(rect) = rect else { return };
+    let p = serde_json::json!({ "glyph": name, "glyph_size": size, "glyph_style": glyph_style.clone() });
+    draw_glyph_face(rect, &p, flash, out);
+}
+
+/// The **paged menu** (PTT) — the two-rail page/tab control. It DRAWS its frame backdrop
+/// (the node's own `style`), the 1px rule between the rails, and the four controller-glyph
+/// hints (`lt`/`rt` flanking the page rail, `lb`/`rb` the tab rail). The rails themselves
+/// are AUTHORED child components (a `tabs` page rail, a `pill_toggle` tab rail) the walker
+/// placed at the band rects; the content is every other child, flowed below. The rails own
+/// their own stepping — the hints only FIRE their step names (see [`hit_paged_menu`]).
+fn draw_paged_menu(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut Vec<HudCommand>) {
+    if let Some(st) = jopt(props, "style") {
+        draw_panel_bg(r, st, out);
+    }
+    let lay = paged_layout(node, r, model);
+    if let (Some(rule), Some(rs)) = (lay.rule, jopt(props, "rule_style")) {
+        draw_panel_bg(rule, rs, out);
+    }
+    let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
+    let hg = pnum(node, "hint_glyph").unwrap_or(26.0) as f32;
+    let hg2 = pnum(node, "hint_glyph2").unwrap_or(22.0) as f32;
+    // The gutter under a PRESSED pointer lights its glyph — the click highlight the hints
+    // carry, restored on the native PTT kind. Press-only (`pressed` = mouse-down over the
+    // frame, `mx`/`my` = the injected pointer): it clears on release, so no highlight
+    // lingers on the last-clicked hint.
+    let pressed = props.get("pressed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mouse = Vec2::new(
+        props.get("mx").and_then(|v| v.as_f64()).unwrap_or(f64::from(f32::MIN)) as f32,
+        props.get("my").and_then(|v| v.as_f64()).unwrap_or(f64::from(f32::MIN)) as f32,
+    );
+    let hot = |rect: Option<Rect>| {
+        if pressed && rect.is_some_and(|rc| rc.contains(mouse)) {
+            1.0
+        } else {
+            0.0
+        }
+    };
+    draw_paged_hint(lay.lt, "lt", hg, glyph_style, hot(lay.lt), out);
+    draw_paged_hint(lay.rt, "rt", hg, glyph_style, hot(lay.rt), out);
+    draw_paged_hint(lay.lb, "lb", hg2, glyph_style, hot(lay.lb), out);
+    draw_paged_hint(lay.rb, "rb", hg2, glyph_style, hot(lay.rb), out);
+}
+
+/// The PTT's hit: the frame CLAIMS (a click on the page background does not pick through),
+/// and a click in a hint GUTTER fires the neighbouring rail's step name — LT/RT read the
+/// PAGE rail's `prev_action`/`next_action`, LB/RB the TAB rail's. The name rides the full
+/// activation channel ([`HitVerdict::fire`]), so the rail steps ITSELF on the very name a
+/// shoulder signal or a pad Confirm on that rail carries — one channel, no scene stepper.
+fn hit_paged_menu(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool) -> HitVerdict {
+    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    if !click {
+        return v;
+    }
+    let lay = paged_layout(node, r, model);
+    let rail = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
+    let act = |n: Option<&UiNode>, key: &str| n.and_then(|n| ptext(n, key)).filter(|s| !s.is_empty()).map(str::to_string);
+    let over = |rect: Option<Rect>| rect.is_some_and(|rc| rc.contains(m));
+    if over(lay.lt) {
+        v.fire = act(rail("tabs"), "prev_action");
+    } else if over(lay.rt) {
+        v.fire = act(rail("tabs"), "next_action");
+    } else if over(lay.lb) {
+        v.fire = act(rail("pill_toggle"), "prev_action");
+    } else if over(lay.rb) {
+        v.fire = act(rail("pill_toggle"), "next_action");
+    }
+    v
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -5415,14 +6076,14 @@ fn push_text(out: &mut Vec<HudCommand>, x: f32, y: f32, text: &str, size: f32, c
 }
 
 // Neutral fallbacks (only used when a style path is missing — real colour comes
-// from the resolved Prism tokens in `ui_elements.json`).
+// from the resolved Prism tokens in `ui_theme.json`).
 const INK: [f32; 4] = [0.871, 0.847, 0.788, 1.0];
 const PANEL: [f32; 4] = [0.078, 0.09, 0.122, 1.0];
 const RUNE: [f32; 4] = [0.435, 0.592, 1.0, 1.0];
 const SAP: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
 const CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 /// Glyph-face resting tint — mirrors `$bronze`. The authored source is
-/// `pad_glyphs.color` in `ui_elements.json`; this is only the missing-key floor.
+/// `pad_glyphs.color` in `ui_theme.json`; this is only the missing-key floor.
 const BRONZE: [f32; 4] = [0.722, 0.592, 0.353, 1.0];
 /// The dim half of the bronze pair — mirrors `$bronze_dim`; a medallion ring's bottom
 /// gradient stop when its variant block names no `bot`.
@@ -5454,6 +6115,71 @@ const SIG_BLUE: [f32; 4] = [0.176, 0.373, 0.69, 1.0];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The splash timeline, ported verbatim from the retired per-scene scripts:
+    /// linear rise over fade_in, flat 1.0 through hold, linear fall over fade_out.
+    #[test]
+    fn splash_alpha_ramps_holds_and_falls() {
+        let a = |t: f32| splash_alpha(t, 0.6, 1.2, 0.6);
+        assert_eq!(a(0.0), 0.0);
+        assert!((a(0.3) - 0.5).abs() < 1e-6, "halfway up the fade-in");
+        assert_eq!(a(0.6), 1.0);
+        assert_eq!(a(1.2), 1.0, "flat through the hold");
+        assert!((a(2.1) - 0.5).abs() < 1e-6, "halfway down the fade-out");
+        assert_eq!(a(2.4), 0.0);
+        assert_eq!(a(9.0), 0.0, "clamped after the end");
+        assert_eq!(splash_alpha(0.0, 0.0, 1.0, 0.5), 1.0, "zero fade-in shows instantly");
+    }
+
+    /// THE SPLASH ANIMATES THROUGH THE CACHE: its alpha is driven by
+    /// `Model.elapsed` — a model read no `*_bind` prop declares — so the
+    /// fingerprint must fold it by kind. Without that fold the first frame
+    /// (alpha ≈ 0) replays forever: in-window, a splash that never fades in.
+    /// The plateau still replays — equal alpha ⇒ byte-identical commands.
+    #[test]
+    fn a_splash_redraws_as_its_clock_advances() {
+        // Redraw counts fold `strings::generation()` into every fingerprint, so hold
+        // the stringtable guard (see `hovering_redraws_only_the_hovered_node`).
+        let _g = crate::strings::test_guard();
+        let mut sp = node("splash");
+        sp.id = "sp".into();
+        sp.width = Some(200.0);
+        sp.height = Some(100.0);
+        sp.anchor = Some(UiAnchor::TopLeft);
+        sp = prop(sp, "tex", Value::Number(1.0));
+        sp = prop(sp, "fade_in", Value::Number(0.6));
+        sp = prop(sp, "hold", Value::Number(1.2));
+        sp = prop(sp, "fade_out", Value::Number(0.6));
+        let input = input_at(-9.0, -9.0, false);
+        let mut state = UiState::new();
+        let mut at = |t: f64| {
+            let model =
+                ValueMap::new().with("elapsed", t).with("img_w", 100.0).with("img_h", 50.0);
+            run_ui(&sp, &model, &styles(), &input, &mut state)
+        };
+        let alpha_of = |f: &UiFrame| {
+            f.commands
+                .iter()
+                .find_map(|c| match c {
+                    HudCommand::Sprite { color, .. } => Some(color[3]),
+                    _ => None,
+                })
+                .expect("the splash drew its image")
+        };
+
+        let rise = at(0.3);
+        assert!((alpha_of(&rise) - 0.5).abs() < 0.01, "mid-rise draws at half alpha");
+        let top = at(0.6);
+        assert_eq!(top.stats.redraw_nodes, 1, "the clock advancing invalidates the splash");
+        assert!(alpha_of(&top) > 0.99, "the ramp completed");
+        at(1.0);
+        let plateau = at(1.5);
+        assert_eq!(plateau.stats.redraw_nodes, 0, "the hold plateau replays from cache");
+        assert_eq!(alpha_of(&plateau), 1.0);
+        let faded = at(2.1);
+        assert_eq!(faded.stats.redraw_nodes, 1, "the fade-out invalidates again");
+        assert!((alpha_of(&faded) - 0.5).abs() < 0.01, "halfway down the fade-out");
+    }
     use std::collections::HashMap;
 
     fn node(component: &str) -> UiNode {
@@ -5511,6 +6237,38 @@ mod tests {
     /// A wheel tick at a parked pointer — the input a `list` scrolls on.
     fn input_wheel(x: f32, y: f32, wheel: f32) -> UiInput {
         UiInput { wheel, ..input_at(x, y, false) }
+    }
+
+    /// A per-id ARRANGE bind (`<id>_off_x`/`_off_y`/`_anchor`) overrides a node's authored
+    /// placement, so a scene's Lua `arrange()` — and a per-user layout override — can move a
+    /// component the scene file centred. With no bind, the authored placement stands.
+    #[test]
+    fn an_arrange_bind_overrides_a_nodes_static_placement() {
+        use super::{anchored, Rect};
+        let mut hud = node("panel");
+        hud.id = "hud".into();
+        hud.width = Some(100.0);
+        hud.height = Some(50.0);
+        hud.anchor = Some(UiAnchor::TopLeft);
+        hud.offset = [0.0, 0.0];
+        let parent = Rect { x: 0.0, y: 0.0, w: 800.0, h: 600.0 };
+
+        // No bind → the authored top-left placement stands.
+        let base = anchored(&hud, parent, &ValueMap::new());
+        assert_eq!((base.x, base.y), (0.0, 0.0), "authored placement stands when no arrange bind");
+
+        // arrange() moved it: a centre anchor + a (40, 25) offset override wins.
+        let mut model = ValueMap::new();
+        model.set("hud_anchor", "center");
+        model.set("hud_off_x", 40.0);
+        model.set("hud_off_y", 25.0);
+        let moved = anchored(&hud, parent, &model);
+        // center: x = (800-100)/2 + 40 = 390 ; y = (600-50)/2 + 25 = 300.
+        assert_eq!(
+            (moved.x, moved.y),
+            (390.0, 300.0),
+            "arrange anchor+offset binds override the authored placement"
+        );
     }
 
     // ── Draw cache (draw on change) ──────────────────────────────────────────
@@ -5872,7 +6630,7 @@ mod tests {
         // the stringtable guard: a concurrent test's `load_str` mid-test would bump the
         // generation and force spurious redraws (an order-dependent flake).
         let _g = crate::strings::test_guard();
-        // Cached commands carry RESOLVED colours, so a hot-reloaded `ui_elements.json`
+        // Cached commands carry RESOLVED colours, so a hot-reloaded `ui_theme.json`
         // must invalidate them — while an equal tree rebuilt at a new address must not
         // (the fingerprint folds block CONTENT, never its address).
         let page = tree();
@@ -6964,6 +7722,51 @@ mod tests {
         assert_eq!(frame.results.number("tab"), Some(1.0), "cell click selects its index");
     }
 
+    #[test]
+    fn tabs_vertical_stacks_cells_top_to_bottom_and_click_picks_the_row() {
+        // A `vertical` strip, 200 wide × 300 tall, three cells (a|b|c) bound to "cat":
+        // stacked TOP-TO-BOTTOM, each spanning the full 200 width, 100px tall.
+        let mk = |value: f64, label: &str| {
+            let t = node("tab");
+            let t = prop(t, "value", Value::Number(value));
+            prop(t, "label", Value::Text(label.into()))
+        };
+        let mut tabs = node("tabs");
+        tabs.id = "tabs".into();
+        tabs.bind = Some("cat".into());
+        tabs.width = Some(200.0);
+        tabs.height = Some(300.0);
+        tabs.anchor = Some(UiAnchor::TopLeft);
+        tabs = prop(tabs, "vertical", Value::Bool(true));
+        tabs = prop(tabs, "tab_active", Value::Text("ta".into()));
+        tabs = prop(tabs, "tab_idle", Value::Text("ti".into()));
+        tabs.children = vec![mk(0.0, "A"), mk(1.0, "B"), mk(2.0, "C")];
+        let mut page = node("tabs_page");
+        page.children = vec![tabs];
+        let st = serde_json::json!({
+            "ta": { "fill_top": [0.2,0.3,0.5,1.0] },
+            "ti": { "fill_top": [0.09,0.10,0.13,1.0] }
+        });
+        let model = ValueMap::new();
+
+        // The 2nd row (y 100..200) picks index 1 — the click the task calls out.
+        let f = run_ui(&page, &model, &st, &input_at(100.0, 150.0, true), &mut UiState::new());
+        assert_eq!(f.results.number("cat"), Some(1.0), "a click on the 2nd row picks index 1");
+        assert!(f.results.is_on("hud_hit"), "the vertical strip claims the pointer");
+
+        // Discriminators vs a HORIZONTAL strip: a 200-wide horizontal strip would split on
+        // X (cells 0..66.7, 66.7..133.3, 133.3..200), so BOTH of these clicks would pick the
+        // opposite index there — proving the cell axis really flipped to Y.
+        let f = run_ui(&page, &model, &st, &input_at(180.0, 50.0, true), &mut UiState::new());
+        assert_eq!(f.results.number("cat"), Some(0.0), "top row picks 0 (a horizontal strip picks 2 at x=180)");
+        let f = run_ui(&page, &model, &st, &input_at(20.0, 250.0, true), &mut UiState::new());
+        assert_eq!(f.results.number("cat"), Some(2.0), "bottom row picks 2 (a horizontal strip picks 0 at x=20)");
+
+        // A drawn cell spans the FULL width (a horizontal cell would be ~66.7 wide).
+        let full_w = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { w, .. } if (*w - 200.0).abs() < 0.5));
+        assert!(full_w, "vertical cells span the full strip width");
+    }
+
     fn select_styles_json() -> Json {
         serde_json::json!({
             "controls": {
@@ -7425,10 +8228,15 @@ mod tests {
     /// second focus system this component exists to end.
     #[test]
     fn a_focused_panel_draws_its_own_rim() {
-        let styles = crate::load_styles(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_elements.json"
-        ));
+        // A COMPONENT-BEHAVIOUR test owns its style fixture — the `panel` block is
+        // scene content now (five-line split), not something shipped shared.
+        let styles = serde_json::json!({
+            "panel": {
+                "resting": { "border_w": 1.0, "border": [0.3, 0.3, 0.32, 1.0] },
+                "focused": { "border_w": 2.0, "border": [0.25, 0.45, 0.85, 1.0] },
+                "entered": { "border_w": 2.0, "border": [0.55, 0.45, 0.85, 1.0] }
+            }
+        });
         let resting = styles["panel"]["resting"]["border_w"].as_f64().expect("panel.resting");
         let focus_w = styles["panel"]["focused"]["border_w"].as_f64().expect("panel.focused");
         assert_ne!(resting, focus_w, "the two states must be distinguishable at all");
@@ -7471,69 +8279,46 @@ mod tests {
         assert_eq!(border_of(&mut focused), focus_w, "the focused pane draws its own rim");
     }
 
-    /// **A rail hint press steps the strip by one, and wraps** — over the REAL
-    /// `paged_menu`. The control owns its stepping: the walker records the fired
-    /// result name (`tab_next` — the same name the RB hint button's `action`
-    /// fires and the same one the shoulder signal carries), and the NEXT pass
-    /// advances that strip's own bind by +1 with wrap over its OWN children.
-    /// No scene owns a stepper, and no count is written down anywhere.
+    /// **A rail step advances the strip by one, and CLAMPS at the ends** — over the REAL
+    /// (native) `paged_menu`. The control owns its stepping: the walker records the fired
+    /// result name (`tab_next` — the same name the RB hint gutter fires and the shoulder
+    /// signal carries), and the NEXT pass advances that strip's own bind by +1, clamped to
+    /// its OWN children (next stops at the last, prev at the first — a linear rail never
+    /// wraps; wrapping is an unexpected-UX anti-pattern, Aaron 2026-08-12). No scene owns a
+    /// stepper, and no count is written down anywhere.
     #[test]
-    fn a_rail_hint_press_steps_the_strip_by_one_and_wraps() {
+    fn a_rail_hint_press_steps_the_strip_by_one_and_clamps() {
         let styles = serde_json::json!({});
-        let reg = crate::builtin_templates();
-        let option = |i: usize| {
-            let o = prop(node("option"), "value", Value::Number(i as f64));
-            prop(o, "label", Value::Text(format!("$t{i}")))
-        };
-        let mut menu = UiNode { template: Some("paged_menu".into()), ..Default::default() };
-        menu.slots.insert("pages".into(), vec![option(0), option(1)]);
-        menu.slots.insert("tabs".into(), vec![option(0), option(1), option(2)]);
-        let mut screen = node("screen");
-        screen.children = vec![crate::expand(menu, &reg)];
+        // The native tree: page rail (`tabs`, id `pg`, 2 options) + tab rail
+        // (`pill_toggle`, id `tb`, 3 options), each authored with its own step names.
+        let screen = paged_menu_tree(false);
 
-        // The strips authored their own stepping — the SAME names the hint buttons fire.
-        let all = {
-            fn walk<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
-                out.push(n);
-                for c in &n.children {
-                    walk(c, out);
-                }
-                for g in n.slots.values() {
-                    for c in g {
-                        walk(c, out);
-                    }
-                }
-            }
-            let mut v = Vec::new();
-            walk(&screen, &mut v);
-            v
-        };
-        let rail = all.iter().find(|n| n.id == "paged_tabs").expect("the tab rail");
-        assert_eq!(rail.props.get("next_action"), Some(&Value::Text("tab_next".into())));
-        assert_eq!(rail.props.get("prev_action"), Some(&Value::Text("tab_prev".into())));
-        let hints: Vec<&str> = all
-            .iter()
-            .filter(|n| n.props.contains_key("glyph"))
-            .filter_map(|n| n.action.as_deref())
-            .collect();
-        assert!(
-            hints.contains(&"tab_next") && hints.contains(&"tab_prev"),
-            "the rail hints fire the very names the strip steps on — one channel"
-        );
+        // The authored tab rail carries its own step names — the SAME the hint gutter fires.
+        let tabs = screen.children[0].children.iter().find(|n| n.id == "tb").expect("the tab rail");
+        assert_eq!(tabs.props.get("next_action"), Some(&Value::Text("tab_next".into())));
+        assert_eq!(tabs.props.get("prev_action"), Some(&Value::Text("tab_prev".into())));
 
-        // Three tabs, resting on 0: three presses walk 1 → 2 → 0.
+        // Three tabs, resting on 0: `tab_next` walks 0 → 1 → 2 → 2 (CLAMPS at the last,
+        // never wraps back to 0).
         let mut state = UiState::new();
-        let mut model = ValueMap::new().with("tab", 0.0).with("paged_tabs_shown", true);
-        for want in [1.0, 2.0, 0.0] {
+        let mut model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        for want in [1.0, 2.0, 2.0] {
             state.push_step("tab_next");
             let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-            assert_eq!(f.results.number("tab"), Some(want), "the strip stepped itself");
+            assert_eq!(f.results.number("tab"), Some(want), "the strip steps itself, clamping at the last");
             model = model.with("tab", want); // the scene folded it back
         }
-        // Backwards wraps too, over the PAGE rail's own (different) length.
+        // ...and `tab_prev` walks 2 → 1 → 0 → 0 (CLAMPS at the first, never wraps to the last).
+        for want in [1.0, 0.0, 0.0] {
+            state.push_step("tab_prev");
+            let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+            assert_eq!(f.results.number("tab"), Some(want), "prev clamps at the first");
+            model = model.with("tab", want);
+        }
+        // The step is over each rail's OWN length: the 2-page rail's prev at 0 stays 0.
         state.push_step("page_prev");
         let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(f.results.number("page"), Some(1.0), "two pages: 0 − 1 wraps to 1");
+        assert_eq!(f.results.number("page"), Some(0.0), "two pages: prev at 0 clamps to 0, never wraps to 1");
         // A name no strip claims steps nothing, and never accumulates.
         state.push_step("something_else");
         let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
@@ -7583,6 +8368,213 @@ mod tests {
             Some(1.0),
             "a mouse click on the hint stepped the strip — a click is an activation"
         );
+    }
+
+    // ── Composites: popup_panel + paged_menu ─────────────────────────────────
+
+    /// A `popup_panel` reserves its drawn title block at the top, then flows its
+    /// authored ITEMS below — the items are ordinary child nodes, the title is chrome.
+    /// The slab measures to `panel_w` × (title block + items + pad), so an anchored
+    /// modal sizes to its content.
+    #[test]
+    fn popup_panel_reserves_the_title_block_then_flows_its_items() {
+        let item = |id: &str| {
+            let mut n = node("button");
+            n.id = id.into();
+            n.size = Some(40.0);
+            n.action = Some(id.into());
+            n
+        };
+        let mut pop = node("popup_panel");
+        pop.id = "pop".into();
+        pop.anchor = Some(UiAnchor::TopLeft);
+        pop = prop(pop, "title", Value::Text("POP".into()));
+        pop.children = vec![item("it0"), item("it1")];
+        let mut screen = node("screen");
+        screen.children = vec![pop];
+
+        let f = run_ui(&screen, &ValueMap::new(), &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
+        // Defaults: panel_pad 38, panel_gap 16, title_size 52 → items_top = 38 + (52+10) + 16 = 116.
+        let (pop_r, it0, it1) = (r("pop"), r("it0"), r("it1"));
+        assert_eq!((pop_r.size.x, pop_r.size.y), (404.0, 246.0), "slab is panel_w × content height");
+        assert_eq!((it0.pos.x, it0.pos.y), (38.0, 116.0), "first item flows under the title block");
+        assert_eq!((it0.size.x, it1.pos.y), (328.0, 168.0), "items span the inner width, spaced by items_gap");
+    }
+
+    /// A `popup_panel` DRAWS its own chrome: the styled backdrop and the centred title.
+    #[test]
+    fn popup_panel_draws_its_backdrop_and_title() {
+        let mut pop = node("popup_panel");
+        pop.id = "pop".into();
+        pop.anchor = Some(UiAnchor::TopLeft);
+        pop = prop(pop, "title", Value::Text("PAUSED".into()));
+        let mut screen = node("screen");
+        screen.children = vec![pop];
+        let styles = serde_json::json!({ "modal": { "panel": { "fill": [0.1, 0.1, 0.1, 1.0] } } });
+
+        let f = run_ui(&screen, &ValueMap::new(), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let titled = f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "PAUSED"));
+        let backed = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { .. }));
+        assert!(titled, "the panel drew its title");
+        assert!(backed, "the panel drew its backdrop");
+    }
+
+    /// A `paged_menu` whose two authored rails and a content child are present: the page
+    /// rail (`tabs`) sits between the LT/RT hint gutters, the tab rail (`pill_toggle`) is
+    /// centred below the 1px rule, and the content child GROWS to fill the rest.
+    fn paged_menu_tree(hide_tabs: bool) -> UiNode {
+        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let mut pages = node("tabs");
+        pages.id = "pg".into();
+        pages.bind = Some("page".into());
+        pages = prop(pages, "next_action", Value::Text("page_next".into()));
+        pages = prop(pages, "prev_action", Value::Text("page_prev".into()));
+        pages.children = opts(2);
+        let mut tabs = node("pill_toggle");
+        tabs.id = "tb".into();
+        tabs.bind = Some("tab".into());
+        tabs.size = Some(520.0);
+        tabs = prop(tabs, "next_action", Value::Text("tab_next".into()));
+        tabs = prop(tabs, "prev_action", Value::Text("tab_prev".into()));
+        tabs.children = opts(3);
+        let mut content = node("cell");
+        content.id = "ct".into();
+        content.grow = Some(1.0);
+        let mut pm = node("paged_menu");
+        pm.id = "pm".into();
+        pm.anchor = Some(UiAnchor::TopLeft);
+        pm.width = Some(800.0);
+        pm.height = Some(600.0);
+        pm.pad = 40.0;
+        pm = prop(pm, "style", Value::Text("paged_menu.frame".into()));
+        if hide_tabs {
+            pm = prop(pm, "hide_tabs", Value::Bool(true));
+        }
+        pm.children = vec![pages, tabs, content];
+        let mut screen = node("screen");
+        screen.children = vec![pm];
+        screen
+    }
+
+    #[test]
+    fn paged_menu_places_both_rails_and_grows_content() {
+        let screen = paged_menu_tree(false);
+        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
+        // inner = (40,40,720,520). Page band: hint_w 54, rail_gap 30, rail_h 42.
+        let pg = r("pg");
+        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (124.0, 40.0, 552.0, 42.0), "page rail between the LT/RT gutters");
+        // Rule 1px at y 82; tab band centred: cluster = 2*46 + 2*20 + 520 = 652, cx = 40 + 34 = 74.
+        let tb = r("tb");
+        assert_eq!((tb.pos.x, tb.pos.y, tb.size.x, tb.size.y), (140.0, 83.0, 520.0, 44.0), "tab pill centred below the rule");
+        // Content grows to fill below the tab band (y = 40+42+1+44 = 127).
+        let ct = r("ct");
+        assert_eq!((ct.pos.y, ct.size.y), (127.0, 433.0), "content grows to fill the rest");
+    }
+
+    #[test]
+    fn paged_menu_hidden_tab_rail_collapses_and_content_reclaims_it() {
+        let screen = paged_menu_tree(true);
+        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        assert!(f.rect("tb").is_none(), "hide_tabs drops the pill rail entirely");
+        // No rule, no tab band: content starts right under the page rail (y = 82).
+        let ct = f.rect("ct").expect("content placed");
+        assert_eq!((ct.pos.y, ct.size.y), (82.0, 478.0), "content reclaims the collapsed rail space");
+    }
+
+    #[test]
+    fn paged_menu_draws_the_rule_and_four_glyph_hints() {
+        let screen = paged_menu_tree(false);
+        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let styles = serde_json::json!({
+            "paged_menu": { "frame": { "fill": [0.05, 0.05, 0.07, 1.0] }, "rule": { "color": [0.4, 0.3, 0.2, 1.0] } },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3 } },
+        });
+        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let sprites = f.commands.iter().filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })).count();
+        assert_eq!(sprites, 4, "all four rail-hint glyphs drew from the atlas");
+        let rule = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { h, y, .. } if (*h - 1.0).abs() < 0.01 && (*y - 82.0).abs() < 0.01));
+        assert!(rule, "the 1px rule drew between the rails");
+    }
+
+    #[test]
+    fn paged_menu_hint_gutter_click_fires_the_rails_step() {
+        // Start on the LAST page (1 of 2) so a prev actually MOVES — a clamp at the
+        // first would hide whether the gutter even fired.
+        let model = ValueMap::new().with("page", 1.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        // LT gutter (x 40..94, y 40..82): fires the PAGE rail's prev_action → page 1 → 0.
+        let f = run_ui(&paged_menu_tree(false), &model, &serde_json::json!({}), &input_at(60.0, 60.0, true), &mut UiState::new());
+        assert!(f.results.is_on("hud_hit"), "the frame claims the click");
+        assert_eq!(f.results.number("page"), Some(0.0), "LT stepped the page rail back");
+        // RB gutter (x 680..726, y 83..127): fires the TAB rail's next_action → tab 0 → 1 (3 tabs).
+        let f = run_ui(&paged_menu_tree(false), &model, &serde_json::json!({}), &input_at(700.0, 100.0, true), &mut UiState::new());
+        assert_eq!(f.results.number("tab"), Some(1.0), "RB stepped the tab rail forward");
+    }
+
+    /// `page_side: "left"` stands the PAGE rail up as a fixed-width LEFT COLUMN (the authored
+    /// `vertical` `tabs`), a 1px vertical rule divides it from the RIGHT area, and the tab
+    /// rail + content take that right area — while the default (top) geometry is unchanged.
+    #[test]
+    fn paged_menu_left_side_stands_the_page_rail_in_a_left_column() {
+        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let mut pages = node("tabs");
+        pages.id = "pg".into();
+        pages.bind = Some("page".into());
+        pages = prop(pages, "vertical", Value::Bool(true));
+        pages.children = opts(3);
+        let mut tabs = node("pill_toggle");
+        tabs.id = "tb".into();
+        tabs.bind = Some("tab".into());
+        tabs.size = Some(520.0);
+        tabs.children = opts(3);
+        let mut content = node("cell");
+        content.id = "ct".into();
+        content.grow = Some(1.0);
+        let mut pm = node("paged_menu");
+        pm.id = "pm".into();
+        pm.anchor = Some(UiAnchor::TopLeft);
+        pm.width = Some(800.0);
+        pm.height = Some(600.0);
+        pm.pad = 40.0;
+        pm = prop(pm, "style", Value::Text("paged_menu.frame".into()));
+        pm = prop(pm, "page_side", Value::Text("left".into()));
+        pm.children = vec![pages, tabs, content];
+        let mut screen = node("screen");
+        screen.children = vec![pm];
+
+        let styles = serde_json::json!({
+            "paged_menu": { "frame": { "fill": [0.05,0.05,0.07,1.0] }, "rule": { "color": [0.4,0.3,0.2,1.0] } },
+        });
+        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
+
+        // inner = (40,40,720,520). page_w 200, page_gap 12 → left column, then a 1px rule at
+        // x 240, then the right area at x = 40+200+12+1 = 253 (w 507).
+        let pg = r("pg");
+        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (40.0, 40.0, 200.0, 520.0), "page rail is the fixed-width left column");
+        // Tab rail rides the top of the right area (cluster centred; pill 520 overflows the
+        // 507 area so cx clamps to 253 → pill at 253+46+20 = 319), fully RIGHT of the rule.
+        let tb = r("tb");
+        assert_eq!((tb.pos.x, tb.pos.y, tb.size.x, tb.size.y), (319.0, 40.0, 520.0, 44.0), "tab rail rides the top of the right area");
+        assert!(tb.pos.x > 240.0, "the tab rail sits right of the vertical rule");
+        // Content fills the right area BELOW the tab band (y = 40+44 = 84).
+        let ct = r("ct");
+        assert_eq!((ct.pos.x, ct.pos.y, ct.size.x, ct.size.y), (253.0, 84.0, 507.0, 476.0), "content fills the right area below the tab band");
+        // The divider is a 1px-WIDE, full-height vertical rule (top mode's is 1px-TALL).
+        let vrule = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { x, w, h, .. }
+            if (*w - 1.0).abs() < 0.01 && (*h - 520.0).abs() < 0.01 && (*x - 240.0).abs() < 0.01));
+        assert!(vrule, "a 1px vertical rule divides the left column from the right area");
+
+        // The DEFAULT (top) path is byte-for-byte unchanged: the same kind with no
+        // `page_side` lays the page rail horizontally between the LT/RT gutters, as before.
+        let top = paged_menu_tree(false);
+        let f2 = run_ui(&top, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let pg2 = f2.rect("pg").expect("pg placed");
+        assert_eq!((pg2.pos.x, pg2.pos.y, pg2.size.x, pg2.size.y), (124.0, 40.0, 552.0, 42.0), "page_side:top (default) geometry is unchanged");
     }
 
     /// **A strip selection is reported as a NUMBER.** The every-frame echo is the
@@ -10197,124 +11189,6 @@ mod tests {
         let sp = panels(&run(&page_of(stack)));
         assert_rects_eq(&gp, &sp, "grid reproduces stack");
         assert_rects_eq(&gp, &[(0.0, 0.0, 300.0, 200.0), (0.0, 0.0, 300.0, 200.0)], "both children fill the container");
-    }
-
-    /// The `frame` TEMPLATE's centre content is inset past the corner-rune zone
-    /// purely by the border-grid track structure — WITH NO `title_pad`-style prop
-    /// anywhere. This is the Phase-2 payoff: what `window` achieved with a patch-prop
-    /// (`title_pad = 30` to shove the title clear of the top-left rune), `frame`
-    /// achieves structurally, because the corner cell IS the intersection of the two
-    /// edge tracks that also inset the centre.
-    #[test]
-    fn frame_center_clears_corner_runes_intrinsically() {
-        use crate::template::{builtin_templates, expand};
-
-        // A `box`-styled panel that fills whatever cell it lands in (no own size).
-        let box_panel = || prop(node("cell"), "style", Value::Text("box".into()));
-
-        // Build the frame TEMPLATE node by hand: center + nw regions, a 400×300 frame,
-        // every edge track 30. Crucially there is NO title_pad / body_pad prop.
-        let mut frame = node("");
-        frame.component = String::new();
-        frame.template = Some("frame".into());
-        frame.props.insert("w".into(), Value::Number(400.0));
-        frame.props.insert("h".into(), Value::Number(300.0));
-        frame.props.insert("edge".into(), Value::Number(30.0));
-        frame.slots.insert("center".into(), vec![box_panel()]);
-        frame.slots.insert("nw".into(), vec![box_panel()]);
-
-        // run_ui does NOT expand templates — it resolves directly — so expand FIRST,
-        // else we'd lay out a bare, unexpanded template node and prove nothing.
-        let built = expand(frame, &builtin_templates());
-        let ps = panels(&run(&page_of(built)));
-
-        // Emission order → ps[0] = nw corner rect, ps[1] = center rect. (The unstyled
-        // stack + grid emit no Panel; rune_corners emits TEXT, not Panel — so only the
-        // two `box` regions appear.) Assertions are anchor-independent (relative).
-        assert_eq!(ps.len(), 2, "only the two box regions emit panels: {ps:?}");
-        let (nw, center) = (ps[0], ps[1]);
-        // The corner cell is exactly the w_size × n_size intersection: 30 × 30.
-        assert!((nw.2 - 30.0).abs() < 1e-3 && (nw.3 - 30.0).abs() < 1e-3, "nw cell is 30×30: {nw:?}");
-        // The centre is inset from the frame by exactly the edge tracks — its origin
-        // sits (w_size, n_size) = (30, 30) past the corner cell's origin. 30 >= the
-        // rune box (inset 14 + size 16), so the content clears the corner rune BY
-        // CONSTRUCTION, with no title_pad prop present anywhere.
-        assert!((center.0 - nw.0 - 30.0).abs() < 1e-3, "center inset by w_size past nw: {center:?} vs {nw:?}");
-        assert!((center.1 - nw.1 - 30.0).abs() < 1e-3, "center inset by n_size past nw: {center:?} vs {nw:?}");
-        // Centre extent = frame minus the two edges on each axis: 400-60, 300-60.
-        assert!((center.2 - 340.0).abs() < 1e-3, "center width = 400 - 2*30: {center:?}");
-        assert!((center.3 - 240.0).abs() < 1e-3, "center height = 300 - 2*30: {center:?}");
-    }
-
-    /// END-TO-END clearance: a `frame` filling the 800×600 screen with only a `center`
-    /// region and DEFAULT edges (30 = the corner-rune box extent, inset 14 + size 16)
-    /// must lay its centre content inset 30px on every side — clearing the rune zone —
-    /// WITH NO title_pad-style prop. Proves the whole frame→grid→arrange chain through
-    /// `run_ui`, not just template expansion: the clearance is structural, not authored.
-    #[test]
-    fn frame_center_clears_the_corner_rune_zone_end_to_end() {
-        let mut fr = node(""); // component is ignored when `template` is set
-        fr.template = Some("frame".into());
-        fr = prop(fr, "w_frac", Value::Number(1.0));
-        fr = prop(fr, "h_frac", Value::Number(1.0));
-        let mut center = prop(node("cell"), "style", Value::Text("box".into()));
-        center.id = "center".into();
-        fr.slots.insert("center".into(), vec![center]);
-
-        let tree = crate::template::expand(page_of(fr), &crate::template::builtin_templates());
-        let ps = panels(&run(&tree));
-        // The inset centre cell: (w_edge, n_edge, W - w - e, H - n - s) = (30, 30, 740, 540).
-        assert!(
-            ps.iter().any(|&(x, y, w, h)| {
-                (x - 30.0).abs() < 1e-3 && (y - 30.0).abs() < 1e-3
-                    && (w - 740.0).abs() < 1e-3 && (h - 540.0).abs() < 1e-3
-            }),
-            "centre content must be inset 30px on every side (clearing the rune zone), got {ps:?}"
-        );
-    }
-
-    /// END-TO-END: the `n` TITLE bar occupies its OWN top-CENTRE cell — it does NOT span
-    /// the corner cells. Regression guard for the "title bar overwrites the corner runes"
-    /// defect (a full-bleed `n` / `s` span, col 0 · span 3). Builds a real `frame` with
-    /// `nw` + `n` + `center` regions through `run_ui` and asserts the laid-out `n` rect
-    /// begins EXACTLY at the `w` edge track (where the `nw` corner cell ends), so the title
-    /// zone and the corner-rune zone are distinct, non-overlapping rectangles.
-    #[test]
-    fn frame_title_bar_sits_in_its_own_cell_clear_of_the_corners() {
-        use crate::template::{builtin_templates, expand};
-        // A `box`-styled panel that fills whatever cell it lands in (no own size).
-        let box_panel = || prop(node("cell"), "style", Value::Text("box".into()));
-
-        let mut frame = node("");
-        frame.component = String::new();
-        frame.template = Some("frame".into());
-        frame.props.insert("w".into(), Value::Number(400.0));
-        frame.props.insert("h".into(), Value::Number(300.0));
-        frame.props.insert("edge".into(), Value::Number(30.0));
-        frame.props.insert("n_size".into(), Value::Number(52.0));
-        frame.slots.insert("nw".into(), vec![box_panel()]);
-        frame.slots.insert("n".into(), vec![box_panel()]);
-        frame.slots.insert("center".into(), vec![box_panel()]);
-
-        let built = expand(frame, &builtin_templates());
-        let ps = panels(&run(&page_of(built)));
-
-        // Emission order (nw, n, center) → ps[0] = nw corner, ps[1] = n title, ps[2] = center.
-        // The frame self-anchors CENTRE, so its corner is offset — assertions are RELATIVE to nw.
-        assert_eq!(ps.len(), 3, "the three box regions emit panels: {ps:?}");
-        let (nw, n, center) = (ps[0], ps[1], ps[2]);
-        // The nw corner cell is the w_size × n_size intersection: 30 × 52.
-        assert!((nw.2 - 30.0).abs() < 1e-3 && (nw.3 - 52.0).abs() < 1e-3, "nw cell is 30×52: {nw:?}");
-        // The title bar begins EXACTLY where the corner column ends (nw.x + w_size = nw.x + 30),
-        // in the same top row (nw.y), and spans ONLY the centre column (width = 400 - 30 - 30).
-        assert!((n.0 - nw.0 - 30.0).abs() < 1e-3, "n title starts at the w edge, clear of the nw corner: {n:?} vs {nw:?}");
-        assert!((n.1 - nw.1).abs() < 1e-3, "n title shares the top row with nw: {n:?} vs {nw:?}");
-        assert!((n.2 - 340.0).abs() < 1e-3, "n title spans only the centre column: {n:?}");
-        assert!((n.3 - 52.0).abs() < 1e-3, "n title fills the top-row band (n_size): {n:?}");
-        // Disjoint zones: the title's left edge meets the corner's right edge — no intrusion.
-        assert!(n.0 >= nw.0 + nw.2 - 1e-3, "title zone and corner zone are disjoint: {n:?} vs {nw:?}");
-        // Sanity: the centre is inset one edge track below + right of nw (the rune-cleared cell).
-        assert!((center.0 - nw.0 - 30.0).abs() < 1e-3 && (center.1 - nw.1 - 52.0).abs() < 1e-3, "center inset past the edges: {center:?} vs {nw:?}");
     }
 
     /// Cross-axis `align` on a container sizes each child to its intrinsic cross extent

@@ -1,12 +1,12 @@
 //! flicker-widgets — the engine's **UI toolkit**: the Rust component walker
 //! (layout / draw / hit-test over a Lua-declared [`UiNode`] tree), the
-//! [`component`] tier that owns every control's draw + hit, the template tier,
+//! [`component`] tier that owns every control's draw + hit,
 //! Surfaces, intents, the stringtable, and the [`render_hud`] draw bridge.
 //! (`flicker` re-exports this crate as `flicker::ui`.)
 //!
 //! The UI pattern: **Lua declares** (a screen's `tree()` returns component
 //! instances), **data rides the Model** (binds), **styles live in
-//! `ui_elements.json`** (one palette, `theme.tokens`), and **Rust owns
+//! `ui_theme.json`** (one palette, `theme.tokens`), and **Rust owns
 //! everything else** — [`run_ui`] lays the cached tree out, draws and hit-tests
 //! each control in [`component`], and returns [`HudCommand`]s for [`render_hud`].
 //! Per-control behaviour was briefly a `ui/<kind>.lua` module tier; it came back
@@ -19,9 +19,9 @@
 //! A walker consumer wires the seam like this:
 //! ```ignore
 //! // setup (once):
-//! let styles = flicker_widgets::load_styles("ui_elements.json"); // token-resolved
+//! let styles = flicker_widgets::load_styles("ui_theme.json"); // token-resolved
 //! let host = ScriptHost::from_file(path)?;
-//! flicker_widgets::load_ui_json(&host, "ui_elements.json");   // → the `UI` global
+//! flicker_widgets::load_ui_json(&host, "ui_theme.json");   // → the `UI` global
 //! let tree = host.ui_tree()?.expect("tree()");                 // cached once
 //! let intents = UiIntents::of(&tree);                          // S9 declaration
 //! // each frame:
@@ -62,17 +62,6 @@ pub use walker::{focusables_of, walker_owned, WalkerHandler};
 pub mod intents;
 pub use intents::UiIntents;
 
-/// The **template tier** — data protos (the embedded `ui_templates.json`) plus
-/// the three surviving structural Rust builders (`frame` / `card` /
-/// `option_grid`), each composing components into a [`UiNode`] subtree, invoked
-/// by name from per-scene arrangement DATA. See [`template`].
-///
-/// [`UiNode`]: flicker_script::UiNode
-pub mod template;
-pub use template::{
-    builtin_templates, expand, BuildCtx, Slots, TemplateDef, TemplateFn, TemplateRegistry,
-};
-
 /// The **scene file** — `{ boot, behaviour, params, tree, exits }` as authored
 /// JSON, one `<Name>.scene.json` per scene: the composition a human assembles,
 /// the Rust behaviour that plays it, and the routing that leaves it — plus
@@ -94,16 +83,11 @@ pub use chat_panel::{chat_panel, ChatLineKind, ChatLineView, ChatView, RosterEnt
 /// instead of hand-rolled show/hide chains. See [`surfaces`].
 pub mod surfaces;
 
-/// The Workflow — an Orchestration with an ordinal: linear step surfaces +
-/// fail-loud document gates over one `Surfaces` exclusive group (Aaron 2026-08-01).
-pub mod workflow;
-
 /// The spine's REVERSIBLE half — undo/redo over commands a bench can apply and
 /// take back. Domain-free: the commands live with the data they mutate.
 pub mod history;
 pub use history::{Command, CommandHistory, DEFAULT_DEPTH};
-pub use surfaces::{OrchestrationRule, Surface, SurfaceChange, SurfaceOp, Surfaces};
-pub use workflow::{workflows_from_json, Step, Workflow, WorkflowDef};
+pub use surfaces::{Surface, SurfaceChange, Surfaces};
 
 pub mod strings;
 
@@ -143,7 +127,12 @@ const STRUCTURAL_KINDS: &[&str] =
 const RUST_COMPONENT_KINDS: &[&str] = &[
     "button", "panel", "sprite", "rune_corners", "tooltip", "checkbox", "toggle", "radio", "tile",
     "pill_toggle", "tabs", "select", "slider", "stepper", "text_field", "list", "context_menu",
-    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge",
+    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge", "splash",
+    // Composites the engine draws at walk time — the carved modal slab and the two-rail
+    // page/tab control (PTT). Formalised from the retired `popup_panel` / `paged_menu`
+    // template builders (201F4F51 P1): now first-class kinds the scene names via
+    // `component:` and the walker lays out / draws / hit-tests, never a template pass.
+    "popup_panel", "paged_menu",
 ];
 
 /// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests
@@ -179,21 +168,14 @@ pub fn is_known_kind(kind: &str) -> bool {
 /// Every kind in `tree` the engine does not know, deduped — empty for a well-formed
 /// tree. The drift gate for the authored vocabulary: a screen's test walks its real
 /// tree through this, so a typo or a stale name fails the build rather than rendering
-/// an invisible hole (and a `template` node that never expanded is caught too).
+/// an invisible hole.
 pub fn unknown_kinds(tree: &UiNode) -> Vec<String> {
     fn walk(n: &UiNode, out: &mut Vec<String>) {
-        if n.template.is_some() {
-            out.push(format!("template:{}", n.template.as_deref().unwrap_or("?")));
-        } else if !is_known_kind(&n.component) && !out.iter().any(|k| k == &n.component) {
+        if !is_known_kind(&n.component) && !out.iter().any(|k| k == &n.component) {
             out.push(n.component.clone());
         }
         for c in &n.children {
             walk(c, out);
-        }
-        for group in n.slots.values() {
-            for c in group {
-                walk(c, out);
-            }
         }
     }
     let mut out = Vec::new();
@@ -209,7 +191,7 @@ pub fn unknown_kinds(tree: &UiNode) -> Vec<String> {
 ///
 /// Walks the SAME prop vocabulary the draw boundary resolves
 /// (`DISPLAY_STR_PROPS`: label / text / title / subtitle / footer / placeholder /
-/// hint / name / meta / prefix), over children and template slots. EXEMPT — not
+/// hint / name / meta / prefix), over children. EXEMPT — not
 /// display copy that needs a token:
 ///   * `$token` values (already stringtable refs; `$$…` escapes count too) and
 ///     empty strings;
@@ -256,11 +238,6 @@ pub fn raw_display_literals(tree: &UiNode) -> Vec<String> {
         }
         for c in &n.children {
             walk(c, out);
-        }
-        for group in n.slots.values() {
-            for c in group {
-                walk(c, out);
-            }
         }
     }
     let mut out = Vec::new();
@@ -426,80 +403,212 @@ pub fn load_widgets(script: &ScriptHost) {
     }
 }
 
-/// Parse the `ui_elements.json` at `path` and expose it to `script` as the `UI`
+/// Parse the `ui_theme.json` at `path` and expose it to `script` as the `UI`
 /// global, so a screen reads its layout from named elements (`UI.hud.controls`)
 /// instead of hardcoded constants. Logs and continues on failure (scripts guard
 /// `if not UI`). Calling again hot-reloads the layout after an edit.
 pub fn load_ui_json(script: &ScriptHost, path: impl AsRef<Path>) {
-    let path = path.as_ref();
-    match std::fs::read_to_string(path) {
-        Ok(text) => load_ui_json_str(script, &text),
-        Err(e) => tracing::error!("ui_elements.json read failed ({}): {e}", path.display()),
+    load_ui_json_for(script, path, None);
+}
+
+/// [`load_ui_json`] plus the SCENE's own style blocks (five-line split): the full
+/// on-disk pipeline — satellites merged, scene blocks over them, `$token`s
+/// resolved against the one palette — handed to Lua as one `UI` global, so a
+/// dormant bench's `UI.<bench>.*` reads survive its bucket leaving the theme file.
+pub fn load_ui_json_for(
+    script: &ScriptHost,
+    path: impl AsRef<Path>,
+    scene: Option<&serde_json::Value>,
+) {
+    let ui = load_styles_for(path, scene);
+    if let Err(e) = script.set_global_json("UI", &ui) {
+        tracing::error!("UI elements exposure failed: {e}");
     }
 }
 
-/// Expose an **already-in-memory** `ui_elements.json` string to `script` as the
+/// Expose an **already-in-memory** `ui_theme.json` string to `script` as the
 /// `UI` global — the same contract as [`load_ui_json`], for layouts embedded in
 /// a crate (`include_str!`) rather than read from disk. Logs and continues on a
 /// parse error (scripts guard `if not UI`).
 pub fn load_ui_json_str(script: &ScriptHost, json: &str) {
-    match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(mut ui) => {
-            resolve_tokens(&mut ui);
-            if let Err(e) = script.set_global_json("UI", &ui) {
-                tracing::error!("UI elements exposure failed: {e}");
-            }
-        }
-        Err(e) => tracing::error!("ui_elements.json parse failed: {e}"),
+    load_ui_json_strs(script, &[json]);
+}
+
+/// [`load_ui_json_str`] over the embedded theme TRIO — root + satellites merged
+/// by [`load_styles_strs`]'s rules, then handed to Lua as one `UI` global, so a
+/// script's `UI.settings.*` / `UI.menu.*` reads survive the file split unchanged.
+pub fn load_ui_json_strs(script: &ScriptHost, parts: &[&str]) {
+    load_ui_json_strs_for(script, parts, None);
+}
+
+/// [`load_ui_json_strs`] plus the SCENE's own style blocks — the embedded Lua
+/// exposure for a scene pair: the scene file's `styles` land in the `UI` global
+/// beside the shared defaults, tokens resolved against the one palette.
+pub fn load_ui_json_strs_for(
+    script: &ScriptHost,
+    parts: &[&str],
+    scene: Option<&serde_json::Value>,
+) {
+    let ui = load_styles_strs_for(parts, scene);
+    if let Err(e) = script.set_global_json("UI", &ui) {
+        tracing::error!("UI elements exposure failed: {e}");
     }
 }
 
-/// Load `ui_elements.json` at `path`, expand its `$token` design-token
-/// references, and return the resolved tree — the **styles** input for the Rust
-/// component walker ([`run_ui`]), which resolves a node's dotted `style` path
-/// against it (so colours stay single-sourced in `theme.tokens`, exactly like the
-/// `UI` global [`load_ui_json`] hands Lua). Returns an empty object when the file
-/// can't be read or parsed (the walker then falls back to its neutral defaults).
+/// The theme's SATELLITE files, merged into the loaded root by [`load_styles`]:
+/// the RTT stage sources (`ui_stages.json`) and the shell chrome (`ui_style.json`)
+/// — split out of the one big file by Aaron 2026-08-12. The PALETTE never leaves
+/// `ui_theme.json`: a satellite carrying a `theme` key is a palette fork
+/// (rule 8D8A4215) and is refused loudly.
+const THEME_SATELLITES: &[&str] = &["ui_stages.json", "ui_style.json"];
+
+/// Merge one satellite file's top-level entries into the theme root. The theme
+/// file WINS a key collision (loud error — a satellite must own its keys), and a
+/// `theme` key is refused outright (the palette-fork guard).
+fn merge_satellite(root: &mut serde_json::Value, sat: serde_json::Value, name: &str) {
+    let (Some(obj), serde_json::Value::Object(sat)) = (root.as_object_mut(), sat) else {
+        tracing::error!("{name}: not a JSON object — ignored");
+        return;
+    };
+    for (k, v) in sat {
+        if k == "theme" {
+            tracing::error!(
+                "{name} carries a `theme` key — the palette lives ONLY in ui_theme.json \
+                 (one-palette law); refusing the fork"
+            );
+            continue;
+        }
+        if obj.contains_key(&k) {
+            tracing::error!("{name}: key `{k}` collides with ui_theme.json — the theme file wins");
+            continue;
+        }
+        obj.insert(k, v);
+    }
+}
+
+/// Load `ui_theme.json` at `path`, merge its sibling SATELLITE files
+/// ([`THEME_SATELLITES`] in the same folder, when present), expand `$token`
+/// design-token references, and return the resolved tree — the **styles** input
+/// for the Rust component walker ([`run_ui`]), which resolves a node's dotted
+/// `style` path against it (so colours stay single-sourced in `theme.tokens`,
+/// exactly like the `UI` global [`load_ui_json`] hands Lua). One merged root
+/// means a `stage` node's source and a chrome style resolve exactly as they did
+/// when everything lived in one file — call sites carry only the theme path.
+/// Returns an empty object when the theme file can't be read or parsed (the
+/// walker then falls back to its neutral defaults).
 pub fn load_styles(path: impl AsRef<Path>) -> serde_json::Value {
+    load_styles_for(path, None)
+}
+
+/// [`load_styles`] plus the SCENE's own style blocks ([`SceneDef::styles`] — the
+/// five-line split: a scene's values live in its scene file). Merged AFTER the
+/// satellites and BEFORE token resolution, so a scene's `$token` refs resolve
+/// against the one palette exactly like the shared defaults. A scene may
+/// deliberately override a shared bucket for itself — its own file wins — but a
+/// `theme` key is refused (the palette-fork guard, also enforced at parse).
+pub fn load_styles_for(
+    path: impl AsRef<Path>,
+    scene: Option<&serde_json::Value>,
+) -> serde_json::Value {
     let path = path.as_ref();
     let mut ui = match std::fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(ui) => ui,
             Err(e) => {
-                tracing::error!("ui_elements.json parse failed (styles): {e}");
+                tracing::error!("ui_theme.json parse failed (styles): {e}");
                 serde_json::Value::Object(Default::default())
             }
         },
         Err(e) => {
-            tracing::error!("ui_elements.json read failed (styles) ({}): {e}", path.display());
+            tracing::error!("ui_theme.json read failed (styles) ({}): {e}", path.display());
             serde_json::Value::Object(Default::default())
         }
     };
+    if let Some(dir) = path.parent() {
+        for name in THEME_SATELLITES {
+            let sp = dir.join(name);
+            let Ok(text) = std::fs::read_to_string(&sp) else { continue };
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(sat) => merge_satellite(&mut ui, sat, name),
+                Err(e) => tracing::error!("{name} parse failed ({}): {e}", sp.display()),
+            }
+        }
+    }
+    if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
+        for (k, v) in scene {
+            if k == "theme" {
+                tracing::error!(
+                    "scene styles carry a `theme` key — the palette lives ONLY in \
+                     ui_theme.json (one-palette law); refusing the fork"
+                );
+                continue;
+            }
+            obj.insert(k.clone(), v.clone());
+        }
+    }
     resolve_tokens(&mut ui);
     ui
 }
 
-/// Like [`load_styles`] but from an already-in-memory `ui_elements.json` string
+/// Like [`load_styles`] but from an already-in-memory `ui_theme.json` string
 /// (`include_str!`) — for a crate that embeds its layout rather than reading it
 /// from disk (the front-end shell). Returns the token-resolved tree the component
 /// walker resolves node `style` paths against. Empty object on a parse error.
 pub fn load_styles_str(json: &str) -> serde_json::Value {
-    let mut ui = match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(ui) => ui,
-        Err(e) => {
-            tracing::error!("ui_elements.json parse failed (styles str): {e}");
+    load_styles_strs(&[json])
+}
+
+/// The EMBEDDED counterpart of [`load_styles`]'s satellite merge: the first
+/// string is the theme root (it must carry `theme.tokens`), each further string
+/// is an embedded satellite (`ui_style.json`, `ui_stages.json`, …) merged under
+/// the same rules — the root wins collisions, a satellite `theme` key is refused
+/// (the palette-fork guard). One merged root, one token resolution, exactly like
+/// the on-disk trio.
+pub fn load_styles_strs(parts: &[&str]) -> serde_json::Value {
+    load_styles_strs_for(parts, None)
+}
+
+/// [`load_styles_strs`] plus the SCENE's own style blocks (five-line split) — the
+/// embedded counterpart of [`load_styles_for`].
+pub fn load_styles_strs_for(
+    parts: &[&str],
+    scene: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut ui = match parts.first().map(|p| serde_json::from_str::<serde_json::Value>(p)) {
+        Some(Ok(ui)) => ui,
+        Some(Err(e)) => {
+            tracing::error!("ui_theme.json parse failed (styles str): {e}");
             serde_json::Value::Object(Default::default())
         }
+        None => serde_json::Value::Object(Default::default()),
     };
+    for (i, part) in parts.iter().enumerate().skip(1) {
+        match serde_json::from_str::<serde_json::Value>(part) {
+            Ok(sat) => merge_satellite(&mut ui, sat, &format!("embedded satellite #{i}")),
+            Err(e) => tracing::error!("embedded satellite #{i} parse failed: {e}"),
+        }
+    }
+    if let (Some(obj), Some(serde_json::Value::Object(scene))) = (ui.as_object_mut(), scene) {
+        for (k, v) in scene {
+            if k == "theme" {
+                tracing::error!(
+                    "scene styles carry a `theme` key — the palette lives ONLY in \
+                     ui_theme.json (one-palette law); refusing the fork"
+                );
+                continue;
+            }
+            obj.insert(k.clone(), v.clone());
+        }
+    }
     resolve_tokens(&mut ui);
     ui
 }
 
 // (The dormant `load_arrangement_str` / `load_styles_merged` loaders died in S10
 // — zero production callers. The surviving DATA entry points are
-// `flicker_script::parse_ui_json` (the ONE arrangement reader) + the template
-// registry (`builtin_templates` / `expand`) + the styles loaders above; a future
-// CMS re-adds against those, not against a dormant convenience wrapper.)
+// `flicker_script::parse_ui_json` (the ONE arrangement reader) + the styles
+// loaders above; a future CMS re-adds against those, not against a dormant
+// convenience wrapper.)
 
 /// Expand `"$name"` design-token references against the `theme.tokens` map, in
 /// place, before the tree reaches Lua. A token (e.g. `"$sap_base"`) is replaced
@@ -545,14 +654,14 @@ mod tests {
     use super::*;
     use flicker_script::ScriptHost;
 
-    /// The canonical Prism palette (`theme.tokens` in `ui_elements.json`) as
+    /// The canonical Prism palette (`theme.tokens` in `ui_theme.json`) as
     /// `(name, rgba)` — the one source of truth both fallback gates below check
     /// their copies against.
     fn theme_tokens() -> Vec<(String, [f64; 4])> {
         let elements: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../content/sensorium/resources/ui_elements.json"
+            "../../../../content/sensorium/resources/ui_theme.json"
         ))
-        .expect("ui_elements.json parses");
+        .expect("ui_theme.json parses");
         elements["theme"]["tokens"]
             .as_object()
             .expect("theme.tokens present")
@@ -703,7 +812,7 @@ mod tests {
     /// exported, never a component — is still rejected, now because it is in neither
     /// roster rather than by a hardcoded `kind != "core"`.
     #[test]
-    fn unknown_kinds_catches_a_typo_and_an_unexpanded_template() {
+    fn unknown_kinds_catches_a_typo() {
         let leaf = |kind: &str| UiNode { component: kind.to_string(), ..Default::default() };
         let mut screen = leaf("screen");
         screen.children = vec![leaf("cell"), leaf("button"), leaf("text")];
@@ -711,18 +820,6 @@ mod tests {
 
         screen.children.push(leaf("colunm")); // the typo a rename leaves behind
         assert_eq!(unknown_kinds(&screen), vec!["colunm".to_string()], "a stale kind is reported");
-
-        let mut stale = leaf("screen");
-        stale.children = vec![UiNode {
-            component: String::new(),
-            template: Some("window".into()),
-            ..Default::default()
-        }];
-        assert_eq!(
-            unknown_kinds(&stale),
-            vec!["template:window".to_string()],
-            "a template that never expanded is reported too"
-        );
 
         assert!(!is_known_kind("core"), "`core` is the emitter library, never a component kind");
         for kind in rust_component_kinds() {
@@ -754,14 +851,14 @@ mod tests {
             node(&[("text", "dead"), ("text_bind", "live")]), // bind-shadowed → exempt
             node(&[("text", "Hello World")]),            // duplicate → deduped
         ];
-        // A slot-authored literal is walked too.
+        // A nested child's literal is walked too.
         let mut holder = UiNode { component: "cell".into(), ..Default::default() };
-        holder.slots.insert("items".into(), vec![node(&[("label", "Slot Copy")])]);
+        holder.children = vec![node(&[("label", "Nested Copy")])];
         screen.children.push(holder);
 
         assert_eq!(
             raw_display_literals(&screen),
-            vec!["Hello World".to_string(), "Slot Copy".to_string()]
+            vec!["Hello World".to_string(), "Nested Copy".to_string()]
         );
     }
 
@@ -782,6 +879,109 @@ mod tests {
         assert_eq!(ui["oops"], serde_json::json!("$missing"));
     }
 
+    /// The theme trio: `load_styles` merges the sibling satellite files into ONE
+    /// root (so stage sources + chrome resolve exactly as when everything lived in
+    /// one file), the theme file WINS a key collision, and a satellite carrying a
+    /// `theme` key is REFUSED — the palette-fork guard (one-palette law, 8D8A4215).
+    #[test]
+    fn load_styles_merges_satellites_and_refuses_a_palette_fork() {
+        let dir = std::env::temp_dir().join("flicker_theme_trio_merge");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(
+            dir.join("ui_theme.json"),
+            r#"{ "theme": { "tokens": { "ink": [0.9, 0.9, 0.8, 1.0] } },
+                 "panel": { "fill": "$ink" }, "mine": { "kept": true } }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("ui_stages.json"),
+            r#"{ "stages": { "test_stage": { "tint": "$ink" } },
+                 "theme": { "tokens": { "ink": [1.0, 0.0, 0.0, 1.0] } },
+                 "mine": { "kept": false } }"#,
+        )
+        .unwrap();
+
+        let ui = load_styles(dir.join("ui_theme.json"));
+        // Satellite keys merged in — and their $tokens resolved against the ONE palette.
+        assert_eq!(ui["stages"]["test_stage"]["tint"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
+        // The fork was refused: the satellite's `theme` never replaced the palette.
+        assert_eq!(ui["panel"]["fill"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
+        // A colliding key keeps the theme file's value.
+        assert_eq!(ui["mine"]["kept"], serde_json::json!(true));
+
+        // The REAL shipped pair: the split stages land in the merged root, and the
+        // shipped satellite carries no `theme` key (the guard has nothing to refuse).
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/resources/ui_theme.json");
+        let shipped = load_styles(&root);
+        assert!(
+            shipped.get("stages").and_then(|s| s.as_object()).is_some_and(|s| !s.is_empty()),
+            "the shipped ui_stages.json merges into the theme root"
+        );
+    }
+
+    /// THE FIVE-LINE SPLIT, file half (Aaron 2026-08-12): `ui_theme.json` carries
+    /// the `theme` node and NOTHING else — the default UI theme colors. Scene
+    /// values live in scene files, weights/effects in ui_style.json, structure in
+    /// Rust drawing code. Any other key here is the violation returning.
+    #[test]
+    fn ui_theme_json_is_the_theme_and_nothing_else() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/resources/ui_theme.json");
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&root).expect("theme file reads"))
+                .expect("theme file parses");
+        let obj = raw.as_object().expect("theme file is an object");
+        for key in obj.keys() {
+            assert!(
+                key == "theme" || key.starts_with('_'),
+                "`{key}` does not belong in ui_theme.json — THE ONLY DATA IN THIS \
+                 FILE IS THE THEME (five-line architecture): scene values go in the \
+                 scene's own file, weights/effects in ui_style.json, component \
+                 structure in Rust"
+            );
+        }
+        assert!(
+            obj.get("theme").and_then(|t| t.get("tokens")).is_some(),
+            "the theme node carries the one palette (theme.tokens)"
+        );
+    }
+
+    /// THE FIVE-LINE SPLIT, shared-file half (Aaron 2026-08-12): NO component
+    /// block lives in ANY shared file. `ui_theme.json` = the theme (colors) only;
+    /// `ui_style.json` = truly-global weight/effect defaults (currently none) and
+    /// never a per-component or per-scene block. A component's layout details live
+    /// in the scene files that use it; its structure is Rust drawing code.
+    #[test]
+    fn no_component_block_lives_in_a_shared_file() {
+        const COMPONENT_BLOCKS: &[&str] = &[
+            "modal", "badge", "tooltip", "pad_glyphs", "paged_menu", "resource_gauge",
+            "action_slot", "medallion", "rtt_holder", "slider", "panel", "stat_dot",
+        ];
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/resources");
+        for file in ["ui_theme.json", "ui_style.json", "ui_stages.json"] {
+            let raw: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(dir.join(file)).expect("shared file reads"),
+            )
+            .expect("shared file parses");
+            for key in COMPONENT_BLOCKS {
+                assert!(
+                    raw.get(key).is_none(),
+                    "`{key}` is in {file} — component layout details live in the \
+                     SCENE FILES that use them, never a shared file"
+                );
+            }
+        }
+        // ui_style.json also never carries a palette (the fork guard's target).
+        let style: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ui_style.json")).expect("style reads"),
+        )
+        .expect("style parses");
+        assert!(style.get("theme").is_none(), "ui_style.json must never carry a `theme` key");
+    }
+
     #[test]
     fn widgets_lua_parses_and_evaluates() {
         // set_lua_module loads + eval()s the toolkit; a syntax error would surface
@@ -791,5 +991,184 @@ mod tests {
         let host = ScriptHost::new(main, "test-main").expect("host builds");
         host.set_lua_module("Widgets", WIDGETS_LUA, "widgets.lua")
             .expect("widgets.lua parses and evaluates to a table");
+    }
+
+    /// **NO SCENE READS A DEVICE OR NAMES A PANE STYLE.** A source-level sweep of
+    /// every scene crate — the channel three separate defects travelled, closed
+    /// in one gate so none of them can grow back quietly. (Moved here verbatim
+    /// when the template tier was deleted — 201F4F51; it is a scene-crate source
+    /// sweep, never template-specific.)
+    ///
+    /// * `input.gamepad(` / `.gamepad(0)` — a scene reaching past the input map
+    ///   for a stick. The camera reads BOUND SIGNALS (`signal_axis`); a raw read
+    ///   re-applies the deadzone a second time, which is a bug you can only find
+    ///   by measuring. `flicker-controllertester` is exempt and only it: that
+    ///   bench IS the device visualizer, so reading the device is its subject.
+    /// * `tri_pane.` — the retired per-bench pane palette. There is ONE pane
+    ///   palette now (`panel.resting` / `panel.focused`) and the PANEL draws
+    ///   itself from the focus the walker holds; a scene naming a pane skin is a
+    ///   scene deciding what focus looks like.
+    /// * a walker-owned `on_*` declaration — Confirm, Cancel, `Nav*`, `Panel*`
+    ///   and `ChordBegin` mean one thing on every screen, so no scene may name
+    ///   them in its own props. (The template/proto channel that once needed its
+    ///   own gate is GONE with the template tier — 201F4F51 — so a scene's props
+    ///   are now the ONLY channel a declaration travels.) The allow-list below is
+    ///   EMPTY: the gate fails the moment any scene falls in (rule 98232A50).
+    /// * a private globe: `fn build_shell` / `struct OrbitCam` in a scene. There
+    ///   is ONE globe in Prism (`flicker-globe`) and it was three copies twice.
+    #[test]
+    fn no_scene_reads_a_device_or_names_a_pane_style() {
+        use flicker_input_core::ActionSignal;
+        use std::path::{Path, PathBuf};
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scenes");
+        let root = root.canonicalize().expect("Alpha/crates/scenes resolves");
+
+        fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("scene dir reads").flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    rust_files(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        rust_files(&root, &mut files);
+        files.sort();
+        assert!(files.len() > 20, "the sweep found the scene crates: {}", files.len());
+        let crate_of = |p: &Path| -> String {
+            p.strip_prefix(&root)
+                .ok()
+                .and_then(|r| r.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        };
+
+        // The walker's OWN answer to "whose signal is this", folded into the two
+        // shapes a DECLARATION takes in Rust — the `(prop, result)` pair a bench
+        // folds into its root, and a direct `props.insert`. Never a second list
+        // here that could drift from what the layer actually consumes; and
+        // naming the SHAPE rather than the bare string is what lets a migrated
+        // bench's own absence gate mention the signal it is disowning.
+        let owned: Vec<String> = ActionSignal::ALL
+            .iter()
+            .copied()
+            .filter(|s| crate::walker_owned(*s))
+            .flat_map(|s| {
+                let mut key = String::from("on");
+                for c in s.name().chars() {
+                    if c.is_uppercase() {
+                        key.push('_');
+                    }
+                    key.extend(c.to_lowercase());
+                }
+                [format!("(\"{key}\", \""), format!("insert(\"{key}\"")]
+            })
+            .collect();
+        assert!(
+            owned.iter().any(|k| k == "(\"on_confirm\", \"")
+                && owned.iter().any(|k| k == "insert(\"on_panel_next\""),
+            "the fold produced the declaration shapes a scene writes: {owned:?}"
+        );
+
+        // A scene camera that is NOT the globe's: Solar Birth's `OrbitCam` is a
+        // cinematic POSE HOLDER — the `.flight` player drives it and hands over to
+        // the pointer mid-shot — and it frames a solar system, not a planet at
+        // `flicker_globe::RADIUS`. Folding it in is a real change to the shared
+        // camera's contract, so it is named here rather than waved through.
+        const CAMERAS_NOT_THE_GLOBES: [&str; 1] = ["flicker-solarbirth"];
+
+        // The scenes that still declare a walker-owned signal. EMPTY as of the
+        // template-tier removal (2026-08-12): quartermaster / godmode / assetpipeline
+        // each folded one in from their template-built UI; stubbing those benches off
+        // templates removed the declarations, so the gate now enforces ZERO. A NEW name
+        // here means a scene stole a walker signal (violation F1) — migrate it, don't
+        // allow-list it. (Rule 98232A50: the backlog shrinks as benches migrate.)
+        const NOT_YET_MIGRATED: [&str; 0] = [];
+
+        let (mut devices, mut panes, mut globes) = (Vec::new(), Vec::new(), Vec::new());
+        let mut declarers: Vec<String> = Vec::new();
+        for f in &files {
+            let krate = crate_of(f);
+            let src = std::fs::read_to_string(f).expect("scene source reads");
+            for (n, line) in src.lines().enumerate() {
+                let at = format!("{}:{}", f.strip_prefix(&root).unwrap().display(), n + 1);
+                if krate != "flicker-controllertester"
+                    && (line.contains("input.gamepad(") || line.contains(".gamepad(0)"))
+                {
+                    devices.push(at.clone());
+                }
+                if line.contains("tri_pane.") {
+                    panes.push(at.clone());
+                }
+                if line.contains("fn build_shell")
+                    || (line.contains("struct OrbitCam")
+                        && !CAMERAS_NOT_THE_GLOBES.contains(&krate.as_str()))
+                {
+                    globes.push(at.clone());
+                }
+                if owned.iter().any(|o| line.contains(o.as_str())) && !declarers.contains(&krate)
+                {
+                    declarers.push(krate.clone());
+                }
+            }
+        }
+        assert!(devices.is_empty(), "a scene reached past the input map for a device: {devices:?}");
+        assert!(panes.is_empty(), "a scene named the retired pane palette: {panes:?}");
+        assert!(globes.is_empty(), "a scene grew its own globe again: {globes:?}");
+        declarers.sort();
+        let mut expected: Vec<String> = NOT_YET_MIGRATED.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            declarers, expected,
+            "the walker-owned backlog moved. A NEW name means a scene stole a walker signal; a \
+             MISSING name means a bench migrated and this list must shrink with it"
+        );
+    }
+
+    /// **ABSENCE GATE: no shipped scene names the removed template tier.** The
+    /// `template` / `slots` keys are gone (201F4F51) and both readers reject them,
+    /// but a scene file could still be authored with one and only fail when it
+    /// loads. This scans every `content/sensorium/scenes/*.scene.json` for those
+    /// keys at ANY depth, so the tier cannot quietly regrow in shipped content — a
+    /// build failure, not a runtime hole.
+    #[test]
+    fn no_shipped_scene_names_the_template_tier() {
+        use std::path::PathBuf;
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/scenes");
+        let dir = dir.canonicalize().expect("content/sensorium/scenes resolves");
+
+        fn has_key(v: &serde_json::Value, key: &str) -> bool {
+            match v {
+                serde_json::Value::Object(m) => {
+                    m.contains_key(key) || m.values().any(|c| has_key(c, key))
+                }
+                serde_json::Value::Array(a) => a.iter().any(|c| has_key(c, key)),
+                _ => false,
+            }
+        }
+
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).expect("scenes dir reads").flatten() {
+            let path = entry.path();
+            if !path.to_string_lossy().ends_with(".scene.json") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("scene file reads");
+            let json: serde_json::Value = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{} is not JSON: {e}", path.display()));
+            for key in ["template", "slots"] {
+                assert!(
+                    !has_key(&json, key),
+                    "{} names the removed template tier (a `{key}` key) — the tier is gone \
+                     (201F4F51); author component KINDS with nested `children`",
+                    path.display()
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "the gate found the shipped scene files in {}", dir.display());
     }
 }

@@ -2,7 +2,7 @@
 //! client, and the demonstration of blending the engine's two UI modes on one
 //! screen: **2D sprite gameplay** (the target box + lifetime bar, drawn with
 //! `draw_sprite`) UNDER a **declarative vector HUD** (a carved-stone stats panel
-//! and a RESET button — a `hud_clicktrainer.lua` component tree walked by the
+//! and a RESET button — a `clicktrainer.scene.json` component tree walked by the
 //! Rust component walker), with **clicks routed correctly** between them.
 //!
 //! The walker reports `hud_hit` when the cursor is over its panel; the scene only
@@ -23,15 +23,14 @@
 
 use std::time::Duration;
 
-use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{Fired, Resolver};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
 mod route;
@@ -51,13 +50,11 @@ const TARGET_LIFETIME: f32 = 1.15;
 const CALM: [f32; 3] = [0.30, 0.80, 0.85];
 const URGENT: [f32; 3] = [0.95, 0.30, 0.25];
 
-/// The declarative HUD tree (`hud_clicktrainer.lua`) + the shared UI-element layout.
-const HUD_SCRIPT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/scripts/hud_clicktrainer.lua"
-);
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+/// The scene's PAIR SCRIPT (`SceneName.lua` — the scene's component logic).
+const CLICKTRAINER_SCRIPT: &str =
+    include_str!("../../../../content/sensorium/scripts/clicktrainer.lua");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 /// Top-left region (px) reserved for the HUD panel, so every target stays
 /// clickable (the HUD absorbs clicks in its own area). A touch larger than the
 /// panel; targets that would land inside it are re-rolled.
@@ -71,13 +68,22 @@ pub struct ClickTrainer {
     /// 1×1 white pixel — the sprite shader tints it, so one texture draws the
     /// target box and its lifetime bar in any colour.
     white: Option<TextureHandle>,
+    /// The AUTHORED tree off the manifest's def (the kernel parsed the scene file;
+    /// this bench is the behaviour that plays it). `enter` installs it as the HUD.
+    authored: Option<UiNode>,
+    /// The scene file's own `styles` blocks (five-line split) — merged over the
+    /// shared theme root when `enter` loads styles.
+    scene_styles: Option<serde_json::Value>,
+    /// The PAIR SCRIPT host (`clicktrainer.lua`): `derive()` owns the HUD's display
+    /// derivations; the engine publishes only raw runtime variables.
+    script: Option<ScriptHost>,
     /// The HUD's component tree, parsed ONCE from the script's `tree()` at load;
     /// the walker redraws this cached tree every frame with fresh Model bindings.
     ui_tree: Option<UiNode>,
     /// The screen's declarative bindings (S9), read off the cached tree's root
     /// (`on_menu = "pause_open"`).
     ui_intents: UiIntents,
-    /// Token-resolved `ui_elements.json` styles the walker resolves node `style`
+    /// Token-resolved `ui_theme.json` styles the walker resolves node `style`
     /// paths against.
     ui_styles: serde_json::Value,
     /// Draw commands stashed by `update`'s walker pass, blitted in `render`.
@@ -102,26 +108,12 @@ pub struct ClickTrainer {
     total_reaction: f32,
 
     // ── shell / pause plumbing ──
-    /// Per-context action maps (World base only — the click trainer has no chat /
-    /// text-entry context). Drives the pause hotkey (`Menu` = Esc) through the
-    /// resolver and round-trips through the settings overlay; each `PauseScene` we
-    /// push reads its `active_map()`.
-    bindings: ContextualBindings,
-    /// Gamepad calibration (defaults — the click trainer has no camera). Read by the
-    /// resolver each frame and handed to each `PauseScene` we push.
-    gamepad_config: GamepadConfig,
     /// Theme for the pause overlay we push (built once in `enter`).
     ui_theme: Option<Theme>,
 
-    /// The new-input-model per-frame seam (spec §5/§9): a stateful edge [`Resolver`]
-    /// (replaces the `menu_prev` bool), a REUSED `Fired` scratch buffer (no per-frame
-    /// alloc — RT-7), the router's request queue, a monotonic frame `tick` (the
-    /// resolver's `TickTime`, NOT wall-clock — spec §3.2a), and the retained walker
-    /// [`UiState`] the HUD layer writes focus through.
-    resolver: Resolver,
-    ev: Vec<Fired>,
-    route: RouteCtx,
-    tick: u64,
+    /// The retained walker [`UiState`] the HUD layer writes focus through. Input-P3
+    /// (0569DA9B): the scene owns NO resolver/bindings — the PUMP resolves this frame's
+    /// events (World context) and hands them in via `SceneInput`.
     ui_state: UiState,
     /// Intent names fired last frame — republished ONCE into the next Model as
     /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
@@ -129,10 +121,20 @@ pub struct ClickTrainer {
 }
 
 impl ClickTrainer {
-    /// A fresh click-trainer scene (no target placed yet — `enter` spawns the first).
-    pub fn new() -> Self {
+    /// A fresh click-trainer scene (no target placed yet — `enter` spawns the first),
+    /// carrying its authored HUD tree off the manifest's def.
+    pub fn new(def: &SceneDef) -> Self {
         Self {
             white: None,
+            authored: def.tree.clone(),
+            scene_styles: def.styles.clone(),
+            script: match ScriptHost::new(CLICKTRAINER_SCRIPT, "clicktrainer.lua") {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::error!("clicktrainer.lua failed to load — raw HUD values only: {e}");
+                    None
+                }
+            },
             ui_tree: None,
             ui_intents: UiIntents::default(),
             ui_styles: serde_json::Value::Object(Default::default()),
@@ -147,13 +149,7 @@ impl ClickTrainer {
             last_reaction: f32::INFINITY,
             best_reaction: f32::INFINITY,
             total_reaction: 0.0,
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
-            gamepad_config: GamepadConfig::default(),
             ui_theme: None,
-            resolver: Resolver::new(),
-            ev: Vec::new(),
-            route: RouteCtx::new(),
-            tick: 0,
             ui_state: UiState::new(),
             fired_sigs: Vec::new(),
         }
@@ -217,25 +213,36 @@ impl ClickTrainer {
     /// tree's `text_bind`s display verbatim (`"—"` until there's data), plus the
     /// transient `sig_<name>` mirror of last frame's fired intents.
     fn hud_model(&self) -> ValueMap {
-        let react = |t: f32| {
-            if t.is_finite() {
-                format!("{:.0} ms", t * 1000.0)
-            } else {
-                "—".to_string()
-            }
-        };
+        // The ENGINE publishes raw runtime variables; the PAIR SCRIPT derives the
+        // display values (five-line split — logic lives in clicktrainer.lua).
+        let secs = |t: f32| if t.is_finite() { f64::from(t) } else { -1.0 };
         let avg = if self.hits > 0 {
             self.total_reaction / self.hits as f32
         } else {
             f32::INFINITY
         };
-        let mut m = ValueMap::new()
-            .with("hits", self.hits.to_string())
-            .with("misses", self.misses.to_string())
-            .with("accuracy", format!("{:.0}%", self.accuracy()))
-            .with("react_last", react(self.last_reaction))
-            .with("react_best", react(self.best_reaction))
-            .with("react_avg", react(avg));
+        let raw = ValueMap::new()
+            .with("hits", f64::from(self.hits))
+            .with("misses", f64::from(self.misses))
+            .with("accuracy_pct", f64::from(self.accuracy()))
+            .with("react_last_s", secs(self.last_reaction))
+            .with("react_best_s", secs(self.best_reaction))
+            .with("react_avg_s", secs(avg));
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("clicktrainer: publishing raw vars failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => {
+                    for (k, v) in derived.entries() {
+                        m.set(k.clone(), v.clone());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::error!("clicktrainer.lua derive() failed: {e}"),
+            }
+        }
         UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
     }
@@ -249,37 +256,28 @@ impl Scene for ClickTrainer {
         // The declarative HUD: a component tree walked by the engine. Degrades to
         // no HUD (the game still plays) if the script can't load. The styles are
         // the token-resolved layout JSON (the same tree Lua reads via `UI`).
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
-        match ScriptHost::from_file(HUD_SCRIPT) {
-            Ok(script) => {
-                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.clicktrainer`)
-                match script.ui_tree() {
-                    Ok(Some(tree)) => {
-                        // The screen's declarative bindings (S9), read off the
-                        // root once — cached exactly like the tree.
-                        self.ui_intents = UiIntents::of(&tree);
-                        self.ui_tree = Some(tree);
-                    }
-                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
-                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
-                }
-                // The host is dropped here: the parsed `UiNode` is fully owned data
-                // and every control draws in the engine, so nothing reads the VM again.
+        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles.as_ref());
+        // The HUD is DATA (201F4F51): the authored tree came off the manifest's def at
+        // construction; installing it here keeps re-entry (pause pop) behaviour
+        // identical. Degrades to no HUD (the game still plays) if the file had none.
+        match self.authored.clone() {
+            Some(tree) => {
+                // The screen's declarative bindings (S9), read off the root once.
+                self.ui_intents = UiIntents::of(&tree);
+                self.ui_tree = Some(tree);
             }
-            Err(e) => tracing::warn!("HUD script load failed ({HUD_SCRIPT}): {e} — no HUD"),
+            None => tracing::error!("ClickTrainer's scene file has no `tree` — no HUD"),
         }
         self.spawn(renderer.size());
         renderer.window().set_title("Flicker Click Trainer");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         let dt_s = dt.as_secs_f32();
         let screen = renderer.size();
 
-        // Pick up any input-settings change made in the pause→settings overlay.
-        if let Some((map, _, _)) = flicker_shell::take_pending_input() {
-            self.bindings = ContextualBindings::new(map);
-        }
+        // (Settings rebinds are the PUMP's job now — S1c — not the scene's: it owns no
+        // bindings to re-seed, and the pump adopts the committed World map each frame.)
 
         if !self.spawned {
             self.spawn(screen);
@@ -311,45 +309,24 @@ impl Scene for ClickTrainer {
             self.hud_commands = frame.commands;
         }
 
-        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch. The resolver
-        // owns the press edges; the chain arbitrates them:
+        // ── The input seam (input-P3, 0569DA9B): the PUMP resolved this frame's events
+        // (World context) — the scene owns no Resolver. Dispatch `signals.events`:
         //   [ROOT]  RootHandler   — declares World (no consuming arms — S10)
-        //   [1]     WalkerHandler — consumes the click while `over_hud`, and the
-        //                           screen's DECLARED `on_menu` intent
+        //   [1]     WalkerHandler — consumes the click while `over_hud`, + the screen's
+        //                           DECLARED `on_menu` intent
         //   [2]     GameplayBase  — a click that bubbled past the HUD scores a hit/miss
-        // `ev` is the REUSED `Fired` buffer; the `InputEvent` list is a short-lived local
-        // (it borrows this frame's snapshot, so it cannot be a field — RT-7 holds because
-        // steady-state frames resolve zero edges and allocate nothing).
-        self.tick = self.tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> = self
-            .ev
-            .iter()
-            .map(|f| InputEvent::from_fired(f, ctx, input))
-            .collect();
+        // No focusable tree + no context-pushing handler, so nothing to reconcile — the
+        // runner applies the route's (empty) context requests after `update`. ──
         self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-
         let mut root = RootHandler;
         let mut walker =
             WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
         let mut gameplay = GameplayBase::default();
         {
             let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
-            Router::dispatch(&events, &mut chain, &mut self.route);
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        // Reconcile any context/focus intents. None arise in this chain today (no
-        // context-pushing handler), but this is the standard post-dispatch seam,
-        // applied through the walker so a future navigable HUD shares one focus id
-        // for mouse + gamepad (spec §4.2a).
-        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
-        walker.apply_focus(focus_change);
-        // The screen's fired intents (S9), drained once: acted on below and queued
-        // for the one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
-        self.route.requests.clear();
 
         // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
         // consumed the Menu press and fired the name; the scene maps it onto the
@@ -357,11 +334,17 @@ impl Scene for ClickTrainer {
         // manager freezes us while the overlay is up, so the target clock stops too.
         if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.ui_theme.expect("theme built in enter");
+            // The scene owns no bindings; take the World map from the shared profile for
+            // the pause overlay (it binds Menu, so Esc resumes).
+            let pause_map = flicker_shell::input_profile()
+                .context_map("World")
+                .cloned()
+                .unwrap_or_else(InputMap::wasd_and_mouse);
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                self.bindings.active_map(),
+                &pause_map,
                 &AbstractControls::default(),
-                &self.gamepad_config,
+                &GamepadConfig::default(),
             )));
         }
 
@@ -423,27 +406,61 @@ impl Scene for ClickTrainer {
     }
 }
 
-impl Default for ClickTrainer {
-    fn default() -> Self {
-        Self::new()
-    }
+/// The bench's launchable-scene factory — the CLIENT BEHAVIOUR the roster registers:
+/// a menu LOAD (`Goto { id: "clicktrainer" }`) resolves the manifest's def and hands
+/// it here.
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(ClickTrainer::new(def))
 }
 
 #[cfg(test)]
 mod tests {
-    //! Load the real `hud_clicktrainer.lua` + the shared `ui_elements.json` and walk
+    //! Load the real `clicktrainer.scene.json` + the shared `ui_theme.json` and walk
     //! a frame, so a Lua syntax/runtime error — or a broken click-routing contract —
     //! fails the build instead of only surfacing in the running app.
     use super::*;
     use flicker::ui::run_ui;
     use flicker_input_core::ActionSignal;
 
+    /// The shipped scene file, read by the gates exactly as the manifest reads it.
+    const CLICKTRAINER_SCENE: &str =
+        include_str!("../../../../content/sensorium/scenes/clicktrainer.scene.json");
+
     fn tree_and_styles() -> (UiNode, serde_json::Value) {
-        let h = ScriptHost::from_file(HUD_SCRIPT)
-            .expect("load hud_clicktrainer.lua");
-        load_ui_json(&h, HUD_UI_ELEMENTS);
-        let tree = h.ui_tree().expect("tree builds").expect("script exposes tree()");
-        (tree, load_styles(HUD_UI_ELEMENTS))
+        let def = SceneDef::parse("clicktrainer", CLICKTRAINER_SCENE)
+            .expect("clicktrainer.scene.json loads");
+        let tree = def.tree.expect("scene defines a tree");
+        // The scene's OWN style blocks ride its file (five-line split) and merge
+        // over the shared root — the exact path `enter` runs.
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        (tree, styles)
+    }
+
+    /// THE PAIR-SCRIPT REGRESSION GATE: build the bench exactly as the resolver
+    /// does (real def, real clicktrainer.lua) and run the REAL hud_model path —
+    /// the raw variables must come back as the DERIVED display strings the tree
+    /// binds. This is the coverage whose absence let a silent Lua failure ship:
+    /// a derive() that throws leaves numbers (or nothing) under the display keys.
+    #[test]
+    fn the_pair_script_derives_the_display_strings() {
+        let def = SceneDef::parse("clicktrainer", CLICKTRAINER_SCENE)
+            .expect("clicktrainer.scene.json loads");
+        if let Err(e) = ScriptHost::new(CLICKTRAINER_SCRIPT, "clicktrainer.lua") {
+            panic!("clicktrainer.lua failed to load: {e}");
+        }
+        let ct = ClickTrainer::new(&def);
+        assert!(ct.script.is_some(), "clicktrainer.lua loads (the pair script)");
+        let m = ct.hud_model();
+        for key in ["hits", "misses", "accuracy", "react_last", "react_best", "react_avg"] {
+            assert!(
+                m.text(key).is_some(),
+                "derive() must yield display TEXT for '{key}' — got {:?}",
+                m.number(key).map(|n| format!("Number({n})"))
+            );
+        }
+        assert_eq!(m.text("hits"), Some("0"));
+        assert_eq!(m.text("accuracy"), Some("100%"), "no shots yet = a perfect record");
+        assert_eq!(m.text("react_last"), Some("—"), "no hit yet reads as an em dash");
     }
 
     fn model() -> ValueMap {
@@ -475,13 +492,13 @@ mod tests {
         let (tree, _) = tree_and_styles();
         assert!(
             flicker::ui::unknown_kinds(&tree).is_empty(),
-            "hud_clicktrainer.lua names unknown kinds: {:?}",
+            "clicktrainer.scene.json names unknown kinds: {:?}",
             flicker::ui::unknown_kinds(&tree)
         );
         // The strings gate (S10): every display literal is a `$token`.
         assert!(
             flicker::ui::raw_display_literals(&tree).is_empty(),
-            "hud_clicktrainer.lua ships raw display literals: {:?}",
+            "clicktrainer.scene.json ships raw display literals: {:?}",
             flicker::ui::raw_display_literals(&tree)
         );
         // The MODEL-CHANNEL strings gate (S10's blind side): display copy published

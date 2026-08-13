@@ -22,7 +22,7 @@
 //!   * Escape: open the pause menu (Resume / Quit).
 //!
 //! Debug toggles are driven by a DECLARATIVE component-tree HUD
-//! (`Alpha/content/sensorium/scripts/hud_pocclusters.lua`): the Lua declares the panel via
+//! (`Alpha/content/sensorium/scripts/shared/hud_pocclusters.lua`): the Lua declares the panel via
 //! `M.tree()` (checkboxes + the move-speed / sensitivity sliders) and the
 //! flicker-widgets Rust walker (`run_ui`) owns layout, hit-test, and draw. Six
 //! clickable checkboxes replace the old `1`/`2`/`\` key handling:
@@ -66,7 +66,7 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    chat_panel, load_styles, load_ui_json, render_hud, run_ui, strings, ChatLineKind,
+    chat_panel, render_hud, run_ui, strings, ChatLineKind,
     ChatLineView, ChatView, RosterEntry, Surface, Surfaces, UiInput, UiIntents, UiState,
     WalkerHandler,
 };
@@ -203,7 +203,7 @@ struct GameScene {
     /// pass's Model. (`walk` is NOT here: it is the surface-walk checkbox's
     /// two-way control bind that some rows also gate on.)
     surfaces: Surfaces,
-    /// The Prism-token-resolved `ui_elements.json` the walker resolves node
+    /// The Prism-token-resolved `ui_theme.json` the walker resolves node
     /// `style` paths against (colours/sizes; the palette stays single-sourced).
     ui_styles: serde_json::Value,
     /// This frame's HUD draw commands — the walker builds them in `update`,
@@ -417,16 +417,16 @@ impl Default for GameScene {
 /// the shared content tree alongside the other clients' HUD scripts.
 const HUD_SCRIPT_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/scripts/hud_pocclusters.lua"
+    "/../../../content/sensorium/scripts/shared/hud_pocclusters.lua"
 );
 
-/// The scene's HUD layout + `$token` styles live in the shared `ui_elements.json` —
+/// The scene's HUD layout + `$token` styles live in the shared `ui_theme.json` —
 /// the ONE global UI-element definition + Prism palette every prism-alpha scene reads —
 /// under the `pocclusters` key. NOT a per-scene copy: a second file would need its own
 /// `theme.tokens`, forking the palette, which the one-colour-source rule forbids.
-const HUD_UI_ELEMENTS: &str = concat!(
+const HUD_UI_THEME: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/resources/ui_elements.json"
+    "/../../../content/sensorium/resources/ui_theme.json"
 );
 
 impl GameScene {
@@ -436,11 +436,11 @@ impl GameScene {
     /// takes its placeholder values from [`Default`]; the world + camera come up in
     /// [`Scene::enter`].
     fn new() -> Self {
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let mut ui_tree = None;
         match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
-                load_ui_json(&s, HUD_UI_ELEMENTS); // HUD layout constants (`UI.pocclusters`)
+                flicker::ui::load_ui_json_for(&s, HUD_UI_THEME, Some(&crate::scene_styles())); // HUD layout constants (`UI.pocclusters`)
                 match s.ui_tree() {
                     Ok(Some(tree)) => ui_tree = Some(tree),
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
@@ -2535,7 +2535,7 @@ fn try_load_bake_field(
 
 #[cfg(test)]
 mod script_smoke {
-    //! Load the *real* HUD component-tree script + the shared `ui_elements.json`
+    //! Load the *real* HUD component-tree script + the shared `ui_theme.json`
     //! and walk it for one frame, so a Lua syntax/runtime error — or a `tree()`
     //! that reads a `UI.pocclusters` key the layout lacks — fails the build instead
     //! of only surfacing in the running app. The build-time check that keeps the
@@ -2591,12 +2591,12 @@ mod script_smoke {
         flicker::ui::strings::load_str(&strings, "en-us");
         let host = ScriptHost::from_file(HUD_SCRIPT_PATH)
             .expect("load hud_pocclusters.lua");
-        load_ui_json(&host, HUD_UI_ELEMENTS); // HUD layout (`UI.pocclusters`)
+        flicker::ui::load_ui_json_for(&host, HUD_UI_THEME, Some(&crate::scene_styles())); // HUD layout (`UI.pocclusters`)
         let tree = host
             .ui_tree()
             .expect("tree parses")
             .expect("hud_pocclusters.lua exposes tree()");
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
 
         // Vocabulary gate: an unknown kind renders NOTHING (anchor-overlaid children, no
         // draw arm), so a name left behind by a rename would be invisible until someone
@@ -2648,4 +2648,13 @@ mod script_smoke {
             "the inspector panel renders while has_pick is set"
         );
     }
+}
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
 }

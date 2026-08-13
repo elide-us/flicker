@@ -253,7 +253,7 @@ pub enum UiAnchor {
 /// A placed UI **component instance** — one node of the tree a screen declares
 /// for the Rust component walker to lay out, draw, and hit-test. The inbound
 /// counterpart to [`HudCommand`]: instead of the script emitting finished
-/// geometry each frame, it names a Rust `component` template and supplies
+/// geometry each frame, it names a Rust `component` and supplies
 /// plain-data props once; the walker owns draw / layout / hit-test. Honours the
 /// [boundary contract](crate#boundary-contract-engine--script-—-strictly-enforced)
 /// — every field is scalar data or child nodes, never a handle.
@@ -266,7 +266,7 @@ pub enum UiAnchor {
 pub struct UiNode {
     /// Stable identity within the tree (events, focus, layout cache). May be empty.
     pub id: String,
-    /// Which Rust template renders this node (`row` / `cell` / `screen` /
+    /// Which Rust component renders this node (`row` / `cell` / `screen` /
     /// `button` / `checkbox` / `slider` / `text` / `cell` / …). Required.
     pub component: String,
     /// Child nodes, in draw / sequence order.
@@ -304,14 +304,6 @@ pub struct UiNode {
     pub visible_bind: Option<String>,
     /// `Model` key gating interactivity — the node draws dim / inert when false.
     pub enabled_bind: Option<String>,
-    /// Names a **template** (a data proto or registered builder that composes
-    /// components) instead of a leaf `component`; expanded by
-    /// `flicker-widgets::expand` before the tree is cached. A node carries
-    /// `component` OR `template`.
-    pub template: Option<String>,
-    /// Named child groups a template splices into place (`header` / `body`
-    /// / …). Empty for every non-template node.
-    pub slots: HashMap<String, Vec<UiNode>>,
     /// Directional-nav order **within** [`tab_group`](Self::tab_group): a d-pad /
     /// arrow step moves to the adjacent ordinal (spec §8). Optional plain-data
     /// widening — absent in the Lua/JSON defaults to `0` (like a `#[serde(default)]`
@@ -407,6 +399,13 @@ impl ValueMap {
         self.map.insert(name.into(), value.into());
     }
 
+    /// Fold every entry of `other` into this map, overwriting on key collision — used
+    /// to merge a scene's arrangement binds ([`Arrangement::to_model`]) into its data
+    /// model before a walk.
+    pub fn extend(&mut self, other: ValueMap) {
+        self.map.extend(other.map);
+    }
+
     /// The raw value for `name`, if present.
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.map.get(name)
@@ -426,10 +425,90 @@ impl ValueMap {
     }
 
     /// The text for `name`, if present and textual.
+    /// Iterate the entries — the fold seam a scene uses to merge a pair script's
+    /// `derive()` output into its frame Model.
+    pub fn entries(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.map.iter()
+    }
+
     pub fn text(&self, name: &str) -> Option<&str> {
         match self.map.get(name) {
             Some(Value::Text(t)) => Some(t),
             _ => None,
+        }
+    }
+}
+
+/// One component's arrangement, produced by a scene's Lua `arrange()` (the modern
+/// orchestration contract). Defaults match the "declared in the scene JSON, dark until
+/// Lua lights it" model: `on` is `false` unless the script turns it on. `offset` is a
+/// pixel `[dx, dy]` from the `anchor`; `resizable`/`movable` are the behavioural flags
+/// Lua sets so the engine knows whether a player may resize / drag the component.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ComponentArrange {
+    pub on: bool,
+    pub anchor: Option<String>,
+    pub offset: [f32; 2],
+    pub resizable: bool,
+    pub movable: bool,
+    /// Scalar component-PROP overrides: every key in an `arrange()` entry beyond the
+    /// structural ones above ([`ARRANGE_STRUCTURAL_KEYS`]) configures a feature of the
+    /// Rust component — an image path, a fade duration, a rail toggle — exactly as the
+    /// same key would in the scene JSON's node. The engine applies them onto the tree
+    /// node with this entry's id ([`Arrangement::apply_props`]), on change, never per
+    /// frame. This is how "Lua configures the component's features" crosses the seam.
+    pub props: HashMap<String, Value>,
+}
+
+/// `arrange()` entry keys read structurally into [`ComponentArrange`]'s named fields —
+/// every other scalar key in an entry is a component prop. One list, same idiom as
+/// [`UI_STRUCTURAL_KEYS`], so the two sweeps cannot disagree about what is a prop.
+const ARRANGE_STRUCTURAL_KEYS: &[&str] = &["on", "anchor", "offset", "resizable", "movable"];
+
+/// The per-component arrangement a scene's Lua `arrange()` returns — keyed by component
+/// id. A component ABSENT from the map is off; the engine applies this over the scene's
+/// static JSON component tree (which components exist), never rebuilding structure. The
+/// counterpart to [`ScriptHost::react`], which returns the outbound intents.
+#[derive(Clone, Debug, Default)]
+pub struct Arrangement {
+    pub components: HashMap<String, ComponentArrange>,
+}
+
+impl Arrangement {
+    /// Flatten this arrangement into the run_ui bind model: each component's visibility
+    /// rides its **id** (the bind a JSON component sets `visible_bind` to), and its
+    /// placement + behavioural flags ride `<id>_off_x` / `<id>_off_y` / `<id>_anchor` /
+    /// `<id>_resizable` / `<id>_movable`. The engine hands this to `run_ui` over the
+    /// scene's STATIC tree, so Lua never rebuilds structure — it only sets values.
+    #[must_use]
+    pub fn to_model(&self) -> ValueMap {
+        let mut m = ValueMap::new();
+        for (id, c) in &self.components {
+            m.set(id.clone(), c.on);
+            if let Some(a) = &c.anchor {
+                m.set(format!("{id}_anchor"), a.clone());
+            }
+            m.set(format!("{id}_off_x"), c.offset[0]);
+            m.set(format!("{id}_off_y"), c.offset[1]);
+            m.set(format!("{id}_resizable"), c.resizable);
+            m.set(format!("{id}_movable"), c.movable);
+        }
+        m
+    }
+
+    /// Apply every entry's scalar PROP overrides onto the tree node whose `id` matches
+    /// the entry — the other half of applying an arrangement over the scene's STATIC
+    /// tree (the flags/placement half rides [`to_model`](Self::to_model) binds). Lua
+    /// still never rebuilds structure: a prop it names lands on a node the scene JSON
+    /// authored. Call on change (enter, a reconfiguration), never per frame.
+    pub fn apply_props(&self, tree: &mut UiNode) {
+        if let Some(c) = self.components.get(&tree.id) {
+            for (key, value) in &c.props {
+                tree.props.insert(key.clone(), value.clone());
+            }
+        }
+        for child in &mut tree.children {
+            self.apply_props(child);
         }
     }
 }
@@ -534,7 +613,7 @@ impl ScriptHost {
     /// marshalled into Lua (objects → tables, arrays → 1-indexed tables,
     /// numbers/bools/strings → their Lua equivalents, null → nil). This is the
     /// **layout / config** inbound channel: it carries static, plain-data trees
-    /// like `ui_elements.json` — still only data (no handles), so it honours the
+    /// like `ui_theme.json` — still only data (no handles), so it honours the
     /// [boundary contract](crate#boundary-contract-engine--script-—-strictly-enforced).
     /// Typically called once at load (call again to hot-reload). Example:
     /// `host.set_global_json("UI", &serde_json::from_str(text)?)` lets scripts
@@ -637,6 +716,137 @@ impl ScriptHost {
         };
         let root: Table = tree_fn.call(())?;
         Ok(Some(parse_ui_node(&root)?))
+    }
+
+    /// Run a scene's modern `arrange()` — the ARRANGEMENT half of the orchestration seam.
+    /// Returns which components are on, where they sit (anchor + pixel offset), and their
+    /// behavioural flags (resizable / movable), keyed by component id. Meant to be called
+    /// ON CHANGE (a panel opens, a resize, a new per-user override), not per frame; the
+    /// engine applies the result over the scene's static component tree. `Ok(None)` when
+    /// the module exposes no `arrange` (a legacy or react-only script).
+    pub fn arrange(&self) -> Result<Option<Arrangement>, ScriptError> {
+        let Some(arrange) = self.module.get::<Option<Function>>("arrange")? else {
+            return Ok(None);
+        };
+        let table: Table = arrange.call(())?;
+        let mut components = HashMap::new();
+        for pair in table.pairs::<String, mlua::Value>() {
+            let (id, spec) = pair?;
+            let mlua::Value::Table(spec) = spec else {
+                tracing::warn!("arrange() entry '{id}' is not a table — skipped");
+                continue;
+            };
+            let offset = match spec.get::<Option<Table>>("offset")? {
+                Some(o) => [
+                    o.get::<Option<f32>>(1)?.unwrap_or(0.0),
+                    o.get::<Option<f32>>(2)?.unwrap_or(0.0),
+                ],
+                None => [0.0, 0.0],
+            };
+            // Everything not read structurally, if it is a scalar, is a component
+            // prop — the same sweep `parse_ui_node` runs over a node table.
+            let mut props = HashMap::new();
+            for pair in spec.pairs::<mlua::Value, mlua::Value>() {
+                let (key, value) = pair?;
+                let mlua::Value::String(key) = key else { continue };
+                let key = key.to_str()?.to_string();
+                if ARRANGE_STRUCTURAL_KEYS.contains(&key.as_str()) {
+                    continue;
+                }
+                let value = match value {
+                    mlua::Value::Boolean(b) => Value::Bool(b),
+                    mlua::Value::Integer(i) => Value::Number(i as f64),
+                    mlua::Value::Number(n) => Value::Number(n),
+                    mlua::Value::String(s) => Value::Text(s.to_str()?.to_string()),
+                    _ => continue,
+                };
+                props.insert(key, value);
+            }
+            components.insert(
+                id,
+                ComponentArrange {
+                    on: spec.get::<Option<bool>>("on")?.unwrap_or(false),
+                    anchor: spec.get::<Option<String>>("anchor")?,
+                    offset,
+                    resizable: spec.get::<Option<bool>>("resizable")?.unwrap_or(false),
+                    movable: spec.get::<Option<bool>>("movable")?.unwrap_or(false),
+                    props,
+                },
+            );
+        }
+        Ok(Some(Arrangement { components }))
+    }
+
+    /// Run a scene's modern `react(sig)` — the ORCHESTRATION half of the seam. Given this
+    /// frame's fired signals (a [`ValueMap`] of result names), the script updates its own
+    /// remembered state and returns a [`ValueMap`] of outbound INTENTS that leave the UI
+    /// (navigation the kernel routes, a game action). Meant to be called only when a
+    /// signal fires, never per frame. `Ok(None)` when the module exposes no `react`.
+    pub fn react(&self, signals: &ValueMap) -> Result<Option<ValueMap>, ScriptError> {
+        let Some(react) = self.module.get::<Option<Function>>("react")? else {
+            return Ok(None);
+        };
+        let sig = self.lua.create_table()?;
+        for (name, value) in &signals.map {
+            match value {
+                Value::Bool(b) => sig.set(name.as_str(), *b)?,
+                Value::Number(n) => sig.set(name.as_str(), *n)?,
+                Value::Text(t) => sig.set(name.as_str(), t.as_str())?,
+            }
+        }
+        let intents: Table = react.call(sig)?;
+        let mut map = HashMap::new();
+        for pair in intents.pairs::<String, mlua::Value>() {
+            let (name, value) = pair?;
+            let value = match value {
+                mlua::Value::Boolean(b) => Value::Bool(b),
+                mlua::Value::Integer(i) => Value::Number(i as f64),
+                mlua::Value::Number(n) => Value::Number(n),
+                mlua::Value::String(s) => Value::Text(s.to_str()?.to_string()),
+                other => {
+                    tracing::warn!(
+                        "react() returned an unsupported intent type for '{name}': {}",
+                        other.type_name()
+                    );
+                    continue;
+                }
+            };
+            map.insert(name, value);
+        }
+        Ok(Some(ValueMap { map }))
+    }
+
+    /// Run a scene's `derive()` — the scene Lua's COMPONENT-LOGIC half of the pair
+    /// (five-line architecture: `SceneName.lua` defines the logic for all components
+    /// in the scene and the scene runtime variables). The engine publishes the RAW
+    /// runtime variables with [`set_model`](Self::set_model); `derive()` returns the
+    /// DERIVED Model values (display strings, per-component styles, visibility
+    /// gates) the frame folds in before the walker runs. `Ok(None)` when the module
+    /// exposes no `derive` (a scene whose logic is entirely arrangement).
+    pub fn derive(&self) -> Result<Option<ValueMap>, ScriptError> {
+        let Some(derive) = self.module.get::<Option<Function>>("derive")? else {
+            return Ok(None);
+        };
+        let out: Table = derive.call(())?;
+        let mut map = HashMap::new();
+        for pair in out.pairs::<String, mlua::Value>() {
+            let (name, value) = pair?;
+            let value = match value {
+                mlua::Value::Boolean(b) => Value::Bool(b),
+                mlua::Value::Integer(i) => Value::Number(i as f64),
+                mlua::Value::Number(n) => Value::Number(n),
+                mlua::Value::String(t) => Value::Text(t.to_str()?.to_string()),
+                other => {
+                    tracing::warn!(
+                        "derive() returned an unsupported value type for '{name}': {}",
+                        other.type_name()
+                    );
+                    continue;
+                }
+            };
+            map.insert(name, value);
+        }
+        Ok(Some(ValueMap { map }))
     }
 }
 
@@ -791,40 +1001,66 @@ fn read_font(cmd: &Table) -> mlua::Result<FontRole> {
 /// table becomes a scalar entry in [`UiNode::props`]. Kept in one place so the
 /// props sweep and the structural reads cannot disagree about what is a prop.
 const UI_STRUCTURAL_KEYS: &[&str] = &[
-    "id", "component", "type", "template", "slots", "children", "anchor", "offset", "size", "grow",
+    "id", "component", "type", "children", "anchor", "offset", "size", "grow",
     "width", "height", "gap", "pad", "pad_x", "pad_y", "bind", "action", "visible", "visible_bind",
     "enabled", "enabled_bind", "nav_ordinal", "tab_group",
 ];
 
+impl UiAnchor {
+    /// Parse an anchor NAME (`"top_left"`, `"center"`, …) to a [`UiAnchor`]; an unknown or
+    /// absent name is `None`. THE single mapping, shared by the tree parser
+    /// ([`parse_anchor`]) and the engine's per-id ARRANGE-bind override — a scene's Lua
+    /// `arrange()` names a component's anchor and the walker resolves it through here, so
+    /// the two paths can never drift apart.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<UiAnchor> {
+        Some(match name {
+            "top_left" => UiAnchor::TopLeft,
+            "top" => UiAnchor::Top,
+            "top_right" => UiAnchor::TopRight,
+            "left" => UiAnchor::Left,
+            "center" => UiAnchor::Center,
+            "right" => UiAnchor::Right,
+            "bottom_left" => UiAnchor::BottomLeft,
+            "bottom" => UiAnchor::Bottom,
+            "bottom_right" => UiAnchor::BottomRight,
+            _ => return None,
+        })
+    }
+}
+
 /// Map an anchor name to [`UiAnchor`]; unknown / absent → `None` (the node flows).
 fn parse_anchor(name: Option<String>) -> Option<UiAnchor> {
-    Some(match name?.as_str() {
-        "top_left" => UiAnchor::TopLeft,
-        "top" => UiAnchor::Top,
-        "top_right" => UiAnchor::TopRight,
-        "left" => UiAnchor::Left,
-        "center" => UiAnchor::Center,
-        "right" => UiAnchor::Right,
-        "bottom_left" => UiAnchor::BottomLeft,
-        "bottom" => UiAnchor::Bottom,
-        "bottom_right" => UiAnchor::BottomRight,
-        _ => return None,
-    })
+    UiAnchor::from_name(name?.as_str())
 }
 
 /// Parse one Lua node table (and, recursively, its `children`) into a [`UiNode`].
 /// Known keys are read structurally; every remaining string-keyed **scalar** goes
 /// into [`UiNode::props`] (tables — `children` / `offset` — are handled here and
-/// never leak into props). A node carries `component` (alias `type`) OR a
-/// `template` name.
+/// never leak into props). A node names a `component` (alias `type`).
 fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
+    // The template tier was removed (201F4F51): a stray `template` / `slots` key is
+    // a stale authoring construct that would otherwise fall through to the props
+    // sweep and drop its subtree SILENTLY — the exact "an authored name fails to
+    // NOTHING" defect (rule 4BB12A75). Reject it LOUD, pointing at the fix.
+    if t.contains_key("template")? {
+        let name = t.get::<Option<String>>("template")?.unwrap_or_default();
+        return Err(mlua::Error::RuntimeError(format!(
+            "the template tier was removed (201F4F51); \"{name}\" is now a component kind \
+             — write `component = \"{name}\"`"
+        )));
+    }
+    if t.contains_key("slots")? {
+        return Err(mlua::Error::RuntimeError(
+            "slots were removed (201F4F51); nest authored children under `children`".to_string(),
+        ));
+    }
     let component = t
         .get::<Option<String>>("component")?
         .or(t.get::<Option<String>>("type")?);
-    let template = t.get::<Option<String>>("template")?;
-    if component.is_none() && template.is_none() {
+    if component.is_none() {
         return Err(mlua::Error::RuntimeError(
-            "ui node missing `component` or `template`".to_string(),
+            "ui node missing `component`".to_string(),
         ));
     }
     let component = component.unwrap_or_default();
@@ -847,19 +1083,6 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
         ],
         None => [0.0, 0.0],
     };
-
-    // Named child groups a template builder splices: `slots = { header = { ... } }`.
-    let mut slots = HashMap::new();
-    if let Some(map) = t.get::<Option<Table>>("slots")? {
-        for pair in map.pairs::<String, Table>() {
-            let (name, list) = pair?;
-            let mut nodes = Vec::new();
-            for item in list.sequence_values::<Table>() {
-                nodes.push(parse_ui_node(&item?)?);
-            }
-            slots.insert(name, nodes);
-        }
-    }
 
     // Everything not read structurally, if it is a scalar, is a prop.
     let mut props = HashMap::new();
@@ -905,32 +1128,45 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
         enabled_bind: t
             .get::<Option<String>>("enabled_bind")?
             .or(t.get::<Option<String>>("enabled")?),
-        template,
-        slots,
         nav_ordinal: t.get::<Option<u32>>("nav_ordinal")?.unwrap_or(0),
         tab_group: t.get::<Option<String>>("tab_group")?.unwrap_or_default(),
     })
 }
 
-/// Parse one **arrangement JSON** object (and, recursively, its `children` /
-/// `slots`) into a [`UiNode`] — the data-path counterpart to [`parse_ui_node`],
-/// reading the SAME [`UI_STRUCTURAL_KEYS`] so a scene authored as data and one
-/// authored in Lua cannot drift. Every remaining scalar becomes a prop; a node
-/// carries `component` (alias `type`) OR a `template` name.
+/// Parse one **arrangement JSON** object (and, recursively, its `children`) into a
+/// [`UiNode`] — the data-path counterpart to [`parse_ui_node`], reading the SAME
+/// [`UI_STRUCTURAL_KEYS`] so a scene authored as data and one authored in Lua
+/// cannot drift. Every remaining scalar becomes a prop; a node names a `component`
+/// (alias `type`).
 pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
     use serde_json::Value as J;
     let obj = value
         .as_object()
         .ok_or_else(|| "ui node must be a JSON object".to_string())?;
 
+    // The template tier was removed (201F4F51): a `template` / `slots` key is a
+    // stale authoring construct. A silently-ignored key would drop a whole subtree
+    // — reject it LOUD, pointing at the fix (rule 4BB12A75).
+    if let Some(t) = obj.get("template") {
+        let name = t.as_str().unwrap_or_default();
+        return Err(format!(
+            "the template tier was removed (201F4F51); \"{name}\" is now a component kind \
+             — write \"component\": \"{name}\""
+        ));
+    }
+    if obj.contains_key("slots") {
+        return Err(
+            "slots were removed (201F4F51); nest authored children under \"children\"".to_string(),
+        );
+    }
+
     let component = obj
         .get("component")
         .or_else(|| obj.get("type"))
         .and_then(J::as_str)
         .map(str::to_string);
-    let template = obj.get("template").and_then(J::as_str).map(str::to_string);
-    if component.is_none() && template.is_none() {
-        return Err("ui node missing `component` or `template`".to_string());
+    if component.is_none() {
+        return Err("ui node missing `component`".to_string());
     }
 
     let children = match obj.get("children") {
@@ -940,19 +1176,6 @@ pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
             .collect::<Result<Vec<_>, _>>()?,
         _ => Vec::new(),
     };
-
-    let mut slots = HashMap::new();
-    if let Some(J::Object(map)) = obj.get("slots") {
-        for (name, val) in map {
-            if let J::Array(items) = val {
-                let nodes = items
-                    .iter()
-                    .map(parse_ui_json)
-                    .collect::<Result<Vec<_>, _>>()?;
-                slots.insert(name.clone(), nodes);
-            }
-        }
-    }
 
     let offset = match obj.get("offset") {
         Some(J::Array(a)) => [
@@ -1007,14 +1230,12 @@ pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
             .or_else(|| obj.get("enabled"))
             .and_then(J::as_str)
             .map(str::to_string),
-        template,
-        slots,
         // `as_f64`, like every other numeric field above — NOT `as_u64`. A
-        // template param arrives as a float-shaped JSON number (the substituter
-        // builds them with `Number::from_f64`), and `as_u64` rejects those, so
-        // an `as_u64` read made every proto-authored ordinal silently 0 — the
-        // exact "an authored name fails to NOTHING" defect (rule 4BB12A75), and
-        // invisible because 0 is also the default.
+        // float-shaped JSON number (`1.0`) must read as the ordinal `1`; `as_u64`
+        // rejects a non-integer JSON number, so an `as_u64` read made every
+        // float-authored ordinal silently 0 — the exact "an authored name fails
+        // to NOTHING" defect (rule 4BB12A75), invisible because 0 is also the
+        // default.
         nav_ordinal: obj.get("nav_ordinal").and_then(J::as_f64).unwrap_or(0.0).max(0.0) as u32,
         tab_group: obj
             .get("tab_group")
@@ -1032,11 +1253,20 @@ fn check_contract(module: &Table) -> Result<(), ScriptError> {
     let has_update = module.get::<Option<Function>>("update")?.is_some();
     let has_draw = module.get::<Option<Function>>("draw")?.is_some();
     let has_tree = module.get::<Option<Function>>("tree")?.is_some();
-    if (has_update && has_draw) || has_tree {
+    // The modern PAIR-SCRIPT contract (the SceneName.lua half): a scene script
+    // exposes any of `arrange` (per-component arrangement + feature props),
+    // `react` (signals → intents), or `derive` (raw runtime variables → derived
+    // Model values). The legacy immediate contract is `update` + `draw`; the mid
+    // contract is `tree`.
+    let has_arrange = module.get::<Option<Function>>("arrange")?.is_some();
+    let has_react = module.get::<Option<Function>>("react")?.is_some();
+    let has_derive = module.get::<Option<Function>>("derive")?.is_some();
+    if (has_update && has_draw) || has_tree || has_arrange || has_react || has_derive {
         Ok(())
     } else {
         Err(ScriptError::Lua(mlua::Error::RuntimeError(
-            "script module must expose `update` + `draw` or `tree`".to_string(),
+            "script must expose `arrange`/`react`/`derive`, or `tree`, or `update` + `draw`"
+                .to_string(),
         )))
     }
 }
@@ -1106,6 +1336,70 @@ fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE PAIR-SCRIPT CONFIGURATION SURFACE: an `arrange()` entry's non-structural
+    /// scalar keys are component-PROP overrides, and `apply_props` lands them on the
+    /// tree node with the entry's id — how a pair script configures a Rust
+    /// component's features (a splash's image + fade timeline, a rail toggle)
+    /// without a bespoke verb API and without rebuilding structure.
+    #[test]
+    fn arrange_entry_props_configure_the_component() {
+        let host = ScriptHost::new(
+            r#"
+            local M = {}
+            function M.arrange()
+              return {
+                splash = {
+                  on = true,
+                  image = "package/sensorium/assets/logo.png",
+                  fade_in = 0.5,
+                  hold = 1.2,
+                  fade_out = 0.5,
+                },
+              }
+            end
+            return M
+            "#,
+            "splash-pair.lua",
+        )
+        .expect("a module-form pair script loads");
+        let a = host.arrange().expect("arrange runs").expect("arrange present");
+        let splash = a.components.get("splash").expect("splash arranged");
+        assert!(splash.on, "`on` stays structural, not a prop");
+        assert!(!splash.props.contains_key("on"));
+        assert_eq!(
+            splash.props.get("image"),
+            Some(&Value::Text("package/sensorium/assets/logo.png".into()))
+        );
+        assert_eq!(splash.props.get("hold"), Some(&Value::Number(1.2)));
+
+        // apply_props: the overrides land on the id-matched node of a STATIC tree.
+        let mut tree = UiNode {
+            component: "screen".into(),
+            children: vec![UiNode {
+                id: "splash".into(),
+                component: "splash".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        a.apply_props(&mut tree);
+        assert!(tree.props.is_empty(), "the un-named root is untouched");
+        let node = &tree.children[0];
+        assert_eq!(node.props.get("fade_in"), Some(&Value::Number(0.5)));
+        assert_eq!(node.props.get("fade_out"), Some(&Value::Number(0.5)));
+        assert_eq!(
+            node.props.get("image"),
+            Some(&Value::Text("package/sensorium/assets/logo.png".into()))
+        );
+    }
+
+    /// A script exposing no hook still fails fast at load.
+    #[test]
+    fn an_empty_script_is_still_refused() {
+        let err = ScriptHost::new("local x = 1", "empty.lua");
+        assert!(err.is_err(), "no module, no hooks — refused at load, not mid-frame");
+    }
 
     // Two peer modules + a main script that requires both — the per-file
     // component seam. `component` requires the shared `core`; the main script
@@ -1567,14 +1861,12 @@ mod tests {
         assert_eq!(without.tab_group, "");
         assert_eq!(without.nav_ordinal, 0);
 
-        // **A FLOAT-SHAPED ordinal is the same ordinal.** This is the channel a
-        // template param travels: the substituter builds every numeric prop with
-        // `Number::from_f64`, so a proto's `"@nav_ordinal=1"` (and an authored
-        // literal `1.0`) reaches here as a float. Read with `as_u64` these all
-        // fell back to 0 — silently, because 0 is also the default — which put
-        // every proto-authored control at its group's entry point and broke the
-        // d-pad order behind a green build. Every neighbouring numeric field
-        // uses `as_f64`; this one now does too.
+        // **A FLOAT-SHAPED ordinal is the same ordinal.** An authored literal
+        // `1.0` (a JSON number written with a decimal point) reaches here as a
+        // float. Read with `as_u64` these all fell back to 0 — silently, because 0
+        // is also the default — which put every such control at its group's entry
+        // point and broke the d-pad order behind a green build. Every neighbouring
+        // numeric field uses `as_f64`; this one now does too.
         for (json, want) in [(serde_json::json!(1.0), 1), (serde_json::json!(2.0), 2)] {
             let n = parse_ui_json(&serde_json::json!({
                 "component": "button", "nav_ordinal": json
@@ -1590,6 +1882,31 @@ mod tests {
         assert_eq!(neg.nav_ordinal, 0);
     }
 
+    /// The template tier is gone (201F4F51): BOTH parse paths REJECT a `template`
+    /// or `slots` key rather than let it fall through to the props sweep and drop
+    /// the subtree silently (rule 4BB12A75). The error names the fix.
+    #[test]
+    fn a_template_or_slots_key_is_a_loud_load_error() {
+        // JSON path (scene files).
+        let t = parse_ui_json(&serde_json::json!({ "template": "window" }))
+            .expect_err("a template key fails loud");
+        assert!(t.contains("template tier was removed") && t.contains("window"), "{t}");
+        let s = parse_ui_json(&serde_json::json!({ "component": "cell", "slots": {} }))
+            .expect_err("a slots key fails loud");
+        assert!(s.contains("slots were removed"), "{s}");
+        // A node with no component is still the "missing component" error, not a panic.
+        assert!(parse_ui_json(&serde_json::json!({ "id": "x" })).is_err(), "no component fails");
+
+        // Lua path (behind `ui_tree()`), which several live scenes still build through.
+        let host = ScriptHost::new(
+            r#"local M = {} function M.tree() return { template = "window" } end return M"#,
+            "tmpl",
+        )
+        .expect("host builds");
+        let e = host.ui_tree().expect_err("a template key fails the Lua path loud");
+        assert!(format!("{e}").contains("template tier was removed"), "{e}");
+    }
+
     #[test]
     fn ui_tree_absent_on_legacy_module() {
         // A legacy update/draw screen exposes no `tree` → ui_tree() is None.
@@ -1602,5 +1919,85 @@ mod tests {
         // update+draw absent but tree present → still a valid module.
         let src = r#"local M = {} function M.tree() return { component = "screen" } end return M"#;
         assert!(ScriptHost::new(src, "tree-only").is_ok());
+    }
+
+    #[test]
+    fn arrange_and_react_marshal_the_modern_contract() {
+        // A module exposing ONLY arrange/react is a valid modern orchestration script.
+        let src = r#"
+            local M = {}
+            local open = { settings = false }
+            function M.arrange()
+              return {
+                menu = { on = true, anchor = "center", offset = { 10, -4 } },
+                settings = { on = open.settings, resizable = true, movable = true },
+              }
+            end
+            function M.react(sig)
+              if sig.settings then open.settings = true end
+              if sig.launch then return { go = "populous" } end
+              return {}
+            end
+            return M
+        "#;
+        let host = ScriptHost::new(src, "modern").expect("arrange/react module loads");
+
+        // arrange() → per-component on/off + placement + behavioural flags.
+        let a = host.arrange().expect("arrange runs").expect("arrange present");
+        let menu = a.components.get("menu").expect("menu arranged");
+        assert!(menu.on);
+        assert_eq!(menu.anchor.as_deref(), Some("center"));
+        assert_eq!(menu.offset, [10.0, -4.0]);
+        let settings = a.components.get("settings").expect("settings arranged");
+        assert!(!settings.on && settings.resizable && settings.movable);
+
+        // react(sig): a `settings` signal flips REMEMBERED state and emits no outbound
+        // intent; a `launch` signal emits a nav intent. State persists (the module lives).
+        let quiet = host
+            .react(&ValueMap::new().with("settings", true))
+            .expect("react runs")
+            .expect("react present");
+        assert!(quiet.get("go").is_none(), "opening a panel emits no outbound intent");
+        let nav = host
+            .react(&ValueMap::new().with("launch", true))
+            .expect("react runs")
+            .expect("react present");
+        assert_eq!(nav.text("go"), Some("populous"), "a launch signal emits the nav intent");
+
+        // The state flip from the first react() is remembered on the next arrange().
+        let a2 = host.arrange().expect("arrange runs").expect("arrange present");
+        assert!(a2.components.get("settings").expect("settings").on, "settings now on");
+    }
+
+    #[test]
+    fn arrangement_flattens_to_the_run_ui_model() {
+        let mut components = std::collections::HashMap::new();
+        components.insert(
+            "menu".to_string(),
+            ComponentArrange {
+                on: true,
+                anchor: Some("center".into()),
+                offset: [10.0, -4.0],
+                ..Default::default()
+            },
+        );
+        components.insert(
+            "settings".to_string(),
+            ComponentArrange {
+                resizable: true,
+                movable: true,
+                ..Default::default()
+            },
+        );
+        let model = Arrangement { components }.to_model();
+        // Visibility rides the component id (its `visible_bind`); placement + flags ride `<id>_*`.
+        assert!(model.is_on("menu"));
+        assert!(!model.is_on("settings"));
+        assert_eq!(model.number("menu_off_x"), Some(10.0));
+        assert_eq!(model.number("menu_off_y"), Some(-4.0));
+        assert_eq!(model.text("menu_anchor"), Some("center"));
+        assert!(model.text("settings_anchor").is_none(), "no anchor bind when the script sets none");
+        assert!(model.is_on("settings_resizable"));
+        assert!(model.is_on("settings_movable"));
     }
 }

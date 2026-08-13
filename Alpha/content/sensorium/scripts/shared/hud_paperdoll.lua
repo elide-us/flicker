@@ -12,7 +12,7 @@
 --   * `action`        — an event name emitted on click (`attack`, `fit_record`).
 --   * `visible_bind`  — a Model key gating a subtree (`fit_active`, `animate`).
 --   * `enabled_bind`  — a Model key gating a control (a slot with no piece loaded).
---   * `style`         — a dotted path into `ui_elements.json` (colours/sizes; the
+--   * `style`         — a dotted path into `ui_theme.json` (colours/sizes; the
 --                       palette stays single-sourced in `theme.tokens`).
 -- Layout / labels / ranges still come from `UI.paperdoll` — one source of truth,
 -- so the tree and the engine's keyboard nav (which reads the same `fit.rows`)

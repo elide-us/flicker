@@ -21,7 +21,7 @@
 -- transient interaction (a slider's drag flag, a dropdown's open flag), passed
 -- in via a `state` table keyed by a stable widget id.
 --
--- Styles (colours/sizes) come from ui_elements.json — no hardcoded palette.
+-- Styles (colours/sizes) come from ui_theme.json — no hardcoded palette.
 
 local W = {}
 

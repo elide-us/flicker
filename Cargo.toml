@@ -28,6 +28,7 @@ members = [
     "Alpha/crates/world/flicker-voxel",
     # Game-package libraries (reusable client scenes hosted by prism-alpha).
     "Alpha/crates/scenes/flicker-clicktrainer",
+    "Alpha/crates/scenes/flicker-componentcatalog",
     "Alpha/crates/scenes/flicker-controllertester",
     "Alpha/crates/frontend/flicker-globe",
     "Alpha/crates/scenes/flicker-godmode",

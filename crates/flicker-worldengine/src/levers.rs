@@ -26,7 +26,7 @@ const ABUNDANCE_FILE: &str = "abundance.json";
 
 /// One tunable generator knob. `id` is the contract shared by the config
 /// ([`crate::WorldConfig`] reads it), the viewer HUD (publishes/edits it), and the
-/// `ui_elements.json` slider layout (whose range must match `[min, max]`).
+/// `ui_theme.json` slider layout (whose range must match `[min, max]`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LeverDef {
     /// Owning epoch (1..=9). Epoch 1 also owns the element mix (see [`AbundanceDef`]).

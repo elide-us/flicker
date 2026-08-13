@@ -2,7 +2,7 @@
   "_meta": {
     "format": "flicker.epoch_defaults",
     "version": 1,
-    "note": "Per-epoch generation levers for flicker-worldengine — one row per tunable knob: its owning epoch (1..=9), stable id (shared by the config, the Lua HUD, and ui_elements.json slider layout), Earth-like default, and the [min,max] band a slider spans / a reseed wanders within. Lifted out of the old hardcoded PARAM_DEFS table in flicker-world/src/world.rs. Loaded behind GeneratorParamsSource (JSON now, DB later); the element mix lives in abundance.json. Epochs 7-9 (heightmap strata) carry a duration knob for the shared 9-epoch clock; their physics is stubbed this iteration."
+    "note": "Per-epoch generation levers for flicker-worldengine — one row per tunable knob: its owning epoch (1..=9), stable id (shared by the config, the Lua HUD, and ui_theme.json slider layout), Earth-like default, and the [min,max] band a slider spans / a reseed wanders within. Lifted out of the old hardcoded PARAM_DEFS table in flicker-world/src/world.rs. Loaded behind GeneratorParamsSource (JSON now, DB later); the element mix lives in abundance.json. Epochs 7-9 (heightmap strata) carry a duration knob for the shared 9-epoch clock; their physics is stubbed this iteration."
   },
   "levers": [
     { "epoch": 1, "id": "e1_equator_bias",       "default": 1.5,   "min": 0.0,   "max": 3.0 },

@@ -1,0 +1,181 @@
+{
+  "_comment": "SOLAR BIRTH — the intro cinematic on the NEW graphical-scene pattern (Option A, 201F4F51 + the RTT decision): a full-screen `rtt` viewport carries the 3D (sun · 8 planets · Home's moon · dust cloud), and the readout is a TEXT-OVERLAY PANEL in the tree above it. The `solarbirth` behaviour renders its bespoke 3D into the rect the walker reserves for `solarbirth_view` (the rtt's `source` is a REQUIRED label — the walker skips a source-less rtt, so its slot never reserves and nothing renders — but this scene renders BESPOKE, not from a `stages.solarbirth_sky` block, so no such stage need exist; offscreen pass composited in via the FrameGraph), then the walker draws this readout panel over it. Camera drag/zoom is gated to the viewport (and blocked over the readout panel). `phase` + the legend's `roster_<i>` lines are Model binds; `roster_legend` is the CONTAINER the scene fills with one row per planet (mechanism 6). Esc fires `on_menu = pause_open` → the shared pause popup.",
+  "behaviour": "solarbirth",
+  "params": {},
+  "exits": {},
+  "tree": {
+    "component": "screen",
+    "id": "solarbirth",
+    "on_menu": "pause_open",
+    "children": [
+      {
+        "component": "rtt",
+        "id": "solarbirth_view",
+        "source": "solarbirth_sky",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "cell",
+        "id": "readout",
+        "anchor": "top_left",
+        "offset": [
+          16,
+          16
+        ],
+        "width": 520,
+        "pad": 16,
+        "gap": 0,
+        "layer": 1,
+        "style": "solarbirth.readout",
+        "children": [
+          {
+            "component": "text",
+            "text": "$sb_flicker_solarbirth",
+            "size": 34,
+            "text_size": 28,
+            "color": "solarbirth.title.color"
+          },
+          {
+            "component": "text",
+            "text_bind": "phase",
+            "size": 24,
+            "text_size": 16,
+            "color": "solarbirth.phase.color"
+          },
+          {
+            "component": "text",
+            "text": "$sb_drag_rotate_wheel_zoom_space_replay_fly",
+            "size": 30,
+            "text_size": 13,
+            "color": "solarbirth.hint.color"
+          },
+          {
+            "component": "text",
+            "text": "$sb_planets_inner_outer",
+            "size": 22,
+            "text_size": 14,
+            "color": "solarbirth.roster_header.color"
+          },
+          {
+            "component": "cell",
+            "id": "roster_legend",
+            "gap": 0
+          }
+        ]
+      }
+    ]
+  },
+  "styles": {
+    "solarbirth": {
+      "_comment": "flicker-solarbirth HUD (SolarBirth.scene.json): the walker readout — title, flight-phase line, controls hint, and the fixed 8-planet roster legend. Roster row colours are the scene's HUD tints: each school colour with every channel floored at 0.35 (the legacy `p.color[i].max(0.35)` lightening), authored here because the walker's colour channel is dotted style paths. The ruled school colours themselves stay in flicker-orrery.",
+      "readout": {
+        "fill_top": [
+          0.02,
+          0.03,
+          0.06,
+          0.62
+        ],
+        "fill_bot": [
+          0.01,
+          0.015,
+          0.03,
+          0.62
+        ],
+        "grad": 2,
+        "radius": 4,
+        "border_w": 1,
+        "border": [
+          0.3,
+          0.36,
+          0.52,
+          0.35
+        ]
+      },
+      "title": {
+        "color": [
+          0.9,
+          0.92,
+          0.97,
+          1.0
+        ]
+      },
+      "phase": {
+        "color": [
+          0.78,
+          0.74,
+          0.92,
+          1.0
+        ]
+      },
+      "hint": {
+        "color": [
+          0.62,
+          0.66,
+          0.78,
+          1.0
+        ]
+      },
+      "roster_header": {
+        "color": [
+          0.9,
+          0.92,
+          0.97,
+          1.0
+        ]
+      },
+      "roster": {
+        "chaos": [
+          0.95,
+          0.45,
+          0.35,
+          1.0
+        ],
+        "fire": [
+          0.86,
+          0.35,
+          0.35,
+          1.0
+        ],
+        "home": [
+          0.35,
+          0.52,
+          0.55,
+          1.0
+        ],
+        "earth": [
+          0.35,
+          0.64,
+          0.35,
+          1.0
+        ],
+        "light": [
+          0.95,
+          0.96,
+          0.98,
+          1.0
+        ],
+        "air": [
+          0.93,
+          0.83,
+          0.35,
+          1.0
+        ],
+        "water": [
+          0.35,
+          0.4,
+          0.9,
+          1.0
+        ],
+        "death": [
+          0.35,
+          0.35,
+          0.35,
+          1.0
+        ]
+      }
+    }
+  }
+}

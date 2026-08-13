@@ -1,0 +1,231 @@
+{
+  "_comment": "⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant bench's style blocks, vendored OUT of ui_theme.json (a scene's values belong in its scene file). They move into this bench's own .scene.json at its migration — do not grow this file. Colors are $token refs into ui_theme.json's theme.tokens; a `theme` key here is refused as a palette fork.",
+  "assetpipeline": {
+    "_comment": "Asset Pipeline editor (flicker-assetpipeline) — the in-app content-pipeline wizard. Built to DesignSync project 2fc44682 'Asset Pipeline.dc.html'. Colours are $token refs resolved against this file's theme.tokens — the ONE Prism palette; never a private copy.",
+    "col": {
+      "ink": "$ink_bright",
+      "ink_dim": "$ink",
+      "dim": "$dim",
+      "faint": "$faint",
+      "bronze": "$bronze",
+      "rail": "$dim_soft",
+      "sapphire": "$sapphire"
+    },
+    "_map_comment": "BONE-MAP / REQUIREMENT COLOUR KEY — the one place the conform provenance states get their colour. ok = a source bone renamed to canonical; review = placed by a derive pass (hip/shoulder/ankle) and worth a human's eye; auto = inferred from the reference rig; fail = a Review requirement that is not met. Bound per-row as a dotted path via `<row>_color`, so the key cannot drift between the list and the summary.",
+    "map": {
+      "ok": "$sig_green",
+      "review": "$sig_yellow",
+      "auto": "$sig_blue",
+      "fail": "$hp_hi"
+    },
+    "panel": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 4
+    },
+    "well": {
+      "fill_top": "$well_top",
+      "fill_bot": "$well_bot",
+      "border": "$edge1",
+      "border_w": 1,
+      "radius": 3
+    },
+    "seam": {
+      "fill_top": "$seam",
+      "fill_bot": "$seam"
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    },
+    "slider": {
+      "track": "$stone1",
+      "fill": "$sap_base",
+      "knob": "$sap_border",
+      "label": "$dim_soft",
+      "value": "$ink",
+      "track_h": 6,
+      "knob_w": 9,
+      "label_size": 11
+    },
+    "_choice_comment": "An EXCLUSIVE-CHOICE row and a LIST-SELECTION row. Both are `button`s: exclusivity is state the engine already owns, so a radio needs no component of its own — the caption arrives by text_bind carrying the selected glyph. `choice` is a flat stone row; `rowsel` is the selected-row marker the design specifies (a sapphire accent wash) and draws NOTHING when a row is unselected, so it sits under a bound text without covering it.",
+    "choice": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "hover_top": "$stone3",
+      "hover_bot": "$stone2",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 2,
+      "label": "$ink",
+      "hover_label": "$ink_bright"
+    },
+    "rowsel": {
+      "fill_top": "$accent_wash_2",
+      "fill_bot": "$accent_wash",
+      "hover_top": "$accent_wash_2",
+      "hover_bot": "$accent_wash_2",
+      "border": "$sapphire",
+      "border_w": 1,
+      "radius": 2,
+      "label": "$ink"
+    },
+    "rowsel_off": {
+      "fill_top": "$stage_void",
+      "fill_bot": "$stage_void",
+      "hover_top": "$accent_wash",
+      "hover_bot": "$accent_wash",
+      "radius": 2,
+      "label": "$ink"
+    },
+    "_import_comment": "IMPORT WORKFLOW SELECTOR (Step::Task) — the standard Prism `window` template (a PRESET over `frame`: chiseled `settings.window` border + automatic glowing CORNER RUNES + an 'Import' title bar), sized RESPONSIVELY at `win_frac` of the screen, its `content` slot holding the reusable `option_grid` selector field (heading · sunk well of a flowing card grid · hint), `cols`-per-row for an ARBITRARY workflow count. `card` is the transparent CLICK+HOVER overlay over each tile: idle shows the $edge3 resting edge; hover lights the Prism-DS 'selected ring' ($sapphire border + $sap_glow halo) plus a faint $accent_wash. `import.*` sizes: `win_frac` the window size, `head_size` the title glyph; `sec_/subtitle_/hint_size` the field's heading/subtitle/hint; `grid_*` the grid + well; `card_size`/`pad`/`gap`/`slot_h`/`rune_size`/`title_*`/`desc_*`/`tag_*` each square tile (the italic flavour WRAPS to the card width over its `desc_h`). Tiles carry NO Model label — copy/runes are static instance params on the `clayworks_import_card` proto.",
+    "card": {
+      "fill_top": "$stage_void",
+      "fill_bot": "$stage_void",
+      "hover_top": "$accent_wash",
+      "hover_bot": "$accent_wash",
+      "border": "$edge3",
+      "hover_border": "$sapphire",
+      "border_w": 1,
+      "radius": 3,
+      "glow": "$sap_glow",
+      "label": "$stage_void"
+    },
+    "import": {
+      "cols": 4,
+      "win_frac": 0.82,
+      "head_size": 22,
+      "win_gap": 14,
+      "sec_size": 12,
+      "subtitle_size": 13,
+      "hint_size": 11,
+      "grid_gap": 20,
+      "grid_pad": 24,
+      "card_size": 210,
+      "pad": 16,
+      "gap": 6,
+      "slot_h": 60,
+      "rune_size": 32,
+      "title_size": 16,
+      "title_h": 22,
+      "desc_size": 12,
+      "desc_h": 52,
+      "tag_size": 10,
+      "tag_h": 16
+    },
+    "import_scrim": {
+      "fill_top": "$scrim",
+      "fill_bot": "$scrim"
+    },
+    "layout": {
+      "margin": 0
+    },
+    "_workbench_comment": "KILNWORKS WORKBENCH CHROME — a solid TILED layout (not floating overlays): a full-bleed `header` bar filling the top, a `tab_bar` of the six pipeline steps drawn Loomforge-style (NON-interactive — the active step lights via the walker's `style_bind`; the footer Back/Next drives the step), a `body` row holding the framed RTT `holder` (the 2×2 editor viewport) beside a first-class editor rail (`inspector`), and a full-bleed `footer`. `tab_bar`/`tab_active`/`tab_idle` intentionally mirror `loomforge.tab_*` (same $tokens, no hover — the tabs don't respond to the pointer); DEDUP: promote to a shared component block when the design-system component tier lands.",
+    "header": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 0,
+      "h": 40,
+      "pad": 16,
+      "gap": 12,
+      "title_size": 21,
+      "title_w": 210,
+      "name_size": 18,
+      "name_w": 240,
+      "meta_size": 10,
+      "meta_w": 110
+    },
+    "tab_bar": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$edge1",
+      "border_w": 1,
+      "radius": 0,
+      "h": 34,
+      "pad": 6,
+      "gap": 4,
+      "tab_size": 13
+    },
+    "tab_active": {
+      "fill_top": "$sap_base",
+      "fill_bot": "$sap_base_lo",
+      "border": "$sap_border",
+      "border_w": 1,
+      "label": "$ink_bright",
+      "radius": 3
+    },
+    "tab_idle": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone2",
+      "border": "$edge2",
+      "border_w": 1,
+      "label": "$dim",
+      "radius": 3
+    },
+    "body": {
+      "margin": 10,
+      "gap": 10
+    },
+    "inspector": {
+      "top": 110,
+      "width": 384,
+      "pad": 18,
+      "gap": 8,
+      "title_size": 20,
+      "title_w": 200,
+      "line_h": 22,
+      "line_size": 13,
+      "badge_size": 10,
+      "badge_w": 120,
+      "head_size": 12,
+      "sub_gap": 4
+    },
+    "_stage_comment": "PER-STAGE INSPECTOR CONTROLS — one block per wizard step, each shown only while its `on_<step>` flag is set. `rig` = the inline piece picker (multi-mesh folders) + the paged bone map (`rows` must equal the crate's BONE_ROWS) + the four offset sliders, whose ±range lives HERE so Rust and Lua cannot disagree about it; `attach` = the six socket rows + three offset sliders; `review` = the requirement rows (`rows` must equal REQUIREMENT_ROWS) + the commit button.",
+    "rig": {
+      "rows": 6,
+      "row_h": 22,
+      "row_size": 12,
+      "page_h": 20,
+      "page_size": 11,
+      "page_w": 110,
+      "slider_h": 26,
+      "off_range": 20,
+      "roll_range": 90,
+      "btn_h": 26,
+      "btn_w": 120,
+      "btn_size": 10
+    },
+    "attach": {
+      "rows": 6,
+      "row_h": 24,
+      "row_size": 12,
+      "slider_h": 26,
+      "off_range": 30
+    },
+    "review": {
+      "rows": 4,
+      "row_h": 22,
+      "row_size": 12,
+      "commit_h": 40,
+      "commit_size": 12
+    },
+    "footer": {
+      "height": 76,
+      "pad": 16,
+      "gap": 14,
+      "title_size": 18,
+      "hint_size": 13,
+      "btn_h": 40,
+      "load_w": 138,
+      "back_w": 96,
+      "next_w": 96,
+      "btn_size": 12
+    }
+  }
+}

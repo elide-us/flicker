@@ -3,7 +3,7 @@
 //! `Loading` shows a title for a frame, then generates the planet and replaces
 //! itself with `World`. `World` owns the generated planet (all epoch layers), an
 //! orbit camera, the selected epoch + view field, and the tunable [`WorldParams`].
-//! It drives a Lua HUD (`scripts/world_ui.lua` + `ui_elements.json`): stats, a
+//! It drives a Lua HUD (`scripts/world_ui.lua` + `ui_theme.json`): stats, a
 //! field/grid/epoch control row, and a per-epoch knob panel. Dragging a knob
 //! updates the slider live; the planet regenerates on release. Keyboard
 //! shortcuts mirror the panel.
@@ -16,7 +16,7 @@ use flicker::render::{
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{ScriptHost, ValueMap};
-use flicker::ui::{load_ui_json, load_widgets, render_hud, strings};
+use flicker::ui::{load_widgets, render_hud, strings};
 use flicker_input_core::{ActionSignal, Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_materials::Tables;
@@ -51,7 +51,7 @@ const DIM: [f32; 4] = [0.70, 0.75, 0.85, 1.0];
 
 const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/world_ui.lua");
 const UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_theme.json");
 
 /// Splash + first generation. Renders one frame, then builds the world.
 pub struct Loading {
@@ -464,7 +464,7 @@ impl Scene for World {
         self.theme = Some(Theme::build(renderer));
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
-                load_ui_json(&script, UI_ELEMENTS);
+                flicker::ui::load_ui_json_for(&script, UI_ELEMENTS, Some(&crate::scene_styles()));
                 load_widgets(&script);
                 self.script = Some(script);
             }
@@ -636,7 +636,7 @@ mod tests {
     #[test]
     fn hud_script_loads_and_runs() {
         let script = ScriptHost::from_file(HUD_SCRIPT).expect("world_ui.lua loads");
-        load_ui_json(&script, UI_ELEMENTS);
+        flicker::ui::load_ui_json_for(&script, UI_ELEMENTS, Some(&crate::scene_styles()));
         load_widgets(&script);
 
         let mut model = ValueMap::new()
@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn element_grid_runs_on_composition_epoch() {
         let script = ScriptHost::from_file(HUD_SCRIPT).expect("world_ui.lua loads");
-        load_ui_json(&script, UI_ELEMENTS);
+        flicker::ui::load_ui_json_for(&script, UI_ELEMENTS, Some(&crate::scene_styles()));
         load_widgets(&script);
 
         let mut model = ValueMap::new()
@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn celestial_panel_runs_and_round_trips() {
         let script = ScriptHost::from_file(HUD_SCRIPT).expect("world_ui.lua loads");
-        load_ui_json(&script, UI_ELEMENTS);
+        flicker::ui::load_ui_json_for(&script, UI_ELEMENTS, Some(&crate::scene_styles()));
         load_widgets(&script);
 
         let model = ValueMap::new()

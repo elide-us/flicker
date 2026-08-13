@@ -102,59 +102,6 @@ pub struct SurfaceChange<'a> {
     pub context: Option<&'a str>,
 }
 
-/// The operation an [`OrchestrationRule`] applies to its target surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SurfaceOp {
-    Show,
-    Hide,
-    Toggle,
-    /// [`Surfaces::set_exclusive`] — show the target, hide its radio group.
-    Exclusive,
-}
-
-/// One declarative rule of an **Orchestration** — Aaron's vocabulary
-/// (ratified 2026-08-01): *"an Orchestration is a layout that changes based on
-/// signals."* When the named result/signal fires this frame, the op is applied
-/// to the target surface: `OnSignal(OpenInventory) → Show(inventory)` as data,
-/// replacing the hand-written `if results.is_on(..) { surfaces.show(..) }`
-/// chains. A [`crate::workflow::Workflow`] is an Orchestration with an ordinal.
-#[derive(Clone, Debug)]
-pub struct OrchestrationRule {
-    /// The fired result name to react to — a click `action`, a declared-intent
-    /// result, or a `sig_*` mirror key; anything truthy in this frame's results.
-    pub on: String,
-    /// What happens to the target.
-    pub op: SurfaceOp,
-    /// The surface id the op drives (unknown ids warn, never panic).
-    pub target: String,
-}
-
-impl OrchestrationRule {
-    fn rule(on: impl Into<String>, op: SurfaceOp, target: impl Into<String>) -> Self {
-        Self { on: on.into(), op, target: target.into() }
-    }
-
-    /// `on` fired → show `target`.
-    pub fn show(on: impl Into<String>, target: impl Into<String>) -> Self {
-        Self::rule(on, SurfaceOp::Show, target)
-    }
-
-    /// `on` fired → hide `target`.
-    pub fn hide(on: impl Into<String>, target: impl Into<String>) -> Self {
-        Self::rule(on, SurfaceOp::Hide, target)
-    }
-
-    /// `on` fired → flip `target`.
-    pub fn toggle(on: impl Into<String>, target: impl Into<String>) -> Self {
-        Self::rule(on, SurfaceOp::Toggle, target)
-    }
-
-    /// `on` fired → show `target` exclusively within its radio group.
-    pub fn exclusive(on: impl Into<String>, target: impl Into<String>) -> Self {
-        Self::rule(on, SurfaceOp::Exclusive, target)
-    }
-}
-
 /// A screen's declared surface set + their current states — the minimal Scene
 /// Manager. Construct once with the declaration, mutate through
 /// [`show`](Self::show) / [`hide`](Self::hide) / [`toggle`](Self::toggle) /
@@ -262,25 +209,6 @@ impl Surfaces {
         }
     }
 
-    /// Apply an Orchestration's rules over this frame's fired results — call
-    /// after the scene folds its results (clicks, intents, `take_fired` names)
-    /// and before [`publish`](Self::publish). Rules whose `on` did not fire are
-    /// no-ops; a fired rule is exactly one of the state ops above, so unchanged
-    /// outcomes still cost nothing downstream.
-    pub fn orchestrate(&mut self, rules: &[OrchestrationRule], results: &ValueMap) {
-        for r in rules {
-            if !results.is_on(&r.on) {
-                continue;
-            }
-            match r.op {
-                SurfaceOp::Show => self.show(&r.target),
-                SurfaceOp::Hide => self.hide(&r.target),
-                SurfaceOp::Toggle => self.toggle(&r.target),
-                SurfaceOp::Exclusive => self.set_exclusive(&r.target),
-            }
-        }
-    }
-
     /// Publish every surface's state into the frame's Model under its declared
     /// key — the ONE visibility write a scene makes per frame. Values ride the
     /// same keys the tree's `visible_bind`s already name, so unchanged states
@@ -378,7 +306,6 @@ impl Surfaces {
 mod tests {
     use super::*;
     use crate::component::{run_ui, UiInput, UiState};
-    use crate::template::builtin_templates;
     use flicker_render::Vec2;
     use flicker_script::{UiNode, Value};
 
@@ -471,40 +398,6 @@ mod tests {
         s.show("inspector");
         s.hide("inspector");
         assert!(s.visibility_diff().is_empty());
-    }
-
-    #[test]
-    fn orchestration_rules_apply_fired_results_to_surfaces() {
-        // The HUD story as data: OnSignal(inventory_open) → Show(inventory);
-        // rules whose result did not fire are no-ops; unknown targets warn.
-        let mut s = Surfaces::new(vec![
-            Surface::new("inventory"),
-            Surface::new("map"),
-            Surface::new("sec_video").group("section").on(),
-            Surface::new("sec_audio").group("section"),
-        ]);
-        let rules = vec![
-            OrchestrationRule::show("inventory_open", "inventory"),
-            OrchestrationRule::hide("inventory_close", "inventory"),
-            OrchestrationRule::toggle("map_toggle", "map"),
-            OrchestrationRule::exclusive("pick_audio", "sec_audio"),
-            OrchestrationRule::show("broken", "nonsense"),
-        ];
-
-        let mut results = ValueMap::new().with("inventory_open", true).with("map_toggle", true);
-        s.orchestrate(&rules, &results);
-        assert!(s.is_on("inventory") && s.is_on("map"));
-        assert!(s.is_on("sec_video"), "unfired rules touch nothing");
-
-        results = ValueMap::new()
-            .with("inventory_close", true)
-            .with("map_toggle", true)
-            .with("pick_audio", true)
-            .with("broken", true);
-        s.orchestrate(&rules, &results);
-        assert!(!s.is_on("inventory"), "hide rule fired");
-        assert!(!s.is_on("map"), "toggle rule flipped back");
-        assert!(s.is_on("sec_audio") && !s.is_on("sec_video"), "exclusive drove the group");
     }
 
     #[test]
@@ -631,32 +524,29 @@ mod tests {
         }
     }
 
-    /// A Screen declaration naming an rtt-view TEMPLATE surface round-trips
-    /// visibility like any other surface: hidden, the walker never places the
-    /// subtree, so its `RttSlot`s are not reserved; shown, both stages come
-    /// back. This is the S8 Screen▸RTTs story document-by-test.
+    /// A Screen declaration naming an rtt-view surface round-trips visibility like
+    /// any other surface: hidden, the walker never places the subtree, so its
+    /// `RttSlot`s are not reserved; shown, both stages come back. This is the S8
+    /// Screen▸RTTs story document-by-test.
     ///
-    /// The vehicle is the ONE N-panel arrangement — a `multi_view` of two
-    /// `rtt_panel`s — which is what the fixed two-/three-/four-up protos were
-    /// replaced by. The subject of the gate is the SURFACE round trip, not the
-    /// proto: any declaration reserving two stages would do, and this one is
-    /// the arrangement the benches actually ship.
+    /// The vehicle is a `row` of two `rtt` wells authored straight from component
+    /// KINDS — the template tier that once wrapped this (a `multi_view` of two
+    /// `rtt_panel`s) is gone (201F4F51). The subject of the gate is the SURFACE
+    /// round trip, not the arrangement: any declaration reserving two stages would
+    /// do, and this one is the shape the benches ship.
     #[test]
-    fn an_rtt_view_template_surface_round_trips_visibility() {
+    fn an_rtt_view_surface_round_trips_visibility() {
         let json = r#"{ "component": "screen", "children": [
-            { "template": "multi_view", "id": "pair", "visible_bind": "workbench_on", "gap": 4,
-              "slots": { "panes": [
-                { "template": "rtt_panel", "id": "pair_left",  "tab_group": "l", "source": "cam_a" },
-                { "template": "rtt_panel", "id": "pair_right", "tab_group": "r", "source": "cam_b" }
-              ] } }
+            { "component": "row", "id": "pair", "visible_bind": "workbench_on", "gap": 4,
+              "children": [
+                { "component": "rtt", "id": "pair_left_rtt",  "tab_group": "l", "source": "cam_a" },
+                { "component": "rtt", "id": "pair_right_rtt", "tab_group": "r", "source": "cam_b" }
+              ] }
         ] }"#;
-        // The surviving data path: the ONE arrangement reader + the registry.
+        // The ONE arrangement reader — no expansion pass; the tree is already kinds.
         let value: serde_json::Value = serde_json::from_str(json).expect("json parses");
-        let tree = crate::expand(
-            flicker_script::parse_ui_json(&value).expect("arrangement parses"),
-            &builtin_templates(),
-        );
-        assert!(crate::unknown_kinds(&tree).is_empty(), "the declared screen expands clean");
+        let tree = flicker_script::parse_ui_json(&value).expect("arrangement parses");
+        assert!(crate::unknown_kinds(&tree).is_empty(), "the declared screen names known kinds");
 
         let mut surfaces =
             Surfaces::new(vec![Surface::new("workbench").key("workbench_on").on()]);

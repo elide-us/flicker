@@ -2,7 +2,7 @@
 //!
 //! A `stage` UI node composites an offscreen sub-scene (a character portrait, a
 //! turntable) into its rect; the `stages.<source>.layers` list in
-//! `ui_elements.json` names what that sub-scene draws. The layer kinds that are
+//! `ui_theme.json` names what that sub-scene draws. The layer kinds that are
 //! plain line geometry live here as PURE FUNCTIONS — no GPU, no renderer state —
 //! so a scene builds them once and can unit-test the result without a device.
 //!

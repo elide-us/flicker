@@ -1,6 +1,6 @@
 //! The [`InputHandler`] trait — one layer of the bus (spec §4.2).
 
-use flicker_input_core::InputContext;
+use flicker_input_core::{ActionSignal, InputContext};
 
 use crate::event::{Flow, InputEvent};
 use crate::router::RouteCtx;
@@ -15,6 +15,24 @@ use crate::router::RouteCtx;
 /// pass. Both default-implemented methods let a handler opt into only what it
 /// needs — most handlers implement `handle` alone.
 pub trait InputHandler {
+    /// The signals this handler SUBSCRIBES to — the ones it is willing to consume.
+    /// The dispatcher offers a signal to [`capture`](Self::capture) /
+    /// [`handle`](Self::handle) ONLY when the handler subscribes to it; an
+    /// unsubscribed signal passes straight through this layer to the next, so a
+    /// handler can never eat input it does not own (Aaron 2026-08-11: a context
+    /// WATCHES the stream and takes only what is relevant — it never consumes ALL
+    /// input; MCP `67DEE93A`).
+    ///
+    /// Defaults to subscribing to EVERYTHING, so a handler that already gates
+    /// imperatively inside `handle` (returning [`Flow::Pass`] for signals it does
+    /// not want) is unchanged. A handler adopting the subscription discipline —
+    /// e.g. a nav-only focus layer, or a scene's orchestration layer — OVERRIDES
+    /// this to declare its own set, and the dispatcher then guarantees it is only
+    /// ever asked about those signals.
+    fn subscribes(&self, _signal: ActionSignal) -> bool {
+        true
+    }
+
     /// Top-down first-refusal pass. Return [`Flow::Consumed`] to claim the event
     /// before any lower handler's [`handle`](Self::handle) can run. Defaults to
     /// [`Flow::Pass`] (capture-only layers like system/global override it).

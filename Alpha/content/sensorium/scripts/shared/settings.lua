@@ -1,8 +1,10 @@
 -- Prism Settings — a DECLARATIVE component tree (the Rust walker `run_ui` owns
 -- layout, draw, and hit-test). Replaces the old immediate-mode `M.update`/`M.draw`
--- pixel-math + the `Widgets` toolkit. One windowed screen: a title bar + corner
--- runes (via the shared `window` TEMPLATE), a left category rail (Video / Audio /
--- Input), a scrolling content region, and a footer (Restore / Back / Apply).
+-- pixel-math + the `Widgets` toolkit. Template-free (201F4F51): the window is a
+-- styled `stack` + `rune_corners` authored inline, and navigation is the native
+-- `paged_menu` (PTT) in its LEFT page-rail mode — a VERTICAL page rail (Video /
+-- Audio / Input) beside a horizontal tab rail (the Input sub-tabs) over the
+-- scrolling content — with a footer (Restore / Apply / Save-and-Close) below.
 --
 -- Two-way contract lives in the node data (same channels every walker scene uses):
 --   * `action`       — a momentary event the scene reads by id (go_video, settings_apply…).
@@ -11,7 +13,7 @@
 --   * `visible_bind` — a Model key gating a subtree (sec_video, sub_keyboard…).
 --   * `enabled_bind` — a Model key gating a control; unwired PREVIEW rows point it at
 --                      `off` (always false) so their control is inert.
---   * `style`/`color`— dotted paths into ui_elements.json (palette single-sourced in
+--   * `style`/`color`— dotted paths into ui_theme.json (palette single-sourced in
 --                      theme.tokens); `color_bind` names a Model key holding such a path.
 -- Layout / labels all come from `UI.settings`, so the tree and the engine cannot drift.
 --
@@ -38,6 +40,10 @@ local Slider  = tag("slider")
 local Pill    = tag("pill_toggle")
 local Badge   = tag("badge")
 local Opt     = tag("option")   -- pure DATA child of a select/pill (never drawn)
+local Tabs        = tag("tabs")          -- the VERTICAL page rail (Video/Audio/Input)
+local Paged       = tag("paged_menu")    -- the PTT page/tab control (native kind)
+local PopupPanel  = tag("popup_panel")   -- native titled modal slab (the dialogs)
+local Runes       = tag("rune_corners")  -- the window's four carved corner glyphs
 
 -- Wired rows bind to the scene's canonical Model keys; everything else is a
 -- read-only `pv_<id>` preview key the scene publishes with a fixed default.
@@ -55,9 +61,6 @@ local BINDS = {
 -- `box` = the node's main-axis LENGTH (line height in a column); `glyph` = font size.
 local function line(text, box, glyph, color, font, align)
   return Text { text = text, size = box, text_size = glyph, color = color, font = font or "body", align = align }
-end
-local function bound(key, box, glyph, color, font, align)
-  return Text { text_bind = key, size = box, text_size = glyph, color = color, font = font or "body", align = align }
 end
 
 -- ── select / pill option children. An option's value is its 0-based INDEX, and an
@@ -248,53 +251,37 @@ local function controller_tab()
   }
 end
 
--- ── nav rail: CATEGORIES header, one button per section (active lit via style_bind),
---    a footer block. Buttons fire `go_<id>`; the scene tracks the active section. ──
-local function nav_rail()
-  local S = UI.settings
-  local nav = S.nav
-  local btn = function(id, label)
-    return Button { id = "nav_" .. id, action = "go_" .. id, label = label, size = nav.row_h,
-                    label_size = nav.label_size, style_bind = "nav_" .. id .. "_style" }
-  end
-  return Cell {
-    size = nav.w, pad = nav.pad, gap = nav.gap,
+-- ── page rail: a VERTICAL `tabs` strip = the paged_menu's PAGE rail. Bound to
+--    `settings_page` (0=video / 1=audio / 2=input); the selected cell wears the
+--    primary button style, the idle cells the secondary — the vertical rail IS the
+--    active-section indicator now (the old `go_<id>` nav rail + `nav_<id>_style`
+--    bind are gone). Clicking a cell reports the new INDEX; the scene maps it back
+--    to the `sec_*` radio. ──
+local function page_rail()
+  return Tabs {
+    id = "settings_page", bind = "settings_page", vertical = true, gap = 8,
+    tab_active = "modal.buttons.variants.primary",
+    tab_idle = "modal.buttons.variants.secondary",
     children = {
-      line(nav.header, 22, nav.header_size, "settings.nav.header_color", "label", "left"),
-      btn("video", "$set_video"),
-      btn("audio", "$set_audio"),
-      btn("input", "$set_input"),
-      Stack { grow = 1 },
-      line(nav.footer_title, 16, nav.header_size, "settings.nav.footer_title_color", "label", "left"),
-      line(nav.footer_sub, 16, 12, "settings.nav.footer_sub_color", "body", "left"),
+      Opt { value = 0, label = "$set_video" },
+      Opt { value = 1, label = "$set_audio" },
+      Opt { value = 2, label = "$set_input" },
     },
   }
 end
 
--- ── content header: kicker + section title, with the input sub-tab pills on the
---    right (only while the Input section is active). ──
-local function content_header()
-  local S = UI.settings
-  return Row {
-    size = 72,
+-- ── tab rail: the Input sub-tabs as a segmented pill = the paged_menu's TAB rail.
+--    Two-way `input_subtab` (the bind carries the sub-tab INDEX; the scene maps it
+--    back to the `sub_*` surface). The paged_menu shows it ONLY on the Input page
+--    (its `tabs_shown = "input_page_active"` gate), so no `visible_bind` here. ──
+local function tab_rail()
+  return Pill {
+    id = "input_subtab", bind = "input_subtab",
+    size = 330, style = "settings.controls.pill",
     children = {
-      Cell { grow = 1, gap = 4, children = {
-        Stack { size = 6 },
-        bound("kicker", 16, S.content.kicker_size, "settings.content.title_color", "label", "left"),
-        bound("sec_title", 40, S.content.title_size, "settings.content.title_color", "display", "left"),
-      } },
-      -- Input sub-tabs as a segmented pill (two-way `input_subtab`); matches the
-      -- current pill sub-tabs and stays in the settings namespace. The bind carries
-      -- the sub-tab's INDEX — the scene maps it back to the `sub_*` surface.
-      Pill {
-        id = "input_subtab", bind = "input_subtab", visible_bind = "sec_input",
-        size = 330, style = "settings.controls.pill",
-        children = {
-          Opt { value = 0, label = "$set_keyboard" },
-          Opt { value = 1, label = "$set_mouse" },
-          Opt { value = 2, label = "$set_controller" },
-        },
-      },
+      Opt { value = 0, label = "$set_keyboard" },
+      Opt { value = 1, label = "$set_mouse" },
+      Opt { value = 2, label = "$set_controller" },
     },
   }
 end
@@ -313,7 +300,7 @@ local function content_scroll()
   }
 end
 
--- ── footer controls (spliced into the frame's `s` / footer region) ──
+-- ── footer controls (the bottom Row of the window's content cell) ──
 -- APPLY saves without closing (flash); SAVE AND CLOSE (primary) saves and pops. The
 -- titlebar × fires `settings_close`, which confirms first when there are unsaved edits.
 local function footer_children()
@@ -331,30 +318,41 @@ local function footer_children()
 end
 
 -- ── modal dialogs (children of the scene root; gated by a Model flag the scene sets) ──
--- Both use the shared `choice_dialog` template. The scene enforces modality in Rust
--- (while a flag is set it processes only that dialog's actions), so the dim overlay is
--- purely visual.
+-- Each is a full-bleed dim scrim (`screens.pause`) gated by `visible_bind`, holding a
+-- native `popup_panel` — the carved slab draws its own titled chrome and flows its
+-- authored children (a message line + the action buttons) as items. The scene enforces
+-- modality in Rust (while a flag is set it processes only that dialog's actions), so the
+-- overlay is purely visual; the button `action`s + gates are unchanged from before.
+local function overlay(gate, panel)
+  return Cell {
+    visible_bind = gate, anchor = "top_left", width_frac = 1.0, height_frac = 1.0,
+    style = "screens.pause", children = { panel },
+  }
+end
+
 local function dialogs()
   local D = UI.settings.dialogs
   return {
     -- Unsaved-changes confirm (fired by × / Esc when the buffer is dirty).
-    {
-      template = "choice_dialog", visible_bind = "confirm_close",
-      title = D.close_title, title_size = 26, message = D.close_msg,
-      overlay_style = "screens.pause", panel_style = "modal.panel",
-      slots = { buttons = {
+    overlay("confirm_close", PopupPanel {
+      title = D.close_title, title_size = 26, panel_style = "modal.panel",
+      anchor = "center", layer = 2,
+      children = {
+        line(D.close_msg, 44, 15, "settings.row.name_color", "body", "center"),
         Button { action = "confirm_save",    label = D.save,    size = 46, label_size = 14, style = "modal.buttons.variants.primary" },
         Button { action = "confirm_discard", label = D.discard, size = 46, label_size = 14, style = "modal.buttons.variants.danger" },
         Button { action = "confirm_cancel",  label = D.cancel,  size = 46, label_size = 14, style = "modal.buttons.variants.secondary" },
-      } },
-    },
+      },
+    }),
     -- Restore-defaults acknowledgement (single OK).
-    {
-      template = "choice_dialog", visible_bind = "restore_note",
-      title = D.restore_title, title_size = 26, message = D.restore_msg,
-      overlay_style = "screens.pause", panel_style = "modal.panel",
-      confirm_label = D.ok, confirm_action = "restore_ok", confirm_variant = "primary",
-    },
+    overlay("restore_note", PopupPanel {
+      title = D.restore_title, title_size = 26, panel_style = "modal.panel",
+      anchor = "center", layer = 2,
+      children = {
+        line(D.restore_msg, 44, 15, "settings.row.name_color", "body", "center"),
+        Button { action = "restore_ok", label = D.ok, size = 46, label_size = 14, style = "modal.buttons.variants.primary" },
+      },
+    }),
   }
 end
 
@@ -368,35 +366,56 @@ function M.tree()
   local footer = footer_children()
   footer[2].visible_bind = "applied" -- the "SETTINGS APPLIED" flash
 
-  -- The `window` TEMPLATE (a `frame` wrapping a HEADER · CONTENT · FOOTER section) owns the chrome:
-  -- the title sits in the HEADER cell, the `content` slot is the rail | body layout, and the `footer`
-  -- slot is the Restore / Apply / Save-and-Close row. `has_close` turns the frame's top-right corner
-  -- into an × (fires `settings_close`, confirm-if-dirty). `title_h` / `footer_h` size the header /
-  -- footer cells; `title_pad` / `footer_pad` / `footer_gap` are their padding. One skeleton, one
-  -- container — every modal renders through this.
+  -- The window is HAND-AUTHORED now (template tier is gone): a styled `stack` carrying
+  -- the `settings.window` chrome bg, an inset content `cell` (titlebar · paged_menu ·
+  -- footer), and a `rune_corners` overlay that paints the four carved corners on top.
+  -- The `edge` inset clears the corner runes (~30, the frame's old clearance constant).
+  local edge = S.titlebar.pad_x
+  local window = Stack {
+    style = "settings.window", anchor = "center", width = S.window.w, height = S.window.h,
+    children = {
+      Cell {
+        anchor = "top_left", width_frac = 1.0, height_frac = 1.0, pad = edge,
+        children = {
+          -- Titlebar: the settings title (left) + the × close control (right, danger).
+          -- The × fires `settings_close` — the SAME intent Esc/pad-B emit — so the
+          -- scene's confirm-if-dirty ladder handles both alike.
+          Row {
+            size = S.titlebar.h,
+            children = {
+              Cell { grow = 1, children = {
+                Stack { grow = 1 },
+                line(S.titlebar.title, S.titlebar.title_size + 4, S.titlebar.title_size, "settings.titlebar.title_color", "display", "left"),
+                Stack { grow = 1 },
+              } },
+              Cell { size = 46, children = {
+                Stack { grow = 1 },
+                Button { id = "close", action = "settings_close", label = "×", size = 34, label_size = 20, style = "modal.buttons.variants.danger" },
+                Stack { grow = 1 },
+              } },
+            },
+          },
+          -- The PTT page/tab control in LEFT page-rail mode: the vertical page rail
+          -- (Video/Audio/Input) as a fixed `page_w` column, the horizontal Input tab
+          -- rail (shown only on the Input page via `input_page_active`), and the
+          -- scrolling content below — the gated sections the scene publishes.
+          Paged {
+            page_side = "left", page_w = S.nav.w, grow = 1,
+            tabs_shown = "input_page_active",
+            children = { page_rail(), tab_rail(), content_scroll() },
+          },
+          -- Footer: Restore / applied-flash / Apply / Save-and-Close.
+          Row { size = S.footer.h, children = footer },
+        },
+      },
+      Runes { style = "settings.runes", anchor = "top_left", width_frac = 1.0, height_frac = 1.0 },
+    },
+  }
+
   local children = {
     -- Dim scrim behind the modal (translucent; reuses the pause overlay token).
     Cell { anchor = "top_left", width_frac = 1.0, height_frac = 1.0, style = "screens.pause" },
-    {
-      template = "window",
-      title = S.titlebar.title, title_size = S.titlebar.title_size,
-      w = S.window.w, h = S.window.h, style = "settings",
-      title_h = S.titlebar.h, title_pad = S.titlebar.pad_x,
-      close_action = "settings_close", close_style = "modal.buttons.variants.danger",
-      footer_h = S.footer.h, footer_pad = S.footer.pad_x, footer_gap = 12,
-      slots = {
-        content = {
-          Row {
-            grow = 1,
-            children = {
-              nav_rail(),
-              Cell { grow = 1, pad = 24, gap = 12, children = { content_header(), content_scroll() } },
-            },
-          },
-        },
-        footer = footer,
-      },
-    },
+    window,
   }
   -- Modal dialogs sit last so they overlay the window when their gate is set.
   for _, d in ipairs(dialogs()) do children[#children + 1] = d end

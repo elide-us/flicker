@@ -37,8 +37,15 @@ impl Router {
 
         for ev in events {
             // ── Phase 1: capture (top-down, first Consumed stops the event) ──
+            // A layer that does not SUBSCRIBE to this signal is skipped entirely —
+            // it never even sees a signal it does not own (MCP 67DEE93A). Default
+            // subscription is "everything", so imperatively-gated handlers are
+            // unchanged; only a handler that declares a narrower set is filtered.
             let mut captured = false;
             for (layer, handler) in chain.iter_mut().enumerate() {
+                if !handler.subscribes(ev.signal) {
+                    continue;
+                }
                 if handler.capture(ev, rc) == Flow::Consumed {
                     report.consumed.push((layer, ev.signal));
                     captured = true;
@@ -52,6 +59,9 @@ impl Router {
             // ── Phase 2: target + bubble (high→low, first Consumed stops) ──
             let mut consumed = false;
             for (layer, handler) in chain.iter_mut().enumerate() {
+                if !handler.subscribes(ev.signal) {
+                    continue;
+                }
                 if handler.handle(ev, rc) == Flow::Consumed {
                     report.consumed.push((layer, ev.signal));
                     consumed = true;
@@ -206,11 +216,13 @@ mod tests {
         hnd: Flow,
         log: Log,
         emit: Option<RouterRequest>,
+        /// `Some(s)` = subscribes ONLY to signal `s`; `None` = subscribes to all.
+        subs: Option<ActionSignal>,
     }
 
     impl Mock {
         fn new(name: &'static str, log: &Log) -> Self {
-            Self { name, cap: Flow::Pass, hnd: Flow::Pass, log: log.clone(), emit: None }
+            Self { name, cap: Flow::Pass, hnd: Flow::Pass, log: log.clone(), emit: None, subs: None }
         }
         fn capturing(mut self) -> Self {
             self.cap = Flow::Consumed;
@@ -224,9 +236,16 @@ mod tests {
             self.emit = Some(req);
             self
         }
+        fn subscribing_to(mut self, signal: ActionSignal) -> Self {
+            self.subs = Some(signal);
+            self
+        }
     }
 
     impl InputHandler for Mock {
+        fn subscribes(&self, signal: ActionSignal) -> bool {
+            self.subs.is_none_or(|s| s == signal)
+        }
         fn capture(&mut self, _ev: &InputEvent, _rc: &mut RouteCtx) -> Flow {
             self.log.borrow_mut().push(format!("{}:capture", self.name));
             self.cap
@@ -260,6 +279,45 @@ mod tests {
         assert!(report.consumed_by(0, ActionSignal::Menu));
         assert!(!report.passed(ActionSignal::Menu));
         assert_eq!(*log.borrow(), vec!["a:capture"]);
+    }
+
+    /// **Subscription discipline (MCP 67DEE93A): a layer only ever consumes the
+    /// signals it subscribes to.** A scene-orchestration layer subscribed to Confirm
+    /// never eats a Nav, and a nav-only focus layer never eats a Confirm — each
+    /// signal reaches the layer that owns it, and no context eats all input. The
+    /// unsubscribed layer is skipped before it is even asked (no `capture`/`handle`).
+    #[test]
+    fn a_layer_only_consumes_signals_it_subscribes_to() {
+        let raw = InputState::new();
+        let log: Log = Rc::default();
+        // Scene (primary) then focus (secondary), each subscribed narrowly.
+        let mut scene = Mock::new("scene", &log)
+            .subscribing_to(ActionSignal::Confirm)
+            .consuming();
+        let mut focus = Mock::new("focus", &log)
+            .subscribing_to(ActionSignal::NavDown)
+            .consuming();
+        let mut rc = RouteCtx::new();
+
+        // A Nav signal: the scene is NOT subscribed → skipped; focus owns + consumes it.
+        {
+            let nav = [event(ActionSignal::NavDown, &raw)];
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut scene, &mut focus];
+            let report = Router::dispatch(&nav, &mut chain, &mut rc);
+            assert!(report.consumed_by(1, ActionSignal::NavDown), "focus owns Nav");
+            assert!(!report.passed(ActionSignal::NavDown));
+        }
+        assert_eq!(*log.borrow(), vec!["focus:capture", "focus:handle"], "scene never saw the Nav");
+
+        // A Confirm signal: focus is NOT subscribed → skipped; the scene owns + consumes it.
+        log.borrow_mut().clear();
+        {
+            let confirm = [event(ActionSignal::Confirm, &raw)];
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut scene, &mut focus];
+            let report = Router::dispatch(&confirm, &mut chain, &mut rc);
+            assert!(report.consumed_by(0, ActionSignal::Confirm), "scene owns Confirm");
+        }
+        assert_eq!(*log.borrow(), vec!["scene:capture", "scene:handle"], "focus never saw the Confirm");
     }
 
     #[test]

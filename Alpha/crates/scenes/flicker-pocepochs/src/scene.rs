@@ -16,7 +16,7 @@ use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -31,9 +31,9 @@ use crate::route::RootHandler;
 /// The declarative HUD tree (`hud_pocepochs.lua`: readout text + the
 /// life-supporting-conditions gauge panel) + the shared UI-element layout.
 const HUD_SCRIPT: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/scripts/hud_pocepochs.lua");
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/scripts/shared/hud_pocepochs.lua");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 /// The globe's authored stage — `stages.pocepochs_globe` in that same file: the light the
 /// planet is seen by, the backdrop it sits on, and the fact that its shells come from the
 /// simulation rather than the style sheet.
@@ -87,7 +87,7 @@ pub struct WorldScene {
     ui_tree: Option<UiNode>,
     /// The screen's declarative bindings (S9): `on_menu = "pause_open"`.
     ui_intents: UiIntents,
-    /// Token-resolved `ui_elements.json` styles (dotted `style` paths resolve here).
+    /// Token-resolved `ui_theme.json` styles (dotted `style` paths resolve here).
     ui_styles: serde_json::Value,
     /// Retained walker interaction state.
     ui_state: UiState,
@@ -127,7 +127,7 @@ impl WorldScene {
         // The styles are read HERE, not in `enter`, because the world is built FROM them: a
         // globe's look is authored, and the object that owns the look has to exist before the
         // first frame asks it to draw.
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let world = GlobeWorld::new(STAGE_SOURCE, &ui_styles, None);
         let mut scene = Self {
             sim,
@@ -449,7 +449,7 @@ impl Scene for WorldScene {
         // the world is built from them.)
         match ScriptHost::from_file(HUD_SCRIPT) {
             Ok(script) => {
-                load_ui_json(&script, HUD_UI_ELEMENTS); // layout (`UI.pocepochs`)
+                flicker::ui::load_ui_json_for(&script, HUD_UI_THEME, Some(&crate::scene_styles())); // layout (`UI.pocepochs`)
                 self.sim.ensure(0);
                 let bands: Vec<serde_json::Value> = self
                     .sim
@@ -562,7 +562,10 @@ impl Scene for WorldScene {
         // about the camera — the drag latch, the wheel, the bound look signals — is the
         // world's, and the scene neither keeps one nor reads a device for it.
         self.world.place(Some(Rect { pos: Vec2::ZERO, size: renderer.size() }));
-        self.world.update(dt.as_secs_f32(), input, &self.bindings, None);
+        // Disabled bench (input-P3 pending): it names no panel, so the world never owns
+        // the camera (focus `None` → the look tuple is ignored). GlobeWorld now takes the
+        // resolved tuple, not a resolver; a zero tuple keeps the globe pointer-flown.
+        self.world.update(dt.as_secs_f32(), input, (0.0, 0.0, 0.0), None);
 
         let play = input.key_down(Key::Space);
         let down = input.key_down(Key::Down);
@@ -717,7 +720,7 @@ mod tests {
         flicker::ui::strings::load_str(&strings, "en-us");
         let script = ScriptHost::from_file(HUD_SCRIPT)
             .expect("hud_pocepochs.lua loads");
-        load_ui_json(&script, HUD_UI_ELEMENTS);
+        flicker::ui::load_ui_json_for(&script, HUD_UI_THEME, Some(&crate::scene_styles()));
         let mut scene = WorldScene::new();
         scene.sim.ensure(0);
         let bands: Vec<serde_json::Value> = scene
@@ -750,7 +753,7 @@ mod tests {
         let intents = UiIntents::of(&tree);
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
 
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let model = scene.hud_model();
         let snap = UiInput {
             mouse: Vec2::new(-9.0, -9.0),

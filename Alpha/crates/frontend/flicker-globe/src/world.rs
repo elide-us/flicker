@@ -32,9 +32,7 @@
 use flicker::render::{
     Camera, FrameGraph, MeshHandle, MeshIndices, Rect, Renderer, Vec3, MeshVertex,
 };
-use flicker_input_core::{
-    AbstractControls, ActionSignal, ContextualBindings, GamepadConfig, InputState,
-};
+use flicker_input_core::{AbstractControls, ActionSignal, InputState};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
 
 use crate::view::{Arrows, GlobeStage, GlobeView, StageLayer};
@@ -87,10 +85,11 @@ pub struct GlobeWorld {
     /// that names no panel is pointer-flown only.
     panel: Option<String>,
     owns_camera: bool,
-    /// The player's pad profile — the deadzone the bound signals are read
-    /// through. Held here so the world needs no per-frame hand-off of it.
-    gamepad: GamepadConfig,
-    /// The live look deflection, read from the bound signals each frame.
+    /// The live look deflection this frame — computed by the SCENE from its signal
+    /// source (the pump's `signals.axis`, or a bench's own `bindings.signal_axis`) and
+    /// handed to [`update`](GlobeWorld::update). The six Look/Zoom signals stay the
+    /// camera's knowledge (see [`look_from`](GlobeWorld::look_from)); the deadzone lives
+    /// on the source now, not here.
     look: (f32, f32, f32),
 }
 
@@ -127,7 +126,6 @@ impl GlobeWorld {
             dirty: false,
             panel: None,
             owns_camera: false,
-            gamepad: GamepadConfig::default(),
             look: (0.0, 0.0, 0.0),
         }
     }
@@ -226,41 +224,30 @@ impl GlobeWorld {
         self.rect
     }
 
-    /// The player's own input settings — the look sliders (sensitivity, the two
-    /// invert flags) and the pad's deadzone/threshold shape. Both arrive from
-    /// the settings panel together and both belong to the world: the camera
-    /// turns at the rate the player asked for, and the signals it reads are
-    /// deadzoned by the profile the player is on.
-    pub fn set_controls(&mut self, controls: AbstractControls, gamepad: GamepadConfig) {
+    /// The player's LOOK settings (sensitivity + the two invert flags) reach the
+    /// camera. The pad deadzone that used to live here moved to the signal SOURCE:
+    /// the pump (or a bench's own resolver) deadzones the axis BEFORE it becomes the
+    /// `look` tuple handed to [`update`](GlobeWorld::update).
+    pub fn set_controls(&mut self, controls: AbstractControls) {
         self.cam.set_controls(controls);
-        self.gamepad = gamepad;
     }
 
-    /// One frame of camera motion. The look/zoom SIGNALS decide how far
-    /// (resolved through the active binding map — never a device read), the
-    /// walker's focus decides whether they are ours at all, and the pointer
-    /// half latches inside the rect exactly as it always has.
+    /// One frame of camera motion. `look` is the (yaw, pitch, zoom) deflection the
+    /// SCENE resolved from its signal source this frame (see
+    /// [`look_from`](GlobeWorld::look_from)); the walker's focus decides whether it is
+    /// ours at all, and the pointer half latches inside the rect exactly as it always has.
     pub fn update(
         &mut self,
         dt: f32,
         input: &InputState,
-        bindings: &ContextualBindings,
+        look: (f32, f32, f32),
         focused: Option<&str>,
     ) {
         self.owns_camera = match (self.panel.as_deref(), focused) {
             (Some(panel), Some(f)) => panel == f,
             _ => false,
         };
-        let axis = |s: ActionSignal| bindings.signal_axis(s, input, &self.gamepad);
-        self.look = if self.owns_camera {
-            (
-                axis(ActionSignal::LookRight) - axis(ActionSignal::LookLeft),
-                axis(ActionSignal::LookUp) - axis(ActionSignal::LookDown),
-                axis(ActionSignal::ZoomIn) - axis(ActionSignal::ZoomOut),
-            )
-        } else {
-            (0.0, 0.0, 0.0)
-        };
+        self.look = if self.owns_camera { look } else { (0.0, 0.0, 0.0) };
         let (dx, dy, dz) = self.look;
         if dx != 0.0 || dy != 0.0 {
             self.cam.orbit(dx, dy, dt);
@@ -269,6 +256,19 @@ impl GlobeWorld {
             self.cam.zoom(dz, dt);
         }
         self.cam.update(input, self.rect);
+    }
+
+    /// Resolve the three camera axes (yaw, pitch, zoom) from a signal SOURCE — the
+    /// pump's `FrameInput::axis` for a scene on the pump (input-P3), or a bench's own
+    /// `ContextualBindings::signal_axis`. The six Look/Zoom signals are the camera's
+    /// knowledge, kept in ONE place; the source (and its deadzone) is the caller's. The
+    /// result is handed straight to [`update`](GlobeWorld::update).
+    pub fn look_from(mut axis: impl FnMut(ActionSignal) -> f32) -> (f32, f32, f32) {
+        (
+            axis(ActionSignal::LookRight) - axis(ActionSignal::LookLeft),
+            axis(ActionSignal::LookUp) - axis(ActionSignal::LookDown),
+            axis(ActionSignal::ZoomIn) - axis(ActionSignal::ZoomOut),
+        )
     }
 
     /// The camera the world is seen from.
@@ -349,7 +349,9 @@ impl InputHandler for GlobeWorld {
 mod tests {
     use super::*;
     use flicker_input_core::device::{GamepadAxis, Key};
-    use flicker_input_core::{EventKind, InputContext, InputMap};
+    // Test-only now: the scenes resolve the look tuple from these and hand the world the
+    // result (input-P3) — the world itself no longer takes bindings/gamepad.
+    use flicker_input_core::{ContextualBindings, EventKind, GamepadConfig, InputContext, InputMap};
 
     fn styles(stage: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "stages": { "test_globe": stage } })
@@ -373,7 +375,7 @@ mod tests {
     /// layers, that many materialized shells, that reference frame and that
     /// clear — and an unknown `draw` kind is dropped LOUDLY rather than drawing
     /// nothing in silence (rule 4BB12A75). Every one of these values sat
-    /// authored and unread in `ui_elements.json` before this pass.
+    /// authored and unread in `ui_theme.json` before this pass.
     #[test]
     fn the_stage_block_drives_the_shells_and_the_clear() {
         let s = styles(serde_json::json!({
@@ -472,7 +474,10 @@ mod tests {
         );
 
         let before = world.camera().position;
-        world.update(0.5, &input, &bindings, Some("view"));
+        // The scene resolves the look tuple from its signal source (the pump does this in
+        // the migrated scenes); the world takes the tuple and gates it on focus.
+        let look_axes = GlobeWorld::look_from(|s| bindings.signal_axis(s, &input, &cfg));
+        world.update(0.5, &input, look_axes, Some("view"));
         assert!(
             (world.camera().position - before).length() > 1.0,
             "a bound look signal turned the planet"
@@ -497,15 +502,19 @@ mod tests {
         let look =
             InputEvent::new(ActionSignal::LookRight, EventKind::Press, InputContext::World, &raw);
 
+        // The scene resolves the look tuple from its bindings (the pump does this in the
+        // migrated scenes); the world takes the tuple and gates it on focus.
+        let cfg = GamepadConfig::default();
+        let look_axes = GlobeWorld::look_from(|s| bindings.signal_axis(s, &input, &cfg));
         for elsewhere in [None, Some("other_panel")] {
             let before = world.camera().position;
-            world.update(0.5, &input, &bindings, elsewhere);
+            world.update(0.5, &input, look_axes, elsewhere);
             assert_eq!(world.camera().position, before, "{elsewhere:?} does not fly the planet");
             assert_eq!(world.handle(&look, &mut rc), Flow::Pass, "and the signal is not ours");
         }
 
         let before = world.camera().position;
-        world.update(0.5, &input, &bindings, Some("view"));
+        world.update(0.5, &input, look_axes, Some("view"));
         assert!((world.camera().position - before).length() > 1.0, "the focused panel flies it");
         assert_eq!(world.handle(&look, &mut rc), Flow::Consumed, "and owns the signal");
         // Anything that is not a camera signal always passes.

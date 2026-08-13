@@ -225,6 +225,12 @@ pub struct InputState {
     /// up). The driver resets this to `0.0` immediately after
     /// `App::update` returns.
     pub mouse_wheel_delta: f32,
+    /// Accumulated mouse MOTION (pixels) since the previous frame consumed it — the
+    /// pointer-look delta (`+x` right, `+y` down, screen sense). Reset to zero after
+    /// each `App::update`, exactly like [`mouse_wheel_delta`]. A `MouseMotion` binding
+    /// reads this (typically gated on a held button), so mouse-look is a real signal
+    /// rather than a raw poll. The wheel and this delta are the two pointer deltas.
+    pub mouse_delta: Vec2,
 
     // ── Keyboard ──
     keys_held: HashSet<Key>,
@@ -264,6 +270,7 @@ impl Default for InputState {
             mouse_forward: false,
             mouse_left_pressed: false,
             mouse_wheel_delta: 0.0,
+            mouse_delta: Vec2::ZERO,
             keys_held: HashSet::new(),
             typed_text: String::new(),
             backspace_edge: false,
@@ -363,6 +370,9 @@ impl InputState {
                         return true;
                     }
                 }
+                // Mouse motion is the pointer-look DELTA channel, not a held control
+                // (resolved via `ContextualBindings::signal_pointer_delta`).
+                InputBinding::MouseMotion { .. } => {}
             }
         }
         false
@@ -480,6 +490,7 @@ impl InputState {
         self.backspace_edge = false;
         self.mouse_left_pressed = false;
         self.mouse_wheel_delta = 0.0;
+        self.mouse_delta = Vec2::ZERO;
     }
 
     /// Update a mouse button's held state.

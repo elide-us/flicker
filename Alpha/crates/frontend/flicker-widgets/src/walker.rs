@@ -179,7 +179,18 @@ impl<'a> WalkerHandler<'a> {
         for name in &self.fired {
             self.ui.push_step(name);
         }
-        std::mem::take(&mut self.fired)
+        // Fold in this frame's POINTER activations (a click on a button / toggle /
+        // context row, recorded by `run_ui`'s hit pass). The hit pass already lit
+        // their flash + strip-step, so they join the drain here — AFTER the relight
+        // loop, not through it — purely to reach the one `sig_<name>` mirror the
+        // scene republishes. Pointer and pad now converge on this single channel: a
+        // mouse click on `mode_<realm>` mirrors `sig_mode_<realm>` exactly like a pad
+        // Confirm (rule 37722F91 "all input events are signals"; the additive step of
+        // pump P2, MCP `0569DA9B` — `hit_node`'s direct fire is removed once every
+        // scene drains here).
+        let mut fired = std::mem::take(&mut self.fired);
+        fired.extend(self.ui.take_pointer_fired());
+        fired
     }
 
     /// Whether `Cancel` was consumed this frame — the scene pops its modal / backs
@@ -212,28 +223,44 @@ impl<'a> WalkerHandler<'a> {
             ActionSignal::NavDown => self.nudge_or_move(current.as_deref(), NavDir::Down),
             ActionSignal::NavLeft => self.nudge_or_move(current.as_deref(), NavDir::Left),
             ActionSignal::NavRight => self.nudge_or_move(current.as_deref(), NavDir::Right),
-            // The LEFT STICK is the panel tier: it cycles `tab_group` and lands on
-            // the group's lowest ordinal — the panel node itself. (The bumpers are
-            // NOT here: they belong to the page/tab control's own rail.)
-            ActionSignal::PanelNext => self.cycle_group(current.as_deref(), true),
-            ActionSignal::PanelPrev => self.cycle_group(current.as_deref(), false),
+            // The LEFT STICK is the panel tier: it cycles `tab_group` and lands on the
+            // group's lowest ordinal — the panel node itself. (The bumpers are NOT here:
+            // they belong to the page/tab control's own rail.) But ONLY while navigating:
+            // once a pane is ENTERED (0EFF5464), the left stick belongs to that pane's
+            // interior (its camera), so panel-cycling is suppressed until Cancel exits.
+            ActionSignal::PanelNext if !self.ui.entered => self.cycle_group(current.as_deref(), true),
+            ActionSignal::PanelPrev if !self.ui.entered => self.cycle_group(current.as_deref(), false),
+            ActionSignal::PanelNext | ActionSignal::PanelPrev => {}
             ActionSignal::Confirm => {
-                // Same path a click uses: hand the focused node's action to the
-                // scene, which sets `results.set(action, true)` (component.rs ~:896).
+                // A focused node WITH an action activates like a click (menu buttons,
+                // pane controls) — same path, same `sig_<name>` mirror. A focused node
+                // with NO action is a pane CONTAINER: Confirm ENTERS it (pane_enter,
+                // 0EFF5464) so the left stick reaches its interior. Entering is a no-op
+                // once already entered.
                 let action = current
                     .as_deref()
                     .and_then(|id| self.action_for(id))
                     .map(str::to_string);
-                if let Some(a) = action.as_deref() {
-                    // A pad Confirm is an activation like any click — the focused
-                    // button lights the same flash (one acknowledgement, every route).
-                    self.ui.flash(a);
+                match action {
+                    Some(a) => {
+                        // A pad Confirm is an activation like any click — the focused
+                        // button lights the same flash (one acknowledgement, every route).
+                        self.ui.flash(&a);
+                        self.activated = Some(a);
+                    }
+                    None if !self.ui.entered => self.ui.entered = true,
+                    None => {}
                 }
-                self.activated = action;
             }
+            // Cancel backs out ONE level (B never skips — BA4487BD): inside an entered
+            // pane it EXITS to navigating; otherwise it pops the scene's modal/context.
             ActionSignal::Cancel => {
-                self.cancelled = true;
-                rc.pop_context();
+                if self.ui.entered {
+                    self.ui.entered = false;
+                } else {
+                    self.cancelled = true;
+                    rc.pop_context();
+                }
             }
             _ => {}
         }
@@ -335,11 +362,6 @@ fn collect_nav(
     for child in &node.children {
         collect_nav(child, model, focusables, actions, sliders);
     }
-    for group in node.slots.values() {
-        for child in group {
-            collect_nav(child, model, focusables, actions, sliders);
-        }
-    }
 }
 
 /// The signals THIS LAYER owns while it holds a focusable tree — the ones whose
@@ -375,6 +397,20 @@ fn is_pointer_signal(signal: ActionSignal) -> bool {
 }
 
 impl InputHandler for WalkerHandler<'_> {
+    /// The walker's SUBSCRIPTION (MCP `67DEE93A` / `2A221E4A`): it owns the nav
+    /// FAMILY (move focus / activate / cancel / panel + the chord modifier it
+    /// observes), the POINTER signals (its `hud_hit` gate over UI), and any signal
+    /// the screen DECLARED an intent for. Everything else — a scene's orchestration
+    /// signals, gameplay actions — passes straight through to the layers below. The
+    /// walker is the SECONDARY (focus) context, NOT an eat-everything layer; the
+    /// dispatcher now enforces that by never even offering it a signal it does not
+    /// own here.
+    fn subscribes(&self, signal: ActionSignal) -> bool {
+        walker_owned(signal)
+            || is_pointer_signal(signal)
+            || self.intents.is_some_and(|i| i.result_for(signal).is_some())
+    }
+
     fn handle(&mut self, ev: &InputEvent, rc: &mut RouteCtx) -> Flow {
         // The chord modifier is OBSERVED, never consumed: the walker tracks
         // held-ness (it scales a slider nudge to the coarse step) and passes
@@ -780,6 +816,53 @@ mod tests {
         assert_eq!(h.ui.focused(), Some("pop_right"));
     }
 
+    /// **The pane LOCK tier (0EFF5464).** Navigate to a pane, `Confirm` ENTERS it,
+    /// `PanelNext` is then suppressed (the left stick belongs to the interior), and
+    /// `Cancel` EXITS one level back to navigating — WITHOUT popping the scene. The
+    /// d-pad stays live throughout (asserted elsewhere; menus depend on it).
+    #[test]
+    fn confirm_enters_a_pane_panel_cycle_gates_and_cancel_exits_one_level() {
+        let raw = InputState::new();
+        // Two actionless PANE containers (panels at ordinal 0 — no `action`, so Confirm
+        // enters rather than activates).
+        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        for group in ["pop_left", "pop_view"] {
+            tree.children.push(UiNode {
+                id: group.into(),
+                component: "panel".into(),
+                tab_group: group.into(),
+                nav_ordinal: 0,
+                ..Default::default()
+            });
+        }
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pop_left"));
+        assert!(!h.ui.entered(), "navigating, not entered");
+
+        // Confirm on the actionless pane ENTERS it.
+        h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        assert!(h.ui.entered(), "Confirm entered the pane");
+
+        // PanelNext is now suppressed — the left stick belongs to the interior.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pop_left"), "panel cycle gated while entered");
+        assert!(h.ui.entered());
+
+        // Cancel EXITS one level (0EFF5464 / BA4487BD "B never skips") — back to
+        // navigating, and it does NOT pop the scene's context.
+        assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
+        assert!(!h.ui.entered(), "Cancel exited the pane");
+        assert!(!h.cancelled(), "exiting a pane is not a scene-level cancel");
+
+        // Navigating resumes — PanelNext cycles panes again.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pop_view"), "navigating resumes after exit");
+    }
+
     /// **The bumpers no longer move focus.** `TabNext`/`TabPrev` belong to the
     /// page/tab control's own rail (which steps itself now), so the walker passes
     /// them straight through — one meaning per signal.
@@ -830,6 +913,60 @@ mod tests {
         click.set("quit", true); // what the hit pass writes for a clicked button
         assert!(pad.is_on("quit") && click.is_on("quit"));
         assert_eq!(pad.get("quit"), click.get("quit"), "same key, same value, same channel");
+    }
+
+    /// **A mouse CLICK converges with a pad Confirm on the ONE drain (pump P2 /
+    /// rule 37722F91 "all input events are signals").** `run_ui`'s hit pass records
+    /// the clicked button's `action` into the shared [`UiState`]; the walker's
+    /// [`take_fired`](WalkerHandler::take_fired) drains it — so a click reaches the
+    /// scene's `sig_<name>` mirror byte-identically to a pad Confirm on the focused
+    /// button. Before P2 the click fired only into `results` and never rode the
+    /// drain, so a mouse-clicked `mode_<realm>` never mirrored `sig_mode_<realm>`
+    /// and the menu's Lua never latched the page (MCP `4180A432`).
+    #[test]
+    fn a_mouse_click_arrives_through_take_fired_like_a_pad_confirm() {
+        use flicker_render::Vec2;
+
+        // One actionable button, top-left, filling a 200-wide cell at height 40 —
+        // a click at its centre lands inside its resolved rect.
+        let mut btn = button("go", "menu", 0, "go");
+        btn.size = Some(40.0);
+        let mut col = UiNode { component: "cell".into(), ..Default::default() };
+        col.anchor = Some(flicker_script::UiAnchor::TopLeft);
+        col.width = Some(200.0);
+        col.children = vec![btn];
+        let mut tree =
+            UiNode { component: "screen".into(), id: "root".into(), ..Default::default() };
+        tree.children.push(col);
+
+        let model = ValueMap::new();
+        let styles = serde_json::json!({});
+        let click = crate::UiInput {
+            mouse: Vec2::new(100.0, 20.0),
+            clicked: true,
+            down: true,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let mut ui = UiState::new();
+
+        // Hit pass: the click writes the action into `results` (unchanged) AND records
+        // it on the one activation channel for the walker to drain.
+        let frame = crate::run_ui(&tree, &model, &styles, &click, &mut ui);
+        assert!(frame.results.is_on("go"), "the click still writes the action into results");
+        let hud_hit = frame.results.is_on("hud_hit");
+
+        // The walker drains the SAME name a pad Confirm would — the convergence that
+        // reaches the `sig_<name>` mirror.
+        let mut h = WalkerHandler::hud(&mut ui, hud_hit).with_nav(&tree, &model);
+        assert_eq!(
+            h.take_fired(),
+            vec!["go".to_string()],
+            "the click rides the one drain to the mirror, like a pad Confirm"
+        );
+        assert!(h.take_fired().is_empty(), "and it drains exactly once");
     }
 
     #[test]

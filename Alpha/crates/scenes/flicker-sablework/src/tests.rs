@@ -7,7 +7,7 @@
 use flicker::render::Vec2;
 use flicker::script::{HudCommand, Value, ValueMap};
 use flicker::ui::{load_styles, run_ui, strings, UiInput, UiState};
-use flicker_texture::{BlendMode, MapKind, NoiseKind, CHANNEL_COUNT};
+use flicker_texture::{BlendMode, MapKind, NoiseKind};
 
 use super::*;
 
@@ -22,8 +22,8 @@ fn load_strings() {
     strings::load_str(&table, "en-us");
 }
 
-/// THE tree the scene walks. `build_tree` expands internally, so there is exactly
-/// one seam and a gate cannot end up inspecting a different tree than the app draws.
+/// THE tree the scene walks — an empty `screen` placeholder now that the template
+/// tier this bench composed against has been removed.
 fn tree_of(bench: &Sablework) -> UiNode {
     bench.build_tree(Vec2::new(1920.0, 1080.0))
 }
@@ -33,7 +33,7 @@ fn draw() -> Vec<HudCommand> {
     load_strings();
     let bench = Sablework::new();
     let tree = tree_of(&bench);
-    let styles = load_styles(HUD_UI_ELEMENTS);
+    let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
     let snap = UiInput {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
@@ -96,98 +96,6 @@ fn every_token_the_bench_draws_resolves() {
     assert!(unresolved.is_empty(), "tokens with no stringtable entry: {unresolved:?}");
 }
 
-/// The bench draws its three columns — the shape check that catches a tree that
-/// parses but lays out to nothing.
-#[test]
-fn the_console_draws() {
-    let commands = draw();
-    assert!(!commands.is_empty(), "the bench draws its panels + controls");
-    let text = |needle: &str| {
-        commands
-            .iter()
-            .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
-    };
-    assert!(text("SABLEWORK"), "the title renders");
-    assert!(text("Channel Rack"), "the rack section header renders");
-    assert!(text("Output Stage"), "the output-stage header renders");
-    assert!(text("CH1") && text("CH6"), "every voice of the rack renders");
-    assert!(text("Roughness"), "the output knobs render");
-    assert!(text("Height"), "the map selector renders");
-}
-
-/// COMPOSITION IS DATA. The console is a proto in `ui_templates.json` that the scene
-/// CONFIGURES — it does not build a surface, and there is no per-scene HUD script.
-///
-/// Pinned because the regression is silent: hand-composed chrome looks fine in
-/// isolation and only reads as wrong beside another bench, and by then the parallel
-/// idiom is load-bearing. The two halves asserted here are (a) the scene emits a
-/// template INSTANCE, and (b) nothing unexpanded survives `build_tree`.
-#[test]
-fn the_console_is_a_data_proto_the_scene_only_configures() {
-    let bench = Sablework::new();
-
-    // (a) A raw screen carries exactly one child, and it is a template instance.
-    let mut raw = UiNode { component: "screen".into(), ..Default::default() };
-    raw.children = vec![UiNode { template: Some(CONSOLE_TEMPLATE.into()), ..Default::default() }];
-    let expanded = expand(raw, &builtin_templates());
-    assert!(
-        !expanded.children.is_empty(),
-        "`{CONSOLE_TEMPLATE}` is not registered in ui_templates.json"
-    );
-
-    // (b) The tree the app draws has no unexpanded proto left in it.
-    fn unexpanded(n: &UiNode, out: &mut Vec<String>) {
-        if let Some(t) = &n.template {
-            out.push(t.clone());
-        }
-        for c in n.children.iter().chain(n.slots.values().flatten()) {
-            unexpanded(c, out);
-        }
-    }
-    let mut left = Vec::new();
-    unexpanded(&tree_of(&bench), &mut left);
-    assert!(left.is_empty(), "unexpanded template nodes reached the screen: {left:?}");
-
-    // And there is no HUD script to regress into.
-    let script = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../content/sensorium/scripts/hud_sablework.lua"
-    );
-    assert!(
-        !std::path::Path::new(script).exists(),
-        "a per-scene HUD script reappeared — composition belongs in ui_templates.json"
-    );
-}
-
-/// The screen DECLARES its input as data, so a pad press, a key and a click are the
-/// same event by the time the dispatcher sees them. A bench that read raw keys
-/// instead would be unreachable from a controller — the floor, not an alternative.
-#[test]
-fn the_screen_declares_its_input_as_data() {
-    let tree = tree_of(&Sablework::new());
-    for signal in ["on_menu", "on_tab_next", "on_tab_prev"] {
-        assert!(tree.props.contains_key(signal), "the screen does not declare {signal}");
-    }
-    // …and NOT ONE walker-owned signal. Confirm, Cancel, `Nav*` and `Panel*` mean
-    // the same thing on every screen in Prism and the walker answers all of them;
-    // a screen that named one would kill it on itself (violation F1, 2026-08-09).
-    for signal in [
-        "on_confirm",
-        "on_cancel",
-        "on_nav_up",
-        "on_nav_down",
-        "on_nav_left",
-        "on_nav_right",
-        "on_panel_next",
-        "on_panel_prev",
-        "on_chord_begin",
-    ] {
-        assert!(!tree.props.contains_key(signal), "`{signal}` is the walker's, not this screen's");
-    }
-    // And the walker can collect them — the seam that puts them on the Router.
-    assert!(!UiIntents::of(&tree).is_empty(), "declared intents were not collected");
-}
-
 /// Every DECLARED result must have a dispatcher arm. A signal that fires a name
 /// nothing handles is the "authored name that fails to nothing" failure: the pad
 /// press does nothing and looks like dead hardware.
@@ -208,44 +116,7 @@ fn every_declared_intent_reaches_the_dispatcher() {
     assert_eq!(bench.selected_map(), before, "the view tabs do not wrap");
 }
 
-/// Every workbench SLOT the bench fills must actually reach the screen. A slot
-/// name the template does not have is silently dropped — the content simply never
-/// draws, with no error anywhere.
-#[test]
-fn every_workbench_slot_reaches_the_screen() {
-    load_strings();
-    let commands = draw();
-    let text = |needle: &str| {
-        commands
-            .iter()
-            .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains(needle)))
-    };
-    assert!(text("SABLEWORK"), "header slot");
-    assert!(text("Base") && text("Height"), "tabs slot (the map selector)");
-    assert!(text("Channel Rack"), "viewport slot (the rack)");
-    assert!(text("Output Stage"), "rail slot (the output stage)");
-    assert!(text("Commit") && text("Ready"), "footer slot (actions + staging status)");
-}
-
 // ── the console's vocabulary must match the instrument's ──────────────────────
-
-/// The Lua rack draws a FIXED number of voices. If `CHANNEL_COUNT` grew and the
-/// tree did not, the extra voices would be silently unreachable — audible in the
-/// image, invisible on the console.
-#[test]
-fn the_rack_draws_every_voice_the_instrument_has() {
-    load_strings();
-    let commands = draw();
-    for n in 1..=CHANNEL_COUNT {
-        let label = format!("CH{n}");
-        assert!(
-            commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == &label)),
-            "voice {n} of {CHANNEL_COUNT} has no row in hud_sablework.lua"
-        );
-    }
-}
 
 /// The map buttons are one vocabulary shared with the tree AND with
 /// `MapKind::ALL`; a mismatch would point a button at the wrong texture.
@@ -525,139 +396,7 @@ fn the_commit_status_is_never_blank() {
     }
 }
 
-/// THE SWATCH ACTUALLY DRAWS — the gate whose absence let the preview ship blank.
-///
-/// Every other gate passed while the swatch resolved to **0x0**: the tree was
-/// valid, the vocabulary was known, the binds were published, and one sprite was
-/// correctly emitted — at zero size, because a `stack` OVERLAYS its children
-/// rather than stretching them and the sprite carried no explicit fill. The image
-/// is the entire point of this bench, so its rect is a first-class assertion.
-#[test]
-fn the_swatch_draws_at_a_real_size() {
-    load_strings();
-    let sprites: Vec<(u32, f32, f32)> = draw()
-        .iter()
-        .filter_map(|c| match c {
-            HudCommand::Sprite { tex, w, h, .. } => Some((*tex, *w, *h)),
-            _ => None,
-        })
-        .collect();
-
-    // Exactly one: six maps are stacked in the same well, gated by `visible_bind`,
-    // and two visible would paint over each other.
-    assert_eq!(sprites.len(), 1, "expected one visible map, got {sprites:?}");
-    let (tex, w, h) = sprites[0];
-    assert_eq!(tex, 0, "the opening map is BaseColor, texture 0");
-    assert!(w > 100.0 && h > 100.0, "the swatch resolved to {w}x{h} — it will not be visible");
-    assert!((w - h).abs() < 1.0, "the swatch is {w}x{h}; a non-square tiles as rectangles");
-}
-
-/// Selecting a map must move the SPRITE, not just the button highlight — the two
-/// are separate binds, so a mismatch would light the right tab over the wrong image.
-#[test]
-fn switching_maps_switches_the_drawn_texture() {
-    load_strings();
-    let styles = load_styles(HUD_UI_ELEMENTS);
-    let mut bench = Sablework::new();
-    for (want, id) in MAP_IDS.iter().enumerate() {
-        let mut results = ValueMap::default();
-        results.set(*id, true);
-        route::apply(&mut bench, &results);
-
-        let tree = tree_of(&bench);
-        let snap = UiInput {
-            mouse: Vec2::new(-1.0, -1.0),
-            clicked: false,
-            down: false,
-            screen: Vec2::new(1920.0, 1080.0),
-            typed: String::new(),
-            backspace: false,
-            wheel: 0.0,
-        };
-        let frame =
-            run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
-        let drawn: Vec<u32> = frame
-            .commands
-            .iter()
-            .filter_map(|c| match c {
-                HudCommand::Sprite { tex, w, .. } if *w > 1.0 => Some(*tex),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(drawn, [want as u32], "selecting {id} drew {drawn:?}");
-    }
-}
-
 // ── the lit preview ────────────────────────────────────────────────────────────
-
-/// The LIT view is the seventh tab, and selecting it swaps the flat swatch for the
-/// rendered sample: the `rtt` node is reserved and NO sprite draws.
-///
-/// Both halves matter. A reserved rect with a sprite still drawing would paint the
-/// flat map over the lit one; a sprite gone with no rect reserved would be a blank
-/// panel, which is exactly how the swatch shipped invisible the first time.
-#[test]
-fn the_lit_tab_reserves_a_sub_scene_instead_of_a_sprite() {
-    load_strings();
-    let styles = load_styles(HUD_UI_ELEMENTS);
-    let mut bench = Sablework::new();
-    fire(&mut bench, LIT_ID, true);
-    assert!(bench.showing_lit(), "the lit tab did not select");
-
-    let tree = tree_of(&bench);
-    let snap = UiInput {
-        mouse: Vec2::new(-1.0, -1.0),
-        clicked: false,
-        down: false,
-        screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
-        wheel: 0.0,
-    };
-    let frame =
-        run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
-
-    let slot = frame
-        .rtts
-        .iter()
-        .find(|s| s.id == "sw_lit")
-        .expect("the lit view reserved no sub-scene slot");
-    assert_eq!(slot.source, "sablework_lit", "the slot names no stage source");
-    assert!(slot.w > 100.0 && slot.h > 100.0, "the lit slot is {}x{}", slot.w, slot.h);
-
-    let sprites = frame
-        .commands
-        .iter()
-        .filter(|c| matches!(c, HudCommand::Sprite { w, .. } if *w > 1.0))
-        .count();
-    assert_eq!(sprites, 0, "a flat map still draws over the lit sample");
-}
-
-/// A flat tab reserves NO sub-scene — otherwise the offscreen pass would render
-/// every frame to composite behind an opaque swatch, for nothing.
-#[test]
-fn a_flat_tab_costs_no_sub_scene() {
-    load_strings();
-    let styles = load_styles(HUD_UI_ELEMENTS);
-    let mut bench = Sablework::new();
-    fire(&mut bench, "map_normal", true);
-    let tree = tree_of(&bench);
-    let snap = UiInput {
-        mouse: Vec2::new(-1.0, -1.0),
-        clicked: false,
-        down: false,
-        screen: Vec2::new(1920.0, 1080.0),
-        typed: String::new(),
-        backspace: false,
-        wheel: 0.0,
-    };
-    let frame =
-        run_ui(&tree, &bench.hud_model(), &styles, &snap, &mut UiState::new());
-    assert!(
-        frame.rtts.iter().all(|s| s.id != "sw_lit"),
-        "the lit sub-scene renders while a flat map is showing"
-    );
-}
 
 /// The lit view's own controls change how you LOOK at the surface, never what it
 /// is — so neither may trigger a re-bake.
@@ -669,99 +408,4 @@ fn the_lit_controls_are_not_recipe_edits() {
     assert_ne!(bench.lit.body, body, "the body did not swap");
     assert!(!fire(&mut bench, "lit_spin", false), "stopping the spin is not an edit");
     assert!(!bench.lit.spinning);
-}
-
-/// NO CONTROL DRAWS AN EMPTY LABEL.
-///
-/// The gate that would have caught 14 blank boxes shipping. `label_bind` was
-/// listed among the walker's binds but never actually READ, so every button
-/// carrying one drew `""` — and the token gate passed straight over it, because
-/// an empty string does not start with `$`. Presence-of-text was asserted;
-/// non-emptiness was not.
-#[test]
-fn no_control_draws_an_empty_label() {
-    load_strings();
-    let blank = draw()
-        .iter()
-        .filter(|c| matches!(c, HudCommand::Text { text, .. } if text.trim().is_empty()))
-        .count();
-    assert_eq!(blank, 0, "{blank} controls drew an empty label — a bound label that resolved to nothing");
-}
-
-/// EVERY BUTTON CAN FIRE.
-///
-/// The walker fires a node's `action`; its `id` is only the FOCUS id. A button
-/// carrying an id alone is a dead control that still draws, highlights and
-/// hovers — which is exactly how every button on this bench shipped inert while
-/// the sliders worked.
-#[test]
-fn every_button_can_fire() {
-    fn walk<'a>(n: &'a UiNode, out: &mut Vec<&'a UiNode>) {
-        if n.component == "button" {
-            out.push(n);
-        }
-        for c in n.children.iter().chain(n.slots.values().flatten()) {
-            walk(c, out);
-        }
-    }
-    let tree = tree_of(&Sablework::new());
-    let mut buttons = Vec::new();
-    walk(&tree, &mut buttons);
-    assert!(buttons.len() >= 20, "only {} buttons found — the tree did not expand", buttons.len());
-
-    let dead: Vec<String> = buttons
-        .iter()
-        .filter(|b| b.action.as_deref().unwrap_or("").is_empty())
-        .map(|b| b.id.clone())
-        .collect();
-    assert!(dead.is_empty(), "buttons that fire nothing: {dead:?}");
-}
-
-/// Every action a button fires must reach the dispatcher and DO something — the
-/// other half of the same failure. A button wired to a name nothing handles is
-/// just as dead as one with no action at all.
-#[test]
-fn every_button_action_is_handled() {
-    fn walk(n: &UiNode, out: &mut Vec<String>) {
-        if n.component == "button" {
-            if let Some(a) = n.action.as_deref() {
-                out.push(a.to_string());
-            }
-        }
-        for c in n.children.iter().chain(n.slots.values().flatten()) {
-            walk(c, out);
-        }
-    }
-    let mut actions = Vec::new();
-    walk(&tree_of(&Sablework::new()), &mut actions);
-    actions.sort();
-    actions.dedup();
-
-    // Every piece of state a button is allowed to move. Incomplete here means a
-    // WORKING control reads as dead — which this list already did once, for the
-    // bake rung.
-    let observe = |b: &Sablework| {
-        (
-            b.recipe().clone(),
-            b.selected_map(),
-            b.selected_voice(),
-            b.lit.body,
-            b.lit.spinning,
-            b.commit_state.clone(),
-            b.bake_rung().px,
-        )
-    };
-    for action in actions {
-        // Fired from TWO starting views, because a selection is idempotent: picking
-        // the tab already showing changes nothing and is correct. The action has to
-        // move something from at least one reachable state.
-        let moved = ["map_base", "map_metal"].iter().any(|from| {
-            let mut bench = Sablework::new();
-            fire(&mut bench, from, true);
-            let before = observe(&bench);
-            let edited = fire(&mut bench, &action, true);
-            edited || observe(&bench) != before
-        });
-        assert!(moved, "`{action}` fires but changes nothing from any starting state");
-    }
 }

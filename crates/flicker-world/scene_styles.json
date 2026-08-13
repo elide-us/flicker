@@ -1,0 +1,710 @@
+{
+  "_comment": "⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant bench's style blocks, vendored OUT of ui_theme.json (a scene's values belong in its scene file). They move into this bench's own .scene.json at its migration — do not grow this file. Colors are $token refs into ui_theme.json's theme.tokens; a `theme` key here is refused as a palette fork.",
+  "world": {
+    "_comment": "flicker-world in-scene HUD (scripts/world_ui.lua). Was the app's local `hud` key; moved here under `world` to avoid colliding with pocclusters' `hud`.",
+    "capture": {
+      "x": 0,
+      "y": 0,
+      "w": 320,
+      "h": 640
+    },
+    "timeline": {
+      "_comment": "Bottom evolution scrubber; playhead = Model.timeline 0..1.",
+      "height": 92,
+      "margin_x": 24,
+      "margin_bottom": 16,
+      "title": "EVOLUTION  ·  drag to scrub",
+      "title_size": 15,
+      "title_color": "$dim",
+      "bg": "$panel_bg",
+      "border": "$sap_border",
+      "divider": "$edge4",
+      "seg_even": [
+        0.078,
+        0.09,
+        0.122,
+        0.55
+      ],
+      "seg_odd": [
+        0.11,
+        0.125,
+        0.161,
+        0.55
+      ],
+      "seg_active": [
+        0.141,
+        0.247,
+        0.471,
+        0.8
+      ],
+      "num_color": "$dim",
+      "num_size": 14,
+      "label_size": 20,
+      "label_color": "$ink",
+      "active_label_color": "$rune_glow_hi",
+      "playhead": "$rune_glow_hi",
+      "playhead_w": 3
+    },
+    "celestial": {
+      "title": "SKY",
+      "margin_x": 16,
+      "width": 210,
+      "top_y": 16,
+      "rows_y": 44,
+      "row_h": 30,
+      "slider_x_off": 72,
+      "slider_w": 86,
+      "value_x_off": 168,
+      "header_size": 18,
+      "header_color": "$bronze",
+      "label_size": 16,
+      "label_color": "$ink",
+      "value_size": 15,
+      "value_color": "$dim",
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_hi": "$sheen",
+        "handle_w": 8
+      },
+      "rows": [
+        {
+          "id": "time_of_day",
+          "label": "Time",
+          "min": 0.0,
+          "max": 24.0,
+          "fmt": "%.1fh"
+        },
+        {
+          "id": "play_speed",
+          "label": "Speed",
+          "min": 0.0,
+          "max": 10.0,
+          "fmt": "%.1fx"
+        },
+        {
+          "id": "year_month",
+          "label": "Season",
+          "min": 0.0,
+          "max": 12.0,
+          "fmt": "%.1f"
+        },
+        {
+          "id": "axial_tilt_deg",
+          "label": "Tilt",
+          "min": 0.0,
+          "max": 90.0,
+          "fmt": "%.0f°"
+        }
+      ]
+    },
+    "stats": {
+      "x": 16,
+      "title": {
+        "y": 14,
+        "size": 27,
+        "color": "$ink_bright"
+      },
+      "cells": {
+        "y": 50,
+        "size": 18,
+        "color": "$ink"
+      },
+      "seed": {
+        "y": 76,
+        "size": 18,
+        "color": "$stam_hi"
+      },
+      "view": {
+        "y": 100,
+        "size": 18,
+        "color": "$ink"
+      }
+    },
+    "controls": {
+      "label_x": 16,
+      "widget_x": 128,
+      "label_size": 17,
+      "label_color": "$ink",
+      "view": {
+        "label": "Field",
+        "y": 128,
+        "options": [
+          "Elevation",
+          "Biome",
+          "Plates",
+          "Temperature",
+          "Precipitation",
+          "Prebiotic",
+          "Life",
+          "Deposits",
+          "Flow",
+          "Sediment",
+          "Watersheds",
+          "Composition",
+          "Crust",
+          "Terrain"
+        ],
+        "w": 160,
+        "h": 28
+      },
+      "freq": {
+        "label": "Grid",
+        "y": 164,
+        "min": 6,
+        "max": 48,
+        "step": 4,
+        "w": 160,
+        "h": 30
+      },
+      "epoch": {
+        "label": "Epoch",
+        "y": 200,
+        "min": 1,
+        "max": 6,
+        "step": 1,
+        "w": 160,
+        "h": 30
+      },
+      "reseed": {
+        "label": "New seed",
+        "y": 236,
+        "w": 160,
+        "h": 30
+      },
+      "stepper_style": {
+        "box": "$stone1",
+        "btn": "$sap_hover",
+        "label": "$ink",
+        "label_size": 18
+      },
+      "button_style": {
+        "cell": "$stone3",
+        "hot": "$sap_hover",
+        "label": "$ink",
+        "label_size": 17
+      },
+      "dropdown_style": {
+        "cell": "$stone2",
+        "hot": "$cell_hot",
+        "label": "$ink",
+        "label_size": 16
+      }
+    },
+    "params": {
+      "label_x": 16,
+      "widget_x": 128,
+      "header_y": 282,
+      "header_size": 17,
+      "header_color": "$bronze",
+      "origin_y": 306,
+      "row_h": 27,
+      "label_size": 16,
+      "label_color": "$ink",
+      "value_size": 15,
+      "value_color": "$dim",
+      "slider_w": 104,
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_w": 8
+      }
+    },
+    "elements": {
+      "header": "ELEMENT MIX (relative · Epoch 1)",
+      "header_y": 436,
+      "header_size": 16,
+      "header_color": "$bronze",
+      "origin_y": 460,
+      "row_h": 25,
+      "cols": 2,
+      "col_x": [
+        16,
+        168
+      ],
+      "label_w": 30,
+      "slider_w": 78,
+      "label_size": 15,
+      "label_color": "$ink",
+      "max": 60.0,
+      "items": [
+        {
+          "sym": "O"
+        },
+        {
+          "sym": "Si"
+        },
+        {
+          "sym": "Al"
+        },
+        {
+          "sym": "Fe"
+        },
+        {
+          "sym": "Ca"
+        },
+        {
+          "sym": "Na"
+        },
+        {
+          "sym": "K"
+        },
+        {
+          "sym": "Ti"
+        },
+        {
+          "sym": "C"
+        },
+        {
+          "sym": "H"
+        },
+        {
+          "sym": "P"
+        },
+        {
+          "sym": "S"
+        },
+        {
+          "sym": "Cl"
+        },
+        {
+          "sym": "N"
+        }
+      ]
+    },
+    "epochs": [
+      {
+        "label": "Composition",
+        "views": [
+          "Composition"
+        ],
+        "params": [
+          {
+            "id": "e1_equator_bias",
+            "label": "Equator heavy",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e1_pole_bias",
+            "label": "Pole volatile",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e1_contrast",
+            "label": "Province contrast",
+            "min": 1.0,
+            "max": 6.0
+          },
+          {
+            "id": "e1_frequency",
+            "label": "Province scale",
+            "min": 0.5,
+            "max": 6.0
+          }
+        ]
+      },
+      {
+        "label": "Differentiation",
+        "views": [
+          "Crust",
+          "Composition"
+        ],
+        "params": [
+          {
+            "id": "e2_duration",
+            "label": "Molten era",
+            "min": 1.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e2_crust_density_max",
+            "label": "Crust density cap",
+            "min": 2.5,
+            "max": 5.0
+          },
+          {
+            "id": "e2_polar_thickening",
+            "label": "Polar thickening",
+            "min": 0.0,
+            "max": 1.0
+          }
+        ]
+      },
+      {
+        "label": "Tectonics",
+        "views": [
+          "Elevation",
+          "Plates",
+          "Terrain",
+          "Crust",
+          "Composition"
+        ],
+        "params": [
+          {
+            "id": "e3_plates",
+            "label": "Plates",
+            "min": 2.0,
+            "max": 24.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e3_continental_fraction",
+            "label": "Continental frac",
+            "min": 0.0,
+            "max": 1.0
+          },
+          {
+            "id": "e3_mountain_uplift",
+            "label": "Mountain uplift",
+            "min": 0.0,
+            "max": 1.5
+          },
+          {
+            "id": "e3_rift_drop",
+            "label": "Rift drop",
+            "min": 0.0,
+            "max": 1.0
+          },
+          {
+            "id": "e3_hotspots",
+            "label": "Hotspots",
+            "min": 0.0,
+            "max": 20.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e3_hotspot_uplift",
+            "label": "Hotspot uplift",
+            "min": 0.0,
+            "max": 1.5
+          },
+          {
+            "id": "e3_hotspot_trail",
+            "label": "Hotspot trail",
+            "min": 0.05,
+            "max": 1.5
+          },
+          {
+            "id": "e3_duration",
+            "label": "Drift time",
+            "min": 1.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          }
+        ]
+      },
+      {
+        "label": "Hydrosphere",
+        "views": [
+          "Elevation",
+          "Temperature",
+          "Precipitation",
+          "Prebiotic",
+          "Terrain"
+        ],
+        "params": [
+          {
+            "id": "e4_hydration",
+            "label": "Hydration",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e4_equator_temp",
+            "label": "Equator C",
+            "min": 0.0,
+            "max": 50.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e4_pole_temp",
+            "label": "Pole C",
+            "min": -60.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e4_axial_tilt",
+            "label": "Axial tilt",
+            "min": 0.0,
+            "max": 90.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e4_vapor_scale",
+            "label": "Rain / humidity",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e4_duration",
+            "label": "Chem time",
+            "min": 1.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e4_prebiotic_rate",
+            "label": "Precursor rate",
+            "min": 0.0,
+            "max": 1.0
+          }
+        ]
+      },
+      {
+        "label": "Mineralization",
+        "views": [
+          "Life",
+          "Terrain",
+          "Elevation",
+          "Temperature",
+          "Prebiotic"
+        ],
+        "params": [
+          {
+            "id": "e5_max_veins",
+            "label": "Max veins",
+            "min": 0.0,
+            "max": 256.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e5_vein_threshold",
+            "label": "Vein threshold",
+            "min": 0.0,
+            "max": 1.0
+          },
+          {
+            "id": "e5_microbial",
+            "label": "Life threshold",
+            "min": 0.02,
+            "max": 0.5
+          },
+          {
+            "id": "e5_vent_life",
+            "label": "Vent boost",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e5_duration",
+            "label": "Vein time",
+            "min": 1.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          }
+        ]
+      },
+      {
+        "label": "Erosion",
+        "views": [
+          "Biome",
+          "Elevation",
+          "Flow",
+          "Sediment",
+          "Watersheds",
+          "Deposits",
+          "Terrain",
+          "Life",
+          "Temperature",
+          "Precipitation"
+        ],
+        "params": [
+          {
+            "id": "e6_rain",
+            "label": "Rain",
+            "min": 0.0,
+            "max": 3.0
+          },
+          {
+            "id": "e6_erosion_rate",
+            "label": "Erosion rate",
+            "min": 0.0,
+            "max": 0.1,
+            "fmt": "%.3f"
+          },
+          {
+            "id": "e6_duration",
+            "label": "Erosion time",
+            "min": 1.0,
+            "max": 10.0,
+            "fmt": "%.0f"
+          },
+          {
+            "id": "e6_flora",
+            "label": "Flora threshold",
+            "min": 0.0,
+            "max": 1.0
+          },
+          {
+            "id": "e6_organics",
+            "label": "Peat rate",
+            "min": 0.0,
+            "max": 0.2,
+            "fmt": "%.3f"
+          },
+          {
+            "id": "e6_decomposer",
+            "label": "Decomposer onset",
+            "min": 0.0,
+            "max": 1.0
+          },
+          {
+            "id": "e6_carbonate",
+            "label": "Carbonate onset",
+            "min": 0.0,
+            "max": 1.0
+          }
+        ]
+      }
+    ]
+  },
+  "hud": {
+    "stats": {
+      "x": 16,
+      "title": {
+        "y": 16,
+        "size": 22,
+        "color": "$ink_bright"
+      },
+      "pos": {
+        "y": 44,
+        "size": 16,
+        "color": "$ink"
+      },
+      "clusters": {
+        "y": 64,
+        "size": 16,
+        "color": "$ink"
+      },
+      "config": {
+        "y": 84,
+        "size": 16,
+        "color": "$ink"
+      },
+      "diag": {
+        "y": 104,
+        "size": 16,
+        "color": "$ink"
+      },
+      "escape": {
+        "y": 124,
+        "size": 16,
+        "color": "$ink"
+      },
+      "pick": {
+        "y": 144,
+        "size": 16,
+        "color": "$stam_hi"
+      },
+      "walk": {
+        "y": 164,
+        "size": 16,
+        "color": "$sig_green"
+      }
+    },
+    "checkboxes": {
+      "origin": [
+        16,
+        180
+      ],
+      "row_h": 26,
+      "box": 18,
+      "header": {
+        "text": "HUD (scripted) - click to toggle",
+        "size": 16,
+        "color": "$bronze"
+      },
+      "border_color": "$edge4",
+      "fill_on": "$sig_green",
+      "fill_off": "$stone2",
+      "label_size": 16,
+      "label_color": "$ink",
+      "items": [
+        {
+          "key": "wireframe",
+          "label": "Wireframe overlay"
+        },
+        {
+          "key": "corner_arrows",
+          "label": "Corner-vector arrows"
+        },
+        {
+          "key": "navmesh",
+          "label": "Navmesh wireframe"
+        },
+        {
+          "key": "camera_lod",
+          "label": "Camera-driven LOD"
+        },
+        {
+          "key": "lod_billboards",
+          "label": "LOD billboards"
+        }
+      ]
+    },
+    "controls": {
+      "label_x": 16,
+      "widget_x": 120,
+      "margin_b": 70,
+      "row_h": 26,
+      "label_size": 14,
+      "label_color": "$ink",
+      "speed": {
+        "y": 340,
+        "label": "Move speed",
+        "min": 20,
+        "max": 200,
+        "w": 150,
+        "h": 12
+      },
+      "sens": {
+        "y": 366,
+        "label": "Sensitivity",
+        "min": 0.0005,
+        "max": 0.012,
+        "step": 0.0005,
+        "fmt": "%.4f",
+        "w": 96,
+        "h": 18
+      },
+      "locomotion": {
+        "y": 392,
+        "label": "Locomotion",
+        "options": [
+          "Fly",
+          "Walk"
+        ],
+        "w": 110,
+        "h": 20
+      },
+      "slider_style": {
+        "track": "$stone1",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_hi": "$sheen",
+        "handle_w": 8
+      },
+      "stepper_style": {
+        "box": "$stone1",
+        "btn": "$stone3",
+        "label": "$ink",
+        "label_size": 13
+      },
+      "dropdown_style": {
+        "cell": "$stone2",
+        "hot": "$cell_hot",
+        "label": "$ink",
+        "label_size": 13
+      }
+    }
+  }
+}

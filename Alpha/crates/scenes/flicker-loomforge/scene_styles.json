@@ -1,0 +1,213 @@
+{
+  "_comment": "⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant bench's style blocks, vendored OUT of ui_theme.json (a scene's values belong in its scene file). They move into this bench's own .scene.json at its migration — do not grow this file. Colors are $token refs into ui_theme.json's theme.tokens; a `theme` key here is refused as a palette fork.",
+  "loomforge": {
+    "_comment": "Loomforge Bench (crates/flicker-loomforge) — the animation-authoring editor: State Machine · Pack Browser · Creature Composer · TAE Editor. The chrome (top bar / tab bar / body) is a Rust UiNode tree run through the flicker-widgets walker; the node-graph canvas and TAE timeline are drawn by the scene itself. Every colour is a $token ref into theme.tokens — the one Prism palette.",
+    "top_bar": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 0
+    },
+    "title": {
+      "color": "$ink_bright"
+    },
+    "badge": {
+      "color": "$bronze"
+    },
+    "tab_bar": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$edge1",
+      "border_w": 1,
+      "radius": 0
+    },
+    "tab_active": {
+      "fill_top": "$sap_base",
+      "fill_bot": "$sap_base_lo",
+      "hover_top": "$sap_hover",
+      "hover_bot": "$sap_hover_lo",
+      "border": "$sap_border",
+      "hover_border": "$sap_hover_border",
+      "label": "$ink_bright",
+      "radius": 3
+    },
+    "tab_idle": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone2",
+      "hover_top": "$stone_btn_hi",
+      "hover_bot": "$stone_btn",
+      "border": "$edge2",
+      "hover_border": "$edge3",
+      "label": "$dim",
+      "radius": 3
+    },
+    "button_primary": {
+      "fill_top": "$sap_base",
+      "fill_bot": "$sap_base_lo",
+      "hover_top": "$sap_hover",
+      "hover_bot": "$sap_hover_lo",
+      "border": "$sap_border",
+      "hover_border": "$sap_hover_border",
+      "label": "$ink_bright",
+      "radius": 3
+    },
+    "button_secondary": {
+      "fill_top": "$stone_btn_hi",
+      "fill_bot": "$stone_btn",
+      "hover_top": "$stone3",
+      "hover_bot": "$stone2",
+      "border": "$edge3",
+      "hover_border": "$edge4",
+      "label": "$ink_label",
+      "radius": 3
+    },
+    "body": {
+      "fill_top": "$stone0",
+      "fill_bot": "$stone0",
+      "border": "$edge1",
+      "border_w": 0,
+      "radius": 0
+    },
+    "body_text": {
+      "color": "$ink"
+    },
+    "_canvas_comment": "The node-graph canvas is drawn by the SCENE (not the widgets walker), so it reads these colours by dotted path rather than as a node style.",
+    "canvas": {
+      "bg": "$stone0",
+      "grid": "$hairline",
+      "card_fill_top": "$stone3",
+      "card_fill_bot": "$stone2",
+      "card_border": "$edge2",
+      "card_border_sel": "$sap_border",
+      "card_label": "$ink_bright",
+      "card_label_sel": "$ink_sapphire",
+      "card_meta": "$dim",
+      "stage_top": "$stone3",
+      "stage_bot": "$stone0",
+      "stage_border": "$edge1",
+      "edge": "$bronze",
+      "edge_sel": "$rune_glow",
+      "drop_hint": "$sap_glow"
+    },
+    "rail": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 0
+    },
+    "rail_title": {
+      "color": "$bronze"
+    },
+    "rail_text": {
+      "color": "$ink"
+    },
+    "clip_row": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone2",
+      "hover_top": "$stone_btn_hi",
+      "hover_bot": "$stone_btn",
+      "border": "$edge2",
+      "hover_border": "$sap_border",
+      "label": "$ink",
+      "radius": 3
+    },
+    "_stage_comment": "Backdrop panels for `stage` nodes. The doll composites INTO the rect these frame; `inset` is how far the image sits inside the border. What each stage RENDERS lives in the shared top-level `stages` block, named by the node's `source` prop.",
+    "clip_stage": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone0",
+      "border": "$edge1",
+      "border_w": 1,
+      "radius": 3,
+      "inset": 1
+    },
+    "_pack_kind_comment": "Pack Browser accent per pack KIND. The kind is DERIVED by reading what a pack contains (combat windows -> Weapon, events -> Ability, multi-state and eventless -> Locomotion), never authored into the file — there is no gameplay runtime behind a pack category yet, so no pack claims one. Hexes are the DC's: #9db8ff / #c8707a / #e0b23a / #8f8a7d, each an EXACT existing token.",
+    "pack_kind": {
+      "locomotion": {
+        "color": "$rune_glow_hi"
+      },
+      "weapon": {
+        "color": "$danger_hi"
+      },
+      "ability": {
+        "color": "$sig_yellow"
+      },
+      "creature": {
+        "color": "$dim"
+      }
+    },
+    "tae": {
+      "fill_top": "$stone1",
+      "fill_bot": "$stone0",
+      "border": "$bronze_dim",
+      "border_w": 1,
+      "radius": 0
+    },
+    "_tae_lane_comment": "The nine TAE event lanes, keyed by lane id — their ORDER lives in Rust (tae::Lane::ALL), because order is spec, not colour. Per lane: `swatch` tints the gutter label, `row`/`row_border` are the track's own fill and edge, `event` fills a window bar. A one-shot (an event with no `end` tick) draws as a narrow marker in the same colour, so point-vs-span comes from the DATA rather than from which lane it lands on.",
+    "tae_lane": {
+      "track": "$well",
+      "track_border": "$edge1",
+      "ruler": "$dim",
+      "playhead": "$rune_glow",
+      "event_sel": "$rune_glow",
+      "budget_ok": "$sig_green",
+      "budget_tight": "$sig_yellow",
+      "budget_over": "$danger_hi",
+      "hitbox": {
+        "swatch": "$danger_hi",
+        "row": "$danger_bg_lo",
+        "row_border": "$danger_border",
+        "event": "$danger_hi"
+      },
+      "iframe": {
+        "swatch": "$rune_glow",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$mana_hi"
+      },
+      "parry": {
+        "swatch": "$sig_white",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$sig_white"
+      },
+      "cancel": {
+        "swatch": "$bronze",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$bronze_deep"
+      },
+      "hyperarmor": {
+        "swatch": "$stam_hi",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$stam_lo"
+      },
+      "telegraph": {
+        "swatch": "$sig_orange",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$sig_orange"
+      },
+      "sfx": {
+        "swatch": "$dim",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$dim"
+      },
+      "vfx": {
+        "swatch": "$dim",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$rune_halo"
+      },
+      "notify": {
+        "swatch": "$dim",
+        "row": "$stone2",
+        "row_border": "$edge2",
+        "event": "$dim"
+      }
+    }
+  }
+}

@@ -23,6 +23,13 @@ use crate::snapshot::{GamepadConfig, InputState};
 
 /// A single physical input that can be bound to a signal.
 ///
+/// Which mouse-motion axis a [`InputBinding::MouseMotion`] reads.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MouseAxis {
+    X,
+    Y,
+}
+
 /// Covers keyboard, mouse, and gamepad inputs. Gamepad axes use
 /// [`AxisDirection`] to specify which half of the axis triggers the
 /// binding.
@@ -35,6 +42,18 @@ pub enum InputBinding {
         axis: GamepadAxis,
         direction: AxisDirection,
     },
+    /// Mouse MOTION on one axis — the pointer-look channel. `direction` picks the
+    /// half (as gamepad axes do); `gate`, when set, restricts it to while that mouse
+    /// button is held (right-drag look). Resolved as a per-frame DELTA via
+    /// [`ContextualBindings::signal_pointer_delta`](crate::ContextualBindings::signal_pointer_delta),
+    /// NOT the 0..1 `signal_axis` rate channel — a mouse delta is frame-absolute
+    /// motion, not a stick deflection, and the two integrate differently (the delta
+    /// is used as-is; a stick is a rate multiplied by `dt`).
+    MouseMotion {
+        axis: MouseAxis,
+        direction: AxisDirection,
+        gate: Option<MouseButton>,
+    },
 }
 
 impl fmt::Display for InputBinding {
@@ -44,6 +63,10 @@ impl fmt::Display for InputBinding {
             Self::MouseButton(mb) => write!(f, "{mb}"),
             Self::GamepadButton(gb) => write!(f, "{gb}"),
             Self::GamepadAxis { axis, direction } => write!(f, "{axis} {direction}"),
+            Self::MouseMotion { axis, direction, gate } => match gate {
+                Some(g) => write!(f, "Mouse {axis:?} {direction} (hold {g})"),
+                None => write!(f, "Mouse {axis:?} {direction}"),
+            },
         }
     }
 }
@@ -88,6 +111,33 @@ impl InputBinding {
                     AxisDirection::Negative => v < -threshold,
                 }
             }),
+            // Mouse motion is a per-frame DELTA (the pointer-look channel), not a held
+            // control — it resolves only through `signal_pointer_delta`, never here.
+            InputBinding::MouseMotion { .. } => false,
+        }
+    }
+
+    /// The gated, directional mouse-motion delta this frame for a [`MouseMotion`]
+    /// binding — `0.0` for any other binding, or when the gate button is not held.
+    /// The per-binding value the pointer-look channel sums.
+    ///
+    /// [`MouseMotion`]: InputBinding::MouseMotion
+    pub fn mouse_delta_axis(self, s: &InputState) -> f32 {
+        let InputBinding::MouseMotion { axis, direction, gate } = self else {
+            return 0.0;
+        };
+        if let Some(g) = gate {
+            if !s.mouse_button_down(g) {
+                return 0.0;
+            }
+        }
+        let d = match axis {
+            MouseAxis::X => s.mouse_delta.x,
+            MouseAxis::Y => s.mouse_delta.y,
+        };
+        match direction {
+            AxisDirection::Positive => d.max(0.0),
+            AxisDirection::Negative => (-d).max(0.0),
         }
     }
 }
@@ -239,6 +289,7 @@ impl InputMap {
                     }
                 })
             }
+            InputBinding::MouseMotion { .. } => false,
         })
     }
 
@@ -272,6 +323,25 @@ impl InputMap {
         map.bind(
             ActionSignal::SecondaryAction,
             InputBinding::MouseButton(MouseButton::Right),
+        );
+        // Mouse-look: RIGHT-drag orbits (LEFT stays free for select-target — the MMO
+        // default). X motion → look left/right, Y → up/down (screen y is down, so look
+        // up = negative Y); gated on RMB held, so a plain cursor never turns the camera.
+        map.bind(
+            ActionSignal::LookRight,
+            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookLeft,
+            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookDown,
+            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookUp,
+            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
         );
         map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
         map.bind(ActionSignal::Sprint, InputBinding::Key(Key::LeftShift));
@@ -518,6 +588,115 @@ impl InputMap {
         map
     }
 
+    /// The Look / Interact / Menu / free-click binds SHARED by both flight-camera modes
+    /// ([`flight_path`](Self::flight_path) on the rail, [`flying`](Self::flying) off it):
+    /// only the LEFT STICK differs between them (throttle vs zoom). This is the aerial
+    /// case of the input-context-is-a-vehicle model (MCP `3B4DB4C2`) — one flight camera,
+    /// two modes/contexts.
+    ///
+    /// - **Look** — right stick, and mouse RIGHT-drag (a [`MouseMotion`](InputBinding::MouseMotion)
+    ///   gated on RMB, the MMO default): left-click stays free for select-target. The
+    ///   stick is a rate (a caller multiplies by `dt`), the mouse delta is frame-absolute
+    ///   — the two channels [`signal_axis`](crate::ContextualBindings::signal_axis) and
+    ///   [`signal_pointer_delta`](crate::ContextualBindings::signal_pointer_delta) resolve.
+    /// - **Interact** — controller West (X) and keyboard `E`: the "use" edge a flight
+    ///   scene maps onto start/restart.
+    /// - **Menu** — `Esc` and Start, so pause still opens from the active context (the
+    ///   active map is the TOP of the stack, never merged down it).
+    fn flight_camera_common(map: &mut InputMap) {
+        use crate::device::GamepadButton;
+        // Look via right stick (mirrors gamepad_default's convention: +Y = up).
+        map.bind(
+            ActionSignal::LookRight,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Positive },
+        );
+        map.bind(
+            ActionSignal::LookLeft,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Negative },
+        );
+        map.bind(
+            ActionSignal::LookUp,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Positive },
+        );
+        map.bind(
+            ActionSignal::LookDown,
+            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Negative },
+        );
+        // Look via mouse RIGHT-drag (left stays free). Screen y is down, so look up = −Y.
+        map.bind(
+            ActionSignal::LookRight,
+            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookLeft,
+            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookDown,
+            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+        );
+        map.bind(
+            ActionSignal::LookUp,
+            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+        );
+        // Interact = start/restart the cinematic: controller West (X) + keyboard E.
+        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::West));
+        // Left-click stays FREE for select-target — bound to a NAMED signal a future
+        // pick consumes, never a raw poll; RMB is the look gate, also named.
+        map.bind(ActionSignal::PrimaryAction, InputBinding::MouseButton(MouseButton::Left));
+        map.bind(ActionSignal::SecondaryAction, InputBinding::MouseButton(MouseButton::Right));
+        // Pause still opens from the active context: Esc + Start (mirrors wasd_and_mouse).
+        map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
+        map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
+        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
+    }
+
+    /// The flight camera ON its rail — the map for context
+    /// [`FlightPath`](crate::InputContext::FlightPath). The **LEFT STICK is THROTTLE**
+    /// (LeftStickY → `MoveForward`/`MoveBackward`, mirrored to `W`/`S` so it drives with
+    /// no pad): a caller scales the flight's rail speed by the Move-axis difference. A
+    /// Look gesture drops out to [`flying`](Self::flying) (free camera). Shares
+    /// look/interact/menu with `flying` — only the left stick differs.
+    pub fn flight_path() -> Self {
+        let mut map = Self::empty();
+        // Throttle: left stick Y, mirrored to W/S so the flight is drivable KBM-only.
+        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
+        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::S));
+        map.bind(
+            ActionSignal::MoveForward,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+        );
+        map.bind(
+            ActionSignal::MoveBackward,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+        );
+        Self::flight_camera_common(&mut map);
+        map
+    }
+
+    /// The flight camera OFF the rail — the map for context
+    /// [`Flying`](crate::InputContext::Flying), the free manual camera. The **LEFT STICK
+    /// is ZOOM** (LeftStickY → `ZoomIn`/`ZoomOut`; the mouse wheel zooms too) and look
+    /// PANS. There is NO throttle off the rail (nothing to speed up); Interact restarts
+    /// the flight, re-entering [`flight_path`](Self::flight_path). Shares
+    /// look/interact/menu with `flight_path`.
+    pub fn flying() -> Self {
+        let mut map = Self::empty();
+        // Zoom (dolly): left stick Y. The wheel zooms too (pointer channel), so this is
+        // the pad equivalent — no throttle here, the camera is off the rail.
+        map.bind(
+            ActionSignal::ZoomIn,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+        );
+        map.bind(
+            ActionSignal::ZoomOut,
+            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+        );
+        Self::flight_camera_common(&mut map);
+        map
+    }
+
     /// The default Xbox layout for the souls-combat game, matching the ruled control
     /// design (MCP `DE46BDB8`). Physical positions: A=`South` B=`East` X=`West` Y=`North`.
     ///
@@ -661,6 +840,70 @@ mod tests {
         assert_eq!(map.action_for(InputBinding::Key(Key::LeftControl)), Some(ActionSignal::Crouch));
         assert_eq!(map.action_for(InputBinding::Key(Key::C)), Some(ActionSignal::Crouch));
         assert_eq!(map.action_for(InputBinding::Key(Key::Space)), Some(ActionSignal::Jump));
+    }
+
+    /// The flight camera's TWO modes (MCP `3B4DB4C2` / Solar Birth signal map `5B9A8B50`):
+    /// the LEFT STICK is throttle ON the rail (`flight_path`) and zoom OFF it (`flying`);
+    /// everything else is SHARED — look is a bound signal on BOTH the right stick and
+    /// mouse RIGHT-drag (never LEFT — left stays free for select-target), Interact is
+    /// West + E, and Menu survives so pause still opens.
+    #[test]
+    fn flight_camera_presets_bind_the_two_mode_contract() {
+        use crate::device::GamepadButton;
+        let rail = InputMap::flight_path();
+        let free = InputMap::flying();
+
+        // The LEFT STICK differs by mode: throttle on the rail, zoom off it — and each
+        // mode binds ONLY its own (the rail never zooms, the free camera never throttles).
+        assert_eq!(
+            rail.action_for(InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            }),
+            Some(ActionSignal::MoveForward),
+        );
+        assert_eq!(
+            free.action_for(InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            }),
+            Some(ActionSignal::ZoomIn),
+        );
+        assert!(rail.bindings_for(ActionSignal::ZoomIn).is_empty());
+        assert!(free.bindings_for(ActionSignal::MoveForward).is_empty());
+
+        // SHARED by both modes: look on right-stick + RMB-drag (never left), left-click
+        // free, Interact West+E, Menu Esc.
+        for map in [&rail, &free] {
+            assert_eq!(
+                map.action_for(InputBinding::GamepadAxis {
+                    axis: GamepadAxis::RightStickX,
+                    direction: AxisDirection::Positive,
+                }),
+                Some(ActionSignal::LookRight),
+            );
+            assert!(map.bindings_for(ActionSignal::LookRight).iter().any(|b| matches!(
+                b,
+                InputBinding::MouseMotion { gate: Some(MouseButton::Right), .. }
+            )));
+            assert!(!map.bindings_for(ActionSignal::LookRight).iter().any(|b| matches!(
+                b,
+                InputBinding::MouseMotion { gate: Some(MouseButton::Left), .. }
+            )));
+            assert_eq!(
+                map.action_for(InputBinding::MouseButton(MouseButton::Left)),
+                Some(ActionSignal::PrimaryAction),
+            );
+            assert!(map
+                .bindings_for(ActionSignal::Interact)
+                .contains(&InputBinding::GamepadButton(GamepadButton::West)));
+            assert!(map
+                .bindings_for(ActionSignal::Interact)
+                .contains(&InputBinding::Key(Key::E)));
+            assert!(map
+                .bindings_for(ActionSignal::Menu)
+                .contains(&InputBinding::Key(Key::Escape)));
+        }
     }
 
     #[test]

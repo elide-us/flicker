@@ -30,8 +30,7 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, UiNode, Value, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui, strings, TemplateRegistry,
-    UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -58,12 +57,9 @@ enum Preset {
 }
 use flicker_poc_chemistry::{Levers, PlateEvent};
 
-/// The bench's whole surface, as ONE data proto in `ui_templates.json`. The
-/// scene configures this; it does not compose it.
-const BENCH_TEMPLATE: &str = "godmode_bench";
 /// The shared UI-element layout + palette.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// Radii of the shells (exaggerated for legibility — real crust is a hair-thin
 /// rind on the mantle; here the gaps are opened up so the stack is visible and the
@@ -568,10 +564,6 @@ pub struct GodModeScene {
     // readout + conservation ledger. The tree + the screen's declared intents are
     // cached at enter; every control draws in the engine, so there is no script
     // host here at all. ──
-    /// The proto registry [`build_tree`](Self::build_tree) expands against —
-    /// built once. Composition is DATA (`godmode_*` in `ui_templates.json`);
-    /// this scene configures a surface, it never composes one.
-    templates: TemplateRegistry,
     ui_intents: UiIntents,
     ui_styles: serde_json::Value,
     ui_state: UiState,
@@ -589,7 +581,7 @@ impl GodModeScene {
         // (`stages.godmode_globe` — the light it is seen by and the backdrop it
         // sits on) is what the world is BUILT from, so the styles must exist
         // before the world does.
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let world = GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None);
         Self {
             sim: SimHandle::spawn(seed),
@@ -626,7 +618,6 @@ impl GodModeScene {
             ev: Vec::new(),
             route: RouteCtx::new(),
             tick: 0,
-            templates: builtin_templates(),
             ui_intents: UiIntents::default(),
             ui_styles,
             ui_state: UiState::new(),
@@ -638,7 +629,7 @@ impl GodModeScene {
     /// **Write the `legend.*` style block** the legend card's swatches resolve
     /// through — GENERATED from the very colour functions that paint the globe,
     /// at enter, so the chip beside a word and the hex on the sphere are one
-    /// source. Nothing here is authored; ui_elements.json never carries a copy
+    /// source. Nothing here is authored; ui_theme.json never carries a copy
     /// that could drift.
     fn inject_legend_styles(&mut self) {
         let rgba = |c: [f32; 3]| serde_json::json!([c[0], c[1], c[2], 1.0]);
@@ -1515,11 +1506,14 @@ impl Scene for GodModeScene {
         // before the scene sees any of them. A half-migrated surface answering
         // two input vocabularies at once is a tracked defect, so they went
         // together.
-        // One camera line, and it is the WORLD's: the look and zoom SIGNALS out
-        // of the active binding map, gated by the focus of the panel the world
-        // names (this bench names none yet, so the globe stays pointer-flown),
-        // and the pointer drag latching inside the world's own rect.
-        self.world.update(dt.as_secs_f32(), input, &self.bindings, self.ui_state.focused());
+        // One camera line, and it is the WORLD's: the look and zoom SIGNALS, gated by the
+        // focus of the panel the world names (this bench names none yet, so the globe
+        // stays pointer-flown), and the pointer drag latching inside the world's own rect.
+        // Disabled bench (its input-P3 is task #3): it still self-resolves, so it resolves
+        // the look tuple from its OWN bindings and hands GlobeWorld the result — the world
+        // no longer takes a resolver.
+        let look = GlobeWorld::look_from(|s| self.bindings.signal_axis(s, input, &self.gamepad_config));
+        self.world.update(dt.as_secs_f32(), input, look, self.ui_state.focused());
         Transition::None
     }
 
@@ -1734,46 +1728,11 @@ impl Scene for GodModeScene {
 }
 
 impl GodModeScene {
-    /// This frame's screen: the input DECLARATION plus ONE configured bench.
-    ///
-    /// Rebuilt every frame — re-expansion is what keeps a template PARAM live,
-    /// and it is cheap because the walker's draw cache is structural.
+    /// This frame's screen. The template tier this bench composed against has been
+    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
+    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
     fn build_tree(&self) -> UiNode {
-        let mut page = UiNode { component: "screen".into(), ..Default::default() };
-        page.props.insert("id".into(), Value::Text("chemistry".into()));
-        // Everything the bench reacts to, named as DATA: a pad press, a key and
-        // a click are the same event by the time the dispatcher sees them, and
-        // the scene root hand-rolls no Menu arm.
-        //
-        // **Declare only what you dispatch.** And note what is NOT here:
-        // `on_confirm`. Confirm stays the walker's, because it is what
-        // ACTIVATES the focused control — a bench full of buttons that stole
-        // Confirm for one of them would have a pad that can move the focus ring
-        // and never press anything.
-        for (signal, result) in [
-            ("on_menu", "pause_open"),
-            ("on_cancel", "gate_resume"),
-            ("on_tab_next", "field_next"),
-            ("on_tab_prev", "field_prev"),
-        ] {
-            page.props.insert(signal.into(), Value::Text(result.into()));
-        }
-
-        // The hab gauges' green bands are STATIC observer data, so they ride
-        // template PARAMS from the ONE source (`habitability::BANDS`) rather
-        // than a Model bind — a gauge's band is configuration, not state.
-        let mut bench = UiNode { template: Some(BENCH_TEMPLATE.into()), ..Default::default() };
-        for (i, &(lo, hi)) in flicker_poc_chemistry::habitability::BANDS.iter().enumerate() {
-            let n = i + 1;
-            bench.props.insert(format!("a{n}_lo"), Value::Number(lo));
-            bench.props.insert(format!("a{n}_hi"), Value::Number(hi));
-        }
-        page.children = vec![bench];
-
-        // Expanded HERE, not at the call sites, so the scene and every gate walk
-        // the SAME tree. An unresolved proto would otherwise draw a bare box in
-        // the app while the tests inspected a `template` node they never opened.
-        expand(page, &self.templates)
+        UiNode { component: "screen".to_string(), id: "godmode".to_string(), ..Default::default() }
     }
 
     /// The cell being looked at: the one whose direction is closest to the camera.

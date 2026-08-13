@@ -27,6 +27,6 @@ flicker-voxel.workspace = true
 flicker-core.workspace = true
 flicker-worker.workspace = true
 glam.workspace = true
-# Resolves the walker's node `style` paths against `ui_elements.json` (styles Value).
+# Resolves the walker's node `style` paths against `ui_theme.json` (styles Value).
 serde_json.workspace = true
 tracing.workspace = true

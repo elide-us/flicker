@@ -18,12 +18,15 @@ mod tests {
     use flicker_globe::{GlobeStage, StageLayer};
 
     fn styles() -> serde_json::Value {
-        let raw = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_elements.json"
-        ))
-        .expect("ui_elements.json reads");
-        serde_json::from_str(&raw).expect("ui_elements.json parses")
+        // The PRODUCTION loader, not a raw file read: stage sources live in the
+        // ui_stages.json satellite and reach the root through load_styles's merge.
+        flicker::ui::load_styles_for(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../content/sensorium/resources/ui_theme.json"
+            ),
+            Some(&crate::scene_styles()),
+        )
     }
 
     /// **The authored stage is actually READ.** The bench declares

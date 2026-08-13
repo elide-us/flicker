@@ -1,5 +1,5 @@
 -- flicker-world HUD: planet stats, view/grid/epoch controls, and a per-epoch
--- knob panel — driven by Lua + `ui_elements.json` (the `UI.world` section) and the
+-- knob panel — driven by Lua + `ui_theme.json` (the `UI.world` section) and the
 -- engine `Model` (live values published each frame). Layout/colours/labels live
 -- in the JSON; this script owns behaviour. The LEGACY `Widgets` toolkit
 -- (stepper / button / dropdown / slider) is from flicker-widgets (`WIDGETS_LUA`,

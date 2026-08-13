@@ -1,0 +1,2351 @@
+{
+  "_comment": "ComponentCatalog UI-TEST scene DEFINITION (201F4F51 template-free). A left nav rail of bookmarks beside a RIGHT scroll TRAY: every component in its own card box, all present, flowing in a scrollable `list`; a bookmark scrolls the tray to that card (card_i.y - card_0.y), the top card's bookmark highlights. The standalone `tabs` control is RETIRED here — superseded by the PTT (paged_menu); the Paged Menu card demos the real nested page->tab behavior (Page 1: Tab 1/Tab 2, Page 2: Tab 3/Tab 4) via two page-gated `pill_toggle` tab rails (the PTT lays out the first VISIBLE rail). 24 cards. Display strings are $tokens; interactive VALUES ride binds the bench seeds + folds; the paged-menu visibility binds are derived in the bench from the page/tab. No Lua. The bench owns + loads this file.",
+  "behaviour": "componentcatalog",
+  "params": {},
+  "tree": {
+    "component": "screen",
+    "id": "catalog",
+    "on_menu": "pause_open",
+    "children": [
+      {
+        "component": "stack",
+        "style": "settings.window",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "children": [
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "width_frac": 1.0,
+            "height_frac": 1.0,
+            "pad": 24,
+            "children": [
+              {
+                "component": "row",
+                "grow": 1.0,
+                "gap": 16,
+                "children": [
+                  {
+                    "component": "panel",
+                    "id": "cat_nav",
+                    "style": "panel",
+                    "tab_group": "cat_nav",
+                    "nav_ordinal": 0,
+                    "pad": 8,
+                    "width": 220,
+                    "children": [
+                      {
+                        "component": "list",
+                        "id": "cat_nav_scroll",
+                        "bind": "cat_nav_scroll",
+                        "scroll_speed": 46,
+                        "grow": 1.0,
+                        "gap": 4,
+                        "gutter": 14,
+                        "style": "settings.content.scrollbar",
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "nav_0",
+                            "label": "$cat_nav_button",
+                            "style_bind": "nav_sty_0",
+                            "action": "nav_0",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 1
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_1",
+                            "label": "$cat_nav_panel",
+                            "style_bind": "nav_sty_1",
+                            "action": "nav_1",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 2
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_2",
+                            "label": "$cat_nav_sprite",
+                            "style_bind": "nav_sty_2",
+                            "action": "nav_2",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 3
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_3",
+                            "label": "$cat_nav_rune_corners",
+                            "style_bind": "nav_sty_3",
+                            "action": "nav_3",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 4
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_4",
+                            "label": "$cat_nav_tooltip",
+                            "style_bind": "nav_sty_4",
+                            "action": "nav_4",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 5
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_5",
+                            "label": "$cat_nav_checkbox",
+                            "style_bind": "nav_sty_5",
+                            "action": "nav_5",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 6
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_6",
+                            "label": "$cat_nav_toggle",
+                            "style_bind": "nav_sty_6",
+                            "action": "nav_6",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 7
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_7",
+                            "label": "$cat_nav_radio",
+                            "style_bind": "nav_sty_7",
+                            "action": "nav_7",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 8
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_8",
+                            "label": "$cat_nav_tile",
+                            "style_bind": "nav_sty_8",
+                            "action": "nav_8",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 9
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_9",
+                            "label": "$cat_nav_pill_toggle",
+                            "style_bind": "nav_sty_9",
+                            "action": "nav_9",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 10
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_10",
+                            "label": "$cat_nav_select",
+                            "style_bind": "nav_sty_10",
+                            "action": "nav_10",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 11
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_11",
+                            "label": "$cat_nav_slider",
+                            "style_bind": "nav_sty_11",
+                            "action": "nav_11",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 12
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_12",
+                            "label": "$cat_nav_stepper",
+                            "style_bind": "nav_sty_12",
+                            "action": "nav_12",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 13
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_13",
+                            "label": "$cat_nav_text_field",
+                            "style_bind": "nav_sty_13",
+                            "action": "nav_13",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 14
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_14",
+                            "label": "$cat_nav_list",
+                            "style_bind": "nav_sty_14",
+                            "action": "nav_14",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 15
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_15",
+                            "label": "$cat_nav_context_menu",
+                            "style_bind": "nav_sty_15",
+                            "action": "nav_15",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 16
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_16",
+                            "label": "$cat_nav_gauge",
+                            "style_bind": "nav_sty_16",
+                            "action": "nav_16",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 17
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_17",
+                            "label": "$cat_nav_resource_gauge",
+                            "style_bind": "nav_sty_17",
+                            "action": "nav_17",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 18
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_18",
+                            "label": "$cat_nav_stat_dot",
+                            "style_bind": "nav_sty_18",
+                            "action": "nav_18",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 19
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_19",
+                            "label": "$cat_nav_action_slot",
+                            "style_bind": "nav_sty_19",
+                            "action": "nav_19",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 20
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_20",
+                            "label": "$cat_nav_medallion",
+                            "style_bind": "nav_sty_20",
+                            "action": "nav_20",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 21
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_21",
+                            "label": "$cat_nav_badge",
+                            "style_bind": "nav_sty_21",
+                            "action": "nav_21",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 22
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_22",
+                            "label": "$cat_nav_popup_panel",
+                            "style_bind": "nav_sty_22",
+                            "action": "nav_22",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 23
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_23",
+                            "label": "$cat_nav_paged_menu",
+                            "style_bind": "nav_sty_23",
+                            "action": "nav_23",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 24
+                          },
+                          {
+                            "component": "button",
+                            "id": "nav_24",
+                            "label": "$cat_nav_splash",
+                            "style_bind": "nav_sty_24",
+                            "action": "nav_24",
+                            "size": 32,
+                            "label_size": 13,
+                            "tab_group": "cat_nav",
+                            "nav_ordinal": 24
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "panel",
+                    "id": "cat_content",
+                    "style": "panel",
+                    "pad": 12,
+                    "grow": 1.0,
+                    "children": [
+                      {
+                        "component": "list",
+                        "id": "cat_content_scroll",
+                        "bind": "cat_content_scroll",
+                        "scroll_speed": 46,
+                        "grow": 1.0,
+                        "pad": 6,
+                        "gap": 12,
+                        "gutter": 16,
+                        "style": "settings.content.scrollbar",
+                        "children": [
+                          {
+                            "component": "panel",
+                            "id": "card_0",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_button",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "button",
+                                "id": "cat_button",
+                                "action": "cat_button_click",
+                                "label": "$cat_lbl_button",
+                                "size": 46,
+                                "label_size": 14,
+                                "style": "modal.buttons.variants.primary",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 1
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_1",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_panel",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "panel",
+                                "id": "cat_panel_demo",
+                                "style": "panel",
+                                "pad": 16,
+                                "size": 70,
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_lbl_panel",
+                                    "text_size": 13,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_2",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_sprite",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "sprite",
+                                "tex": 1,
+                                "alpha": 1.0,
+                                "width": 96,
+                                "height": 96
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_3",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_rune_corners",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "cell",
+                                "size": 90,
+                                "style": "panel",
+                                "children": [
+                                  {
+                                    "component": "rune_corners",
+                                    "style": "settings.runes",
+                                    "anchor": "top_left",
+                                    "width_frac": 1.0,
+                                    "height_frac": 1.0
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_4",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_tooltip",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "tooltip",
+                                "style": "tooltip",
+                                "width": 240,
+                                "height": 74,
+                                "rune": "ᛝ",
+                                "rune_color": "stat_dot.hues.blue.fill",
+                                "name": "$cat_tt_name",
+                                "meta": "$cat_tt_meta"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_5",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_checkbox",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "checkbox",
+                                "id": "cat_check",
+                                "bind": "cat_check_val",
+                                "label": "$cat_lbl_checkbox",
+                                "box": 16,
+                                "size": 26,
+                                "style": "paperdoll.view.checkbox",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 2
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_6",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_toggle",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "toggle",
+                                "id": "cat_toggle",
+                                "bind": "cat_toggle_val",
+                                "size": 56,
+                                "style": "settings.controls.toggle",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 3
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_7",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 6,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_radio",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "radio",
+                                "id": "cat_radio_a",
+                                "value": "a",
+                                "bind": "cat_radio_val",
+                                "label": "$cat_opt_a",
+                                "box": 15,
+                                "size": 24,
+                                "style": "paperdoll.view.checkbox",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 4
+                              },
+                              {
+                                "component": "radio",
+                                "id": "cat_radio_b",
+                                "value": "b",
+                                "bind": "cat_radio_val",
+                                "label": "$cat_opt_b",
+                                "box": 15,
+                                "size": 24,
+                                "style": "paperdoll.view.checkbox",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 5
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_8",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_tile",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "tile",
+                                "id": "cat_tile",
+                                "bind": "cat_tile_on",
+                                "enabled_bind": "cat_tile_loaded",
+                                "label": "$cat_lbl_tile",
+                                "width": 72,
+                                "height": 72,
+                                "style": "paperdoll.inventory.cell",
+                                "style_off": "paperdoll.inventory.empty",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 6
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_9",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_pill_toggle",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "pill_toggle",
+                                "id": "cat_pill",
+                                "bind": "cat_pill_val",
+                                "size": 240,
+                                "style": "settings.controls.pill",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 7,
+                                "children": [
+                                  {
+                                    "component": "option",
+                                    "value": 0,
+                                    "label": "$cat_low"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "value": 1,
+                                    "label": "$cat_med"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "value": 2,
+                                    "label": "$cat_high"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_10",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_select",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "select",
+                                "id": "cat_select",
+                                "bind": "cat_select_val",
+                                "size": 220,
+                                "placeholder": "$cat_ph_select",
+                                "style": "settings.controls",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 8,
+                                "children": [
+                                  {
+                                    "component": "option",
+                                    "value": 0,
+                                    "label": "$cat_opt_alpha"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "value": 1,
+                                    "label": "$cat_opt_bravo"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "value": 2,
+                                    "label": "$cat_opt_charlie"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_11",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_slider",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "slider",
+                                "id": "cat_slider",
+                                "bind": "cat_slider_val",
+                                "min": 0,
+                                "max": 100,
+                                "decimals": 0,
+                                "suffix": "%",
+                                "value_w": 46,
+                                "slider_h": 10,
+                                "size": 260,
+                                "label": "$cat_lbl_slider",
+                                "label_w": 80,
+                                "style": "slider",
+                                "focus_group": "cat_content",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 9
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_12",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_stepper",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "stepper",
+                                "id": "cat_stepper",
+                                "bind": "cat_stepper_val",
+                                "min": 0,
+                                "max": 10,
+                                "step": 1,
+                                "decimals": 0,
+                                "label": "$cat_lbl_stepper",
+                                "label_w": 80,
+                                "size": 200,
+                                "style": "hud.controls.stepper_style",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 10
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_13",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_text_field",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "text_field",
+                                "id": "cat_field",
+                                "bind": "cat_field_val",
+                                "placeholder": "$cat_ph_field",
+                                "width": 260,
+                                "height": 40,
+                                "style": "settings.controls.field",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 11
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_14",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_list",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "list",
+                                "id": "cat_list_demo",
+                                "bind": "cat_list_demo_off",
+                                "scroll_speed": 46,
+                                "size": 120,
+                                "gutter": 16,
+                                "style": "settings.content.scrollbar",
+                                "children": [
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_row_a",
+                                    "size": 26,
+                                    "text_size": 14,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_row_b",
+                                    "size": 26,
+                                    "text_size": 14,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_row_c",
+                                    "size": 26,
+                                    "text_size": 14,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  },
+                                  {
+                                    "component": "text",
+                                    "text": "$cat_row_d",
+                                    "size": 26,
+                                    "text_size": 14,
+                                    "font": "label",
+                                    "color": "panel.stat_label"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_15",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_context_menu",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "context_menu",
+                                "id": "cat_menu",
+                                "width": 220,
+                                "height": 156,
+                                "style": "settings.controls.menu",
+                                "children": [
+                                  {
+                                    "component": "option",
+                                    "label": "$cat_cut",
+                                    "action": "cat_menu_cut"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "label": "$cat_copy",
+                                    "active": true,
+                                    "action": "cat_menu_copy"
+                                  },
+                                  {
+                                    "component": "option",
+                                    "divider": true
+                                  },
+                                  {
+                                    "component": "option",
+                                    "label": "$cat_paste",
+                                    "disabled": true,
+                                    "action": "cat_menu_paste"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_16",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_gauge",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "gauge",
+                                "id": "cat_gauge",
+                                "bind": "cat_gauge_val",
+                                "lo": 0.3,
+                                "hi": 0.7,
+                                "width": 240,
+                                "height": 14,
+                                "style": "pocepochs.hab.gauge"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_17",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_resource_gauge",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "resource_gauge",
+                                "id": "cat_rgauge",
+                                "bind": "cat_rgauge_val",
+                                "tone": "health",
+                                "label": "$cat_lbl_rgauge",
+                                "readout": "72 / 100",
+                                "width": 240,
+                                "height": 30,
+                                "style": "resource_gauge"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_18",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_stat_dot",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "stat_dot",
+                                "hue": "green",
+                                "glow": true,
+                                "width": 26,
+                                "height": 26,
+                                "style": "stat_dot"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_19",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_action_slot",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "action_slot",
+                                "id": "cat_slot",
+                                "action": "cat_slot_cast",
+                                "rune": "ᚨ",
+                                "key": "Q",
+                                "charges": 3,
+                                "cd": 0.4,
+                                "active": true,
+                                "width": 56,
+                                "height": 56,
+                                "style": "action_slot",
+                                "tab_group": "cat_content",
+                                "nav_ordinal": 12
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_20",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_medallion",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "medallion",
+                                "ring": "sapphire",
+                                "rune": "ᛝ",
+                                "width": 64,
+                                "height": 64,
+                                "style": "medallion"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_21",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_badge",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "badge",
+                                "tone": "bronze",
+                                "label": "$cat_lbl_badge",
+                                "size": 84,
+                                "style": "badge"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_22",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_popup_panel",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "popup_panel",
+                                "title": "$cat_popup_title",
+                                "subtitle": "$cat_popup_sub",
+                                "footer": "$cat_popup_footer",
+                                "divider": true,
+                                "items_gap": 12,
+                                "panel_style": "modal.panel",
+                                "children": [
+                                  {
+                                    "component": "button",
+                                    "id": "cat_popup_ok",
+                                    "action": "cat_popup_ok",
+                                    "label": "$cat_lbl_ok",
+                                    "size": 46,
+                                    "style": "modal.buttons.variants.primary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 13
+                                  },
+                                  {
+                                    "component": "button",
+                                    "id": "cat_popup_cancel",
+                                    "action": "cat_popup_cancel",
+                                    "label": "$cat_lbl_cancel",
+                                    "size": 46,
+                                    "style": "modal.buttons.variants.secondary",
+                                    "tab_group": "cat_content",
+                                    "nav_ordinal": 14
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_23",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_paged_menu",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "paged_menu",
+                                "style": "paged_menu.frame",
+                                "pad": 24,
+                                "size": 300,
+                                "tabs_shown": "cat_pm_tabs_shown",
+                                "children": [
+                                  {
+                                    "component": "tabs",
+                                    "id": "cat_pm_pages",
+                                    "bind": "cat_pm_page",
+                                    "next_action": "cat_pm_page_next",
+                                    "prev_action": "cat_pm_page_prev",
+                                    "grow": 1.0,
+                                    "gap": 8,
+                                    "tab_active": "paged_menu.page_active",
+                                    "tab_idle": "paged_menu.page_idle",
+                                    "children": [
+                                      {
+                                        "component": "option",
+                                        "value": 0,
+                                        "label": "$cat_page_1"
+                                      },
+                                      {
+                                        "component": "option",
+                                        "value": 1,
+                                        "label": "$cat_page_2"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "pill_toggle",
+                                    "id": "cat_pm_tabs_a",
+                                    "visible_bind": "cat_pm_on_p0",
+                                    "bind": "cat_pm_tab",
+                                    "next_action": "cat_pm_tab_next",
+                                    "prev_action": "cat_pm_tab_prev",
+                                    "size": 360,
+                                    "style": "paged_menu.tab_track",
+                                    "children": [
+                                      {
+                                        "component": "option",
+                                        "value": 0,
+                                        "label": "$cat_tab_1"
+                                      },
+                                      {
+                                        "component": "option",
+                                        "value": 1,
+                                        "label": "$cat_tab_2"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "pill_toggle",
+                                    "id": "cat_pm_tabs_b",
+                                    "visible_bind": "cat_pm_on_p1",
+                                    "bind": "cat_pm_tab",
+                                    "next_action": "cat_pm_tab_next",
+                                    "prev_action": "cat_pm_tab_prev",
+                                    "size": 360,
+                                    "style": "paged_menu.tab_track",
+                                    "children": [
+                                      {
+                                        "component": "option",
+                                        "value": 0,
+                                        "label": "$cat_tab_3"
+                                      },
+                                      {
+                                        "component": "option",
+                                        "value": 1,
+                                        "label": "$cat_tab_4"
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "component": "cell",
+                                    "grow": 1.0,
+                                    "pad": 20,
+                                    "children": [
+                                      {
+                                        "component": "cell",
+                                        "visible_bind": "cat_pm_p0_t0",
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$cat_tab_1",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "cell",
+                                        "visible_bind": "cat_pm_p0_t1",
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$cat_tab_2",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "cell",
+                                        "visible_bind": "cat_pm_p1_t0",
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$cat_tab_3",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "component": "cell",
+                                        "visible_bind": "cat_pm_p1_t1",
+                                        "children": [
+                                          {
+                                            "component": "text",
+                                            "text": "$cat_tab_4",
+                                            "text_size": 15,
+                                            "font": "label",
+                                            "color": "panel.stat_value"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "component": "panel",
+                            "id": "card_24",
+                            "style": "panel",
+                            "pad": 14,
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text": "$cat_nav_splash",
+                                "text_size": 14,
+                                "font": "label",
+                                "color": "panel.stat_value"
+                              },
+                              {
+                                "component": "splash",
+                                "size": 160,
+                                "tex": 1,
+                                "fade_in": 0.6,
+                                "hold": 1.2,
+                                "fade_out": 0.6,
+                                "fit": 0.8,
+                                "backdrop": "logo.backdrop"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "rune_corners",
+            "style": "settings.runes",
+            "anchor": "top_left",
+            "width_frac": 1.0,
+            "height_frac": 1.0
+          }
+        ]
+      }
+    ]
+  },
+  "exits": {},
+  "styles": {
+    "modal": {
+      "panel": {
+        "w": 404,
+        "pad_x": 38,
+        "pad_top": 34,
+        "pad_bottom": 30,
+        "radius": 4,
+        "border_w": 1,
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "shadow": "$shadow",
+        "shadow_dy": 20,
+        "shadow_feather": 44,
+        "shadow_grow": 4
+      },
+      "title": {
+        "size": 52,
+        "color": "$ink_bright",
+        "glow": "$sap_glow"
+      },
+      "subtitle": {
+        "size": 11,
+        "color": "$bronze_dim",
+        "gap_top": 12
+      },
+      "countdown": {
+        "size": 15,
+        "color": "$dim",
+        "gap_top": 10
+      },
+      "divider": {
+        "color": "$bronze",
+        "gap": 22
+      },
+      "footer": {
+        "size": 10,
+        "color": "$faint",
+        "gap_top": 14
+      },
+      "studio": {
+        "size": 9,
+        "color": "$studio",
+        "margin_x": 0,
+        "margin_b": 34
+      },
+      "spectrum": {
+        "w": 4,
+        "alpha": 0.55,
+        "palette": [
+          "$sig_white",
+          "$sig_yellow",
+          "$sig_red",
+          "$sig_orange",
+          "$sig_black_gem",
+          "$sig_blue",
+          "$sig_green"
+        ]
+      },
+      "buttons": {
+        "h": 48,
+        "gap": 12,
+        "gap_top": 22,
+        "radius": 3,
+        "border_w": 1,
+        "label_size": 15,
+        "variants": {
+          "primary": {
+            "fill_top": "$sap_base",
+            "fill_bot": "$sap_base_lo",
+            "border": "$sap_border",
+            "label": "$ink_sapphire",
+            "glow": "$sap_glow",
+            "press_top": "$sap_press",
+            "press_bot": "$sap_press_lo",
+            "press_border": "$sap_press_border",
+            "hover_top": "$sap_hover",
+            "hover_bot": "$sap_hover_lo",
+            "hover_border": "$sap_hover_border",
+            "hover_label": "$ink_sapphire"
+          },
+          "secondary": {
+            "fill_top": "$stone_btn",
+            "fill_bot": "$stone2",
+            "border": "$edge4",
+            "label": "$ink_button",
+            "press_top": "$stone2",
+            "press_bot": "$stone1",
+            "press_border": "$edge2",
+            "hover_top": "$stone_btn_hi",
+            "hover_bot": "$surface_top",
+            "hover_border": "$bronze_dim",
+            "hover_label": "$ink_bright"
+          },
+          "danger": {
+            "fill_top": "$danger_base",
+            "fill_bot": "$danger_base_lo",
+            "border": "$danger_hi",
+            "label": "$danger_text_hi",
+            "glow": "$danger_glow",
+            "press_top": "$danger_base_lo",
+            "press_bot": "$danger_press_lo",
+            "press_border": "$danger_border",
+            "hover_top": "$danger_hover",
+            "hover_bot": "$danger_hover_lo",
+            "hover_border": "$danger_hi",
+            "hover_label": "$danger_text_hi"
+          },
+          "ghost": {
+            "fill_top": "$stage_void",
+            "fill_bot": "$stage_void",
+            "label": "$dim",
+            "hover_top": "$stage_void",
+            "hover_bot": "$stage_void",
+            "hover_border": "$edge2",
+            "hover_label": "$ink"
+          }
+        }
+      }
+    },
+    "badge": {
+      "h": 18,
+      "pad": 8,
+      "label_size": 11,
+      "accent_bg": "$sap_base",
+      "accent_label": "$ink_sapphire",
+      "neutral_bg": "$stone2",
+      "neutral_label": "$dim",
+      "bronze_bg": "$bronze_dim",
+      "bronze_label": "$ink",
+      "solid_bg": "$bronze",
+      "solid_label": "$stone0"
+    },
+    "tooltip": {
+      "bg": "$panel_bg",
+      "border": "$edge2",
+      "radius": 4,
+      "pad": 12,
+      "name_color": "$ink_bright",
+      "name_size": 16,
+      "meta_color": "$dim",
+      "meta_size": 12
+    },
+    "paged_menu": {
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "hint": {
+        "fill_top": "$stone_btn_hi",
+        "fill_bot": "$stone_btn",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      },
+      "eyebrow": "$bronze_dim",
+      "title": "$ink_bright",
+      "rule": "$seam",
+      "page_active": {
+        "fill_top": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "fill_bot": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border_w": 0,
+        "radius": 0,
+        "label": "$ink_bright",
+        "label_size": 15,
+        "underline": "$rune_glow_hi",
+        "underline_w": 2
+      },
+      "page_idle": {
+        "fill_top": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "fill_bot": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border_w": 0,
+        "radius": 0,
+        "label": "$dim",
+        "label_size": 15
+      },
+      "tab_track": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 14
+      },
+      "tab_active": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 12,
+        "label": "$ink_sapphire"
+      },
+      "tab_idle": {
+        "fill_top": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "fill_bot": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border_w": 0,
+        "radius": 12,
+        "label": "$dim"
+      },
+      "group_eyebrow": "$bronze",
+      "well": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "row_label": "$dim_soft",
+      "row_label_focus": "$ink_bright",
+      "row_seam": "$seam",
+      "row_focus": {
+        "fill_top": "$accent_wash",
+        "fill_bot": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "border_w": 0,
+        "radius": 0
+      },
+      "legend_label": "$dim",
+      "legend_hint": "$faint"
+    },
+    "pad_glyphs": {
+      "tex": 2,
+      "cols": 4,
+      "rows": 4,
+      "color": "$bronze",
+      "flash": "$rune_glow_hi",
+      "cells": {
+        "lt": 0,
+        "rt": 1,
+        "lb": 2,
+        "rb": 3,
+        "a": 4,
+        "b": 5,
+        "x": 6,
+        "y": 7,
+        "menu": 8,
+        "view": 9,
+        "dpad": 10,
+        "dpad_up": 11,
+        "dpad_down": 12,
+        "dpad_left": 13,
+        "dpad_right": 14,
+        "stick": 15
+      }
+    },
+    "resource_gauge": {
+      "track": "$well",
+      "border": "$edge2",
+      "low_border": "$danger_border",
+      "radius": 10,
+      "pad": 2,
+      "sheen": "$sheen",
+      "label_size": 10,
+      "readout_size": 12,
+      "readout_color": "$ink",
+      "low_label": "$danger_hi",
+      "health_top": "$hp_hi",
+      "health_bot": "$hp_lo",
+      "health_label": "$hp_hi",
+      "mana_top": "$mana_hi",
+      "mana_bot": "$mana_lo",
+      "mana_label": "$mana_hi",
+      "stamina_top": "$stam_hi",
+      "stamina_bot": "$stam_lo",
+      "stamina_label": "$stam_hi",
+      "cast_top": "$cast_hi",
+      "cast_bot": "$cast_lo",
+      "cast_label": "$bronze",
+      "cast_border": "$bronze_dim"
+    },
+    "action_slot": {
+      "bg_top": "$stone_btn",
+      "bg_bot": "$well",
+      "border": "$edge4",
+      "rim": "$slot_rim",
+      "radius": 4,
+      "active_border": "$sap_border",
+      "active_glow": "$sap_glow",
+      "rune_color": "$bronze",
+      "rune_halo": "$rune_halo",
+      "key_color": "$bronze",
+      "key_size": 10,
+      "charge_color": "$rune_glow_hi",
+      "charge_size": 11,
+      "cd_veil": "$cd_veil",
+      "cd_color": "$ink_bright",
+      "cd_size": 15
+    },
+    "medallion": {
+      "rim": "$med_rim",
+      "bg_top": "$med_bg",
+      "bg_bot": "$med_bg_lo",
+      "rune_color": "$rune_glow",
+      "ring_w": 3,
+      "rings": {
+        "bronze": {
+          "top": "$bronze",
+          "bot": "$bronze_dim"
+        },
+        "sapphire": {
+          "top": "$sap_border",
+          "bot": "$sap_hover_lo",
+          "glow": "$sap_glow",
+          "halo": "$rune_halo"
+        },
+        "danger": {
+          "top": "$danger_base",
+          "bot": "$danger_border"
+        },
+        "ghost": {
+          "top": "$ghost_ring",
+          "bot": "$ghost_ring_lo"
+        },
+        "gold": {
+          "top": "$gold_ring",
+          "bot": "$bronze_deep"
+        }
+      }
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 14,
+      "focus_track": "$well",
+      "focus_fill": "$sap_hover",
+      "focus_label": "$rune_glow_hi",
+      "value_color": "$dim",
+      "label_size": 13,
+      "value_size": 12
+    },
+    "panel": {
+      "resting": {
+        "fill": "$panel_bg",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "focused": {
+        "fill": "$panel_bg",
+        "border": "$sap_border",
+        "border_w": 2,
+        "radius": 3
+      },
+      "empty": "$dim",
+      "stat_label": "$dim",
+      "stat_value": "$ink_bright"
+    },
+    "stat_dot": {
+      "border": "$shadow",
+      "hues": {
+        "white": {
+          "fill": "$sig_white",
+          "glow": "$sig_white_glow"
+        },
+        "yellow": {
+          "fill": "$sig_yellow",
+          "glow": "$sig_yellow_glow"
+        },
+        "red": {
+          "fill": "$sig_red",
+          "glow": "$sig_red_glow"
+        },
+        "orange": {
+          "fill": "$sig_orange",
+          "glow": "$sig_orange_glow"
+        },
+        "black": {
+          "fill": "$sig_black",
+          "glow": "$sig_black_glow"
+        },
+        "blue": {
+          "fill": "$sig_blue",
+          "glow": "$sig_blue_glow"
+        },
+        "green": {
+          "fill": "$sig_green",
+          "glow": "$sig_green_glow"
+        }
+      }
+    },
+    "settings": {
+      "window": {
+        "w": 1180,
+        "h": 726,
+        "min_margin": 32,
+        "radius": 4,
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "shadow": "$shadow",
+        "shadow_dy": 18,
+        "shadow_feather": 46,
+        "shadow_grow": 4
+      },
+      "runes": {
+        "size": 16,
+        "inset": 14,
+        "top": "$rune_glow",
+        "bot": "$bronze_dim"
+      },
+      "titlebar": {
+        "h": 52,
+        "pad_x": 30,
+        "wash": "$accent_wash",
+        "seam": "$seam",
+        "_fill_note": "fill_top/fill_bot = the declared `wash` so draw_panel_bg actually tints the bar (was falling back to the dark PANEL constant); `color` = `title_color` so the title text picks it up (draw_text reads `color`/`label_color`, not `title_color`).",
+        "fill_top": "$accent_wash",
+        "fill_bot": "$accent_wash",
+        "color": "$ink_bright",
+        "mark": "$bronze",
+        "title": "$set_settings",
+        "title_size": 21,
+        "title_color": "$ink_bright",
+        "hint": "ESC TO CLOSE",
+        "hint_size": 9,
+        "hint_color": "$faint",
+        "close": {
+          "size": 26,
+          "radius": 3,
+          "bg": "$danger_bg",
+          "border": "$danger_border",
+          "label": "$danger_text",
+          "hover_border": "$danger_hi",
+          "hover_label": "$danger_text_hi"
+        }
+      },
+      "nav": {
+        "w": 236,
+        "pad": 16,
+        "seam": "$seam",
+        "header": "$set_categories",
+        "header_size": 9,
+        "header_color": "$faint",
+        "row_h": 42,
+        "gap": 5,
+        "gem": 9,
+        "label_size": 13,
+        "active_top": "$accent_wash_2",
+        "active_bot": "$accent_wash",
+        "active_border": "$rune_glow",
+        "active_label": "$ink_bright",
+        "inactive_label": "$dim",
+        "footer_title": "$set_prism_clay_engine",
+        "footer_title_color": "$bronze_dim",
+        "footer_sub": "$set_adventurer_and_rts_shared_kit",
+        "footer_sub_color": "$faint"
+      },
+      "content": {
+        "pad_x": 34,
+        "pad_top": 22,
+        "kicker_size": 10,
+        "title_size": 32,
+        "title_color": "$ink_bright",
+        "seam": "$seam",
+        "scrollbar": "$bronze_dim"
+      },
+      "footer": {
+        "h": 58,
+        "pad_x": 34,
+        "seam": "$seam",
+        "restore": "$set_restore_defaults",
+        "restore_color": "$muted",
+        "restore_hover": "$danger_hi",
+        "applied": "$settings_applied",
+        "applied_color": "$rune_glow_hi",
+        "apply": "$set_apply",
+        "save_close": "$set_save_and_close"
+      },
+      "dialogs": {
+        "close_title": "$set_unsaved_changes",
+        "close_msg": "$set_do_you_want_to_save_your_changes",
+        "save": "$set_save_and_close_2",
+        "discard": "$set_discard",
+        "cancel": "$set_cancel_2",
+        "restore_title": "$set_defaults_restored",
+        "restore_msg": "$set_all_settings_have_been_reset_to_their_de",
+        "ok": "$set_ok"
+      },
+      "row": {
+        "h": 50,
+        "group_gap": 22,
+        "seam": "$seam",
+        "name_size": 17,
+        "name_color": "$ink_label",
+        "desc_size": 13,
+        "desc_color": "$dim_soft",
+        "group_size": 10,
+        "group_color": "$bronze",
+        "ctrl_w": 340,
+        "value_size": 13,
+        "value_color": "$rune_glow_hi"
+      },
+      "controls": {
+        "field": {
+          "top": "$surface_top",
+          "bot": "$surface_bot",
+          "border": "$edge4",
+          "hover_border": "$bronze_dim",
+          "radius": 3,
+          "h": 40,
+          "label": "$ink_button",
+          "label_size": 15,
+          "caret": "$rune_glow"
+        },
+        "menu": {
+          "top": "$stone3",
+          "bot": "$stone0",
+          "border": "$edge2",
+          "radius": 3,
+          "row_h": 30,
+          "label": "$ink_button",
+          "label_size": 15,
+          "sel_bg": "$accent_wash_2",
+          "sel_label": "$ink_bright",
+          "hover_bg": "$accent_wash"
+        },
+        "segment": {
+          "bg": "$well",
+          "border": "$edge2",
+          "radius": 4,
+          "pad": 3,
+          "h": 36,
+          "active_top": "$sap_base",
+          "active_bot": "$sap_base_lo",
+          "active_label": "$ink_sapphire",
+          "label": "$dim",
+          "label_size": 11
+        },
+        "toggle": {
+          "w": 50,
+          "h": 25,
+          "on_top": "$sap_base",
+          "on_bot": "$sap_base_lo",
+          "on_border": "$sap_border",
+          "off_bg": "$stone2",
+          "off_border": "$edge3",
+          "knob_on": "$ink_sapphire",
+          "knob_off": "$dim"
+        },
+        "cycler": {
+          "w": 200,
+          "h": 40,
+          "btn_top": "$surface_top",
+          "btn_bot": "$surface_bot",
+          "btn_hover": "$stone_btn_hi",
+          "btn_border": "$edge4",
+          "arrow": "$bronze",
+          "mid": "$well",
+          "label": "$ink_bright",
+          "label_size": 13
+        },
+        "slider": {
+          "track": "$well",
+          "border": "$edge2",
+          "fill_lo": "$sap_base_lo",
+          "fill_hi": "$sap_border",
+          "knob_top": "$stone4",
+          "knob_bot": "$stone2",
+          "knob_border": "$sap_border",
+          "knob_dot": "$rune_glow",
+          "h": 8,
+          "knob": 20
+        },
+        "keycap": {
+          "w": 156,
+          "h": 34,
+          "radius": 3,
+          "label_size": 12,
+          "top": "$stone_btn",
+          "bot": "$stone2",
+          "border": "$edge4",
+          "label": "$ink_bright",
+          "rebind_top": "$sap_hover",
+          "rebind_bot": "$sap_hover_lo",
+          "rebind_border": "$rune_glow",
+          "rebind_label": "$ink_sapphire",
+          "unbound_bg": "$surface_bot",
+          "unbound_border": "$seam",
+          "unbound_label": "$faint"
+        },
+        "pill": {
+          "bg": "$well",
+          "border": "$edge2",
+          "radius": 15,
+          "pad": 3,
+          "h": 30,
+          "active_top": "$sap_base",
+          "active_bot": "$sap_base_lo",
+          "active_label": "$ink_sapphire",
+          "label": "$dim",
+          "label_size": 11
+        }
+      },
+      "rebind_banner": {
+        "top": "$accent_wash_2",
+        "bot": "$accent_wash",
+        "border": "$sap_border",
+        "text": "Press any key to bind",
+        "text2": "Esc to cancel · Backspace to unbind",
+        "text_color": "$ink_label",
+        "accent": "$rune_glow_hi",
+        "hint_color": "$dim_soft"
+      },
+      "nav_items": [
+        {
+          "id": "video",
+          "label": "$set_video",
+          "gem": "$sig_blue",
+          "kicker": "DISPLAY & RENDERING",
+          "kicker_color": "$sig_blue",
+          "title": "Video"
+        },
+        {
+          "id": "audio",
+          "label": "$set_audio",
+          "gem": "$sig_yellow",
+          "kicker": "MIXING & OUTPUT",
+          "kicker_color": "$sig_yellow",
+          "title": "Audio"
+        },
+        {
+          "id": "input",
+          "label": "$set_input",
+          "gem": "$sig_red",
+          "kicker": "BINDINGS & DEVICES",
+          "kicker_color": "$sig_red",
+          "title": "Input"
+        }
+      ],
+      "video": {
+        "groups": [
+          {
+            "name": "$set_display",
+            "rows": [
+              {
+                "id": "display_mode",
+                "kind": "dropdown",
+                "name": "$set_display_mode",
+                "desc": "$set_how_the_game_fills_your_screen",
+                "options": [
+                  "$set_windowed",
+                  "$set_borderless_window",
+                  "$set_fullscreen"
+                ],
+                "wired": true
+              },
+              {
+                "id": "resolution",
+                "kind": "dropdown",
+                "name": "$set_resolution",
+                "desc": "$set_rendering_resolution_of_the_viewport",
+                "options": [
+                  "1280 × 720",
+                  "1600 × 900",
+                  "1920 × 1080",
+                  "2560 × 1440",
+                  "3440 × 1440",
+                  "3840 × 2160"
+                ],
+                "wired": true
+              },
+              {
+                "id": "quality",
+                "kind": "segment",
+                "name": "$set_graphics_quality",
+                "desc": "$set_master_preset_for_all_render_features",
+                "options": [
+                  "$set_low",
+                  "$set_medium",
+                  "$set_high",
+                  "$set_ultra"
+                ],
+                "wired": true
+              }
+            ]
+          },
+          {
+            "name": "$set_performance",
+            "rows": [
+              {
+                "id": "vsync",
+                "kind": "toggle",
+                "name": "$set_vertical_sync",
+                "desc": "$set_sync_frames_to_the_display_to_prevent_te",
+                "wired": true
+              },
+              {
+                "id": "fps_limit",
+                "kind": "cycler",
+                "name": "$set_frame_rate_limit",
+                "desc": "$set_cap_the_maximum_frames_per_second",
+                "options": [
+                  "30",
+                  "60",
+                  "120",
+                  "144",
+                  "$set_unlimited"
+                ],
+                "wired": true
+              }
+            ]
+          },
+          {
+            "name": "$set_image",
+            "rows": [
+              {
+                "id": "fov",
+                "kind": "slider",
+                "name": "$set_field_of_view",
+                "desc": "$set_adventurer_camera_angle_60_120",
+                "min": 60,
+                "max": 120,
+                "default": 90,
+                "suffix": "°",
+                "wired": false
+              },
+              {
+                "id": "gamma",
+                "kind": "slider",
+                "name": "$set_brightness",
+                "desc": "$set_gamma_of_the_rendered_scene",
+                "min": 0,
+                "max": 100,
+                "default": 50,
+                "wired": false
+              }
+            ]
+          }
+        ]
+      },
+      "audio": {
+        "dim": 0.5,
+        "stub": {
+          "title": "$set_not_yet_implemented",
+          "title_color": "$bronze",
+          "body": "$set_no_audio_modules_exist_in_the_clay_engin",
+          "body_color": "$dim_soft",
+          "border": "$bronze_dim",
+          "top": "$accent_wash"
+        },
+        "groups": [
+          {
+            "name": "$set_volume",
+            "rows": [
+              {
+                "id": "a_master",
+                "kind": "slider",
+                "name": "$set_master_volume",
+                "min": 0,
+                "max": 100,
+                "default": 80,
+                "wired": false
+              },
+              {
+                "id": "a_music",
+                "kind": "slider",
+                "name": "$set_music",
+                "min": 0,
+                "max": 100,
+                "default": 70,
+                "wired": false
+              },
+              {
+                "id": "a_fx",
+                "kind": "slider",
+                "name": "$set_effects",
+                "min": 0,
+                "max": 100,
+                "default": 85,
+                "wired": false
+              },
+              {
+                "id": "a_amb",
+                "kind": "slider",
+                "name": "$set_ambient",
+                "min": 0,
+                "max": 100,
+                "default": 55,
+                "wired": false
+              },
+              {
+                "id": "a_voice",
+                "kind": "slider",
+                "name": "$set_voice",
+                "min": 0,
+                "max": 100,
+                "default": 100,
+                "wired": false
+              }
+            ]
+          },
+          {
+            "name": "$set_output",
+            "rows": [
+              {
+                "id": "a_device",
+                "kind": "static",
+                "name": "$set_output_device",
+                "value": "$set_system_default",
+                "wired": false
+              },
+              {
+                "id": "a_subs",
+                "kind": "toggle",
+                "name": "$set_subtitles",
+                "wired": false
+              }
+            ]
+          }
+        ]
+      },
+      "input": {
+        "tabs": [
+          {
+            "id": "keyboard",
+            "label": "$set_keyboard"
+          },
+          {
+            "id": "mouse",
+            "label": "$set_mouse"
+          },
+          {
+            "id": "controller",
+            "label": "$set_controller"
+          }
+        ],
+        "keyboard": {
+          "groups": [
+            {
+              "name": "$set_movement",
+              "actions": [
+                {
+                  "id": "MoveForward",
+                  "label": "$set_move_forward"
+                },
+                {
+                  "id": "MoveBackward",
+                  "label": "$set_move_backward"
+                },
+                {
+                  "id": "StrafeLeft",
+                  "label": "$set_strafe_left"
+                },
+                {
+                  "id": "StrafeRight",
+                  "label": "$set_strafe_right"
+                },
+                {
+                  "id": "MoveUp",
+                  "label": "$set_move_up"
+                },
+                {
+                  "id": "MoveDown",
+                  "label": "$set_move_down"
+                },
+                {
+                  "id": "Jump",
+                  "label": "$set_jump"
+                },
+                {
+                  "id": "Sprint",
+                  "label": "$set_sprint"
+                },
+                {
+                  "id": "Crouch",
+                  "label": "$set_crouch"
+                }
+              ]
+            },
+            {
+              "name": "$set_interface",
+              "actions": [
+                {
+                  "id": "Interact",
+                  "label": "$set_interact"
+                },
+                {
+                  "id": "Inventory",
+                  "label": "$set_inventory"
+                },
+                {
+                  "id": "Map",
+                  "label": "$set_world_map"
+                },
+                {
+                  "id": "Menu",
+                  "label": "$set_menu"
+                }
+              ]
+            },
+            {
+              "name": "$set_actions",
+              "actions": [
+                {
+                  "id": "PrimaryAction",
+                  "label": "$set_primary_action"
+                },
+                {
+                  "id": "SecondaryAction",
+                  "label": "$set_secondary_action"
+                },
+                {
+                  "id": "Reload",
+                  "label": "$set_reload"
+                },
+                {
+                  "id": "Confirm",
+                  "label": "$set_confirm"
+                },
+                {
+                  "id": "Cancel",
+                  "label": "$set_cancel"
+                },
+                {
+                  "id": "Quit",
+                  "label": "$set_quit"
+                }
+              ]
+            }
+          ]
+        },
+        "mouse": {
+          "groups": [
+            {
+              "name": "$set_pointer",
+              "rows": [
+                {
+                  "id": "m_look",
+                  "kind": "slider",
+                  "name": "$set_look_sensitivity",
+                  "desc": "$set_adventurer_camera_turn_speed",
+                  "min": 0,
+                  "max": 100,
+                  "backend_min": 0.001,
+                  "backend_max": 0.02,
+                  "wired": true
+                },
+                {
+                  "id": "m_aim",
+                  "kind": "slider",
+                  "name": "$set_aim_sensitivity",
+                  "desc": "$set_multiplier_while_channelling_aiming",
+                  "min": 0,
+                  "max": 100,
+                  "default": 65,
+                  "wired": false
+                },
+                {
+                  "id": "m_invert",
+                  "kind": "toggle",
+                  "name": "$set_invert_vertical_look",
+                  "desc": "$set_flip_the_up_down_axis",
+                  "wired": true
+                }
+              ]
+            },
+            {
+              "name": "$set_commander_rts",
+              "rows": [
+                {
+                  "id": "m_edge",
+                  "kind": "toggle",
+                  "name": "$set_edge_pan",
+                  "desc": "$set_scroll_the_map_when_the_cursor_nears_the",
+                  "default_on": true,
+                  "wired": false
+                },
+                {
+                  "id": "m_edge_speed",
+                  "kind": "slider",
+                  "name": "$set_edge_pan_speed",
+                  "desc": "$set_commander_camera_scroll_rate",
+                  "min": 0,
+                  "max": 100,
+                  "default": 55,
+                  "wired": false
+                }
+              ]
+            }
+          ]
+        },
+        "controller": {
+          "ring": "$edge4",
+          "ring_bg": "$stone0",
+          "title": "$set_choose_a_control_profile",
+          "title_size": 21,
+          "title_color": "$ink_label",
+          "body": "$set_pick_a_starting_layout_above_rebind_indi",
+          "body_color": "$dim_soft",
+          "detect": "DETECT CONTROLLER",
+          "enable": "Enable support"
+        }
+      }
+    },
+    "logo": {
+      "backdrop": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  }
+}

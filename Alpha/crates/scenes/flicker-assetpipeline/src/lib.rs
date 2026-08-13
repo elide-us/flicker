@@ -23,11 +23,9 @@
 //!
 //! On the canonical pattern (rule E5AFBBAB — the Quartermaster is the reference), not the
 //! shape this bench itself used to model: the scene owns no HUD Lua and composes nothing.
-//! `ui_templates.json` holds the `clayworks_bench` proto — the whole surface over the
-//! shared `workflow` spine, with `clayworks_bank` / `clayworks_row` / `clayworks_offset` /
-//! `clayworks_import_card` beneath it. [`AssetPipeline::build_tree`] emits ONE instance
-//! node, declares the screen's input as `on_<signal>` props, and calls `expand` at the
-//! end — the single seam, so the scene and every gate walk the same tree.
+//! The UI template tier this bench composed against has been removed and the bench is not
+//! in the launcher roster, so [`AssetPipeline::build_tree`] now returns an empty `screen`
+//! placeholder rather than composing a surface.
 //!
 //! **Controller is the floor.** A/B are the wizard's forward/back; the bumpers walk the
 //! same rail, because the step strip IS this screen's tab bar; L2/R2 cycle the gizmo mode
@@ -54,10 +52,9 @@ use flicker::render::{
     TexturedMeshHandle, Vec2, Vec3,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, Value, ValueMap};
+use flicker::script::{HudCommand, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui, strings, workflows_from_json,
-    TemplateRegistry, UiInput, UiIntents, UiState, WalkerHandler, Workflow, WorkflowDef,
+    render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_shell::{PauseScene, Theme};
 
@@ -87,19 +84,17 @@ use route::RootHandler;
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 
-/// The bench's COMPOSITION lives in `ui_templates.json` as this proto; the scene only
-/// configures it (canonical pattern, rule E5AFBBAB — the Quartermaster is the reference).
-/// There is deliberately **no `hud_assetpipeline.lua`**: a per-scene script that composed
-/// the surface out of `Cell`/`Row`/`Stack` builders would put composition back in code,
-/// which is the exact break ruled unacceptable in E804E0EF — just in Lua rather than Rust.
-const BENCH_TEMPLATE: &str = "clayworks_bench";
+/// ⛔ The engine-retired Workflow runtime, QUARANTINED here with its only consumer
+/// (Aaron 2026-08-12); dies with this bench's migration to the scene-def system.
+mod workflow;
+use workflow::{workflows_from_json, Workflow, WorkflowDef};
 
-/// Layout + `$token` styles live in the shared `ui_elements.json` — the ONE global
+/// Layout + `$token` styles live in the shared `ui_theme.json` — the ONE global
 /// UI-element definition + Prism palette every prism-alpha scene reads — under the
 /// `assetpipeline` key. NOT a per-scene copy: a second file would need its own
 /// `theme.tokens`, forking the palette, which the one-colour-source rule forbids.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// Skeleton overlay colours, matching the paperdoll's rig view so the two tools read alike.
 /// JOINTS (the selectable balls) stay cyan; BONES (the octahedral diamonds between them) read
@@ -154,7 +149,6 @@ const SUBJECT_TINT: [f32; 4] = [0.80, 0.79, 0.77, 1.0];
 /// so the two stay separable under any lighting angle and in the flat ortho panels.
 const PIECE_TINT: [f32; 4] = [1.0, 0.74, 0.40, 1.0];
 
-
 /// Vertex ceiling for the fitting body's reference mesh. `fitting_base` prefers the ~3.3k-tri
 /// `GolemBase_Low`, but falls back to the 95k-tri authoring cut (49.6 MB) — and beyond this the
 /// upload cost at `enter` outweighs a reference the user can already read from the skeleton.
@@ -187,12 +181,9 @@ const CLIP_VIEWS: [QuadView; 2] = [
     QuadView { label: "IN PLACE", label_flipped: "IN PLACE", ortho: None },
 ];
 
-/// The workflow DEFINITIONS — durable content beside `ui_templates.json`, embedded like
-/// the walker's own component modules so the wizard cannot ship without its spine.
-const UI_WORKFLOWS: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/resources/ui_workflows.json"
-));
+/// The workflow DEFINITIONS — quarantined beside the vendored runtime (no longer
+/// shared content): this bench is the construct's only consumer.
+const UI_WORKFLOWS: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui_workflows.json"));
 
 /// What the Conform stage IS for the loaded asset.
 ///
@@ -803,9 +794,6 @@ pub struct AssetPipeline {
     tick: u64,
     ui_theme: Option<Theme>,
     // ── HUD (component walker) ──
-    /// The template registry, built ONCE and held — `build_tree` expands against it
-    /// every frame, which is what keeps template params live (CM4 7A1F32C5).
-    templates: TemplateRegistry,
     /// The screen's declarative signal bindings (S9), collected from the expanded
     /// tree's ROOT `on_<signal>` props (`on_menu = "pause_open"`). Refreshed with the
     /// tree each frame; the walker layer consumes a declared signal and `update` maps
@@ -1148,7 +1136,7 @@ impl AssetPipeline {
     /// DATA (`clayworks_bench` in `ui_templates.json`) and [`Self::build_tree`] emits
     /// one instance of it every frame.
     pub fn new() -> Self {
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         // The workflow spine. The definitions are EMBEDDED content, so a parse failure is
         // a build bug the suite catches, not a runtime state — expect() over limping on
         // with no wizard. The character definition is also the pre-dispatch default:
@@ -1185,7 +1173,6 @@ impl AssetPipeline {
             route: RouteCtx::new(),
             tick: 0,
             ui_theme: None,
-            templates: builtin_templates(),
             // Refreshed from the built tree's root each frame in `update`.
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
@@ -2189,34 +2176,12 @@ impl AssetPipeline {
     /// printf — so every readout is a pre-built string here. `&mut` because the workflow
     /// runtime's own [`Workflow::publish`] rides the same Model (surfaces, rail chips,
     /// discard dialog, footer step keys) — one publish, one frame, no split state.
-    /// The bench's UI tree for this frame: a screen root that DECLARES its input as
-    /// data, one `clayworks_bench` template instance, and [`expand`] as the single
-    /// seam. Rebuilt every frame — re-expansion is what keeps template params live.
-    ///
-    /// Controller is the floor (BA4487BD), using only RATIFIED signal names:
-    /// A/B are the wizard's forward/back, and the bumpers walk the same rail because
-    /// the step strip IS this screen's tab bar. `Mode*` cycles the gizmo on the rig
-    /// page — the one genuine second axis the bench has. Nothing is declared that the
-    /// dispatcher below does not act on: a bound signal with no arm is dead hardware.
+    /// The bench's UI tree for this frame. The template tier this bench composed
+    /// against has been removed; the bench is not in the launcher roster, so
+    /// `build_tree` returns an empty `screen` placeholder rather than rebuilding a
+    /// UI ad-hoc.
     pub fn build_tree(&self, _screen: Vec2) -> UiNode {
-        let mut page = UiNode { component: "screen".into(), id: "assetpipeline".into(), ..Default::default() };
-        for (signal, result) in [
-            ("on_menu", "pause_open"),
-            ("on_confirm", "wf_next"),
-            ("on_cancel", "wf_back"),
-            ("on_tab_next", "wf_next"),
-            ("on_tab_prev", "wf_back"),
-            ("on_mode_next", "gizmo_next"),
-            ("on_mode_prev", "gizmo_prev"),
-        ] {
-            page.props.insert(signal.into(), Value::Text(result.into()));
-        }
-        page.children =
-            vec![UiNode { template: Some(BENCH_TEMPLATE.into()), ..Default::default() }];
-        // Expanded HERE, not at the call sites, so the scene and every gate walk the
-        // SAME tree — a proto left unresolved would otherwise draw a bare box in the
-        // app while the tests inspected a `template` node they never opened (8634C200).
-        expand(page, &self.templates)
+        UiNode { component: "screen".to_string(), id: "assetpipeline".to_string(), ..Default::default() }
     }
 
     /// The gizmo-mode toggle's dispatcher — POINTER and PAD reaching one piece of
@@ -4523,168 +4488,6 @@ mod tests {
         );
     }
 
-    /// GEOMETRY GUARD — no HUD draw command may escape the screen horizontally at the real
-    /// display sizes. The binding tests prove the tree walks; this proves it FITS. A mis-sized
-    /// button or a text slot placed past a panel edge (the "corrupted layout" this HUD carried,
-    /// from `size` doubling as a Row's width) surfaces here as a rect or glyph beyond the right
-    /// edge — caught in CI instead of by eye in the window, which the harness cannot open.
-    #[test]
-    fn hud_never_overflows_the_screen_width() {
-        // The REAL tree, through the scene's own single seam — so this gate inspects
-        // exactly what the app draws (8634C200: a gate that builds its own unexpanded
-        // tree certifies the drift it exists to catch).
-        let tree = AssetPipeline::new().build_tree(Vec2::new(1600.0, 900.0));
-        let styles = load_styles(HUD_UI_ELEMENTS);
-
-        // Vocabulary gate, same spirit as the overflow check below: an unknown kind draws
-        // NOTHING, so a name left behind by a rename is invisible in the window this
-        // harness cannot open.
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "clayworks_bench names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "clayworks_bench ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
-        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published from
-        // Rust into the Model bypasses the tree gate above, so the crate self-gates its
-        // OWN source — every `.set`/`.with` value must be a resolved `$token`, a data
-        // shape, or carry an explicit `strings-gate-exempt` reason.
-        let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
-        // The workflow drift gate: every step of BOTH shipped definitions has a node in
-        // the REAL tree gating on its surface key — a definition/tree mismatch is a build
-        // failure here, not a step that flips its surface and renders a blank page.
-        let mut gate_ed = AssetPipeline::new();
-        assert!(
-            gate_ed.wf.ungated_steps(&tree).is_empty(),
-            "character workflow steps with no visible_bind in the tree: {:?}",
-            gate_ed.wf.ungated_steps(&tree)
-        );
-        gate_ed.dispatch_workflow(Some(AssetClass::Prop));
-        assert!(
-            gate_ed.wf.ungated_steps(&tree).is_empty(),
-            "prop workflow steps with no visible_bind in the tree: {:?}",
-            gate_ed.wf.ungated_steps(&tree)
-        );
-
-        // The user's 1600×900 fullscreen (settings.json) and the 1280×720 windowed default.
-        const SIZES: [Vec2; 2] = [Vec2::new(1600.0, 900.0), Vec2::new(1280.0, 720.0)];
-        let tol = 1.5_f32;
-        let check = |model: &ValueMap, screen: Vec2, step: &str| {
-            let snap = UiInput {
-                mouse: Vec2::new(-100.0, -100.0),
-                clicked: false,
-                down: false,
-                screen,
-                typed: String::new(),
-                backspace: false,
-                wheel: 0.0,
-            };
-            let mut state = UiState::new();
-            let frame = run_ui(&tree, model, &styles, &snap, &mut state);
-            for cmd in &frame.commands {
-                let (x, right, y) = match *cmd {
-                    HudCommand::Rect { x, y, w, .. } | HudCommand::Sprite { x, y, w, .. } => {
-                        (x, x + w, y)
-                    }
-                    // A right-aligned label's `x` is already its right edge (it renders leftward);
-                    // a left/centre one's `x` is its start. Either way `x` must be on-screen.
-                    HudCommand::Text { x, y, .. } => (x, x, y),
-                    _ => continue,
-                };
-                assert!(
-                    x >= -tol && right <= screen.x + tol,
-                    "{step} @ {screen:?}: draw x={x}..{right} escapes width {}",
-                    screen.x
-                );
-                assert!(y >= -tol, "{step} @ {screen:?}: draw y={y} is above the top edge");
-            }
-        };
-
-        // The Workflow page is the FIRST screen shown and needs no content — always exercise the top
-        // bar + footer here (the empty-state the user first hit).
-        for screen in SIZES {
-            check(&AssetPipeline::new().hud_model(), screen, "task");
-        }
-
-        // The later stages need a parsed source; skip cleanly when the content tree is absent.
-        let Some(mut ed) = parsed() else {
-            eprintln!("skipping stage bounds: no content tree");
-            return;
-        };
-        // Every stop of the character workflow: Back to Task first (the folder stays open),
-        // then walk forward, conforming when the rig view is reached.
-        ed.apply_workflow_results(&fired("wf_back"));
-        for step in ["task", "conform", "attach", "review"] {
-            park(&mut ed, step);
-            if step == "conform" {
-                ed.conform();
-            }
-            for screen in SIZES {
-                check(&ed.hud_model(), screen, step);
-            }
-        }
-
-        // A non-character's rig page is Conform under the Mount role (socket picker +
-        // offset/rotation/scale sliders) in place of the character bone map — verify THAT
-        // subtree also fits the screen.
-        ed.source.as_mut().unwrap().class = Some(AssetClass::Prop);
-        ed.apply_workflow_results(&fired("wf_back"));
-        ed.apply_workflow_results(&fired("wf_back"));
-        assert_eq!(ed.wf.step(), "conform");
-        for screen in SIZES {
-            check(&ed.hud_model(), screen, "conform");
-        }
-    }
-
-    /// Every stage's controls must walk against the REAL Lua tree and the REAL json — this is
-    /// what turns a renamed bind or a missing style path into a build failure instead of an
-    /// empty panel found in the window.
-    #[test]
-    fn every_stage_subtree_walks_and_binds() {
-        let Some(mut ed) = at_conform() else {
-            eprintln!("skipping: no content tree");
-            return;
-        };
-        load_shipped_strings(); // the per-step needles are token-resolved copy now
-        // The REAL tree, through the scene's own single seam — so this gate inspects
-        // exactly what the app draws (8634C200: a gate that builds its own unexpanded
-        // tree certifies the drift it exists to catch).
-        let tree = AssetPipeline::new().build_tree(Vec2::new(1600.0, 900.0));
-        let styles = load_styles(HUD_UI_ELEMENTS);
-
-        // One representative bound string per stage — if the stage's subtree failed to build or
-        // its binding was renamed, the string never reaches the draw commands.
-        for (step, needle) in [
-            ("conform", "Internal rig"),
-            ("attach", "Grip"),
-            ("review", "skeleton conforms"),
-        ] {
-            park(&mut ed, step);
-            let model = ed.hud_model();
-            let snap = UiInput {
-                mouse: Vec2::new(-100.0, -100.0),
-                clicked: false,
-                down: false,
-                screen: Vec2::new(1520.0, 980.0),
-                typed: String::new(),
-                backspace: false,
-                wheel: 0.0,
-            };
-            let mut state = UiState::new();
-            let frame = run_ui(&tree, &model, &styles, &snap, &mut state);
-            let drew = frame.commands.iter().any(|c| {
-                matches!(c, HudCommand::Text { text, .. } if text.contains(needle))
-            });
-            assert!(drew, "{step:?}: no draw command carried {needle:?}");
-        }
-    }
-
     /// COMMIT writes a rig the engine's own loader accepts, carrying the authored offsets and
     /// the bake's synthesized root. Written to a scratch dir — the live content tree is Aaron's,
     /// and a test that rewrote a shipped character would be a destructive one.
@@ -4759,7 +4562,7 @@ mod tests {
     /// deleted `assetpipeline.map.*` key would otherwise show as default ink and read as fine.
     #[test]
     fn bone_map_colours_resolve_against_the_shared_palette() {
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         for state in [MapState::Ok, MapState::Review, MapState::Auto] {
             let mut node = &styles;
             for part in state.color().split('.') {
@@ -4772,70 +4575,6 @@ mod tests {
         }
         // The Review stage's failure colour rides the same block.
         assert!(styles["assetpipeline"]["map"]["fail"].is_array());
-    }
-
-    /// The real HUD script + the real `ui_elements.json` must load and walk together —
-    /// this is what makes a missing `UI.assetpipeline` key or a renamed bind a BUILD
-    /// failure rather than an empty panel discovered in the window.
-    #[test]
-    fn hud_tree_walks_against_the_shared_ui_elements() {
-        // The HUD's display copy is `$token`s now (S10 strings gate); load the
-        // shipped table so the walked commands carry the resolved en-us text.
-        load_shipped_strings();
-        let styles = load_styles(HUD_UI_ELEMENTS);
-        let mut ed = AssetPipeline::new();
-        let tree = ed.build_tree(Vec2::new(1600.0, 900.0));
-        let model = ed.hud_model();
-        let snap = UiInput {
-            mouse: Vec2::new(-100.0, -100.0), // parked off-panel: no hover, no click
-            clicked: false,
-            down: false,
-            screen: Vec2::new(1520.0, 980.0),
-            typed: String::new(),
-            backspace: false,
-            wheel: 0.0,
-        };
-        let mut state = UiState::new();
-        let frame = run_ui(&tree, &model, &styles, &snap, &mut state);
-        assert!(
-            !frame.commands.is_empty(),
-            "the walker drew nothing — the tree resolved to an empty page"
-        );
-        // The footer's step hint is a bound string, so seeing it proves the Model→tree binding
-        // actually resolved rather than silently rendering blanks. The entry page is Task now, so
-        // its hint is what the first frame draws.
-        let drew_hint = frame.commands.iter().any(|c| {
-            matches!(c, HudCommand::Text { text, .. } if text.contains("Choose the kind of asset"))
-        });
-        assert!(drew_hint, "the bound step hint did not reach the draw commands");
-
-        // The Task overlay is now built from the STANDARD templates: the `frame` gives the "Import"
-        // title bar (its `n` region) and glowing CORNER RUNES, and each DS `card` gives a workflow-noun
-        // title. Prove those reach the draw commands so a regression in the template wiring fails HERE.
-        let text_is = |needle: &str| {
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == needle))
-        };
-        assert!(text_is("Import"), "the window title bar did not draw");
-        assert!(text_is("Character"), "the first workflow card title did not draw");
-        // The rail chips ride the workflow runtime's published binds all the way to DRAW:
-        // the character definition's four pre-localized titles are on the strip.
-        for chip in ["Workflow", "Rig", "Attach", "Review"] {
-            assert!(text_is(chip), "rail chip {chip:?} did not draw");
-        }
-        assert!(
-            frame
-                .commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Text { font: flicker::script::FontRole::Rune, .. })),
-            "the window's corner runes did not draw"
-        );
-        // The card's italic flavour WRAPS: it reaches the draw commands carrying a wrap width, so a
-        // long line breaks to the card instead of running off it.
-        let wrapped_flavour = frame.commands.iter().any(|c| {
-            matches!(c, HudCommand::Text { text, wrap: Some(w), .. }
-                if text.contains("A soul given form") && *w > 0.0)
-        });
-        assert!(wrapped_flavour, "the card flavour did not draw as wrapped text with a bound width");
     }
 
     /// The right-drag pan slides the LOOK-AT POINT across the view plane so the content tracks the
@@ -4981,72 +4720,6 @@ mod tests {
     // Three assertions that hold Clayworks on the Quartermaster shape. They exist
     // because the regression they guard is INVISIBLE: a hand-composed surface looks
     // identical on screen to a configured one, so only a test can tell them apart.
-
-    /// COMPOSITION IS DATA. The bench is a proto the scene CONFIGURES, and the
-    /// per-scene HUD script that used to hand-assemble this surface out of
-    /// `Cell`/`Row`/`Stack` builders is gone — asserted by absence, so the legacy
-    /// idiom cannot come back quietly the way it did in Sablework (81885AB7).
-    #[test]
-    fn the_bench_is_a_data_proto_the_scene_only_configures() {
-        let reg = builtin_templates();
-        for proto in
-            ["clayworks_bench", "clayworks_row", "clayworks_bank", "clayworks_offset", "clayworks_import_card"]
-        {
-            assert!(reg.contains_key(proto), "`{proto}` is registered in ui_templates.json");
-        }
-
-        // No unexpanded `template` node survives `build_tree` — the expand seam is
-        // INSIDE it, so the scene and every gate above walk the same tree.
-        fn unexpanded(n: &UiNode, out: &mut Vec<String>) {
-            if let Some(t) = n.template.as_ref() {
-                out.push(t.clone());
-            }
-            n.children.iter().for_each(|c| unexpanded(c, out));
-        }
-        let tree = AssetPipeline::new().build_tree(Vec2::new(1600.0, 900.0));
-        let mut left = Vec::new();
-        unexpanded(&tree, &mut left);
-        assert!(left.is_empty(), "these protos never resolved: {left:?}");
-
-        let lua = std::path::Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/scripts/hud_assetpipeline.lua"
-        ));
-        assert!(
-            !lua.exists(),
-            "hud_assetpipeline.lua is back — composition belongs in ui_templates.json, not a per-scene script"
-        );
-    }
-
-    /// THE SCREEN DECLARES ITS INPUT AS DATA (S9). The root carries `on_<signal>`
-    /// props and `UiIntents::of` collects every one of them — a suffix that names no
-    /// `ActionSignal` is warned-and-skipped, which would silently produce a dead
-    /// binding, so the count is the assertion.
-    #[test]
-    fn the_screen_declares_its_input_as_data() {
-        let tree = AssetPipeline::new().build_tree(Vec2::new(1600.0, 900.0));
-        let declared: Vec<&String> =
-            tree.props.keys().filter(|k| k.starts_with("on_")).collect();
-        assert_eq!(declared.len(), 7, "seven declared intents, got {declared:?}");
-
-        let intents = UiIntents::of(&tree);
-        use flicker_input_core::ActionSignal;
-        for (signal, name) in [
-            (ActionSignal::Menu, "pause_open"),
-            (ActionSignal::Confirm, "wf_next"),
-            (ActionSignal::Cancel, "wf_back"),
-            (ActionSignal::TabNext, "wf_next"),
-            (ActionSignal::TabPrev, "wf_back"),
-            (ActionSignal::ModeNext, "gizmo_next"),
-            (ActionSignal::ModePrev, "gizmo_prev"),
-        ] {
-            assert_eq!(
-                intents.result_for(signal),
-                Some(name),
-                "{signal:?} resolves — an uncollected intent is a pad press bound to nothing"
-            );
-        }
-    }
 
     /// EVERY DECLARED INTENT REACHES THE DISPATCHER. A result name the scene never
     /// acts on is dead hardware: the button is bound, the signal fires, nothing
@@ -5347,9 +5020,7 @@ mod tests {
     }
 
     /// A conform edit arms the Back DISCARD GUARD: Back holds the page and raises the
-    /// `wf_discard` surface, "keep editing" stays put, "discard" steps back — and the
-    /// dialog genuinely draws through the real tree (the `choice_dialog` instance the HUD
-    /// gates on that surface), so the guard is not an invisible state.
+    /// `wf_discard` surface, "keep editing" stays put, "discard" steps back.
     #[test]
     fn dirty_back_raises_the_discard_dialog() {
         load_shipped_strings();
@@ -5360,28 +5031,6 @@ mod tests {
         assert_eq!(ed.wf.step(), "conform", "held until the dialog resolves");
         let m = ed.hud_model();
         assert!(m.is_on("wf_discard"), "the confirm dialog surface is up");
-
-        // The dialog reaches the DRAW commands through the real Lua tree + templates.
-        // The REAL tree, through the scene's own single seam — so this gate inspects
-        // exactly what the app draws (8634C200: a gate that builds its own unexpanded
-        // tree certifies the drift it exists to catch).
-        let tree = AssetPipeline::new().build_tree(Vec2::new(1600.0, 900.0));
-        let styles = load_styles(HUD_UI_ELEMENTS);
-        let snap = UiInput {
-            mouse: Vec2::new(-100.0, -100.0),
-            clicked: false,
-            down: false,
-            screen: Vec2::new(1520.0, 980.0),
-            typed: String::new(),
-            backspace: false,
-            wheel: 0.0,
-        };
-        let mut state = UiState::new();
-        let frame = run_ui(&tree, &m, &styles, &snap, &mut state);
-        let drew = frame.commands.iter().any(|c| {
-            matches!(c, HudCommand::Text { text, .. } if text.contains("ARE YOU SURE?"))
-        });
-        assert!(drew, "the discard dialog did not draw over the bench");
 
         // Keep editing: the dialog closes, the step holds. Then a clean discard steps back.
         ed.apply_workflow_results(&fired("wf_discard_no"));
@@ -5436,4 +5085,13 @@ mod tests {
         assert_eq!(floor, -3.5, "lowest extent (z=10) recentred about 13.5");
         assert!(floor < 0.0, "a recentred floor is always below the origin");
     }
+}
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
 }

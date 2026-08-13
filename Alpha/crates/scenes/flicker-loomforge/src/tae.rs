@@ -350,7 +350,7 @@ mod tests {
                 "{k:?} shares its lane with another kind"
             );
         }
-        // Lane ids are the ui_elements keys — a collision would cross two lanes' colours.
+        // Lane ids are the ui_theme keys — a collision would cross two lanes' colours.
         let mut ids: Vec<&str> = Lane::ALL.iter().map(|l| l.id()).collect();
         ids.sort_unstable();
         ids.dedup();

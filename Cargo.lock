@@ -943,6 +943,7 @@ dependencies = [
  "flicker-core",
  "flicker-input-core",
  "flicker-input-device",
+ "flicker-input-router",
  "flicker-render",
  "pollster",
  "tracing",
@@ -986,6 +987,18 @@ name = "flicker-clicktrainer"
 version = "0.1.0"
 dependencies = [
  "fastrand",
+ "flicker",
+ "flicker-input-core",
+ "flicker-input-router",
+ "flicker-shell",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "flicker-componentcatalog"
+version = "0.1.0"
+dependencies = [
  "flicker",
  "flicker-input-core",
  "flicker-input-router",
@@ -1424,6 +1437,7 @@ dependencies = [
  "flicker-worldgen",
  "flicker-worldgrid",
  "glam",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3071,6 +3085,7 @@ dependencies = [
  "anyhow",
  "flicker-assetpipeline",
  "flicker-clicktrainer",
+ "flicker-componentcatalog",
  "flicker-content",
  "flicker-controllertester",
  "flicker-godmode",
@@ -3081,6 +3096,7 @@ dependencies = [
  "flicker-sablework",
  "flicker-shell",
  "flicker-solarbirth",
+ "flicker-widgets",
  "tracing",
  "tracing-subscriber",
 ]

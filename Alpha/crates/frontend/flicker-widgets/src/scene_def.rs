@@ -7,7 +7,7 @@
 //!   "behaviour": "splash",
 //!   "params":    { "image": "package/sensorium/assets/elideus_productions_yellow.png" },
 //!   "tree":      { "component": "screen", "children": [ … ] },
-//!   "exits":     { "done": { "to": "CeLogo", "mode": "replace" } }
+//!   "exits":     { "next": { "to": "CeLogo", "mode": "replace" } }
 //! }
 //! ```
 //!
@@ -53,7 +53,8 @@
 //! Every authored NAME in the file is resolved AT LOAD and every failure is an
 //! `Err` (rule: a name that fails to NOTHING is the difference between authorable
 //! and not). An unreadable file, an unparseable tree, a missing `behaviour`, an
-//! unknown component kind, an unknown template name, an unspellable `mode`, a
+//! unknown component kind, a `template` key (the tier is gone — 201F4F51), an
+//! unspellable `mode`, a
 //! mistyped top-level key, zero or two scenes claiming `boot` — all refuse to load
 //! rather than yielding a scene that renders a blank screen. The TWO checks this
 //! module cannot make are whether an exit's `to` names a scene the client can
@@ -66,8 +67,6 @@ use std::path::Path;
 
 use flicker_scene::{GotoMode, Transition};
 use flicker_script::UiNode;
-
-use crate::template::{expand, TemplateDef, TemplateRegistry};
 
 /// The file-name suffix that marks a scene file — `TegLogo.scene.json`. The part
 /// before it is the scene's id, so the naming convention IS the roster key.
@@ -112,7 +111,7 @@ pub struct SceneDef {
     /// `true` on the ONE scene the application boots into. Exactly one scene in a
     /// [`SceneManifest`] may claim it — so even "what starts first" is authored.
     pub boot: bool,
-    /// The authored UI tree, already template-expanded and vocabulary-checked.
+    /// The authored UI tree, already parsed and vocabulary-checked.
     ///
     /// `None` when the file authors no `tree` — a scene whose visuals are still
     /// drawn by Rust or by an immediate-mode script (the intro splash plays its
@@ -122,6 +121,12 @@ pub struct SceneDef {
     pub tree: Option<UiNode>,
     /// Fired result name → where it goes.
     pub exits: HashMap<String, SceneExit>,
+    /// The scene's OWN style values (the five-line split, Aaron 2026-08-12):
+    /// per-scene blocks the tree's dotted `style` paths / binds resolve through,
+    /// merged over the shared theme root by `load_styles_for`. Colours in here are
+    /// `$token` refs — the palette stays `ui_theme.json`'s alone. `None` when the
+    /// scene needs nothing beyond the shared defaults.
+    pub styles: Option<serde_json::Value>,
 }
 
 /// The top-level keys a scene file may carry. Anything else is a typo — and a
@@ -131,25 +136,21 @@ pub struct SceneDef {
 /// `id` is deliberately NOT here: the id comes from the file name, and a document
 /// that restates it would be a second source of truth free to disagree with the
 /// first.
-const SCENE_KEYS: &[&str] = &["_comment", "boot", "behaviour", "params", "tree", "exits"];
+const SCENE_KEYS: &[&str] =
+    &["_comment", "boot", "behaviour", "params", "tree", "exits", "styles"];
 
 impl SceneDef {
     /// Read one scene file. `id` is the file's derived id (see
-    /// [`scene_id_from_file_name`]); `reg` is the template registry its `tree` is
-    /// expanded against — normally [`builtin_templates`](crate::builtin_templates),
-    /// plus any bespoke builder the client registered.
-    pub fn parse(id: &str, text: &str, reg: &TemplateRegistry) -> Result<Self, String> {
+    /// [`scene_id_from_file_name`]); its `tree` is parsed and vocabulary-checked
+    /// against the component kinds the walker knows.
+    pub fn parse(id: &str, text: &str) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| format!("scene '{id}' is not JSON: {e}"))?;
-        Self::from_json(id, &value, reg)
+        Self::from_json(id, &value)
     }
 
     /// [`parse`](Self::parse) from an already-decoded document.
-    pub fn from_json(
-        id: &str,
-        value: &serde_json::Value,
-        reg: &TemplateRegistry,
-    ) -> Result<Self, String> {
+    pub fn from_json(id: &str, value: &serde_json::Value) -> Result<Self, String> {
         let obj = value
             .as_object()
             .ok_or_else(|| format!("scene '{id}': file must be a JSON object"))?;
@@ -197,7 +198,7 @@ impl SceneDef {
 
         let tree = match obj.get("tree") {
             None | Some(serde_json::Value::Null) => None,
-            Some(json) => Some(build_tree(json, reg).map_err(|e| format!("scene '{id}': {e}"))?),
+            Some(json) => Some(build_tree(json).map_err(|e| format!("scene '{id}': {e}"))?),
         };
 
         let mut exits = HashMap::new();
@@ -213,7 +214,22 @@ impl SceneDef {
             Some(_) => return Err(format!("scene '{id}': `exits` must be an object")),
         }
 
-        Ok(Self { id: id.to_string(), behaviour, params, boot, tree, exits })
+        let styles = match obj.get("styles") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v @ serde_json::Value::Object(map)) => {
+                if map.contains_key("theme") {
+                    return Err(format!(
+                        "scene '{id}': `styles` carries a `theme` key — the palette \
+                         lives ONLY in ui_theme.json (one-palette law); a scene's \
+                         colours are $token refs"
+                    ));
+                }
+                Some(v.clone())
+            }
+            Some(_) => return Err(format!("scene '{id}': `styles` must be an object")),
+        };
+
+        Ok(Self { id: id.to_string(), behaviour, params, boot, tree, exits, styles })
     }
 
     /// One string entry from this scene's [`params`](Self::params) — the shape a
@@ -269,7 +285,7 @@ impl SceneManifest {
     /// failure (a `.DS_Store`, an editor backup, a stray note must not stop the
     /// app from booting) — but every file that IS one must load, and the folder
     /// must yield exactly one `boot` scene.
-    pub fn load_dir(dir: &Path, reg: &TemplateRegistry) -> Result<Self, String> {
+    pub fn load_dir(dir: &Path) -> Result<Self, String> {
         let listing = std::fs::read_dir(dir)
             .map_err(|e| format!("scenes folder {} could not be read: {e}", dir.display()))?;
         // Sort by file name so a load ERROR names files in a stable order too.
@@ -302,8 +318,7 @@ impl SceneManifest {
                 .map_err(|e| format!("scene file {} could not be read: {e}", path.display()))?;
             files.push((id.to_string(), text));
         }
-        Self::from_files(files, reg)
-            .map_err(|e| format!("{e} (scenes folder: {})", dir.display()))
+        Self::from_files(files).map_err(|e| format!("{e} (scenes folder: {})", dir.display()))
     }
 
     /// Build a manifest from already-read `(id, text)` pairs — what
@@ -311,11 +326,10 @@ impl SceneManifest {
     /// a test drives without touching a disk.
     pub fn from_files(
         files: impl IntoIterator<Item = (String, String)>,
-        reg: &TemplateRegistry,
     ) -> Result<Self, String> {
         let mut scenes = BTreeMap::new();
         for (id, text) in files {
-            let def = SceneDef::parse(&id, &text, reg)?;
+            let def = SceneDef::parse(&id, &text)?;
             scenes.insert(id, def);
         }
         if scenes.is_empty() {
@@ -385,47 +399,17 @@ impl SceneManifest {
     }
 }
 
-/// Parse + expand + vocabulary-check one authored `tree`.
-fn build_tree(json: &serde_json::Value, reg: &TemplateRegistry) -> Result<UiNode, String> {
+/// Parse + vocabulary-check one authored `tree`. `parse_ui_json` fails loud on a
+/// stale `template`/`slots` key (the tier is gone — 201F4F51); the kind gate then
+/// rejects any `component` the walker does not know, so an authored name that
+/// resolves to nothing is a LOAD error, never a page with a hole in it.
+fn build_tree(json: &serde_json::Value) -> Result<UiNode, String> {
     let node = flicker_script::parse_ui_json(json).map_err(|e| format!("`tree` did not parse: {e}"))?;
-    // Template names are resolved BEFORE expansion, because `expand` stands an
-    // unknown template in as an empty screen (a warn, and a page with a hole in
-    // it). At load a typo is simply an error.
-    let missing = unknown_templates(&node, reg);
-    if !missing.is_empty() {
-        return Err(format!("`tree` names unknown template(s) {missing:?}"));
-    }
-    let node = expand(node, reg);
     let unknown = crate::unknown_kinds(&node);
     if !unknown.is_empty() {
         return Err(format!("`tree` names unknown component kind(s) {unknown:?}"));
     }
     Ok(node)
-}
-
-/// Every template name in `node` (including its slots) that `reg` does not know,
-/// deduped in walk order.
-fn unknown_templates(node: &UiNode, reg: &TemplateRegistry) -> Vec<String> {
-    fn walk(n: &UiNode, reg: &TemplateRegistry, out: &mut Vec<String>) {
-        if let Some(name) = &n.template {
-            if !matches!(reg.get(name.as_str()), Some(TemplateDef::Builder(_) | TemplateDef::Data(_)))
-                && !out.contains(name)
-            {
-                out.push(name.clone());
-            }
-        }
-        for c in &n.children {
-            walk(c, reg, out);
-        }
-        for group in n.slots.values() {
-            for c in group {
-                walk(c, reg, out);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(node, reg, &mut out);
-    out
 }
 
 /// One `exits` entry: `{ "to": "<scene id>", "mode": "replace" }`.
@@ -458,7 +442,6 @@ fn parse_exit(spec: &serde_json::Value) -> Result<SceneExit, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builtin_templates;
 
     fn goto(t: Option<Transition>) -> Option<(String, GotoMode)> {
         match t {
@@ -475,7 +458,6 @@ mod tests {
             "TegLogo",
             r#"{ "behaviour": "splash", "params": { "image": "logo.png" },
                  "exits": { "done": { "to": "CeLogo" } } }"#,
-            &builtin_templates(),
         )
         .expect("scene file loads");
         assert_eq!(def.id, "TegLogo", "the id is the file's, not the document's");
@@ -515,7 +497,6 @@ mod tests {
                    "a": { "to": "x", "mode": "replace" },
                    "b": { "to": "y", "mode": "replace_root" },
                    "c": { "to": "z", "mode": "push" } } }"#,
-            &builtin_templates(),
         )
         .expect("scene file loads");
         assert_eq!(goto(def.exit("a")), Some(("x".into(), GotoMode::Replace)));
@@ -525,36 +506,33 @@ mod tests {
         let bad = SceneDef::parse(
             "S",
             r#"{ "behaviour": "menu", "exits": { "a": { "to": "x", "mode": "pop" } } }"#,
-            &builtin_templates(),
         );
         assert!(bad.is_err_and(|e| e.contains("pop")), "an unspellable mode fails loud");
     }
 
-    /// An authored tree goes through the SAME reader + template tier a Lua-declared
-    /// screen does: `stat_row` is a data proto, and it must be gone (expanded into
-    /// real components) by the time the def is built.
+    /// An authored tree goes through the SAME reader every scene walks: it parses
+    /// to real component KINDS and the vocabulary gate confirms the walker knows
+    /// every one (the template tier that once sat between is gone — 201F4F51).
     #[test]
-    fn an_authored_tree_parses_and_expands() {
+    fn an_authored_tree_parses_and_vocabulary_checks() {
         let def = SceneDef::parse(
             "S",
             r#"{ "behaviour": "menu", "tree": { "component": "screen", "children": [
-                   { "template": "stat_row", "caption": "$menu_settings", "value_bind": "v" } ] } }"#,
-            &builtin_templates(),
+                   { "component": "row", "children": [
+                       { "component": "text", "text": "$menu_settings" },
+                       { "component": "text", "text_bind": "v" } ] } ] } }"#,
         )
         .expect("scene file loads");
         let tree = def.tree.expect("tree authored");
         assert_eq!(tree.component, "screen");
-        fn any_template(n: &UiNode) -> bool {
-            n.template.is_some() || n.children.iter().any(any_template)
-        }
-        assert!(!any_template(&tree), "no unexpanded template survives the load");
         assert!(crate::unknown_kinds(&tree).is_empty(), "the built tree names known kinds only");
     }
 
-    /// Every authored NAME fails LOUD rather than to nothing.
+    /// Every authored NAME fails LOUD rather than to nothing — including the stale
+    /// `template` / `slots` keys of the removed tier (201F4F51), which the reader
+    /// now rejects outright instead of dropping their subtree silently.
     #[test]
     fn authored_names_that_do_not_resolve_are_load_errors() {
-        let reg = builtin_templates();
         let cases = [
             (r#"{ "exits": {} }"#, "no `behaviour`"),
             (r#"{ "behaviour": "" }"#, "an empty `behaviour`"),
@@ -562,15 +540,16 @@ mod tests {
             (r#"{ "behaviour": "menu", "params": [] }"#, "params that are not a map"),
             (r#"{ "behaviour": "menu", "boot": "yes" }"#, "a non-boolean boot"),
             (r#"{ "behaviour": "menu", "tree": { "component": "buttonn" } }"#, "unknown component kind"),
-            (r#"{ "behaviour": "menu", "tree": { "template": "no_such_template" } }"#, "unknown template"),
-            (r#"{ "behaviour": "menu", "tree": { "id": "x" } }"#, "a node with neither component nor template"),
+            (r#"{ "behaviour": "menu", "tree": { "template": "window" } }"#, "a `template` key (the tier is gone)"),
+            (r#"{ "behaviour": "menu", "tree": { "component": "cell", "slots": {} } }"#, "a `slots` key (the tier is gone)"),
+            (r#"{ "behaviour": "menu", "tree": { "id": "x" } }"#, "a node with no component"),
             (r#"{ "behaviour": "menu", "exits": { "done": {} } }"#, "an exit with no target"),
             (r#"{ "behaviour": "menu", "exits": [] }"#, "exits that are not a map"),
             ("not json at all", "unparseable"),
             ("[]", "a document that is not an object"),
         ];
         for (json, why) in cases {
-            assert!(SceneDef::parse("S", json, &reg).is_err(), "{why} must be a load error: {json}");
+            assert!(SceneDef::parse("S", json).is_err(), "{why} must be a load error: {json}");
         }
     }
 
@@ -581,7 +560,6 @@ mod tests {
         let err = SceneDef::parse(
             "TegLogo",
             r#"{ "id": "teg_logo", "behaviour": "splash" }"#,
-            &builtin_templates(),
         )
         .expect_err("a document may not restate its id");
         assert!(err.contains("FILE NAME"), "the error points at the fix: {err}");
@@ -599,7 +577,7 @@ mod tests {
                     .to_string(),
             ),
         ];
-        let m = SceneManifest::from_files(files, &builtin_templates()).expect("manifest loads");
+        let m = SceneManifest::from_files(files).expect("manifest loads");
         assert_eq!(m.boot(), "TegLogo", "the FILE says what starts first");
         assert_eq!(m.ids().collect::<Vec<_>>(), ["Main", "TegLogo"], "sorted, stable");
         assert_eq!(m.len(), 2);
@@ -611,29 +589,25 @@ mod tests {
     /// Zero boots, two boots, an empty folder and a bad member are all loud.
     #[test]
     fn a_manifest_refuses_an_undefined_entry_point() {
-        let reg = builtin_templates();
-        let none = SceneManifest::from_files(
-            vec![("Main".to_string(), r#"{ "behaviour": "menu" }"#.to_string())],
-            &reg,
-        );
+        let none = SceneManifest::from_files(vec![(
+            "Main".to_string(),
+            r#"{ "behaviour": "menu" }"#.to_string(),
+        )]);
         assert!(none.is_err_and(|e| e.contains("boot")), "zero boot scenes fails loud");
 
         let boot = r#"{ "boot": true, "behaviour": "menu" }"#.to_string();
-        let two = SceneManifest::from_files(
-            vec![("A".to_string(), boot.clone()), ("B".to_string(), boot)],
-            &reg,
-        );
+        let two = SceneManifest::from_files(vec![
+            ("A".to_string(), boot.clone()),
+            ("B".to_string(), boot),
+        ]);
         assert!(
             two.is_err_and(|e| e.contains("\"A\"") && e.contains("\"B\"")),
             "two boot scenes fails loud, naming both"
         );
 
-        assert!(SceneManifest::from_files(vec![], &reg).is_err(), "an empty roster fails loud");
+        assert!(SceneManifest::from_files(vec![]).is_err(), "an empty roster fails loud");
 
-        let bad = SceneManifest::from_files(
-            vec![("Broken".to_string(), "{ nope".to_string())],
-            &reg,
-        );
+        let bad = SceneManifest::from_files(vec![("Broken".to_string(), "{ nope".to_string())]);
         assert!(bad.is_err_and(|e| e.contains("Broken")), "a bad member names itself: ");
     }
 
@@ -653,13 +627,13 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"not a scene").unwrap();
         std::fs::create_dir_all(dir.join("subdir")).unwrap();
 
-        let m = SceneManifest::load_dir(&dir, &builtin_templates()).expect("folder indexes");
+        let m = SceneManifest::load_dir(&dir).expect("folder indexes");
         assert_eq!(m.ids().collect::<Vec<_>>(), ["Main"], "only scene files join the roster");
         assert_eq!(m.boot(), "Main");
 
         // A file that IS a scene file but does not load is fatal, and says which.
         std::fs::write(dir.join("Broken.scene.json"), b"{ nope").unwrap();
-        let err = SceneManifest::load_dir(&dir, &builtin_templates())
+        let err = SceneManifest::load_dir(&dir)
             .expect_err("a broken scene file fails the whole load");
         assert!(err.contains("Broken"), "the error names the file: {err}");
 
@@ -671,7 +645,7 @@ mod tests {
     fn a_missing_scenes_folder_is_an_error() {
         let dir = std::env::temp_dir().join("flicker_scene_manifest_absent");
         let _ = std::fs::remove_dir_all(&dir);
-        let err = SceneManifest::load_dir(&dir, &builtin_templates())
+        let err = SceneManifest::load_dir(&dir)
             .expect_err("no folder = no roster = loud");
         assert!(err.contains("could not be read"), "{err}");
     }

@@ -3,7 +3,7 @@
 //! shared 1×1 white pixel + the **Muse** main-menu character (with a baked
 //! left-edge alpha fade), and (3) renders the Rust loading widget
 //! ([`Theme::draw_loading`], flat vector chrome). Every colour it draws is a
-//! **`theme.tokens`** lookup into the embedded `ui_elements.json` — the ONE
+//! **`theme.tokens`** lookup into the embedded `ui_theme.json` — the ONE
 //! palette source the Lua screens read too, so the Rust-drawn loading screen can
 //! never drift from the design language. `Theme::lua_textures` hands the
 //! textures to a Lua screen by name.
@@ -20,20 +20,20 @@ use flicker::render::{Renderer, TextureHandle, Vec2};
 
 /// The shell's embedded UI-element layout — the SAME bytes `shell.rs` exposes to
 /// Lua; parsed here once for the `theme.tokens` palette.
-const UI_JSON: &str = include_str!("../../../../content/sensorium/resources/ui_elements.json");
+const UI_JSON: &str = include_str!("../../../../content/sensorium/resources/ui_theme.json");
 
 /// The Prism palette (`theme.tokens`), parsed once from the embedded
-/// `ui_elements.json`. Missing/malformed entries fall back to opaque magenta —
+/// `ui_theme.json`. Missing/malformed entries fall back to opaque magenta —
 /// loudly visible, exactly like a bad token in the Lua path.
 static TOKENS: LazyLock<HashMap<String, [f32; 4]>> = LazyLock::new(|| {
     let fallback = HashMap::new();
     let Ok(root) = serde_json::from_str::<serde_json::Value>(UI_JSON) else {
-        tracing::error!("theme: embedded ui_elements.json did not parse — token palette empty");
+        tracing::error!("theme: embedded ui_theme.json did not parse — token palette empty");
         return fallback;
     };
     let Some(tokens) = root.get("theme").and_then(|t| t.get("tokens")).and_then(|t| t.as_object())
     else {
-        tracing::error!("theme: embedded ui_elements.json has no theme.tokens");
+        tracing::error!("theme: embedded ui_theme.json has no theme.tokens");
         return fallback;
     };
     tokens
@@ -87,7 +87,7 @@ const CURSOR_TINT: &str = "gold_ring";
 /// a style tints each one. Embedded like the Muse so every shell app inherits it,
 /// and ONE texture so a whole footer legend draws in a single bind. Regenerate from
 /// the source SVGs with `tools/gen_prism_pad_glyphs.py`; the name → cell map lives in
-/// `ui_elements.json` under `pad_glyphs`.
+/// `ui_theme.json` under `pad_glyphs`.
 const PAD_GLYPHS_IMAGE: &[u8] =
     include_bytes!("../../../../content/package/sensorium/assets/prism_pad_glyphs.png");
 

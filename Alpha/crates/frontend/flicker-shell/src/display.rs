@@ -95,7 +95,7 @@ impl Default for DisplaySetting {
 
 /// Windowed resolution rungs the settings panel offers (physical px). These MUST stay
 /// index-aligned with the `settings.video.resolution` dropdown options in
-/// `ui_elements.json` — this array is the single source for that index↔size mapping.
+/// `ui_theme.json` — this array is the single source for that index↔size mapping.
 /// `apply` clamps the chosen rung to the monitor, so a rung larger than the screen
 /// simply fits to the screen.
 pub const RESOLUTIONS: [Resolution; 6] = [

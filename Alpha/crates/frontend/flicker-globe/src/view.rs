@@ -89,7 +89,7 @@ impl Default for GlobeStage {
 }
 
 impl GlobeStage {
-    /// Parse `stages.<source>` out of the loaded `ui_elements.json`.
+    /// Parse `stages.<source>` out of the loaded `ui_theme.json`.
     ///
     /// Best-effort: anything missing keeps the default, because a malformed
     /// style file must not leave a bench with a black hole and no explanation.

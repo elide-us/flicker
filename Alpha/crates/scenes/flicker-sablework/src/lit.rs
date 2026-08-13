@@ -27,7 +27,7 @@ use flicker::render::{
     Vec3,
 };
 
-/// The stage source this view is authored under, in `ui_elements.json`'s `stages`
+/// The stage source this view is authored under, in `ui_theme.json`'s `stages`
 /// block. The look — lighting, camera framing — is DATA there, not constants here.
 pub const STAGE_SOURCE: &str = "sablework_lit";
 /// Turns per second of the turntable. Slow: the point is to watch a highlight
@@ -176,7 +176,7 @@ impl Default for Stage {
 }
 
 impl Stage {
-    /// Parse `stages.<source>` out of the loaded `ui_elements.json`.
+    /// Parse `stages.<source>` out of the loaded `ui_theme.json`.
     ///
     /// Best-effort: anything missing keeps the default, because a malformed style
     /// file must not leave the bench with a black panel and no explanation. What
@@ -386,10 +386,13 @@ mod tests {
     /// stage config nothing reads is an authored name that resolves to nothing.
     #[test]
     fn the_authored_stage_is_read_and_lights_the_sample() {
-        let styles = flicker::ui::load_styles(concat!(
+        let styles = flicker::ui::load_styles_for(
+            concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_elements.json"
-        ));
+            "/../../../content/sensorium/resources/ui_theme.json"
+            ),
+            Some(&crate::scene_styles()),
+        );
         let stage = Stage::from_styles(&styles, STAGE_SOURCE);
 
         // It must differ from the bare default, or nothing was actually read.

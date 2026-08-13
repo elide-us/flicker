@@ -14,7 +14,9 @@ mod system;
 
 pub use scene::Sim;
 
-/// Build the solar-birth cinematic as a boxed `Scene` for the shell's scene registry.
-pub fn scene() -> Box<dyn flicker::scene::Scene> {
-    Box::new(Sim::new())
+/// Build the solar-birth cinematic as a boxed `Scene` — the CLIENT BEHAVIOUR the
+/// roster registers; the manifest resolves `solarbirth.scene.json` and hands its
+/// def here.
+pub fn scene(def: &flicker::ui::SceneDef) -> Box<dyn flicker::scene::Scene> {
+    Box::new(Sim::new(def))
 }

@@ -10,7 +10,7 @@
 //! [ROOT] RootHandler    declares the World base context (no consuming arms)
 //! [1]    WalkerHandler   the HUD panel — hud_hit pointer-consume + the screen's
 //!                        DECLARED intents (S9: `on_menu = "pause_open"` on the
-//!                        hud_clicktrainer.lua root)   [flicker-widgets]
+//!                        clicktrainer.scene.json root)   [flicker-widgets]
 //! [2]    GameplayBase    the target click, run only on Pass
 //! ```
 //!
@@ -30,7 +30,7 @@ pub const ROOT: usize = 0;
 /// **[ROOT]** The scene-mode root. Declares the base `World` context — nothing
 /// more. Its hardcoded `Menu`-press arm died with S10: the pause-open binding is
 /// DATA on the screen root now (`on_menu = "pause_open"` in
-/// `hud_clicktrainer.lua`), consumed by the walker layer below and mapped onto
+/// `clicktrainer.scene.json`), consumed by the walker layer below and mapped onto
 /// the pause push by the scene.
 pub struct RootHandler;
 

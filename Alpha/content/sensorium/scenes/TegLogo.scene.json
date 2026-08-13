@@ -1,11 +1,42 @@
 {
-  "_comment": "SCENE FILE — the publisher splash, and the scene the application BOOTS into. One file per scene, named <Name>.scene.json; the engine indexes this whole folder at startup, so THE FOLDER LISTING IS THE ROSTER and the scene's id is its file name (TegLogo) — never restated inside the document. `boot` marks the one scene that starts the application: exactly one file in this folder may claim it, and zero or two is a loud failure at boot. `behaviour` names the registered Rust behaviour that PLAYS this scene (the engine knows behaviours, not scenes — adding a scene is data, adding a new KIND of scene is Rust), and `params` is that behaviour's own configuration: `splash` fades one image in/holds/out, fires the result `done`, and is skippable with click / Space / Escape. `image` is relative to the content root. `exits` maps a FIRED RESULT NAME to the scene it goes to (`mode`: replace | replace_root | push, default replace) — so reordering the intro, or booting straight to the menu, is editing this file, not recompiling. NO `tree` YET: the splash's visuals are the immediate-mode `scripts/logo.lua` timeline over the image above, fitted by the image's runtime pixel size — there is no component tree to author until that draw converts, and authoring a decorative one the engine does not read would be dead data.",
+  "_comment": "SCENE FILE — the publisher splash, and the scene the application BOOTS into. The `tree` below is the arrangement — one full-bleed `splash` component (the Rust widgets kind that owns all drawing). The PAIR SCRIPT (scripts/TegLogo.lua) is a module like every pair script: its arrange() sets the splash node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed; `exit` = the player backed out (Cancel/Esc). `boot` marks the one scene the application starts in.",
   "boot": true,
   "behaviour": "splash",
-  "params": {
-    "image": "package/sensorium/assets/elideus_productions_yellow.png"
-  },
   "exits": {
-    "done": { "to": "CeLogo", "mode": "replace" }
+    "next": {
+      "to": "CeLogo",
+      "mode": "replace"
+    },
+    "exit": {
+      "to": "Main",
+      "mode": "replace"
+    }
+  },
+  "styles": {
+    "logo": {
+      "backdrop": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "children": [
+      {
+        "component": "splash",
+        "id": "splash",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "fit": 0.9,
+        "backdrop": "logo.backdrop"
+      }
+    ]
   }
 }

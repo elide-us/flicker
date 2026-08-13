@@ -10,7 +10,7 @@
 //! they need free 2D positioning, edges/curves, and drop targets that the walker's
 //! closed component set has no templates for.
 //!
-//! All colours come from the ONE global `ui_elements.json` (`loomforge` section) as
+//! All colours come from the ONE global `ui_theme.json` (`loomforge` section) as
 //! `$token` refs into the Prism palette — never a private palette.
 
 mod canvas;
@@ -37,7 +37,7 @@ use flicker::script::{
     HudCommand, UiAnchor, UiNode, Value, ValueMap,
 };
 use flicker::ui::{
-    load_styles, render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
@@ -45,8 +45,8 @@ use flicker_shell::{PauseScene, Theme};
 use stage::{StageReq, StageRig};
 
 /// THE single global UI-element + Prism-palette file.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// The pack the bench opens with — the GOLEM baseline pack (seeded 2026-08-04 from the
 /// retired PrismHumanBaseA exemplar): locomotion states over the shared retarget clips.
@@ -1755,7 +1755,7 @@ impl Scene for LoomforgeBench {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.theme = Some(Theme::build(renderer));
         self.hud_white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
 
         // The Pack Browser's library: every real `*.pack.json` under the content tree.
         // Scanned once — the browser reads files, it does not watch them.
@@ -2406,7 +2406,7 @@ impl LoomforgeBench {
         json_rgba(v, fallback)
     }
 
-    /// Read an rgba from the resolved `ui_elements.json` by dotted path. The canvas is
+    /// Read an rgba from the resolved `ui_theme.json` by dotted path. The canvas is
     /// scene-drawn, so it can't ride a node `style` — but the colours still come from
     /// the ONE palette, never a private constant. `fallback` covers a missing path.
     fn color(&self, path: &str, fallback: [f32; 4]) -> [f32; 4] {
@@ -2498,7 +2498,7 @@ fn rect_contains(r: &StageRect, p: Vec2) -> bool {
     p.x >= r.pos.x && p.x <= r.pos.x + r.size.x && p.y >= r.pos.y && p.y <= r.pos.y + r.size.y
 }
 
-/// A `text` node: `color` is a dotted path into the resolved `ui_elements.json`.
+/// A `text` node: `color` is a dotted path into the resolved `ui_theme.json`.
 /// The wire name of a response — the exact value written into the mask.
 fn response_label(r: Response) -> &'static str {
     match r {
@@ -2736,7 +2736,7 @@ mod tests {
         assert_eq!(doll.id.strip_prefix(STAGE_PREFIX), Some("walk_forward"));
 
         // And the source it names must be one the shared JSON actually defines.
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         assert!(
             stage::parse_sources(&styles).contains_key(DOLL_SOURCE),
             "`{DOLL_SOURCE}` must exist in the shared `stages` block"
@@ -2759,11 +2759,11 @@ mod tests {
     #[test]
     fn every_pack_kind_colour_resolves_in_the_shared_json() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for k in packs::PackKind::ALL {
             let c = bench.color(k.color_path(), miss);
-            assert_ne!(c, miss, "{} is missing from ui_elements.json", k.color_path());
+            assert_ne!(c, miss, "{} is missing from ui_theme.json", k.color_path());
             assert!(c.iter().all(|v| v.is_finite()));
         }
     }
@@ -2774,7 +2774,7 @@ mod tests {
     #[test]
     fn pack_browser_tree_is_well_formed_over_the_real_library() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         bench.packs = packs::scan_packs(Path::new(CONTENT_CHARACTERS));
         if bench.packs.is_empty() {
             return; // content tree absent in this checkout
@@ -2812,7 +2812,7 @@ mod tests {
             EditorDoc::load(Path::new(PACK_PATH), &[Path::new(BASE_DIR), Path::new(CLIPS_DIR)]);
         let Ok(doc) = doc else { return }; // content tree absent
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         bench.doc = Some(doc);
         bench.tab = Tab::TaeEditor;
         // Select a state so the axis + track counts resolve.
@@ -2838,7 +2838,7 @@ mod tests {
     #[test]
     fn every_tae_lane_swatch_resolves() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for lane in tae::Lane::ALL {
             let path = format!("loomforge.tae_lane.{}.swatch", lane.id());
@@ -2876,7 +2876,7 @@ mod tests {
     #[test]
     fn card_stage_colours_resolve_in_the_shared_json() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for path in [
             "loomforge.canvas.stage_top",
@@ -2886,7 +2886,7 @@ mod tests {
             "loomforge.canvas.edge",
         ] {
             let c = bench.color(path, miss);
-            assert_ne!(c, miss, "{path} is missing from ui_elements.json");
+            assert_ne!(c, miss, "{path} is missing from ui_theme.json");
             assert!(c.iter().all(|v| v.is_finite()), "{path} resolved to a non-colour");
         }
         // The clip-row doll's frame is a walker `style`, so it must be a real block.
@@ -2902,7 +2902,7 @@ mod tests {
     #[test]
     fn every_tae_lane_resolves_all_four_colours() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for lane in tae::Lane::ALL {
             for key in ["swatch", "row", "row_border", "event"] {
@@ -2932,4 +2932,13 @@ mod tests {
         bench.apply_actions(&results);
         assert!(bench.status.contains("Nothing to save"));
     }
+}
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
 }

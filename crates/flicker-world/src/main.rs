@@ -30,3 +30,12 @@ fn main() -> Result<()> {
         || Box::new(scene::Loading::new(world::DEFAULT_FREQ, world::DEFAULT_SEED)),
     ))
 }
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}

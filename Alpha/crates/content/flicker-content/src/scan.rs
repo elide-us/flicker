@@ -481,7 +481,7 @@ pub fn classify_package_head(head: &[u8]) -> PackageClass {
 }
 
 /// Byte offset just past `"<key>"` in `head`, if present.
-fn find_key<'a>(head: &'a [u8], key: &[u8]) -> Option<usize> {
+fn find_key(head: &[u8], key: &[u8]) -> Option<usize> {
     let mut needle = Vec::with_capacity(key.len() + 2);
     needle.push(b'"');
     needle.extend_from_slice(key);

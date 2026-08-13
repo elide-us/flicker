@@ -31,7 +31,7 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
-    load_styles, load_ui_json, render_hud, run_ui, Surface, Surfaces, UiInput, UiIntents,
+    render_hud, run_ui, Surface, Surfaces, UiInput, UiIntents,
     UiState, WalkerHandler,
 };
 // The strings module (fixture tokens + the Model-channel gate scan) is test-only.
@@ -107,10 +107,10 @@ use format::Model;
 /// (layout, the `UI.paperdoll` section) — the same split every flicker client uses.
 const HUD_SCRIPT_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../Alpha/content/sensorium/scripts/hud_paperdoll.lua"
+    "/../../Alpha/content/sensorium/scripts/shared/hud_paperdoll.lua"
 );
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_theme.json");
 
 /// A submesh's GPU upload for the current frame — textured (albedo) or flat (gray).
 enum SubGpu {
@@ -349,7 +349,7 @@ const FITS_FILE: &str = "fits.json";
 /// The gadget's rows `(key, group)` from the shared UI library. Empty on a bad/missing
 /// file — the gadget then simply has no keyboard navigation rather than the viewer failing.
 fn load_fit_rows() -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(HUD_UI_ELEMENTS) else {
+    let Ok(text) = std::fs::read_to_string(HUD_UI_THEME) else {
         return Vec::new();
     };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -814,7 +814,7 @@ struct Viewer {
     /// `fit_active` gate. (`animate` is NOT here — it is a two-way checkbox bind
     /// that some rows also gate on, a control's value, not a managed surface.)
     surfaces: Surfaces,
-    /// The resolved `ui_elements.json` the walker resolves node `style` paths against.
+    /// The resolved `ui_theme.json` the walker resolves node `style` paths against.
     ui_styles: serde_json::Value,
     /// This frame's HUD draw commands — the walker builds them in `update`, `render`
     /// blits them (one walk per frame; the script never sees a renderer handle).
@@ -1119,7 +1119,7 @@ impl Viewer {
         }
         // Steps come from the same JSON the sliders' ranges do, so the gadget stays tunable
         // without a recompile.
-        let ui: serde_json::Value = match std::fs::read_to_string(HUD_UI_ELEMENTS)
+        let ui: serde_json::Value = match std::fs::read_to_string(HUD_UI_THEME)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
         {
@@ -1716,10 +1716,10 @@ impl Scene for Viewer {
         // here leaves `ui_tree: None` and the scene simply renders without a HUD.
         // The Prism-token-resolved styles the component walker resolves node `style`
         // paths against (the same tree Lua reads via the `UI` global).
-        self.ui_styles = load_styles(HUD_UI_ELEMENTS);
+        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
-                load_ui_json(&s, HUD_UI_ELEMENTS); // layout constants (`UI.paperdoll`)
+                flicker::ui::load_ui_json_for(&s, HUD_UI_THEME, Some(&crate::scene_styles())); // layout constants (`UI.paperdoll`)
                 // Build the component tree ONCE (step 4 lazy build-once): the walker
                 // redraws this cached tree every frame with fresh Model bindings.
                 match s.ui_tree() {
@@ -2980,7 +2980,7 @@ mod tests {
 
     fn host() -> ScriptHost {
         let h = ScriptHost::from_file(HUD_SCRIPT_PATH).expect("load hud.lua");
-        load_ui_json(&h, HUD_UI_ELEMENTS);
+        flicker::ui::load_ui_json_for(&h, HUD_UI_THEME, Some(&crate::scene_styles()));
         h
     }
 
@@ -3013,7 +3013,7 @@ mod tests {
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
         assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -3027,7 +3027,9 @@ mod tests {
     }
 
     fn ui() -> serde_json::Value {
-        serde_json::from_str(&std::fs::read_to_string(HUD_UI_ELEMENTS).unwrap()).unwrap()
+        // The PRODUCTION path: this bench's vendored scene styles merged over the
+        // shared theme root (the paperdoll blocks left ui_theme.json — five-line split).
+        flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()))
     }
 
     /// A selected piece, so the fit gadget's path is actually exercised.
@@ -3438,7 +3440,7 @@ mod tests {
         // One retained interaction state across the whole gesture (press → drag → release),
         // so the drag capture persists — exactly how the engine holds `ui_state` per frame.
         let tree = h.ui_tree().unwrap().unwrap();
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let model = fit_model(true);
         let mut state = UiState::new();
         let mut captures = |mx: f32, my: f32, clicked: bool, down: bool| {
@@ -3512,8 +3514,7 @@ mod tests {
         // Centre of the first inventory cell, from the SAME layout the walker resolves:
         // a bottom-anchored column [header, bar]; the bar (a padded row of cells) sits
         // flush with the column bottom, itself offset up by `margin_b`.
-        let ui: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(HUD_UI_ELEMENTS).unwrap()).unwrap();
+        let ui = ui();
         let inv = &ui["paperdoll"]["inventory"];
         let num = |k: &str| inv[k].as_f64().unwrap() as f32;
         let (slot, gap, pad, mb) = (num("slot"), num("gap"), num("pad"), num("margin_b"));
@@ -3534,4 +3535,13 @@ mod tests {
         let res = run_hud(&host, &hud_test_model(false, false), &click, w, h).results;
         assert!(!res.is_on(&first), "clicking an EMPTY cell must stay unequipped");
     }
+}
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
 }

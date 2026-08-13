@@ -491,9 +491,9 @@ impl Conveyor {
         let mut here: Vec<Column> = Vec::with_capacity(4);
         let mut vacancies: Vec<usize> = Vec::new();
         let mut well = 0.0f64;
-        for cell in 0..n {
+        for (cell, &head_cell) in head.iter().enumerate() {
             here.clear();
-            let mut at = head[cell];
+            let mut at = head_cell;
             while at != NONE {
                 if let Some(col) = lifted[at as usize].take() {
                     here.push(col);

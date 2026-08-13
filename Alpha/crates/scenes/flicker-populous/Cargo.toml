@@ -26,5 +26,5 @@ flicker-shell.workspace = true
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
 tracing.workspace = true
-# The scene holds the loaded `ui_elements.json` styles as a JSON value.
+# The scene holds the loaded `ui_theme.json` styles as a JSON value.
 serde_json.workspace = true

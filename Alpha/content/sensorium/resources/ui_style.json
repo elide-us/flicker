@@ -1,0 +1,3 @@
+{
+  "_comment": "DEFAULT UI WEIGHTS AND EFFECTS (five-line architecture). Deliberately EMPTY: component looks are the Rust drawing code's token defaults, and each scene carries its own layout details in its .scene.json `styles`. Add a key here ONLY for a truly global weight/effect default — never a per-component or per-scene block, and never a `theme` (palette) key."
+}

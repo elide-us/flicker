@@ -1,0 +1,192 @@
+{
+  "_comment": "STAGE SOURCES for the flicker walker — named offscreen RTT sub-scenes a `stage`/`rtt` node composites into its rect (split out of ui_theme.json, Aaron 2026-08-12). A source says WHAT to render (lighting preset, camera, content layers); the NODE says WHERE it lands. Draw ORDER is derived topologically by flicker-render::FrameGraph, never expressed here. Layers carry scalars, $token colours and *_bind Model keys — never geometry. Colours are $token refs resolved against ui_theme.json's theme.tokens at load (the loader merges this file into the theme root — the palette NEVER lives here; a `theme` key in this file is refused as a fork). The `lighting` presets are salvaged from the retired packeditor (pip_scene / night_scene).",
+  "stages": {
+    "lighting": {
+      "studio": {
+        "sun_dir": [
+          0.4,
+          0.8,
+          0.5
+        ],
+        "sun": [
+          0.85,
+          0.85,
+          0.85
+        ],
+        "moon_dir": [
+          -0.5,
+          0.3,
+          -0.4
+        ],
+        "moon": [
+          0.2,
+          0.22,
+          0.3
+        ],
+        "ambient": [
+          0.35,
+          0.35,
+          0.35
+        ]
+      },
+      "night": {
+        "sun_dir": [
+          0.2,
+          -0.5,
+          0.3
+        ],
+        "sun": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "moon_dir": [
+          -0.3,
+          0.7,
+          0.4
+        ],
+        "moon": [
+          0.42,
+          0.48,
+          0.62
+        ],
+        "ambient": [
+          0.13,
+          0.15,
+          0.21
+        ],
+        "sky_zenith": [
+          0.006,
+          0.01,
+          0.024
+        ],
+        "sky_horizon": [
+          0.02,
+          0.03,
+          0.06
+        ]
+      }
+    },
+    "portrait": {
+      "_comment": "One character on a dark void — the Loomforge Stage doll (pack cards, clip rows, creature roster + hero). The node's panel style supplies the backdrop gradient, so the target clears TRANSPARENT and the doll composites over it.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.55,
+        "pitch": 0.18,
+        "dist": 2.6,
+        "target_y": 0.95
+      },
+      "layers": [
+        {
+          "draw": "skinned",
+          "model_bind": "stage_model",
+          "pose_bind": "stage_pose"
+        },
+        {
+          "draw": "ring",
+          "radius": 0.45,
+          "y": 0.0,
+          "segments": 24,
+          "color": "$bronze",
+          "color_active": "$rune_glow"
+        }
+      ]
+    },
+    "turntable": {
+      "_comment": "Wider framing over a ground grid — the TAE editor preview (300px) and any full-body review shot.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw_bind": "stage_spin",
+        "pitch": 0.22,
+        "dist": 3.2,
+        "target_y": 1.0
+      },
+      "layers": [
+        {
+          "draw": "grid",
+          "spacing": 0.5,
+          "extent": 6,
+          "y": 0.0,
+          "color": "$grid_line"
+        },
+        {
+          "draw": "skinned",
+          "model_bind": "stage_model",
+          "pose_bind": "stage_pose"
+        },
+        {
+          "draw": "ring",
+          "radius": 0.5,
+          "y": 0.0,
+          "segments": 24,
+          "color": "$bronze",
+          "color_active": "$rune_glow"
+        }
+      ]
+    },
+    "sablework_lit": {
+      "_comment": "The Sablework LIT PREVIEW — the material shown on a turning sample under a fixed light, which is the only way roughness/metalness/normal relief actually read. The `material` layer is drawn by the bench's own lit module (it binds the six preview maps it already holds); the target clears TRANSPARENT so the node's panel supplies the backdrop, matching `portrait`.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "camera": {
+        "kind": "orbit",
+        "yaw": 0.6,
+        "pitch": 0.28,
+        "dist": 2.6,
+        "target_y": 0.0
+      },
+      "layers": [
+        {
+          "draw": "material"
+        }
+      ]
+    },
+    "godmode_globe": {
+      "_comment": "The God Mode GLOBE — the forming planet, drawn into the bench's centre viewport. Deliberately has NO `camera` block, and that absence is a decision rather than an omission: every other stage frames a fixed subject, but this one is flown by the maintainer, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by and the backdrop it sits on. `clear` is transparent so the node's `rtt_holder` panel shows through, matching `sablework_lit`.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shells"
+        }
+      ]
+    },
+    "pocepochs_globe": {
+      "_comment": "The PLANET SIMULATION globe — the forward-regenerative epoch sim's world. Like `godmode_globe` it publishes its own shells (the surface shell, or the classified per-column layer stack) and authors no `camera`, because the planet is flown by the maintainer. `clear` is transparent so the scene's own deep-space backdrop shows through the composited viewport.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shells"
+        }
+      ]
+    },
+    "populous_globe": {
+      "_comment": "The POPULOUS hex ledger globe — the authored world drawn into the multi-view's centre viewport. Like `godmode_globe` it deliberately has NO `camera` block: the map is flown by the game master, so the scene's own orbit camera owns the view and the stage authors only the light it is seen by (the default light source). `clear` is transparent so the node's holder panel shows through. Unlike God Mode, this world has NO simulation publishing shells, so its whole appearance is authored here: the near-black under-shell, the inset tile shell over it (the seams between the tiles show the shell beneath, and those seams ARE the outlines — two static shells, no per-edge line geometry), and the shared reference frame above both.",
+      "lighting": "studio",
+      "clear": "$stage_void",
+      "layers": [
+        {
+          "draw": "shell",
+          "radius_scale": 0.998,
+          "inset": 0.0,
+          "color": "$world_seam"
+        },
+        {
+          "draw": "shell",
+          "radius_scale": 1.0,
+          "inset": 0.12,
+          "color": "$world_tile"
+        },
+        {
+          "draw": "graticule",
+          "radius_scale": 1.022
+        }
+      ]
+    }
+  }
+}

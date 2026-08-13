@@ -1,0 +1,632 @@
+{
+  "_comment": "THE PRISM THEME — the default UI theme COLORS and nothing else (five-line architecture, Aaron 2026-08-12): `theme.tokens` is the ONE palette every $token ref in every style source (ui_style.json, ui_stages.json, scene-file `styles`, vendored bench styles) resolves against. Weights/effects live in ui_style.json; a scene's own values live in its .scene.json; component structure is Rust drawing code. Adding ANY other node to this file is the violation the theme-only gate exists to catch.",
+  "theme": {
+    "_comment": "The Prism palette — the ONE source of UI colour (imported from the 'Prism UI Design Language': cold carved stone lit by sapphire rune-light, aged bronze the only structural metal, the 7-colour Septisigil for stats). Every colour elsewhere in this file is a `$name` reference resolved against this map. Stone ramp = surfaces (dark→light); edge = borders; ink/dim/faint = text; bronze = structural metal; sap_* = the interactive/live accent (base/hover/pressed + border + glow); rune_glow = lit text/focus; hp/mana/stam = resource ramps; sig_* = the seven stat colours. Derived translucent tokens (sheen/scrim/wash/panel_bg/hairline/cell_hot) are alpha variants of the same palette.",
+    "tokens": {
+      "stone0": [
+        0.031,
+        0.035,
+        0.047,
+        1.0
+      ],
+      "stone1": [
+        0.055,
+        0.063,
+        0.086,
+        1.0
+      ],
+      "stone2": [
+        0.078,
+        0.09,
+        0.122,
+        1.0
+      ],
+      "stone3": [
+        0.11,
+        0.125,
+        0.161,
+        1.0
+      ],
+      "stone4": [
+        0.149,
+        0.169,
+        0.208,
+        1.0
+      ],
+      "stone5": [
+        0.2,
+        0.227,
+        0.278,
+        1.0
+      ],
+      "edge0": [
+        0.125,
+        0.145,
+        0.188,
+        1.0
+      ],
+      "edge1": [
+        0.149,
+        0.169,
+        0.208,
+        1.0
+      ],
+      "edge2": [
+        0.169,
+        0.188,
+        0.235,
+        1.0
+      ],
+      "edge3": [
+        0.2,
+        0.227,
+        0.278,
+        1.0
+      ],
+      "edge4": [
+        0.227,
+        0.255,
+        0.314,
+        1.0
+      ],
+      "ink": [
+        0.871,
+        0.847,
+        0.788,
+        1.0
+      ],
+      "ink_bright": [
+        0.906,
+        0.882,
+        0.824,
+        1.0
+      ],
+      "dim": [
+        0.561,
+        0.541,
+        0.49,
+        1.0
+      ],
+      "faint": [
+        0.361,
+        0.341,
+        0.286,
+        1.0
+      ],
+      "bronze": [
+        0.722,
+        0.592,
+        0.353,
+        1.0
+      ],
+      "bronze_dim": [
+        0.431,
+        0.353,
+        0.204,
+        1.0
+      ],
+      "bronze_deep": [
+        0.541,
+        0.435,
+        0.259,
+        1.0
+      ],
+      "sap_base": [
+        0.141,
+        0.247,
+        0.471,
+        1.0
+      ],
+      "sap_base_lo": [
+        0.082,
+        0.153,
+        0.267,
+        1.0
+      ],
+      "sap_border": [
+        0.227,
+        0.353,
+        0.627,
+        1.0
+      ],
+      "sap_hover": [
+        0.173,
+        0.298,
+        0.557,
+        1.0
+      ],
+      "sap_hover_lo": [
+        0.102,
+        0.188,
+        0.341,
+        1.0
+      ],
+      "sap_hover_border": [
+        0.286,
+        0.416,
+        0.722,
+        1.0
+      ],
+      "sap_press": [
+        0.09,
+        0.173,
+        0.329,
+        1.0
+      ],
+      "sap_press_lo": [
+        0.063,
+        0.122,
+        0.235,
+        1.0
+      ],
+      "sap_press_border": [
+        0.165,
+        0.267,
+        0.471,
+        1.0
+      ],
+      "sap_glow": [
+        0.094,
+        0.188,
+        0.384,
+        0.45
+      ],
+      "rune_glow": [
+        0.435,
+        0.592,
+        1.0,
+        1.0
+      ],
+      "rune_glow_hi": [
+        0.616,
+        0.722,
+        1.0,
+        1.0
+      ],
+      "rune_halo": [
+        0.435,
+        0.592,
+        1.0,
+        0.38
+      ],
+      "hp_hi": [
+        0.847,
+        0.318,
+        0.369,
+        1.0
+      ],
+      "hp_lo": [
+        0.478,
+        0.11,
+        0.149,
+        1.0
+      ],
+      "mana_hi": [
+        0.353,
+        0.525,
+        0.949,
+        1.0
+      ],
+      "mana_lo": [
+        0.122,
+        0.247,
+        0.612,
+        1.0
+      ],
+      "stam_hi": [
+        0.941,
+        0.804,
+        0.416,
+        1.0
+      ],
+      "stam_lo": [
+        0.541,
+        0.416,
+        0.141,
+        1.0
+      ],
+      "sig_white": [
+        0.914,
+        0.906,
+        0.871,
+        1.0
+      ],
+      "sig_yellow": [
+        0.878,
+        0.698,
+        0.227,
+        1.0
+      ],
+      "sig_red": [
+        0.753,
+        0.165,
+        0.22,
+        1.0
+      ],
+      "sig_orange": [
+        0.851,
+        0.478,
+        0.169,
+        1.0
+      ],
+      "sig_black": [
+        0.353,
+        0.353,
+        0.4,
+        1.0
+      ],
+      "sig_black_gem": [
+        0.149,
+        0.149,
+        0.173,
+        1.0
+      ],
+      "sig_blue": [
+        0.176,
+        0.373,
+        0.69,
+        1.0
+      ],
+      "sig_green": [
+        0.184,
+        0.616,
+        0.357,
+        1.0
+      ],
+      "ink_sapphire": [
+        0.933,
+        0.949,
+        1.0,
+        1.0
+      ],
+      "ink_label": [
+        0.765,
+        0.741,
+        0.686,
+        1.0
+      ],
+      "ink_button": [
+        0.839,
+        0.816,
+        0.761,
+        1.0
+      ],
+      "dim_soft": [
+        0.49,
+        0.467,
+        0.408,
+        1.0
+      ],
+      "muted": [
+        0.604,
+        0.58,
+        0.518,
+        1.0
+      ],
+      "studio": [
+        0.29,
+        0.275,
+        0.231,
+        1.0
+      ],
+      "well": [
+        0.039,
+        0.047,
+        0.063,
+        1.0
+      ],
+      "surface_top": [
+        0.098,
+        0.114,
+        0.149,
+        1.0
+      ],
+      "surface_bot": [
+        0.063,
+        0.075,
+        0.098,
+        1.0
+      ],
+      "seam": [
+        0.137,
+        0.153,
+        0.184,
+        1.0
+      ],
+      "stone_btn": [
+        0.125,
+        0.141,
+        0.18,
+        1.0
+      ],
+      "stone_btn_hi": [
+        0.157,
+        0.176,
+        0.22,
+        1.0
+      ],
+      "danger_text": [
+        0.906,
+        0.78,
+        0.792,
+        1.0
+      ],
+      "danger_text_hi": [
+        0.949,
+        0.827,
+        0.839,
+        1.0
+      ],
+      "danger_border": [
+        0.353,
+        0.165,
+        0.188,
+        1.0
+      ],
+      "danger_hi": [
+        0.784,
+        0.439,
+        0.478,
+        1.0
+      ],
+      "danger_bg": [
+        0.165,
+        0.078,
+        0.094,
+        1.0
+      ],
+      "danger_bg_lo": [
+        0.102,
+        0.055,
+        0.063,
+        1.0
+      ],
+      "danger_base": [
+        0.659,
+        0.216,
+        0.255,
+        1.0
+      ],
+      "danger_base_lo": [
+        0.439,
+        0.102,
+        0.133,
+        1.0
+      ],
+      "danger_hover": [
+        0.776,
+        0.255,
+        0.302,
+        1.0
+      ],
+      "danger_hover_lo": [
+        0.518,
+        0.122,
+        0.157,
+        1.0
+      ],
+      "danger_glow": [
+        0.659,
+        0.216,
+        0.255,
+        0.4
+      ],
+      "shadow": [
+        0.0,
+        0.0,
+        0.0,
+        0.55
+      ],
+      "sheen": [
+        0.9,
+        0.94,
+        1.0,
+        0.16
+      ],
+      "scrim": [
+        0.031,
+        0.035,
+        0.047,
+        0.64
+      ],
+      "scrim_dim": [
+        0.0,
+        0.0,
+        0.0,
+        0.25
+      ],
+      "accent_wash": [
+        0.141,
+        0.247,
+        0.471,
+        0.1
+      ],
+      "accent_wash_2": [
+        0.141,
+        0.247,
+        0.471,
+        0.22
+      ],
+      "panel_bg": [
+        0.055,
+        0.063,
+        0.086,
+        0.94
+      ],
+      "hairline": [
+        0.431,
+        0.353,
+        0.204,
+        0.35
+      ],
+      "cell_hot": [
+        0.125,
+        0.165,
+        0.255,
+        1.0
+      ],
+      "sapphire": [
+        0.227,
+        0.388,
+        0.812,
+        1.0
+      ],
+      "grid_line": [
+        0.549,
+        0.627,
+        0.765,
+        0.07
+      ],
+      "stage_void": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "world_tile": [
+        0.42,
+        0.46,
+        0.52,
+        1.0
+      ],
+      "world_seam": [
+        0.03,
+        0.03,
+        0.04,
+        1.0
+      ],
+      "well_top": [
+        0.043,
+        0.051,
+        0.071,
+        1.0
+      ],
+      "well_bot": [
+        0.055,
+        0.067,
+        0.086,
+        1.0
+      ],
+      "cast_hi": [
+        0.906,
+        0.784,
+        0.467,
+        1.0
+      ],
+      "cast_lo": [
+        0.627,
+        0.49,
+        0.173,
+        1.0
+      ],
+      "sig_white_glow": [
+        0.914,
+        0.906,
+        0.871,
+        0.55
+      ],
+      "sig_yellow_glow": [
+        0.878,
+        0.698,
+        0.227,
+        0.55
+      ],
+      "sig_red_glow": [
+        0.753,
+        0.165,
+        0.22,
+        0.55
+      ],
+      "sig_orange_glow": [
+        0.851,
+        0.478,
+        0.169,
+        0.55
+      ],
+      "sig_black_glow": [
+        0.353,
+        0.353,
+        0.4,
+        0.55
+      ],
+      "sig_blue_glow": [
+        0.176,
+        0.373,
+        0.69,
+        0.55
+      ],
+      "sig_green_glow": [
+        0.184,
+        0.616,
+        0.357,
+        0.55
+      ],
+      "danger_press_lo": [
+        0.29,
+        0.067,
+        0.086,
+        1.0
+      ],
+      "hostile_bg": [
+        0.141,
+        0.082,
+        0.098,
+        1.0
+      ],
+      "hostile_bg_lo": [
+        0.071,
+        0.043,
+        0.051,
+        1.0
+      ],
+      "ghost_ring": [
+        0.282,
+        0.345,
+        0.494,
+        1.0
+      ],
+      "ghost_ring_lo": [
+        0.137,
+        0.176,
+        0.267,
+        1.0
+      ],
+      "gold_ring": [
+        0.851,
+        0.643,
+        0.255,
+        1.0
+      ],
+      "med_bg": [
+        0.141,
+        0.075,
+        0.094,
+        1.0
+      ],
+      "med_bg_lo": [
+        0.055,
+        0.024,
+        0.031,
+        1.0
+      ],
+      "med_rim": [
+        0.063,
+        0.024,
+        0.031,
+        1.0
+      ],
+      "slot_rim": [
+        0.722,
+        0.592,
+        0.353,
+        0.14
+      ],
+      "cd_veil": [
+        0.024,
+        0.031,
+        0.047,
+        0.72
+      ]
+    }
+  }
+}

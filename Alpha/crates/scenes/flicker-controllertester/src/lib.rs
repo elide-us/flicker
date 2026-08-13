@@ -22,7 +22,7 @@
 //! context. Cycle with Tab (keyboard) or Back/View (pad).
 //!
 //! A STANDALONE diagnostic (`34BE2610`) built on the click-trainer scene toolkit
-//! (`draw_ui_panel` + `draw_text`, no Lua, no `ui_elements.json`); `prism-alpha`
+//! (`draw_ui_panel` + `draw_text`, no Lua, no `ui_theme.json`); `prism-alpha`
 //! hosts it. Esc / Start open the pause menu.
 
 mod golem;

@@ -16,7 +16,7 @@
 --                      the formatting in `hud_model` — no printf here).
 --   * `visible_bind` — a Model key gating a subtree (`walk` row, `has_pick`/`no_pick`,
 --                      the whole inspector panel).
---   * `style`/`color`— dotted paths into `ui_elements.json` (palette single-sourced
+--   * `style`/`color`— dotted paths into `ui_theme.json` (palette single-sourced
 --                      in its theme.tokens — the one global UI-element definition).
 -- Layout / labels all come from `UI.pocclusters` — one source of truth, so the tree and
 -- the engine cannot drift. Change a toggle or a column here (or in the JSON) and the

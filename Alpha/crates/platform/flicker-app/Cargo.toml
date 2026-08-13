@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 flicker-core.workspace = true
 flicker-input-core.workspace = true
+flicker-input-router.workspace = true
 # Platform input sources (KBM + gamepad) + the 120 Hz analog sampler. The winit
 # event loop stays here; input translation moved to this crate (spec §6). The gilrs
 # / GameController platform deps moved with the gamepad code and now live there.

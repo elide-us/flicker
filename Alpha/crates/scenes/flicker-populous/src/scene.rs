@@ -50,27 +50,30 @@ use std::time::Duration;
 
 use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, ValueMap};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, load_styles, render_hud, run_ui, TemplateRegistry, UiInput,
-    UiIntents, UiState, WalkerHandler,
+    load_styles, render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState,
+    WalkerHandler,
 };
 use flicker_globe::GlobeWorld;
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Resolver,
-};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use crate::map::{HexMap, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
 use crate::ui;
 
-/// The scene's `$token` styles live in the shared `ui_elements.json` — the ONE
+/// The scene's `$token` styles live in the shared `ui_theme.json` — the ONE
 /// global UI-element definition + Prism palette every prism-alpha scene reads.
 /// NOT a per-scene copy: a second file would need its own `theme.tokens`, forking
 /// the palette.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
+
+/// The bench's Lua ORCHESTRATION script — `arrange()` decides which tab-specific
+/// components are shown from the two-way-bound page/tab selection. Embedded (the
+/// same `include_str!` pattern the shell scenes use), so the bench ships with it.
+const POPULOUS_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/populous.lua");
 
 /// **Populous Bench** — the DEFAULT PAGE, and the surface the world will be
 /// authored from.
@@ -79,10 +82,17 @@ pub struct PopulousBench {
     sel_page: usize,
     sel_tab: usize,
 
-    // ── the surface ──
-    templates: TemplateRegistry,
+    // ── the surface (the scene as DATA) ──
+    /// The static component tree, parsed ONCE from `populous.scene.json`:
+    /// every component declared, each tab's slice gated on a `shown_p0_t*` bind.
+    /// Never rebuilt — the walker redraws it each frame against a fresh Model.
+    tree: UiNode,
+    /// The Lua ORCHESTRATION host (`populous.lua`): `arrange()` reads the bound
+    /// page/tab and returns which slice is lit. Held for the bench's whole life.
+    script: ScriptHost,
     ui_styles: serde_json::Value,
     ui_state: UiState,
+    /// The screen's declared signal->result intents, read off the static tree ONCE.
     ui_intents: UiIntents,
     hud_commands: Vec<HudCommand>,
     theme: Option<Theme>,
@@ -91,12 +101,10 @@ pub struct PopulousBench {
     /// pad glyphs) draws without re-plumbing the atlas hand-off.
     textures: Vec<TextureHandle>,
 
-    // ── input ──
-    bindings: ContextualBindings,
-    gamepad_config: GamepadConfig,
-    resolver: Resolver,
-    ev: Vec<Fired>,
-    tick: u64,
+    // ── input (input-P3, 0569DA9B): the scene owns NO resolver/bindings. The central
+    //    PUMP resolves this frame's World-context events for the scene's `input_context()`
+    //    (the World default); the walker consumes the edges and the globe reads continuous
+    //    look/zoom from `signals.axis`. ──
 
     // ── the globe as an instrument ──
     map: HexMap,
@@ -107,36 +115,41 @@ pub struct PopulousBench {
     world: GlobeWorld,
 }
 
-impl Default for PopulousBench {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PopulousBench {
-    pub fn new() -> Self {
+    pub fn new(def: &SceneDef) -> Self {
         let map = HexMap::new(DEFAULT_FREQ);
         tracing::info!("populous: {} tiles at freq {}", map.len(), map.freq());
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
         // Open with the world FILLING the square viewport (Aaron: ~85%), not a
         // distant marble; the camera belongs to the viewport PANE, which is what
         // hands it the look signals.
         let world = GlobeWorld::new(ui::STAGE_SOURCE, &ui_styles, Some(0.85)).in_panel(ui::VIEW_PANE);
+
+        // The scene is DATA: the kernel's manifest parsed the authored scene-def and
+        // handed it here (this bench is the BEHAVIOUR that plays it). Its tree names
+        // component KINDS directly (the template tier is gone — 201F4F51).
+        let tree = def
+            .tree
+            .clone()
+            .expect("populous.scene.json declares a tree");
+        // The declared signal->result intents live in the static tree — read ONCE.
+        let ui_intents = UiIntents::of(&tree);
+        // The Lua ORCHESTRATION host, held for the bench's life so `arrange()` runs
+        // each frame the selection may have moved.
+        let script = ScriptHost::new(POPULOUS_SCRIPT, "populous.lua")
+            .expect("populous.lua loads (it ships with the crate)");
+
         let mut bench = Self {
             sel_page: 0,
             sel_tab: 0,
-            templates: builtin_templates(),
+            tree,
+            script,
             ui_styles,
             ui_state: UiState::default(),
-            ui_intents: UiIntents::default(),
+            ui_intents,
             hud_commands: Vec::new(),
             theme: None,
             textures: Vec::new(),
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
-            gamepad_config: GamepadConfig::default(),
-            resolver: Resolver::default(),
-            ev: Vec::new(),
-            tick: 0,
             map,
             world,
         };
@@ -158,10 +171,12 @@ impl PopulousBench {
         &self.map
     }
 
-    /// This frame's screen. A method so a gate can build the very tree the app
-    /// walks, rather than a reconstruction of it.
-    pub fn build_tree(&self) -> flicker::script::UiNode {
-        ui::build(self.sel_page, self.sel_tab, &self.templates)
+    /// The scene's static component tree — a clone for a gate or a test to walk. It is
+    /// authored DATA now (`populous.scene.json`), parsed ONCE in `new`, so
+    /// this is no longer per-(page, tab): which slice shows is decided by `arrange()`'s
+    /// visibility binds, not by rebuilding structure.
+    pub fn build_tree(&self) -> UiNode {
+        self.tree.clone()
     }
 
     /// Which page and tab the rails are on — the roster indices, for tests.
@@ -300,19 +315,29 @@ impl Scene for PopulousBench {
         self.world.free(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
-        if let Some((map, look, gp)) = flicker_shell::take_pending_input() {
-            self.bindings = ContextualBindings::new(map);
-            self.gamepad_config = gp.clone();
-            // The settings panel's look sliders reach the planet — they used to
-            // be discarded here while the globe turned at a private rate.
-            self.world.set_controls(look, gp);
+    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+        if let Some((_map, look, _gp)) = flicker_shell::take_pending_input() {
+            // The pump owns the key rebind now (S1c, non-draining); this scene keeps only
+            // the player's LOOK controls (sensitivity + invert) for its globe camera — they
+            // used to be discarded here while the globe turned at a private rate. The pad
+            // deadzone rides the pump's `signals.axis`, so the gamepad is no longer ours.
+            self.world.set_controls(look);
         }
 
         let screen = renderer.size();
-        let tree = self.build_tree();
-        self.ui_intents = UiIntents::of(&tree);
-        let model = self.model();
+        // The scene is DATA: walk the STATIC tree (built once in `new`). `arrange()`
+        // reads the two-way-bound page/tab from the model and returns which slice is
+        // lit; fold those visibility binds in so the walker draws the right one.
+        // `ui_intents` was read off the static tree once, in `new`.
+        let mut model = self.model();
+        if let Err(e) = self.script.set_model(&model) {
+            tracing::error!("populous: publishing the model to the script failed: {e}");
+        }
+        match self.script.arrange() {
+            Ok(Some(arrangement)) => model.extend(arrangement.to_model()),
+            Ok(None) => {}
+            Err(e) => tracing::error!("populous: arrange() failed: {e}"),
+        }
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -322,7 +347,7 @@ impl Scene for PopulousBench {
             backspace: false,
             wheel: input.mouse_wheel_delta,
         };
-        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        let frame = run_ui(&self.tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
         let over_hud = frame.results.is_on("hud_hit");
         // The walker RESERVES the viewport's rect and never fills it (it runs
         // late; offscreen passes must run first) — hand it to the world here,
@@ -330,38 +355,29 @@ impl Scene for PopulousBench {
         self.world.place(frame.rtt_rect(ui::VIEW_SLOT));
         self.hud_commands = frame.commands;
 
-        // ONE resolve, ONE dispatch — the walker layer consumes the screen's
-        // declared intent, so the pause never reads a raw key.
-        self.tick = self.tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.tick,
-            &mut self.ev,
-        );
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> =
-            self.ev.iter().map(|f| InputEvent::from_fired(f, ctx, input)).collect();
+        // ── The input seam (input-P3, 0569DA9B): the PUMP resolved this frame's
+        // World-context events — the scene owns no Resolver. Dispatch `signals.events`
+        // through the [walker, world] chain via `signals.route`; the walker layer consumes
+        // the screen's declared `on_menu` intent (so the pause never reads a raw key), and
+        // the globe below it takes what is left of the look/zoom edges while its panel
+        // holds the cursor. The runner reconciles the route's context requests after
+        // `update`; the walker writes focus directly during dispatch, so there is nothing
+        // to apply here. ──
 
         // UNCONDITIONAL: the walker owns the focus graph on every frame, so the
         // left stick can reach every panel and the d-pad can reach every control
         // inside the focused one. A scene that switched navigability on and off
         // would be deciding what a signal means, which is the walker's job.
         let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
-            .with_nav(&tree, &model)
+            .with_nav(&self.tree, &model)
             .with_intents(&self.ui_intents);
-        let mut route = RouteCtx::default();
         {
             // The world sits BELOW the walker: navigation is decided first, and
             // what is left of the look/zoom signals belongs to the globe while
             // its panel holds the cursor.
             let mut chain: [&mut dyn InputHandler; 2] = [&mut walker, &mut self.world];
-            Router::dispatch(&events, &mut chain, &mut route);
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        let focus_change = apply_context_requests(&mut self.bindings, &route.requests);
-        walker.apply_focus(focus_change);
 
         // Fold the fired intent names in beside the click results, so both
         // channels reach the ONE dispatcher identically.
@@ -371,23 +387,35 @@ impl Scene for PopulousBench {
         }
         self.apply_results(&results);
 
-        // One camera line, and it is the WORLD's: it reads the look and zoom
-        // SIGNALS out of the active binding map (never a device), answers them
-        // only while its own panel holds the walker's cursor, and latches the
-        // pointer drag inside its own rect.
+        // One camera line, and it is the WORLD's: the look and zoom come from the PUMP's
+        // continuous queries (`signals.axis`, never a device), and the globe answers them
+        // only while its own panel holds the walker's cursor, latching the pointer drag
+        // inside its own rect. The six Look/Zoom signals stay the camera's (`look_from`).
         let dtf = dt.as_secs_f32();
-        self.world.update(dtf, input, &self.bindings, self.ui_state.focused());
+        let look = GlobeWorld::look_from(|s| signals.axis(s, input));
+        // The globe answers look/zoom only while its pane is ENTERED (0EFF5464): merely
+        // highlighting the viewport pane no longer feeds the camera — Confirm locks into
+        // it, Cancel backs out. `entered` is the walker's; the scene reads it, never a
+        // second focus system (F2).
+        let look_gate = if self.ui_state.entered() { self.ui_state.focused() } else { None };
+        self.world.update(dtf, input, look, look_gate);
 
         // Menu opens the shell's pause overlay — quit, settings, back to the
         // menu. The screen DECLARED `on_menu`; the arm lives here rather than in
         // `apply_results` because it returns a Transition.
         if results.is_on("pause_open") {
             if let Some(theme) = self.theme {
+                // The scene owns no bindings; take the World map from the shared profile
+                // for the pause overlay (it binds Menu, so Esc resumes).
+                let pause_map = flicker_shell::input_profile()
+                    .context_map("World")
+                    .cloned()
+                    .unwrap_or_else(InputMap::wasd_and_mouse);
                 return Transition::Push(Box::new(PauseScene::new(
                     theme,
-                    self.bindings.active_map(),
+                    &pause_map,
                     &AbstractControls::default(),
-                    &self.gamepad_config,
+                    &GamepadConfig::default(),
                 )));
             }
         }
@@ -412,16 +440,22 @@ impl Scene for PopulousBench {
     }
 }
 
-/// Build the bench as a boxed `Scene` for the shell's scene registry.
-pub fn scene() -> Box<dyn Scene> {
-    Box::new(PopulousBench::new())
+/// Build the bench as a boxed `Scene` — the CLIENT BEHAVIOUR the roster registers;
+/// the manifest resolves `populous.scene.json` and hands its def here.
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(PopulousBench::new(def))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use flicker::script::{UiNode, Value};
-    use flicker_input_core::{ActionSignal, EventKind, InputContext};
+    // Test-only now: the tests synthesize events with a real resolver to drive the walker
+    // chain end-to-end; the scene itself owns none of this any more (input-P3).
+    use flicker_input_core::{
+        ActionSignal, ContextualBindings, EventKind, Fired, InputContext, Resolver,
+    };
+    use flicker_input_router::{InputEvent, RouteCtx};
 
     fn flatten(n: &UiNode) -> Vec<&UiNode> {
         let mut out = vec![n];
@@ -431,26 +465,17 @@ mod tests {
             for c in &node.children {
                 out.push(c);
             }
-            for group in node.slots.values() {
-                for c in group {
-                    out.push(c);
-                }
-            }
             i += 1;
         }
         out
     }
 
-    /// **The whole surface resolves.** Nothing unexpanded survives the one seam,
-    /// every component kind is registered, and no raw English reaches a draw —
-    /// the three drift gates every migrated bench carries.
+    /// **The whole surface resolves.** Every component kind is registered and no raw
+    /// English reaches a draw — the two drift gates every migrated bench carries (the
+    /// template tier that once needed a third gate is gone — 201F4F51).
     #[test]
-    fn the_screen_expands_with_no_unknown_kinds_or_raw_strings() {
-        let tree = PopulousBench::new().build_tree();
-        assert!(
-            !flatten(&tree).iter().any(|n| n.template.is_some()),
-            "nothing unexpanded survives the one seam"
-        );
+    fn the_screen_names_known_kinds_with_no_raw_strings() {
+        let tree = test_bench().build_tree();
         let unknown = flicker::ui::unknown_kinds(&tree);
         assert!(unknown.is_empty(), "{unknown:?}");
         let raw = flicker::ui::raw_display_literals(&tree);
@@ -478,16 +503,18 @@ mod tests {
     fn the_bench_is_exactly_the_catalog_and_nothing_else() {
         /// Aaron's catalog, expanded to the component kinds it is built from.
         const CATALOG: &[&str] = &[
-            "screen", "grid", "cell", "row", "stack",
-            "rune_corners", // Frame (9-grid) + PTT structure
-            "tabs", "pill_toggle", "button", // the PTT: page rail, tab rail, four hints
+            "screen", "cell", "row", "stack",
+            "rune_corners", // the page frame's corner runes (frame inlined as stack + overlay)
+            "paged_menu",   // the PTT — a native Component (rails/hints/rule drawn by Rust)
+            "tabs", "pill_toggle", // the PTT's authored page + tab rails
             "panel",  // UI Panel and RTT Panel
             "rtt",    // the hex world's viewport
             "slider", // the size dial
+            "button", // the seams action
             "text", "option", // localized strings
         ];
         for tab in [0.0, 1.0] {
-            let mut bench = PopulousBench::new();
+            let mut bench = test_bench();
             let mut r = ValueMap::default();
             r.set(ui::TAB_BIND, tab);
             bench.apply_results(&r);
@@ -502,29 +529,22 @@ mod tests {
         }
         // …and the catalog is not aspirational: on the MAP tab every interactive
         // member of it is actually PRESENT.
-        let tree = PopulousBench::new().build_tree();
+        let tree = test_bench().build_tree();
         let all = flatten(&tree);
         let count = |kind: &str| all.iter().filter(|n| n.component == kind).count();
+        assert_eq!(count("paged_menu"), 1, "the PTT is ONE Component");
         assert_eq!(count("tabs"), 1, "the PTT's page rail");
         assert_eq!(count("pill_toggle"), 1, "the PTT's tab rail");
         assert_eq!(count("panel"), 3, "two UI Panels and one RTT Panel");
         assert_eq!(count("rtt"), 1, "one viewport");
         assert_eq!(count("slider"), 1, "the size dial");
-        // The four rail hints are the ONLY glyph-faced buttons, and every one of
-        // them is a plain `button`.
-        let hints: Vec<&&UiNode> = all.iter().filter(|n| n.props.contains_key("glyph")).collect();
-        let mut glyphs: Vec<&str> = hints
-            .iter()
-            .filter_map(|n| match n.props.get("glyph") {
-                Some(Value::Text(t)) => Some(t.as_str()),
-                _ => None,
-            })
-            .collect();
-        glyphs.sort_unstable();
-        assert_eq!(glyphs, ["lb", "lt", "rb", "rt"], "the rails' hints, and nothing else");
+        // The rail hints (lt/rt/lb/rb) and the rule are now drawn BY the `paged_menu`
+        // Component, not authored tree nodes — so NOTHING on the surface wears a glyph.
+        // The hint→step behaviour is gated in flicker-widgets (`draw_paged_menu` /
+        // `hit_paged_menu`); here we assert only the stray-node inverse.
         assert!(
-            hints.iter().all(|n| n.component == "button"),
-            "a rail hint is a plain `button` with a glyph face"
+            !all.iter().any(|n| n.props.contains_key("glyph")),
+            "the PTT hints are component-internal, not authored glyph buttons"
         );
         // The three panes, each the ONE panel component, and the viewport wired
         // to its authored stage (the default light source).
@@ -590,18 +610,13 @@ mod tests {
             for c in &n.children {
                 subtree(c, out);
             }
-            for g in n.slots.values() {
-                for c in g {
-                    subtree(c, out);
-                }
-            }
         }
         let right = all.iter().find(|n| n.id == ui::RIGHT_PANE).expect("right pane");
         let mut nodes = Vec::new();
         subtree(right, &mut nodes);
         assert!(
-            nodes.iter().all(|n| matches!(n.component.as_str(), "panel" | "row" | "text")),
-            "the stats pane is display-only"
+            nodes.iter().all(|n| matches!(n.component.as_str(), "panel" | "cell" | "row" | "text")),
+            "the stats pane is display-only (its slice gate is a plain `cell`)"
         );
         // ONE set of corner runes: the page chrome's. The content frame turned
         // its own off (`runes = false`) — the corners never stack.
@@ -616,7 +631,7 @@ mod tests {
     /// component gate: `a_focused_panel_draws_its_own_rim`).
     #[test]
     fn the_panes_are_panels_the_walker_can_cycle() {
-        let tree = PopulousBench::new().build_tree();
+        let tree = test_bench().build_tree();
         let all = flatten(&tree);
         let panes: Vec<&&UiNode> = all.iter().filter(|n| n.component == "panel").collect();
         assert_eq!(panes.len(), 3, "three panes, all the ONE panel component");
@@ -645,7 +660,7 @@ mod tests {
     /// the selected page — read from [`ui::PAGES`], never a written-down count.
     #[test]
     fn the_rails_are_built_from_the_roster() {
-        let tree = PopulousBench::new().build_tree();
+        let tree = test_bench().build_tree();
         let all = flatten(&tree);
         let rail = |id: &str| {
             all.iter()
@@ -663,10 +678,10 @@ mod tests {
     /// neighbouring hint button fires, so a click, a shoulder press and a pad
     /// Confirm all converge on one numeric index write — which is the only thing
     /// this bench dispatches. (The stepping itself, over the real `paged_menu`,
-    /// is gated in flicker-widgets: `a_rail_hint_press_steps_the_strip_by_one_and_wraps`.)
+    /// is gated in flicker-widgets: `a_rail_hint_press_steps_the_strip_by_one_and_clamps`.)
     #[test]
     fn the_rails_own_their_stepping_and_the_scene_reads_the_index() {
-        let mut bench = PopulousBench::new();
+        let mut bench = test_bench();
         let tree = bench.build_tree();
         let all = flatten(&tree);
         for (id, next, prev) in [
@@ -689,72 +704,59 @@ mod tests {
         assert_eq!(bench.selection(), (0, 1), "the strip's index is what moves the tab");
     }
 
-    /// **The seams tab is the same world, from the SAME multi-view.** The
-    /// identical viewport node — same id, same authored stage, so the scene's
-    /// one render path serves both tabs — flanked by the randomize button on the
-    /// left and a pane resting on the `ui_panel` proto's own localized
-    /// `$ui_pane_empty` fallback on the right. That both tabs come out of ONE
-    /// `multi_view` proto is the point: a tab swaps its panes, never its
-    /// arrangement. Nothing of the map tab's interior leaks across — no dial, no
-    /// stat captions — and the three drift gates hold on THIS tab's tree too
-    /// (the default-selection gate never walks it).
+    /// **Both tab slices live in ONE static tree, over the SAME panes, gated apart.**
+    /// A tab no longer rebuilds structure — `build_tree` is identical whatever the
+    /// selection; the MAP slice (the size dial + stats) and the SEAMS slice (the
+    /// randomize button + the pane's `$ui_pane_empty` placeholder) coexist, each gated
+    /// on its `shown_p0_t*` key over the SAME viewport + three panes. WHICH slice shows
+    /// is `arrange()`'s job (`arrange_lights_the_selected_tabs_slice`), never the
+    /// tree's — the point of the shared-panes arrangement.
     #[test]
-    fn the_seams_tab_is_the_same_world_on_default_panes() {
-        let mut bench = PopulousBench::new();
-        let mut r = ValueMap::default();
-        r.set(ui::TAB_BIND, 1.0); // the tab rail's own index write
-        bench.apply_results(&r);
-        assert_eq!(bench.selection(), (0, 1), "the seams tab is selected");
-
+    fn both_tab_slices_share_the_panes_and_are_gated_apart() {
+        let bench = test_bench();
         let tree = bench.build_tree();
         let all = flatten(&tree);
-        assert!(!all.iter().any(|n| n.template.is_some()), "nothing unexpanded survives");
-        let unknown = flicker::ui::unknown_kinds(&tree);
-        assert!(unknown.is_empty(), "{unknown:?}");
-        let raw = flicker::ui::raw_display_literals(&tree);
-        assert!(raw.is_empty(), "{raw:?}");
+        assert!(flicker::ui::unknown_kinds(&tree).is_empty());
+        assert!(flicker::ui::raw_display_literals(&tree).is_empty());
 
-        // The SAME hex world display: the one viewport, wired to the one stage.
+        // The one viewport, wired to the one stage — shared by both tabs, ungated.
         let view = all.iter().find(|n| n.id == ui::VIEW_SLOT).expect("the viewport is placed");
         assert_eq!(view.component, "rtt", "the centre pane is the viewport");
         assert_eq!(
             view.props.get("source"),
             Some(&Value::Text(ui::STAGE_SOURCE.to_string())),
-            "lit by the same authored stage as the map tab"
+            "the one authored stage lights it"
         );
 
-        // The SAME arrangement: three panes, all the one `panel` component, in
-        // the same left/view/right order the map tab shows — one `multi_view`
-        // proto serving both tabs, which is what "N-panel is a template" means.
+        // The one three-pane arrangement, all the `panel` component, left/view/right.
         let panes: Vec<&&UiNode> = all.iter().filter(|n| n.component == "panel").collect();
-        assert_eq!(panes.len(), 3, "the same three-pane arrangement");
+        assert_eq!(panes.len(), 3, "one three-pane arrangement, shared by both tabs");
         for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE].iter().enumerate() {
-            assert_eq!(&panes[i].id, id, "the panes keep the map tab's order");
+            assert_eq!(&panes[i].id, id, "the panes keep left/view/right order");
         }
 
-        // The left pane holds the randomize button; the RIGHT one holds nothing
-        // and shows the proto's own localized placeholder — the slot FALLBACK,
-        // not a copy of it.
+        // BOTH slices are DECLARED in the one tree — the tab lights one, never adds or
+        // removes structure. The map slice's dial and the seams slice's button coexist.
+        assert!(
+            all.iter().any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::FREQ_BIND)),
+            "the map slice's size dial is declared"
+        );
         assert!(
             all.iter().any(|n| n.action.as_deref() == Some(ui::SEAMS_ACTION)),
-            "the seams tab's one control"
+            "the seams slice's randomize button is declared"
         );
-        let placeholders: Vec<&&UiNode> = all
+        let placeholders = all
             .iter()
-            .filter(|n| {
-                matches!(n.props.get("text"), Some(Value::Text(t)) if t == "$ui_pane_empty")
-            })
-            .collect();
-        assert_eq!(placeholders.len(), 1, "the empty pane reads the default text");
+            .filter(|n| matches!(n.props.get("text"), Some(Value::Text(t)) if t == "$ui_pane_empty"))
+            .count();
+        assert_eq!(placeholders, 1, "the seams pane declares one empty placeholder");
 
-        // And nothing of the map tab's interior leaks across.
-        assert!(!all.iter().any(|n| n.component == "slider"), "the dial belongs to the map tab");
+        // Both slices are gated, on DIFFERENT keys, so a selection lights exactly one.
+        let gates: std::collections::HashSet<&str> =
+            all.iter().filter_map(|n| n.visible_bind.as_deref()).collect();
         assert!(
-            !all.iter().any(|n| matches!(
-                n.props.get("text"),
-                Some(Value::Text(t)) if t.starts_with("$pop_stat")
-            )),
-            "the stats belong to the map tab"
+            gates.contains("shown_p0_t0") && gates.contains("shown_p0_t1"),
+            "the map and seams slices are gated apart"
         );
     }
 
@@ -774,7 +776,7 @@ mod tests {
     /// sees one number, once, and rebuilds.
     #[test]
     fn the_planet_size_is_one_world_shared_by_every_tab() {
-        let mut bench = PopulousBench::new();
+        let mut bench = test_bench();
         let tab = |i: f64| {
             let mut r = ValueMap::default();
             r.set(ui::TAB_BIND, i);
@@ -820,7 +822,7 @@ mod tests {
     /// page echo can never re-fire the arm whose side effect resets the tab.
     #[test]
     fn a_rail_click_write_jumps_the_selection_and_echoes_are_inert() {
-        let mut bench = PopulousBench::new();
+        let mut bench = test_bench();
         // A wild write clamps into the roster and lands — one click, no steps.
         let mut wild = ValueMap::default();
         wild.set(ui::TAB_BIND, 9.0);
@@ -854,10 +856,10 @@ mod tests {
     fn a_click_on_the_tab_rail_switches_to_the_seams_tab() {
         use flicker::render::Vec2;
 
-        let mut bench = PopulousBench::new();
+        let mut bench = test_bench();
         let tree = bench.build_tree();
         let model = bench.model();
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        let styles = load_styles(HUD_UI_THEME);
         let mut state = UiState::default();
         let snap = |mouse: Vec2, clicked: bool, down: bool| UiInput {
             mouse,
@@ -893,7 +895,7 @@ mod tests {
     /// activation path, statically killed every button on the screen (F1).
     #[test]
     fn the_screen_declares_only_what_it_owns_and_every_one_has_an_arm() {
-        let tree = PopulousBench::new().build_tree();
+        let tree = test_bench().build_tree();
         let mut declared: Vec<(String, String)> = tree
             .props
             .iter()
@@ -981,7 +983,7 @@ mod tests {
     /// difference between authorable and not (rule 4BB12A75).
     #[test]
     fn the_seams_button_fires_a_name_the_dispatcher_answers() {
-        let mut bench = PopulousBench::new();
+        let mut bench = test_bench();
         let mut seams = ValueMap::default();
         seams.set(ui::TAB_BIND, 1.0);
         bench.apply_results(&seams);
@@ -1005,15 +1007,16 @@ mod tests {
         assert_eq!(bench.selection(), (0, 1), "…and it is not a navigation either");
     }
 
-    /// **The rail buttons are wired to results this screen dispatches.** Every
-    /// hint's `action` is one of the declared intents' result names — so a
-    /// click, a pad Confirm and the shoulder signal all reach the ONE
-    /// dispatcher, and the activate flash they share can actually light. A
-    /// button firing a result nothing dispatches is a light that can never
-    /// come on.
+    /// **The PTT rails fire results this screen dispatches.** The glyph hints are now
+    /// drawn BY the `paged_menu` Component and their click→step is gated in flicker-widgets
+    /// (`hit_paged_menu` fires the neighbouring rail's step name). At the SCENE level the
+    /// load-bearing property survives: each rail's `next_action`/`prev_action` is one of the
+    /// screen's declared intents — so a hint click, a pad Confirm and the shoulder signal all
+    /// converge on the ONE result the rail steps on. A rail stepping a result nothing
+    /// declares would be a dead control.
     #[test]
-    fn the_rail_buttons_fire_results_this_screen_dispatches() {
-        let tree = PopulousBench::new().build_tree();
+    fn the_ptt_rails_fire_results_this_screen_dispatches() {
+        let tree = test_bench().build_tree();
         let declared: Vec<String> = tree
             .props
             .iter()
@@ -1023,17 +1026,26 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let actions: Vec<&str> = flatten(&tree)
-            .iter()
-            .filter(|n| n.props.contains_key("glyph"))
-            .filter_map(|n| n.action.as_deref())
-            .collect();
-        assert_eq!(actions.len(), 4, "every rail hint fires an action");
-        for want in ["page_prev", "page_next", "tab_prev", "tab_next"] {
-            assert!(actions.contains(&want), "the {want} hint is a wired button");
+        let all = flatten(&tree);
+        let mut steps: Vec<&str> = Vec::new();
+        for n in &all {
+            for k in ["next_action", "prev_action"] {
+                if let Some(Value::Text(t)) = n.props.get(k) {
+                    steps.push(t.as_str());
+                }
+            }
+        }
+        steps.sort_unstable();
+        steps.dedup();
+        assert_eq!(
+            steps,
+            ["page_next", "page_prev", "tab_next", "tab_prev"],
+            "both rails carry their four step names"
+        );
+        for want in steps {
             assert!(
                 declared.iter().any(|d| d == want),
-                "`{want}` is also a declared intent's result, so pad and click converge"
+                "`{want}` is a declared intent, so pad / click / shoulder converge on the rail's step"
             );
         }
     }
@@ -1050,10 +1062,13 @@ mod tests {
     fn the_viewport_resolves_to_a_substantial_square() {
         use flicker::render::Vec2;
 
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         let tree = bench.build_tree();
-        let model = ValueMap::default();
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        // Light the MAP slice (what arrange() publishes on tab 0) so the gated size
+        // dial is placed — it is dark until the selection lights `shown_p0_t0`.
+        let mut model = ValueMap::default();
+        model.set("shown_p0_t0", true);
+        let styles = load_styles(HUD_UI_THEME);
         let snap = UiInput {
             mouse: Vec2::ZERO,
             clicked: false,
@@ -1110,10 +1125,12 @@ mod tests {
     fn a_click_on_the_dials_track_writes_the_bound_value() {
         use flicker::render::Vec2;
 
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         let tree = bench.build_tree();
-        let model = bench.model();
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        // Light the MAP slice so the gated dial is placed + hittable (tab 0).
+        let mut model = bench.model();
+        model.set("shown_p0_t0", true);
+        let styles = load_styles(HUD_UI_THEME);
         let mut state = UiState::default();
         let snap = |mouse: Vec2, clicked: bool, down: bool| UiInput {
             mouse,
@@ -1165,7 +1182,7 @@ mod tests {
     /// as a rounding quirk.
     #[test]
     fn the_map_is_the_standard_ninety_six() {
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         assert_eq!(bench.map().freq(), 96);
         assert_eq!(bench.map().len(), (10 * 96 * 96 + 2) as usize, "92,162 tiles");
     }
@@ -1184,7 +1201,7 @@ mod tests {
     fn the_worlds_appearance_comes_from_the_authored_stage() {
         use flicker_globe::StageLayer;
 
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         let layers = &bench.world.stage().layers;
         let shells: Vec<&StageLayer> =
             layers.iter().filter(|l| matches!(l, StageLayer::Shell { .. })).collect();
@@ -1216,10 +1233,12 @@ mod tests {
         use flicker_input_core::device::Key;
         use flicker_input_core::EventKind;
 
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         let tree = bench.build_tree();
-        let model = bench.model();
-        let styles = load_styles(HUD_UI_ELEMENTS);
+        // Light the MAP slice so the gated dial is placed + focusable (tab 0).
+        let mut model = bench.model();
+        model.set("shown_p0_t0", true);
+        let styles = load_styles(HUD_UI_THEME);
         let intents = UiIntents::of(&tree);
         let bindings = ContextualBindings::new(InputMap::wasd_and_mouse());
         let cfg = GamepadConfig::default();
@@ -1277,16 +1296,17 @@ mod tests {
     /// `the_camera_moves_only_while_the_world_panel_holds_focus`.)
     #[test]
     fn the_camera_belongs_to_the_world_in_the_viewport_pane() {
-        use flicker_input_core::device::GamepadAxis;
+        let mut bench = test_bench();
+        let input = InputState::new();
 
-        let mut bench = PopulousBench::new();
-        let mut input = InputState::new();
-        input.gamepad_mut(0).set_axis(GamepadAxis::RightStickX, 1.0);
-
+        // A non-zero look tuple (the pump resolves this from `signals.axis` in-scene); the
+        // world applies it ONLY while the viewport pane holds the walker's focus — the gate
+        // this asserts. (The motion itself is gated in flicker-globe:
+        // `the_camera_moves_only_while_the_world_panel_holds_focus`.)
         let turn = |b: &mut PopulousBench, input: &InputState| {
             let before = b.world.camera().position;
             let focus = b.ui_state.focused().map(str::to_string);
-            b.world.update(0.5, input, &b.bindings, focus.as_deref());
+            b.world.update(0.5, input, (1.0, 0.0, 0.0), focus.as_deref());
             (b.world.camera().position - before).length()
         };
         assert_eq!(turn(&mut bench, &input), 0.0, "panel navigation owns the sticks");
@@ -1301,7 +1321,7 @@ mod tests {
     /// back as the `pause_open` result `update` answers with the pause push.
     #[test]
     fn a_menu_press_fires_the_declared_pause_intent() {
-        let bench = PopulousBench::new();
+        let bench = test_bench();
         let tree = bench.build_tree();
         let intents = UiIntents::of(&tree);
 
@@ -1320,5 +1340,79 @@ mod tests {
             vec!["pause_open".to_string()],
             "the declared intent reaches the scene as its result name"
         );
+    }
+
+    /// **`arrange()` lights exactly the selected tab's slice.** The Lua
+    /// orchestration reads the two-way-bound page/tab out of the Model and returns
+    /// which selection-keyed slice is shown — the MAP tab lights `shown_p0_t0`, the
+    /// SEAMS tab lights `shown_p0_t1`, and neither lights the other's. Gating is by
+    /// SELECTION, not content; this is the whole of what Lua decides for this bench,
+    /// and the values (the dial's number, the readouts) stay engine-side.
+    #[test]
+    fn arrange_lights_the_selected_tabs_slice() {
+        use flicker::script::ScriptHost;
+
+        let host = ScriptHost::new(POPULOUS_SCRIPT, "populous.lua").expect("populous.lua loads");
+        let arrange_at = |page: f64, tab: f64| {
+            let mut m = ValueMap::default();
+            m.set(ui::PAGE_BIND, page);
+            m.set(ui::TAB_BIND, tab);
+            host.set_model(&m).expect("model publishes");
+            host.arrange().expect("arrange runs").expect("arrange is present").to_model()
+        };
+
+        // MAP tab (page 0, tab 0): its slice is lit, the seams slice is dark.
+        let map = arrange_at(0.0, 0.0);
+        assert!(map.is_on("shown_p0_t0"), "the map tab lights its slice");
+        assert!(!map.is_on("shown_p0_t1"), "the map tab darkens the seams slice");
+
+        // SEAMS tab (page 0, tab 1): its slice is lit, the map slice is dark.
+        let seams = arrange_at(0.0, 1.0);
+        assert!(seams.is_on("shown_p0_t1"), "the seams tab lights its slice");
+        assert!(!seams.is_on("shown_p0_t0"), "the seams tab darkens the map slice");
+    }
+
+    /// **The static tree loads and declares BOTH tabs' slices gated.** The authored
+    /// JSON parses to a `UiNode` tree of component KINDS (the template tier is gone —
+    /// 201F4F51), every component kind is known, the three panes + the viewport + the
+    /// size dial are all present at once, and each tab's slice is gated on its
+    /// `shown_p0_t*` key — the data half of the Lua-arrange pattern.
+    /// The shipped scene file, read exactly as the manifest reads it.
+    const POPULOUS_SCENE: &str =
+        include_str!("../../../../content/sensorium/scenes/populous.scene.json");
+
+    /// A bench built the way the resolver builds it: from the shipped file's def.
+    fn test_bench() -> PopulousBench {
+        let def = SceneDef::parse("populous", POPULOUS_SCENE).expect("populous.scene.json loads");
+        PopulousBench::new(&def)
+    }
+
+    #[test]
+    fn the_static_tree_loads_and_gates_both_tabs() {
+        let tree = SceneDef::parse("populous", POPULOUS_SCENE)
+            .expect("populous.scene.json loads")
+            .tree
+            .expect("populous.scene.json declares a tree");
+        let all = flatten(&tree);
+
+        let unknown = flicker::ui::unknown_kinds(&tree);
+        assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
+
+        // The whole layout is present at once — both tabs, gated (not a per-tab rebuild).
+        for id in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE] {
+            assert!(all.iter().any(|n| n.id == id), "the `{id}` pane is in the static tree");
+        }
+        let view = all.iter().find(|n| n.id == ui::VIEW_SLOT).expect("the viewport is placed");
+        assert_eq!(view.component, "rtt", "the centre pane is the viewport");
+        assert!(
+            all.iter().any(|n| n.bind.as_deref() == Some(ui::FREQ_BIND)),
+            "the size dial (bound to pop_freq) is present"
+        );
+
+        // Both tabs' slices are declared and gated on the keys `arrange()` lights.
+        let gates: std::collections::HashSet<&str> =
+            all.iter().filter_map(|n| n.visible_bind.as_deref()).collect();
+        assert!(gates.contains("shown_p0_t0"), "the map tab's slice is gated");
+        assert!(gates.contains("shown_p0_t1"), "the seams tab's slice is gated");
     }
 }

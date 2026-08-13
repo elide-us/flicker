@@ -1,121 +1,34 @@
 //! prism-alpha — the unified Prism client shell (the single launcher).
 //!
 //! Every Prism test app / POC is just a `Scene`; this one binary hosts them all
-//! behind the shared front-end (splash → mode menu → scene → pause). Its root
-//! menu lists the three PLAY MODES — Explore the World (Adventurer), Build the
-//! World (DM, under construction), Developer Mode — plus the Click Trainer
-//! quick-launch button and the Settings/Quit chrome. Each mode opens its tier-2
-//! page: Adventurer = the Solar Birth cinematic, DM = the coming-soon note,
-//! Developer = the two-column SCENE-SELECTION launcher (one data-driven row per
-//! tool/bench scene). Mode membership is the entry's `realms` tag list (a tool
-//! can be shared across modes); `SceneInfo` stays pure display data for the row.
+//! behind the shared front-end (splash → mode menu → scene → pause). The root menu
+//! lists the PLAY MODES (Adventurer · Dungeon Maker · Game Master · Developer);
+//! each mode's tier-2 page lists the scenes tagged to its realm, and a scene's
+//! `SceneInfo` fills that page's panel row.
 //!
-//! The per-app `flicker-*` crates stay as thin standalone entry points to the SAME
-//! scenes — nothing about a scene is specific to which binary launches it.
-//! **Pack Editor is still a raw `impl App` (not a `Scene`)**, so it joins the
-//! roster once it is converted. `Scene`-conversion of a POC is the whole cost of
-//! adding it here.
+//! Migration status (2026-08-12): the roster carries the benches MIGRATED to the new
+//! system. Every launchable scene is a file in `content/sensorium/scenes/` — ONE folder,
+//! the kernel manifest — and each roster entry below is the CLIENT BEHAVIOUR that plays
+//! the file naming it (`resolve_shell_scene`: manifest → shell behaviours → these
+//! entries, factory receiving the parsed `SceneDef`). The roster's other half is
+//! launcher metadata (realm + `SceneInfo`). The dormant scene crates stay compiling +
+//! UNCHANGED until they migrate.
 
 use anyhow::Result;
 
-use flicker_clicktrainer::ClickTrainer;
-use flicker_controllertester::ControllerTester;
 use flicker_shell::{
     SceneEntry, SceneInfo, ShellConfig, REALM_ADVENTURER, REALM_DEVELOPER, REALM_GAMEMASTER,
 };
 
-/// The launcher roster: one `SceneEntry` per scene — its realm tags decide which
-/// mode's tier-2 page lists it, and its `SceneInfo` fills that page's panel row
-/// (name · mode · region · desc · meta). The row LOAD button fires the entry
-/// `id`, which the shell menu dispatches to `factory()`.
+/// The launcher roster — one `SceneEntry` per LAUNCHABLE scene. Its realm tag
+/// decides which mode page lists it; the row LOAD button fires the entry `id`; the
+/// shell resolves that id through the MANIFEST and hands the file's def to the
+/// entry's factory (the entry is the client half of the behaviour registry).
+///
+/// Grows as benches migrate (see the module note). The gate test below holds the
+/// roster and the scenes folder bound to each other.
 fn roster() -> Vec<SceneEntry> {
     vec![
-        // Adventurer mode ("Explore the World"): exactly the Solar Birth cinematic.
-        SceneEntry::new("solarbirth", "Solar Birth", "primary", flicker_solarbirth::scene)
-            .with_realm(REALM_ADVENTURER)
-            .with_info(SceneInfo::new(
-                "Solar Birth",
-                "Cinematic",
-                "Celestial",
-                "Fly-in over the fixed Prism system as the dust cloud clears.",
-                "Clay 0.1 · Cinematic · flight-path",
-            )),
-        // Click Trainer stays a plain launch button on the ROOT menu (above Settings),
-        // not a mode-page card — a quick minigame, not one of the showcase scenes.
-        // No `SceneInfo` and no realm ⇒ the shell renders it as a root popup button.
-        SceneEntry::new("clicktrainer", "CLICK TRAINER", "primary", || {
-            Box::new(ClickTrainer::new())
-        }),
-        // Adventurer mode is the ROOT of the eventual main player experience, so the
-        // scenes a player actually stands in live here rather than in the tool
-        // launcher: the voxel world they move through, and the pad they move with.
-        SceneEntry::new("controllertester", "Controller Tester", "primary", || {
-            Box::new(ControllerTester::new())
-        })
-        .with_realm(REALM_ADVENTURER)
-        .with_info(SceneInfo::new(
-            "Controller Tester",
-            "Diagnostic",
-            "Input",
-            "Live gamepad / keyboard / mouse readout — buttons, sticks and triggers light up as you press them.",
-            "Clay 0.1 · Tool · gilrs",
-        )),
-        // Developer mode: the tool/bench scenes of the two-column launcher. Ordered by
-        // pipeline position (Aaron, QA pass 2026-08-03): asset IMPORT first, the file
-        // manager that promotes its output second, then the downstream benches.
-        SceneEntry::new("assetpipeline", "Clayworks Bench", "primary", flicker_assetpipeline::scene)
-            .with_realm(REALM_DEVELOPER)
-            .with_info(SceneInfo::new(
-                "Clayworks Bench",
-                "Rigging",
-                "Content",
-                "Choose a workflow, then rig the asset, set attach points, and export to staging for the Quartermaster.",
-                "Clay 0.1 · Editor · flicker.rig",
-            )),
-        // The content air-traffic controller: what the ingest benches drop into
-        // staging/ reaches the tree the game reads only by being promoted here.
-        SceneEntry::new("quartermaster", "Quartermaster Bench", "primary", flicker_quartermaster::scene)
-            .with_realm(REALM_DEVELOPER)
-            .with_info(SceneInfo::new(
-                "Quartermaster Bench",
-                "Content",
-                "Package",
-                "Review what the pipelines staged, then promote it into the runtime package — the manager of the package manifest.",
-                "Clay 0.1 · Editor · staging → package",
-            )),
-        SceneEntry::new("loomforge", "Loomforge Bench", "primary", flicker_loomforge::scene)
-            .with_realm(REALM_DEVELOPER)
-            .with_info(SceneInfo::new(
-                "Loomforge Bench",
-                "Rigging",
-                "Animation",
-                "Author a state machine, packs, creatures, and TAE windows — and save the pack back.",
-                "Clay 0.1 · Editor · flicker.pack",
-            )),
-        SceneEntry::new("pocclusters", "Cluster Editor", "primary", flicker_pocclusters::scene)
-            .with_realm(REALM_ADVENTURER)
-            .with_info(SceneInfo::new(
-                "Cluster Editor",
-                "Tool",
-                "CSG / Voxel",
-                "3×3 voxel-cluster field — dual-contour + mesh, LOD, navmesh, and the virtual-voxel inspector.",
-                "Clay 0.1 · Tool · dual-contour",
-            )),
-        // GAME MASTER: the realm the WORLD is authored in — a new segment beside
-        // Dungeon Maker, not a rename of it (Aaron, 2026-08-08). God Mode moved
-        // here from Developer: running a planet is not a content bench.
-        SceneEntry::new("godmode", "God Mode", "primary", flicker_godmode::scene)
-            .with_realm(REALM_GAMEMASTER)
-            .with_info(SceneInfo::new(
-                "God Mode",
-                "Simulation",
-                "World-Gen",
-                "Watch a planet evolve from a molten ball — orbit the layer stack, recolour it by any field, and drive the run.",
-                "Clay 0.1 · Sim · chemistry-first",
-            )),
-        // The world as a MAP rather than a simulation: one hex tiling, every tile
-        // identified by its own index and carrying nothing else yet. Built up a
-        // layer at a time, each one earning its place.
         SceneEntry::new("populous", "Populous Bench", "primary", flicker_populous::scene)
             .with_realm(REALM_GAMEMASTER)
             .with_info(SceneInfo::new(
@@ -125,16 +38,37 @@ fn roster() -> Vec<SceneEntry> {
                 "A hex map of a world — every tile its own index, and a dial from 23k to 144k tiles. Nothing else, yet.",
                 "Clay 0.1 · Bench · hex map",
             )),
-        // The texture synthesizer: a channel rack of noise voices blended into one
-        // field, projected into the PBR map set a surface actually needs.
-        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
+        SceneEntry::new("clicktrainer", "Click Trainer", "primary", flicker_clicktrainer::scene)
             .with_realm(REALM_DEVELOPER)
             .with_info(SceneInfo::new(
-                "Sablework Bench",
-                "Authoring",
-                "Materials",
-                "Dial a surface on a six-voice channel rack — blend noise, shape the relief, and watch the swatch tile live.",
-                "Clay 0.1 · Editor · texture recipe",
+                "Click Trainer",
+                "Trainer",
+                "Aim / 2D",
+                "Click the shrinking targets before they time out — live accuracy and reaction-time readouts over a 2D sprite game.",
+                "Clay 0.1 · Bench · 2D + vector HUD",
+            )),
+        SceneEntry::new(
+            "componentcatalog",
+            "Component Catalog",
+            "primary",
+            flicker_componentcatalog::scene,
+        )
+        .with_realm(REALM_DEVELOPER)
+        .with_info(SceneInfo::new(
+            "Component Catalog",
+            "Reference",
+            "UI / Widgets",
+            "One live copy of every Rust widget component with all features on — a nav rail of bookmarks over a card per control. The UI test scene.",
+            "Clay 0.1 · Bench · UI catalog",
+        )),
+        SceneEntry::new("solarbirth", "Solar Birth", "primary", flicker_solarbirth::scene)
+            .with_realm(REALM_ADVENTURER)
+            .with_info(SceneInfo::new(
+                "Solar Birth",
+                "Cinematic",
+                "Celestial",
+                "A camera fly-in over the fixed Prism system as the dust clears — drag to orbit, wheel to zoom, Space to replay the flight.",
+                "Clay 0.1 · Cinematic · fly-in",
             )),
     ]
 }
@@ -167,21 +101,14 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicker_shell::{REALM_DM, REALM_GAMEMASTER};
+    use flicker_shell::{REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM};
 
-    /// The Aaron-ratified mode map, pinned.
-    ///
-    /// **Adventurer is the root of the eventual main player experience**, not a
-    /// showcase shelf — so the scenes a player STANDS IN live there: the Solar
-    /// Birth cinematic, the voxel world of the Cluster Editor, and the Controller
-    /// Tester they learn the pad on. Developer keeps the authoring BENCHES, which
-    /// had grown too crowded to read (Aaron, 2026-08-02). **GAME MASTER (the DM
-    /// realm) is where the world itself is authored** — God Mode moved there from
-    /// Developer (Aaron, 2026-08-08), because running a planet is not a content
-    /// bench. **Dungeon Maker (DM) is untouched** — Game Master was ADDED beside
-    /// it, not a rename. Click Trainer stays a realm-less root-level button.
+    /// The launchable roster is the set of benches MIGRATED to the new system, in
+    /// realm order: Populous (Game Master), Click Trainer (Developer), Solar Birth
+    /// (Adventurer). DM stays dark until its bench migrates (backlog in MCP). Pins the
+    /// set so a stray re-add of an un-migrated bench is caught.
     #[test]
-    fn roster_realms_follow_the_ratified_mode_map() {
+    fn roster_holds_the_migrated_benches() {
         let scenes = roster();
         let realm_ids = |realm: &str| -> Vec<&str> {
             scenes
@@ -190,37 +117,62 @@ mod tests {
                 .map(|e| e.id.as_str())
                 .collect()
         };
+        assert_eq!(realm_ids(REALM_GAMEMASTER), ["populous"], "Populous is the Game Master bench");
+        assert_eq!(
+            realm_ids(REALM_DEVELOPER),
+            ["clicktrainer", "componentcatalog"],
+            "Click Trainer + the Component Catalog are the Developer benches"
+        );
+        assert_eq!(realm_ids(REALM_ADVENTURER), ["solarbirth"], "Solar Birth is the Adventurer bench");
+        assert!(
+            realm_ids(REALM_DM).is_empty(),
+            "realm '{REALM_DM}' has no migrated bench yet"
+        );
+        assert!(
+            scenes.iter().all(|e| e.info.is_some()),
+            "every launcher bench carries panel metadata for its row"
+        );
+    }
 
-        let adventurer = realm_ids(REALM_ADVENTURER);
-        for id in ["solarbirth", "pocclusters", "controllertester"] {
-            assert!(adventurer.contains(&id), "'{id}' belongs to the Adventurer root");
+    /// THE MANIFEST↔ROSTER GATE — the client half of the behaviour registry, closed
+    /// where both sides are visible (the shell's own gate can only vouch for its
+    /// builtin behaviours). One folder, no strays:
+    /// - every authored scene's `behaviour` is a SHELL builtin or a roster entry id
+    ///   (a file nothing plays is a black screen waiting to be clicked);
+    /// - every roster entry has an authored scene file (a launchable scene IS data —
+    ///   no file, no launch);
+    /// - each launchable file's `behaviour` names its OWN roster entry, so `Goto{id}`
+    ///   builds the bench the file says it is.
+    #[test]
+    fn every_authored_scene_resolves_and_every_bench_is_authored() {
+        use flicker_widgets::scene_def::SceneManifest;
+
+        flicker_content::init_from_app_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
+        let dir = flicker_content::roots().sensorium().join("scenes");
+        let m = SceneManifest::load_dir(&dir).expect("the scenes folder indexes");
+        let builtins = flicker_shell::builtin_behaviours();
+        let scenes = roster();
+
+        for def in m.scenes() {
+            let builtin = builtins.contains(&def.behaviour.as_str());
+            let registered = scenes.iter().any(|e| e.id == def.behaviour);
+            assert!(
+                builtin || registered,
+                "scene file '{}' names behaviour '{}', which neither the shell builds \
+                 nor any roster entry plays",
+                def.id,
+                def.behaviour
+            );
         }
-        // GAME MASTER is a NEW realm; Dungeon Maker survives it, still empty.
-        let gm = realm_ids(REALM_GAMEMASTER);
-        assert!(gm.contains(&"godmode"), "the planet simulation is a Game Master instrument");
-        assert!(gm.contains(&"populous"), "the world map bench is a Game Master instrument");
-        assert!(realm_ids(REALM_DM).is_empty(), "Dungeon Maker is still under construction");
-
-        let dev = realm_ids(REALM_DEVELOPER);
-        assert!(dev.contains(&"sablework"), "the texture synthesizer is an authoring bench");
-        // The old "Planet Simulation" tile is GONE — God Mode is the planet
-        // simulation, and two launcher entries for one thing is how a
-        // maintainer ends up in the wrong one.
-        assert!(!dev.contains(&"pocepochs"), "the superseded Planet Simulation tile is retired");
-        assert!(!dev.contains(&"godmode"), "the planet simulation left Developer for GAME MASTER");
-        // Developer is the BENCH launcher: nothing a player stands in belongs there.
-        for id in ["solarbirth", "pocclusters", "controllertester", "clicktrainer"] {
-            assert!(!dev.contains(&id), "'{id}' is not a Developer bench");
-        }
-
-        // Click Trainer: realm-less AND info-less ⇒ a plain root popup button.
-        let ct = scenes.iter().find(|e| e.id == "clicktrainer").expect("click trainer registered");
-        assert!(ct.realms.is_empty() && ct.info.is_none());
-
-        // Every other entry is realm-tagged and info-bearing (a mode-page panel row).
-        for e in scenes.iter().filter(|e| e.id != "clicktrainer") {
-            assert!(!e.realms.is_empty(), "'{}' belongs to a mode", e.id);
-            assert!(e.info.is_some(), "'{}' carries panel metadata", e.id);
+        for e in &scenes {
+            let def = m
+                .get(&e.id)
+                .unwrap_or_else(|| panic!("roster entry '{}' has no scene file — a launchable scene is DATA", e.id));
+            assert_eq!(
+                def.behaviour, e.id,
+                "scene file '{}' must name its own roster entry as its behaviour",
+                e.id
+            );
         }
     }
 }

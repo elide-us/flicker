@@ -33,7 +33,7 @@ flicker-input-router.workspace = true
 glam.workspace = true
 # Native open-folder dialog for the Load step.
 rfd.workspace = true
-# Resolves the walker's node `style` paths against `ui_elements.json` (styles Value).
+# Resolves the walker's node `style` paths against `ui_theme.json` (styles Value).
 serde_json.workspace = true
 # Skeleton-only deserialize of the fitting body (skips its mesh — GolemBase is ~50 MB).
 serde.workspace = true

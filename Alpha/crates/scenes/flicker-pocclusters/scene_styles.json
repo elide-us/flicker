@@ -1,0 +1,426 @@
+{
+  "_comment": "⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant bench's style blocks, vendored OUT of ui_theme.json (a scene's values belong in its scene file). They move into this bench's own .scene.json at its migration — do not grow this file. Colors are $token refs into ui_theme.json's theme.tokens; a `theme` key here is refused as a palette fork.",
+  "pocclusters": {
+    "_comment": "flicker-pocclusters 'Cluster Editor' HUD — TWO declarative panels walked by flicker-widgets run_ui, built to the design mock (DesignSync project a39150df, 'Cluster Editor HUD.dc.html'). LEFT 'main' panel = header + mode pill, a Readout box (title + Cam/Grid/Move/Diag rows + Pick + a walk-only row + Esc hint), the 6 Debug-Overlay toggles in a 2-column grid, and a Move-speed slider. RIGHT 'inspector' panel = shown only when a face is picked: header + subtitle + a 7-column table (Corner / X Y Z local / wX wY wZ world) over the selected voxel's 8 corners. Stat + cell strings are pre-formatted in Rust (hud_model) and bound by name via text_bind; toggles + slider are two-way binds. Every colour is a $token (single palette source = this file's theme.tokens). Caps labels now carry the mock's letter-spacing (the `label` font role tracks them); numeric cells set `tracking = 0` on their text nodes so the fixed-width columns stay aligned. Corner runes ARE rendered (the `Prism Rune` face + `runes` config: each panel is a `stack` overlaying 4 Elder Futhark glyphs — top two rune-light over a feathered `rune_halo` panel, bottom two bronze). Panel headers carry a bronze ✦/◈ icon with lead/trail spacers that clear the corner runes; the Esc hint sits in a bordered `keycap`; the inspector closes with a colour-coded ◆ local / wX·wY·wZ world legend. Remaining mock flourishes a vector HUD still can't do (gem glyphs, runePulse animation, inset shadows) are omitted. The separate `hud`/`voxel` sections still serve the legacy voxel-cluster example — keep them distinct.",
+    "col": {
+      "label": "$dim_soft",
+      "title": "$ink_bright",
+      "value": "$ink",
+      "dim": "$dim",
+      "accent": "$rune_glow_hi",
+      "amber": "$stam_hi",
+      "bronze": "$bronze",
+      "bronze_deep": "$bronze_deep",
+      "rune": "$rune_glow"
+    },
+    "panel": {
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "border_w": 1,
+      "radius": 4
+    },
+    "box": {
+      "fill_top": "$stone0",
+      "fill_bot": "$stone1",
+      "border": "$hairline",
+      "border_w": 1,
+      "radius": 3
+    },
+    "pill": {
+      "fill_top": "$accent_wash_2",
+      "fill_bot": "$accent_wash_2",
+      "border": "$sap_border",
+      "border_w": 1,
+      "radius": 3
+    },
+    "divider": {
+      "fill": "$seam"
+    },
+    "checkbox": {
+      "box": "$stone2",
+      "check": "$sig_green",
+      "border": "$edge4",
+      "pad": 3
+    },
+    "slider": {
+      "track": "$well",
+      "fill": "$sap_base",
+      "fill_hi": "$sap_border",
+      "handle": "$sap_border",
+      "handle_w": 18
+    },
+    "rune_halo": {
+      "fill": "$rune_halo",
+      "radius": 11,
+      "feather": 7
+    },
+    "keycap": {
+      "fill_top": "$stone2",
+      "fill_bot": "$stone2",
+      "border": "$edge4",
+      "border_w": 1,
+      "radius": 3
+    },
+    "layout": {
+      "margin": 24,
+      "panel_w": 360,
+      "pad": 18,
+      "gap": 12,
+      "section_size": 11,
+      "section_h": 22
+    },
+    "header": {
+      "title": "$pc_cluster_editor",
+      "title_size": 21,
+      "row_h": 26,
+      "pill_w": 92,
+      "pill_h": 22,
+      "pill_size": 11,
+      "icon": "✦",
+      "icon_size": 15,
+      "icon_w": 20,
+      "lead": 10,
+      "trail": 14
+    },
+    "readout": {
+      "section": "$pc_readout",
+      "title_size": 19,
+      "title_h": 26,
+      "row_h": 19,
+      "label_w": 52,
+      "label_size": 11,
+      "value_size": 13,
+      "pad": 14,
+      "gap": 4,
+      "esc_pre": "$pc_press",
+      "esc_key": "$pc_esc",
+      "esc_post": "$pc_for_the_menu",
+      "esc_size": 14,
+      "esc_h": 24,
+      "key_w": 34,
+      "key_h": 18,
+      "key_size": 11,
+      "rows": [
+        {
+          "label": "$pc_cam",
+          "bind": "cam_val"
+        },
+        {
+          "label": "$pc_grid",
+          "bind": "grid_val"
+        },
+        {
+          "label": "$pc_move",
+          "bind": "move_val"
+        },
+        {
+          "label": "$pc_diag",
+          "bind": "diag_val"
+        }
+      ]
+    },
+    "toggles": {
+      "section": "$pc_debug_overlays",
+      "row_h": 26,
+      "box": 20,
+      "label_x": 30,
+      "label_size": 15,
+      "col_w": 152,
+      "gap": 6,
+      "items": [
+        {
+          "key": "wireframe",
+          "label": "$pc_wireframe_overlay"
+        },
+        {
+          "key": "arrows",
+          "label": "$pc_corner_vector_arrows"
+        },
+        {
+          "key": "navmesh",
+          "label": "$pc_navmesh_wireframe"
+        },
+        {
+          "key": "camera_lod",
+          "label": "$pc_camera_driven_lod"
+        },
+        {
+          "key": "lod_billboards",
+          "label": "$pc_lod_billboards"
+        },
+        {
+          "key": "walk",
+          "label": "$pc_surface_walk"
+        }
+      ]
+    },
+    "controls": {
+      "section": "$pc_controls",
+      "label": "$pc_move_speed",
+      "label_size": 15,
+      "value_size": 13,
+      "row_h": 24,
+      "slider_h": 8,
+      "track_h": 24,
+      "min": 20,
+      "max": 200,
+      "scale_size": 10,
+      "scale_h": 18,
+      "min_label": "20",
+      "unit": "$pc_units_s",
+      "max_label": "200"
+    },
+    "celestial": {
+      "_comment": "The Celestial Cycle panel (bottom-right) — the recovered voxel.lighting controls restyled to the Prism mock. Two groups: 'Sky · the paired hands' (Sun + Moon in a box well) and 'World · independent' (Year/Speed/Fog/Latitude/Epoch), plus View toggles. Sliders bind two-way to the celestial state in its native math units (hours / weeks 0-4 / months 0-12 / degrees / years); readout strings are pre-formatted in Rust (celestial::fmt_*) and bound by val_bind. Reuses this file's theme.tokens (single palette) + the pocclusters panel/box/slider/checkbox styles.",
+      "margin": 24,
+      "panel_w": 360,
+      "pad": 16,
+      "gap": 12,
+      "title": "$pc_celestial_cycle",
+      "title_size": 21,
+      "title_h": 26,
+      "icon": "✦",
+      "icon_size": 15,
+      "icon_w": 20,
+      "lead": 8,
+      "hint": "$pc_scrub_the_celestial_timeline_to_test_orb",
+      "hint_size": 12,
+      "hint_h": 18,
+      "well_pad": 14,
+      "group_gap": 10,
+      "ctrl_gap": 6,
+      "row_h": 20,
+      "label_size": 15,
+      "value_size": 13,
+      "value_w": 172,
+      "track_h": 20,
+      "slider_h": 8,
+      "sky_section": "$pc_sky_the_paired_hands",
+      "world_section": "$pc_world_independent",
+      "views_section": "$pc_view",
+      "sun": {
+        "label": "$pc_sun",
+        "bind": "cc_sun",
+        "val_bind": "cc_sun_val",
+        "min": 0.0,
+        "max": 24.0
+      },
+      "moon": {
+        "label": "$pc_moon",
+        "bind": "cc_moon",
+        "val_bind": "cc_moon_val",
+        "min": 0.0,
+        "max": 4.0
+      },
+      "year": {
+        "label": "$pc_year",
+        "bind": "cc_year",
+        "val_bind": "cc_year_val",
+        "min": 0.0,
+        "max": 12.0
+      },
+      "speed": {
+        "label": "$pc_speed",
+        "bind": "cc_speed",
+        "val_bind": "cc_speed_val",
+        "min": 0.0,
+        "max": 120.0
+      },
+      "fog": {
+        "label": "$pc_fog",
+        "bind": "cc_fog",
+        "val_bind": "cc_fog_val",
+        "min": 0.0,
+        "max": 1.0
+      },
+      "latitude": {
+        "label": "$pc_latitude",
+        "bind": "cc_lat",
+        "val_bind": "cc_lat_val",
+        "min": -90.0,
+        "max": 90.0
+      },
+      "epoch": {
+        "label": "$pc_epoch",
+        "bind": "cc_epoch",
+        "val_bind": "cc_epoch_val",
+        "min": 0.0,
+        "max": 20.0
+      },
+      "view_constellations": "$pc_constellations",
+      "view_planets": "$pc_planets_ecliptic",
+      "view_paths": "$pc_celestial_paths_advent",
+      "runes": [
+        "ᚦ",
+        "ᛇ",
+        "ᛃ",
+        "ᛒ"
+      ]
+    },
+    "inspector": {
+      "margin": 24,
+      "panel_w": 392,
+      "pad": 18,
+      "gap": 8,
+      "icon": "◈",
+      "icon_size": 14,
+      "icon_w": 20,
+      "lead": 8,
+      "legend_local": "$pc_local_corner",
+      "legend_world": "$pc_wx_y_z_world_space",
+      "legend_size": 9,
+      "legend_h": 24,
+      "legend_gap": 22,
+      "title_size": 21,
+      "title_h": 26,
+      "sub_size": 10,
+      "sub_h": 20,
+      "pad_box": 10,
+      "head_h": 20,
+      "head_size": 10,
+      "row_h": 22,
+      "cell_size": 12,
+      "name_w": 88,
+      "coord_w": 44,
+      "headers": [
+        "$pc_corner",
+        "X",
+        "Y",
+        "Z",
+        "$pc_wx",
+        "$pc_wy",
+        "$pc_wz"
+      ]
+    },
+    "runes": {
+      "cell": 22,
+      "inset": 3,
+      "size": 15,
+      "size_b": 13,
+      "main": [
+        "ᛞ",
+        "ᛟ",
+        "ᛊ",
+        "ᛝ"
+      ],
+      "inspector": [
+        "ᛜ",
+        "ᛢ",
+        "ᛘ",
+        "ᛉ"
+      ]
+    },
+    "chat": {
+      "_comment": "Floating in-world comms window — the flicker-widgets `chat_panel` builder (a per-frame Rust UiNode tree the pocclusters scene runs as a SECOND run_ui pass over the HUD, so the window can move + resize; not a cached tree). Maps the DesignSync ChatPanel (MCP 36F7946B) onto the clay-chat v0.1 line protocol (MCP D9FE6CE0). Container leaves (window/titlebar/tabstrip/tab_*/log/roster/input_bar/btn*) are panel styles (fill_top/fill_bot/border/radius); *_color + line_* + roster_* are TEXT colours (a text node's dotted `color` path). `input` is the text_field style (top/bot/border/caret/placeholder/label). Single palette: every value is a $token from theme.tokens.",
+      "window": {
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 4
+      },
+      "titlebar": {
+        "fill_top": "$accent_wash_2",
+        "fill_bot": "$accent_wash",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "title_color": "$ink_bright",
+      "tabstrip": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "radius": 3
+      },
+      "tab_active": {
+        "fill_top": "$accent_wash_2",
+        "fill_bot": "$accent_wash_2",
+        "border": "$sap_border",
+        "border_w": 1,
+        "label": "$ink_bright",
+        "active_label": "$ink_bright",
+        "radius": 3,
+        "label_size": 12
+      },
+      "tab_idle": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone2",
+        "border": "$edge2",
+        "border_w": 1,
+        "label": "$dim_soft",
+        "radius": 3,
+        "label_size": 12
+      },
+      "log": {
+        "fill_top": "$well_top",
+        "fill_bot": "$well_bot",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3
+      },
+      "roster": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stone0",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3
+      },
+      "roster_head": "$bronze",
+      "roster_here": "$ink",
+      "roster_op": "$bronze",
+      "roster_you": "$rune_glow_hi",
+      "input_bar": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
+      "input": {
+        "top": "$well",
+        "bot": "$well",
+        "border": "$edge3",
+        "hover_border": "$bronze_deep",
+        "caret": "$rune_glow",
+        "placeholder": "$dim",
+        "label": "$ink",
+        "radius": 3,
+        "label_size": 14
+      },
+      "speaker_color": "$ink_bright",
+      "btn": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "hover_top": "$sap_hover",
+        "hover_bot": "$sap_hover_lo",
+        "border": "$sap_border",
+        "hover_border": "$sap_hover_border",
+        "label": "$ink_sapphire",
+        "glow": "$sap_glow",
+        "radius": 3,
+        "label_size": 14
+      },
+      "btn_danger": {
+        "fill_top": "$danger_bg",
+        "fill_bot": "$danger_bg_lo",
+        "hover_top": "$danger_bg",
+        "hover_bot": "$danger_bg_lo",
+        "border": "$danger_border",
+        "hover_border": "$danger_hi",
+        "label": "$danger_text",
+        "hover_label": "$danger_text_hi",
+        "radius": 3,
+        "label_size": 14
+      },
+      "corner": "$bronze",
+      "line_say": "$ink",
+      "line_you": "$rune_glow_hi",
+      "line_op": "$bronze",
+      "line_emote": "$rune_glow",
+      "line_joined": "$rune_glow",
+      "line_left": "$dim",
+      "line_renamed": "$bronze"
+    }
+  }
+}

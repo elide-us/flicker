@@ -7,7 +7,7 @@ publish = false
 
 # flicker-widgets — the engine's **UI toolkit** (the Rust component walker, which
 # draws and hit-tests every control itself + templates/Surfaces/intents/stringtable
-# + the Lua HUD render bridge + the ui_elements.json loaders) — the shared seam both
+# + the Lua HUD render bridge + the ui_theme.json loaders) — the shared seam both
 # flicker-shell and every client consume; the `flicker` umbrella re-exports it as
 # `flicker::ui` (the retired `flicker-ui` shim crate is gone, S10).
 [dependencies]

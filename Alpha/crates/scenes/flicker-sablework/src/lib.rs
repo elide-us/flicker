@@ -17,11 +17,9 @@
 //! # The UI is DATA
 //!
 //! Following the Quartermaster, not the older benches: this scene owns no HUD Lua
-//! and composes nothing. `ui_templates.json` holds the `sablework_console` proto
-//! (a `workbench` carrying a fixed bank of six `synth_voice` rows); [`build_tree`]
-//! emits ONE instance node, declares the screen's input as `on_<signal>` props,
-//! and calls `expand` at the end — the single seam, so the scene and every gate
-//! walk the same tree.
+//! and composes nothing. The UI template tier this bench composed against has been
+//! removed and the bench is not in the launcher roster, so [`build_tree`] now
+//! returns an empty `screen` placeholder rather than composing a surface.
 //!
 //! # Why the swatch is one sprite and not nine
 //!
@@ -41,10 +39,9 @@ use std::time::Duration;
 
 use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, Value, ValueMap};
+use flicker::script::{HudCommand, UiNode, ValueMap};
 use flicker::ui::{
-    builtin_templates, expand, load_styles, render_hud, run_ui, TemplateRegistry, UiInput,
-    UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Resolver,
@@ -62,20 +59,15 @@ pub mod commit;
 pub mod lit;
 pub mod route;
 
-/// The console's COMPOSITION lives in `ui_templates.json` as this proto; the scene
-/// only configures it. There is deliberately no `hud_sablework.lua` — a per-scene
-/// script that composed the surface would put composition back in code.
-const CONSOLE_TEMPLATE: &str = "sablework_console";
-
-/// The scene's layout + `$token` styles live in the shared `ui_elements.json` —
+/// The scene's layout + `$token` styles live in the shared `ui_theme.json` —
 /// the ONE global UI-element definition + Prism palette every prism-alpha scene
 /// reads — under the `sablework` key. NOT a per-scene copy: a second file would
 /// need its own `theme.tokens`, forking the palette.
-const HUD_UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_elements.json");
+const HUD_UI_THEME: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// How many times the swatch repeats per axis in the preview. Read from
-/// `ui_elements.json` at load so the Lua and the scene cannot disagree; this is
+/// `ui_theme.json` at load so the Lua and the scene cannot disagree; this is
 /// the fallback for a malformed file, and it is deliberately the same value the
 /// JSON ships so a missing key degrades to the intended look rather than to
 /// something that merely happens not to crash.
@@ -146,7 +138,7 @@ pub struct Sablework {
     size_rung: usize,
 
     // ── preview ──
-    /// Repeats per axis in the swatch. From `ui_elements.json`.
+    /// Repeats per axis in the swatch. From `ui_theme.json`.
     tiles: u32,
     /// The six preview textures, in [`MapKind::ALL`] order. Created once at
     /// `PREVIEW_SIZE * tiles` square and rewritten in place forever after.
@@ -177,8 +169,6 @@ pub struct Sablework {
     /// draws everything else rather than by a second set of constants.
     lit_rect: Option<flicker::render::Rect>,
 
-    /// The proto registry `build_tree` expands against — built once.
-    templates: TemplateRegistry,
     ui_intents: UiIntents,
     ui_state: UiState,
     ui_styles: serde_json::Value,
@@ -201,7 +191,7 @@ impl Default for Sablework {
 
 impl Sablework {
     pub fn new() -> Self {
-        let ui_styles = load_styles(HUD_UI_ELEMENTS);
+        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let tiles = ui_styles
             .get("sablework")
             .and_then(|s| s.get("preview"))
@@ -259,7 +249,6 @@ impl Sablework {
             commit_rx,
             lit: lit::LitPreview::default(),
             lit_rect: None,
-            templates: builtin_templates(),
             ui_intents: UiIntents::default(),
             ui_state: UiState::default(),
             ui_styles,
@@ -539,41 +528,11 @@ impl Sablework {
         });
     }
 
-    /// This frame's screen — the input declaration plus ONE configured console.
-    ///
-    /// Rebuilt every frame: re-expansion is what keeps a template PARAM live (a
-    /// data-child's props are not model-resolved), and it is cheap because the
-    /// walker's draw cache is structural — an identical tree replays for free.
+    /// This frame's screen. The template tier this bench composed against has been
+    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
+    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
     pub fn build_tree(&self, _screen: Vec2) -> UiNode {
-        let mut page = UiNode { component: "screen".into(), ..Default::default() };
-        // The screen's input DECLARATION. Everything the bench reacts to is named
-        // here as DATA, so a pad press, a key and a click are the same event by the
-        // time the dispatcher sees it — and the scene hand-rolls no `esc_prev`.
-        //
-        // Controller is the floor, using only the ratified vocabulary: the bumpers
-        // (`Tab*`) walk the MAP tabs — six views of one artifact is exactly what a
-        // tab is. NOTHING ELSE is declared: Confirm, Cancel and `Panel*` are the
-        // WALKER's on every screen in Prism (it activates the focused control,
-        // backs out, and cycles the panels), and naming one here bound four dead
-        // result names while statically killing activation on this bench —
-        // violation F1, 2026-08-09. Selecting a VOICE is movement WITHIN the rack
-        // panel, so it belongs to the d-pad on the walker's focus graph; touching
-        // any of a voice's controls also selects it.
-        for (signal, result) in [
-            ("on_menu", "pause_open"),
-            ("on_tab_next", "map_next"),
-            ("on_tab_prev", "map_prev"),
-        ] {
-            page.props.insert(signal.into(), Value::Text(result.into()));
-        }
-        page.children = vec![UiNode {
-            template: Some(CONSOLE_TEMPLATE.into()),
-            ..Default::default()
-        }];
-        // Expanded HERE, not at the call sites, so the scene and every gate walk the
-        // SAME tree. An unresolved proto would otherwise draw a bare box in the app
-        // while the tests inspected a `template` node they never opened.
-        expand(page, &self.templates)
+        UiNode { component: "screen".to_string(), id: "sablework".to_string(), ..Default::default() }
     }
 
     fn selected_channel(&self) -> Channel {
@@ -754,3 +713,12 @@ pub fn scene() -> Box<dyn Scene> {
 
 #[cfg(test)]
 mod tests;
+
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}
