@@ -146,7 +146,7 @@ This is where the scene's component logic lives.
 -- clicktrainer.lua (shipped)
 local M = {}
 
-local function react_text(seconds)
+local function stat_text(seconds)
   if seconds == nil or seconds < 0 then return "—" end
   return string.format("%.0f ms", seconds * 1000.0)
 end
@@ -155,7 +155,7 @@ function M.derive()
   return {
     hits = string.format("%d", (Model and Model.hits) or 0),
     accuracy = string.format("%.0f%%", (Model and Model.accuracy_pct) or 0),
-    react_last = react_text(Model and Model.react_last_s),
+    stat_last = stat_text(Model and Model.stat_last_s),
   }
 end
 

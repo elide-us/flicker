@@ -124,7 +124,7 @@
               },
               {
                 "component": "text",
-                "text_bind": "react_last",
+                "text_bind": "stat_last",
                 "grow": 1.0,
                 "align": "right",
                 "text_size": 14,
@@ -146,7 +146,7 @@
               },
               {
                 "component": "text",
-                "text_bind": "react_best",
+                "text_bind": "stat_best",
                 "grow": 1.0,
                 "align": "right",
                 "text_size": 14,
@@ -168,7 +168,7 @@
               },
               {
                 "component": "text",
-                "text_bind": "react_avg",
+                "text_bind": "stat_avg",
                 "grow": 1.0,
                 "align": "right",
                 "text_size": 14,
@@ -252,15 +252,15 @@
           "label": "$ct_accuracy"
         },
         {
-          "id": "react_last",
+          "id": "stat_last",
           "label": "$ct_reaction"
         },
         {
-          "id": "react_best",
+          "id": "stat_best",
           "label": "$ct_best"
         },
         {
-          "id": "react_avg",
+          "id": "stat_avg",
           "label": "$ct_average"
         }
       ],

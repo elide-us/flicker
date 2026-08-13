@@ -225,9 +225,9 @@ impl ClickTrainer {
             .with("hits", f64::from(self.hits))
             .with("misses", f64::from(self.misses))
             .with("accuracy_pct", f64::from(self.accuracy()))
-            .with("react_last_s", secs(self.last_reaction))
-            .with("react_best_s", secs(self.best_reaction))
-            .with("react_avg_s", secs(avg));
+            .with("stat_last_s", secs(self.last_reaction))
+            .with("stat_best_s", secs(self.best_reaction))
+            .with("stat_avg_s", secs(avg));
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -451,7 +451,7 @@ mod tests {
         let ct = ClickTrainer::new(&def);
         assert!(ct.script.is_some(), "clicktrainer.lua loads (the pair script)");
         let m = ct.hud_model();
-        for key in ["hits", "misses", "accuracy", "react_last", "react_best", "react_avg"] {
+        for key in ["hits", "misses", "accuracy", "stat_last", "stat_best", "stat_avg"] {
             assert!(
                 m.text(key).is_some(),
                 "derive() must yield display TEXT for '{key}' — got {:?}",
@@ -460,7 +460,7 @@ mod tests {
         }
         assert_eq!(m.text("hits"), Some("0"));
         assert_eq!(m.text("accuracy"), Some("100%"), "no shots yet = a perfect record");
-        assert_eq!(m.text("react_last"), Some("—"), "no hit yet reads as an em dash");
+        assert_eq!(m.text("stat_last"), Some("—"), "no hit yet reads as an em dash");
     }
 
     fn model() -> ValueMap {
@@ -468,9 +468,9 @@ mod tests {
             .with("hits", "5")
             .with("misses", "1")
             .with("accuracy", "83%")
-            .with("react_last", "210 ms")
-            .with("react_best", "180 ms")
-            .with("react_avg", "205 ms")
+            .with("stat_last", "210 ms")
+            .with("stat_best", "180 ms")
+            .with("stat_avg", "205 ms")
     }
 
     fn snap_at(x: f32, y: f32, clicked: bool) -> UiInput {

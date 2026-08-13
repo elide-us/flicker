@@ -3,14 +3,14 @@
 -- The engine publishes the RAW runtime variables into `Model` each frame:
 --   hits, misses          -- counters (numbers)
 --   accuracy_pct          -- 0..100 (number)
---   react_last_s, react_best_s, react_avg_s  -- seconds; < 0 means "no hit yet"
+--   stat_last_s, stat_best_s, stat_avg_s  -- seconds; < 0 means "no hit yet"
 --
 -- `derive()` turns those into the display values the HUD components bind:
 -- readable strings, formatted here in CONTENT — not in engine code.
 
 local M = {}
 
-local function react_text(seconds)
+local function stat_text(seconds)
   if seconds == nil or seconds < 0 then
     return "—"
   end
@@ -25,9 +25,9 @@ function M.derive()
     hits = string.format("%d", hits),
     misses = string.format("%d", misses),
     accuracy = string.format("%.0f%%", acc),
-    react_last = react_text(Model and Model.react_last_s),
-    react_best = react_text(Model and Model.react_best_s),
-    react_avg = react_text(Model and Model.react_avg_s),
+    stat_last = stat_text(Model and Model.stat_last_s),
+    stat_best = stat_text(Model and Model.stat_best_s),
+    stat_avg = stat_text(Model and Model.stat_avg_s),
   }
 end
 
