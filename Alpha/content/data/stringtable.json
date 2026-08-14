@@ -2488,5 +2488,14 @@
   },
   "qm_class_texture_recipe": {
     "en-us": "Recipe"
+  },
+  "set_profile_default": {
+    "en-us": "Default (Keyboard & Mouse)"
+  },
+  "set_profile_kbm_souls": {
+    "en-us": "Souls — Keyboard & Mouse"
+  },
+  "set_profile_xbox_souls": {
+    "en-us": "Souls — Gamepad"
   }
 }

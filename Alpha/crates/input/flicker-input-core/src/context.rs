@@ -455,10 +455,14 @@ impl InputProfile {
     /// settings controller tab lists these as its profile selector (spec §7.3);
     /// [`by_name`](Self::by_name) constructs one. The id is persisted as
     /// [`InputProfile::name`]; the label is display-only.
+    /// `(stable value, display $token)`: the value is the persisted profile id (engine
+    /// identifier); the label is a stringtable `$token` so the display name is localized
+    /// content (DATA PLACEMENT LAW — every UI string rides the stringtable), never raw
+    /// English baked into the engine.
     pub const PRESET_NAMES: &'static [(&'static str, &'static str)] = &[
-        ("default", "Default (Keyboard & Mouse)"),
-        ("kbm_souls", "Souls — Keyboard & Mouse"),
-        ("xbox_souls", "Souls — Gamepad"),
+        ("default", "$set_profile_default"),
+        ("kbm_souls", "$set_profile_kbm_souls"),
+        ("xbox_souls", "$set_profile_xbox_souls"),
     ];
 
     /// Construct a named built-in profile, or `None` if the id is unknown.

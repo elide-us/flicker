@@ -1,5 +1,5 @@
 {
-  "_comment": "SHARED SETTINGS DEFINITION — the scene half of the settings pair (with scripts/shared/settings.lua). Carries the settings screen data model (video/audio/input rows) + chrome, authored ONCE here instead of copied into every scene file (Aaron 2026-08-14). UnifiedSettingsScene resolves settings.* against this block; main_scene_styles() merges it back onto the shell carrier until settings is a fully self-contained scene. INTERIM: the tree is still built by settings.lua M.tree() (the static-tree + derive conversion is the rest of content-layer item #8); dead pre-walker residue (nav_items, titlebar hint/close, cycler/segment, min_margin) is pruned + the window/control skins promote to Rust defaults in Stage 3.",
+  "_comment": "SHARED SETTINGS DEFINITION — the scene half of the settings pair (with scripts/shared/settings.lua, a thin derive()-only module). LAYOUT: the static `tree` is the settings window (titlebar · left page-rail paged_menu · footer · two dialogs) with EMPTY per-section containers by id (video_rows/audio_rows/kb_rows/mouse_rows/controller_rows). The hardened Rust behaviour (UnifiedSettingsScene::settings_tree) parses this tree and FILLS the containers from the row SCHEMA — the untrusted, end-user-editable Lua composes NO structure (the client is in the enemy's hands; security). settings.lua's SOLE job is turning the published section/sub-tab INDICES into the sec_*/sub_* visibility gates. STYLES: the visual skins live in `styles`; the video/audio/input row SCHEMA also still rides styles.settings.{video,audio,input} (read in place by the filler) — a data-in-styles wart to relocate to a data block in a follow-up. Realizes content-layer item #8 (settings = a real scene pair).",
   "styles": {
     "settings": {
       "window": {
@@ -609,5 +609,338 @@
         }
       }
     }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "settings",
+    "on_cancel": "settings_close",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "style": "screens.pause"
+      },
+      {
+        "component": "stack",
+        "style": "settings.window",
+        "anchor": "center",
+        "width": 1180,
+        "height": 726,
+        "children": [
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "width_frac": 1.0,
+            "height_frac": 1.0,
+            "pad": 30,
+            "children": [
+              {
+                "component": "row",
+                "size": 52,
+                "children": [
+                  {
+                    "component": "cell",
+                    "grow": 1.0,
+                    "children": [
+                      {
+                        "component": "stack",
+                        "grow": 1.0
+                      },
+                      {
+                        "component": "text",
+                        "text": "$set_settings",
+                        "size": 25,
+                        "text_size": 21,
+                        "color": "settings.titlebar.title_color",
+                        "font": "display",
+                        "align": "left"
+                      },
+                      {
+                        "component": "stack",
+                        "grow": 1.0
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "size": 46,
+                    "children": [
+                      {
+                        "component": "stack",
+                        "grow": 1.0
+                      },
+                      {
+                        "component": "button",
+                        "id": "close",
+                        "action": "settings_close",
+                        "label": "×",
+                        "size": 34,
+                        "label_size": 20,
+                        "variant": "danger"
+                      },
+                      {
+                        "component": "stack",
+                        "grow": 1.0
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "paged_menu",
+                "page_side": "left",
+                "page_w": 236,
+                "grow": 1.0,
+                "tabs_shown": "input_page_active",
+                "children": [
+                  {
+                    "component": "tabs",
+                    "id": "settings_page",
+                    "bind": "settings_page",
+                    "vertical": true,
+                    "gap": 8,
+                    "tab_active_variant": "primary",
+                    "tab_idle_variant": "secondary",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$set_video"
+                      },
+                      {
+                        "component": "option",
+                        "value": 1,
+                        "label": "$set_audio"
+                      },
+                      {
+                        "component": "option",
+                        "value": 2,
+                        "label": "$set_input"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "pill_toggle",
+                    "id": "input_subtab",
+                    "bind": "input_subtab",
+                    "size": 330,
+                    "style": "settings.controls.pill",
+                    "children": [
+                      {
+                        "component": "option",
+                        "value": 0,
+                        "label": "$set_keyboard"
+                      },
+                      {
+                        "component": "option",
+                        "value": 1,
+                        "label": "$set_mouse"
+                      },
+                      {
+                        "component": "option",
+                        "value": 2,
+                        "label": "$set_controller"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "list",
+                    "id": "settings_scroll",
+                    "bind": "scroll_off",
+                    "scroll_speed": 46,
+                    "grow": 1.0,
+                    "pad": 6,
+                    "children": [
+                      {
+                        "component": "cell",
+                        "id": "video_rows",
+                        "visible_bind": "sec_video",
+                        "gap": 0
+                      },
+                      {
+                        "component": "cell",
+                        "id": "audio_rows",
+                        "visible_bind": "sec_audio",
+                        "gap": 0
+                      },
+                      {
+                        "component": "cell",
+                        "visible_bind": "sec_input",
+                        "gap": 0,
+                        "children": [
+                          {
+                            "component": "cell",
+                            "id": "kb_rows",
+                            "visible_bind": "sub_keyboard",
+                            "gap": 0
+                          },
+                          {
+                            "component": "cell",
+                            "id": "mouse_rows",
+                            "visible_bind": "sub_mouse",
+                            "gap": 0
+                          },
+                          {
+                            "component": "cell",
+                            "id": "controller_rows",
+                            "visible_bind": "sub_controller",
+                            "gap": 0
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "row",
+                "size": 58,
+                "children": [
+                  {
+                    "component": "button",
+                    "id": "restore",
+                    "action": "settings_restore",
+                    "label": "$set_restore_defaults",
+                    "size": 180,
+                    "label_size": 12,
+                    "variant": "secondary"
+                  },
+                  {
+                    "component": "text",
+                    "text": "$settings_applied",
+                    "size": 180,
+                    "text_size": 12,
+                    "color": "settings.footer.applied_color",
+                    "font": "label",
+                    "align": "left",
+                    "visible_bind": "applied"
+                  },
+                  {
+                    "component": "stack",
+                    "grow": 1.0
+                  },
+                  {
+                    "component": "button",
+                    "id": "apply",
+                    "action": "settings_apply",
+                    "label": "$set_apply",
+                    "size": 104,
+                    "label_size": 14,
+                    "variant": "secondary"
+                  },
+                  {
+                    "component": "button",
+                    "id": "save_close",
+                    "action": "settings_back",
+                    "label": "$set_save_and_close",
+                    "size": 168,
+                    "label_size": 14,
+                    "variant": "primary"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "rune_corners",
+            "anchor": "top_left",
+            "width_frac": 1.0,
+            "height_frac": 1.0
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "visible_bind": "confirm_close",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "style": "screens.pause",
+        "children": [
+          {
+            "component": "popup_panel",
+            "title": "$set_unsaved_changes",
+            "title_size": 26,
+            "panel_style": "modal.panel",
+            "anchor": "center",
+            "layer": 2,
+            "children": [
+              {
+                "component": "text",
+                "text": "$set_do_you_want_to_save_your_changes",
+                "size": 44,
+                "text_size": 15,
+                "color": "settings.row.name_color",
+                "font": "body",
+                "align": "center"
+              },
+              {
+                "component": "button",
+                "action": "confirm_save",
+                "label": "$set_save_and_close_2",
+                "size": 46,
+                "label_size": 14,
+                "variant": "primary"
+              },
+              {
+                "component": "button",
+                "action": "confirm_discard",
+                "label": "$set_discard",
+                "size": 46,
+                "label_size": 14,
+                "variant": "danger"
+              },
+              {
+                "component": "button",
+                "action": "confirm_cancel",
+                "label": "$set_cancel_2",
+                "size": 46,
+                "label_size": 14,
+                "variant": "secondary"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "visible_bind": "restore_note",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "style": "screens.pause",
+        "children": [
+          {
+            "component": "popup_panel",
+            "title": "$set_defaults_restored",
+            "title_size": 26,
+            "panel_style": "modal.panel",
+            "anchor": "center",
+            "layer": 2,
+            "children": [
+              {
+                "component": "text",
+                "text": "$set_all_settings_have_been_reset_to_their_de",
+                "size": 44,
+                "text_size": 15,
+                "color": "settings.row.name_color",
+                "font": "body",
+                "align": "center"
+              },
+              {
+                "component": "button",
+                "action": "restore_ok",
+                "label": "$set_ok",
+                "size": 46,
+                "label_size": 14,
+                "variant": "primary"
+              }
+            ]
+          }
+        ]
+      }
+    ]
   }
 }
