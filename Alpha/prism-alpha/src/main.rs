@@ -61,6 +61,15 @@ fn roster() -> Vec<SceneEntry> {
             "One live copy of every Rust widget component with all features on — a nav rail of bookmarks over a card per control. The UI test scene.",
             "Clay 0.1 · Bench · UI catalog",
         )),
+        SceneEntry::new("quartermaster", "Quartermaster Bench", "primary", flicker_quartermaster::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Quartermaster Bench",
+                "Manager",
+                "Content / Files",
+                "The content air-traffic controller: review what landed in staging and promote it into the package, then rearrange the trees — move-only, every mutation one undo.",
+                "Clay 0.1 · Bench · file manager",
+            )),
         SceneEntry::new("solarbirth", "Solar Birth", "primary", flicker_solarbirth::scene)
             .with_realm(REALM_ADVENTURER)
             .with_info(SceneInfo::new(
@@ -120,8 +129,8 @@ mod tests {
         assert_eq!(realm_ids(REALM_GAMEMASTER), ["populous"], "Populous is the Game Master bench");
         assert_eq!(
             realm_ids(REALM_DEVELOPER),
-            ["clicktrainer", "componentcatalog"],
-            "Click Trainer + the Component Catalog are the Developer benches"
+            ["clicktrainer", "componentcatalog", "quartermaster"],
+            "Click Trainer + the Component Catalog + the Quartermaster are the Developer benches"
         );
         assert_eq!(realm_ids(REALM_ADVENTURER), ["solarbirth"], "Solar Birth is the Adventurer bench");
         assert!(

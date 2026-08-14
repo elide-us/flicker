@@ -37,34 +37,47 @@ const HUD_UI_THEME: &str =
 /// card, and the wheel writes as you scroll.
 const CONTENT_SCROLL_BIND: &str = "cat_content_scroll";
 
-/// The number of cards (23 interactive + the 2 composites). The standalone `tabs` is
-/// RETIRED — superseded by the PTT (`paged_menu`). In step with the tree's `card_<i>`
-/// boxes + `nav_<i>` bookmarks.
-const CARD_COUNT: usize = 25;
-
 /// The bookmark of the card at the top of the view wears the primary slab, the rest the
 /// secondary — the nav's active indicator, published per-frame through each `style_bind`.
 const NAV_ACTIVE_STYLE: &str = "modal.buttons.variants.primary";
 const NAV_IDLE_STYLE: &str = "modal.buttons.variants.secondary";
 
-/// The two-way VALUE binds each card's control commits — folded back and republished so a
-/// committed value persists until the model moves (rule 3A04B4CE), the round-trip the
-/// settings scene runs. (Display strings are static `$token`s in the tree, not here.)
-const DEMO_BINDS: &[&str] = &[
-    "cat_check_val",
-    "cat_toggle_val",
-    "cat_radio_val",
-    "cat_tile_on",
-    "cat_pill_val",
-    "cat_select_val",
-    "cat_slider_val",
-    "cat_stepper_val",
-    "cat_field_val",
-    "cat_pm_page",
-    "cat_pm_tab",
-    "cat_nav_scroll",
-    "cat_list_demo_off",
-];
+/// Every `card_<i>` id in the authored tray, in tree order — DERIVED from the tree
+/// at load, never counted by hand. The card list, the nav loop, and the section
+/// tracker all walk this, so adding a card is one authored box + its bookmark and
+/// zero bookkeeping (the roster-coverage gate below tells you when one is owed).
+fn card_ids(tree: &UiNode) -> Vec<String> {
+    fn walk(n: &UiNode, out: &mut Vec<String>) {
+        if n.id.starts_with("card_") {
+            out.push(n.id.clone());
+        }
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &mut out);
+    out
+}
+
+/// Every two-way `bind` the authored tree carries — the fold-back set (rule
+/// 3A04B4CE), DERIVED from the tree: the tree IS the list, so a new bound demo
+/// control round-trips without touching Rust.
+fn tree_binds(tree: &UiNode) -> Vec<String> {
+    fn walk(n: &UiNode, out: &mut Vec<String>) {
+        if let Some(b) = n.bind.as_deref() {
+            if !b.is_empty() && !out.iter().any(|k| k == b) {
+                out.push(b.to_string());
+            }
+        }
+        for c in &n.children {
+            walk(c, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(tree, &mut out);
+    out
+}
 
 /// The UI test scene. Everything a frame needs lives here; the shell drives it through
 /// the [`Scene`] trait.
@@ -88,6 +101,10 @@ pub struct ComponentCatalog {
     content_scroll: f32,
     /// The card currently at the top of the tray — which bookmark highlights.
     section: usize,
+    /// The tray's `card_<i>` ids in tree order — derived from the authored tree.
+    cards: Vec<String>,
+    /// Every two-way bind the tree carries — the fold-back set, derived likewise.
+    binds: Vec<String>,
     /// Live values every bound control round-trips through (rule 3A04B4CE).
     /// Starts EMPTY — the PAIR SCRIPT seeds the demo values; a committed value
     /// echoed back here wins over the seed from then on.
@@ -107,6 +124,8 @@ impl ComponentCatalog {
             tracing::error!("scene '{}' declares no `tree` — no UI", def.id);
         }
         let ui_intents = tree.as_ref().map(UiIntents::of).unwrap_or_default();
+        let cards = tree.as_ref().map(card_ids).unwrap_or_default();
+        let binds = tree.as_ref().map(tree_binds).unwrap_or_default();
         Self {
             tree,
             ui_intents,
@@ -117,6 +136,8 @@ impl ComponentCatalog {
             ui_state: UiState::default(),
             content_scroll: 0.0,
             section: 0,
+            cards,
+            binds,
             demo: ValueMap::new(),
             script: match ScriptHost::new(CATALOG_SCRIPT, "componentcatalog.lua") {
                 Ok(h) => Some(h),
@@ -136,7 +157,7 @@ impl ComponentCatalog {
         let mut raw = self.demo.clone();
         raw.set(CONTENT_SCROLL_BIND, f64::from(self.content_scroll));
         raw.set("section", self.section as f64);
-        raw.set("card_count", CARD_COUNT as f64);
+        raw.set("card_count", self.cards.len() as f64);
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -158,9 +179,9 @@ impl ComponentCatalog {
     /// Fold each committed demo value so its control shows it next frame (rule 3A04B4CE);
     /// a control that did not move re-echoes its resting value, a no-op.
     fn apply_results(&mut self, results: &ValueMap) {
-        for &k in DEMO_BINDS {
+        for k in &self.binds {
             if let Some(v) = results.get(k) {
-                self.demo.set(k, v.clone());
+                self.demo.set(k.clone(), v.clone());
             }
         }
     }
@@ -168,13 +189,13 @@ impl ComponentCatalog {
     /// The card whose top is nearest the tray's current scroll offset — the one at the top
     /// of the view, so its bookmark highlights. `card_i.y - card_0.y` is the height stacked
     /// above card `i`; the active card is the one whose stack ≈ the offset.
-    fn active_card(rects: &[(String, [f32; 4])], scroll: f32, fallback: usize) -> usize {
-        let card_y = |i: usize| rects.iter().find(|(n, _)| n == &format!("card_{i}")).map(|(_, r)| r[1]);
-        let Some(c0) = card_y(0) else { return fallback };
+    fn active_card(&self, rects: &[(String, [f32; 4])], scroll: f32, fallback: usize) -> usize {
+        let card_y = |id: &str| rects.iter().find(|(n, _)| n == id).map(|(_, r)| r[1]);
+        let Some(first) = self.cards.first().and_then(|id| card_y(id)) else { return fallback };
         let mut best = (f32::MAX, fallback);
-        for i in 0..CARD_COUNT {
-            if let Some(ci) = card_y(i) {
-                let d = ((ci - c0) - scroll).abs();
+        for (i, id) in self.cards.iter().enumerate() {
+            if let Some(ci) = card_y(id) {
+                let d = ((ci - first) - scroll).abs();
                 if d < best.0 {
                     best = (d, i);
                 }
@@ -247,18 +268,19 @@ impl Scene for ComponentCatalog {
         // so it is correct at any current scroll and for any card height. Overrides the
         // wheel adopt above (an explicit jump outranks the resting echo — rule 3A04B4CE).
         let card_y = |id: &str| rects.iter().find(|(n, _)| n == id).map(|(_, r)| r[1]);
-        if let Some(c0) = card_y("card_0") {
-            for i in 0..CARD_COUNT {
-                if results.is_on(&format!("nav_{i}")) {
-                    if let Some(ci) = card_y(&format!("card_{i}")) {
-                        self.content_scroll = (ci - c0).max(0.0);
-                    }
-                }
+        let jump = self
+            .cards
+            .iter()
+            .find(|card| results.is_on(&format!("nav_{}", &card["card_".len()..])))
+            .cloned();
+        if let (Some(c0), Some(card)) = (self.cards.first().and_then(|id| card_y(id)), jump) {
+            if let Some(ci) = card_y(&card) {
+                self.content_scroll = (ci - c0).max(0.0);
             }
         }
         self.apply_results(&results);
         // Which card is at the top now → which bookmark highlights next frame.
-        self.section = Self::active_card(&rects, self.content_scroll, self.section);
+        self.section = self.active_card(&rects, self.content_scroll, self.section);
 
         // Menu opens the shell's pause overlay (the screen's DECLARED `on_menu`).
         if results.is_on("pause_open") {
@@ -416,15 +438,36 @@ mod tests {
     /// tree's `nav_<i>` bookmarks + `card_<i>` boxes.
     #[test]
     fn one_bookmark_and_card_box_per_component() {
-        for i in 0..CARD_COUNT {
-            assert!(
-                CATALOG_SCENE.contains(&format!("\"nav_{i}\"")),
-                "the tree carries nav bookmark nav_{i}"
-            );
-            assert!(
-                CATALOG_SCENE.contains(&format!("\"card_{i}\"")),
-                "the tree carries card box card_{i}"
-            );
+        let def = SceneDef::parse("componentcatalog", CATALOG_SCENE).expect("scene parses");
+        let tree = def.tree.expect("the scene ships a tree");
+
+        // Structure: every card has its bookmark and the ordinals chain 1..n in
+        // authoring order (the drifted-ordinal class of bug fails here).
+        let cards = card_ids(&tree);
+        assert!(!cards.is_empty(), "the tray carries cards");
+        for card in &cards {
+            let nav = format!("\"nav_{}\"", &card["card_".len()..]);
+            assert!(CATALOG_SCENE.contains(&nav), "card {card} has its bookmark {nav}");
         }
+
+        // COVERAGE — derived from the ROSTER, the single source of truth: every
+        // engine component kind must appear somewhere in the tray (its own card,
+        // or inside a composite's demo, e.g. `tabs` as the PTT's page rail). A
+        // newly promoted kind fails HERE, by name, until its demo is authored —
+        // the catalog can never silently lag the engine again.
+        fn kinds_in(n: &UiNode, out: &mut std::collections::HashSet<String>) {
+            out.insert(n.component.clone());
+            for c in &n.children {
+                kinds_in(c, out);
+            }
+        }
+        let mut present = std::collections::HashSet::new();
+        kinds_in(&tree, &mut present);
+        let missing: Vec<&str> = flicker::ui::rust_component_kinds()
+            .iter()
+            .copied()
+            .filter(|k| !present.contains(*k))
+            .collect();
+        assert!(missing.is_empty(), "engine kinds with no demo in the catalog: {missing:?}");
     }
 }
