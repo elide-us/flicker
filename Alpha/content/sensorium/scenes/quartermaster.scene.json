@@ -1,0 +1,2407 @@
+{
+  "_comment": "Quartermaster Bench — the content air-traffic controller (Content Manager, 3A73500E): a two-tab file manager over staging/ and package/. Files = browse/rearrange (move-only, no delete); Review = staging queue → class-routed PROMOTE with the manifest ledger. Slot banks are the sanctioned windowed dynamic-rows pattern; the behaviour windows the filesystem into the slots. Signal contract: C2C98408 (ratified 2026-08-13).",
+  "behaviour": "quartermaster",
+  "params": {},
+  "exits": {},
+  "styles": {
+    "quartermaster": {
+      "top_bar": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 0
+      },
+      "title": {
+        "color": "$ink_bright"
+      },
+      "badge": {
+        "color": "$dim"
+      },
+      "tab_bar": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stone0",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 0
+      },
+      "tab_active": {
+        "fill_top": "$sap_base",
+        "fill_bot": "$sap_base_lo",
+        "hover_top": "$sap_hover",
+        "hover_bot": "$sap_hover_lo",
+        "border": "$sap_border",
+        "hover_border": "$sap_hover_border",
+        "label": "$ink_bright",
+        "radius": 3
+      },
+      "tab_idle": {
+        "fill_top": "$stone_btn",
+        "fill_bot": "$stone1",
+        "hover_top": "$stone_btn_hi",
+        "hover_bot": "$stone2",
+        "border": "$edge4",
+        "label": "$ink_button",
+        "radius": 3
+      },
+      "crumb_bar": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$surface_bot",
+        "border": "$seam",
+        "border_w": 1,
+        "radius": 0
+      },
+      "crumb": {
+        "color": "$dim"
+      },
+      "header": {
+        "color": "$bronze"
+      },
+      "meta": {
+        "color": "$dim"
+      },
+      "caret": {
+        "color": "$faint"
+      },
+      "tree": {
+        "color": "$ink"
+      },
+      "clip": {
+        "color": "$sapphire"
+      },
+      "error": {
+        "color": "$danger_text"
+      },
+      "rename": {
+        "_comment": "The inline rename field. `rename_bad` is the same box with a danger rim — a name that cannot be used BLOCKS the commit and says so, rather than discarding what was typed.",
+        "panel_bg": "$well",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 2,
+        "text": "$ink_bright",
+        "caret": "$rune_glow"
+      },
+      "rename_bad": {
+        "panel_bg": "$well",
+        "border": "$danger_border",
+        "border_w": 1,
+        "radius": 2,
+        "text": "$ink_bright",
+        "caret": "$danger_text"
+      },
+      "pane": {
+        "panel_bg": "$panel_bg",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 0
+      },
+      "pane_focused": {
+        "_comment": "The focused pane carries a sapphire rim — on a pad this ring IS the cursor's home, so it must read at a glance.",
+        "panel_bg": "$panel_bg",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 0
+      },
+      "list_header": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stone0",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 0
+      },
+      "col_header": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stone1",
+        "hover_top": "$stone2",
+        "hover_bot": "$stone2",
+        "border": "$stone1",
+        "label": "$faint",
+        "radius": 0
+      },
+      "rowsel": {
+        "_comment": "The selected slot's BUTTON skin (post-migration: one button per slot wears rowsel/rowsel_off via style_bind; the old under-wash panel form is gone with the built tree).",
+        "fill_top": "$accent_wash",
+        "fill_bot": "$accent_wash",
+        "hover_top": "$accent_wash_2",
+        "hover_bot": "$accent_wash_2",
+        "border": "$sap_border",
+        "label": "$ink_bright",
+        "radius": 2
+      },
+      "scrim": {
+        "_comment": "The bench's modal dim — passed to the `conflict_dialog` proto as its `overlay_style` skin. The dialog chrome itself is the proto's (modal.panel).",
+        "panel_bg": "$scrim",
+        "radius": 0
+      },
+      "card": {
+        "_comment": "One side of a collision (existing / incoming) — passed to the `conflict_dialog` proto as its `card_style` skin.",
+        "panel_bg": "$stone0",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 3
+      },
+      "checkbox": {
+        "box": "$stone2",
+        "check": "$sig_green",
+        "border": "$edge4",
+        "pad": 3
+      },
+      "menu": {
+        "_comment": "The focused-item context menu — the `item_context_menu` proto's default skin. Same block shape as the settings dropdown popup, so it matches the `select` popup exactly.",
+        "top": "$stone3",
+        "bot": "$stone0",
+        "border": "$edge2",
+        "radius": 3,
+        "row_h": 30,
+        "label": "$ink_button",
+        "label_size": 14,
+        "sel_bg": "$accent_wash_2",
+        "sel_label": "$ink_bright",
+        "hover_bg": "$accent_wash",
+        "hint": "$faint",
+        "disabled": "$faint",
+        "divider": "$edge2"
+      },
+      "rowsel_off": {
+        "_comment": "The invisible full-width click/focus target over each row.",
+        "fill_top": "$stone_btn",
+        "fill_bot": "$stone_btn",
+        "hover_top": "$cell_hot",
+        "hover_bot": "$cell_hot",
+        "border": "$stone_btn",
+        "label": "$ink",
+        "radius": 0
+      },
+      "status_bar": {
+        "fill_top": "$stone1",
+        "fill_bot": "$stone0",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 0
+      },
+      "class": {
+        "folder": "$bronze",
+        "rig": "$sig_blue",
+        "clip": "$sig_yellow",
+        "pack": "$sig_orange",
+        "rbp": "$sig_orange",
+        "bake": "$sig_green",
+        "flight": "$sig_white",
+        "epoch": "$sig_green",
+        "texture": "$sig_green",
+        "font": "$muted",
+        "doc": "$faint",
+        "unknown": "$danger_text",
+        "texture_recipe": "$sig_green"
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "quartermaster",
+    "on_menu": "pause_open",
+    "on_undo": "undo",
+    "on_redo": "redo",
+    "on_cut": "cut",
+    "on_paste": "paste",
+    "on_rename": "rename",
+    "on_create_folder": "create_folder",
+    "on_context_menu": "menu_open",
+    "on_tab_next": "tab_next",
+    "on_tab_prev": "tab_prev",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "children": [
+          {
+            "component": "panel",
+            "size": 52,
+            "style": "quartermaster.top_bar",
+            "pad": [
+              14,
+              0
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 10,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$qm_title",
+                    "text_size": 18,
+                    "grow": 1,
+                    "style": "quartermaster.title"
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          },
+          {
+            "component": "panel",
+            "size": 44,
+            "style": "quartermaster.tab_bar",
+            "pad": [
+              14,
+              6
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "button",
+                    "id": "tab_files",
+                    "action": "tab_files",
+                    "label": "$qm_tab_files",
+                    "style_bind": "tab_files_sty",
+                    "width": 150
+                  },
+                  {
+                    "component": "button",
+                    "id": "tab_review",
+                    "action": "tab_review",
+                    "label": "$qm_tab_review",
+                    "style_bind": "tab_review_sty",
+                    "width": 150
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "qm_files",
+            "visible_bind": "files_on",
+            "grow": 1,
+            "children": [
+              {
+                "component": "panel",
+                "size": 52,
+                "style": "quartermaster.crumb_bar",
+                "pad": [
+                  14,
+                  0
+                ],
+                "children": [
+                  {
+                    "component": "row",
+                    "gap": 10,
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$qm_route",
+                        "text_size": 12,
+                        "style": "quartermaster.meta"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "crumbs",
+                        "grow": 1,
+                        "text_size": 13,
+                        "style": "quartermaster.crumb"
+                      },
+                      {
+                        "component": "text",
+                        "text_bind": "count",
+                        "text_size": 12,
+                        "style": "quartermaster.meta"
+                      },
+                      {
+                        "component": "text",
+                        "text": "$qm_items",
+                        "text_size": 12,
+                        "style": "quartermaster.meta"
+                      }
+                    ],
+                    "grow": 1
+                  }
+                ]
+              },
+              {
+                "component": "row",
+                "grow": 1,
+                "gap": 8,
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "panel",
+                    "id": "qm_tree",
+                    "width": 340,
+                    "style_bind": "tree_pane_sty",
+                    "pad": 8,
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$qm_tree_header",
+                        "text_size": 12,
+                        "size": 24,
+                        "style": "quartermaster.header"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_0",
+                            "action": "tree_open_slot_0",
+                            "style_bind": "tree_slot_0_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_0_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_0_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_1",
+                            "action": "tree_open_slot_1",
+                            "style_bind": "tree_slot_1_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_1_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_1_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_2",
+                            "action": "tree_open_slot_2",
+                            "style_bind": "tree_slot_2_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_2_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_2_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_3",
+                            "action": "tree_open_slot_3",
+                            "style_bind": "tree_slot_3_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_3_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_3_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_4",
+                            "action": "tree_open_slot_4",
+                            "style_bind": "tree_slot_4_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_4_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_4_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_5",
+                            "action": "tree_open_slot_5",
+                            "style_bind": "tree_slot_5_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_5_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_5_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_6",
+                            "action": "tree_open_slot_6",
+                            "style_bind": "tree_slot_6_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_6_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_6_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_7",
+                            "action": "tree_open_slot_7",
+                            "style_bind": "tree_slot_7_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_7_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_7_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_8",
+                            "action": "tree_open_slot_8",
+                            "style_bind": "tree_slot_8_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_8_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_8_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_9",
+                            "action": "tree_open_slot_9",
+                            "style_bind": "tree_slot_9_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_9_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_9_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_10",
+                            "action": "tree_open_slot_10",
+                            "style_bind": "tree_slot_10_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_10_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_10_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 32,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "tree_slot_11",
+                            "action": "tree_open_slot_11",
+                            "style_bind": "tree_slot_11_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "tree_slot_11_text",
+                                "text_size": 13,
+                                "style": "quartermaster.tree"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "tree_slot_11_on"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "panel",
+                    "id": "qm_list_pane",
+                    "grow": 1,
+                    "style_bind": "list_pane_sty",
+                    "pad": 8,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 32,
+                        "gap": 8,
+                        "pad": [
+                          8,
+                          0
+                        ],
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "sort_name",
+                            "action": "sort_name",
+                            "label": "$qm_col_name",
+                            "style": "quartermaster.col_header",
+                            "grow": 1
+                          },
+                          {
+                            "component": "button",
+                            "id": "sort_type",
+                            "action": "sort_type",
+                            "label": "$qm_col_type",
+                            "style": "quartermaster.col_header",
+                            "width": 90
+                          },
+                          {
+                            "component": "button",
+                            "id": "sort_size",
+                            "action": "sort_size",
+                            "label": "$qm_col_size",
+                            "style": "quartermaster.col_header",
+                            "width": 80
+                          }
+                        ]
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_0",
+                            "action": "row_pick_slot_0",
+                            "style_bind": "row_slot_0_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_0_name",
+                                "color_bind": "row_slot_0_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_0_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_0_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_0_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_1",
+                            "action": "row_pick_slot_1",
+                            "style_bind": "row_slot_1_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_1_name",
+                                "color_bind": "row_slot_1_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_1_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_1_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_1_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_2",
+                            "action": "row_pick_slot_2",
+                            "style_bind": "row_slot_2_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_2_name",
+                                "color_bind": "row_slot_2_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_2_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_2_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_2_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_3",
+                            "action": "row_pick_slot_3",
+                            "style_bind": "row_slot_3_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_3_name",
+                                "color_bind": "row_slot_3_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_3_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_3_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_3_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_4",
+                            "action": "row_pick_slot_4",
+                            "style_bind": "row_slot_4_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_4_name",
+                                "color_bind": "row_slot_4_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_4_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_4_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_4_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_5",
+                            "action": "row_pick_slot_5",
+                            "style_bind": "row_slot_5_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_5_name",
+                                "color_bind": "row_slot_5_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_5_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_5_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_5_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_6",
+                            "action": "row_pick_slot_6",
+                            "style_bind": "row_slot_6_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_6_name",
+                                "color_bind": "row_slot_6_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_6_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_6_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_6_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_7",
+                            "action": "row_pick_slot_7",
+                            "style_bind": "row_slot_7_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_7_name",
+                                "color_bind": "row_slot_7_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_7_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_7_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_7_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_8",
+                            "action": "row_pick_slot_8",
+                            "style_bind": "row_slot_8_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_8_name",
+                                "color_bind": "row_slot_8_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_8_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_8_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_8_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_9",
+                            "action": "row_pick_slot_9",
+                            "style_bind": "row_slot_9_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_9_name",
+                                "color_bind": "row_slot_9_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_9_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_9_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_9_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_10",
+                            "action": "row_pick_slot_10",
+                            "style_bind": "row_slot_10_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_10_name",
+                                "color_bind": "row_slot_10_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_10_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_10_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_10_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "list_slot_11",
+                            "action": "row_pick_slot_11",
+                            "style_bind": "row_slot_11_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_11_name",
+                                "color_bind": "row_slot_11_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_11_type",
+                                "width": 90,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_11_size",
+                                "width": 80,
+                                "align": "right",
+                                "text_size": 12,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "row_slot_11_on"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "qm_review",
+            "visible_bind": "review_on",
+            "grow": 1,
+            "children": [
+              {
+                "component": "row",
+                "grow": 1,
+                "gap": 8,
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "panel",
+                    "id": "qm_queue",
+                    "width": 340,
+                    "style_bind": "queue_pane_sty",
+                    "pad": 8,
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$qm_review_queue",
+                        "text_size": 12,
+                        "size": 24,
+                        "style": "quartermaster.header"
+                      },
+                      {
+                        "component": "text",
+                        "text": "$qm_review_empty",
+                        "text_size": 12,
+                        "size": 24,
+                        "visible_bind": "rv_empty",
+                        "style": "quartermaster.meta"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_0",
+                            "action": "rv_pick_slot_0",
+                            "style_bind": "rv_slot_0_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_0_name",
+                                "color_bind": "rv_slot_0_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_0_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_0_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_1",
+                            "action": "rv_pick_slot_1",
+                            "style_bind": "rv_slot_1_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_1_name",
+                                "color_bind": "rv_slot_1_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_1_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_1_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_2",
+                            "action": "rv_pick_slot_2",
+                            "style_bind": "rv_slot_2_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_2_name",
+                                "color_bind": "rv_slot_2_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_2_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_2_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_3",
+                            "action": "rv_pick_slot_3",
+                            "style_bind": "rv_slot_3_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_3_name",
+                                "color_bind": "rv_slot_3_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_3_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_3_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_4",
+                            "action": "rv_pick_slot_4",
+                            "style_bind": "rv_slot_4_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_4_name",
+                                "color_bind": "rv_slot_4_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_4_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_4_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_5",
+                            "action": "rv_pick_slot_5",
+                            "style_bind": "rv_slot_5_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_5_name",
+                                "color_bind": "rv_slot_5_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_5_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_5_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_6",
+                            "action": "rv_pick_slot_6",
+                            "style_bind": "rv_slot_6_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_6_name",
+                                "color_bind": "rv_slot_6_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_6_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_6_on"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 40,
+                        "children": [
+                          {
+                            "component": "button",
+                            "id": "rv_slot_7",
+                            "action": "rv_pick_slot_7",
+                            "style_bind": "rv_slot_7_sty",
+                            "label": "",
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          },
+                          {
+                            "component": "row",
+                            "pad": [
+                              8,
+                              0
+                            ],
+                            "gap": 8,
+                            "children": [
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_7_name",
+                                "color_bind": "rv_slot_7_color",
+                                "grow": 1,
+                                "text_size": 13
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "rv_slot_7_meta",
+                                "width": 150,
+                                "align": "right",
+                                "text_size": 11,
+                                "style": "quartermaster.meta"
+                              }
+                            ],
+                            "width_frac": 1.0,
+                            "height_frac": 1.0,
+                            "anchor": "top_left"
+                          }
+                        ],
+                        "visible_bind": "rv_slot_7_on"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "panel",
+                    "id": "qm_facts",
+                    "grow": 1,
+                    "style": "quartermaster.pane",
+                    "pad": 14,
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "text",
+                        "text": "$qm_review_facts",
+                        "text_size": 12,
+                        "size": 24,
+                        "style": "quartermaster.header"
+                      },
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "gap": 8,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$qm_col_type",
+                            "style": "quartermaster.meta",
+                            "text_size": 12,
+                            "width": 110
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_class",
+                            "text_size": 12,
+                            "grow": 1,
+                            "color": "quartermaster.title.color"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "gap": 8,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$qm_fact_files",
+                            "style": "quartermaster.meta",
+                            "text_size": 12,
+                            "width": 110
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_files",
+                            "text_size": 12,
+                            "grow": 1,
+                            "color": "quartermaster.title.color"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "gap": 8,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$qm_fact_size",
+                            "style": "quartermaster.meta",
+                            "text_size": 12,
+                            "width": 110
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_size",
+                            "text_size": 12,
+                            "grow": 1,
+                            "color": "quartermaster.title.color"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 24,
+                        "gap": 8,
+                        "visible_bind": "rv_warn_0_on",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "!",
+                            "width": 16,
+                            "align": "center",
+                            "text_size": 13,
+                            "bold": true,
+                            "style": "quartermaster.error"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_warn_0",
+                            "grow": 1,
+                            "text_size": 12,
+                            "style": "quartermaster.error"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 24,
+                        "gap": 8,
+                        "visible_bind": "rv_warn_1_on",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "!",
+                            "width": 16,
+                            "align": "center",
+                            "text_size": 13,
+                            "bold": true,
+                            "style": "quartermaster.error"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_warn_1",
+                            "grow": 1,
+                            "text_size": 12,
+                            "style": "quartermaster.error"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 24,
+                        "gap": 8,
+                        "visible_bind": "rv_warn_2_on",
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "!",
+                            "width": 16,
+                            "align": "center",
+                            "text_size": 13,
+                            "bold": true,
+                            "style": "quartermaster.error"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_warn_2",
+                            "grow": 1,
+                            "text_size": 12,
+                            "style": "quartermaster.error"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 40,
+                        "gap": 10,
+                        "children": [
+                          {
+                            "component": "text",
+                            "text": "$qm_review_target",
+                            "text_size": 12,
+                            "style": "quartermaster.meta"
+                          },
+                          {
+                            "component": "text",
+                            "text_bind": "rv_target",
+                            "grow": 1,
+                            "text_size": 12,
+                            "style": "quartermaster.crumb"
+                          },
+                          {
+                            "component": "button",
+                            "id": "promote",
+                            "action": "promote",
+                            "label": "$qm_review_promote",
+                            "style": "modal.buttons.variants.primary",
+                            "width": 150,
+                            "size": 36
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "panel",
+            "size": 34,
+            "style": "quartermaster.status_bar",
+            "pad": [
+              14,
+              0
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 10,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$qm_holding",
+                    "text_size": 12,
+                    "visible_bind": "has_clip",
+                    "style": "quartermaster.meta"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "clip_name",
+                    "text_size": 12,
+                    "visible_bind": "has_clip",
+                    "style": "quartermaster.crumb"
+                  },
+                  {
+                    "component": "cell",
+                    "grow": 1,
+                    "children": []
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "error",
+                    "text_size": 12,
+                    "visible_bind": "has_error",
+                    "style": "quartermaster.error"
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "qm_menu",
+        "visible_bind": "has_menu",
+        "layer": 40,
+        "anchor": "center",
+        "width": 220,
+        "children": [
+          {
+            "component": "panel",
+            "style": "quartermaster.menu",
+            "pad": 8,
+            "gap": 4,
+            "children": [
+              {
+                "component": "button",
+                "id": "menu_confirm",
+                "action": "confirm",
+                "label": "$qm_menu_open",
+                "style_bind": "menu_sty_0",
+                "size": 30
+              },
+              {
+                "component": "button",
+                "id": "menu_rename",
+                "action": "rename",
+                "label": "$qm_menu_rename",
+                "style_bind": "menu_sty_1",
+                "size": 30
+              },
+              {
+                "component": "button",
+                "id": "menu_cut",
+                "action": "cut",
+                "label": "$qm_menu_cut",
+                "style_bind": "menu_sty_2",
+                "size": 30
+              },
+              {
+                "component": "button",
+                "id": "menu_paste",
+                "action": "paste",
+                "label": "$qm_menu_paste",
+                "style_bind": "menu_sty_3",
+                "size": 30
+              },
+              {
+                "component": "cell",
+                "size": 8,
+                "children": []
+              },
+              {
+                "component": "button",
+                "id": "menu_create_folder",
+                "action": "create_folder",
+                "label": "$qm_menu_newfolder",
+                "style_bind": "menu_sty_4",
+                "size": 30
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "popup_panel",
+        "id": "qm_prompt",
+        "visible_bind": "has_prompt",
+        "layer": 50,
+        "anchor": "center",
+        "title": "$qm_conflict_title",
+        "children": [
+          {
+            "component": "text",
+            "text_bind": "conflict_name",
+            "text_size": 15,
+            "size": 24,
+            "color": "quartermaster.title.color",
+            "align": "center"
+          },
+          {
+            "component": "text",
+            "text_bind": "conflict_where",
+            "text_size": 12,
+            "size": 20,
+            "align": "center",
+            "style": "quartermaster.meta"
+          },
+          {
+            "component": "row",
+            "gap": 10,
+            "size": 64,
+            "children": [
+              {
+                "component": "cell",
+                "grow": 1,
+                "style": "quartermaster.card",
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$qm_conflict_existing",
+                    "text_size": 11,
+                    "size": 18,
+                    "style": "quartermaster.header"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "conflict_existing",
+                    "text_size": 11,
+                    "wrap": true,
+                    "grow": 1,
+                    "style": "quartermaster.meta"
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "grow": 1,
+                "style": "quartermaster.card",
+                "pad": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$qm_conflict_incoming",
+                    "text_size": 11,
+                    "size": 18,
+                    "style": "quartermaster.header"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "conflict_incoming",
+                    "text_size": 11,
+                    "wrap": true,
+                    "grow": 1,
+                    "style": "quartermaster.meta"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "checkbox",
+            "id": "conflict_apply_rest",
+            "bind": "conflict_apply_rest",
+            "visible_bind": "conflict_multi",
+            "label": "$qm_conflict_apply_rest",
+            "box": 14,
+            "size": 24,
+            "style": "quartermaster.checkbox"
+          },
+          {
+            "component": "row",
+            "gap": 10,
+            "size": 38,
+            "children": [
+              {
+                "component": "button",
+                "id": "conflict_skip",
+                "action": "conflict_skip",
+                "label": "$qm_conflict_skip",
+                "style": "modal.buttons.variants.secondary",
+                "grow": 1
+              },
+              {
+                "component": "button",
+                "id": "conflict_keep_both",
+                "action": "conflict_keep_both",
+                "label": "$qm_conflict_keep_both",
+                "style": "modal.buttons.variants.secondary",
+                "grow": 1
+              },
+              {
+                "component": "button",
+                "id": "conflict_replace",
+                "action": "conflict_replace",
+                "label": "$qm_conflict_replace",
+                "style": "modal.buttons.variants.primary",
+                "grow": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "qm_rename",
+        "visible_bind": "has_rename",
+        "layer": 45,
+        "anchor": "center",
+        "width": 420,
+        "children": [
+          {
+            "component": "panel",
+            "style": "quartermaster.rename",
+            "pad": 12,
+            "gap": 6,
+            "children": [
+              {
+                "component": "text",
+                "text_bind": "rename_draft",
+                "text_size": 14,
+                "size": 24,
+                "color": "quartermaster.title.color"
+              },
+              {
+                "component": "text",
+                "text": "$qm_rename_hint",
+                "text_size": 11,
+                "size": 16,
+                "style": "quartermaster.meta"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "qm_toasts",
+        "anchor": "bottom_right",
+        "offset": [
+          -16,
+          -50
+        ],
+        "width": 320,
+        "layer": 45,
+        "gap": 6,
+        "children": [
+          {
+            "component": "panel",
+            "id": "toast_0",
+            "visible_bind": "toast_0_on",
+            "size": 34,
+            "style": "quartermaster.card",
+            "pad": [
+              10,
+              0
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text_bind": "toast_0_label",
+                    "text_size": 12,
+                    "style": "quartermaster.meta"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "toast_0_name",
+                    "text_size": 12,
+                    "color": "quartermaster.title.color"
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          },
+          {
+            "component": "panel",
+            "id": "toast_1",
+            "visible_bind": "toast_1_on",
+            "size": 34,
+            "style": "quartermaster.card",
+            "pad": [
+              10,
+              0
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text_bind": "toast_1_label",
+                    "text_size": 12,
+                    "style": "quartermaster.meta"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "toast_1_name",
+                    "text_size": 12,
+                    "color": "quartermaster.title.color"
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          },
+          {
+            "component": "panel",
+            "id": "toast_2",
+            "visible_bind": "toast_2_on",
+            "size": 34,
+            "style": "quartermaster.card",
+            "pad": [
+              10,
+              0
+            ],
+            "children": [
+              {
+                "component": "row",
+                "gap": 8,
+                "children": [
+                  {
+                    "component": "text",
+                    "text_bind": "toast_2_label",
+                    "text_size": 12,
+                    "style": "quartermaster.meta"
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "toast_2_name",
+                    "text_size": 12,
+                    "color": "quartermaster.title.color"
+                  }
+                ],
+                "grow": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

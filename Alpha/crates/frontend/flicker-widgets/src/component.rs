@@ -589,6 +589,11 @@ struct Placed<'a> {
     rect: Rect,
     enabled: bool,
     layer: f32,
+    /// Accumulated ink fade inherited down the tree (1.0 = none) — a container's
+    /// `faded` toggle multiplies every DESCENDANT command's alpha at assembly time
+    /// (the cut-clipboard marking, a dimmed pane). Applied OUTSIDE the DrawCache, so
+    /// cached commands stay unfaded and a fade flip never invalidates an entry.
+    fade: f32,
     /// Scissor clip inherited from a `list` ancestor (px x,y,w,h), or `None`.
     /// Propagated in `resolve`; the draw pass emits a `HudCommand::Clip` when it
     /// changes between placed nodes (tree order keeps a list subtree contiguous).
@@ -617,7 +622,7 @@ pub fn run_ui(
 ) -> UiFrame {
     let screen = Rect { x: 0.0, y: 0.0, w: input.screen.x, h: input.screen.y };
     let mut placed = Vec::new();
-    resolve(tree, screen, model, 0.0, None, child_key(0, tree, 0), &mut placed);
+    resolve(tree, screen, model, 0.0, 1.0, None, child_key(0, tree, 0), &mut placed);
 
     // Hit-test pass: fold events + value edits into `results`, drag into `state`.
     let mut results = ValueMap::new();
@@ -754,8 +759,14 @@ pub fn run_ui(
         };
         if replay {
             let e = cache.entries.get_mut(&p.key).expect("probed above");
+            let start = commands.len();
             commands.extend_from_slice(&e.commands);
             e.touched = frame;
+            // The inherited `faded` dim is applied on the way OUT of the cache, so a
+            // fade flip re-tints a replayed entry without ever invalidating it.
+            if p.fade < 1.0 {
+                fade_commands(&mut commands[start..], p.fade);
+            }
             continue;
         }
         // Miss: draw for real and rebuild the entry. The read-key list is recomputed
@@ -787,6 +798,11 @@ pub fn run_ui(
                 touched: frame,
             },
         );
+        // Cache first, fade second: the entry holds the UNFADED run (fade is not a
+        // fingerprint input), and this frame's emission dims in place after.
+        if p.fade < 1.0 {
+            fade_commands(&mut commands[start..], p.fade);
+        }
     }
     // Evict what this frame did not touch, but only once the map has grown well past
     // the live tree — a screen that toggles between two panels should keep both cached,
@@ -930,6 +946,7 @@ fn resolve<'a>(
     rect: Rect,
     model: &ValueMap,
     layer: f32,
+    fade: f32,
     clip: Option<[f32; 4]>,
     key: u64,
     out: &mut Vec<Placed<'a>>,
@@ -940,7 +957,9 @@ fn resolve<'a>(
     // A node's optional `layer` prop accumulates down the tree, so a whole
     // subtree (a styled popup + its buttons + labels) can sit above a backdrop.
     let layer = layer + pnum(node, "layer").map(|n| n as f32).unwrap_or(0.0);
-    out.push(Placed { node, rect, enabled: enabled(node, model), layer, clip, key });
+    // `faded` accumulates the same way: a faded container dims its whole subtree.
+    let fade = fade * node_fade(node, model);
+    out.push(Placed { node, rect, enabled: enabled(node, model), layer, fade, clip, key });
     if node.children.is_empty() || no_descend(&node.component) {
         return;
     }
@@ -967,9 +986,9 @@ fn resolve<'a>(
             let view_w = (inner.w - gutter).max(0.0);
             let content = Rect { x: inner.x, y: inner.y - offset, w: view_w, h: content_h };
             let view = Some([inner.x, inner.y, view_w, inner.h]);
-            flow(node, content, model, layer, view, key, out, false);
+            flow(node, content, model, layer, fade, view, key, out, false);
         }
-        "row" => flow(node, inner, model, layer, clip, key, out, true),
+        "row" => flow(node, inner, model, layer, fade, clip, key, out, true),
         // `cell` is the generic layout BOX (a "div") — same vertical-flow engine as
         // `cell` is THE box — one vertical-flow engine, one name. (It absorbed `column`
         // and `panel`: a vertical list is a `cell`, and a carved-stone panel is a `cell`
@@ -978,11 +997,11 @@ fn resolve<'a>(
         // own a backdrop + a focus rim. Without this arm the walker would anchor-
         // overlay its children (the generic fall-through), and a pane's contents
         // would stack on top of one another instead of flowing down it.
-        "cell" | "panel" => flow(node, inner, model, layer, clip, key, out, false),
+        "cell" | "panel" => flow(node, inner, model, layer, fade, clip, key, out, false),
         // A 2-D track grid — the CSS-Grid generalisation of `flow` (see the Grid
         // section). Must sit before the `_` catch-all so its children are placed
         // into cells rather than anchor-overlaid.
-        "grid" => grid_arrange(node, inner, model, layer, clip, key, out),
+        "grid" => grid_arrange(node, inner, model, layer, fade, clip, key, out),
         // The carved modal slab: its authored `children` are the ITEMS (buttons/rows the
         // scene supplies), flowed vertically below the drawn title block. The title /
         // subtitle / divider / footer are CHROME the component draws (not placed nodes),
@@ -994,7 +1013,7 @@ fn resolve<'a>(
             for (i, child) in node.children.iter().enumerate().filter(|(_, c)| visible(c, model)) {
                 let mh = child_main(child, model, false);
                 let r = Rect { x: c.inner_x, y, w: c.inner_w, h: mh };
-                resolve(child, r, model, layer, clip, child_key(key, child, i), out);
+                resolve(child, r, model, layer, fade, clip, child_key(key, child, i), out);
                 y += mh + c.items_gap;
             }
         }
@@ -1016,19 +1035,19 @@ fn resolve<'a>(
                     "tabs" if !tabs_done => {
                         tabs_done = true;
                         if let Some(rail) = lay.page_rail {
-                            resolve(child, rail, model, layer, clip, child_key(key, child, i), out);
+                            resolve(child, rail, model, layer, fade, clip, child_key(key, child, i), out);
                         }
                     }
                     "pill_toggle" if !pills_done => {
                         pills_done = true;
                         if let Some(pill) = lay.tab_pill {
-                            resolve(child, pill, model, layer, clip, child_key(key, child, i), out);
+                            resolve(child, pill, model, layer, fade, clip, child_key(key, child, i), out);
                         }
                     }
                     _ => content.push((i, child)),
                 }
             }
-            flow_kids(node, &content, lay.content, model, layer, clip, key, out, false);
+            flow_kids(node, &content, lay.content, model, layer, fade, clip, key, out, false);
         }
         // page / stack / anything else: overlay children, each placed by its own anchor.
         _ => {
@@ -1039,7 +1058,7 @@ fn resolve<'a>(
                     continue;
                 }
                 let r = anchored(c, inner, model);
-                resolve(c, r, model, layer, clip, child_key(key, c, i), out);
+                resolve(c, r, model, layer, fade, clip, child_key(key, c, i), out);
             }
         }
     }
@@ -1071,6 +1090,7 @@ fn flow<'a>(
     area: Rect,
     model: &ValueMap,
     layer: f32,
+    fade: f32,
     clip: Option<[f32; 4]>,
     key: u64,
     out: &mut Vec<Placed<'a>>,
@@ -1080,7 +1100,7 @@ fn flow<'a>(
     // when a sibling above it hides.
     let kids: Vec<(usize, &UiNode)> =
         node.children.iter().enumerate().filter(|(_, c)| visible(c, model)).collect();
-    flow_kids(node, &kids, area, model, layer, clip, key, out, horizontal);
+    flow_kids(node, &kids, area, model, layer, fade, clip, key, out, horizontal);
 }
 
 /// The flow engine over an EXPLICIT (index, child) list — so a composite that owns a
@@ -1095,6 +1115,7 @@ fn flow_kids<'a>(
     area: Rect,
     model: &ValueMap,
     layer: f32,
+    fade: f32,
     clip: Option<[f32; 4]>,
     key: u64,
     out: &mut Vec<Placed<'a>>,
@@ -1156,7 +1177,7 @@ fn flow_kids<'a>(
         } else {
             Rect { x: area.x + cross_off, y: pos, w: cross_len, h: len }
         };
-        resolve(c, r, model, layer, clip, child_key(key, c, *i), out);
+        resolve(c, r, model, layer, fade, clip, child_key(key, c, *i), out);
         pos += len + node.gap;
     }
 }
@@ -1634,6 +1655,7 @@ fn grid_arrange<'a>(
     area: Rect,
     model: &ValueMap,
     layer: f32,
+    fade: f32,
     clip: Option<[f32; 4]>,
     key: u64,
     out: &mut Vec<Placed<'a>>,
@@ -1664,7 +1686,7 @@ fn grid_arrange<'a>(
             w: span_extent(&cw, p.col, p.col_span, col_gap),
             h: span_extent(&rh, p.row, p.row_span, row_gap),
         };
-        resolve(k, r, model, layer, clip, child_key(key, k, *i), out); // the child fills its cell
+        resolve(k, r, model, layer, fade, clip, child_key(key, k, *i), out); // the child fills its cell
     }
 }
 
@@ -1715,6 +1737,22 @@ pub(crate) fn visible(node: &UiNode, model: &ValueMap) -> bool {
     match &node.visible_bind {
         Some(k) => model.is_on(k),
         None => true,
+    }
+}
+
+/// A node's OWN fade contribution — the `faded` behavior toggle (any container or
+/// component may author it; state usually rides `faded_bind`). Faded ⇒ the `fade`
+/// factor (0.45, the pre-stage map's cut-clipboard marking); resting ⇒ 1.0. Visual
+/// only: hit-testing, focus and nav are untouched — a cut row stays interactive.
+fn node_fade(node: &UiNode, model: &ValueMap) -> f32 {
+    let faded = match ptext(node, "faded_bind") {
+        Some(k) => model.is_on(k),
+        None => pbool(node, "faded"),
+    };
+    if faded {
+        pnum(node, "fade").map(|n| n as f32).unwrap_or(0.45).clamp(0.0, 1.0)
+    } else {
+        1.0
     }
 }
 
@@ -2783,6 +2821,27 @@ fn draw_node(
         _ => {}
     }
     None
+}
+
+/// Scale the alpha of every colour in `cmds` by `f` — the assembly half of the
+/// `faded` container toggle (see [`node_fade`] and the draw loop in [`run_ui`]).
+/// Runs on the way out of the [`DrawCache`], never into it. A clip carries no
+/// colour and passes through.
+fn fade_commands(cmds: &mut [HudCommand], f: f32) {
+    for c in cmds {
+        match c {
+            HudCommand::Rect { color, .. }
+            | HudCommand::Sprite { color, .. }
+            | HudCommand::Text { color, .. }
+            | HudCommand::TextCaret { color, .. } => color[3] *= f,
+            HudCommand::Panel { color, color2, border_color, .. } => {
+                color[3] *= f;
+                color2[3] *= f;
+                border_color[3] *= f;
+            }
+            HudCommand::Clip { .. } => {}
+        }
+    }
 }
 
 /// Add a node's accumulated sub-layer onto one of its emitted commands (see the
@@ -5467,6 +5526,7 @@ fn hit_badge(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
     let pill = badge_pill(r, props.get("style").unwrap_or(&Json::Null));
     HitVerdict { hit: pill.contains(m), ..Default::default() }
 }
+
 
 // ── Composites (engine-drawn assemblies) ─────────────────────────────────────
 //
@@ -8419,6 +8479,8 @@ mod tests {
         assert!(titled, "the panel drew its title");
         assert!(backed, "the panel drew its backdrop");
     }
+
+
 
     /// A `paged_menu` whose two authored rails and a content child are present: the page
     /// rail (`tabs`) sits between the LT/RT hint gutters, the tab rail (`pill_toggle`) is

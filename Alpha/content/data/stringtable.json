@@ -2446,5 +2446,47 @@
   },
   "cat_nav_splash": {
     "en-us": "Splash"
+  },
+  "qm_menu_open": {
+    "en-us": "Open"
+  },
+  "qm_menu_rename": {
+    "en-us": "Rename"
+  },
+  "qm_menu_cut": {
+    "en-us": "Cut"
+  },
+  "qm_menu_paste": {
+    "en-us": "Paste"
+  },
+  "qm_menu_newfolder": {
+    "en-us": "New folder"
+  },
+  "qm_conflict_title": {
+    "en-us": "Already exists"
+  },
+  "qm_conflict_existing": {
+    "en-us": "EXISTING"
+  },
+  "qm_conflict_incoming": {
+    "en-us": "INCOMING"
+  },
+  "qm_conflict_apply_rest": {
+    "en-us": "Apply to the remaining conflicts"
+  },
+  "qm_conflict_skip": {
+    "en-us": "Skip"
+  },
+  "qm_conflict_keep_both": {
+    "en-us": "Keep both"
+  },
+  "qm_conflict_replace": {
+    "en-us": "Replace"
+  },
+  "qm_rename_hint": {
+    "en-us": "Enter commits · Esc cancels"
+  },
+  "qm_class_texture_recipe": {
+    "en-us": "Recipe"
   }
 }

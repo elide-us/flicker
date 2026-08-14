@@ -144,11 +144,13 @@ pub(crate) fn is_rust_component(kind: &str) -> bool {
     RUST_COMPONENT_KINDS.contains(&kind)
 }
 
-/// Every engine-tier component kind — the roster, for the gate that holds each control
-/// to its obligations (a legal kind, and a hit answered in Rust). Test-only: the walker
-/// itself asks [`is_rust_component`] about ONE kind at a time and never needs the list.
-#[cfg(test)]
-pub(crate) fn rust_component_kinds() -> &'static [&'static str] {
+/// Every engine-tier component kind — the roster, THE single source of truth for
+/// what the engine draws. The walker itself asks [`is_rust_component`] about ONE
+/// kind at a time and never needs the list; the consumers are the gates: this
+/// crate's roster test, and the Component Catalog's coverage gate, which derives
+/// its required card set from HERE so the catalog can never silently lag the
+/// engine (a new kind fails the catalog build until its demo card is authored).
+pub fn rust_component_kinds() -> &'static [&'static str] {
     RUST_COMPONENT_KINDS
 }
 

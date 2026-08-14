@@ -17,18 +17,20 @@
 //! B goes up. Multi-select and drag are a later keyboard/mouse enhancement —
 //! never a requirement for any core flow.
 //!
-//! # Why the tree is built in Rust
+//! # The pair
 //!
-//! A folder listing is unbounded and its node ids encode positions in the
-//! CURRENT listing, so they must be re-derived after every navigation. That is
-//! the sanctioned Rust-tree case (loomforge's precedent): the walker's draw
-//! cache is structural, so a rebuilt-identical tree replays for free.
+//! The tree is AUTHORED — `quartermaster.scene.json` + `quartermaster.lua`
+//! (five-line architecture, 491BD9BB). A folder listing is unbounded, so the
+//! scene ships fixed SLOT BANKS (the sanctioned windowed dynamic-rows pattern)
+//! and this behaviour windows the filesystem into them: `hud_model` publishes
+//! `<bank>_slot_<s>_*` keys for the visible window, the pair script derives the
+//! gates and style paths, and a slot's fired action carries its SLOT index,
+//! mapped back to the absolute row here.
 
 pub mod fs_model;
 
 use flicker::ui::{Command, CommandHistory};
 use flicker_content::{BatchFileOp, FileOp};
-use flicker_input_core::{editor_chords, ChordLayer, InputContext};
 
 /// The node id of the inline rename field — also its focus id.
 const RENAME_ID: &str = "rename_field";
@@ -155,29 +157,37 @@ use std::time::Duration;
 
 use flicker::render::{Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, ValueMap};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
-    AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Key, Resolver,
+    AbstractControls, ActionSignal, EventKind, GamepadConfig, InputMap, InputState, Key,
 };
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
 const HUD_UI_THEME: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
+/// The pair script — the scene's LOGIC half, by name (five-line architecture).
+const QM_SCRIPT: &str =
+    include_str!("../../../../content/sensorium/scripts/quartermaster.lua");
+/// The shipped scene file — the tests' copy of the authored tree (the runtime
+/// receives the same file through the manifest `SceneDef`).
+const QM_SCENE: &str =
+    include_str!("../../../../content/sensorium/scenes/quartermaster.scene.json");
 
-const TOP_BAR_H: f32 = 52.0;
-const TAB_BAR_H: f32 = 44.0;
-const CRUMB_H: f32 = 52.0;
-const STATUS_H: f32 = 34.0;
-const TREE_W: f32 = 340.0;
+/// Slot-bank capacities — must match the authored tree's `*_slot_<s>` banks.
+const TREE_SLOTS: usize = 12;
+const LIST_SLOTS: usize = 12;
+const QUEUE_SLOTS: usize = 8;
+
 const ROW_H: f32 = 32.0;
 const LIST_ROW_H: f32 = 34.0;
-const HEADER_H: f32 = 32.0;
+/// Wheel px per tick over a pane (the `list` component's own default speed).
+const WHEEL_SPEED: f32 = 46.0;
 
 /// The bench's two pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -277,7 +287,13 @@ pub struct Quartermaster {
     tree_scroll: f32,
     list_view_h: f32,
 
-    // ── engine plumbing ──
+    // ── pair-scene plumbing ──
+    /// The AUTHORED tree (`def.tree`), cached; the walker redraws it every frame.
+    authored: Option<UiNode>,
+    /// The scene file's own style blocks (`def.styles`), merged in `enter`.
+    scene_styles_json: Option<serde_json::Value>,
+    /// The pair script; `None` degrades to raw model values, loudly.
+    script: Option<ScriptHost>,
     ui_intents: UiIntents,
     ui_state: UiState,
     ui_styles: serde_json::Value,
@@ -312,11 +328,6 @@ pub struct Quartermaster {
     /// The last mutation's outcome, for the status line.
     last_error: Option<String>,
 
-    bindings: ContextualBindings,
-    chord: ChordLayer,
-    gamepad_config: GamepadConfig,
-    resolver: Resolver,
-    ev: Vec<Fired>,
     tick: u64,
     fired_sigs: Vec<String>,
 
@@ -332,17 +343,40 @@ pub struct Quartermaster {
 
 impl Default for Quartermaster {
     fn default() -> Self {
-        Self::new()
+        Self::with_roots(Roots::from_config())
     }
 }
 
 impl Quartermaster {
-    pub fn new() -> Self {
-        Self::with_roots(Roots::from_config())
+    /// The runtime constructor — the manifest hands in the authored `SceneDef`.
+    pub fn new(def: &SceneDef) -> Self {
+        Self::from_parts(def.tree.clone(), def.styles.clone(), Roots::from_config())
     }
 
-    /// A bench over explicit roots — the seam a test drives without an app.
+    /// A bench over explicit roots, on the SHIPPED scene file — the seam a test
+    /// drives without an app, exercising the same authored tree the runtime gets.
     pub fn with_roots(roots: Roots) -> Self {
+        let def = SceneDef::parse("quartermaster", QM_SCENE)
+            .expect("the shipped quartermaster.scene.json parses");
+        Self::from_parts(def.tree, def.styles, roots)
+    }
+
+    fn from_parts(
+        authored: Option<UiNode>,
+        scene_styles_json: Option<serde_json::Value>,
+        roots: Roots,
+    ) -> Self {
+        if authored.is_none() {
+            tracing::error!("quartermaster: the scene def declares no `tree` — no UI will draw");
+        }
+        let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(QM_SCRIPT, "quartermaster.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("quartermaster.lua failed to load — raw model values only: {e}");
+                None
+            }
+        };
         let cwd = roots.package.clone();
         let mut me = Self {
             roots,
@@ -362,8 +396,11 @@ impl Quartermaster {
             tree_sel: 0,
             list_scroll: 0.0,
             tree_scroll: 0.0,
-            list_view_h: 600.0,
-            ui_intents: UiIntents::default(),
+            list_view_h: LIST_SLOTS as f32 * LIST_ROW_H,
+            authored,
+            scene_styles_json,
+            script,
+            ui_intents,
             ui_state: UiState::default(),
             ui_styles: serde_json::Value::Null,
             hud_commands: Vec::new(),
@@ -376,14 +413,6 @@ impl Quartermaster {
             history: CommandHistory::new(),
             batch_seq: 0,
             last_error: None,
-            // The chord layer rides the ratified context stack: hold the
-            // modifier and L2 means Cut rather than its base-map signal.
-            bindings: ContextualBindings::new(bench_map())
-                .with(InputContext::Chord, editor_chords()),
-            chord: ChordLayer::new(),
-            gamepad_config: GamepadConfig::default(),
-            resolver: Resolver::new(),
-            ev: Vec::new(),
             tick: 0,
             fired_sigs: Vec::new(),
             queue: Vec::new(),
@@ -631,22 +660,12 @@ impl Quartermaster {
         self.menu.is_some()
     }
 
-    /// Open the context menu on the focused item. Anchored beside the focused
-    /// row so a pad user sees it where they are looking; a pointer user gets it
-    /// under the cursor once CM6 lands the pointer layer.
+    /// Open the context menu on the focused item. The authored tree centres it
+    /// (`qm_menu` is a centre-anchored, visibility-gated overlay); the state here
+    /// is only WHETHER it is up and where the pad cursor sits inside it.
     pub fn open_menu(&mut self) {
         self.menu_sel = 0;
-        let chrome = TOP_BAR_H + TAB_BAR_H + CRUMB_H;
-        self.menu = Some(match self.pane {
-            Pane::List => Vec2::new(
-                TREE_W + 40.0,
-                chrome + HEADER_H + (self.sel as f32 * LIST_ROW_H) - self.list_scroll + LIST_ROW_H,
-            ),
-            Pane::Tree => Vec2::new(
-                40.0,
-                chrome + (self.tree_sel as f32 * ROW_H) - self.tree_scroll + ROW_H,
-            ),
-        });
+        self.menu = Some(Vec2::ZERO);
     }
 
     /// Is the menu row at `i` pickable right now? Only Paste goes dead, and only
@@ -1099,34 +1118,86 @@ impl Quartermaster {
         }
     }
 
-    /// Which rows are worth building nodes for. A folder can hold hundreds of
-    /// files; only the visible window plus a margin becomes UI.
-    fn visible_range(&self) -> (usize, usize) {
-        let first = (self.list_scroll / LIST_ROW_H).floor().max(0.0) as usize;
-        let count = (self.list_view_h / LIST_ROW_H).ceil() as usize + 2;
-        (first.min(self.rows.len()), (first + count).min(self.rows.len()))
+    // ────────────────────────────── UI ──────────────────────────────
+
+    /// The list bank's first ABSOLUTE row — the windowing base the scroll implies.
+    fn list_base(&self) -> usize {
+        (self.list_scroll / LIST_ROW_H).max(0.0) as usize
     }
 
-    // ────────────────────────────── UI ──────────────────────────────
+    /// The tree bank's first ABSOLUTE row.
+    fn tree_base(&self) -> usize {
+        (self.tree_scroll / ROW_H).max(0.0) as usize
+    }
+
+    /// A tree row's slot text: indent + caret glyph + name, one display string.
+    /// Single glyphs, not copy — the caret is a mark, and the name is data.
+    fn tree_slot_text(t: &TreeRow) -> String {
+        let caret = if !t.has_children {
+            '\u{00b7}'
+        } else if t.expanded {
+            '\u{25be}'
+        } else {
+            '\u{25b8}'
+        };
+        format!("{}{caret} {}", "  ".repeat(t.depth), t.name)
+    }
 
     fn hud_model(&self) -> ValueMap {
         let mut m = ValueMap::new();
-        m.set("list_scroll", f64::from(self.list_scroll));
-        m.set("tree_scroll", f64::from(self.tree_scroll));
+        // Raw state the pair script derives gates and style paths from.
+        m.set("tab", self.tab.id());
+        m.set("pane", self.pane.id());
+        m.set("menu_sel", self.menu_sel as f64);
+        m.set("queue_len", self.queue.len() as f64);
+        m.set("has_rename", self.is_renaming());
 
-        // Row captions + per-class colour, keyed by the node ids build_tree makes.
-        let (first, last) = self.visible_range();
-        for (i, row) in self.rows.iter().enumerate().take(last).skip(first) {
-            m.set(format!("row_{i}_name"), row.name.clone());
-            m.set(format!("row_{i}_type"), class_token(row));
-            m.set(format!("row_{i}_size"), human_size(row));
-            m.set(format!("row_{i}_color"), class_color(row));
-            m.set(format!("row_{i}_sel"), i == self.sel && self.pane == Pane::List);
+        // The windowed slot banks. A slot beyond the data gates itself off.
+        let base = self.list_base();
+        for s in 0..LIST_SLOTS {
+            let row = self.rows.get(base + s);
+            m.set(format!("row_slot_{s}_on"), row.is_some());
+            if let Some(row) = row {
+                let i = base + s;
+                m.set(format!("row_slot_{s}_name"), row.name.clone());
+                m.set(format!("row_slot_{s}_type"), class_token(row));
+                m.set(format!("row_slot_{s}_size"), human_size(row));
+                m.set(format!("row_slot_{s}_color"), class_color(row));
+                m.set(format!("row_slot_{s}_sel"), i == self.sel && self.pane == Pane::List);
+            }
         }
-        for (i, t) in self.tree.iter().enumerate() {
-            m.set(format!("tree_{i}_name"), t.name.clone());
-            m.set(format!("tree_{i}_caret"), caret_token(t));
-            m.set(format!("tree_{i}_sel"), i == self.tree_sel && self.pane == Pane::Tree);
+        let tbase = self.tree_base();
+        for s in 0..TREE_SLOTS {
+            let t = self.tree.get(tbase + s);
+            m.set(format!("tree_slot_{s}_on"), t.is_some());
+            if let Some(t) = t {
+                let i = tbase + s;
+                m.set(format!("tree_slot_{s}_text"), Self::tree_slot_text(t));
+                m.set(format!("tree_slot_{s}_sel"), i == self.tree_sel && self.pane == Pane::Tree);
+            }
+        }
+        // The Review bank + the selected item's facts (the queue is short and
+        // unscrolled today; the bank caps what shows).
+        for s in 0..QUEUE_SLOTS {
+            let item = self.queue.get(s);
+            m.set(format!("rv_slot_{s}_on"), item.is_some());
+            if let Some(item) = item {
+                m.set(format!("rv_slot_{s}_name"), item.name.clone());
+                m.set(format!("rv_slot_{s}_meta"), human_bytes(item.bytes));
+                m.set(format!("rv_slot_{s}_color"), format!("quartermaster.class.{}", item.class.id()));
+                m.set(format!("rv_slot_{s}_sel"), s == self.review_sel);
+            }
+        }
+        if let Some(item) = self.selected_queue_item() {
+            m.set("rv_class", format!("$qm_class_{}", item.class.id()));
+            m.set("rv_files", item.files.to_string());
+            m.set("rv_size", human_bytes(item.bytes));
+            m.set("rv_target", fs_model::logical(&self.roots.package.join(&item.rel)).display().to_string());
+            let warnings = self.facts.as_ref().map(|f| f.warnings.as_slice()).unwrap_or(&[]);
+            for (i, w) in warnings.iter().take(3).enumerate() {
+                m.set(format!("rv_warn_{i}_on"), true);
+                m.set(format!("rv_warn_{i}"), *w);
+            }
         }
         // The collision prompt. Only the NAMES and the measured facts are data;
         // every caption on the dialog is a `$token` in the tree.
@@ -1189,11 +1260,27 @@ impl Quartermaster {
         m
     }
 
-    /// This frame's chrome. The template tier this bench composed against has been
-    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
-    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
-    pub fn build_tree(&self, _screen: Vec2) -> UiNode {
-        UiNode { component: "screen".to_string(), id: "quartermaster".to_string(), ..Default::default() }
+    /// The frame's full Model: the raw publish above, plus what the pair script
+    /// derives from it (gates and style paths). Falls back to the raw values —
+    /// loudly — if the script is absent or throws.
+    fn model(&self) -> ValueMap {
+        let raw = self.hud_model();
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("quartermaster.lua model publish failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => {
+                    for (k, v) in derived.entries() {
+                        m.set(k.clone(), v.clone());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::error!("quartermaster.lua derive() failed: {e}"),
+            }
+        }
+        m
     }
 
     /// Fold this frame's walker results into bench state. ONE dispatcher: a pad
@@ -1337,9 +1424,9 @@ impl Quartermaster {
             self.promote_selected();
         }
         if self.tab == Tab::Review {
-            for i in 0..self.queue.len() {
-                if results.is_on(&format!("rv_pick_{i}")) {
-                    self.review_pick(i);
+            for s in 0..QUEUE_SLOTS.min(self.queue.len()) {
+                if results.is_on(&format!("rv_pick_slot_{s}")) {
+                    self.review_pick(s);
                 }
             }
         }
@@ -1376,26 +1463,27 @@ impl Quartermaster {
                 self.sort_by(key);
             }
         }
-        // Pointer picks: a row click focuses that row (and its pane).
-        for i in 0..self.rows.len() {
-            if results.is_on(&format!("row_pick_{i}")) {
-                self.pane = Pane::List;
-                self.sel = i;
+        // Pointer picks: a slot click focuses that row (and its pane). The slot
+        // index maps back through the windowing base to the absolute row.
+        for s in 0..LIST_SLOTS {
+            if results.is_on(&format!("row_pick_slot_{s}")) {
+                let i = self.list_base() + s;
+                if i < self.rows.len() {
+                    self.pane = Pane::List;
+                    self.sel = i;
+                }
             }
         }
-        for i in 0..self.tree.len() {
-            if results.is_on(&format!("tree_open_{i}")) {
-                self.pane = Pane::Tree;
-                self.tree_sel = i;
-                self.confirm();
-                break;
+        for s in 0..TREE_SLOTS {
+            if results.is_on(&format!("tree_open_slot_{s}")) {
+                let i = self.tree_base() + s;
+                if i < self.tree.len() {
+                    self.pane = Pane::Tree;
+                    self.tree_sel = i;
+                    self.confirm();
+                    break;
+                }
             }
-        }
-        if let Some(s) = results.number("list_scroll") {
-            self.list_scroll = s as f32;
-        }
-        if let Some(s) = results.number("tree_scroll") {
-            self.tree_scroll = s as f32;
         }
     }
 }
@@ -1404,24 +1492,26 @@ impl Scene for Quartermaster {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
-        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        // The theme, the shared satellites, and THIS scene's own style blocks
+        // (`def.styles` — the five-line home for the bench's values).
+        self.ui_styles =
+            flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles_json.as_ref());
         self.refresh();
         renderer.window().set_title("Quartermaster Bench");
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(&mut self, _dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+        let Some(tree) = self.authored.take() else { return Transition::None };
         let screen = renderer.size();
-        self.list_view_h =
-            (screen.y - (TOP_BAR_H + TAB_BAR_H + CRUMB_H + STATUS_H + HEADER_H)).max(120.0);
 
-        if let Some((map, _, _)) = flicker_shell::take_pending_input() {
-            self.bindings = ContextualBindings::new(with_context_menu(map))
-                .with(InputContext::Chord, editor_chords());
+        self.tick = self.tick.wrapping_add(1);
+        // CM5: the staging queue follows the disk — a light 1 s poll (a few
+        // dozen dirents); the selection survives by path.
+        if self.tab == Tab::Review && self.tick.is_multiple_of(60) {
+            self.refresh_queue();
         }
 
-        let tree = self.build_tree(screen);
-        self.ui_intents = UiIntents::of(&tree);
-        let model = self.hud_model();
+        let model = self.model();
         // Typed characters reach the walker ONLY while a rename is open, so a
         // stray keystroke can never edit something the user is not naming. The
         // scene folds the same text into its own draft below, which is what
@@ -1440,49 +1530,51 @@ impl Scene for Quartermaster {
             screen,
             typed,
             backspace,
-            wheel: input.mouse_wheel_delta,
+            wheel: 0.0,
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        self.authored = Some(tree);
         let over_hud = frame.results.is_on("hud_hit");
+
+        // The wheel scrolls whichever slot BANK the pointer is over — the banks
+        // are windowed (the walker sees only the slots), so the fold and its
+        // clamp against the REAL row count live here with the window.
+        if input.mouse_wheel_delta != 0.0 {
+            let m = input.mouse_position;
+            let over = |id: &str| {
+                frame.rect(id).is_some_and(|r| {
+                    m.x >= r.pos.x
+                        && m.x <= r.pos.x + r.size.x
+                        && m.y >= r.pos.y
+                        && m.y <= r.pos.y + r.size.y
+                })
+            };
+            if over("qm_tree") {
+                let max = (self.tree.len().saturating_sub(TREE_SLOTS)) as f32 * ROW_H;
+                self.tree_scroll =
+                    (self.tree_scroll - input.mouse_wheel_delta * WHEEL_SPEED).clamp(0.0, max);
+            } else if over("qm_list_pane") {
+                let max = (self.rows.len().saturating_sub(LIST_SLOTS)) as f32 * LIST_ROW_H;
+                self.list_scroll =
+                    (self.list_scroll - input.mouse_wheel_delta * WHEEL_SPEED).clamp(0.0, max);
+            }
+        }
         self.hud_commands = frame.commands;
 
-        // ONE resolve, ONE dispatch — the walker layer consumes the screen's
-        // declared intents, so navigation never reads a raw key.
-        self.tick = self.tick.wrapping_add(1);
-        // CM5: the staging queue follows the disk — a light 1 s poll (a few
-        // dozen dirents); the selection survives by path.
-        if self.tab == Tab::Review && self.tick.is_multiple_of(60) {
-            self.refresh_queue();
-        }
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.tick,
-            &mut self.ev,
-        );
-        // Reconcile the chord layer BEFORE the events are routed, so a verb
-        // pressed on the same frame the modifier went down already resolves
-        // against the chord map.
-        self.chord.update(&mut self.bindings, &self.ev, input, &self.gamepad_config);
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> =
-            self.ev.iter().map(|f| InputEvent::from_fired(f, ctx, input)).collect();
+        // ONE dispatch off the pump's resolved frame — the scene owns no
+        // resolver and no bindings (input-P3): the walker consumes pointer +
+        // declared intents, and the base converts the pass-through walker-owned
+        // signals (Nav*/Confirm/Cancel/Panel*) into the bench's result names.
         self.fired_sigs.clear();
-
         let mut walker =
             WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
-        let mut route = RouteCtx::default();
+        let mut base = QuartermasterBase::default();
         {
-            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
-            Router::dispatch(&events, &mut chain, &mut route);
+            let mut chain: [&mut dyn InputHandler; 2] = [&mut walker, &mut base];
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        // The standard post-dispatch seam: reconcile context/focus intents so the
-        // pointer and the pad share ONE focus id (spec §4.2a).
-        let focus_change = apply_context_requests(&mut self.bindings, &route.requests);
-        walker.apply_focus(focus_change);
         self.fired_sigs = walker.take_fired();
+        self.fired_sigs.append(&mut base.fired);
 
         // Fold the fired intent names in beside the click results, so both
         // channels reach the ONE dispatcher identically.
@@ -1519,11 +1611,17 @@ impl Scene for Quartermaster {
 
         if results.is_on("pause_open") {
             if let Some(theme) = self.ui_theme {
+                // The pause overlay shows the PROFILE's map — the pump owns
+                // bindings now (input-P3), the scene holds none.
+                let pause_map = flicker_shell::input_profile()
+                    .context_map("World")
+                    .cloned()
+                    .unwrap_or_else(InputMap::wasd_and_mouse);
                 return Transition::Push(Box::new(PauseScene::new(
                     theme,
-                    self.bindings.active_map(),
+                    &pause_map,
                     &AbstractControls::default(),
-                    &self.gamepad_config,
+                    &GamepadConfig::default(),
                 )));
             }
         }
@@ -1538,8 +1636,42 @@ impl Scene for Quartermaster {
 }
 
 /// The scene factory the launcher roster registers.
-pub fn scene() -> Box<dyn Scene> {
-    Box::new(Quartermaster::new())
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(Quartermaster::new(def))
+}
+
+/// The bench's pass-through base layer. The walker OWNS `Nav*`/`Confirm`/
+/// `Cancel`/`Panel*` and consumes them only while it has focusables; this bench
+/// keeps its ratified SINGLE-FOCUS cursor scene-side (no `tab_group`s in the
+/// authored tree), so those signals pass the walker and land here, converted to
+/// the result names the ONE dispatcher has always consumed. The editor verbs
+/// (`Undo`/`Cut`/…) do NOT pass through here — they are declared intents on the
+/// screen root, consumed by the walker layer above (signal contract C2C98408).
+#[derive(Default)]
+struct QuartermasterBase {
+    fired: Vec<String>,
+}
+
+impl InputHandler for QuartermasterBase {
+    fn handle(&mut self, ev: &InputEvent, _rc: &mut RouteCtx) -> Flow {
+        let name = match ev.signal {
+            ActionSignal::NavUp => "nav_up",
+            ActionSignal::NavDown => "nav_down",
+            ActionSignal::NavLeft => "nav_left",
+            ActionSignal::NavRight => "nav_right",
+            ActionSignal::Confirm => "confirm",
+            ActionSignal::Cancel => "cancel",
+            ActionSignal::PanelNext => "panel_next",
+            ActionSignal::PanelPrev => "panel_prev",
+            _ => return Flow::Pass,
+        };
+        if ev.kind == EventKind::Press {
+            self.fired.push(name.to_string());
+        }
+        // Both edges consumed — a release must not leak to a layer below as a
+        // second gesture.
+        Flow::Consumed
+    }
 }
 
 // ── small node helpers (the Rust-tree idiom) ──
@@ -1614,13 +1746,6 @@ fn class_color(row: &Row) -> String {
     format!("quartermaster.class.{}", row.class.id())
 }
 
-fn caret_token(t: &TreeRow) -> &'static str {
-    match (t.has_children, t.expanded) {
-        (false, _) => "$qm_caret_leaf",
-        (true, false) => "$qm_caret_closed",
-        (true, true) => "$qm_caret_open",
-    }
-}
 
 /// A compact size for the Size column. Folders show a dash.
 /// The context menu's PICKABLE rows: `(verb, proto row index)`. The proto's
@@ -1628,34 +1753,6 @@ fn caret_token(t: &TreeRow) -> &'static str {
 /// and the row index is looked up — a pad cursor can never land on a hairline.
 const MENU_ROWS: [(&str, usize); 5] =
     [("confirm", 0), ("rename", 1), ("cut", 2), ("paste", 3), ("create_folder", 5)];
-
-/// The bench's world-context map: the shared preset plus the one signal it
-/// leaves unbound. `ContextMenu` is in `ActionSignal::ALL` (so the remap surface
-/// already offers it) but no default preset binds it, because no scene wanted a
-/// context menu until this one.
-fn bench_map() -> InputMap {
-    with_context_menu(InputMap::wasd_and_mouse())
-}
-
-/// Add the context-menu bindings to `map`, idempotently: West on the pad (the
-/// free face button — A/B are Confirm/Cancel and Y opens the chord layer) and
-/// right-click on the mouse. Applied to a remapped map too, so a trip through
-/// settings cannot silently strip the menu.
-fn with_context_menu(mut map: InputMap) -> InputMap {
-    map.bind(
-        flicker_input_core::ActionSignal::ContextMenu,
-        flicker_input_core::InputBinding::GamepadButton(
-            flicker_input_core::device::GamepadButton::West,
-        ),
-    );
-    map.bind(
-        flicker_input_core::ActionSignal::ContextMenu,
-        flicker_input_core::InputBinding::MouseButton(
-            flicker_input_core::device::MouseButton::Right,
-        ),
-    );
-    map
-}
 
 /// What a confirmation names for one operation: the item's own file name. Data,
 /// never copy — the `$token` beside it says what HAPPENED to it.
@@ -1790,12 +1887,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(d);
     }
 
-    /// The three drift gates every shipped screen wires, walked against the
-    /// REAL tree the scene builds.
+    /// The drift gates every shipped screen wires, walked against the AUTHORED
+    /// tree off the shipped scene file, plus the pair-scene contracts: the
+    /// declared-intent set is exactly the ratified signal contract's (C2C98408),
+    /// no walker-owned signal is declared anywhere, and the pair script loads.
     #[test]
     fn the_tree_passes_the_drift_gates() {
-        let (qm, d) = scratch("gates");
-        let tree = qm.build_tree(Vec2::new(1920.0, 1080.0));
+        let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
+        let tree = def.tree.expect("the scene file ships a tree");
 
         let unknown = flicker::ui::unknown_kinds(&tree);
         assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
@@ -1805,6 +1904,117 @@ mod tests {
 
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
         assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+
+        // The declared intents are the ratified contract, exactly.
+        let intents = UiIntents::of(&tree);
+        for (sig, name) in [
+            (ActionSignal::Menu, "pause_open"),
+            (ActionSignal::Undo, "undo"),
+            (ActionSignal::Redo, "redo"),
+            (ActionSignal::Cut, "cut"),
+            (ActionSignal::Paste, "paste"),
+            (ActionSignal::Rename, "rename"),
+            (ActionSignal::CreateFolder, "create_folder"),
+            (ActionSignal::ContextMenu, "menu_open"),
+            (ActionSignal::TabNext, "tab_next"),
+            (ActionSignal::TabPrev, "tab_prev"),
+        ] {
+            assert_eq!(intents.result_for(sig), Some(name), "declared intent for {sig:?}");
+        }
+        // The inverse: no node anywhere declares a walker-owned signal.
+        fn no_walker_owned(n: &UiNode) {
+            for k in n.props.keys() {
+                assert!(
+                    !matches!(
+                        k.as_str(),
+                        "on_confirm"
+                            | "on_cancel"
+                            | "on_nav_up"
+                            | "on_nav_down"
+                            | "on_nav_left"
+                            | "on_nav_right"
+                            | "on_panel_next"
+                            | "on_panel_prev"
+                            | "on_chord_begin"
+                    ),
+                    "walker-owned signal declared on node {:?}",
+                    n.id
+                );
+            }
+            for c in &n.children {
+                no_walker_owned(c);
+            }
+        }
+        no_walker_owned(&tree);
+
+        // The pair script loads and derives.
+        let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
+        host.set_model(&ValueMap::new().with("tab", "tab_files")).expect("model publishes");
+        let derived = host.derive().expect("derive runs").expect("derive returns a table");
+        assert!(derived.is_on("files_on"), "the Files page gate derives on");
+    }
+
+    /// The click gate — the walker at REAL coordinates over the shipped tree +
+    /// styles + DERIVED model. Presence AND extent, then the fire: a zero-extent
+    /// slot target renders text and takes no click (the twice-burned lesson — and
+    /// exactly the in-window deadness Aaron reported on the first pass).
+    #[test]
+    fn hud_routes_clicks_on_the_slot_banks_and_tabs() {
+        let (qm, d) = scratch("clicks");
+        let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
+        let tree = def.tree.expect("the scene file ships a tree");
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let screen = Vec2::new(1920.0, 1080.0);
+        let model = qm.model();
+        let mut state = UiState::default();
+
+        // A resting frame reports every slot target's rect.
+        let idle = UiInput {
+            mouse: Vec2::new(-9.0, -9.0),
+            clicked: false,
+            down: false,
+            screen,
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
+        let frame = run_ui(&tree, &model, &styles, &idle, &mut state);
+        let rect_of = |id: &str| {
+            let r = frame.rect(id).unwrap_or_else(|| panic!("{id} is placed"));
+            assert!(
+                r.size.x > 1.0 && r.size.y > 1.0,
+                "{id} has real extent (got {}x{})",
+                r.size.x,
+                r.size.y
+            );
+            (r.pos.x + r.size.x * 0.5, r.pos.y + r.size.y * 0.5)
+        };
+        let slot = rect_of("list_slot_0");
+        let tree_slot = rect_of("tree_slot_0");
+        let tab = rect_of("tab_review");
+
+        // A click on the first listing slot picks that row.
+        let click = |at: (f32, f32), state: &mut UiState| {
+            let snap = UiInput {
+                mouse: Vec2::new(at.0, at.1),
+                clicked: true,
+                down: true,
+                screen,
+                typed: String::new(),
+                backspace: false,
+                wheel: 0.0,
+            };
+            run_ui(&tree, &model, &styles, &snap, state)
+        };
+        let f = click(slot, &mut state);
+        assert!(f.results.is_on("hud_hit"), "the slot claims the pointer");
+        assert!(f.results.is_on("row_pick_slot_0"), "the slot click fires its pick");
+
+        let f = click(tree_slot, &mut UiState::default());
+        assert!(f.results.is_on("tree_open_slot_0"), "the tree slot click fires its open");
+
+        let f = click(tab, &mut UiState::default());
+        assert!(f.results.is_on("tab_review"), "the tab button fires");
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -1822,8 +2032,9 @@ mod tests {
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
 
-        let tree = qm.build_tree(screen);
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
+        let tree = def.tree.expect("the scene file ships a tree");
+        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
         let mut state = UiState::default();
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
@@ -1834,7 +2045,9 @@ mod tests {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui(&tree, &qm.hud_model(), &styles, &snap, &mut state);
+        // The DERIVED model — the pair script's gates decide what is visible,
+        // exactly as the runtime frame does.
+        let frame = run_ui(&tree, &qm.model(), &styles, &snap, &mut state);
         frame
             .commands
             .iter()
@@ -2592,11 +2805,3 @@ mod tests {
 
 }
 
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
-}
