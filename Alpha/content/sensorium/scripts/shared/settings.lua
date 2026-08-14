@@ -192,7 +192,7 @@ local function keyboard_tab()
           -- fill_top/fill_bot, which settings.controls.keycap does not carry).
           Button { id = "kc_" .. a.id, action = "rebind_" .. a.id, text_bind = "bind_" .. a.id,
                    size = S.controls.keycap.w, label_size = S.controls.keycap.label_size,
-                   style = "modal.buttons.variants.secondary" },
+                   variant = "secondary" },
         },
       }
     end
@@ -260,8 +260,8 @@ end
 local function page_rail()
   return Tabs {
     id = "settings_page", bind = "settings_page", vertical = true, gap = 8,
-    tab_active = "modal.buttons.variants.primary",
-    tab_idle = "modal.buttons.variants.secondary",
+    tab_active_variant = "primary",
+    tab_idle_variant = "secondary",
     children = {
       Opt { value = 0, label = "$set_video" },
       Opt { value = 1, label = "$set_audio" },
@@ -307,13 +307,13 @@ local function footer_children()
   local F = UI.settings.footer
   return {
     Button { id = "restore", action = "settings_restore", label = F.restore, size = 180, label_size = 12,
-             style = "modal.buttons.variants.secondary" },
+             variant = "secondary" },
     line(F.applied, 180, 12, "settings.footer.applied_color", "label", "left"), -- flash, gated below
     Stack { grow = 1 },
     Button { id = "apply", action = "settings_apply", label = F.apply, size = 104, label_size = 14,
-             style = "modal.buttons.variants.secondary" },
+             variant = "secondary" },
     Button { id = "save_close", action = "settings_back", label = F.save_close, size = 168, label_size = 14,
-             style = "modal.buttons.variants.primary" },
+             variant = "primary" },
   }
 end
 
@@ -339,9 +339,9 @@ local function dialogs()
       anchor = "center", layer = 2,
       children = {
         line(D.close_msg, 44, 15, "settings.row.name_color", "body", "center"),
-        Button { action = "confirm_save",    label = D.save,    size = 46, label_size = 14, style = "modal.buttons.variants.primary" },
-        Button { action = "confirm_discard", label = D.discard, size = 46, label_size = 14, style = "modal.buttons.variants.danger" },
-        Button { action = "confirm_cancel",  label = D.cancel,  size = 46, label_size = 14, style = "modal.buttons.variants.secondary" },
+        Button { action = "confirm_save",    label = D.save,    size = 46, label_size = 14, variant = "primary" },
+        Button { action = "confirm_discard", label = D.discard, size = 46, label_size = 14, variant = "danger" },
+        Button { action = "confirm_cancel",  label = D.cancel,  size = 46, label_size = 14, variant = "secondary" },
       },
     }),
     -- Restore-defaults acknowledgement (single OK).
@@ -350,7 +350,7 @@ local function dialogs()
       anchor = "center", layer = 2,
       children = {
         line(D.restore_msg, 44, 15, "settings.row.name_color", "body", "center"),
-        Button { action = "restore_ok", label = D.ok, size = 46, label_size = 14, style = "modal.buttons.variants.primary" },
+        Button { action = "restore_ok", label = D.ok, size = 46, label_size = 14, variant = "primary" },
       },
     }),
   }
@@ -390,7 +390,7 @@ function M.tree()
               } },
               Cell { size = 46, children = {
                 Stack { grow = 1 },
-                Button { id = "close", action = "settings_close", label = "×", size = 34, label_size = 20, style = "modal.buttons.variants.danger" },
+                Button { id = "close", action = "settings_close", label = "×", size = 34, label_size = 20, variant = "danger" },
                 Stack { grow = 1 },
               } },
             },
@@ -408,7 +408,7 @@ function M.tree()
           Row { size = S.footer.h, children = footer },
         },
       },
-      Runes { style = "settings.runes", anchor = "top_left", width_frac = 1.0, height_frac = 1.0 },
+      Runes { anchor = "top_left", width_frac = 1.0, height_frac = 1.0 },
     },
   }
 

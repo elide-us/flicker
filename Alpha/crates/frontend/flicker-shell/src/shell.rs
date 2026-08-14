@@ -1287,12 +1287,25 @@ const MENU_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/Ma
 /// orchestrates it with `menu.lua`. (The manifest also loads + expands it at boot.)
 const MAIN_SCENE_JSON: &str = include_str!("../../../../content/sensorium/scenes/Main.scene.json");
 
-/// The shell's declarative UI layout (`modal`/`screens`/`settings`/`logo`/
-/// `loading`), embedded. The client's in-game HUD layout is separate.
+/// The SHARED settings scene-def (`scenes/shared/settings.scene.json`): the settings
+/// screen's data model + chrome `styles`, authored ONCE here instead of copied into
+/// every scene file (Aaron 2026-08-14). Merged onto the shell-furniture carrier by
+/// [`main_scene_styles`]. `scenes/shared/` is skipped by the manifest's folder index
+/// (it walks top-level scene files only — [`SceneManifest::load_dir`] skips dirs), so
+/// this is a direct include, never a roster scene.
+const SETTINGS_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/settings.scene.json");
+
+/// The embedded THEME — `ui_theme.json`, the one palette (`theme.tokens`) and
+/// nothing else (five-line architecture, 491BD9BB). Component looks resolve their
+/// dotted `style` paths against it; the shell-furniture blocks (`modal`/`screens`/…)
+/// ride the scene files now (Main's `styles` via [`main_scene_styles`], settings via
+/// [`SETTINGS_SCENE_JSON`]), not this file.
 const SHELL_UI_JSON: &str = include_str!("../../../../content/sensorium/resources/ui_theme.json");
-/// The shell-chrome SATELLITE (screens / menu / settings / logo / loading),
-/// embedded beside the theme and merged into the same root at load — the
-/// on-disk trio's `include_str!` counterpart.
+/// The embedded STYLE satellite — `ui_style.json`, for truly-global weight/effect
+/// defaults, merged beside the theme at load. Currently an empty placeholder: per
+/// rule 491BD9BB no per-component block lives here (component looks are Rust drawing
+/// code defaults; scene values live in the scene files).
 const SHELL_STYLE_JSON: &str =
     include_str!("../../../../content/sensorium/resources/ui_style.json");
 /// The UI stringtable (`{ token: { locale: text } }`) — every shell display string is a
@@ -1307,13 +1320,28 @@ fn expose_ui_theme(script: &ScriptHost, scene: Option<&serde_json::Value>) {
     flicker::ui::load_ui_json_strs_for(script, &[SHELL_UI_JSON, SHELL_STYLE_JSON], scene);
 }
 
-/// The MAIN scene's `styles` — the shell-furniture carrier: pause / confirm /
-/// settings are shell screens WITHOUT scene files yet (tracked: they become
-/// scenes/components), so their blocks (`modal`, `settings`, `screens`, …) ride
-/// `Main.scene.json` until then. `None` before the manifest loads (tests build
-/// their own).
+/// The MAIN scene's `styles` — the shell-furniture carrier: pause / confirm are
+/// shell screens WITHOUT scene files yet (tracked: they become scenes/components),
+/// so their blocks (`modal`, `screens`, …) ride `Main.scene.json` until then. The
+/// SETTINGS block no longer lives inline in Main — it was moved to its own shared
+/// scene file (`scenes/shared/settings.scene.json`, Aaron 2026-08-14) so it is
+/// authored ONCE instead of copied per scene, and is merged back onto the carrier
+/// here until the settings screen is a fully self-contained scene pair. `None`
+/// before the manifest loads (tests build their own).
 fn main_scene_styles() -> Option<serde_json::Value> {
-    manifest().get("Main").and_then(|d| d.styles.clone())
+    let mut styles = manifest().get("Main").and_then(|d| d.styles.clone())?;
+    if let Some(obj) = styles.as_object_mut() {
+        match serde_json::from_str::<serde_json::Value>(SETTINGS_SCENE_JSON) {
+            Ok(sv) => match sv.get("styles").and_then(|s| s.get("settings")).cloned() {
+                Some(block) => {
+                    obj.insert("settings".to_string(), block);
+                }
+                None => tracing::error!("settings.scene.json carries no styles.settings block"),
+            },
+            Err(e) => tracing::error!("settings.scene.json did not parse: {e}"),
+        }
+    }
+    Some(styles)
 }
 
 /// Publish the built-in input profiles to a settings script as the `PROFILES` data
@@ -1514,10 +1542,7 @@ fn item_button_nodes(items: &[MenuItem], group: &str) -> Vec<UiNode> {
             };
             b.props.insert("label".to_string(), Value::Text(it.label.clone()));
             b.props.insert("label_size".to_string(), Value::Number(15.0));
-            b.props.insert(
-                "style".to_string(),
-                Value::Text(format!("modal.buttons.variants.{}", it.variant)),
-            );
+            b.props.insert("variant".to_string(), Value::Text(it.variant.clone()));
             b
         })
         .collect()
@@ -1569,10 +1594,7 @@ fn scene_row_nodes(scenes: &[SceneRow]) -> Vec<UiNode> {
             };
             load_btn.props.insert("label".to_string(), Value::Text("$menu_load".to_string()));
             load_btn.props.insert("label_size".to_string(), Value::Number(12.0));
-            load_btn.props.insert(
-                "style".to_string(),
-                Value::Text("modal.buttons.variants.primary".to_string()),
-            );
+            load_btn.props.insert("variant".to_string(), Value::Text("primary".to_string()));
             let mut load = kind("cell");
             load.size = Some(150.0);
             load.children = vec![spacer, load_btn];
@@ -1662,6 +1684,28 @@ mod menu_tree_tests {
         let confirm = built_tree("confirm", &MenuPage::default(), &confirm_items());
         assert_eq!(confirm.component, "screen", "confirm → full-bleed popup page");
         assert!(!confirm.children.is_empty(), "confirm popup filled with real content");
+    }
+
+    /// RETIREMENT GATE (2026-08-14): the shared `modal.buttons.variants.*` blocks are
+    /// gone — a button's look is the compiled `variant` prop ([`BtnVariant`]) now, and
+    /// the settings page-rail wears `tab_active_variant`/`tab_idle_variant`. Assert the
+    /// shipped Main carrier still holds the rest of its modal chrome (panel/title for
+    /// pause + confirm) but NO `buttons` block, so the retired path can't silently
+    /// regrow — a scene wearing it would draw magenta (fail-loud), and this makes the
+    /// absence a build failure instead.
+    #[test]
+    fn modal_buttons_variants_are_retired_from_the_carrier() {
+        let def: serde_json::Value =
+            serde_json::from_str(MAIN_SCENE_JSON).expect("Main.scene.json parses");
+        assert!(
+            def["styles"]["modal"].is_object(),
+            "Main still carries the modal chrome (panel/title/… for pause + confirm)"
+        );
+        assert!(
+            def["styles"]["modal"].get("buttons").is_none(),
+            "modal.buttons is retired — button looks are the Rust `variant` prop, not a \
+             resolved style block"
+        );
     }
 
     /// VOCABULARY GATE for the screens every client ships — including the launcher's

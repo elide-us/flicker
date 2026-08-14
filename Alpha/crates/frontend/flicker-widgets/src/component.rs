@@ -3120,11 +3120,17 @@ fn draw_splash(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut
 /// bottom two hanging off the edge.
 fn draw_rune_corners(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
-    let inset = jnum(s, "inset", 8.0);
-    // The node may pin a glyph size; otherwise the style's, else the default.
-    let size = jnum(props, "glyph_size", jnum(s, "size", 14.0));
+    // Defaults ARE the house look (five-line item 3): the retired `settings.runes`
+    // block's values — inset 14, size 16, rune-glow top, bronze-dim bottom — are the
+    // compiled fallback now, so a bare `rune_corners` draws the carved-corner chrome
+    // and a scene that wants a different look overrides with a `style` block (the
+    // Component Catalog does). Mirrors of theme tokens; the drift gate
+    // `rune_corners_default_matches_theme_tokens` fails loud if they diverge.
+    let inset = jnum(s, "inset", 14.0);
+    // The node may pin a glyph size; otherwise the style's, else the house default.
+    let size = jnum(props, "glyph_size", jnum(s, "size", 16.0));
     let glow = first_color(s, &["top"], RUNE);
-    let bronze = first_color(s, &["bot"], DIM);
+    let bronze = first_color(s, &["bot"], BRONZE_DIM);
     let by = r.y + r.h - inset - size;
     // The right pair anchors at `w - inset` and draws right-aligned, so both edges hold
     // the same visual margin without measuring a glyph.
@@ -3251,9 +3257,164 @@ fn draw_glyph_face(r: Rect, props: &Json, flash: f32, out: &mut Vec<HudCommand>)
     });
 }
 
+/// One interaction state's face for a compiled button [`BtnVariant`].
+#[derive(Clone, Copy)]
+struct BtnFace {
+    top: [f32; 4],
+    bot: [f32; 4],
+    border: [f32; 4],
+    label: [f32; 4],
+}
+
+/// The compiled default palette for a named button `variant` — the house looks
+/// the `modal.buttons.variants.*` scene blocks used to carry, now DRAWING-CODE
+/// defaults (five-line architecture item 3, rule 491BD9BB): a scene names
+/// `variant: "primary"` and carries no style block, so the look is single-sourced
+/// here instead of copied per scene. An explicit `style` block still overrides any
+/// stop key-by-key. Every colour MIRRORS the theme token named in its comment; the
+/// gate `button_variant_defaults_match_theme_tokens` reads ui_theme.json and fails
+/// loud if a value drifts (so the mirror can never silently fork — rule AEEF2A68).
+#[derive(Clone, Copy)]
+struct BtnVariant {
+    idle: BtnFace,
+    hover: BtnFace,
+    press: BtnFace,
+    glow: [f32; 4],
+}
+
+const BTN_PRIMARY: BtnVariant = BtnVariant {
+    idle: BtnFace {
+        top: [0.141, 0.247, 0.471, 1.0],  // sap_base
+        bot: [0.082, 0.153, 0.267, 1.0],  // sap_base_lo
+        border: [0.227, 0.353, 0.627, 1.0], // sap_border
+        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire
+    },
+    hover: BtnFace {
+        top: [0.173, 0.298, 0.557, 1.0],  // sap_hover
+        bot: [0.102, 0.188, 0.341, 1.0],  // sap_hover_lo
+        border: [0.286, 0.416, 0.722, 1.0], // sap_hover_border
+        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire
+    },
+    press: BtnFace {
+        top: [0.09, 0.173, 0.329, 1.0],   // sap_press
+        bot: [0.063, 0.122, 0.235, 1.0],  // sap_press_lo
+        border: [0.165, 0.267, 0.471, 1.0], // sap_press_border
+        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire (press falls to label)
+    },
+    glow: [0.094, 0.188, 0.384, 0.45],    // sap_glow
+};
+
+const BTN_SECONDARY: BtnVariant = BtnVariant {
+    idle: BtnFace {
+        top: [0.125, 0.141, 0.18, 1.0],   // stone_btn
+        bot: [0.078, 0.09, 0.122, 1.0],   // stone2
+        border: [0.227, 0.255, 0.314, 1.0], // edge4
+        label: [0.839, 0.816, 0.761, 1.0], // ink_button
+    },
+    hover: BtnFace {
+        top: [0.157, 0.176, 0.22, 1.0],   // stone_btn_hi
+        bot: [0.098, 0.114, 0.149, 1.0],  // surface_top
+        border: [0.431, 0.353, 0.204, 1.0], // bronze_dim
+        label: [0.906, 0.882, 0.824, 1.0], // ink_bright
+    },
+    press: BtnFace {
+        top: [0.078, 0.09, 0.122, 1.0],   // stone2
+        bot: [0.055, 0.063, 0.086, 1.0],  // stone1
+        border: [0.169, 0.188, 0.235, 1.0], // edge2
+        label: [0.839, 0.816, 0.761, 1.0], // ink_button (press falls to label)
+    },
+    glow: [0.0, 0.0, 0.0, 0.0],           // none
+};
+
+const BTN_DANGER: BtnVariant = BtnVariant {
+    idle: BtnFace {
+        top: [0.659, 0.216, 0.255, 1.0],  // danger_base
+        bot: [0.439, 0.102, 0.133, 1.0],  // danger_base_lo
+        border: [0.784, 0.439, 0.478, 1.0], // danger_hi
+        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi
+    },
+    hover: BtnFace {
+        top: [0.776, 0.255, 0.302, 1.0],  // danger_hover
+        bot: [0.518, 0.122, 0.157, 1.0],  // danger_hover_lo
+        border: [0.784, 0.439, 0.478, 1.0], // danger_hi
+        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi
+    },
+    press: BtnFace {
+        top: [0.439, 0.102, 0.133, 1.0],  // danger_base_lo
+        bot: [0.29, 0.067, 0.086, 1.0],   // danger_press_lo
+        border: [0.353, 0.165, 0.188, 1.0], // danger_border
+        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi (press falls to label)
+    },
+    glow: [0.659, 0.216, 0.255, 0.4],     // danger_glow
+};
+
+const BTN_GHOST: BtnVariant = BtnVariant {
+    idle: BtnFace {
+        top: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        bot: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        border: [0.0, 0.0, 0.0, 0.0],     // none
+        label: [0.561, 0.541, 0.49, 1.0], // dim
+    },
+    hover: BtnFace {
+        top: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        bot: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        border: [0.169, 0.188, 0.235, 1.0], // edge2
+        label: [0.871, 0.847, 0.788, 1.0], // ink
+    },
+    press: BtnFace {
+        top: [0.0, 0.0, 0.0, 0.0],        // stage_void (press falls to idle)
+        bot: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        border: [0.0, 0.0, 0.0, 0.0],     // none
+        label: [0.561, 0.541, 0.49, 1.0], // dim
+    },
+    glow: [0.0, 0.0, 0.0, 0.0],           // none
+};
+
+/// A garish MAGENTA palette drawn for an UNKNOWN `variant` name — fail-loud, so a
+/// typo'd variant is a visible defect on screen, never a silent neutral button
+/// (rule 4BB12A75: an authored name that resolves to nothing is the difference
+/// between authorable and not).
+const BTN_UNKNOWN: BtnVariant = BtnVariant {
+    idle: BtnFace {
+        top: [1.0, 0.0, 1.0, 1.0],
+        bot: [1.0, 0.0, 1.0, 1.0],
+        border: [1.0, 1.0, 0.0, 1.0],
+        label: [1.0, 1.0, 0.0, 1.0],
+    },
+    hover: BtnFace {
+        top: [1.0, 0.0, 1.0, 1.0],
+        bot: [1.0, 0.0, 1.0, 1.0],
+        border: [1.0, 1.0, 0.0, 1.0],
+        label: [1.0, 1.0, 0.0, 1.0],
+    },
+    press: BtnFace {
+        top: [1.0, 0.0, 1.0, 1.0],
+        bot: [1.0, 0.0, 1.0, 1.0],
+        border: [1.0, 1.0, 0.0, 1.0],
+        label: [1.0, 1.0, 0.0, 1.0],
+    },
+    glow: [0.0, 0.0, 0.0, 0.0],
+};
+
+/// Resolve a `variant` prop name to its compiled default palette. A NAME that is
+/// present but unrecognised returns [`BTN_UNKNOWN`] (magenta) rather than falling
+/// through to a neutral look — the authored-name-fails-loud contract (4BB12A75).
+fn button_variant(name: &str) -> BtnVariant {
+    match name {
+        "primary" => BTN_PRIMARY,
+        "secondary" => BTN_SECONDARY,
+        "danger" => BTN_DANGER,
+        "ghost" => BTN_GHOST,
+        _ => BTN_UNKNOWN,
+    }
+}
+
 /// The **button** — an SDF panel slab + a centred FACE, with hover + pressed
 /// states (press = 1px nudge + `press_*` stops), an optional sapphire glow halo,
-/// and per-variant fill/border/label (primary / secondary / danger).
+/// and per-variant fill/border/label (primary / secondary / danger / ghost). The
+/// look comes from the `variant` prop's compiled default ([`BtnVariant`]); an
+/// explicit `style` block overrides any stop, and a variant-less button keeps the
+/// neutral sapphire fallback.
 ///
 /// THE FACE is a label OR a glyph — a button is a button either way (Aaron,
 /// 2026-08-08: a rail hint *"IS a BUTTON, it just happens to be one that sends a
@@ -3283,8 +3444,14 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // variants that define none.
     let r = if pressed { Rect { y: r.y + 1.0, ..r } } else { r };
 
+    // A `variant` names one of the compiled house palettes (primary / secondary /
+    // danger / ghost); its stops become the per-state DEFAULTS below. A variant-less
+    // button keeps the neutral sapphire fallback, and an explicit `style` block still
+    // overrides any stop key-by-key.
+    let v = props.get("variant").and_then(|x| x.as_str()).map(button_variant);
+
     // Optional sapphire glow halo behind the button, only on hover.
-    let glow = first_color(s, &["glow"], CLEAR);
+    let glow = first_color(s, &["glow"], v.map(|v| v.glow).unwrap_or(CLEAR));
     if glow[3] > 0.0 && hot {
         out.push(HudCommand::Panel {
             x: r.x - 3.0,
@@ -3305,28 +3472,31 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // Fill / border / label pick their hover vs idle stops down the alias chain —
     // the button OWNS this state→style logic.
     let (top, bot, mut border, mut label_color) = if pressed {
-        let top = first_color(s, &["press_top", "fill_top", "cell", "fill"], SAP);
+        let f = v.map(|v| v.press);
+        let top = first_color(s, &["press_top", "fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
         (
             top,
-            first_color(s, &["press_bot", "fill_bot", "cell", "fill"], top),
-            first_color(s, &["press_border", "border"], CLEAR),
-            first_color(s, &["press_label", "label"], INK),
+            first_color(s, &["press_bot", "fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
+            first_color(s, &["press_border", "border"], f.map(|f| f.border).unwrap_or(CLEAR)),
+            first_color(s, &["press_label", "label"], f.map(|f| f.label).unwrap_or(INK)),
         )
     } else if hot {
-        let top = first_color(s, &["hover_top", "hot", "fill_top", "cell", "fill"], SAP);
+        let f = v.map(|v| v.hover);
+        let top = first_color(s, &["hover_top", "hot", "fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
         (
             top,
-            first_color(s, &["hover_bot", "hot", "fill_bot", "cell", "fill"], top),
-            first_color(s, &["hover_border", "border"], CLEAR),
-            first_color(s, &["hover_label", "label"], INK),
+            first_color(s, &["hover_bot", "hot", "fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
+            first_color(s, &["hover_border", "border"], f.map(|f| f.border).unwrap_or(CLEAR)),
+            first_color(s, &["hover_label", "label"], f.map(|f| f.label).unwrap_or(INK)),
         )
     } else {
-        let top = first_color(s, &["fill_top", "cell", "fill"], SAP);
+        let f = v.map(|v| v.idle);
+        let top = first_color(s, &["fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
         (
             top,
-            first_color(s, &["fill_bot", "cell", "fill"], top),
-            first_color(s, &["border"], CLEAR),
-            first_color(s, &["label"], INK),
+            first_color(s, &["fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
+            first_color(s, &["border"], f.map(|f| f.border).unwrap_or(CLEAR)),
+            first_color(s, &["label"], f.map(|f| f.label).unwrap_or(INK)),
         )
     };
 
@@ -3867,8 +4037,22 @@ fn tab_cell(r: Rect, props: &Json, n: usize, i: usize) -> Rect {
 /// `border` / `hover_border` + `border_w` (1) · `radius` (3) · `label` (falling from
 /// `hover_label` / `active_label`) · `label_size` (13) · `underline` + `underline_w` (2)
 /// + `underline_inset` (0, a rule shorter than its cell).
-fn draw_tab_cell(r: Rect, s: &Json, label: &str, hovered: bool, out: &mut Vec<HudCommand>) {
-    let (top, bot, border, lc) = if hovered {
+fn draw_tab_cell(
+    r: Rect,
+    s: &Json,
+    variant: Option<BtnVariant>,
+    label: &str,
+    hovered: bool,
+    out: &mut Vec<HudCommand>,
+) {
+    let (top, bot, border, lc) = if let Some(v) = variant {
+        // A `tab_*_variant` cell draws the compiled button palette (fill/border/label
+        // per state) instead of a resolved style block — a rail's active/idle cells ARE
+        // buttons, so they wear the one house look ([`BtnVariant`]) as drawing code, and
+        // the `modal.buttons.variants.*` blocks they used to name are retired.
+        let f = if hovered { v.hover } else { v.idle };
+        (f.top, f.bot, f.border, f.label)
+    } else if hovered {
         let top = first_color(s, &["hover_top", "hot", "fill_top", "active_top", "fill"], PANEL);
         (
             top,
@@ -3947,6 +4131,11 @@ fn draw_tabs(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     }
     let active_st = props.get("tab_active").unwrap_or(&Json::Null);
     let idle_st = props.get("tab_idle").unwrap_or(&Json::Null);
+    // A rail may name a compiled button VARIANT per state instead of a style block —
+    // the retired-`modal.buttons.variants` path. Additive: a strip that names neither
+    // draws exactly as before (from its `tab_active`/`tab_idle` blocks).
+    let active_var = props.get("tab_active_variant").and_then(|v| v.as_str()).map(button_variant);
+    let idle_var = props.get("tab_idle_variant").and_then(|v| v.as_str()).map(button_variant);
     let want = jopt(props, "bind_value");
     let m = pointer(props);
     for (i, child) in kids.iter().enumerate() {
@@ -3958,7 +4147,14 @@ fn draw_tabs(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             Some(l) => l.as_str().unwrap_or_default(),
             None => jstr(child, "text"),
         };
-        draw_tab_cell(cell, if active { active_st } else { idle_st }, label, cell.contains(m), out);
+        draw_tab_cell(
+            cell,
+            if active { active_st } else { idle_st },
+            if active { active_var } else { idle_var },
+            label,
+            cell.contains(m),
+            out,
+        );
     }
 }
 
@@ -6175,6 +6371,97 @@ const SIG_BLUE: [f32; 4] = [0.176, 0.373, 0.69, 1.0];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DRIFT GATE (rule AEEF2A68): the button `variant` compiled defaults are a
+    /// MIRROR of the theme tokens they were promoted from (the deleted
+    /// `modal.buttons.variants.*` blocks). Read ui_theme.json and assert every stop
+    /// still equals its token, so the mirror can never silently fork — move a token
+    /// in the theme and this fails until the compiled default follows.
+    #[test]
+    fn button_variant_defaults_match_theme_tokens() {
+        let theme: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../content/sensorium/resources/ui_theme.json"),
+            )
+            .expect("theme reads"),
+        )
+        .expect("theme parses");
+        let tokens = theme.get("theme").and_then(|t| t.get("tokens")).expect("theme.tokens");
+        let tok = |name: &str| -> [f32; 4] {
+            let a = tokens
+                .get(name)
+                .and_then(|v| v.as_array())
+                .unwrap_or_else(|| panic!("token `{name}` missing"));
+            std::array::from_fn(|i| a[i].as_f64().unwrap() as f32)
+        };
+        // (compiled default stop, the token it mirrors)
+        let checks: &[([f32; 4], &str)] = &[
+            (BTN_PRIMARY.idle.top, "sap_base"),
+            (BTN_PRIMARY.idle.bot, "sap_base_lo"),
+            (BTN_PRIMARY.idle.border, "sap_border"),
+            (BTN_PRIMARY.idle.label, "ink_sapphire"),
+            (BTN_PRIMARY.hover.top, "sap_hover"),
+            (BTN_PRIMARY.hover.bot, "sap_hover_lo"),
+            (BTN_PRIMARY.hover.border, "sap_hover_border"),
+            (BTN_PRIMARY.press.top, "sap_press"),
+            (BTN_PRIMARY.press.bot, "sap_press_lo"),
+            (BTN_PRIMARY.press.border, "sap_press_border"),
+            (BTN_PRIMARY.glow, "sap_glow"),
+            (BTN_SECONDARY.idle.top, "stone_btn"),
+            (BTN_SECONDARY.idle.bot, "stone2"),
+            (BTN_SECONDARY.idle.border, "edge4"),
+            (BTN_SECONDARY.idle.label, "ink_button"),
+            (BTN_SECONDARY.hover.top, "stone_btn_hi"),
+            (BTN_SECONDARY.hover.bot, "surface_top"),
+            (BTN_SECONDARY.hover.border, "bronze_dim"),
+            (BTN_SECONDARY.hover.label, "ink_bright"),
+            (BTN_SECONDARY.press.top, "stone2"),
+            (BTN_SECONDARY.press.bot, "stone1"),
+            (BTN_SECONDARY.press.border, "edge2"),
+            (BTN_DANGER.idle.top, "danger_base"),
+            (BTN_DANGER.idle.bot, "danger_base_lo"),
+            (BTN_DANGER.idle.border, "danger_hi"),
+            (BTN_DANGER.idle.label, "danger_text_hi"),
+            (BTN_DANGER.hover.top, "danger_hover"),
+            (BTN_DANGER.hover.bot, "danger_hover_lo"),
+            (BTN_DANGER.press.top, "danger_base_lo"),
+            (BTN_DANGER.press.bot, "danger_press_lo"),
+            (BTN_DANGER.press.border, "danger_border"),
+            (BTN_DANGER.glow, "danger_glow"),
+            (BTN_GHOST.idle.top, "stage_void"),
+            (BTN_GHOST.idle.label, "dim"),
+            (BTN_GHOST.hover.border, "edge2"),
+            (BTN_GHOST.hover.label, "ink"),
+        ];
+        for (got, name) in checks {
+            assert_eq!(*got, tok(name), "button variant default drifted from token `{name}`");
+        }
+    }
+
+    /// DRIFT GATE (rule AEEF2A68): `rune_corners`' compiled house defaults mirror the
+    /// theme tokens the retired `settings.runes` block named. Read ui_theme.json and
+    /// assert the corner colours still equal their tokens, so promoting the block into
+    /// drawing code can't silently fork from the one palette.
+    #[test]
+    fn rune_corners_default_matches_theme_tokens() {
+        let theme: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../content/sensorium/resources/ui_theme.json"),
+            )
+            .expect("theme reads"),
+        )
+        .expect("theme parses");
+        let tok = |name: &str| -> [f32; 4] {
+            let a = theme["theme"]["tokens"][name]
+                .as_array()
+                .unwrap_or_else(|| panic!("token `{name}` missing"));
+            std::array::from_fn(|i| a[i].as_f64().unwrap() as f32)
+        };
+        assert_eq!(RUNE, tok("rune_glow"), "rune_corners top default mirrors rune_glow");
+        assert_eq!(BRONZE_DIM, tok("bronze_dim"), "rune_corners bottom default mirrors bronze_dim");
+    }
 
     /// The splash timeline, ported verbatim from the retired per-scene scripts:
     /// linear rise over fade_in, flat 1.0 through hold, linear fall over fade_out.
