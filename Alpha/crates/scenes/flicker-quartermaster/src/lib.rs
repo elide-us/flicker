@@ -184,8 +184,9 @@ const TREE_SLOTS: usize = 12;
 const LIST_SLOTS: usize = 12;
 const QUEUE_SLOTS: usize = 8;
 
-const ROW_H: f32 = 32.0;
-const LIST_ROW_H: f32 = 34.0;
+// Compact technical rows (Aaron's tree-redesign ruling, 2026-08-13).
+const ROW_H: f32 = 22.0;
+const LIST_ROW_H: f32 = 26.0;
 /// Wheel px per tick over a pane (the `list` component's own default speed).
 const WHEEL_SPEED: f32 = 46.0;
 
@@ -1130,17 +1131,25 @@ impl Quartermaster {
         (self.tree_scroll / ROW_H).max(0.0) as usize
     }
 
-    /// A tree row's slot text: indent + caret glyph + name, one display string.
-    /// Single glyphs, not copy — the caret is a mark, and the name is data.
+    /// How far one tree level indents, in px — applied as a per-slot arrange bind
+    /// (`tree_line_<s>_off_x`), real pixels rather than spaces in a proportional
+    /// face.
+    const TREE_INDENT_PX: f64 = 14.0;
+
+    /// A tree row's slot text: caret glyph + name, one display string. The glyph
+    /// set is Aaron's ruling (2026-08-13): `^` collapsed · `>` expanded · `·` leaf
+    /// — every one verified present in ALL four shipped faces (the ▸/▾ pair this
+    /// replaces existed in none and rendered as tofu). Indentation is NOT here —
+    /// it rides the arrange bind above.
     fn tree_slot_text(t: &TreeRow) -> String {
         let caret = if !t.has_children {
             '\u{00b7}'
         } else if t.expanded {
-            '\u{25be}'
+            '>'
         } else {
-            '\u{25b8}'
+            '^'
         };
-        format!("{}{caret} {}", "  ".repeat(t.depth), t.name)
+        format!("{caret} {}", t.name)
     }
 
     fn hud_model(&self) -> ValueMap {
@@ -1164,6 +1173,11 @@ impl Quartermaster {
                 m.set(format!("row_slot_{s}_size"), human_size(row));
                 m.set(format!("row_slot_{s}_color"), class_color(row));
                 m.set(format!("row_slot_{s}_sel"), i == self.sel && self.pane == Pane::List);
+                // Folder-vs-file at a glance: the name node is a gated PAIR (bold
+                // for a folder, regular for a file — `bold` is a static prop, so
+                // the state picks the node instead).
+                m.set(format!("row_slot_{s}_dir"), row.is_dir);
+                m.set(format!("row_slot_{s}_file"), !row.is_dir);
             }
         }
         let tbase = self.tree_base();
@@ -1174,6 +1188,8 @@ impl Quartermaster {
                 let i = tbase + s;
                 m.set(format!("tree_slot_{s}_text"), Self::tree_slot_text(t));
                 m.set(format!("tree_slot_{s}_sel"), i == self.tree_sel && self.pane == Pane::Tree);
+                // Real px indentation, one arrange bind per slot line.
+                m.set(format!("tree_line_{s}_off_x"), t.depth as f64 * Self::TREE_INDENT_PX);
             }
         }
         // The Review bank + the selected item's facts (the queue is short and
@@ -1952,6 +1968,34 @@ mod tests {
         host.set_model(&ValueMap::new().with("tab", "tab_files")).expect("model publishes");
         let derived = host.derive().expect("derive runs").expect("derive returns a table");
         assert!(derived.is_on("files_on"), "the Files page gate derives on");
+    }
+
+    /// The caret set is Aaron's ruling (2026-08-13): `^` collapsed · `>` expanded
+    /// · `·` leaf — pinned so it cannot quietly reverse, and every glyph is one
+    /// all four shipped faces carry. Indentation is REAL pixels riding the
+    /// per-slot arrange bind, one level = 14px.
+    #[test]
+    fn tree_carets_and_indent_follow_the_ruling() {
+        let (qm, d) = scratch("carets");
+        let row = |name: &str, depth: usize, expanded: bool, has_children: bool| TreeRow {
+            path: qm.roots.package.clone(),
+            name: name.into(),
+            depth,
+            expanded,
+            has_children,
+        };
+        assert_eq!(Quartermaster::tree_slot_text(&row("pack", 0, false, true)), "^ pack");
+        assert_eq!(Quartermaster::tree_slot_text(&row("pack", 0, true, true)), "> pack");
+        assert_eq!(Quartermaster::tree_slot_text(&row("readme", 1, false, false)), "\u{b7} readme");
+
+        // Both roots open from the first frame, so a depth-1 line exists and its
+        // slot's indent bind carries one level of real pixels.
+        let m = qm.hud_model();
+        let indented = (0..TREE_SLOTS).any(|s| {
+            m.number(&format!("tree_line_{s}_off_x")) == Some(Quartermaster::TREE_INDENT_PX)
+        });
+        assert!(indented, "an expanded root's child indents by one level");
+        let _ = std::fs::remove_dir_all(d);
     }
 
     /// The click gate — the walker at REAL coordinates over the shipped tree +

@@ -346,7 +346,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -361,27 +361,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_0_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_0"
                           }
                         ],
                         "visible_bind": "tree_slot_0_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -396,27 +398,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_1_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_1"
                           }
                         ],
                         "visible_bind": "tree_slot_1_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -431,27 +435,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_2_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_2"
                           }
                         ],
                         "visible_bind": "tree_slot_2_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -466,27 +472,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_3_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_3"
                           }
                         ],
                         "visible_bind": "tree_slot_3_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -501,27 +509,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_4_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_4"
                           }
                         ],
                         "visible_bind": "tree_slot_4_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -536,27 +546,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_5_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_5"
                           }
                         ],
                         "visible_bind": "tree_slot_5_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -571,27 +583,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_6_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_6"
                           }
                         ],
                         "visible_bind": "tree_slot_6_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -606,27 +620,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_7_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_7"
                           }
                         ],
                         "visible_bind": "tree_slot_7_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -641,27 +657,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_8_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_8"
                           }
                         ],
                         "visible_bind": "tree_slot_8_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -676,27 +694,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_9_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_9"
                           }
                         ],
                         "visible_bind": "tree_slot_9_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -711,27 +731,29 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_10_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_10"
                           }
                         ],
                         "visible_bind": "tree_slot_10_on"
                       },
                       {
                         "component": "stack",
-                        "size": 32,
+                        "size": 22,
                         "children": [
                           {
                             "component": "button",
@@ -746,20 +768,22 @@
                           {
                             "component": "row",
                             "pad": [
-                              8,
+                              6,
                               0
                             ],
                             "children": [
                               {
                                 "component": "text",
                                 "text_bind": "tree_slot_11_text",
-                                "text_size": 13,
-                                "style": "quartermaster.tree"
+                                "text_size": 12,
+                                "style": "quartermaster.tree",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
                             "height_frac": 1.0,
-                            "anchor": "top_left"
+                            "anchor": "top_left",
+                            "id": "tree_line_11"
                           }
                         ],
                         "visible_bind": "tree_slot_11_on"
@@ -810,7 +834,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -835,7 +859,19 @@
                                 "text_bind": "row_slot_0_name",
                                 "color_bind": "row_slot_0_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_0_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_0_name",
+                                "color_bind": "row_slot_0_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_0_file"
                               },
                               {
                                 "component": "text",
@@ -843,7 +879,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -851,7 +888,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -863,7 +901,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -888,7 +926,19 @@
                                 "text_bind": "row_slot_1_name",
                                 "color_bind": "row_slot_1_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_1_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_1_name",
+                                "color_bind": "row_slot_1_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_1_file"
                               },
                               {
                                 "component": "text",
@@ -896,7 +946,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -904,7 +955,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -916,7 +968,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -941,7 +993,19 @@
                                 "text_bind": "row_slot_2_name",
                                 "color_bind": "row_slot_2_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_2_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_2_name",
+                                "color_bind": "row_slot_2_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_2_file"
                               },
                               {
                                 "component": "text",
@@ -949,7 +1013,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -957,7 +1022,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -969,7 +1035,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -994,7 +1060,19 @@
                                 "text_bind": "row_slot_3_name",
                                 "color_bind": "row_slot_3_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_3_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_3_name",
+                                "color_bind": "row_slot_3_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_3_file"
                               },
                               {
                                 "component": "text",
@@ -1002,7 +1080,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1010,7 +1089,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1022,7 +1102,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1047,7 +1127,19 @@
                                 "text_bind": "row_slot_4_name",
                                 "color_bind": "row_slot_4_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_4_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_4_name",
+                                "color_bind": "row_slot_4_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_4_file"
                               },
                               {
                                 "component": "text",
@@ -1055,7 +1147,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1063,7 +1156,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1075,7 +1169,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1100,7 +1194,19 @@
                                 "text_bind": "row_slot_5_name",
                                 "color_bind": "row_slot_5_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_5_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_5_name",
+                                "color_bind": "row_slot_5_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_5_file"
                               },
                               {
                                 "component": "text",
@@ -1108,7 +1214,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1116,7 +1223,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1128,7 +1236,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1153,7 +1261,19 @@
                                 "text_bind": "row_slot_6_name",
                                 "color_bind": "row_slot_6_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_6_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_6_name",
+                                "color_bind": "row_slot_6_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_6_file"
                               },
                               {
                                 "component": "text",
@@ -1161,7 +1281,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1169,7 +1290,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1181,7 +1303,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1206,7 +1328,19 @@
                                 "text_bind": "row_slot_7_name",
                                 "color_bind": "row_slot_7_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_7_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_7_name",
+                                "color_bind": "row_slot_7_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_7_file"
                               },
                               {
                                 "component": "text",
@@ -1214,7 +1348,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1222,7 +1357,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1234,7 +1370,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1259,7 +1395,19 @@
                                 "text_bind": "row_slot_8_name",
                                 "color_bind": "row_slot_8_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_8_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_8_name",
+                                "color_bind": "row_slot_8_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_8_file"
                               },
                               {
                                 "component": "text",
@@ -1267,7 +1415,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1275,7 +1424,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1287,7 +1437,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1312,7 +1462,19 @@
                                 "text_bind": "row_slot_9_name",
                                 "color_bind": "row_slot_9_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_9_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_9_name",
+                                "color_bind": "row_slot_9_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_9_file"
                               },
                               {
                                 "component": "text",
@@ -1320,7 +1482,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1328,7 +1491,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1340,7 +1504,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1365,7 +1529,19 @@
                                 "text_bind": "row_slot_10_name",
                                 "color_bind": "row_slot_10_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_10_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_10_name",
+                                "color_bind": "row_slot_10_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_10_file"
                               },
                               {
                                 "component": "text",
@@ -1373,7 +1549,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1381,7 +1558,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1393,7 +1571,7 @@
                       },
                       {
                         "component": "stack",
-                        "size": 34,
+                        "size": 26,
                         "children": [
                           {
                             "component": "button",
@@ -1418,7 +1596,19 @@
                                 "text_bind": "row_slot_11_name",
                                 "color_bind": "row_slot_11_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune",
+                                "bold": true,
+                                "visible_bind": "row_slot_11_dir"
+                              },
+                              {
+                                "component": "text",
+                                "text_bind": "row_slot_11_name",
+                                "color_bind": "row_slot_11_color",
+                                "grow": 1,
+                                "text_size": 12,
+                                "font": "rune",
+                                "visible_bind": "row_slot_11_file"
                               },
                               {
                                 "component": "text",
@@ -1426,7 +1616,8 @@
                                 "width": 90,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
@@ -1434,7 +1625,8 @@
                                 "width": 80,
                                 "align": "right",
                                 "text_size": 12,
-                                "style": "quartermaster.meta"
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1511,15 +1703,17 @@
                                 "text_bind": "rv_slot_0_name",
                                 "color_bind": "rv_slot_0_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_0_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1556,15 +1750,17 @@
                                 "text_bind": "rv_slot_1_name",
                                 "color_bind": "rv_slot_1_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_1_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1601,15 +1797,17 @@
                                 "text_bind": "rv_slot_2_name",
                                 "color_bind": "rv_slot_2_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_2_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1646,15 +1844,17 @@
                                 "text_bind": "rv_slot_3_name",
                                 "color_bind": "rv_slot_3_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_3_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1691,15 +1891,17 @@
                                 "text_bind": "rv_slot_4_name",
                                 "color_bind": "rv_slot_4_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_4_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1736,15 +1938,17 @@
                                 "text_bind": "rv_slot_5_name",
                                 "color_bind": "rv_slot_5_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_5_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1781,15 +1985,17 @@
                                 "text_bind": "rv_slot_6_name",
                                 "color_bind": "rv_slot_6_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_6_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
@@ -1826,15 +2032,17 @@
                                 "text_bind": "rv_slot_7_name",
                                 "color_bind": "rv_slot_7_color",
                                 "grow": 1,
-                                "text_size": 13
+                                "text_size": 12,
+                                "font": "rune"
                               },
                               {
                                 "component": "text",
                                 "text_bind": "rv_slot_7_meta",
                                 "width": 150,
                                 "align": "right",
-                                "text_size": 11,
-                                "style": "quartermaster.meta"
+                                "text_size": 12,
+                                "style": "quartermaster.meta",
+                                "font": "rune"
                               }
                             ],
                             "width_frac": 1.0,
