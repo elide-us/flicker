@@ -70,6 +70,15 @@ fn roster() -> Vec<SceneEntry> {
                 "The content air-traffic controller: review what landed in staging and promote it into the package, then rearrange the trees — move-only, every mutation one undo.",
                 "Clay 0.1 · Bench · file manager",
             )),
+        SceneEntry::new("sablework", "Sablework Bench", "primary", flicker_sablework::scene)
+            .with_realm(REALM_DEVELOPER)
+            .with_info(SceneInfo::new(
+                "Sablework Bench",
+                "Synthesizer",
+                "Materials / Textures",
+                "The texture synthesizer console — six noise voices into a tiled swatch, an output stage, and a lit turntable; Commit bakes the material into staging.",
+                "Clay 0.1 · Bench · texture synth",
+            )),
         SceneEntry::new("solarbirth", "Solar Birth", "primary", flicker_solarbirth::scene)
             .with_realm(REALM_ADVENTURER)
             .with_info(SceneInfo::new(
@@ -129,8 +138,8 @@ mod tests {
         assert_eq!(realm_ids(REALM_GAMEMASTER), ["populous"], "Populous is the Game Master bench");
         assert_eq!(
             realm_ids(REALM_DEVELOPER),
-            ["clicktrainer", "componentcatalog", "quartermaster"],
-            "Click Trainer + the Component Catalog + the Quartermaster are the Developer benches"
+            ["clicktrainer", "componentcatalog", "quartermaster", "sablework"],
+            "Click Trainer + the Component Catalog + the Quartermaster + Sablework are the Developer benches"
         );
         assert_eq!(realm_ids(REALM_ADVENTURER), ["solarbirth"], "Solar Birth is the Adventurer bench");
         assert!(

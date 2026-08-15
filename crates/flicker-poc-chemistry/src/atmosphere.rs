@@ -794,7 +794,7 @@ mod tests {
     use flicker_worldgrid::icosphere;
 
     fn tables() -> Tables {
-        Tables::from_source(&JsonTableSource::new(&content_data_dir())).expect("tables")
+        Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables")
     }
 
     fn world(freq: u32, seed: u64) -> (World, Tables) {

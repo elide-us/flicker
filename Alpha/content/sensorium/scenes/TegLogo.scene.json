@@ -1,5 +1,5 @@
 {
-  "_comment": "SCENE FILE — the publisher splash, and the scene the application BOOTS into. The `tree` below is the arrangement — one full-bleed `splash` component (the Rust widgets kind that owns all drawing). The PAIR SCRIPT (scripts/TegLogo.lua) is a module like every pair script: its arrange() sets the splash node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed; `exit` = the player backed out (Cancel/Esc). `boot` marks the one scene the application starts in.",
+  "_comment": "SCENE FILE — the publisher splash, and the scene the application BOOTS into. The `tree` below is the arrangement — one full-bleed `sprite` component in its PRESENTING mode (backdrop + contain-fit + fade timeline; splash merged into sprite 2026-08-14 — one Component, behaviour configured from Lua). The PAIR SCRIPT (scripts/TegLogo.lua) is a module like every pair script: its arrange() sets this node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed; `exit` = the player backed out (Cancel/Esc). `boot` marks the one scene the application starts in.",
   "boot": true,
   "behaviour": "splash",
   "exits": {
@@ -29,7 +29,7 @@
     "height_frac": 1.0,
     "children": [
       {
-        "component": "splash",
+        "component": "sprite",
         "id": "splash",
         "anchor": "top_left",
         "width_frac": 1.0,

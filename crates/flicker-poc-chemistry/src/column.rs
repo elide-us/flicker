@@ -885,7 +885,7 @@ mod tests {
             }
         }
         assert!(c.layers.len() <= cap, "the cap was leaned on: {} beds", c.layers.len());
-        assert!(c.layers.len() >= 1);
+        assert!(!c.layers.is_empty());
         assert!((c.mass_kg() - before).abs() < 1e-6 * before, "conserved through the squeeze");
     }
 

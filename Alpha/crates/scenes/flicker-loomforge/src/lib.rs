@@ -2583,6 +2583,15 @@ fn short_path(p: &Path) -> String {
     }
 }
 
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2859,7 +2868,7 @@ mod tests {
         let kind = bench.packs[0].kind;
         let mut results = ValueMap::default();
         let idx = packs::PackKind::ALL.iter().position(|k| *k == kind).unwrap();
-        results.set(&format!("packkind_{idx}"), true);
+        results.set(format!("packkind_{idx}"), true);
         bench.apply_pack_actions(&results);
 
         let vis = bench.visible_packs();
@@ -2932,13 +2941,4 @@ mod tests {
         bench.apply_actions(&results);
         assert!(bench.status.contains("Nothing to save"));
     }
-}
-
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
 }

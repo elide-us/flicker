@@ -2208,6 +2208,7 @@
                         "component": "row",
                         "size": 40,
                         "gap": 10,
+                        "align": "center",
                         "children": [
                           {
                             "component": "text",
@@ -2229,7 +2230,7 @@
                             "label": "$qm_review_promote",
                             "variant": "primary",
                             "width": 150,
-                            "size": 36
+                            "size_class": "md"
                           }
                         ]
                       }
@@ -2439,6 +2440,7 @@
             "component": "row",
             "gap": 10,
             "size": 38,
+            "align": "center",
             "children": [
               {
                 "component": "button",
@@ -2446,6 +2448,7 @@
                 "action": "conflict_skip",
                 "label": "$qm_conflict_skip",
                 "variant": "secondary",
+                "size_class": "md",
                 "grow": 1
               },
               {
@@ -2454,6 +2457,7 @@
                 "action": "conflict_keep_both",
                 "label": "$qm_conflict_keep_both",
                 "variant": "secondary",
+                "size_class": "md",
                 "grow": 1
               },
               {
@@ -2462,6 +2466,7 @@
                 "action": "conflict_replace",
                 "label": "$qm_conflict_replace",
                 "variant": "primary",
+                "size_class": "md",
                 "grow": 1
               }
             ]

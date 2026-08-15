@@ -1,0 +1,547 @@
+{
+  "_comment": "Sablework Bench SCENE DEFINITION (201F4F51 template-free). The texture SYNTHESIZER console: LEFT the 6-voice channel rack (each voice row is authored DATA — arrangement, not a template), CENTRE the tiled-swatch preview under an 8-tab view selector (7 flat maps + the LIT turntable; the tabs bind `sel_map`, a NUMBER), RIGHT the output stage over the selected voice's fine knobs. Header: patch stepper + Roll/Reseed. Footer: material binding · bake rung · Commit · status. The `sablework` behaviour plays it (flicker-sablework); sablework.lua derives the row washes + view-cell visibility. Styles were folded in from the crate's quarantined scene_styles.json (its layout block described the deleted workbench template and did not move).",
+  "behaviour": "sablework",
+  "params": {},
+  "styles": {
+    "window": {
+      "_comment": "This bench's root slab — scene-owned like populous's (a shared file would fork the look; duplication is the pattern). Only draw-read keys: no dead w/h.",
+      "radius": 4,
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "shadow": "$shadow",
+      "shadow_dy": 18,
+      "shadow_feather": 46,
+      "shadow_grow": 4
+    },
+    "sablework": {
+      "col": {
+        "label": "$dim_soft",
+        "title": "$ink_bright",
+        "value": "$ink",
+        "dim": "$dim",
+        "accent": "$rune_glow_hi",
+        "bronze": "$bronze",
+        "bronze_deep": "$bronze_deep",
+        "off": "$faint"
+      },
+      "panel": {
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "well": {
+        "fill_top": "$stone0",
+        "fill_bot": "$stone0",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 3
+      },
+      "frame": {
+        "fill_top": [0, 0, 0, 0],
+        "fill_bot": [0, 0, 0, 0],
+        "border": "$bronze_deep",
+        "border_w": 1,
+        "radius": 3
+      },
+      "row": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone1",
+        "border": "$edge1",
+        "border_w": 1,
+        "radius": 3
+      },
+      "row_sel": {
+        "fill_top": "$stone4",
+        "fill_bot": "$stone2",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 3
+      },
+      "checkbox": {
+        "box": "$stone2",
+        "check": "$sig_green",
+        "border": "$edge4",
+        "pad": 3
+      },
+      "slider": {
+        "track": "$well",
+        "border": "$edge2",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_w": 14
+      },
+      "button": {
+        "fill_top": "$stone4",
+        "fill_bot": "$stone2",
+        "border": "$edge3",
+        "border_w": 1,
+        "radius": 3
+      },
+      "button_on": {
+        "fill_top": "$sap_hover",
+        "fill_bot": "$sap_base",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 3
+      },
+      "preview": {
+        "_comment": "`tiles` = how many times the scene repeats the baked swatch per axis BEFORE uploading, so the seam shows in one sprite. Read by the Rust scene when it creates the preview textures.",
+        "tiles": 3
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "sablework",
+    "on_menu": "pause_open",
+    "on_tab_next": "map_next",
+    "on_tab_prev": "map_prev",
+    "on_page_next": "patch_next",
+    "on_page_prev": "patch_prev",
+    "children": [
+      {
+        "component": "stack",
+        "style": "window",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "pad": 20,
+        "gap": 12,
+        "children": [
+          {
+            "component": "row",
+            "id": "sw_header",
+            "size": 46,
+            "pad_x": 12,
+            "pad_y": 6,
+            "gap": 8,
+            "align": "center",
+            "children": [
+              {
+                "component": "text",
+                "text": "$sw_title",
+                "text_size": 17,
+                "font": "label",
+                "color": "sablework.col.title",
+                "size": 200
+              },
+              {
+                "component": "text",
+                "text_bind": "recipe_line",
+                "text_size": 13,
+                "font": "label",
+                "color": "sablework.col.value",
+                "grow": 1.0
+              },
+              {
+                "component": "button",
+                "id": "patch_prev",
+                "action": "patch_prev",
+                "label": "$sw_prev",
+                "style": "sablework.button",
+                "size": 34,
+                "size_class": "sm",
+                "tab_group": "sw_top",
+                "nav_ordinal": 1
+              },
+              {
+                "component": "button",
+                "id": "patch_next",
+                "action": "patch_next",
+                "label": "$sw_next",
+                "style": "sablework.button",
+                "size": 34,
+                "size_class": "sm",
+                "tab_group": "sw_top",
+                "nav_ordinal": 2
+              },
+              {
+                "component": "button",
+                "id": "roll",
+                "action": "roll",
+                "label": "$sw_roll",
+                "style": "sablework.button",
+                "size": 72,
+                "size_class": "md",
+                "tab_group": "sw_top",
+                "nav_ordinal": 3
+              },
+              {
+                "component": "button",
+                "id": "reseed",
+                "action": "reseed",
+                "label": "$sw_reseed",
+                "style": "sablework.button",
+                "size": 88,
+                "size_class": "md",
+                "tab_group": "sw_top",
+                "nav_ordinal": 4
+              }
+            ]
+          },
+          {
+            "component": "row",
+            "id": "sw_body",
+            "grow": 1.0,
+            "gap": 12,
+            "children": [
+              {
+                "component": "panel",
+                "id": "sw_rack",
+                "style": "sablework.panel",
+                "size": 620,
+                "pad": 14,
+                "gap": 8,
+                "tab_group": "sw_rack",
+                "nav_ordinal": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$sw_channel_rack",
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "sablework.col.label",
+                    "size": 20
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_1",
+                    "style_bind": "ch1_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch1_on", "bind": "ch1_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 1 },
+                          { "component": "text", "text": "$sw_ch1", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch1_source", "action": "ch1_source", "label_bind": "ch1_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch1_blend", "action": "ch1_blend", "label_bind": "ch1_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 3 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch1_scale", "bind": "ch1_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch1_octaves", "bind": "ch1_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch1_warp", "bind": "ch1_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch1_amount", "bind": "ch1_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 7 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_2",
+                    "style_bind": "ch2_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch2_on", "bind": "ch2_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 8 },
+                          { "component": "text", "text": "$sw_ch2", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch2_source", "action": "ch2_source", "label_bind": "ch2_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 9 },
+                          { "component": "button", "id": "ch2_blend", "action": "ch2_blend", "label_bind": "ch2_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 10 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch2_scale", "bind": "ch2_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 11 },
+                          { "component": "slider", "id": "ch2_octaves", "bind": "ch2_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 12 },
+                          { "component": "slider", "id": "ch2_warp", "bind": "ch2_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 13 },
+                          { "component": "slider", "id": "ch2_amount", "bind": "ch2_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 14 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_3",
+                    "style_bind": "ch3_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch3_on", "bind": "ch3_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 15 },
+                          { "component": "text", "text": "$sw_ch3", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch3_source", "action": "ch3_source", "label_bind": "ch3_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 16 },
+                          { "component": "button", "id": "ch3_blend", "action": "ch3_blend", "label_bind": "ch3_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 17 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch3_scale", "bind": "ch3_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 18 },
+                          { "component": "slider", "id": "ch3_octaves", "bind": "ch3_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 19 },
+                          { "component": "slider", "id": "ch3_warp", "bind": "ch3_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 20 },
+                          { "component": "slider", "id": "ch3_amount", "bind": "ch3_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 21 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_4",
+                    "style_bind": "ch4_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch4_on", "bind": "ch4_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 22 },
+                          { "component": "text", "text": "$sw_ch4", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch4_source", "action": "ch4_source", "label_bind": "ch4_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 23 },
+                          { "component": "button", "id": "ch4_blend", "action": "ch4_blend", "label_bind": "ch4_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 24 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch4_scale", "bind": "ch4_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 25 },
+                          { "component": "slider", "id": "ch4_octaves", "bind": "ch4_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 26 },
+                          { "component": "slider", "id": "ch4_warp", "bind": "ch4_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 27 },
+                          { "component": "slider", "id": "ch4_amount", "bind": "ch4_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 28 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_5",
+                    "style_bind": "ch5_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch5_on", "bind": "ch5_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 29 },
+                          { "component": "text", "text": "$sw_ch5", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch5_source", "action": "ch5_source", "label_bind": "ch5_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 30 },
+                          { "component": "button", "id": "ch5_blend", "action": "ch5_blend", "label_bind": "ch5_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 31 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch5_scale", "bind": "ch5_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 32 },
+                          { "component": "slider", "id": "ch5_octaves", "bind": "ch5_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 33 },
+                          { "component": "slider", "id": "ch5_warp", "bind": "ch5_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 34 },
+                          { "component": "slider", "id": "ch5_amount", "bind": "ch5_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 35 }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "stack",
+                    "id": "sw_voice_6",
+                    "style_bind": "ch6_sty",
+                    "size": 80,
+                    "pad": 8,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 32,
+                        "align": "center",
+                        "children": [
+                          { "component": "checkbox", "id": "ch6_on", "bind": "ch6_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 36 },
+                          { "component": "text", "text": "$sw_ch6", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
+                          { "component": "button", "id": "ch6_source", "action": "ch6_source", "label_bind": "ch6_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 37 },
+                          { "component": "button", "id": "ch6_blend", "action": "ch6_blend", "label_bind": "ch6_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 38 }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "gap": 8,
+                        "size": 24,
+                        "children": [
+                          { "component": "slider", "id": "ch6_scale", "bind": "ch6_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 39 },
+                          { "component": "slider", "id": "ch6_octaves", "bind": "ch6_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 40 },
+                          { "component": "slider", "id": "ch6_warp", "bind": "ch6_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 41 },
+                          { "component": "slider", "id": "ch6_amount", "bind": "ch6_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 42 }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "panel",
+                "id": "sw_view",
+                "style": "sablework.panel",
+                "grow": 1.0,
+                "pad": 14,
+                "gap": 8,
+                "tab_group": "sw_view",
+                "nav_ordinal": 0,
+                "children": [
+                  {
+                    "component": "tabs",
+                    "id": "sw_views",
+                    "bind": "sel_map",
+                    "next_action": "map_next",
+                    "prev_action": "map_prev",
+                    "size": 28,
+                    "gap": 4,
+                    "tab_active": "sablework.button_on",
+                    "tab_idle": "sablework.button",
+                    "tab_group": "sw_view",
+                    "nav_ordinal": 1,
+                    "children": [
+                      { "component": "option", "value": 0, "label": "$sw_map_base" },
+                      { "component": "option", "value": 1, "label": "$sw_map_normal" },
+                      { "component": "option", "value": 2, "label": "$sw_map_rough" },
+                      { "component": "option", "value": 3, "label": "$sw_map_metal" },
+                      { "component": "option", "value": 4, "label": "$sw_map_ao" },
+                      { "component": "option", "value": 5, "label": "$sw_map_height" },
+                      { "component": "option", "value": 6, "label": "$sw_map_emit" },
+                      { "component": "option", "value": 7, "label": "$sw_map_lit" }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "id": "sw_swatch_well",
+                    "style": "sablework.well",
+                    "grow": 1.0,
+                    "pad": 8,
+                    "children": [
+                      { "component": "cell", "visible_bind": "map_base_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 0, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_normal_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 1, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_rough_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 2, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_metal_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 3, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_ao_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 4, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_height_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 5, "width": 600, "height": 600, "anchor": "center" } ] },
+                      { "component": "cell", "visible_bind": "map_emit_shown", "grow": 1.0, "children": [ { "component": "sprite", "tex": 6, "width": 600, "height": 600, "anchor": "center" } ] },
+                      {
+                        "component": "cell",
+                        "visible_bind": "lit_shown",
+                        "grow": 1.0,
+                        "gap": 8,
+                        "children": [
+                          { "component": "rtt", "id": "sw_lit", "source": "sablework_lit", "style": "sablework.frame", "grow": 1.0 },
+                          {
+                            "component": "row",
+                            "size": 32,
+                            "gap": 8,
+                            "align": "center",
+                            "children": [
+                              { "component": "button", "id": "lit_body", "action": "lit_body", "label_bind": "lit_body_label", "style": "sablework.button", "size": 92, "size_class": "md", "tab_group": "sw_view", "nav_ordinal": 2 },
+                              { "component": "text", "text": "$sw_spin", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 60 },
+                              { "component": "toggle", "id": "lit_spin", "bind": "lit_spin", "size": 44, "tab_group": "sw_view", "nav_ordinal": 3 }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "preview_info",
+                    "text_size": 12,
+                    "font": "label",
+                    "color": "sablework.col.dim",
+                    "size": 18
+                  }
+                ]
+              },
+              {
+                "component": "panel",
+                "id": "sw_out",
+                "style": "sablework.panel",
+                "size": 330,
+                "pad": 14,
+                "gap": 6,
+                "tab_group": "sw_out",
+                "nav_ordinal": 0,
+                "children": [
+                  { "component": "text", "text": "$sw_output_stage", "text_size": 11, "font": "label", "color": "sablework.col.label", "size": 20 },
+                  { "component": "slider", "id": "relief", "bind": "relief", "label": "$sw_relief", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 1 },
+                  { "component": "slider", "id": "roughness", "bind": "roughness", "label": "$sw_roughness", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 2 },
+                  { "component": "slider", "id": "roughness_mod", "bind": "roughness_mod", "label": "$sw_rough_mod", "min": -1, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 3 },
+                  { "component": "slider", "id": "metalness", "bind": "metalness", "label": "$sw_metalness", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 4 },
+                  { "component": "slider", "id": "metalness_mod", "bind": "metalness_mod", "label": "$sw_metal_mod", "min": -1, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 5 },
+                  { "component": "slider", "id": "ao", "bind": "ao", "label": "$sw_ao", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 6 },
+                  { "component": "slider", "id": "emissive_strength", "bind": "emissive_strength", "label": "$sw_glow", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 7 },
+                  { "component": "slider", "id": "emissive_band", "bind": "emissive_band", "label": "$sw_glow_band", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 8 },
+                  {
+                    "component": "row",
+                    "size": 20,
+                    "gap": 6,
+                    "children": [
+                      { "component": "text", "text": "$sw_voice", "text_size": 11, "font": "label", "color": "sablework.col.label", "size": 60 },
+                      { "component": "text", "text_bind": "sel_voice", "text_size": 11, "font": "label", "color": "sablework.col.accent", "grow": 1.0 }
+                    ]
+                  },
+                  { "component": "slider", "id": "sel_lacunarity", "bind": "sel_lacunarity", "label": "$sw_lacunarity", "min": 1, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 9 },
+                  { "component": "slider", "id": "sel_gain", "bind": "sel_gain", "label": "$sw_gain", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 10 },
+                  { "component": "slider", "id": "sel_contrast", "bind": "sel_contrast", "label": "$sw_contrast", "min": 0, "max": 4, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 11 },
+                  { "component": "checkbox", "id": "sel_invert", "bind": "sel_invert", "label": "$sw_invert", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_out", "nav_ordinal": 12 }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "row",
+            "id": "sw_footer",
+            "size": 52,
+            "pad_x": 12,
+            "pad_y": 10,
+            "gap": 8,
+            "align": "center",
+            "children": [
+              { "component": "text", "text": "$sw_material", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 70 },
+              { "component": "button", "id": "material", "action": "material", "label_bind": "material_label", "style": "sablework.button", "size": 150, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 1 },
+              { "component": "text", "text": "$sw_size", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 40 },
+              { "component": "button", "id": "bake_size", "action": "bake_size", "label_bind": "size_label", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 2 },
+              { "component": "button", "id": "commit", "action": "commit", "label": "$sw_commit", "style": "sablework.button", "size": 110, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 3 },
+              { "component": "text", "text_bind": "commit_status", "text_size": 12, "font": "label", "color": "sablework.col.value", "grow": 1.0 },
+              { "component": "text", "text_bind": "bake_info", "text_size": 12, "font": "label", "color": "sablework.col.dim", "size": 180 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

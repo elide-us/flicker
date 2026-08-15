@@ -125,9 +125,9 @@ const STRUCTURAL_KINDS: &[&str] =
 /// half of a migration meter. A new control is a new arm in `component.rs` and a new
 /// entry here — there is no other tier to put one in.
 const RUST_COMPONENT_KINDS: &[&str] = &[
-    "button", "panel", "sprite", "rune_corners", "tooltip", "checkbox", "toggle", "radio", "tile",
+    "button", "panel", "sprite", "tooltip", "checkbox", "toggle", "radio", "tile",
     "pill_toggle", "tabs", "select", "slider", "stepper", "text_field", "list", "context_menu",
-    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge", "splash",
+    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge",
     // Composites the engine draws at walk time — the carved modal slab and the two-rail
     // page/tab control (PTT). Formalised from the retired `popup_panel` / `paged_menu`
     // template builders (201F4F51 P1): now first-class kinds the scene names via

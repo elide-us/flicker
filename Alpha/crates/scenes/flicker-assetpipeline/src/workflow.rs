@@ -37,7 +37,6 @@
 //! `workflow.chip.active` / `.visited` / `.todo`).
 
 use flicker::ui::{Surface, Surfaces};
-use flicker_input_router::RouteCtx;
 use flicker::script::ValueMap;
 use std::collections::HashMap;
 
@@ -65,41 +64,8 @@ pub struct Step {
 }
 
 impl Step {
-    /// A step gated by its own id, with an empty contract.
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            title: title.into(),
-            surface: None,
-            needs: Vec::new(),
-            yields: Vec::new(),
-            context: None,
-        }
-    }
-
-    /// Gate the step's subtree by `surface` instead of the id.
-    pub fn surface(mut self, surface: impl Into<String>) -> Self {
-        self.surface = Some(surface.into());
-        self
-    }
-
-    /// Declare the document keys required to enter.
-    pub fn needs(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.needs = keys.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Declare the document keys this step produces.
-    pub fn yields(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.yields = keys.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Declare the `InputContext` the step's surface holds while shown.
-    pub fn context(mut self, context: impl Into<String>) -> Self {
-        self.context = Some(context.into());
-        self
-    }
+    // Steps only ever DESERIALIZE from `ui_workflows.json` — there is no
+    // hand-construction path.
 
     /// The Model key the step's subtree gates on: an explicit `surface`, else
     /// the NAMESPACED default `wf_step_<id>` — bare ids collided with sibling
@@ -109,12 +75,11 @@ impl Step {
     }
 }
 
-/// One workflow definition as it ships in `ui_workflows.json`: a dispatch-card
-/// title plus the linear step list.
+/// One workflow definition as it ships in `ui_workflows.json`: the linear step
+/// list. (The file also carries a `title` per workflow — display copy the bench
+/// reads from its own tree, so the parse ignores it here.)
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct WorkflowDef {
-    /// Dispatch-card / breadcrumb title (`$token`).
-    pub title: String,
     pub steps: Vec<Step>,
 }
 
@@ -141,10 +106,9 @@ pub fn workflows_from_json(json: &str) -> HashMap<String, WorkflowDef> {
 const DISCARD: &str = "wf_discard";
 
 /// A running workflow: the ordinal over one [`Surfaces`] exclusive group.
-/// Construct from a step list (hand-built or a [`WorkflowDef`]), feed it the
-/// frame's results + document with [`handle`](Self::handle), publish with
-/// [`publish`](Self::publish), and route step contexts with
-/// [`apply_contexts`](Self::apply_contexts).
+/// Construct from a [`WorkflowDef`]'s step list, feed it the frame's results +
+/// document with [`handle`](Self::handle), and publish with
+/// [`publish`](Self::publish).
 pub struct Workflow {
     steps: Vec<Step>,
     current: usize,
@@ -315,27 +279,6 @@ impl Workflow {
         }
     }
 
-    /// Route the step surfaces' S9 contexts — delegate to the wrapped
-    /// [`Surfaces::apply_surface_contexts`]; call once per frame after
-    /// [`handle`](Self::handle).
-    pub fn apply_contexts(&mut self, route: &mut RouteCtx) {
-        self.surfaces.apply_surface_contexts(route);
-    }
-
-    /// The steps whose surface key no node in `tree` gates on (`visible_bind`) —
-    /// a step that would flip its surface and render NOTHING. Wire this into the
-    /// screen's drift-gate test (`assert!(wf.ungated_steps(&tree).is_empty())`)
-    /// so a definition/tree mismatch is a build failure, not a blank page.
-    pub fn ungated_steps(&self, tree: &flicker::script::UiNode) -> Vec<String> {
-        fn gates(n: &flicker::script::UiNode, key: &str) -> bool {
-            n.visible_bind.as_deref() == Some(key) || n.children.iter().any(|c| gates(c, key))
-        }
-        self.steps
-            .iter()
-            .map(|s| s.surface_key())
-            .filter(|k| !gates(tree, k))
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -343,11 +286,13 @@ mod tests {
     use super::*;
 
     fn steps() -> Vec<Step> {
-        vec![
-            Step::new("task", "$wf_step_task").yields(["source"]),
-            Step::new("conform", "$wf_step_conform").needs(["source"]).yields(["rig"]),
-            Step::new("review", "$wf_step_review").needs(["rig"]),
-        ]
+        // Through the same serde path the shipped `ui_workflows.json` takes.
+        serde_json::from_value(serde_json::json!([
+            { "id": "task", "title": "$wf_step_task", "yields": ["source"] },
+            { "id": "conform", "title": "$wf_step_conform", "needs": ["source"], "yields": ["rig"] },
+            { "id": "review", "title": "$wf_step_review", "needs": ["rig"] }
+        ]))
+        .expect("test steps deserialize")
     }
 
     fn fired(name: &str) -> ValueMap {

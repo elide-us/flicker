@@ -2662,6 +2662,15 @@ pub fn scene() -> Box<dyn Scene> {
     Box::new(build_viewer(&base_dir))
 }
 
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3535,13 +3544,4 @@ mod tests {
         let res = run_hud(&host, &hud_test_model(false, false), &click, w, h).results;
         assert!(!res.is_on(&first), "clicking an EMPTY cell must stay unequipped");
     }
-}
-
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
 }
