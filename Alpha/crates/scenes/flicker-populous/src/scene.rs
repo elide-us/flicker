@@ -393,11 +393,13 @@ impl Scene for PopulousBench {
         // inside its own rect. The six Look/Zoom signals stay the camera's (`look_from`).
         let dtf = dt.as_secs_f32();
         let look = GlobeWorld::look_from(|s| signals.axis(s, input));
-        // The globe answers look/zoom only while its pane is ENTERED (0EFF5464): merely
-        // highlighting the viewport pane no longer feeds the camera — Confirm locks into
-        // it, Cancel backs out. `entered` is the walker's; the scene reads it, never a
-        // second focus system (F2).
-        let look_gate = if self.ui_state.entered() { self.ui_state.focused() } else { None };
+        // The globe answers look/zoom only while its pane is ENTERED (nav-tier contract
+        // 1B5F6BB8): merely highlighting the viewport pane no longer feeds the camera —
+        // Confirm locks into it, Cancel backs out. The LOCKED pane's `tab_group` IS the
+        // gate the globe matches against (`in_panel`); the walker owns it, the scene only
+        // reads it, never a second focus system (F2). Entering a DIFFERENT pane yields that
+        // pane's group, so the globe correctly stays quiet.
+        let look_gate = self.ui_state.entered_group();
         self.world.update(dtf, input, look, look_gate);
 
         // Menu opens the shell's pause overlay — quit, settings, back to the

@@ -411,6 +411,51 @@ mod tests {
         );
     }
 
+    /// **Every pane group has a clear panel-navigation layer** (nav-tier contract
+    /// 1B5F6BB8): a `tab_group` with interior controls must have exactly ONE ordinal-0
+    /// actionless CONTAINER whose id equals the group, so the left stick lands on the pane
+    /// (not a leaf) and the d-pad reaches the interior only after Confirm enters. This is
+    /// the "ambiguous panel navigation is a violation" rule as a gate — `cat_content` was a
+    /// container-less group (`PanelNext` deposited the cursor on a leaf inside it), which
+    /// this now forbids.
+    #[test]
+    fn every_pane_group_has_a_clear_container() {
+        let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)
+            .expect("componentcatalog.scene.json loads")
+            .tree
+            .expect("it declares a tree");
+        // (id, tab_group, nav_ordinal, has_action) for every focusable node.
+        fn collect(n: &UiNode, out: &mut Vec<(String, String, u32, bool)>) {
+            if !n.tab_group.is_empty() && !n.id.is_empty() {
+                out.push((n.id.clone(), n.tab_group.clone(), n.nav_ordinal, n.action.is_some()));
+            }
+            for c in &n.children {
+                collect(c, out);
+            }
+        }
+        let mut nodes = Vec::new();
+        collect(&tree, &mut nodes);
+        let groups: std::collections::BTreeSet<&str> =
+            nodes.iter().map(|(_, g, _, _)| g.as_str()).collect();
+        assert!(groups.contains("cat_nav") && groups.contains("cat_content"), "both panes present");
+        for g in groups {
+            let members: Vec<_> = nodes.iter().filter(|(_, grp, _, _)| grp == g).collect();
+            let containers = members
+                .iter()
+                .filter(|(id, grp, ord, act)| id == grp && *ord == 0 && !act)
+                .count();
+            assert_eq!(
+                containers, 1,
+                "pane group `{g}` needs exactly one ordinal-0 actionless container (id == group)",
+            );
+            for (id, _, ord, _) in &members {
+                if id != g {
+                    assert!(*ord > 0, "interior `{id}` in `{g}` must follow its container (ordinal > 0)");
+                }
+            }
+        }
+    }
+
     /// The shipped tree names only kinds the engine knows (S10 vocabulary gate) and ships
     /// NO raw display literal — every label is a `$token`, in the tree or a bound value
     /// this source publishes (the strings gate + its model-publish twin).

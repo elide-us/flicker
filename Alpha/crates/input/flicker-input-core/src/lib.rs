@@ -16,11 +16,15 @@
 //! # Module map (spec §3.4)
 //!
 //! - [`device`] — `Key`, `MouseButton`, `GamepadButton`, `GamepadAxis`,
-//!   `AxisDirection`, `DeadzoneShape` (+`Display`).
+//!   `AxisDirection`, `DeadzoneShape` (+`Display`); each control enum carries
+//!   its canonical `ALL` catalog and a `token()` stringtable stem (the
+//!   input-side half of the signal/input catalog, S2).
 //! - [`snapshot`] — `GamepadConfig`, `GamepadState`, `apply_deadzone`,
 //!   `InputState` (with the analog latch), and [`InputEdge`] — the ordered
 //!   per-frame transition log that keeps a press from being lost on a long frame.
-//! - [`signal`] — [`ActionSignal`] (+`Display`, +`label`).
+//! - [`signal`] — [`ActionSignal`] (+`Display`, +`label`) and its catalog
+//!   metadata [`SignalGroup`] / [`RebindScope`] (+`group`, +`rebind_scope`,
+//!   +`token`, +`rebindable` — the derived settings surface's row source).
 //! - [`binding`] — [`InputBinding`] (+`is_down`), [`InputMap`], and the §3.5
 //!   descriptors.
 //! - [`context`] — [`InputContext`] (open newtype + name registry),
@@ -28,7 +32,8 @@
 //!   [`InputProfile`] / [`ContextBindings`] / [`SignalBinding`].
 //! - [`resolve`] — [`EventKind`], [`Fired`], [`Resolver`].
 //! - [`analog`] — [`AnalogFrame`], [`AnalogCache`], [`AbstractControls`].
-//! - [`rebind`] — [`RebindCapture`], [`capture_input`], the `ALL_*` enumerations.
+//! - [`rebind`] — [`RebindCapture`], [`capture_input`] (both ride the device
+//!   enums' `ALL` catalogs).
 
 pub mod analog;
 pub mod binding;
@@ -43,7 +48,7 @@ pub mod snapshot;
 
 // ── Flat public surface (crate root) ──
 pub use analog::{AbstractControls, AnalogCache, AnalogFrame};
-pub use binding::{Activation, BindingDescriptor, InputBinding, InputMap};
+pub use binding::{Activation, BindingDescriptor, InputBinding, InputMap, MouseAxis};
 pub use chord::{editor_chords, ChordLayer};
 pub use context::{
     ContextBindings, ContextualBindings, InputContext, InputProfile, SignalBinding,
@@ -51,9 +56,7 @@ pub use context::{
 pub use device::{
     AxisDirection, DeadzoneShape, GamepadAxis, GamepadButton, Key, MouseButton,
 };
-pub use rebind::{
-    capture_input, RebindCapture, ALL_GAMEPAD_AXES, ALL_GAMEPAD_BUTTONS, ALL_KEYS,
-};
+pub use rebind::{capture_input, RebindCapture};
 pub use resolve::{EventKind, Fired, Resolver, TickTime};
-pub use signal::ActionSignal;
+pub use signal::{ActionSignal, RebindScope, SignalGroup};
 pub use snapshot::{apply_deadzone, GamepadConfig, GamepadState, InputEdge, InputState};

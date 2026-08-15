@@ -99,6 +99,9 @@ pub fn nav(items: &[Focusable], current: Option<&str>, dir: NavDir) -> Option<St
 /// - With a `current` in the list: moves to the adjacent group, wrapping.
 /// - With no `current`: enters the first group (forward) or last (backward).
 /// - Empty `items`: `None`.
+/// - A SINGLE group with `current` already in it: `None` — there is no other pane to
+///   cycle to, so the left stick is a clean no-op (a flat single-context surface like the
+///   settings modal must not have its focus yanked to the top row by a stray stick nudge).
 pub fn tab(items: &[Focusable], current: Option<&str>, forward: bool) -> Option<String> {
     // Distinct groups in first-appearance order.
     let mut groups: Vec<&str> = Vec::new();
@@ -114,6 +117,9 @@ pub fn tab(items: &[Focusable], current: Option<&str>, forward: bool) -> Option<
 
     let target: &str = match current.and_then(|id| find(items, id)) {
         Some(cur) => {
+            if groups.len() == 1 {
+                return None;
+            }
             let pos = groups.iter().position(|g| *g == cur.group.as_str())?;
             let n = groups.len();
             let next = if forward { (pos + 1) % n } else { (pos + n - 1) % n };
@@ -221,5 +227,18 @@ mod tests {
     fn tab_empty_is_none() {
         let items: Vec<Focusable> = vec![];
         assert_eq!(tab(&items, None, true), None);
+    }
+
+    /// A SINGLE group with the cursor already inside it is a no-op — there is no other
+    /// pane to cycle to, so the left stick must not yank focus to the group's top item
+    /// (the flat single-context surface, e.g. the settings modal, nav-tier contract
+    /// 1B5F6BB8). With NO current, a single group still acquires (useful first landing).
+    #[test]
+    fn tab_single_group_with_current_is_a_no_op() {
+        let items = vec![f("r0", "settings_rows", 0), f("r1", "settings_rows", 1)];
+        assert_eq!(tab(&items, Some("r1"), true), None, "no other pane to cycle to");
+        assert_eq!(tab(&items, Some("r0"), false), None);
+        // …but with no focus yet, entering the sole group is still useful acquisition.
+        assert_eq!(tab(&items, None, true).as_deref(), Some("r0"));
     }
 }

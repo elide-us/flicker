@@ -2227,7 +2227,7 @@
                             "id": "promote",
                             "action": "promote",
                             "label": "$qm_review_promote",
-                            "style": "modal.buttons.variants.primary",
+                            "variant": "primary",
                             "width": 150,
                             "size": 36
                           }
@@ -2445,7 +2445,7 @@
                 "id": "conflict_skip",
                 "action": "conflict_skip",
                 "label": "$qm_conflict_skip",
-                "style": "modal.buttons.variants.secondary",
+                "variant": "secondary",
                 "grow": 1
               },
               {
@@ -2453,7 +2453,7 @@
                 "id": "conflict_keep_both",
                 "action": "conflict_keep_both",
                 "label": "$qm_conflict_keep_both",
-                "style": "modal.buttons.variants.secondary",
+                "variant": "secondary",
                 "grow": 1
               },
               {
@@ -2461,7 +2461,7 @@
                 "id": "conflict_replace",
                 "action": "conflict_replace",
                 "label": "$qm_conflict_replace",
-                "style": "modal.buttons.variants.primary",
+                "variant": "primary",
                 "grow": 1
               }
             ]

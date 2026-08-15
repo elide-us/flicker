@@ -19,10 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use flicker_input_core::{
-    AnalogCache, AnalogFrame, GamepadAxis, GamepadButton, InputState, ALL_GAMEPAD_AXES,
-    ALL_GAMEPAD_BUTTONS,
-};
+use flicker_input_core::{AnalogCache, AnalogFrame, GamepadAxis, GamepadButton, InputState};
 use glam::Vec2;
 
 use crate::DiscreteSource;
@@ -104,7 +101,7 @@ fn apply_discrete(snap: &PadSnapshot, out: &mut InputState) {
         return;
     }
     let gp = out.gamepad_mut(0);
-    for &button in &ALL_GAMEPAD_BUTTONS {
+    for &button in GamepadButton::ALL {
         gp.set_button(button, snap.buttons.contains(&button));
     }
 
@@ -116,7 +113,7 @@ fn apply_discrete(snap: &PadSnapshot, out: &mut InputState) {
     // `LeftStick*/RightStick*` → Move/Look rows still live in the `InputMap`
     // presets. DELETE this block (only) when those rows migrate — the analog
     // channel already carries the same values.
-    for &axis in &ALL_GAMEPAD_AXES {
+    for &axis in GamepadAxis::ALL {
         gp.set_axis(axis, snap.axis(axis));
     }
 }

@@ -30,6 +30,17 @@ pub enum MouseAxis {
     Y,
 }
 
+impl MouseAxis {
+    /// The stringtable token for this motion axis' player-facing display name
+    /// (the input-catalog convention — seeds "Mouse X" / "Mouse Y").
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::X => "$mouse_x",
+            Self::Y => "$mouse_y",
+        }
+    }
+}
+
 /// Covers keyboard, mouse, and gamepad inputs. Gamepad axes use
 /// [`AxisDirection`] to specify which half of the axis triggers the
 /// binding.
@@ -697,12 +708,13 @@ impl InputMap {
         map
     }
 
-    /// The default Xbox layout for the souls-combat game, matching the ruled control
-    /// design (MCP `DE46BDB8`). Physical positions: A=`South` B=`East` X=`West` Y=`North`.
-    ///
-    /// Binds the **press** action of each control. Tap-vs-hold (B = dodge / sprint),
-    /// long-press, and the Y-modifier chords (Y+LB two-hand, Y+LT kick) are resolved by the
-    /// input-concept layer above the map, not by a raw binding, so they are absent here.
+    /// The default Xbox controller config — the controller tab's default selection
+    /// (Aaron 2026-08-14, `xbox_souls`). Ruled layout (MCP `DE46BDB8` / `D167E43A`).
+    /// Physical positions: A=`South` B=`East` X=`West` Y=`North`. Binds the **press** of
+    /// each control; tap-vs-hold, long-press and the Y-modifier chords (Y+LT `Kick`,
+    /// Y+LB&LT `CounterPerilous`/mikiri — `1195F78A`) live in the input-concept layer, so
+    /// they are absent here. Signals added since are simply unbound (the derived keyboard
+    /// page, S4a, exposes them to bind).
     pub fn xbox_souls() -> Self {
         use crate::device::GamepadButton;
         let mut map = Self::empty();
@@ -725,37 +737,6 @@ impl InputMap {
         // Meta.
         map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
         map.bind(ActionSignal::Map, InputBinding::GamepadButton(GamepadButton::Select));
-        map
-    }
-
-    /// The default keyboard+mouse layout for the souls-combat game — souls-first, with a
-    /// modest tactical surface rather than an MMO ability-spam bar (MCP `4AC56490` §6).
-    /// Keyboards have keys to spare, so no modifier chords: Kick / two-hand get their own
-    /// keys when added. A starting point; every bind is rebindable.
-    pub fn kbm_souls() -> Self {
-        let mut map = Self::empty();
-        // Movement (WASD); mouse look is delta-based, not an action bind.
-        map.bind(ActionSignal::MoveForward, InputBinding::Key(Key::W));
-        map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::S));
-        map.bind(ActionSignal::StrafeLeft, InputBinding::Key(Key::A));
-        map.bind(ActionSignal::StrafeRight, InputBinding::Key(Key::D));
-        map.bind(ActionSignal::Sprint, InputBinding::Key(Key::LeftShift));
-        map.bind(ActionSignal::Crouch, InputBinding::Key(Key::C));
-        map.bind(ActionSignal::Dodge, InputBinding::Key(Key::Space));
-        map.bind(ActionSignal::Jump, InputBinding::Key(Key::LeftAlt));
-        // Combat.
-        map.bind(ActionSignal::AttackLight, InputBinding::MouseButton(MouseButton::Left));
-        map.bind(ActionSignal::AttackHeavy, InputBinding::MouseButton(MouseButton::Right));
-        map.bind(ActionSignal::Defend, InputBinding::Key(Key::Q));
-        map.bind(ActionSignal::Special, InputBinding::Key(Key::R));
-        map.bind(ActionSignal::LockOn, InputBinding::MouseButton(MouseButton::Middle));
-        // Interaction / items / UI.
-        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
-        map.bind(ActionSignal::UseItem, InputBinding::Key(Key::F));
-        map.bind(ActionSignal::Inventory, InputBinding::Key(Key::I));
-        map.bind(ActionSignal::Map, InputBinding::Key(Key::M));
-        map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
-        map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
         map
     }
 }
@@ -995,28 +976,30 @@ mod tests {
     fn input_map_round_trips_through_json() {
         // The defect this guards: `input_to_action` was keyed by `InputBinding` (a non-unit
         // enum), so serializing the live map to JSON failed and rebinds never persisted.
-        let map = InputMap::xbox_souls();
+        // `wasd_and_mouse` is a rich sample (keys + mouse + pad + a gated MouseMotion).
+        let map = InputMap::wasd_and_mouse();
         let json = serde_json::to_string(&map).expect("InputMap serializes to JSON");
         let back: InputMap = serde_json::from_str(&json).expect("InputMap deserializes");
         for action in [
-            ActionSignal::AttackLight,
-            ActionSignal::Defend,
-            ActionSignal::Dodge,
-            ActionSignal::LockOn,
-            ActionSignal::Interact,
             ActionSignal::MoveForward,
+            ActionSignal::Interact,
+            ActionSignal::Jump,
+            ActionSignal::PrimaryAction,
+            ActionSignal::Confirm,
+            ActionSignal::Cancel,
         ] {
             assert_eq!(map.bindings_for(action), back.bindings_for(action), "{action} survives");
         }
         // the reverse index is rebuilt on load, not serialized
         assert_eq!(
             back.action_for(InputBinding::GamepadButton(GamepadButton::East)),
-            Some(ActionSignal::Dodge),
+            Some(ActionSignal::Cancel),
         );
     }
 
-    // ── Ruled souls presets ──
-
+    /// The ruled Xbox controller layout (MCP `DE46BDB8`) — `xbox_souls` is the controller
+    /// tab's default config (Aaron 2026-08-14). Pins the shoulders / face-button / stick
+    /// assignments so a careless edit to the provisional layout is loud.
     #[test]
     fn xbox_souls_binds_ruled_layout() {
         use GamepadButton as B;
@@ -1032,21 +1015,6 @@ mod tests {
         expect(ActionSignal::Jump, B::North); // Y = jump
         expect(ActionSignal::LockOn, B::RightStick);
         expect(ActionSignal::Crouch, B::LeftStick);
-    }
-
-    #[test]
-    fn kbm_souls_binds_combat() {
-        let m = InputMap::kbm_souls();
-        assert_eq!(
-            m.action_for(InputBinding::MouseButton(MouseButton::Left)),
-            Some(ActionSignal::AttackLight),
-        );
-        assert_eq!(
-            m.action_for(InputBinding::MouseButton(MouseButton::Right)),
-            Some(ActionSignal::AttackHeavy),
-        );
-        assert_eq!(m.action_for(InputBinding::Key(Key::Q)), Some(ActionSignal::Defend));
-        assert_eq!(m.action_for(InputBinding::Key(Key::Space)), Some(ActionSignal::Dodge));
     }
 
     // ── Binding descriptor scaffold ──

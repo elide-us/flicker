@@ -20,16 +20,20 @@
 //! it also **consumes** the directional-nav signals while it owns a focusable tree.
 //! **One meaning per signal, and the walker owns all of them:**
 //!
-//! * `PanelNext`/`PanelPrev` (the LEFT STICK) pick the PANEL — cycling `tab_group`
-//!   ([`tab`]) and landing on the group's lowest `nav_ordinal`, which is the panel
-//!   node itself. That is the whole of "which pane has the cursor": a scene owns
-//!   no pane enum, no rim style and no enter/exit mode.
-//! * `NavUp/Down/Left/Right` move inside the focused group by `nav_ordinal`
-//!   ([`nav`]), with the slider nudge folded in.
+//! * `PanelNext`/`PanelPrev` (the LEFT STICK) pick the PANE — cycling pane CONTAINERS
+//!   ([`tab`] over the lock-filtered [`ring`](WalkerHandler::ring)), suppressed once a
+//!   pane is entered. The container is a focusable whose `id` equals its own `tab_group`.
+//! * `NavUp/Down/Left/Right` move inside the current ring by `nav_ordinal` ([`nav`]),
+//!   with the slider nudge folded in. While NAVIGATING the ring is the containers, so the
+//!   d-pad no-ops on a container until Confirm enters; ENTERED, the ring is the pane's
+//!   interior, so the d-pad walks the pane's controls. Flat groups (no container — menus,
+//!   settings rows) ring whole in both states, so they navigate with no pane ceremony.
 //! * `Confirm` fires the focused node's `action` the SAME way a click does
 //!   (`results.set(action, true)`), delivered on the ONE drain,
-//!   [`take_fired`](WalkerHandler::take_fired).
-//! * `Cancel` requests a context pop / back-out ([`cancelled`](WalkerHandler::cancelled)).
+//!   [`take_fired`](WalkerHandler::take_fired); on an actionless pane CONTAINER it ENTERS
+//!   the pane (gold lock rim) and drops focus inside. Nav-tier contract MCP `1B5F6BB8`.
+//! * `Cancel` exits an entered pane one level (refocus the container), else requests a
+//!   context pop / back-out ([`cancelled`](WalkerHandler::cancelled)).
 //!
 //! `TabNext`/`TabPrev` (the bumpers) are deliberately NOT here: they belong to the
 //! page/tab control's tab rail, which steps itself.
@@ -50,6 +54,22 @@ use flicker_script::{UiNode, ValueMap};
 use crate::component::{visible, UiState};
 use crate::intents::UiIntents;
 
+/// How a focusable value control STEPS under the pad — the axis its own d-pad presses run
+/// along, and (for a [`Toggle`](StepKind::Toggle)) that a `Confirm` flips it. The walker
+/// classifies each steppable here; `run_ui` applies the step by reading the placed node's
+/// kind, so this only drives the walker's nudge-vs-move + Confirm-flip decision.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum StepKind {
+    /// A horizontal slider — Left/Right nudge, Up/Down move focus.
+    SliderH,
+    /// A vertical slider — Up/Down nudge, Left/Right move focus.
+    SliderV,
+    /// A `select` / `pill_toggle` — Left/Right cycle the index (clamped), Up/Down move.
+    Options,
+    /// A `toggle` — Left/Right set off/on, Up/Down move, and `Confirm` flips it.
+    Toggle,
+}
+
 /// The walker as one layer of the event bus. Borrows the retained
 /// [`UiState`] (so it can write focus) and carries this frame's `hud_hit`
 /// verdict (the canonical `run_ui` "UI consumed pointer").
@@ -66,11 +86,12 @@ pub struct WalkerHandler<'a> {
     /// `(node id → action name)` for the focusables that carry an `action`, so
     /// `Confirm` can fire the focused node's action. Parallel to `focusables`.
     actions: Vec<(String, String)>,
-    /// `(node id, vertical)` for every focusable SLIDER — nav on the slider's
-    /// own axis nudges it (the component-level pad contract every slider gets)
-    /// instead of moving focus; the cross axis still navigates away. Filled by
-    /// [`Self::with_nav`].
-    sliders: Vec<(String, bool)>,
+    /// `(node id, StepKind)` for every focusable STEPPABLE value control — a slider,
+    /// select, pill_toggle or toggle. Nav on the control's own axis STEPS it (the
+    /// component-level pad contract every value control gets, `1B5F6BB8`) instead of moving
+    /// focus; the cross axis still navigates away, so a control is never a focus trap.
+    /// Filled by [`Self::with_nav`].
+    steppables: Vec<(String, StepKind)>,
     /// The `action` of the node `Confirm` activated this frame, if any. Drained
     /// into `fired` by [`Self::take_fired`] — the ONE channel a scene reads.
     activated: Option<String>,
@@ -102,7 +123,7 @@ impl<'a> WalkerHandler<'a> {
             consumed_pointer,
             focusables: Vec::new(),
             actions: Vec::new(),
-            sliders: Vec::new(),
+            steppables: Vec::new(),
             activated: None,
             cancelled: false,
             intents: None,
@@ -117,7 +138,7 @@ impl<'a> WalkerHandler<'a> {
     /// nodes — and so a hidden overlay contributes nothing (see
     /// [`focusables_of`]).
     pub fn with_nav(mut self, tree: &UiNode, model: &ValueMap) -> Self {
-        collect_nav(tree, model, &mut self.focusables, &mut self.actions, &mut self.sliders);
+        collect_nav(tree, model, &mut self.focusables, &mut self.actions, &mut self.steppables);
         self
     }
 
@@ -223,20 +244,24 @@ impl<'a> WalkerHandler<'a> {
             ActionSignal::NavDown => self.nudge_or_move(current.as_deref(), NavDir::Down),
             ActionSignal::NavLeft => self.nudge_or_move(current.as_deref(), NavDir::Left),
             ActionSignal::NavRight => self.nudge_or_move(current.as_deref(), NavDir::Right),
-            // The LEFT STICK is the panel tier: it cycles `tab_group` and lands on the
-            // group's lowest ordinal — the panel node itself. (The bumpers are NOT here:
-            // they belong to the page/tab control's own rail.) But ONLY while navigating:
-            // once a pane is ENTERED (0EFF5464), the left stick belongs to that pane's
-            // interior (its camera), so panel-cycling is suppressed until Cancel exits.
-            ActionSignal::PanelNext if !self.ui.entered => self.cycle_group(current.as_deref(), true),
-            ActionSignal::PanelPrev if !self.ui.entered => self.cycle_group(current.as_deref(), false),
+            // The LEFT STICK is the panel tier: it cycles pane CONTAINERS (`tab`). ONLY
+            // while navigating — once a pane is ENTERED (nav-tier contract 1B5F6BB8) the
+            // left stick belongs to that pane's interior (its camera), so panel-cycling is
+            // suppressed until Cancel exits. (The bumpers are NOT here — they belong to the
+            // page/tab control's own rail.)
+            ActionSignal::PanelNext if self.ui.entered_group.is_none() => {
+                self.cycle_group(current.as_deref(), true)
+            }
+            ActionSignal::PanelPrev if self.ui.entered_group.is_none() => {
+                self.cycle_group(current.as_deref(), false)
+            }
             ActionSignal::PanelNext | ActionSignal::PanelPrev => {}
             ActionSignal::Confirm => {
                 // A focused node WITH an action activates like a click (menu buttons,
-                // pane controls) — same path, same `sig_<name>` mirror. A focused node
-                // with NO action is a pane CONTAINER: Confirm ENTERS it (pane_enter,
-                // 0EFF5464) so the left stick reaches its interior. Entering is a no-op
-                // once already entered.
+                // pane controls, settings rows) — same path, same `sig_<name>` mirror. A
+                // focused node with NO action that is a pane CONTAINER: Confirm ENTERS it
+                // and drops focus inside (nav-tier contract 1B5F6BB8) so the d-pad ring
+                // has a current within the pane.
                 let action = current
                     .as_deref()
                     .and_then(|id| self.action_for(id))
@@ -248,15 +273,22 @@ impl<'a> WalkerHandler<'a> {
                         self.ui.flash(&a);
                         self.activated = Some(a);
                     }
-                    None if !self.ui.entered => self.ui.entered = true,
-                    None => {}
+                    // A focused TOGGLE has no action — Confirm FLIPS it (a dir-0 nudge the
+                    // application loop reads as "invert"), so Confirm operates a checkbox
+                    // the way it activates a button. Any other actionless node is a pane
+                    // container → try to enter it.
+                    None => match current.as_deref().and_then(|id| self.step_kind(id).map(|k| (id, k))) {
+                        Some((id, StepKind::Toggle)) => self.ui.push_nudge(id, 0, false),
+                        _ => self.try_enter(current.as_deref()),
+                    },
                 }
             }
             // Cancel backs out ONE level (B never skips — BA4487BD): inside an entered
-            // pane it EXITS to navigating; otherwise it pops the scene's modal/context.
+            // pane it EXITS to navigating and refocuses the container; otherwise it pops
+            // the scene's modal/context.
             ActionSignal::Cancel => {
-                if self.ui.entered {
-                    self.ui.entered = false;
+                if let Some(group) = self.ui.entered_group.take() {
+                    self.ui.request_focus(group); // the container id == its tab_group
                 } else {
                     self.cancelled = true;
                     rc.pop_context();
@@ -274,9 +306,10 @@ impl<'a> WalkerHandler<'a> {
     /// slider is never a focus trap.
     fn nudge_or_move(&mut self, current: Option<&str>, dir: NavDir) {
         if let Some(id) = current {
-            if let Some((_, vertical)) = self.sliders.iter().find(|(sid, _)| sid == id) {
+            if let Some(kind) = self.step_kind(id) {
+                let vertical = kind == StepKind::SliderV;
                 let step = match (vertical, dir) {
-                    (true, NavDir::Up) => 1,               // up grows — top is max
+                    (true, NavDir::Up) => 1, // up grows — top is max
                     (true, NavDir::Down) => -1,
                     (false, NavDir::Right) => 1,
                     (false, NavDir::Left) => -1,
@@ -292,14 +325,86 @@ impl<'a> WalkerHandler<'a> {
         self.move_focus(current, dir);
     }
 
+    /// The [`StepKind`] of a focusable value control, if `id` is one.
+    fn step_kind(&self, id: &str) -> Option<StepKind> {
+        self.steppables.iter().find(|(sid, _)| sid == id).map(|(_, k)| *k)
+    }
+
     fn move_focus(&mut self, current: Option<&str>, dir: NavDir) {
-        if let Some(id) = nav(&self.focusables, current, dir) {
+        let ring = self.ring();
+        if let Some(id) = nav(&ring, current, dir) {
             self.ui.request_focus(id);
         }
     }
 
     fn cycle_group(&mut self, current: Option<&str>, forward: bool) {
-        if let Some(id) = tab(&self.focusables, current, forward) {
+        let ring = self.ring();
+        if let Some(id) = tab(&ring, current, forward) {
+            self.ui.request_focus(id);
+        }
+    }
+
+    /// The focusables the d-pad / left-stick may land on RIGHT NOW, filtered by the pane
+    /// LOCK (nav-tier contract 1B5F6BB8) — the mechanism that makes pane entry explicit:
+    /// - **Locked** in group `g`: only `g`'s INTERIOR members (a pane's own controls);
+    ///   the d-pad walks inside the entered pane and nothing else.
+    /// - **Navigating**: pane CONTAINERS (`id == tab_group`) plus every member of a
+    ///   container-less "flat" group (menus, the settings rows) — so single-context
+    ///   surfaces navigate exactly as before, with no pane ceremony, while multi-pane
+    ///   scenes expose only their containers until one is entered.
+    ///
+    /// Kept off the hot path only in that it allocates a small Vec per nav press; the
+    /// navigability gate + action/slider lookups deliberately stay on the FULL
+    /// collections, so an empty-interior pane never de-navigates the layer.
+    fn ring(&self) -> Vec<Focusable> {
+        if let Some(g) = self.ui.entered_group() {
+            return self
+                .focusables
+                .iter()
+                .filter(|f| f.group == g && f.id != f.group)
+                .cloned()
+                .collect();
+        }
+        let has_container: std::collections::HashSet<&str> = self
+            .focusables
+            .iter()
+            .filter(|f| f.id == f.group)
+            .map(|f| f.group.as_str())
+            .collect();
+        self.focusables
+            .iter()
+            .filter(|f| f.id == f.group || !has_container.contains(f.group.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// `Confirm` on an actionless focused node: if it is a pane CONTAINER (`id` equals its
+    /// own `tab_group`) and nothing is locked yet, ENTER it and drop focus to its
+    /// lowest-`(ordinal, id)` interior so the d-pad ring has a current inside. A pane with
+    /// no interior (a viewport-only pane) keeps focus on the container — the rim shows and
+    /// its camera consumes the sticks. An actionless NON-container node, or an
+    /// already-locked state, is a no-op (no accidental entry, no wedge).
+    fn try_enter(&mut self, current: Option<&str>) {
+        if self.ui.entered_group.is_some() {
+            return;
+        }
+        let Some(cur) = current else { return };
+        let Some(group) = self
+            .focusables
+            .iter()
+            .find(|f| f.id == cur && f.id == f.group)
+            .map(|f| f.group.clone())
+        else {
+            return;
+        };
+        let interior = self
+            .focusables
+            .iter()
+            .filter(|f| f.group == group && f.id != f.group)
+            .min_by(|a, b| a.ordinal.cmp(&b.ordinal).then_with(|| a.id.cmp(&b.id)))
+            .map(|f| f.id.clone());
+        self.ui.entered_group = Some(group);
+        if let Some(id) = interior {
             self.ui.request_focus(id);
         }
     }
@@ -326,8 +431,8 @@ impl<'a> WalkerHandler<'a> {
 pub fn focusables_of(tree: &UiNode, model: &ValueMap) -> Vec<Focusable> {
     let mut focusables = Vec::new();
     let mut actions = Vec::new();
-    let mut sliders = Vec::new();
-    collect_nav(tree, model, &mut focusables, &mut actions, &mut sliders);
+    let mut steppables = Vec::new();
+    collect_nav(tree, model, &mut focusables, &mut actions, &mut steppables);
     focusables
 }
 
@@ -340,7 +445,7 @@ fn collect_nav(
     model: &ValueMap,
     focusables: &mut Vec<Focusable>,
     actions: &mut Vec<(String, String)>,
-    sliders: &mut Vec<(String, bool)>,
+    steppables: &mut Vec<(String, StepKind)>,
 ) {
     if !visible(node, model) {
         return;
@@ -355,12 +460,21 @@ fn collect_nav(
         if let Some(action) = &node.action {
             actions.push((node.id.clone(), action.clone()));
         }
-        if node.component == "slider" {
-            sliders.push((node.id.clone(), crate::config::flag(&node.props, "vertical")));
+        // Every focusable value control is STEPPABLE by the pad on its own axis (the d-pad
+        // operates it; a rail/tab strip carries no bind here and is driven by the shoulders).
+        let kind = match node.component.as_str() {
+            "slider" if crate::config::flag(&node.props, "vertical") => Some(StepKind::SliderV),
+            "slider" => Some(StepKind::SliderH),
+            "select" | "pill_toggle" => Some(StepKind::Options),
+            "toggle" => Some(StepKind::Toggle),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            steppables.push((node.id.clone(), kind));
         }
     }
     for child in &node.children {
-        collect_nav(child, model, focusables, actions, sliders);
+        collect_nav(child, model, focusables, actions, steppables);
     }
 }
 
@@ -861,6 +975,96 @@ mod tests {
         // Navigating resumes — PanelNext cycles panes again.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("pop_view"), "navigating resumes after exit");
+    }
+
+    /// **Entry is EXPLICIT (nav-tier contract 1B5F6BB8).** On an un-entered pane container
+    /// the D-PAD does NOTHING — controller input must not land inside until `Confirm`
+    /// enters. Confirm then drops focus to the pane's lowest-ordinal interior; the d-pad
+    /// walks the interior ONLY; `Cancel` returns focus to the container.
+    #[test]
+    fn strict_entry_gates_the_dpad_until_confirm_then_walks_the_interior() {
+        let raw = InputState::new();
+        // A pane CONTAINER (ordinal 0, actionless) with two interior controls, plus a
+        // second empty pane so there is something to cycle between.
+        let mut pane_a = UiNode {
+            id: "pane_a".into(),
+            component: "panel".into(),
+            tab_group: "pane_a".into(),
+            nav_ordinal: 0,
+            ..Default::default()
+        };
+        pane_a.children.push(button("a_one", "pane_a", 1, "a_one"));
+        pane_a.children.push(button("a_two", "pane_a", 2, "a_two"));
+        let pane_b = UiNode {
+            id: "pane_b".into(),
+            component: "panel".into(),
+            tab_group: "pane_b".into(),
+            nav_ordinal: 0,
+            ..Default::default()
+        };
+        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        tree.children.push(pane_a);
+        tree.children.push(pane_b);
+
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pane_a"), "left stick lands on the container");
+
+        // The D-PAD is dead on an un-entered container — the whole point of explicit entry.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("pane_a"), "d-pad no-ops until the pane is entered");
+        assert!(!h.ui.entered());
+
+        // Confirm ENTERS and drops focus to the lowest-ordinal interior.
+        h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        assert_eq!(h.ui.entered_group(), Some("pane_a"), "the pane is locked");
+        assert_eq!(h.ui.focused(), Some("a_one"), "focus dropped to the lowest-ordinal interior");
+
+        // The d-pad now walks the INTERIOR only.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("a_two"), "d-pad walks the pane interior");
+
+        // Cancel EXITS one level and returns focus to the container.
+        h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
+        assert!(!h.ui.entered(), "Cancel unlocked the pane");
+        assert_eq!(h.ui.focused(), Some("pane_a"), "Cancel refocused the container");
+    }
+
+    /// **A value control STEPS on its own axis and MOVES FOCUS on the cross axis** — never a
+    /// focus trap (nav-tier contract 1B5F6BB8). A focused `select`: Left/Right nudge it
+    /// (focus stays), Up/Down move to the next control.
+    #[test]
+    fn a_focused_value_control_steps_on_its_axis_and_moves_focus_across() {
+        let raw = InputState::new();
+        let mut sel = UiNode {
+            id: "sel".into(),
+            component: "select".into(),
+            tab_group: "g".into(),
+            nav_ordinal: 0,
+            bind: Some("sel".into()),
+            ..Default::default()
+        };
+        sel.children = vec![
+            UiNode { component: "option".into(), ..Default::default() },
+            UiNode { component: "option".into(), ..Default::default() },
+        ];
+        let btn = button("b", "g", 1, "b");
+        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        tree.children = vec![sel, btn];
+        let mut ui = UiState::new();
+        ui.request_focus("sel");
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+
+        // Own axis (Right): steps the control — focus stays put (a nudge, not a move).
+        h.handle(&press(ActionSignal::NavRight, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("sel"), "own-axis nav steps the control, focus stays");
+        // Cross axis (Down): moves focus to the next control — the control is not a trap.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("b"), "cross-axis nav moves focus off the control");
     }
 
     /// **The bumpers no longer move focus.** `TabNext`/`TabPrev` belong to the

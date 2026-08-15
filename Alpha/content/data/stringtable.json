@@ -1874,9 +1874,6 @@
   "sb_the_prism_system": {
     "en-us": "the Prism system"
   },
-  "set_actions": {
-    "en-us": "ACTIONS"
-  },
   "set_active_profile": {
     "en-us": "Active Profile"
   },
@@ -1910,9 +1907,6 @@
   "set_brightness": {
     "en-us": "Brightness"
   },
-  "set_cancel": {
-    "en-us": "Cancel"
-  },
   "set_cancel_2": {
     "en-us": "CANCEL"
   },
@@ -1931,17 +1925,11 @@
   "set_commander_rts": {
     "en-us": "COMMANDER · RTS"
   },
-  "set_confirm": {
-    "en-us": "Confirm"
-  },
   "set_controller": {
     "en-us": "CONTROLLER"
   },
   "set_controller_profile": {
     "en-us": "CONTROLLER PROFILE"
-  },
-  "set_crouch": {
-    "en-us": "Crouch"
   },
   "set_default": {
     "en-us": "Default"
@@ -2000,20 +1988,8 @@
   "set_input": {
     "en-us": "INPUT"
   },
-  "set_interact": {
-    "en-us": "Interact"
-  },
-  "set_interface": {
-    "en-us": "INTERFACE"
-  },
-  "set_inventory": {
-    "en-us": "Inventory"
-  },
   "set_invert_vertical_look": {
     "en-us": "Invert Vertical Look"
-  },
-  "set_jump": {
-    "en-us": "Jump"
   },
   "set_keyboard": {
     "en-us": "KEYBOARD"
@@ -2042,26 +2018,8 @@
   "set_medium": {
     "en-us": "Medium"
   },
-  "set_menu": {
-    "en-us": "Menu"
-  },
   "set_mouse": {
     "en-us": "MOUSE"
-  },
-  "set_move_backward": {
-    "en-us": "Move Backward"
-  },
-  "set_move_down": {
-    "en-us": "Move Down"
-  },
-  "set_move_forward": {
-    "en-us": "Move Forward"
-  },
-  "set_move_up": {
-    "en-us": "Move Up"
-  },
-  "set_movement": {
-    "en-us": "MOVEMENT"
   },
   "set_multiplier_while_channelling_aiming": {
     "en-us": "Multiplier while channelling / aiming"
@@ -2099,17 +2057,8 @@
   "set_preview": {
     "en-us": "PREVIEW"
   },
-  "set_primary_action": {
-    "en-us": "Primary Action"
-  },
   "set_prism_clay_engine": {
     "en-us": "PRISM · CLAY ENGINE"
-  },
-  "set_quit": {
-    "en-us": "Quit"
-  },
-  "set_reload": {
-    "en-us": "Reload"
   },
   "set_rendering_resolution_of_the_viewport": {
     "en-us": "Rendering resolution of the viewport"
@@ -2129,20 +2078,8 @@
   "set_scroll_the_map_when_the_cursor_nears_the": {
     "en-us": "Scroll the map when the cursor nears the edge"
   },
-  "set_secondary_action": {
-    "en-us": "Secondary Action"
-  },
   "set_settings": {
     "en-us": "Settings"
-  },
-  "set_sprint": {
-    "en-us": "Sprint"
-  },
-  "set_strafe_left": {
-    "en-us": "Strafe Left"
-  },
-  "set_strafe_right": {
-    "en-us": "Strafe Right"
   },
   "set_subtitles": {
     "en-us": "Subtitles"
@@ -2185,9 +2122,6 @@
   },
   "set_windowed": {
     "en-us": "Windowed"
-  },
-  "set_world_map": {
-    "en-us": "World Map"
   },
   "settings_applied": {
     "en-us": "SETTINGS APPLIED"
@@ -2488,5 +2422,635 @@
   },
   "qm_class_texture_recipe": {
     "en-us": "Recipe"
+  },
+  "set_profile_default": {
+    "en-us": "Default (Keyboard & Mouse)"
+  },
+  "set_profile_xbox_souls": {
+    "en-us": "Default (Xbox)"
+  },
+  "sig_move_forward": {
+    "en-us": "Move Forward"
+  },
+  "sig_move_backward": {
+    "en-us": "Move Backward"
+  },
+  "sig_strafe_left": {
+    "en-us": "Strafe Left"
+  },
+  "sig_strafe_right": {
+    "en-us": "Strafe Right"
+  },
+  "sig_move_up": {
+    "en-us": "Move Up"
+  },
+  "sig_move_down": {
+    "en-us": "Move Down"
+  },
+  "sig_look_up": {
+    "en-us": "Look Up"
+  },
+  "sig_look_down": {
+    "en-us": "Look Down"
+  },
+  "sig_look_left": {
+    "en-us": "Look Left"
+  },
+  "sig_look_right": {
+    "en-us": "Look Right"
+  },
+  "sig_primary_action": {
+    "en-us": "Primary Action"
+  },
+  "sig_secondary_action": {
+    "en-us": "Secondary Action"
+  },
+  "sig_jump": {
+    "en-us": "Jump"
+  },
+  "sig_sprint": {
+    "en-us": "Sprint"
+  },
+  "sig_crouch": {
+    "en-us": "Crouch"
+  },
+  "sig_interact": {
+    "en-us": "Interact"
+  },
+  "sig_reload": {
+    "en-us": "Reload"
+  },
+  "sig_attack_light": {
+    "en-us": "Light Attack"
+  },
+  "sig_attack_heavy": {
+    "en-us": "Heavy Attack"
+  },
+  "sig_defend": {
+    "en-us": "Defend"
+  },
+  "sig_special": {
+    "en-us": "Special"
+  },
+  "sig_dodge": {
+    "en-us": "Dodge"
+  },
+  "sig_lock_on": {
+    "en-us": "Lock On"
+  },
+  "sig_use_item": {
+    "en-us": "Use Item"
+  },
+  "sig_kick": {
+    "en-us": "Kick"
+  },
+  "sig_counter_perilous": {
+    "en-us": "Perilous Counter"
+  },
+  "sig_confirm": {
+    "en-us": "Confirm"
+  },
+  "sig_cancel": {
+    "en-us": "Cancel"
+  },
+  "sig_menu": {
+    "en-us": "Menu"
+  },
+  "sig_inventory": {
+    "en-us": "Inventory"
+  },
+  "sig_map": {
+    "en-us": "World Map"
+  },
+  "sig_quit": {
+    "en-us": "Quit"
+  },
+  "sig_chord_begin": {
+    "en-us": "Chord Begin"
+  },
+  "sig_activate": {
+    "en-us": "Activate"
+  },
+  "sig_item_select": {
+    "en-us": "Item Select"
+  },
+  "sig_nav_up": {
+    "en-us": "Navigate Up"
+  },
+  "sig_nav_down": {
+    "en-us": "Navigate Down"
+  },
+  "sig_nav_left": {
+    "en-us": "Navigate Left"
+  },
+  "sig_nav_right": {
+    "en-us": "Navigate Right"
+  },
+  "sig_tab_next": {
+    "en-us": "Next Tab"
+  },
+  "sig_tab_prev": {
+    "en-us": "Previous Tab"
+  },
+  "sig_page_next": {
+    "en-us": "Next Page"
+  },
+  "sig_page_prev": {
+    "en-us": "Previous Page"
+  },
+  "sig_panel_next": {
+    "en-us": "Next Panel"
+  },
+  "sig_panel_prev": {
+    "en-us": "Previous Panel"
+  },
+  "sig_mode_next": {
+    "en-us": "Next View Mode"
+  },
+  "sig_mode_prev": {
+    "en-us": "Previous View Mode"
+  },
+  "sig_zoom_in": {
+    "en-us": "Zoom In"
+  },
+  "sig_zoom_out": {
+    "en-us": "Zoom Out"
+  },
+  "sig_undo": {
+    "en-us": "Undo"
+  },
+  "sig_redo": {
+    "en-us": "Redo"
+  },
+  "sig_cut": {
+    "en-us": "Cut"
+  },
+  "sig_paste": {
+    "en-us": "Paste"
+  },
+  "sig_rename": {
+    "en-us": "Rename"
+  },
+  "sig_create_folder": {
+    "en-us": "New Folder"
+  },
+  "sig_context_menu": {
+    "en-us": "Context Menu"
+  },
+  "sig_yes": {
+    "en-us": "Yes"
+  },
+  "sig_no": {
+    "en-us": "No"
+  },
+  "sig_submit_text": {
+    "en-us": "Submit Text"
+  },
+  "sig_cancel_text": {
+    "en-us": "Cancel Text"
+  },
+  "siggroup_movement": {
+    "en-us": "MOVEMENT"
+  },
+  "siggroup_camera": {
+    "en-us": "CAMERA"
+  },
+  "siggroup_combat": {
+    "en-us": "COMBAT & INTERACTION"
+  },
+  "siggroup_souls": {
+    "en-us": "SOULS COMBAT"
+  },
+  "siggroup_ui": {
+    "en-us": "INTERFACE"
+  },
+  "siggroup_system": {
+    "en-us": "SYSTEM"
+  },
+  "siggroup_nav": {
+    "en-us": "NAVIGATION"
+  },
+  "siggroup_editor_nav": {
+    "en-us": "EDITOR NAVIGATION"
+  },
+  "siggroup_editor_verbs": {
+    "en-us": "EDITOR VERBS"
+  },
+  "siggroup_text": {
+    "en-us": "TEXT ENTRY"
+  },
+  "key_a": {
+    "en-us": "A"
+  },
+  "key_b": {
+    "en-us": "B"
+  },
+  "key_c": {
+    "en-us": "C"
+  },
+  "key_d": {
+    "en-us": "D"
+  },
+  "key_e": {
+    "en-us": "E"
+  },
+  "key_f": {
+    "en-us": "F"
+  },
+  "key_g": {
+    "en-us": "G"
+  },
+  "key_h": {
+    "en-us": "H"
+  },
+  "key_i": {
+    "en-us": "I"
+  },
+  "key_j": {
+    "en-us": "J"
+  },
+  "key_k": {
+    "en-us": "K"
+  },
+  "key_l": {
+    "en-us": "L"
+  },
+  "key_m": {
+    "en-us": "M"
+  },
+  "key_n": {
+    "en-us": "N"
+  },
+  "key_o": {
+    "en-us": "O"
+  },
+  "key_p": {
+    "en-us": "P"
+  },
+  "key_q": {
+    "en-us": "Q"
+  },
+  "key_r": {
+    "en-us": "R"
+  },
+  "key_s": {
+    "en-us": "S"
+  },
+  "key_t": {
+    "en-us": "T"
+  },
+  "key_u": {
+    "en-us": "U"
+  },
+  "key_v": {
+    "en-us": "V"
+  },
+  "key_w": {
+    "en-us": "W"
+  },
+  "key_x": {
+    "en-us": "X"
+  },
+  "key_y": {
+    "en-us": "Y"
+  },
+  "key_z": {
+    "en-us": "Z"
+  },
+  "key_digit0": {
+    "en-us": "0"
+  },
+  "key_digit1": {
+    "en-us": "1"
+  },
+  "key_digit2": {
+    "en-us": "2"
+  },
+  "key_digit3": {
+    "en-us": "3"
+  },
+  "key_digit4": {
+    "en-us": "4"
+  },
+  "key_digit5": {
+    "en-us": "5"
+  },
+  "key_digit6": {
+    "en-us": "6"
+  },
+  "key_digit7": {
+    "en-us": "7"
+  },
+  "key_digit8": {
+    "en-us": "8"
+  },
+  "key_digit9": {
+    "en-us": "9"
+  },
+  "key_f1": {
+    "en-us": "F1"
+  },
+  "key_f2": {
+    "en-us": "F2"
+  },
+  "key_f3": {
+    "en-us": "F3"
+  },
+  "key_f4": {
+    "en-us": "F4"
+  },
+  "key_f5": {
+    "en-us": "F5"
+  },
+  "key_f6": {
+    "en-us": "F6"
+  },
+  "key_f7": {
+    "en-us": "F7"
+  },
+  "key_f8": {
+    "en-us": "F8"
+  },
+  "key_f9": {
+    "en-us": "F9"
+  },
+  "key_f10": {
+    "en-us": "F10"
+  },
+  "key_f11": {
+    "en-us": "F11"
+  },
+  "key_f12": {
+    "en-us": "F12"
+  },
+  "key_up": {
+    "en-us": "Up"
+  },
+  "key_down": {
+    "en-us": "Down"
+  },
+  "key_left": {
+    "en-us": "Left"
+  },
+  "key_right": {
+    "en-us": "Right"
+  },
+  "key_left_shift": {
+    "en-us": "L-Shift"
+  },
+  "key_right_shift": {
+    "en-us": "R-Shift"
+  },
+  "key_left_control": {
+    "en-us": "L-Ctrl"
+  },
+  "key_right_control": {
+    "en-us": "R-Ctrl"
+  },
+  "key_left_alt": {
+    "en-us": "L-Alt"
+  },
+  "key_right_alt": {
+    "en-us": "R-Alt"
+  },
+  "key_left_super": {
+    "en-us": "L-Super"
+  },
+  "key_right_super": {
+    "en-us": "R-Super"
+  },
+  "key_space": {
+    "en-us": "Space"
+  },
+  "key_enter": {
+    "en-us": "Enter"
+  },
+  "key_escape": {
+    "en-us": "Esc"
+  },
+  "key_tab": {
+    "en-us": "Tab"
+  },
+  "key_backspace": {
+    "en-us": "Backspace"
+  },
+  "key_delete": {
+    "en-us": "Del"
+  },
+  "key_insert": {
+    "en-us": "Insert"
+  },
+  "key_home": {
+    "en-us": "Home"
+  },
+  "key_end": {
+    "en-us": "End"
+  },
+  "key_page_up": {
+    "en-us": "PageUp"
+  },
+  "key_page_down": {
+    "en-us": "PageDown"
+  },
+  "key_print_screen": {
+    "en-us": "PrtSc"
+  },
+  "key_scroll_lock": {
+    "en-us": "ScrLk"
+  },
+  "key_pause": {
+    "en-us": "Pause"
+  },
+  "key_minus": {
+    "en-us": "-"
+  },
+  "key_equal": {
+    "en-us": "="
+  },
+  "key_left_bracket": {
+    "en-us": "["
+  },
+  "key_right_bracket": {
+    "en-us": "]"
+  },
+  "key_backslash": {
+    "en-us": "\\"
+  },
+  "key_semicolon": {
+    "en-us": ";"
+  },
+  "key_apostrophe": {
+    "en-us": "'"
+  },
+  "key_comma": {
+    "en-us": ","
+  },
+  "key_period": {
+    "en-us": "."
+  },
+  "key_slash": {
+    "en-us": "/"
+  },
+  "key_grave": {
+    "en-us": "`"
+  },
+  "key_numpad0": {
+    "en-us": "KP0"
+  },
+  "key_numpad1": {
+    "en-us": "KP1"
+  },
+  "key_numpad2": {
+    "en-us": "KP2"
+  },
+  "key_numpad3": {
+    "en-us": "KP3"
+  },
+  "key_numpad4": {
+    "en-us": "KP4"
+  },
+  "key_numpad5": {
+    "en-us": "KP5"
+  },
+  "key_numpad6": {
+    "en-us": "KP6"
+  },
+  "key_numpad7": {
+    "en-us": "KP7"
+  },
+  "key_numpad8": {
+    "en-us": "KP8"
+  },
+  "key_numpad9": {
+    "en-us": "KP9"
+  },
+  "key_numpad_add": {
+    "en-us": "KP+"
+  },
+  "key_numpad_subtract": {
+    "en-us": "KP-"
+  },
+  "key_numpad_multiply": {
+    "en-us": "KP*"
+  },
+  "key_numpad_divide": {
+    "en-us": "KP/"
+  },
+  "key_numpad_decimal": {
+    "en-us": "KP."
+  },
+  "key_numpad_enter": {
+    "en-us": "KPEnter"
+  },
+  "key_numpad_equal": {
+    "en-us": "KP="
+  },
+  "key_num_lock": {
+    "en-us": "NumLk"
+  },
+  "mbtn_left": {
+    "en-us": "Left Mouse"
+  },
+  "mbtn_right": {
+    "en-us": "Right Mouse"
+  },
+  "mbtn_middle": {
+    "en-us": "Middle Mouse"
+  },
+  "mbtn_back": {
+    "en-us": "Mouse Back"
+  },
+  "mbtn_forward": {
+    "en-us": "Mouse Forward"
+  },
+  "pad_south": {
+    "en-us": "A / Cross"
+  },
+  "pad_east": {
+    "en-us": "B / Circle"
+  },
+  "pad_north": {
+    "en-us": "Y / Triangle"
+  },
+  "pad_west": {
+    "en-us": "X / Square"
+  },
+  "pad_left_bumper": {
+    "en-us": "LB"
+  },
+  "pad_right_bumper": {
+    "en-us": "RB"
+  },
+  "pad_left_trigger": {
+    "en-us": "LT"
+  },
+  "pad_right_trigger": {
+    "en-us": "RT"
+  },
+  "pad_select": {
+    "en-us": "Select"
+  },
+  "pad_start": {
+    "en-us": "Start"
+  },
+  "pad_guide": {
+    "en-us": "Guide"
+  },
+  "pad_mode": {
+    "en-us": "Mode"
+  },
+  "pad_left_stick": {
+    "en-us": "L-Stick Press"
+  },
+  "pad_right_stick": {
+    "en-us": "R-Stick Press"
+  },
+  "pad_d_pad_up": {
+    "en-us": "D-Pad Up"
+  },
+  "pad_d_pad_down": {
+    "en-us": "D-Pad Down"
+  },
+  "pad_d_pad_left": {
+    "en-us": "D-Pad Left"
+  },
+  "pad_d_pad_right": {
+    "en-us": "D-Pad Right"
+  },
+  "pad_touchpad": {
+    "en-us": "Touchpad"
+  },
+  "pad_c": {
+    "en-us": "C"
+  },
+  "pad_z": {
+    "en-us": "Z"
+  },
+  "axis_left_stick_x": {
+    "en-us": "L-Stick X"
+  },
+  "axis_left_stick_y": {
+    "en-us": "L-Stick Y"
+  },
+  "axis_right_stick_x": {
+    "en-us": "R-Stick X"
+  },
+  "axis_right_stick_y": {
+    "en-us": "R-Stick Y"
+  },
+  "axis_left_trigger": {
+    "en-us": "Left Trigger"
+  },
+  "axis_right_trigger": {
+    "en-us": "Right Trigger"
+  },
+  "mouse_x": {
+    "en-us": "Mouse X"
+  },
+  "mouse_y": {
+    "en-us": "Mouse Y"
+  },
+  "bind_hold": {
+    "en-us": "hold"
   }
 }

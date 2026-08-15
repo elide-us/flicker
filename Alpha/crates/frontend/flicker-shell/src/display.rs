@@ -93,11 +93,11 @@ impl Default for DisplaySetting {
     }
 }
 
-/// Windowed resolution rungs the settings panel offers (physical px). These MUST stay
-/// index-aligned with the `settings.video.resolution` dropdown options in
-/// `ui_theme.json` — this array is the single source for that index↔size mapping.
-/// `apply` clamps the chosen rung to the monitor, so a rung larger than the screen
-/// simply fits to the screen.
+/// FALLBACK resolution rungs — used only when the device enumerates no video modes
+/// (headless / no monitor). The live list comes from [`enumerate`] off the real monitor;
+/// this static ladder is the loud floor so the settings picker is never empty. (No longer
+/// index-aligned with any JSON — the options are Rust-built now.) `apply` clamps the chosen
+/// rung to the monitor, so a rung larger than the screen simply fits to the screen.
 pub const RESOLUTIONS: [Resolution; 6] = [
     Resolution { w: 1280, h: 720 },
     Resolution { w: 1600, h: 900 },
@@ -107,16 +107,32 @@ pub const RESOLUTIONS: [Resolution; 6] = [
     Resolution { w: 3840, h: 2160 },
 ];
 
+/// The device's video-mode sizes as resolution rungs — deduped, sorted ascending by pixel
+/// area (then width). Empty input (headless / no monitor — `Renderer::video_mode_sizes`
+/// returned nothing) falls back to [`RESOLUTIONS`] with a warn, so the picker is never
+/// empty (fail-loud, MCP `4BB12A75`). The persisted setting stores a w×h VALUE, so which
+/// index a size lands on may differ per monitor without breaking a saved file.
+pub fn enumerate(sizes: &[(u32, u32)]) -> Vec<Resolution> {
+    if sizes.is_empty() {
+        tracing::warn!("no video modes enumerated (headless?) — using the fallback resolution rungs");
+        return RESOLUTIONS.to_vec();
+    }
+    let mut rungs: Vec<Resolution> = sizes.iter().map(|&(w, h)| Resolution { w, h }).collect();
+    rungs.sort_by_key(|r| (u64::from(r.w) * u64::from(r.h), r.w));
+    rungs.dedup();
+    rungs
+}
+
 /// The dropdown index of a display mode (its position in [`DisplayMode::ALL`]).
 pub fn mode_index(mode: DisplayMode) -> usize {
     DisplayMode::ALL.iter().position(|m| *m == mode).unwrap_or(0)
 }
 
-/// The resolution dropdown index CLOSEST to `res` (nearest rung by pixel distance),
-/// so an off-ladder size (a drag-resized window) still shows a sensible selection.
-pub fn resolution_index(res: Resolution) -> usize {
-    RESOLUTIONS
-        .iter()
+/// The index in `list` CLOSEST to `res` (nearest rung by pixel distance), so an off-ladder
+/// size (a drag-resized window, persisted by `persist_window_geometry`) still shows a
+/// sensible selection.
+pub fn resolution_index(list: &[Resolution], res: Resolution) -> usize {
+    list.iter()
         .enumerate()
         .min_by_key(|(_, r)| {
             let dw = i64::from(r.w) - i64::from(res.w);
@@ -127,9 +143,9 @@ pub fn resolution_index(res: Resolution) -> usize {
         .unwrap_or(0)
 }
 
-/// The resolution at dropdown index `idx`, if in range.
-pub fn resolution_at(idx: usize) -> Option<Resolution> {
-    RESOLUTIONS.get(idx).copied()
+/// The resolution at index `idx` in `list`, if in range.
+pub fn resolution_at(list: &[Resolution], idx: usize) -> Option<Resolution> {
+    list.get(idx).copied()
 }
 
 /// Process-wide current setting (the window is the real state; this mirrors it
@@ -186,3 +202,42 @@ pub fn settings_dir() -> PathBuf {
 // one writer): `set_current` folds a change into it, and the shell's settings load
 // seeds `CURRENT` via `seed`. The old DisplaySetting-only file I/O — which shared the
 // same file with `GameSettings` and clobbered it — is gone.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `enumerate` dedupes device sizes and sorts ascending by pixel area (then width) —
+    /// the settings dropdown's rung order.
+    #[test]
+    fn enumerate_dedupes_and_sorts_by_area() {
+        // Out of order, with a duplicate (two refresh rates of 1920×1080).
+        let got = enumerate(&[(1920, 1080), (1280, 720), (1920, 1080), (2560, 1440)]);
+        assert_eq!(
+            got,
+            vec![
+                Resolution { w: 1280, h: 720 },
+                Resolution { w: 1920, h: 1080 },
+                Resolution { w: 2560, h: 1440 },
+            ],
+        );
+    }
+
+    /// Empty input (headless / no monitor) is the LOUD fallback to the static ladder, so the
+    /// picker is never empty.
+    #[test]
+    fn enumerate_empty_falls_back_to_the_static_rungs() {
+        assert_eq!(enumerate(&[]), RESOLUTIONS.to_vec());
+    }
+
+    /// `resolution_index` is nearest-rung over the GIVEN list, so an off-ladder persisted
+    /// size still selects a sensible entry; `resolution_at` round-trips an in-range index.
+    #[test]
+    fn resolution_index_is_nearest_over_the_list() {
+        let list = enumerate(&[(1280, 720), (1920, 1080), (3840, 2160)]);
+        assert_eq!(resolution_index(&list, Resolution { w: 1920, h: 1080 }), 1, "exact rung");
+        assert_eq!(resolution_index(&list, Resolution { w: 1850, h: 1040 }), 1, "nearest rung");
+        assert_eq!(resolution_at(&list, 2), Some(Resolution { w: 3840, h: 2160 }));
+        assert_eq!(resolution_at(&list, 9), None, "out of range");
+    }
+}

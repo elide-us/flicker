@@ -188,7 +188,7 @@
             "label": "$ct_reset",
             "size": 36,
             "label_size": 14,
-            "style": "modal.buttons.variants.secondary"
+            "variant": "secondary"
           },
           {
             "component": "stack",
@@ -274,126 +274,6 @@
         "size": 12,
         "color": "$faint",
         "gap_top": 10
-      }
-    },
-    "modal": {
-      "panel": {
-        "w": 404,
-        "pad_x": 38,
-        "pad_top": 34,
-        "pad_bottom": 30,
-        "radius": 4,
-        "border_w": 1,
-        "fill_top": "$stone3",
-        "fill_bot": "$stone1",
-        "border": "$edge2",
-        "shadow": "$shadow",
-        "shadow_dy": 20,
-        "shadow_feather": 44,
-        "shadow_grow": 4
-      },
-      "title": {
-        "size": 52,
-        "color": "$ink_bright",
-        "glow": "$sap_glow"
-      },
-      "subtitle": {
-        "size": 11,
-        "color": "$bronze_dim",
-        "gap_top": 12
-      },
-      "countdown": {
-        "size": 15,
-        "color": "$dim",
-        "gap_top": 10
-      },
-      "divider": {
-        "color": "$bronze",
-        "gap": 22
-      },
-      "footer": {
-        "size": 10,
-        "color": "$faint",
-        "gap_top": 14
-      },
-      "studio": {
-        "size": 9,
-        "color": "$studio",
-        "margin_x": 0,
-        "margin_b": 34
-      },
-      "spectrum": {
-        "w": 4,
-        "alpha": 0.55,
-        "palette": [
-          "$sig_white",
-          "$sig_yellow",
-          "$sig_red",
-          "$sig_orange",
-          "$sig_black_gem",
-          "$sig_blue",
-          "$sig_green"
-        ]
-      },
-      "buttons": {
-        "h": 48,
-        "gap": 12,
-        "gap_top": 22,
-        "radius": 3,
-        "border_w": 1,
-        "label_size": 15,
-        "variants": {
-          "primary": {
-            "fill_top": "$sap_base",
-            "fill_bot": "$sap_base_lo",
-            "border": "$sap_border",
-            "label": "$ink_sapphire",
-            "glow": "$sap_glow",
-            "press_top": "$sap_press",
-            "press_bot": "$sap_press_lo",
-            "press_border": "$sap_press_border",
-            "hover_top": "$sap_hover",
-            "hover_bot": "$sap_hover_lo",
-            "hover_border": "$sap_hover_border",
-            "hover_label": "$ink_sapphire"
-          },
-          "secondary": {
-            "fill_top": "$stone_btn",
-            "fill_bot": "$stone2",
-            "border": "$edge4",
-            "label": "$ink_button",
-            "press_top": "$stone2",
-            "press_bot": "$stone1",
-            "press_border": "$edge2",
-            "hover_top": "$stone_btn_hi",
-            "hover_bot": "$surface_top",
-            "hover_border": "$bronze_dim",
-            "hover_label": "$ink_bright"
-          },
-          "danger": {
-            "fill_top": "$danger_base",
-            "fill_bot": "$danger_base_lo",
-            "border": "$danger_hi",
-            "label": "$danger_text_hi",
-            "glow": "$danger_glow",
-            "press_top": "$danger_base_lo",
-            "press_bot": "$danger_press_lo",
-            "press_border": "$danger_border",
-            "hover_top": "$danger_hover",
-            "hover_bot": "$danger_hover_lo",
-            "hover_border": "$danger_hi",
-            "hover_label": "$danger_text_hi"
-          },
-          "ghost": {
-            "fill_top": "$stage_void",
-            "fill_bot": "$stage_void",
-            "label": "$dim",
-            "hover_top": "$stage_void",
-            "hover_bot": "$stage_void",
-            "hover_border": "$edge2",
-            "hover_label": "$ink"
-          }
-        }
       }
     }
   }

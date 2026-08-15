@@ -761,6 +761,7 @@ mod tests {
             ("STONE_BTN", "stone_btn"),
             ("MARKER", "stam_hi"),
             ("SIG_BLUE", "sig_blue"),
+            ("GOLD_RING", "gold_ring"),
         ];
         // Consts with no `$token` twin — the authored block carries the literal. Listed
         // so the completeness check below stays honest about them.
