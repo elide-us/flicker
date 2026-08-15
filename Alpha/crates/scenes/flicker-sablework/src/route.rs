@@ -14,7 +14,7 @@
 use flicker::script::{Value, ValueMap};
 use flicker_texture::{BlendMode, NoiseKind, CHANNEL_COUNT};
 
-use crate::{Sablework, LIT_ID, MAP_IDS, VIEW_COUNT};
+use crate::{Sablework, VIEW_COUNT};
 
 /// Read a slider's written-back value, if the walker published one this frame.
 fn slid(results: &ValueMap, key: &str) -> Option<f64> {
@@ -158,14 +158,13 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     }
 
     // ── view-only: which map the swatch shows ──
-    // Clicking a tab picks it outright; the bumpers step. Both arrive here as
-    // result NAMES, so the pad and the pointer are the same event.
-    // The LIT view rides the same tab vocabulary as the six flat maps, so the
-    // bumpers walk all seven and a click picks any of them outright.
-    for (i, id) in MAP_IDS.iter().chain([&LIT_ID]).enumerate() {
-        if results.is_on(id) {
-            bench.sel_map = i.min(VIEW_COUNT - 1);
-        }
+    // The tabs bind `sel_map`, a NUMBER (an index is a number — everywhere): a
+    // click writes the picked value back, the bumpers step the ring, and both
+    // arrive here as results, so the pad and the pointer are the same event. The
+    // LIT view rides the same bound number as the seven flat maps.
+    if let Some(v) = slid(results, "sel_map") {
+        // A wild number clamps into the ring rather than pointing past it.
+        bench.sel_map = (v.max(0.0) as usize).min(VIEW_COUNT - 1);
     }
     if results.is_on("map_next") {
         bench.sel_map = (bench.sel_map + 1) % VIEW_COUNT;

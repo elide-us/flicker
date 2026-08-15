@@ -2533,6 +2533,15 @@ fn try_load_bake_field(
     Some(out)
 }
 
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}
+
 #[cfg(test)]
 mod script_smoke {
     //! Load the *real* HUD component-tree script + the shared `ui_theme.json`
@@ -2648,13 +2657,4 @@ mod script_smoke {
             "the inspector panel renders while has_pick is set"
         );
     }
-}
-
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
 }

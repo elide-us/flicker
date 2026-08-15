@@ -75,7 +75,7 @@
                         "id": "mode_adventurer",
                         "action": "mode_adventurer",
                         "label": "$menu_explore_world",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 0,
                         "variant": "primary"
@@ -85,7 +85,7 @@
                         "id": "mode_dm",
                         "action": "mode_dm",
                         "label": "$menu_build_world",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 1,
                         "variant": "primary"
@@ -95,7 +95,7 @@
                         "id": "mode_gamemaster",
                         "action": "mode_gamemaster",
                         "label": "$menu_game_master",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 2,
                         "variant": "primary"
@@ -105,7 +105,7 @@
                         "id": "mode_developer",
                         "action": "mode_developer",
                         "label": "$menu_developer_mode",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 3,
                         "variant": "secondary"
@@ -119,7 +119,7 @@
                         "id": "settings",
                         "action": "settings",
                         "label": "$menu_settings",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 4,
                         "variant": "secondary"
@@ -129,7 +129,7 @@
                         "id": "quit",
                         "action": "quit",
                         "label": "$menu_quit",
-                        "size": 46,
+                        "size_class": "lg",
                         "tab_group": "menu",
                         "nav_ordinal": 5,
                         "variant": "danger"

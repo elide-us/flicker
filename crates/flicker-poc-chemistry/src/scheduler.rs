@@ -465,7 +465,7 @@ mod no_scripted_outcomes {
         );
         // And it stopped for the stated reason: the sea stands at (or past)
         // the target, so the gate reads shut RIGHT NOW off the current state.
-        let t = Tables::from_source(&JsonTableSource::new(&content_data_dir())).expect("tables");
+        let t = Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables");
         let mut stage = crate::infall::WaterDelivery::new(&t);
         stage.target_coverage = 0.30;
         assert!(
@@ -1027,8 +1027,8 @@ mod bake_report {
             let mut thick: Vec<Vec<f64>> = vec![vec![]; 4];
             let mut densy: Vec<Vec<f64>> = vec![vec![]; 4];
             let mut cooledness: Vec<Vec<f64>> = vec![vec![]; 4];
-            for i in 0..n {
-                let wet = surface[i] < sea;
+            for (i, &surf) in surface.iter().enumerate().take(n) {
+                let wet = surf < sea;
                 let slot = match (crust_kind(&w.columns[i]), wet) {
                     (CrustKind::Undifferentiated, _) => continue,
                     (CrustKind::Continental, false) => 0,

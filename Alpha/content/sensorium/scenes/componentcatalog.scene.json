@@ -10,6 +10,8 @@
       {
         "component": "stack",
         "style": "settings.window",
+        "runes": true,
+        "runes_style": "settings.runes",
         "anchor": "top_left",
         "width_frac": 1.0,
         "height_frac": 1.0,
@@ -51,8 +53,7 @@
                             "label": "$cat_nav_button",
                             "style_bind": "nav_sty_0",
                             "action": "nav_0",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 1
                           },
@@ -62,8 +63,7 @@
                             "label": "$cat_nav_panel",
                             "style_bind": "nav_sty_1",
                             "action": "nav_1",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 2
                           },
@@ -73,8 +73,7 @@
                             "label": "$cat_nav_sprite",
                             "style_bind": "nav_sty_2",
                             "action": "nav_2",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 3
                           },
@@ -84,8 +83,7 @@
                             "label": "$cat_nav_rune_corners",
                             "style_bind": "nav_sty_3",
                             "action": "nav_3",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 4
                           },
@@ -95,8 +93,7 @@
                             "label": "$cat_nav_tooltip",
                             "style_bind": "nav_sty_4",
                             "action": "nav_4",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 5
                           },
@@ -106,8 +103,7 @@
                             "label": "$cat_nav_checkbox",
                             "style_bind": "nav_sty_5",
                             "action": "nav_5",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 6
                           },
@@ -117,8 +113,7 @@
                             "label": "$cat_nav_toggle",
                             "style_bind": "nav_sty_6",
                             "action": "nav_6",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 7
                           },
@@ -128,8 +123,7 @@
                             "label": "$cat_nav_radio",
                             "style_bind": "nav_sty_7",
                             "action": "nav_7",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 8
                           },
@@ -139,8 +133,7 @@
                             "label": "$cat_nav_tile",
                             "style_bind": "nav_sty_8",
                             "action": "nav_8",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 9
                           },
@@ -150,8 +143,7 @@
                             "label": "$cat_nav_pill_toggle",
                             "style_bind": "nav_sty_9",
                             "action": "nav_9",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 10
                           },
@@ -161,8 +153,7 @@
                             "label": "$cat_nav_select",
                             "style_bind": "nav_sty_10",
                             "action": "nav_10",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 11
                           },
@@ -172,8 +163,7 @@
                             "label": "$cat_nav_slider",
                             "style_bind": "nav_sty_11",
                             "action": "nav_11",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 12
                           },
@@ -183,8 +173,7 @@
                             "label": "$cat_nav_stepper",
                             "style_bind": "nav_sty_12",
                             "action": "nav_12",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 13
                           },
@@ -194,8 +183,7 @@
                             "label": "$cat_nav_text_field",
                             "style_bind": "nav_sty_13",
                             "action": "nav_13",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 14
                           },
@@ -205,8 +193,7 @@
                             "label": "$cat_nav_list",
                             "style_bind": "nav_sty_14",
                             "action": "nav_14",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 15
                           },
@@ -216,8 +203,7 @@
                             "label": "$cat_nav_context_menu",
                             "style_bind": "nav_sty_15",
                             "action": "nav_15",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 16
                           },
@@ -227,8 +213,7 @@
                             "label": "$cat_nav_gauge",
                             "style_bind": "nav_sty_16",
                             "action": "nav_16",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 17
                           },
@@ -238,8 +223,7 @@
                             "label": "$cat_nav_resource_gauge",
                             "style_bind": "nav_sty_17",
                             "action": "nav_17",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 18
                           },
@@ -249,8 +233,7 @@
                             "label": "$cat_nav_stat_dot",
                             "style_bind": "nav_sty_18",
                             "action": "nav_18",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 19
                           },
@@ -260,8 +243,7 @@
                             "label": "$cat_nav_action_slot",
                             "style_bind": "nav_sty_19",
                             "action": "nav_19",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 20
                           },
@@ -271,8 +253,7 @@
                             "label": "$cat_nav_medallion",
                             "style_bind": "nav_sty_20",
                             "action": "nav_20",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 21
                           },
@@ -282,8 +263,7 @@
                             "label": "$cat_nav_badge",
                             "style_bind": "nav_sty_21",
                             "action": "nav_21",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 22
                           },
@@ -293,8 +273,7 @@
                             "label": "$cat_nav_popup_panel",
                             "style_bind": "nav_sty_22",
                             "action": "nav_22",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 23
                           },
@@ -304,8 +283,7 @@
                             "label": "$cat_nav_paged_menu",
                             "style_bind": "nav_sty_23",
                             "action": "nav_23",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 24
                           },
@@ -315,8 +293,7 @@
                             "label": "$cat_nav_splash",
                             "style_bind": "nav_sty_24",
                             "action": "nav_24",
-                            "size": 32,
-                            "label_size": 13,
+                            "size_class": "md",
                             "tab_group": "cat_nav",
                             "nav_ordinal": 25
                           }
@@ -363,8 +340,7 @@
                                 "id": "cat_button",
                                 "action": "cat_button_click",
                                 "label": "$cat_lbl_button",
-                                "size": 46,
-                                "label_size": 14,
+                                "size_class": "lg",
                                 "variant": "primary",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 1
@@ -444,15 +420,8 @@
                                 "component": "cell",
                                 "size": 90,
                                 "style": "panel",
-                                "children": [
-                                  {
-                                    "component": "rune_corners",
-                                    "style": "settings.runes",
-                                    "anchor": "top_left",
-                                    "width_frac": 1.0,
-                                    "height_frac": 1.0
-                                  }
-                                ]
+                                "runes": true,
+                                "runes_style": "settings.runes"
                               }
                             ]
                           },
@@ -503,7 +472,6 @@
                                 "label": "$cat_lbl_checkbox",
                                 "box": 16,
                                 "size": 26,
-                                "style": "paperdoll.view.checkbox",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 2
                               }
@@ -556,7 +524,6 @@
                                 "label": "$cat_opt_a",
                                 "box": 15,
                                 "size": 24,
-                                "style": "paperdoll.view.checkbox",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 4
                               },
@@ -568,7 +535,6 @@
                                 "label": "$cat_opt_b",
                                 "box": 15,
                                 "size": 24,
-                                "style": "paperdoll.view.checkbox",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 5
                               }
@@ -596,8 +562,6 @@
                                 "label": "$cat_lbl_tile",
                                 "width": 72,
                                 "height": 72,
-                                "style": "paperdoll.inventory.cell",
-                                "style_off": "paperdoll.inventory.empty",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 6
                               }
@@ -747,7 +711,6 @@
                                 "label": "$cat_lbl_stepper",
                                 "label_w": 80,
                                 "size": 200,
-                                "style": "hud.controls.stepper_style",
                                 "tab_group": "cat_content",
                                 "nav_ordinal": 10
                               }
@@ -906,8 +869,7 @@
                                 "lo": 0.3,
                                 "hi": 0.7,
                                 "width": 240,
-                                "height": 14,
-                                "style": "pocepochs.hab.gauge"
+                                "height": 14
                               }
                             ]
                           },
@@ -1068,7 +1030,7 @@
                                     "id": "cat_popup_ok",
                                     "action": "cat_popup_ok",
                                     "label": "$cat_lbl_ok",
-                                    "size": 46,
+                                    "size_class": "lg",
                                     "variant": "primary",
                                     "tab_group": "cat_content",
                                     "nav_ordinal": 13
@@ -1078,7 +1040,7 @@
                                     "id": "cat_popup_cancel",
                                     "action": "cat_popup_cancel",
                                     "label": "$cat_lbl_cancel",
-                                    "size": 46,
+                                    "size_class": "lg",
                                     "variant": "secondary",
                                     "tab_group": "cat_content",
                                     "nav_ordinal": 14
@@ -1253,7 +1215,7 @@
                                 "color": "panel.stat_value"
                               },
                               {
-                                "component": "splash",
+                                "component": "sprite",
                                 "size": 160,
                                 "tex": 1,
                                 "fade_in": 0.6,
@@ -1271,13 +1233,6 @@
                 ]
               }
             ]
-          },
-          {
-            "component": "rune_corners",
-            "style": "settings.runes",
-            "anchor": "top_left",
-            "width_frac": 1.0,
-            "height_frac": 1.0
           }
         ]
       }
@@ -1629,9 +1584,7 @@
       "key_size": 10,
       "charge_color": "$rune_glow_hi",
       "charge_size": 11,
-      "cd_veil": "$cd_veil",
-      "cd_color": "$ink_bright",
-      "cd_size": 15
+      "cd_veil": "$cd_veil"
     },
     "medallion": {
       "rim": "$med_rim",
@@ -1666,6 +1619,7 @@
     },
     "slider": {
       "track": "$well",
+      "border": "$edge2",
       "fill": "$sap_base",
       "fill_hi": "$sap_border",
       "handle": "$sap_border",
@@ -1748,7 +1702,9 @@
         "bot": "$bronze_dim"
       },
       "content": {
-        "scrollbar": "$bronze_dim"
+        "scrollbar": {
+          "thumb": "$bronze_dim"
+        }
       },
       "controls": {
         "field": {

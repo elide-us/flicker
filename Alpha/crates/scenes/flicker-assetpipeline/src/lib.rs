@@ -3940,6 +3940,15 @@ impl Scene for AssetPipeline {
     }
 }
 
+/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
+/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
+/// in its scene file, and these move into this bench's own `.scene.json` at its
+/// migration. Do not grow this file.
+pub(crate) fn scene_styles() -> serde_json::Value {
+    serde_json::from_str(include_str!("../scene_styles.json"))
+        .expect("scene_styles.json parses")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5085,13 +5094,4 @@ mod tests {
         assert_eq!(floor, -3.5, "lowest extent (z=10) recentred about 13.5");
         assert!(floor < 0.0, "a recentred floor is always below the origin");
     }
-}
-
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
 }

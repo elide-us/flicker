@@ -14,39 +14,39 @@
 //! frame or two rather than stuttering with it. Stale results are dropped by
 //! generation, so a fast drag does not queue up a backlog of images nobody wants.
 //!
-//! # The UI is DATA
+//! # The scene is a PAIR (five-line architecture)
 //!
-//! Following the Quartermaster, not the older benches: this scene owns no HUD Lua
-//! and composes nothing. The UI template tier this bench composed against has been
-//! removed and the bench is not in the launcher roster, so [`build_tree`] now
-//! returns an empty `screen` placeholder rather than composing a surface.
+//! `sablework.scene.json` authors the tree + this scene's style blocks;
+//! `sablework.lua` derives the presentation (row washes, view-cell visibility)
+//! from the RAW model this behaviour publishes; the Rust component kinds draw.
+//! The scene owns no resolver and no bindings — the pump hands it resolved
+//! signals, the walker consumes the screen's declared intents, and both input
+//! channels land in the ONE dispatcher ([`route::apply`]) as result names.
 //!
 //! # Why the swatch is one sprite and not nine
 //!
 //! The preview must show the SEAM, which means showing the swatch repeated. The
 //! scene tiles the baked map into a `tiles × tiles` buffer on the CPU and uploads
-//! that, so the tree holds one `sprite` node per map instead of nine. The six
+//! that, so the tree holds one `sprite` node per map instead of nine. The
 //! textures are created once at a fixed size and rewritten **in place**
-//! (`Renderer::update_texture`), so their ids never change and the HUD tree can
-//! name them as constants.
+//! (`Renderer::update_texture`), so their ids never change and the authored tree
+//! names them by constant `tex` index, in [`MapKind::ALL`] order.
 //!
 //! Only the map you are LOOKING at is uploaded; the others are marked dirty and
-//! uploaded when you switch to them. Pushing all six every preview frame would be
-//! ~14 MB of bus traffic per knob movement to show 2.4 MB of it.
+//! uploaded when you switch to them. Pushing all of them every preview frame
+//! would be ~14 MB of bus traffic per knob movement to show 2.4 MB of it.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-use flicker::render::{Renderer, TextureHandle, Vec2};
+use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, ValueMap};
+use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, Fired, GamepadConfig, InputMap, InputState, Resolver,
-};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_materials::{JsonTableSource, MaterialId, Tables};
 use flicker_texture::{
@@ -59,31 +59,29 @@ pub mod commit;
 pub mod lit;
 pub mod route;
 
-/// The scene's layout + `$token` styles live in the shared `ui_theme.json` —
-/// the ONE global UI-element definition + Prism palette every prism-alpha scene
-/// reads — under the `sablework` key. NOT a per-scene copy: a second file would
-/// need its own `theme.tokens`, forking the palette.
+/// The one global UI-element definition + Prism palette every prism-alpha scene
+/// reads. This scene's OWN style blocks ride its scene file (`def.styles`) and
+/// merge over it — never a second theme file, which would fork the palette.
 const HUD_UI_THEME: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
-/// How many times the swatch repeats per axis in the preview. Read from
-/// `ui_theme.json` at load so the Lua and the scene cannot disagree; this is
-/// the fallback for a malformed file, and it is deliberately the same value the
-/// JSON ships so a missing key degrades to the intended look rather than to
-/// something that merely happens not to crash.
+/// The pair script — the scene's LOGIC half, by name (five-line architecture).
+const SW_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/sablework.lua");
+/// The shipped scene file — the tests' copy of the authored tree (the runtime
+/// receives the same file through the manifest `SceneDef`).
+const SW_SCENE: &str = include_str!("../../../../content/sensorium/scenes/sablework.scene.json");
+
+/// How many times the swatch repeats per axis in the preview. Read from the
+/// merged styles (`sablework.preview.tiles`, authored in the scene file) at
+/// `enter`; this is the fallback for a malformed file, and it is deliberately
+/// the same value the JSON ships so a missing key degrades to the intended look
+/// rather than to something that merely happens not to crash.
 const DEFAULT_TILES: u32 = 3;
 
-/// The style a rack row draws with, selected or not. Dotted paths, so they are
-/// wiring rather than display copy.
-const ROW_STYLE: &str = "sablework.row";
-const ROW_STYLE_SEL: &str = "sablework.row_sel";
-const BTN_STYLE: &str = "sablework.button";
-const BTN_STYLE_ON: &str = "sablework.button_on";
-
-/// The preview map buttons, in [`MapKind::ALL`] order. The id is BOTH the node id
-/// (so the button fires it) and the Model-key stem for its `_style` / `_shown`
-/// binds — one vocabulary shared with `hud_sablework.lua`'s `MAPS`.
-const MAP_IDS: [&str; 7] = [
+/// The view-cell ids, in [`MapKind::ALL`] order — ONE vocabulary shared with the
+/// authored tree's `visible_bind` cells and `sablework.lua`'s `MAPS`. The drift
+/// gates pin the three to each other.
+pub const MAP_IDS: [&str; 7] = [
     "map_base",
     "map_normal",
     "map_rough",
@@ -93,13 +91,13 @@ const MAP_IDS: [&str; 7] = [
     "map_emit",
 ];
 
-/// The LIT view's tab id. Deliberately not a seventh `MAP_IDS` entry: the six are
-/// each one `MapKind` the swatch blits, while this one is a rendered sub-scene of
-/// all of them at once. Sharing the `map_*` naming keeps ONE tab vocabulary; the
-/// index `MAP_IDS.len()` is its slot in the selection.
-const LIT_ID: &str = "map_lit";
+/// The LIT view's cell id. Deliberately not an eighth `MAP_IDS` entry: the seven
+/// are each one `MapKind` the swatch blits, while this one is a rendered
+/// sub-scene of all of them at once. The index `MAP_IDS.len()` is its slot in
+/// the tabs' bound number.
+pub const LIT_ID: &str = "map_lit";
 
-/// How many tabs the view selector has — the six flat maps plus the lit view.
+/// How many tabs the view selector has — the seven flat maps plus the lit view.
 pub const VIEW_COUNT: usize = MAP_IDS.len() + 1;
 
 /// One baked preview, tagged with the edit that asked for it.
@@ -129,7 +127,8 @@ pub struct Sablework {
     patch: usize,
     /// The voice the right-hand fine knobs edit, `0..CHANNEL_COUNT`.
     sel_ch: usize,
-    /// The map the swatch shows, an index into [`MapKind::ALL`].
+    /// The view the centre shows — an index into the tabs' bound number:
+    /// `0..MAP_IDS.len()` are the flat maps, `MAP_IDS.len()` is the LIT view.
     sel_map: usize,
     /// The 256-material index, for the binding picker's labels. Empty if the
     /// tables could not be read — the bench still runs unbound.
@@ -138,9 +137,9 @@ pub struct Sablework {
     size_rung: usize,
 
     // ── preview ──
-    /// Repeats per axis in the swatch. From `ui_theme.json`.
+    /// Repeats per axis in the swatch. From the merged styles at `enter`.
     tiles: u32,
-    /// The six preview textures, in [`MapKind::ALL`] order. Created once at
+    /// The preview textures, in [`MapKind::ALL`] order. Created once at
     /// `PREVIEW_SIZE * tiles` square and rewritten in place forever after.
     tex: Vec<TextureHandle>,
     /// The newest baked set, and which of its maps have not reached the GPU yet.
@@ -169,36 +168,56 @@ pub struct Sablework {
     /// draws everything else rather than by a second set of constants.
     lit_rect: Option<flicker::render::Rect>,
 
+    /// The AUTHORED tree off the manifest's def, walked every frame. `take`n
+    /// around the walk so the walker can borrow it beside the mutable UI state.
+    authored: Option<UiNode>,
+    /// This scene's own style blocks (`def.styles`) — merged over the theme at
+    /// `enter`, the five-line home for the bench's values.
+    scene_styles_json: Option<serde_json::Value>,
+    /// The pair script. `None` only if it failed to load — the bench then runs
+    /// on raw model values (no row washes, first view cell only).
+    script: Option<ScriptHost>,
+    /// The screen's declared signal→result intents, read off the tree ONCE.
     ui_intents: UiIntents,
     ui_state: UiState,
     ui_styles: serde_json::Value,
     hud_commands: Vec<HudCommand>,
     ui_theme: Option<Theme>,
     white: Option<TextureHandle>,
-
-    bindings: ContextualBindings,
-    gamepad_config: GamepadConfig,
-    resolver: Resolver,
-    ev: Vec<Fired>,
-    tick: u64,
 }
 
 impl Default for Sablework {
     fn default() -> Self {
-        Self::new()
+        Self::shipped()
     }
 }
 
 impl Sablework {
-    pub fn new() -> Self {
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
-        let tiles = ui_styles
-            .get("sablework")
-            .and_then(|s| s.get("preview"))
-            .and_then(|p| p.get("tiles"))
-            .and_then(|t| t.as_u64())
-            .map(|t| t.clamp(1, 4) as u32)
-            .unwrap_or(DEFAULT_TILES);
+    /// The runtime constructor — the manifest hands in the authored `SceneDef`.
+    pub fn new(def: &SceneDef) -> Self {
+        Self::from_parts(def.tree.clone(), def.styles.clone())
+    }
+
+    /// A bench on the SHIPPED scene file — the seam a test drives without an
+    /// app, exercising the same authored tree the runtime gets.
+    pub fn shipped() -> Self {
+        let def = SceneDef::parse("sablework", SW_SCENE)
+            .expect("the shipped sablework.scene.json parses");
+        Self::from_parts(def.tree, def.styles)
+    }
+
+    fn from_parts(authored: Option<UiNode>, scene_styles_json: Option<serde_json::Value>) -> Self {
+        if authored.is_none() {
+            tracing::error!("sablework: the scene def declares no `tree` — no UI will draw");
+        }
+        let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(SW_SCRIPT, "sablework.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("sablework.lua failed to load — raw model values only: {e}");
+                None
+            }
+        };
 
         // The material index, through the roots service — the bench asks where
         // content lives, it never spells out a path. A tree that will not load is
@@ -234,7 +253,7 @@ impl Sablework {
             sel_map: 0,
             materials,
             size_rung,
-            tiles,
+            tiles: DEFAULT_TILES,
             tex: Vec::new(),
             latest: None,
             dirty: [false; MapKind::ALL.len()],
@@ -249,17 +268,15 @@ impl Sablework {
             commit_rx,
             lit: lit::LitPreview::default(),
             lit_rect: None,
-            ui_intents: UiIntents::default(),
+            authored,
+            scene_styles_json,
+            script,
+            ui_intents,
             ui_state: UiState::default(),
-            ui_styles,
+            ui_styles: serde_json::Value::Null,
             hud_commands: Vec::new(),
             ui_theme: None,
             white: None,
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
-            gamepad_config: GamepadConfig::default(),
-            resolver: Resolver::new(),
-            ev: Vec::new(),
-            tick: 0,
         };
         me.request_bake();
         me
@@ -344,8 +361,8 @@ impl Sablework {
     }
 
     /// Push EVERY stale map. The flat swatch shows one at a time, but the lit
-    /// sample binds all six simultaneously — a map left stale there would shade
-    /// the surface with the previous recipe's roughness.
+    /// sample binds all of them simultaneously — a map left stale there would
+    /// shade the surface with the previous recipe's roughness.
     fn upload_all(&mut self, renderer: &mut Renderer) {
         for i in 0..MapKind::ALL.len() {
             if !self.dirty[i] {
@@ -364,33 +381,29 @@ impl Sablework {
 
     // ── the Model ──────────────────────────────────────────────────────────────
 
-    /// Everything `hud_sablework.lua` binds. Display copy is published as
-    /// `$token`s (localised at the draw boundary); numbers are pre-formatted here
-    /// so the tree never does arithmetic.
+    /// The RAW runtime variables the pair script and the tree bind. Display copy
+    /// is published as `$token`s (localised at the draw boundary); numbers are
+    /// pre-formatted here so the tree never does arithmetic. Presentation logic
+    /// (row washes, view-cell visibility) belongs to `sablework.lua`'s
+    /// `derive()`, not here.
     fn hud_model(&self) -> ValueMap {
         let mut m = ValueMap::default();
+
+        // The two cursors, as NUMBERS — the tabs bind one, derive() reads both.
+        m.set("sel_ch", self.sel_ch);
+        m.set("sel_map", self.sel_map);
 
         for (i, ch) in self.recipe.channels.iter().enumerate() {
             let n = i + 1;
             m.set(format!("ch{n}_on"), ch.enabled);
-            m.set(format!("ch{n}_name"), format!("$sw_ch{n}"));
-            m.set(format!("ch{n}_source"), format!("$sw_src_{}", ch.source.id()));
-            m.set(format!("ch{n}_blend"), format!("$sw_blend_{}", ch.blend.id()));
+            m.set(format!("ch{n}_source_label"), format!("$sw_src_{}", ch.source.id()));
+            m.set(format!("ch{n}_blend_label"), format!("$sw_blend_{}", ch.blend.id()));
             m.set(format!("ch{n}_scale"), ch.scale as f64);
             m.set(format!("ch{n}_octaves"), ch.octaves as f64);
             m.set(format!("ch{n}_warp"), ch.warp);
             m.set(format!("ch{n}_amount"), ch.amount);
-            m.set(
-                format!("ch{n}_style"),
-                if i == self.sel_ch { ROW_STYLE_SEL } else { ROW_STYLE },
-            );
         }
 
-        for (i, id) in MAP_IDS.iter().chain([&LIT_ID]).enumerate() {
-            let on = i == self.sel_map;
-            m.set(format!("{id}_shown"), on);
-            m.set(format!("{id}_style"), if on { BTN_STYLE_ON } else { BTN_STYLE });
-        }
         m.set("lit_body_label", format!("$sw_body_{}", self.lit.body.id()));
         m.set("lit_spin", self.lit.spinning);
 
@@ -450,6 +463,24 @@ impl Sablework {
                 CommitState::Failed(why) => why.clone(),
             },
         );
+        m
+    }
+
+    /// The frame's full model: the raw variables plus the pair script's derived
+    /// presentation values, folded over them.
+    pub(crate) fn model(&self) -> ValueMap {
+        let raw = self.hud_model();
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("sablework: publishing the model to the script failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => m.extend(derived),
+                Ok(None) => {}
+                Err(e) => tracing::error!("sablework: derive() failed: {e}"),
+            }
+        }
         m
     }
 
@@ -528,13 +559,6 @@ impl Sablework {
         });
     }
 
-    /// This frame's screen. The template tier this bench composed against has been
-    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
-    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
-    pub fn build_tree(&self, _screen: Vec2) -> UiNode {
-        UiNode { component: "screen".to_string(), id: "sablework".to_string(), ..Default::default() }
-    }
-
     fn selected_channel(&self) -> Channel {
         self.recipe.channels[self.sel_ch.min(CHANNEL_COUNT - 1)]
     }
@@ -563,18 +587,34 @@ impl Sablework {
     pub fn shown_generation(&self) -> u64 {
         self.shown
     }
+    /// The authored tree — a clone for a gate or a test to walk.
+    pub fn authored_tree(&self) -> Option<UiNode> {
+        self.authored.clone()
+    }
 }
 
 impl Scene for Sablework {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
         self.ui_theme = Some(Theme::build(renderer));
+        // The theme, the shared satellites, and THIS scene's own style blocks
+        // (`def.styles` — the five-line home for the bench's values).
+        self.ui_styles =
+            flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles_json.as_ref());
+        self.tiles = self
+            .ui_styles
+            .get("sablework")
+            .and_then(|s| s.get("preview"))
+            .and_then(|p| p.get("tiles"))
+            .and_then(|t| t.as_u64())
+            .map(|t| t.clamp(1, 4) as u32)
+            .unwrap_or(DEFAULT_TILES);
 
-        // Six preview textures, created ONCE at the tiled size and rewritten in
-        // place forever after — which is what lets the HUD tree name them by a
-        // constant id. Base colour is the only sRGB map; the rest carry data, and
-        // uploading them through the colour path would gamma-correct numbers that
-        // were never a colour.
+        // The preview textures, created ONCE at the tiled size and rewritten in
+        // place forever after — which is what lets the authored tree name them by
+        // a constant `tex` index. Base colour is the only sRGB map; the rest
+        // carry data, and uploading them through the colour path would
+        // gamma-correct numbers that were never a colour.
         let px = self.tex_px();
         let blank = vec![0u8; (px * px * 4) as usize];
         self.tex = MapKind::ALL
@@ -592,7 +632,7 @@ impl Scene for Sablework {
         renderer.window().set_title("Sablework Bench");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
         self.collect_bakes(dt);
         while let Ok(state) = self.commit_rx.try_recv() {
             if let CommitState::Failed(ref why) = state {
@@ -601,14 +641,9 @@ impl Scene for Sablework {
             self.commit_state = state;
         }
 
-        if let Some((map, _, _)) = flicker_shell::take_pending_input() {
-            self.bindings = ContextualBindings::new(map);
-        }
-
+        let Some(tree) = self.authored.take() else { return Transition::None };
         let screen = renderer.size();
-        let tree = self.build_tree(screen);
-        self.ui_intents = UiIntents::of(&tree);
-        let model = self.hud_model();
+        let model = self.model();
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
@@ -627,35 +662,26 @@ impl Scene for Sablework {
         self.hud_commands = frame.commands;
         self.lit.tick(dt);
 
-        // ONE resolve, ONE dispatch — the walker layer consumes the screen's
-        // declared intents, so navigation never reads a raw key.
-        self.tick = self.tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.tick,
-            &mut self.ev,
-        );
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> =
-            self.ev.iter().map(|f| InputEvent::from_fired(f, ctx, input)).collect();
-
-        let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
-        let mut route = RouteCtx::default();
+        // ── The input seam (input-P3): the PUMP resolved this frame's events —
+        // the scene owns no Resolver. One dispatch through the walker, which owns
+        // the focus graph (left stick between panels, d-pad inside one), consumes
+        // the pointer while it is over the HUD, and fires the screen's DECLARED
+        // intents (Menu / TabNext / TabPrev / PageNext / PagePrev) as result
+        // names — navigation never reads a raw key. ──
+        let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
+            .with_nav(&tree, &model)
+            .with_intents(&self.ui_intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
-            Router::dispatch(&events, &mut chain, &mut route);
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        let focus_change = apply_context_requests(&mut self.bindings, &route.requests);
-        walker.apply_focus(focus_change);
+        let fired = walker.take_fired();
+        self.authored = Some(tree);
 
         // Fold the fired intent names in beside the click results, so both
         // channels reach the ONE dispatcher identically.
         let mut results = frame.results.clone();
-        for name in walker.take_fired() {
+        for name in fired {
             results.set(name, true);
         }
 
@@ -668,11 +694,17 @@ impl Scene for Sablework {
 
         if results.is_on("pause_open") {
             if let Some(theme) = self.ui_theme {
+                // The pause overlay shows the PROFILE's map — the pump owns
+                // bindings now (input-P3), the scene holds none.
+                let pause_map = flicker_shell::input_profile()
+                    .context_map("World")
+                    .cloned()
+                    .unwrap_or_else(InputMap::wasd_and_mouse);
                 return Transition::Push(Box::new(PauseScene::new(
                     theme,
-                    self.bindings.active_map(),
+                    &pause_map,
                     &AbstractControls::default(),
-                    &self.gamepad_config,
+                    &GamepadConfig::default(),
                 )));
             }
         }
@@ -685,8 +717,8 @@ impl Scene for Sablework {
         // FrameGraph composites its result into the rect the walk reserved, under
         // the chrome the HUD then draws over.
         if let Some(rect) = self.lit_rect {
-            // The lit view wears every map at once, so all six must be current —
-            // not just the one a flat swatch would be showing.
+            // The lit view wears every map at once, so all of them must be
+            // current — not just the one a flat swatch would be showing.
             self.upload_all(renderer);
             let mut fg = flicker::render::FrameGraph::new();
             self.lit.render(
@@ -706,19 +738,11 @@ impl Scene for Sablework {
     }
 }
 
-/// The scene factory the launcher roster registers.
-pub fn scene() -> Box<dyn Scene> {
-    Box::new(Sablework::new())
+/// The scene factory the launcher roster registers — the manifest resolves
+/// `sablework.scene.json` and hands its def here.
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(Sablework::new(def))
 }
 
 #[cfg(test)]
 mod tests;
-
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
-}

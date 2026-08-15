@@ -998,7 +998,7 @@ mod tests {
             let (inplace, _) = crate::retarget::emit_variants(&idle_bvh, &skel, &tmp.join("c")).unwrap();
             let (g, idx) = posed_world(&inplace);
             let p = |n: &str| pos_of(g[idx[n]]);
-            let (h, th) = (p("hand_l"), p("thigh_l"));
+            let (h, _th) = (p("hand_l"), p("thigh_l"));
             // Posed shoulder height (does widening amplify the idle shoulder-drop? rest upperarm z≈137.5).
             let (clav_z, ua_z) = (p("clavicle_l").z, p("upperarm_l").z);
             eprintln!(

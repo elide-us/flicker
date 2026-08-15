@@ -69,7 +69,9 @@
         "title_size": 32,
         "title_color": "$ink_bright",
         "seam": "$seam",
-        "scrollbar": "$bronze_dim"
+        "scrollbar": {
+          "thumb": "$bronze_dim"
+        }
       },
       "footer": {
         "h": 58,
@@ -510,6 +512,7 @@
       {
         "component": "stack",
         "style": "settings.window",
+        "runes": true,
         "anchor": "center",
         "width": 1180,
         "height": 726,
@@ -686,6 +689,7 @@
               {
                 "component": "row",
                 "size": 58,
+                "align": "center",
                 "children": [
                   {
                     "component": "button",
@@ -693,7 +697,7 @@
                     "action": "settings_restore",
                     "label": "$set_restore_defaults",
                     "size": 180,
-                    "label_size": 12,
+                    "size_class": "md",
                     "variant": "secondary",
                     "tab_group": "settings_rows",
                     "nav_ordinal": 9000
@@ -718,7 +722,7 @@
                     "action": "settings_apply",
                     "label": "$set_apply",
                     "size": 104,
-                    "label_size": 14,
+                    "size_class": "md",
                     "variant": "secondary",
                     "tab_group": "settings_rows",
                     "nav_ordinal": 9001
@@ -729,7 +733,7 @@
                     "action": "settings_back",
                     "label": "$set_save_and_close",
                     "size": 168,
-                    "label_size": 14,
+                    "size_class": "md",
                     "variant": "primary",
                     "tab_group": "settings_rows",
                     "nav_ordinal": 9002
@@ -737,12 +741,6 @@
                 ]
               }
             ]
-          },
-          {
-            "component": "rune_corners",
-            "anchor": "top_left",
-            "width_frac": 1.0,
-            "height_frac": 1.0
           }
         ]
       },
@@ -775,24 +773,21 @@
                 "component": "button",
                 "action": "confirm_save",
                 "label": "$set_save_and_close_2",
-                "size": 46,
-                "label_size": 14,
+                "size_class": "lg",
                 "variant": "primary"
               },
               {
                 "component": "button",
                 "action": "confirm_discard",
                 "label": "$set_discard",
-                "size": 46,
-                "label_size": 14,
+                "size_class": "lg",
                 "variant": "danger"
               },
               {
                 "component": "button",
                 "action": "confirm_cancel",
                 "label": "$set_cancel_2",
-                "size": 46,
-                "label_size": 14,
+                "size_class": "lg",
                 "variant": "secondary"
               }
             ]
@@ -828,8 +823,7 @@
                 "component": "button",
                 "action": "restore_ok",
                 "label": "$set_ok",
-                "size": 46,
-                "label_size": 14,
+                "size_class": "lg",
                 "variant": "primary"
               }
             ]

@@ -238,7 +238,7 @@ pub fn find_horizon_voxel(cluster: &Cluster) -> Option<LocalCoord> {
     // heightfield this is the active LOD-0 cell straddling the surface
     // at that corner column — a stable, unambiguous "the cluster looks
     // like *this* point from far away" answer.
-    for y in (0..CLUSTER_DIM as u32).rev() {
+    for y in (0..CLUSTER_DIM).rev() {
         let coord = LocalCoord::new(0, y, 0).expect("y < CLUSTER_DIM");
         if cluster.get(coord).corner() != CornerVector::DEFAULT {
             return Some(coord);

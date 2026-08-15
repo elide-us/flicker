@@ -546,9 +546,9 @@ fn main_loop_defers(
     g_sample: [i32; 3],
     axis_a: usize,
 ) -> bool {
-    for face_axis in 0..3 {
+    for (face_axis, &gs) in g_sample.iter().enumerate() {
         let neg = 2 * face_axis;
-        if per_face_stride[neg] < stride && g_sample[face_axis] == 0 && axis_a != face_axis {
+        if per_face_stride[neg] < stride && gs == 0 && axis_a != face_axis {
             return true;
         }
     }
@@ -616,12 +616,11 @@ fn emit_boundary_face(
                 n_sample[axis_a] += 1;
                 let n_voxel = sample_to_voxel(n_sample, s_o);
 
-                let s_n = if n_sample[axis_a] < n_o {
-                    reader.solid(n_voxel)
-                } else if reader.has_face_neighbor(axis_a, true) {
+                // In-range, or across the face with a real neighbor: both read the
+                // sample. A true world edge (no neighbor) is left open instead.
+                let s_n = if n_sample[axis_a] < n_o || reader.has_face_neighbor(axis_a, true) {
                     reader.solid(n_voxel)
                 } else {
-                    // True world edge (no neighbor): leave it open.
                     continue;
                 };
                 if s_g == s_n {
@@ -706,8 +705,7 @@ fn neighbor_at<'a>(
 /// differ from self's at a cross-LOD face).
 fn face_neighbor_lod(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> Option<Lod> {
     let dim = CLUSTER_DIM as i32;
-    for axis in 0..3 {
-        let c = coord[axis];
+    for (axis, &c) in coord.iter().enumerate() {
         if c < 0 {
             return neighbor_at(neighbors, axis, false).map(|(_, l)| l);
         }
@@ -762,11 +760,11 @@ fn push_quad(
         let drop = (i + 1) % 4;
         let mut tri = [[0.0_f32; 3]; 3];
         let mut k = 0;
-        for j in 0..4 {
+        for (j, p) in positions.iter().enumerate() {
             if j == drop {
                 continue;
             }
-            tri[k] = positions[j];
+            tri[k] = *p;
             k += 1;
         }
         // Multi-duplicate (e.g. two pairs of equal positions) means the
@@ -864,8 +862,7 @@ fn has_face_neighbor(neighbors: &NeighborContext<'_>, axis: usize, positive: boo
 /// out multi-axis OOB.)
 fn single_axis_face_neighbor_present(neighbors: &NeighborContext<'_>, coord: [i32; 3]) -> bool {
     let dim = CLUSTER_DIM as i32;
-    for axis in 0..3 {
-        let c = coord[axis];
+    for (axis, &c) in coord.iter().enumerate() {
         if c < 0 {
             return has_face_neighbor(neighbors, axis, false);
         }
@@ -1133,6 +1130,10 @@ mod tests {
         assert_eq!(tris_on_x_plane(&m_b, 0.0, 0.01), 0);
     }
 
+    /// An interior edge with an off-manifold use count: the vertex-index pair
+    /// plus both endpoints in quantized units — what the seam audits report.
+    type UnsharedEdge = ((u32, u32), [i64; 3], [i64; 3]);
+
     #[test]
     fn cluster_pair_x_seam_byte_equal_world_positions() {
         // Two adjacent FlatField clusters: the seam-shell vertex stored
@@ -1273,7 +1274,7 @@ mod tests {
         };
 
         let mut over_shared: Vec<((u32, u32), u32)> = Vec::new();
-        let mut interior_unshared: Vec<((u32, u32), [i64; 3], [i64; 3])> = Vec::new();
+        let mut interior_unshared: Vec<UnsharedEdge> = Vec::new();
         let mut boundary_count = 0_usize;
         for (&(a, b), &uses) in &edge_use {
             let pa = verts_q[a as usize];
@@ -1394,7 +1395,7 @@ mod tests {
                 || (a[2] == z_max && b[2] == z_max)
         };
         let mut over_shared: Vec<((u32, u32), u32)> = Vec::new();
-        let mut interior_unshared: Vec<((u32, u32), [i64; 3], [i64; 3])> = Vec::new();
+        let mut interior_unshared: Vec<UnsharedEdge> = Vec::new();
         for (&(a, b), &uses) in &edge_use {
             let pa = verts_q[a as usize];
             let pb = verts_q[b as usize];
@@ -1482,7 +1483,7 @@ mod tests {
         }
         let mut unshared = 0_usize;
         let mut over = 0_usize;
-        for (_, &uses) in &edge_use {
+        for &uses in edge_use.values() {
             match uses {
                 0 | 2 => {}
                 1 => unshared += 1,

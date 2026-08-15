@@ -366,7 +366,7 @@ impl Stage for Crystallization {
                             let have = free.iter().find(|(fe, _)| *fe == e).map_or(0.0, |s| s.1);
                             can = can.min(have / f);
                         }
-                        if can.is_finite() && can > 0.0 && best.map_or(true, |(_, b)| can > b) {
+                        if can.is_finite() && can > 0.0 && best.is_none_or(|(_, b)| can > b) {
                             best = Some((*id, can));
                         }
                     }

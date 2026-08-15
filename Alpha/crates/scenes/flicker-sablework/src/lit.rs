@@ -386,12 +386,17 @@ mod tests {
     /// stage config nothing reads is an authored name that resolves to nothing.
     #[test]
     fn the_authored_stage_is_read_and_lights_the_sample() {
+        // The scene's own style blocks ride the shipped scene file now (the
+        // five-line split); the stage block itself lives in ui_theme.json's
+        // `stages` until the renderer campaign moves scene-owned stages.
+        let def = flicker::ui::SceneDef::parse("sablework", crate::SW_SCENE)
+            .expect("the shipped sablework.scene.json parses");
         let styles = flicker::ui::load_styles_for(
             concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../content/sensorium/resources/ui_theme.json"
             ),
-            Some(&crate::scene_styles()),
+            def.styles.as_ref(),
         );
         let stage = Stage::from_styles(&styles, STAGE_SOURCE);
 

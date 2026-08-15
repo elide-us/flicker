@@ -186,8 +186,7 @@
             "id": "reset",
             "action": "reset",
             "label": "$ct_reset",
-            "size": 36,
-            "label_size": 14,
+            "size_class": "md",
             "variant": "secondary"
           },
           {

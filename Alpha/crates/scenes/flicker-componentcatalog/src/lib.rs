@@ -37,11 +37,6 @@ const HUD_UI_THEME: &str =
 /// card, and the wheel writes as you scroll.
 const CONTENT_SCROLL_BIND: &str = "cat_content_scroll";
 
-/// The bookmark of the card at the top of the view wears the primary slab, the rest the
-/// secondary — the nav's active indicator, published per-frame through each `style_bind`.
-const NAV_ACTIVE_STYLE: &str = "modal.buttons.variants.primary";
-const NAV_IDLE_STYLE: &str = "modal.buttons.variants.secondary";
-
 /// Every `card_<i>` id in the authored tray, in tree order — DERIVED from the tree
 /// at load, never counted by hand. The card list, the nav loop, and the section
 /// tracker all walk this, so adding a card is one authored box + its bookmark and
@@ -321,6 +316,12 @@ mod tests {
     const CATALOG_SCENE: &str =
         include_str!("../../../../content/sensorium/scenes/componentcatalog.scene.json");
 
+    /// The nav's active/idle bookmark styles — the TEST-side mirror of the paths
+    /// componentcatalog.lua publishes through each `style_bind` (the Lua owns the
+    /// runtime choice; these pin it).
+    const NAV_ACTIVE_STYLE: &str = "modal.buttons.variants.primary";
+    const NAV_IDLE_STYLE: &str = "modal.buttons.variants.secondary";
+
     /// THE PAIR-SCRIPT REGRESSION GATE: componentcatalog.lua loads; derive()
     /// seeds the demo values, lights the active bookmark, and gates the Paged
     /// Menu card — the scene's component logic lives in the pair script.
@@ -335,6 +336,163 @@ mod tests {
         assert_eq!(m.text("nav_sty_0"), Some(NAV_ACTIVE_STYLE), "bookmark 0 starts active");
         assert_eq!(m.text("nav_sty_1"), Some(NAV_IDLE_STYLE), "the rest rest");
         assert!(m.is_on("cat_pm_on_p0"), "the Paged Menu card opens on page 1");
+    }
+
+    /// THE AUTHORED-STYLE-PATH GATE (S1 of the styling pass): every style path any
+    /// shipped scene tree names must resolve to a style BLOCK in that scene's
+    /// merged styles. A path that resolves to nothing draws compiled defaults
+    /// SILENTLY — the walker cannot warn (the lookup simply misses), so a card
+    /// that claims to demo styling through a dead path is a lie nobody sees. The
+    /// day it was written this gate caught five dead paths in the catalog and the
+    /// sablework root slab.
+    #[test]
+    fn every_authored_style_path_resolves_to_a_block() {
+        const BLOCK_PROPS: [&str; 9] = [
+            "style",
+            "style_off",
+            "panel_style",
+            "divider_style",
+            "rule_style",
+            "glyph_style",
+            "tab_active",
+            "tab_idle",
+            "runes_style",
+        ];
+        fn jwalk<'v>(root: &'v serde_json::Value, path: &str) -> Option<&'v serde_json::Value> {
+            path.split('.').try_fold(root, |v, seg| v.get(seg))
+        }
+        // Raw-JSON walk, not SceneDef: the shared modal trees (scenes/shared/)
+        // carry no `behaviour` — the manifest skips that folder and a host scene
+        // merges them — but their authored paths must resolve all the same.
+        fn collect(node: &serde_json::Value, out: &mut Vec<(String, String)>) {
+            let kind = node.get("component").and_then(|c| c.as_str()).unwrap_or("?");
+            for prop in BLOCK_PROPS {
+                if let Some(path) = node.get(prop).and_then(|p| p.as_str()) {
+                    out.push((kind.to_string(), path.to_string()));
+                }
+            }
+            if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
+                for kid in kids {
+                    collect(kid, out);
+                }
+            }
+        }
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/scenes");
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for folder in [dir.clone(), dir.join("shared")] {
+            for entry in std::fs::read_dir(&folder).expect("scenes folder reads") {
+                let p = entry.expect("dir entry").path();
+                if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".scene.json")) {
+                    files.push(p);
+                }
+            }
+        }
+        assert!(!files.is_empty(), "the scenes folder holds scene files");
+
+        let mut broken = Vec::new();
+        for path in files {
+            let id = path
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .trim_end_matches(".scene.json")
+                .to_string();
+            let text = std::fs::read_to_string(&path).expect("scene file reads");
+            let doc: serde_json::Value = serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("{id}.scene.json parses: {e}"));
+            let Some(tree) = doc.get("tree") else { continue };
+            // A shared modal tree renders under its HOST's merge (today: Main
+            // merges scenes/shared/* back via main_scene_styles), so its paths
+            // resolve against host styles ⊕ its own — that hosting contract is
+            // part of what this gate pins.
+            let in_shared = path.parent().is_some_and(|p| p.ends_with("shared"));
+            let own = doc.get("styles").cloned().unwrap_or(serde_json::Value::Null);
+            let scene_styles = if in_shared {
+                let main_text = std::fs::read_to_string(dir.join("Main.scene.json"))
+                    .expect("the host scene file reads");
+                let main_doc: serde_json::Value =
+                    serde_json::from_str(&main_text).expect("Main.scene.json parses");
+                let mut merged = main_doc.get("styles").cloned().unwrap_or_default();
+                if let (Some(m), Some(o)) = (merged.as_object_mut(), own.as_object()) {
+                    for (k, v) in o {
+                        m.insert(k.clone(), v.clone());
+                    }
+                }
+                merged
+            } else {
+                own
+            };
+            let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&scene_styles));
+            let mut named = Vec::new();
+            collect(tree, &mut named);
+            for (kind, p) in named {
+                match jwalk(&styles, &p) {
+                    Some(v) if v.is_object() => {}
+                    Some(_) => {
+                        broken.push(format!("{id}: {kind} style '{p}' resolves to a non-block value"))
+                    }
+                    None => broken.push(format!("{id}: {kind} names style '{p}' → NOTHING")),
+                }
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "authored style paths must resolve to blocks:\n{}",
+            broken.join("\n")
+        );
+    }
+
+    /// THE LADDER-PAIRING GATE (styling S2): a `size_class` button inside a ROW
+    /// flows horizontally, so its measured rung height only lands when the row
+    /// aligns non-stretch — a stretch row overrides every child's cross extent
+    /// and the rung would be a silent no-op. Vertical flows (cell/panel/list/
+    /// stack/popup_panel) consume the height as the MAIN extent and need nothing.
+    #[test]
+    fn every_ladder_button_in_a_row_sits_in_an_aligned_flow() {
+        fn walk(node: &serde_json::Value, parent: Option<&serde_json::Value>, id: &str, broken: &mut Vec<String>) {
+            let is_ladder_button = node.get("component").and_then(|c| c.as_str()) == Some("button")
+                && node.get("size_class").is_some()
+                && node.get("height").is_none();
+            if is_ladder_button {
+                if let Some(p) = parent {
+                    let p_kind = p.get("component").and_then(|c| c.as_str()).unwrap_or("");
+                    let p_align = p.get("align").and_then(|a| a.as_str()).unwrap_or("stretch");
+                    if p_kind == "row" && p_align == "stretch" {
+                        let bid = node.get("id").and_then(|i| i.as_str()).unwrap_or("<anon>");
+                        broken.push(format!(
+                            "{id}: button '{bid}' has a size_class inside a STRETCH row — the rung is a no-op; align the row (center/start/end)"
+                        ));
+                    }
+                }
+            }
+            if let Some(kids) = node.get("children").and_then(|c| c.as_array()) {
+                for kid in kids {
+                    walk(kid, Some(node), id, broken);
+                }
+            }
+        }
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/sensorium/scenes");
+        let mut broken = Vec::new();
+        for folder in [dir.clone(), dir.join("shared")] {
+            for entry in std::fs::read_dir(&folder).expect("scenes folder reads") {
+                let p = entry.expect("dir entry").path();
+                if !p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".scene.json")) {
+                    continue;
+                }
+                let id = p.file_name().expect("name").to_string_lossy().to_string();
+                let doc: serde_json::Value =
+                    serde_json::from_str(&std::fs::read_to_string(&p).expect("scene reads"))
+                        .unwrap_or_else(|e| panic!("{id} parses: {e}"));
+                if let Some(tree) = doc.get("tree") {
+                    walk(tree, None, &id, &mut broken);
+                }
+            }
+        }
+        assert!(broken.is_empty(), "ladder buttons need an aligned row:\n{}", broken.join("\n"));
     }
 
     /// PROOF the catalog is NOT hardcoded — the full pipeline, walked end to end

@@ -52,7 +52,7 @@ use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    load_styles, render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState,
+    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState,
     WalkerHandler,
 };
 use flicker_globe::GlobeWorld;
@@ -452,6 +452,9 @@ pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
 mod tests {
     use super::*;
     use flicker::script::{UiNode, Value};
+    // Test-only: the gates load the raw theme without a scene-styles overlay;
+    // the lib itself always merges through `load_styles_for`.
+    use flicker::ui::load_styles;
     // Test-only now: the tests synthesize events with a real resolver to drive the walker
     // chain end-to-end; the scene itself owns none of this any more (input-P3).
     use flicker_input_core::{
@@ -493,10 +496,11 @@ mod tests {
     /// Populous Bench should be that" a build result rather than a wish.
     ///
     /// The list, and why each name is on it: `screen` is the root the
-    /// `default_page` proto emits; `grid` / `cell` / `row` / `stack` /
-    /// `rune_corners` are what the FRAME (Aaron's own "Frame (9-grid)" — the
-    /// frame builder emits a three-column `grid` of cells) and the PTT are MADE
-    /// of, structure rather than content; `tabs` + `pill_toggle` + `button` are
+    /// `default_page` proto emits; `grid` / `cell` / `row` / `stack` are what
+    /// the FRAME (Aaron's own "Frame (9-grid)" — the frame builder emits a
+    /// three-column `grid` of cells) and the PTT are MADE of, structure rather
+    /// than content (the window stack's corner runes ride its `runes` flag,
+    /// decoration not a kind); `tabs` + `pill_toggle` + `button` are
     /// the PTT's two rails and its four glyph hints; `panel` is the UI Panel and
     /// the RTT Panel (one component, two protos); `rtt` is the viewport;
     /// `slider` is the size dial; `text` and `option` carry the localized
@@ -506,7 +510,8 @@ mod tests {
         /// Aaron's catalog, expanded to the component kinds it is built from.
         const CATALOG: &[&str] = &[
             "screen", "cell", "row", "stack",
-            "rune_corners", // the page frame's corner runes (frame inlined as stack + overlay)
+            // (corner runes are the `runes` FLAG on the window stack now — a
+            // decoration, not a kind — so they no longer appear in the census)
             "paged_menu",   // the PTT — a native Component (rails/hints/rule drawn by Rust)
             "tabs", "pill_toggle", // the PTT's authored page + tab rails
             "panel",  // UI Panel and RTT Panel
@@ -620,9 +625,15 @@ mod tests {
             nodes.iter().all(|n| matches!(n.component.as_str(), "panel" | "cell" | "row" | "text")),
             "the stats pane is display-only (its slice gate is a plain `cell`)"
         );
-        // ONE set of corner runes: the page chrome's. The content frame turned
-        // its own off (`runes = false`) — the corners never stack.
-        assert_eq!(count("rune_corners"), 1, "the inner frame's runes are off");
+        // ONE set of corner runes: the page chrome's — the `runes` DECORATION
+        // FLAG on the window stack (the standalone kind is gone, 2026-08-14).
+        // The inner content frame stays bare, so the corners never stack.
+        let flagged: Vec<&&UiNode> = all
+            .iter()
+            .filter(|n| matches!(n.props.get("runes"), Some(Value::Bool(true))))
+            .collect();
+        assert_eq!(flagged.len(), 1, "exactly one slab wears the corner runes");
+        assert_eq!(flagged[0].component, "stack", "…and it is the page chrome's window stack");
     }
 
     /// **The panes are PANELS, and the walker owns which one has the cursor.**

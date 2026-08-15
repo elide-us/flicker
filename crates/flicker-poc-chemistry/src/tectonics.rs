@@ -1236,10 +1236,10 @@ mod tests {
 
         // Bank TWO cell-spacings of convergence, once, and never top it up.
         let banked = 2.0f32;
-        for cell in 0..n {
+        for (cell, &label) in labels.iter().enumerate().take(n) {
             let r = w.grid.dirs[cell];
             let tangent = axis - r * axis.dot(r);
-            let sign = if labels[cell] == 1 { -1.0 } else { 1.0 };
+            let sign = if label == 1 { -1.0 } else { 1.0 };
             let sp = cell_spacing(&w, cell);
             w.columns[cell].accum_disp = tangent.normalize_or_zero() * sign * sp * banked;
         }
@@ -1481,7 +1481,7 @@ mod tests {
     #[test]
     fn the_pole_fit_stays_finite_on_a_degenerate_domain() {
         let r = Vec3::X;
-        let fitted = euler_pole(std::iter::repeat((r, Vec3::Y)).take(3));
+        let fitted = euler_pole(std::iter::repeat_n((r, Vec3::Y), 3));
         assert!(fitted.is_finite());
     }
 }

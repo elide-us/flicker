@@ -112,7 +112,7 @@ pub const STATE_FIELD_WORDS: usize = VOXELS_PER_CLUSTER / VOXELS_PER_WORD;
 // `(word, slot)` pair with no remainder. If `CLUSTER_DIM³` ever
 // stops being a multiple of `VOXELS_PER_WORD`, this fails and the
 // indexing math has to be revisited.
-const _: () = assert!(VOXELS_PER_CLUSTER % VOXELS_PER_WORD == 0);
+const _: () = assert!(VOXELS_PER_CLUSTER.is_multiple_of(VOXELS_PER_WORD));
 
 impl StateField {
     /// All-`Empty` field. The most common starting point — `Cluster`

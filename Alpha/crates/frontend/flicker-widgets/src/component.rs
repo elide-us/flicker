@@ -1421,6 +1421,26 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
                 node.height.or(node.size).unwrap_or(ts + lead),
             )
         }
+        // A `size_class` button measures its DS ladder height (and, for a glyph
+        // face with no width of its own, a square) — the rung is the compiled
+        // default under the author's hand: explicit height/size still win. The
+        // height lands whenever the parent flow aligns non-stretch (a stretch
+        // row overrides cross extents for every kind alike).
+        "button" => {
+            let ladder = ptext(node, "size_class").and_then(button_size);
+            let h = node
+                .height
+                .or(ladder.map(|l| l.h))
+                .or(node.size)
+                .unwrap_or(0.0);
+            let square = node.props.contains_key("glyph");
+            let w = node
+                .width
+                .or(node.size)
+                .or(if square { ladder.map(|l| l.h) } else { None })
+                .unwrap_or(0.0);
+            Vec2::new(w, h)
+        }
         _ => Vec2::new(
             node.width.or(node.size).unwrap_or(0.0),
             node.height.or(node.size).unwrap_or(0.0),
@@ -1869,8 +1889,8 @@ enum HitShape {
     /// on rect-contains and, on a click inside, fires the node's `action` / toggles
     /// its bool `bind` generically (button, panel, tile, action_slot).
     Rect,
-    /// Presentational: never claims the pointer, never interacts (sprite, tooltip,
-    /// rune_corners, the read-out gauges).
+    /// Presentational: never claims the pointer, never interacts (tooltip, the
+    /// read-out gauges; corner runes are a decoration FLAG, not a kind).
     None,
 }
 
@@ -2003,6 +2023,13 @@ fn hit_node(
                 // is the `down` half of the click/held pair.
                 "slider" => hit_slider(input.mouse, r, &props, click, input.down),
                 "stepper" => hit_stepper(input.mouse, r, &props, click),
+                // A sprite's verdict depends on its MODE (node props), so it is
+                // bespoke: presenting → a full-rect claim (the click is the skip);
+                // raw image → pass-through, exactly the decoration rule.
+                "sprite" => HitVerdict {
+                    hit: sprite_has_ramp(node) && r.contains(input.mouse),
+                    ..HitVerdict::default()
+                },
                 "text_field" => hit_text_field(input.mouse, r, click),
                 // The one arm that never reads the click edge at all: a `list` folds
                 // this frame's WHEEL tick, which rides the props (patched live) rather
@@ -2030,10 +2057,11 @@ fn hit_node(
         // claims; a click fires the action / toggles the bind). Besides the bespoke arm
         // above, only the generic plumbing remains — the drag-source, this arm, and the
         // styled-container claim below.
-        // Presentational (sprite / tooltip / rune_corners and the read-out gauges):
-        // never claims, never interacts. Said out loud rather than left to the
-        // catch-all, because the [`HitShape::None`] declaration is what the roster
-        // gate accepts as "this control HAS answered its hit".
+        // Presentational (tooltip and the read-out gauges; corner runes are a
+        // decoration flag on their host node, not a kind): never claims, never
+        // interacts. Said out loud rather than left to the catch-all, because
+        // the [`HitShape::None`] declaration is what the roster gate accepts as
+        // "this control HAS answered its hit".
         k if rust_hit_shape(k) == Some(HitShape::None) => {}
         // Full-rect control (button / panel / tile / action_slot): hover claims; a
         // click inside fires the node's `action` and/or toggles its bool `bind`.
@@ -2451,13 +2479,21 @@ fn node_fingerprint(
         h.f32(scroll_content_h(node, model));
     }
 
-    // A splash's alpha ramp is driven by the scene clock (`Model.elapsed`) — a
-    // model read with no `*_bind` prop naming it, so it is folded by KIND, the
-    // same way `list` folds its content height. The CURRENT alpha rather than the
-    // raw clock, so the hold plateau (and the fully-faded tails) still replay
-    // while the ramps redraw every frame they actually change.
-    if node.component == "splash" {
-        h.f32(splash_alpha_of(node, model));
+    // A PRESENTING sprite's alpha ramp is driven by the scene clock
+    // (`Model.elapsed`) — a model read with no `*_bind` prop naming it, so it is
+    // folded by KIND, the same way `list` folds its content height. The CURRENT
+    // alpha rather than the raw clock, so the hold plateau (and the fully-faded
+    // tails) still replay while the ramps redraw every frame they actually
+    // change. The contain-fit's image dims ride the Model the same bind-less
+    // way, so a late-published size re-fits instead of replaying stale.
+    if node.component == "sprite" {
+        if sprite_has_ramp(node) {
+            h.f32(sprite_ramp_of(node, model));
+        }
+        if pnum(node, "fit").is_some() {
+            h.f32(model.number("img_w").unwrap_or(1.0) as f32);
+            h.f32(model.number("img_h").unwrap_or(1.0) as f32);
+        }
     }
 
     // The node's own scalar props, order-independently (a HashMap has no stable order,
@@ -2476,7 +2512,7 @@ fn node_fingerprint(
     // `style_off`, a tab strip's active/idle pair, a text's `color`, a stage's `tint`,
     // a tooltip's `rune_color`) — plus `color_bind`, where the Model holds the path.
     h.json(st);
-    for key in ["style_off", "tab_active", "tab_idle", "glyph_style", "color", "tint", "rune_color"] {
+    for key in ["style_off", "tab_active", "tab_idle", "glyph_style", "color", "tint", "rune_color", "runes_style"] {
         if let Some(path) = ptext(node, key) {
             h.json(jpath(styles, path));
         }
@@ -2701,12 +2737,14 @@ fn component_props(
             props.insert("rule_style".to_string(), jpath(styles, ptext(node, "rule_style").unwrap_or("paged_menu.rule")).clone());
             props.insert("glyph_style".to_string(), jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone());
         }
-        "splash" => {
+        "sprite" => {
             // `backdrop` is a dotted style path (a colour cannot ride as a scalar
-            // prop); default = the scene styles' `logo.backdrop`, falling back to
-            // opaque black in `draw_splash` when unauthored.
-            let c = json_color(jpath(styles, ptext(node, "backdrop").unwrap_or("logo.backdrop")), [0.0, 0.0, 0.0, 1.0]);
-            props.insert("backdrop_rgba".to_string(), serde_json::json!([c[0], c[1], c[2], c[3]]));
+            // prop) — resolved ONLY when authored: a bare sprite is a raw quad
+            // with nothing behind it, and only a presenting one paints a slate.
+            if let Some(path) = ptext(node, "backdrop") {
+                let c = json_color(jpath(styles, path), [0.0, 0.0, 0.0, 1.0]);
+                props.insert("backdrop_rgba".to_string(), serde_json::json!([c[0], c[1], c[2], c[3]]));
+            }
         }
         _ => {}
     }
@@ -2843,9 +2881,7 @@ fn draw_node(
             // every component, so listing kinds separately would only repeat it.
             match k {
                 "panel" => draw_panel(r, &props, out),
-                "sprite" => draw_sprite(r, &props, out),
-                "splash" => draw_splash(r, node, model, &props, out),
-                "rune_corners" => draw_rune_corners(r, &props, out),
+                "sprite" => draw_sprite(r, node, model, &props, out),
                 "tooltip" => draw_tooltip(r, &props, out),
                 "checkbox" => draw_checkbox(r, &props, out),
                 "toggle" => draw_toggle(r, &props, out),
@@ -2869,6 +2905,14 @@ fn draw_node(
                 "paged_menu" => draw_paged_menu(r, node, model, &props, out),
                 _ => draw_button(r, &props, out),
             }
+            // CORNER RUNES are a DECORATION FLAG on any component, not a kind of
+            // their own (Aaron 2026-08-14): a node authoring `runes: true` wears
+            // the four carved glyphs over whatever its own arm just drew;
+            // `runes_style` names an override block, else the compiled house look.
+            if pbool(node, "runes") {
+                let rb = ptext(node, "runes_style").map_or(&Json::Null, |p| jpath(styles, p));
+                draw_corner_runes(r, node, rb, out);
+            }
             return Some(props);
         }
         // Styled boxes — including `cell` (the generic layout box) and an `rtt`, whose
@@ -2878,6 +2922,13 @@ fn draw_node(
         "cell" | "row" | "stack" | "screen" | "rtt" | "grid" => {
             if !st.is_null() {
                 draw_panel_bg(r, st, out);
+            }
+            // The same corner-rune DECORATION FLAG the component arm honours —
+            // the window slabs are stacks, and a slab that wears the carved
+            // corners authors `runes: true` instead of a separate overlay node.
+            if pbool(node, "runes") {
+                let rb = ptext(node, "runes_style").map_or(&Json::Null, |p| jpath(styles, p));
+                draw_corner_runes(r, node, rb, out);
             }
         }
         // (`list` — the scrolling region's backdrop + scrollbar — draws in the
@@ -3041,14 +3092,16 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // A `popup_panel` is a full-rect claim like a `panel`: its slab must not pick
         // through to the scene behind the modal, and its items are their own child nodes
         // that answer their own clicks. It writes no bind and fires no action of its own.
-        "button" | "panel" | "tile" | "action_slot" | "popup_panel" | "splash" => Some(HitShape::Rect),
+        "button" | "panel" | "tile" | "action_slot" | "popup_panel" => Some(HitShape::Rect),
         // Pure decoration — never claims, never interacts. A tooltip that claimed would
-        // eat every click beneath the cursor it follows; a sprite is an image, not a
-        // surface, so clicks pass through to the scene behind it. The gauges, the stat
+        // eat every click beneath the cursor it follows. The gauges, the stat
         // dot and the portrait medallion are the READ-OUT half of that rule: they report
         // state and are never targets, so a bar, a legend or a party portrait laid over
-        // the world does not eat the click that steers it.
-        "sprite" | "rune_corners" | "tooltip" | "gauge" | "resource_gauge" | "stat_dot"
+        // the world does not eat the click that steers it. (A `sprite` answers in the
+        // BESPOKE tier: a raw image passes clicks through, a PRESENTING one — it
+        // carries the fade ramp — is a boot surface and claims, so a click lands on
+        // it as the skip.)
+        "tooltip" | "gauge" | "resource_gauge" | "stat_dot"
         | "medallion" => Some(HitShape::None),
         _ => None,
     }
@@ -3075,7 +3128,8 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
 fn rust_owns_hit(kind: &str) -> bool {
     matches!(
         kind,
-        "checkbox"
+        "sprite"
+            | "checkbox"
             | "toggle"
             | "radio"
             | "pill_toggle"
@@ -3138,48 +3192,78 @@ fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     }
 }
 
-/// The **sprite** — an image node: blit the engine texture named by `tex` into the
-/// node's whole rect, tinted white × `alpha`. The menu's Muse plate is one of these.
+/// The **sprite** — THE image component (Aaron 2026-08-14: splash was only ever a
+/// sprite with behaviour, and behaviour is what the Lua seam configures — ONE
+/// component). A bare `tex` blits the engine texture into the node's whole rect,
+/// tinted white × `alpha` — the menu's Muse plate, the sablework swatch. Three
+/// OPTIONAL features turn the same node into a presenter (the intro logos):
 ///
-/// It owns the BLIT and nothing else: the aspect lock, the anchor and the deliberate
-/// spill past the viewport (cover, never letterbox) are the walker's layout, and the
-/// node's `layer` prop is the walker's sub-layer — which is how one component serves a
-/// full-bleed backdrop and a 32px icon alike.
+/// - `backdrop` — a dotted style path painted as a full-rect slate under the
+///   image (resolved to `backdrop_rgba` by `component_props`, only when authored).
+/// - `fit` (0..1) — CONTAIN-fit the image's native size (`Model.img_w`/`img_h`,
+///   published by the scene at load) inside that fraction of the rect, centred:
+///   letterbox, never distort. Absent, the quad fills the rect — the aspect
+///   lock, anchor and deliberate spill past the viewport (cover) stay the
+///   walker's layout job.
+/// - `fade_in` / `hold` / `fade_out` (seconds) — the alpha ramp against the
+///   scene clock (`Model.elapsed`): linear rise, flat hold, linear fall,
+///   `fade_out` falling back to `fade_in`. The ramp MULTIPLIES the `alpha` prop.
 ///
-/// No `tex` draws NOTHING rather than texture 0 — the same rule the glyph face
-/// follows: a missing image must be visibly missing, never silently the wrong picture.
-fn draw_sprite(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
+/// The pair script CONFIGURES the features from `arrange()` — prop overrides on
+/// this node (the logo scenes set image + timeline exactly that way).
+///
+/// No `tex` draws NOTHING past the backdrop rather than texture 0 — the same
+/// rule the glyph face follows: a missing image must be visibly missing, never
+/// silently the wrong picture.
+fn draw_sprite(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut Vec<HudCommand>) {
+    // The slate first, so a missing image is a visible void on it, not a hole.
+    if let Some(bg) = props.get("backdrop_rgba") {
+        let bg = json_color(bg, [0.0, 0.0, 0.0, 1.0]);
+        out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color: bg, layer: 0.0 });
+    }
     let Some(tex) = props.get("tex").and_then(|v| v.as_f64()) else {
         return;
     };
+    let ramp = if sprite_has_ramp(node) { sprite_ramp_of(node, model) } else { 1.0 };
+    let alpha = ramp * jnum(props, "alpha", 1.0);
+
+    // Contain-fit only when asked: the image's native size inside `fit` of the
+    // rect, centred. A raw sprite fills its box.
+    let (bx, by, bw, bh) = if let Some(fit) = pnum(node, "fit") {
+        let fit = fit as f32;
+        let iw = model.number("img_w").unwrap_or(1.0).max(1.0) as f32;
+        let ih = model.number("img_h").unwrap_or(1.0).max(1.0) as f32;
+        let scale = (r.w * fit / iw).min(r.h * fit / ih);
+        let (w, h) = (iw * scale, ih * scale);
+        (r.x + (r.w - w) * 0.5, r.y + (r.h - h) * 0.5, w, h)
+    } else {
+        (r.x, r.y, r.w, r.h)
+    };
     out.push(HudCommand::Sprite {
         tex: tex.floor() as u32,
-        x: r.x,
-        y: r.y,
-        w: r.w,
-        h: r.h,
-        color: [1.0, 1.0, 1.0, jnum(props, "alpha", 1.0)],
+        x: bx,
+        y: by,
+        w: bw,
+        h: bh,
+        color: [1.0, 1.0, 1.0, alpha],
         layer: 0.0,
         // The WHOLE image: an atlas sub-rect is the glyph face's business, not this one's.
         uv: [0.0, 0.0, 1.0, 1.0],
     });
 }
 
-/// **Splash** — ONE full-bleed image that fades in, holds, then fades out: the
-/// intro-logo component. The DRAWING logic lives here (the fifth-plus component,
-/// same as the other four dozen); the scene's pair script CONFIGURES it from its
-/// `arrange()` — the entry's `image` / `fade_in` / `hold` / `fade_out` prop
-/// overrides, which the engine applies onto this node's props.
-///
-/// Props: `tex` (texture index), `fade_in` / `hold` / `fade_out` (seconds),
-/// `fit` (0..1 of the rect the image may fill), `backdrop_rgba` (resolved by
-/// `component_props`). Model: `elapsed` (seconds), `img_w` / `img_h` (the
-/// image's native pixels, published by the scene at load).
-///
-/// The alpha ramp is the exact timeline the two splash scripts used to carry in
-/// duplicate: linear rise over `fade_in`, flat 1.0 through `hold`, linear fall
-/// over `fade_out`.
-pub(crate) fn splash_alpha(elapsed: f32, fade_in: f32, hold: f32, fade_out: f32) -> f32 {
+/// Whether this sprite carries the presentation ramp — ANY timeline prop makes it
+/// a presenter (and, in `hit_sprite`, a claiming surface). The one definition the
+/// draw, the cache fingerprint and the hit tier all consult, so the three can
+/// never disagree about which mode a node is in.
+fn sprite_has_ramp(node: &UiNode) -> bool {
+    ["fade_in", "hold", "fade_out"].iter().any(|k| pnum(node, k).is_some())
+}
+
+/// The pure ramp: linear rise over `fade_in`, flat 1.0 through `hold`, linear
+/// fall over `fade_out` — the timeline the two logo scripts used to carry in
+/// duplicate before the component owned it.
+pub(crate) fn sprite_ramp(elapsed: f32, fade_in: f32, hold: f32, fade_out: f32) -> f32 {
     let alpha = if elapsed < fade_in {
         if fade_in <= 0.0 { 1.0 } else { elapsed / fade_in }
     } else if elapsed > fade_in + hold {
@@ -3190,67 +3274,46 @@ pub(crate) fn splash_alpha(elapsed: f32, fade_in: f32, hold: f32, fade_out: f32)
     alpha.clamp(0.0, 1.0)
 }
 
-/// The splash node's CURRENT ramp alpha: its timeline props (with `fade_out`
+/// A presenting sprite's CURRENT ramp alpha: its timeline props (with `fade_out`
 /// falling back to `fade_in`, exactly as the draw defaults) against the scene
 /// clock (`Model.elapsed`). THE one reader for both the draw and the cache
 /// fingerprint, so the default chain can never fork between them.
-fn splash_alpha_of(node: &UiNode, model: &ValueMap) -> f32 {
+fn sprite_ramp_of(node: &UiNode, model: &ValueMap) -> f32 {
     let fade_in = pnum(node, "fade_in").unwrap_or(0.6) as f32;
     let hold = pnum(node, "hold").unwrap_or(1.2) as f32;
     let fade_out = pnum(node, "fade_out").unwrap_or(f64::from(fade_in)) as f32;
     let elapsed = model.number("elapsed").unwrap_or(0.0) as f32;
-    splash_alpha(elapsed, fade_in, hold, fade_out)
+    sprite_ramp(elapsed, fade_in, hold, fade_out)
 }
 
-fn draw_splash(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut Vec<HudCommand>) {
-    let bg = first_color(props, &["backdrop_rgba"], [0.0, 0.0, 0.0, 1.0]);
-    out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color: bg, layer: 0.0 });
-
-    let Some(tex) = pnum(node, "tex") else { return };
-    let fit = pnum(node, "fit").unwrap_or(0.9) as f32;
-    let alpha = splash_alpha_of(node, model);
-
-    // Contain-fit the image's native size inside `fit` of the rect, centred.
-    let iw = model.number("img_w").unwrap_or(1.0).max(1.0) as f32;
-    let ih = model.number("img_h").unwrap_or(1.0).max(1.0) as f32;
-    let scale = (r.w * fit / iw).min(r.h * fit / ih);
-    let (w, h) = (iw * scale, ih * scale);
-    out.push(HudCommand::Sprite {
-        tex: tex.floor() as u32,
-        x: r.x + (r.w - w) * 0.5,
-        y: r.y + (r.h - h) * 0.5,
-        w,
-        h,
-        color: [1.0, 1.0, 1.0, alpha],
-        layer: 0.0,
-        uv: [0.0, 0.0, 1.0, 1.0],
-    });
-}
-
-/// **Rune corners** — four Elder-Futhark glyphs inset from the rect's corners, the TOP
-/// pair in rune-light and the BOTTOM pair in dim bronze. The carved inlay a Prism frame
-/// wears: pure decoration, no bind, no action, no claim.
+/// **Corner runes** — four Elder-Futhark glyphs inset from a node's corners, the TOP
+/// pair in rune-light and the BOTTOM pair in dim bronze. The carved inlay a Prism slab
+/// wears: pure DECORATION, and therefore a FLAG (`runes: true` on the node), never a
+/// component of its own (Aaron 2026-08-14) — both draw arms call this after the node's
+/// own drawing; a slab in the same frame family that doesn't wear runes simply doesn't
+/// author the flag.
 ///
-/// Each corner is its OWN prop with its own default, so a caller overrides exactly one
-/// — the `frame` template blanks `tr` with an EMPTY STRING on a closable frame so the
-/// glyph does not paint beneath the ✕ — without restating the set. An empty string is
-/// therefore a meaningful value, not a missing one, and must not fall back to the
-/// default (Lua's `or` agrees: `""` is truthy there).
+/// Each corner is its OWN node prop with its own default, so a caller overrides exactly
+/// one — a closable frame blanks `tr` with an EMPTY STRING so the glyph does not paint
+/// beneath the ✕ — without restating the set. An empty string is therefore a meaningful
+/// value, not a missing one, and must not fall back to the default (Lua's `or` agrees:
+/// `""` is truthy there).
 ///
 /// The bottom pair is inset UP by a further glyph height so its box mirrors the top
 /// pair's — text is placed by its TOP edge, so subtracting `size` is what stops the
 /// bottom two hanging off the edge.
-fn draw_rune_corners(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
-    let s = props.get("style").unwrap_or(&Json::Null);
+fn draw_corner_runes(r: Rect, node: &UiNode, s: &Json, out: &mut Vec<HudCommand>) {
+    // `s` is the `runes_style` override block (resolved by the caller), else Null.
     // Defaults ARE the house look (five-line item 3): the retired `settings.runes`
     // block's values — inset 14, size 16, rune-glow top, bronze-dim bottom — are the
-    // compiled fallback now, so a bare `rune_corners` draws the carved-corner chrome
-    // and a scene that wants a different look overrides with a `style` block (the
+    // compiled fallback now, so a bare flag draws the carved-corner chrome and a
+    // scene that wants a different look points `runes_style` at a block (the
     // Component Catalog does). Mirrors of theme tokens; the drift gate
-    // `rune_corners_default_matches_theme_tokens` fails loud if they diverge.
+    // `corner_rune_defaults_match_theme_tokens` fails loud if they diverge.
     let inset = jnum(s, "inset", 14.0);
-    // The node may pin a glyph size; otherwise the style's, else the house default.
-    let size = jnum(props, "glyph_size", jnum(s, "size", 16.0));
+    // The node may pin a glyph size; otherwise the block's, else the house default.
+    let size =
+        pnum(node, "glyph_size").map(|n| n as f32).unwrap_or_else(|| jnum(s, "size", 16.0));
     let glow = first_color(s, &["top"], RUNE);
     let bronze = first_color(s, &["bot"], BRONZE_DIM);
     let by = r.y + r.h - inset - size;
@@ -3262,7 +3325,7 @@ fn draw_rune_corners(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         ("bl", "ᚨ", r.x + inset, by, bronze, TextAlign::Left),
         ("br", "ᛟ", r.x + r.w - inset, by, bronze, TextAlign::Right),
     ] {
-        let glyph = props.get(key).and_then(|v| v.as_str()).unwrap_or(dflt);
+        let glyph = ptext(node, key).unwrap_or(dflt);
         push_text(out, x, y, glyph, size, color, align, FontRole::Rune, false, false, -1.0, None);
     }
 }
@@ -3531,6 +3594,39 @@ fn button_variant(name: &str) -> BtnVariant {
     }
 }
 
+/// The **size ladder** — the DS Button contract's three sizes, compiled the way
+/// [`BtnVariant`] compiles the palettes. From `Button.jsx` `SIZES` (pad + font,
+/// CSS box → slab height): sm = 7×14 / 10 → 28 · md = 9×20 / 12 → 32 ·
+/// lg = 14×22 / 15 → 45. Authored per node as `size_class` beside `variant`;
+/// the tree says WHICH rung, never re-derives the pixels. `pad_x` ships with the
+/// contract for the content-hug seam to come; height + label are what the walker
+/// consumes today. An explicit `height`/`size`/`label_size` on the node still
+/// wins — the ladder is the DEFAULT under the author's hand, like a variant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BtnSize {
+    pub h: f32,
+    pub pad_x: f32,
+    pub label_size: f32,
+}
+pub const SIZE_SM: BtnSize = BtnSize { h: 28.0, pad_x: 14.0, label_size: 10.0 };
+pub const SIZE_MD: BtnSize = BtnSize { h: 32.0, pad_x: 20.0, label_size: 12.0 };
+pub const SIZE_LG: BtnSize = BtnSize { h: 45.0, pad_x: 22.0, label_size: 15.0 };
+
+/// Resolve a `size_class` name to its ladder rung. An unrecognised name WARNS and
+/// returns `None` (the button falls to its explicit/legacy geometry) — geometry has
+/// no magenta, so the warn is the loud half of the authored-name contract (4BB12A75).
+fn button_size(name: &str) -> Option<BtnSize> {
+    match name {
+        "sm" => Some(SIZE_SM),
+        "md" => Some(SIZE_MD),
+        "lg" => Some(SIZE_LG),
+        _ => {
+            tracing::warn!("unknown button size_class '{name}' — expected sm | md | lg");
+            None
+        }
+    }
+}
+
 /// The **button** — an SDF panel slab + a centred FACE, with hover + pressed
 /// states (press = 1px nudge + `press_*` stops), an optional sapphire glow halo,
 /// and per-variant fill/border/label (primary / secondary / danger / ghost). The
@@ -3651,7 +3747,16 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         draw_glyph_face(r, props, flash, out);
         return;
     }
-    let lsz = jnum(s, "label_size", jnum(props, "label_size", 14.0));
+    // Label size: the NODE's own prop wins (the tree is the author's hand — G4
+    // prop-wins normalization), then the style block, then the size ladder's rung,
+    // then the neutral default.
+    let rung = props
+        .get("size_class")
+        .and_then(|v| v.as_str())
+        .and_then(button_size)
+        .map(|l| l.label_size)
+        .unwrap_or(14.0);
+    let lsz = jnum(props, "label_size", jnum(s, "label_size", rung));
     let label = props.get("label").and_then(|v| v.as_str()).unwrap_or_default();
     push_text(
         out,
@@ -4025,8 +4130,10 @@ fn pill_cell(well: Rect, pad: f32, n: usize, i: usize) -> Rect {
 fn draw_pill_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     let pad = jnum(s, "pad", 3.0);
-    let radius = jnum(s, "radius", 15.0);
     let well = pill_well(r, s);
+    // Capsule by DERIVATION, like toggle and badge — half the well's own height,
+    // not a literal that is only a capsule at one particular h.
+    let radius = jnum(s, "radius", well.h * 0.5);
 
     // The well: a `bg` fill and a hairline `border`.
     let border = first_color(s, &["border"], CLEAR);
@@ -4670,7 +4777,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         push_text(out, r.x, ly, label, lsz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
     }
 
-    // Rail, the fill up to the value, then the handle riding on it.
+    // Rail, the fill up to the value, then the handle riding on it. The rail is a
+    // SUNK TRACK (styling S3): an SDF panel — capsule radius by DERIVATION (half
+    // its thin axis), squared off by an explicit `radius: 0` — with an alpha-gated
+    // `border` (the DS sunk look is well fill + edge border; effects.css rt-note).
     let track_col = if focused {
         first_color(s, &["focus_track"], STONE)
     } else {
@@ -4678,26 +4788,36 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     };
     let fill_col =
         if focused { first_color(s, &["focus_fill"], RUNE) } else { first_color(s, &["fill"], SAP) };
-    push_rect(out, track, track_col);
+    let thin = if vertical { track.w } else { track.h };
+    let radius = jnum(s, "radius", thin * 0.5);
+    let border = first_color(s, &["border"], CLEAR);
+    let border_w = jnum(s, "border_w", 1.0);
+    push_panel(out, track, track_col, None, radius, border, border_w);
     let t = saturate((value - min) / (max - min));
     let hw = jnum(s, "handle_w", 9.0);
     let over = jnum(s, "handle_over", 4.0);
     let fill_hi = first_color(s, &["fill_hi"], CLEAR);
     let hi_w = jnum(s, "fill_hi_w", 1.0);
     let handle = first_color(s, &["handle"], SAP);
+    // The handle is a rounded knob (chips-class radius by default, its own key to tune).
+    let handle_radius = jnum(s, "handle_radius", 2.0);
     if vertical {
         // The fill RISES from the floor of the rail; the handle is a bar across it.
         let fh = track.h * t;
         let fy = track.y + track.h - fh;
-        push_rect(out, Rect { y: fy, h: fh, ..track }, fill_col);
+        push_panel(out, Rect { y: fy, h: fh, ..track }, fill_col, None, radius, CLEAR, 0.0);
         if fill_hi[3] > 0.0 && fh > 0.0 {
             push_rect(out, Rect { y: fy, h: hi_w, ..track }, fill_hi);
         }
         let hy = track.y + track.h * (1.0 - t);
-        push_rect(
+        push_panel(
             out,
             Rect { x: track.x - over, y: hy - hw * 0.5, w: track.w + 2.0 * over, h: hw },
             handle,
+            None,
+            handle_radius,
+            CLEAR,
+            0.0,
         );
         // The live readout rides BESIDE the handle, on the same `value_w` opt-in the
         // horizontal form spends on a right column; the RANGE marks read off the rail's
@@ -4720,11 +4840,11 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         return;
     }
     let fw = track.w * t;
-    push_rect(out, Rect { w: fw, ..track }, fill_col);
+    push_panel(out, Rect { w: fw, ..track }, fill_col, None, radius, CLEAR, 0.0);
     if fill_hi[3] > 0.0 && fw > 0.0 {
         push_rect(out, Rect { w: fw, h: hi_w, ..track }, fill_hi);
     }
-    push_rect(
+    push_panel(
         out,
         Rect {
             x: track.x + track.w * t - hw * 0.5,
@@ -4733,6 +4853,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             h: track.h + 2.0 * over,
         },
         handle,
+        None,
+        handle_radius,
+        CLEAR,
+        0.0,
     );
     // The readout, lying down: the right column the rail was already inset for (the
     // upright form drew beside its handle above).
@@ -4845,11 +4969,17 @@ fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         push_text(out, r.x, r.y + (r.h - lsz) * 0.5, label, lsz, label_col, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
     }
 
-    // The field, then the two end buttons over it.
-    push_rect(out, field, first_color(s, &["field", "box"], PANEL));
+    // The field, then the two end buttons over it — inputs-class rounding
+    // (radius-sm) with alpha-gated borders (styling S3): the sunk field wears
+    // `border`, the end cells their own `btn_border`.
+    let radius = jnum(s, "radius", 3.0);
+    let border_w = jnum(s, "border_w", 1.0);
+    push_panel(out, field, first_color(s, &["field", "box"], PANEL), None, radius, first_color(s, &["border"], CLEAR), border_w);
     let btn_col = first_color(s, &["btn"], STONE);
-    push_rect(out, minus, btn_col);
-    push_rect(out, plus, btn_col);
+    let btn_border = first_color(s, &["btn_border"], CLEAR);
+    let btn_radius = jnum(s, "btn_radius", radius);
+    push_panel(out, minus, btn_col, None, btn_radius, btn_border, border_w);
+    push_panel(out, plus, btn_col, None, btn_radius, btn_border, border_w);
 
     // The faces, then the value centred in the field. The glyphs are display FONT, not
     // display copy: they are the control's own affordance rather than authored text, so
@@ -4949,10 +5079,10 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     };
     push_panel(out, r, top, Some(bot), jnum(s, "radius", 3.0), border, border_w);
 
-    // The value, or the placeholder while it is empty. `label_size` reads the STYLE
-    // first and the node second: a field's copy sizes with its palette, but one dense
-    // row can still shrink its own.
-    let lsz = jnum(s, "label_size", jnum(props, "label_size", 14.0));
+    // The value, or the placeholder while it is empty. `label_size`: the NODE's own
+    // prop wins over the style block (prop-wins, uniform across kinds — the tree is
+    // the author's hand), the palette supplies the default.
+    let lsz = jnum(props, "label_size", jnum(s, "label_size", 14.0));
     let pad = jnum(props, "text_pad", 8.0);
     let value = jstr(props, "bind_value");
     let (shown, color) = if value.is_empty() {
@@ -5283,7 +5413,10 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let lo = jnum(props, "lo", 0.3);
     let hi = jnum(props, "hi", 0.7);
 
-    push_rect(out, r, first_color(s, &["track"], WELL));
+    // The sunk track (styling S3): slots-class rounding with an alpha-gated
+    // border; the band and caliper marker stay crisp rects inside/across it.
+    let radius = jnum(s, "radius", 3.0);
+    push_panel(out, r, first_color(s, &["track"], WELL), None, radius, first_color(s, &["border"], CLEAR), jnum(s, "border_w", 1.0));
     // The habitable band — the green zone in the middle of the bar.
     push_rect(
         out,
@@ -5308,7 +5441,9 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     else {
         let wash = first_color(s, &["no_signal"], CLEAR);
         if wash[3] > 0.0 {
-            push_rect(out, r, wash);
+            // The wash follows the track's rounding — a square wash over rounded
+            // corners would leave four lit specks.
+            push_panel(out, r, wash, None, radius, CLEAR, 0.0);
         }
         return;
     };
@@ -5828,8 +5963,9 @@ fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 
     let border = first_color(s, &["border"], CLEAR);
     push_panel(out, pill, bg, None, jnum(s, "radius", pill.h * 0.5), border, jnum(s, "border_w", 1.0));
-    // The style's size wins over the node's, which is the one prop a dense strip tunes.
-    let lsz = jnum(s, "label_size", jnum(props, "label_size", 11.0));
+    // The NODE's own prop wins over the style block (prop-wins, uniform across
+    // kinds — the tree is the author's hand); the style supplies the default.
+    let lsz = jnum(props, "label_size", jnum(s, "label_size", 11.0));
     push_text(out, pill.x + pill.w * 0.5, pill.y + (pill.h - lsz) * 0.5, jstr(props, "label"), lsz, label_color, TextAlign::Center, FontRole::Label, false, false, -1.0, None);
 }
 
@@ -6521,6 +6657,88 @@ const SIG_BLUE: [f32; 4] = [0.176, 0.373, 0.69, 1.0];
 mod tests {
     use super::*;
 
+    /// THE SIZE-LADDER PIN (styling S2): the compiled rungs equal the DS Button
+    /// contract (`Button.jsx` `SIZES` — pad 7×14/9×20/14×22, font 10/12/15, one
+    /// CSS content box + 2px border each → slab heights 28/32/45). The DS file is
+    /// remote, so this pin IS the mirror gate (rule AEEF2A68): a drifted rung
+    /// repaints every ladder button in the app, and this fails first.
+    #[test]
+    fn button_size_ladder_matches_the_ds_contract() {
+        assert_eq!(SIZE_SM, BtnSize { h: 28.0, pad_x: 14.0, label_size: 10.0 });
+        assert_eq!(SIZE_MD, BtnSize { h: 32.0, pad_x: 20.0, label_size: 12.0 });
+        assert_eq!(SIZE_LG, BtnSize { h: 45.0, pad_x: 22.0, label_size: 15.0 });
+        assert_eq!(button_size("sm"), Some(SIZE_SM));
+        assert_eq!(button_size("md"), Some(SIZE_MD));
+        assert_eq!(button_size("lg"), Some(SIZE_LG));
+        assert_eq!(button_size("xl"), None, "an unknown rung warns and falls to legacy geometry");
+    }
+
+    /// A `size_class` button MEASURES its rung: the height is the ladder's (so a
+    /// non-stretch flow lands it), an explicit height/size still wins, and a
+    /// glyph face with no width of its own measures square.
+    #[test]
+    fn a_size_class_button_measures_its_rung() {
+        let model = ValueMap::default();
+        let mut b = UiNode { component: "button".into(), ..Default::default() };
+        b.props.insert("size_class".into(), Value::Text("lg".into()));
+        assert_eq!(measure(&b, &model).y, SIZE_LG.h, "the rung supplies the height");
+        assert_eq!(measure(&b, &model).x, 0.0, "width stays the author's (or grow's)");
+
+        b.height = Some(40.0);
+        assert_eq!(measure(&b, &model).y, 40.0, "an explicit height beats the rung");
+
+        let mut g = UiNode { component: "button".into(), ..Default::default() };
+        g.props.insert("size_class".into(), Value::Text("sm".into()));
+        g.props.insert("glyph".into(), Value::Number(3.0));
+        let m = measure(&g, &model);
+        assert_eq!((m.x, m.y), (SIZE_SM.h, SIZE_SM.h), "a widthless glyph button is square");
+    }
+
+    /// STYLING S3: the three flat-rect kinds wear the SUNK-TRACK shape channel —
+    /// rounded SDF tracks with alpha-gated borders — instead of bare rects. The
+    /// slider capsules by derivation (half its thin axis) and squares off with an
+    /// explicit `radius: 0`; stepper and gauge open on the inputs/slots rounding.
+    #[test]
+    fn tracks_round_and_border_through_the_shape_channel() {
+        let track_of = |out: &[HudCommand]| match out.first() {
+            Some(HudCommand::Panel { radius, border, .. }) => (*radius, *border),
+            other => panic!("the track draws as an SDF panel now, got {other:?}"),
+        };
+
+        // Slider (label-less, so the track is the first command).
+        let r = Rect { x: 0.0, y: 0.0, w: 200.0, h: 10.0 };
+        let mut out = Vec::new();
+        draw_slider(r, &serde_json::json!({ "bind_value": 0.5 }), &mut out);
+        assert_eq!(track_of(&out), (5.0, 0.0), "capsule by derivation; no border colour → no border");
+
+        out.clear();
+        let styled = serde_json::json!({
+            "bind_value": 0.5,
+            "style": { "radius": 0.0, "border": [1.0, 1.0, 1.0, 1.0], "border_w": 2.0 }
+        });
+        draw_slider(r, &styled, &mut out);
+        assert_eq!(track_of(&out), (0.0, 2.0), "explicit radius squares; a styled border draws");
+
+        // Stepper: the sunk field opens on the inputs-class rounding.
+        out.clear();
+        draw_stepper(r, &serde_json::json!({ "bind_value": 3.0 }), &mut out);
+        assert_eq!(track_of(&out), (3.0, 0.0));
+
+        // Gauge: slots-class rounding; the no-signal wash follows the track's corner.
+        out.clear();
+        draw_gauge(r, &serde_json::json!({}), &mut out);
+        assert_eq!(track_of(&out), (3.0, 0.0));
+        let wash = serde_json::json!({ "style": { "no_signal": [0.0, 0.0, 0.0, 0.5] } });
+        out.clear();
+        draw_gauge(r, &wash, &mut out);
+        match out.last() {
+            Some(HudCommand::Panel { radius, .. }) => {
+                assert_eq!(*radius, 3.0, "the wash follows the track's rounding")
+            }
+            other => panic!("the no-signal wash rounds with the track, got {other:?}"),
+        }
+    }
+
     /// DRIFT GATE (rule AEEF2A68): the button `variant` compiled defaults are a
     /// MIRROR of the theme tokens they were promoted from (the deleted
     /// `modal.buttons.variants.*` blocks). Read ui_theme.json and assert every stop
@@ -6588,12 +6806,13 @@ mod tests {
         }
     }
 
-    /// DRIFT GATE (rule AEEF2A68): `rune_corners`' compiled house defaults mirror the
-    /// theme tokens the retired `settings.runes` block named. Read ui_theme.json and
-    /// assert the corner colours still equal their tokens, so promoting the block into
-    /// drawing code can't silently fork from the one palette.
+    /// DRIFT GATE (rule AEEF2A68): the corner-rune DECORATION's compiled house
+    /// defaults mirror the theme tokens the retired `settings.runes` block named.
+    /// Read ui_theme.json and assert the corner colours still equal their tokens,
+    /// so promoting the block into drawing code can't silently fork from the one
+    /// palette.
     #[test]
-    fn rune_corners_default_matches_theme_tokens() {
+    fn corner_rune_defaults_match_theme_tokens() {
         let theme: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -6608,15 +6827,15 @@ mod tests {
                 .unwrap_or_else(|| panic!("token `{name}` missing"));
             std::array::from_fn(|i| a[i].as_f64().unwrap() as f32)
         };
-        assert_eq!(RUNE, tok("rune_glow"), "rune_corners top default mirrors rune_glow");
-        assert_eq!(BRONZE_DIM, tok("bronze_dim"), "rune_corners bottom default mirrors bronze_dim");
+        assert_eq!(RUNE, tok("rune_glow"), "corner-rune top default mirrors rune_glow");
+        assert_eq!(BRONZE_DIM, tok("bronze_dim"), "corner-rune bottom default mirrors bronze_dim");
     }
 
     /// The splash timeline, ported verbatim from the retired per-scene scripts:
     /// linear rise over fade_in, flat 1.0 through hold, linear fall over fade_out.
     #[test]
-    fn splash_alpha_ramps_holds_and_falls() {
-        let a = |t: f32| splash_alpha(t, 0.6, 1.2, 0.6);
+    fn sprite_ramp_rises_holds_and_falls() {
+        let a = |t: f32| sprite_ramp(t, 0.6, 1.2, 0.6);
         assert_eq!(a(0.0), 0.0);
         assert!((a(0.3) - 0.5).abs() < 1e-6, "halfway up the fade-in");
         assert_eq!(a(0.6), 1.0);
@@ -6624,20 +6843,20 @@ mod tests {
         assert!((a(2.1) - 0.5).abs() < 1e-6, "halfway down the fade-out");
         assert_eq!(a(2.4), 0.0);
         assert_eq!(a(9.0), 0.0, "clamped after the end");
-        assert_eq!(splash_alpha(0.0, 0.0, 1.0, 0.5), 1.0, "zero fade-in shows instantly");
+        assert_eq!(sprite_ramp(0.0, 0.0, 1.0, 0.5), 1.0, "zero fade-in shows instantly");
     }
 
-    /// THE SPLASH ANIMATES THROUGH THE CACHE: its alpha is driven by
-    /// `Model.elapsed` — a model read no `*_bind` prop declares — so the
+    /// A PRESENTING SPRITE ANIMATES THROUGH THE CACHE: its ramp alpha is driven
+    /// by `Model.elapsed` — a model read no `*_bind` prop declares — so the
     /// fingerprint must fold it by kind. Without that fold the first frame
-    /// (alpha ≈ 0) replays forever: in-window, a splash that never fades in.
+    /// (alpha ≈ 0) replays forever: in-window, a logo that never fades in.
     /// The plateau still replays — equal alpha ⇒ byte-identical commands.
     #[test]
-    fn a_splash_redraws_as_its_clock_advances() {
+    fn a_presenting_sprite_redraws_as_its_clock_advances() {
         // Redraw counts fold `strings::generation()` into every fingerprint, so hold
         // the stringtable guard (see `hovering_redraws_only_the_hovered_node`).
         let _g = crate::strings::test_guard();
-        let mut sp = node("splash");
+        let mut sp = node("sprite");
         sp.id = "sp".into();
         sp.width = Some(200.0);
         sp.height = Some(100.0);
@@ -9850,13 +10069,14 @@ mod tests {
         sl = prop(sl, "style", Value::Text("sl".into()));
         let mut page = node("screen");
         page.children = vec![sl];
-        // Rects, in order: track (full width 100), fill (value-scaled), handle.
+        // Panels, in order (S3 sunk tracks): track (full width 100), fill
+        // (value-scaled), handle.
         let fill_w = |v: f64| {
             let model = ValueMap::new().with("v", v);
             let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
             assert!(f.stats.redraw_nodes >= 1, "the slider really drew this frame");
             let widths: Vec<f32> = f.commands.iter().filter_map(|c| match c {
-                HudCommand::Rect { w, .. } => Some(*w),
+                HudCommand::Panel { w, .. } => Some(*w),
                 _ => None,
             }).collect();
             widths[1]
@@ -9885,8 +10105,8 @@ mod tests {
         let model = ValueMap::new().with("n", 60.0);
         let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
         assert!(f.stats.redraw_nodes >= 1, "the stepper really drew this frame");
-        let rects = f.commands.iter().filter(|c| matches!(c, HudCommand::Rect { .. })).count();
-        assert_eq!(rects, 3, "field background + two end buttons");
+        let slabs = f.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count();
+        assert_eq!(slabs, 3, "field background + two end buttons (S3: SDF slabs)");
         assert!(
             f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "60 fps")),
             "the value renders formatted with decimals + suffix"
@@ -10430,19 +10650,21 @@ mod tests {
     }
 
     #[test]
-    fn rune_corners_draws_four_glyphs_glow_top_bronze_bottom() {
-        // A rune_corners overlay filling a 200×120 rect at the origin, carrying the four
-        // corner glyphs + the reused `runes` style block (mirrors `settings.runes`).
-        let mut rc = node("rune_corners");
+    fn corner_rune_flag_draws_four_glyphs_glow_top_bronze_bottom() {
+        // The corner runes are a DECORATION FLAG now: a plain cell spanning a
+        // 200×120 rect authors `runes: true`, the four corner glyphs, and a
+        // `runes_style` override block (mirrors `settings.runes`).
+        let mut rc = node("cell");
         rc.id = "rc".into();
         rc.width = Some(200.0);
         rc.height = Some(120.0);
         rc.anchor = Some(UiAnchor::TopLeft);
+        rc = prop(rc, "runes", Value::Bool(true));
         rc = prop(rc, "tl", Value::Text("ᛞ".into()));
         rc = prop(rc, "tr", Value::Text("ᛝ".into()));
         rc = prop(rc, "bl", Value::Text("ᚨ".into()));
         rc = prop(rc, "br", Value::Text("ᛟ".into()));
-        rc = prop(rc, "style", Value::Text("runes".into()));
+        rc = prop(rc, "runes_style", Value::Text("runes".into()));
         let mut page = node("screen");
         page.children = vec![rc];
 
@@ -10491,7 +10713,7 @@ mod tests {
         assert!(runes[0].2 < runes[2].2 && runes[1].2 < runes[3].2, "top pair above bottom pair");
 
         // No interaction: a bare decoration doesn't claim the pointer on its own.
-        assert!(!frame.results.is_on("hud_hit"), "a bare rune_corners overlay claims nothing");
+        assert!(!frame.results.is_on("hud_hit"), "a rune-flagged bare cell claims nothing");
     }
 
     #[test]
@@ -10719,7 +10941,10 @@ mod tests {
                 .commands
                 .iter()
                 .filter_map(|c| match c {
+                    // The track + no-signal wash are SDF panels now (S3); the band,
+                    // sheen and marker stay rects — one flat list keeps the order.
                     HudCommand::Rect { x, w, color, .. } => Some((*x, *w, *color)),
+                    HudCommand::Panel { x, w, color, .. } => Some((*x, *w, *color)),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -11916,6 +12141,25 @@ mod tests {
         HudCommand::Rect { x, y, w, h, color, layer: 0.0 }
     }
 
+    /// A borderless SDF slab pin — the S3 sunk-track shape (solid fill, no grad,
+    /// alpha-gated border resolved to none).
+    fn pin_panel(x: f32, y: f32, w: f32, h: f32, color: [f32; 4], radius: f32) -> HudCommand {
+        HudCommand::Panel {
+            x,
+            y,
+            w,
+            h,
+            color,
+            color2: color,
+            grad: 0.0,
+            radius,
+            border: 0.0,
+            border_color: CLEAR,
+            feather: 0.0,
+            layer: 0.0,
+        }
+    }
+
     fn pin_text(
         x: f32,
         y: f32,
@@ -11982,13 +12226,15 @@ mod tests {
             vec![
                 // Caption: the rect's left edge, centred on the 15px line.
                 pin_text(12.0, 32.5, "SIZE", 15.0, INK_C, TextAlign::Left, FontRole::Body),
-                // Rail: x 12+80, w 300−80−40, y centred for a 12px height.
-                pin_rect(92.0, 34.0, 180.0, 12.0, TRACK),
+                // Rail: x 12+80, w 300−80−40, y centred for a 12px height — a sunk
+                // slab capsuled at half its height (S3), fill matching, knob at the
+                // chips radius.
+                pin_panel(92.0, 34.0, 180.0, 12.0, TRACK, 6.0),
                 // Fill to 0.625 of 180, then the 1px highlight along its top edge.
-                pin_rect(92.0, 34.0, 112.5, 12.0, FILL),
+                pin_panel(92.0, 34.0, 112.5, 12.0, FILL, 6.0),
                 pin_rect(92.0, 34.0, 112.5, 1.0, HI),
                 // Handle: 7 wide, centred on the fill's end, overhanging 4px each side.
-                pin_rect(201.0, 30.0, 7.0, 20.0, HANDLE),
+                pin_panel(201.0, 30.0, 7.0, 20.0, HANDLE, 2.0),
                 // Readout: right-aligned on the row's own right edge.
                 pin_text(312.0, 34.5, "+2.5 kg", 11.0, VALUE, TextAlign::Right, FontRole::Body),
             ],
@@ -12009,10 +12255,10 @@ mod tests {
             draw(dial, &props),
             vec![
                 pin_text(40.0, 10.0, "POP", 15.0, INK_C, TextAlign::Left, FontRole::Body),
-                pin_rect(65.0, 33.0, 10.0, 177.0, TRACK),
-                pin_rect(65.0, 143.625, 10.0, 66.375, FILL),
+                pin_panel(65.0, 33.0, 10.0, 177.0, TRACK, 5.0),
+                pin_panel(65.0, 143.625, 10.0, 66.375, FILL, 5.0),
                 pin_rect(65.0, 143.625, 10.0, 1.0, HI),
-                pin_rect(61.0, 140.125, 18.0, 7.0, HANDLE),
+                pin_panel(61.0, 140.125, 18.0, 7.0, HANDLE, 2.0),
                 pin_text(85.0, 138.125, "4", 11.0, VALUE, TextAlign::Left, FontRole::Body),
                 // Range marks: `value_size` − 2, the MAX at the top (a planet grows up).
                 pin_text(55.0, 28.5, "9", 9.0, VALUE, TextAlign::Right, FontRole::Body),
@@ -12038,9 +12284,9 @@ mod tests {
         assert_eq!(
             draw(row, &serde_json::json!({ "style": {}, "label": "", "layer": 0.0, "bind_value": 0.5 })),
             vec![
-                pin_rect(12.0, 20.0, 160.0, 28.0, PANEL),
-                pin_rect(12.0, 20.0, 28.0, 28.0, STONE),
-                pin_rect(144.0, 20.0, 28.0, 28.0, STONE),
+                pin_panel(12.0, 20.0, 160.0, 28.0, PANEL, 3.0),
+                pin_panel(12.0, 20.0, 28.0, 28.0, STONE, 3.0),
+                pin_panel(144.0, 20.0, 28.0, 28.0, STONE, 3.0),
                 pin_text(26.0, 27.5, "-", 13.0, INK_C, TextAlign::Center, FontRole::Label),
                 pin_text(158.0, 27.5, "+", 13.0, INK_C, TextAlign::Center, FontRole::Label),
                 pin_text(92.0, 27.5, "0.50", 13.0, INK_C, TextAlign::Center, FontRole::Body),
@@ -12065,10 +12311,10 @@ mod tests {
             vec![
                 pin_text(12.0, 26.5, "FPS", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Left, FontRole::Body),
                 // Field: past the 60px caption column, 20 tall and centred in the row.
-                pin_rect(72.0, 24.0, 100.0, 20.0, [0.1, 0.11, 0.12, 1.0]),
+                pin_panel(72.0, 24.0, 100.0, 20.0, [0.1, 0.11, 0.12, 1.0], 3.0),
                 // Each end cell is as wide as the field is TALL — square at any height.
-                pin_rect(72.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0]),
-                pin_rect(152.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0]),
+                pin_panel(72.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0], 3.0),
+                pin_panel(152.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0], 3.0),
                 pin_text(82.0, 26.5, "-", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
                 pin_text(162.0, 26.5, "+", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
                 pin_text(122.0, 28.5, "60 fps", 11.0, [0.5, 0.5, 0.45, 1.0], TextAlign::Center, FontRole::Body),
@@ -12088,7 +12334,10 @@ mod tests {
         let rects = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32)> {
             cmds.iter()
                 .filter_map(|c| match c {
+                    // Tracks/fills/handles are SDF panels now (S3); hairlines and
+                    // markers stay rects — one flat list keeps the emission order.
                     HudCommand::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                    HudCommand::Panel { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
                     _ => None,
                 })
                 .collect()
