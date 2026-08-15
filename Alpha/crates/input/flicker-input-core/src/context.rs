@@ -436,8 +436,8 @@ impl ContextBindings {
 pub struct InputProfile {
     /// Schema version, for a future migration (bumped when the shape changes).
     pub schema: u32,
-    /// Stable profile id (e.g. `"default"`, `"kbm_souls"`) — persisted, and the value
-    /// the settings profile selector round-trips (spec §7.3).
+    /// Stable profile id (e.g. `"default"`) — persisted, and the value the settings
+    /// profile selector round-trips (spec §7.3).
     pub name: String,
     /// Per-context maps + reshape, keyed by stable context NAME (spec §7.1a).
     pub contexts: Vec<(String, ContextBindings)>,
@@ -459,17 +459,19 @@ impl InputProfile {
     /// identifier); the label is a stringtable `$token` so the display name is localized
     /// content (DATA PLACEMENT LAW — every UI string rides the stringtable), never raw
     /// English baked into the engine.
-    pub const PRESET_NAMES: &'static [(&'static str, &'static str)] = &[
-        ("default", "$set_profile_default"),
-        ("kbm_souls", "$set_profile_kbm_souls"),
-        ("xbox_souls", "$set_profile_xbox_souls"),
-    ];
+    /// The CONTROLLER-config roster the settings controller tab lists as its selector
+    /// (Aaron 2026-08-14: the controller tab selects controller configs, NOT the KBM
+    /// profile — the keyboard tab owns the WASD default). ONE for now — `xbox_souls`, the
+    /// default Xbox layout (the `kbm_souls` souls-keyboard preset stays parked, banked in
+    /// MCP `D167E43A`; alternate controller configs are TBD pending community input).
+    pub const PRESET_NAMES: &'static [(&'static str, &'static str)] =
+        &[("xbox_souls", "$set_profile_xbox_souls")];
 
-    /// Construct a named built-in profile, or `None` if the id is unknown.
+    /// Construct a named built-in profile, or `None` if the id is unknown. `default` is the
+    /// system/keyboard profile (WASD); `xbox_souls` is the controller config.
     pub fn by_name(name: &str) -> Option<Self> {
         match name {
             "default" => Some(Self::default_profile()),
-            "kbm_souls" => Some(Self::kbm_souls()),
             "xbox_souls" => Some(Self::xbox_souls()),
             _ => None,
         }
@@ -483,12 +485,9 @@ impl InputProfile {
         Self::from_world("default", InputMap::wasd_and_mouse())
     }
 
-    /// The souls keyboard+mouse profile (`World` = [`InputMap::kbm_souls`]).
-    pub fn kbm_souls() -> Self {
-        Self::from_world("kbm_souls", InputMap::kbm_souls())
-    }
-
-    /// The souls gamepad profile (`World` = [`InputMap::xbox_souls`]).
+    /// The default Xbox controller config (`World` = [`InputMap::xbox_souls`]) — the
+    /// controller tab's default selection (Aaron 2026-08-14). The provisional layout is
+    /// banked in MCP `D167E43A`; community consultation will inform alternates.
     pub fn xbox_souls() -> Self {
         Self::from_world("xbox_souls", InputMap::xbox_souls())
     }
@@ -542,7 +541,6 @@ impl InputProfile {
     pub fn backfill_from_presets(&mut self) {
         let preset = match self.name.as_str() {
             "default" => Self::default_profile(),
-            "kbm_souls" => Self::kbm_souls(),
             "xbox_souls" => Self::xbox_souls(),
             _ => return,
         };
@@ -718,7 +716,9 @@ mod tests {
     #[test]
     fn context_without_its_own_map_falls_back_to_world() {
         // Radial has no map registered → it should read the World map rather than go dead.
-        let mut cb = ContextualBindings::new(InputMap::xbox_souls());
+        let mut world = InputMap::empty();
+        world.bind(ActionSignal::Dodge, InputBinding::GamepadButton(GamepadButton::East));
+        let mut cb = ContextualBindings::new(world);
         cb.push(InputContext::Radial);
         assert_eq!(cb.active(), InputContext::Radial);
         assert_eq!(

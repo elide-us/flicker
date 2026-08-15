@@ -298,13 +298,15 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
-    /// Pane LOCK — the four-context pane model (MCP 0EFF5464). While `false` the LEFT
-    /// STICK cycles panes (`PanelNext`/`PanelPrev`) and a pane feeds its interior
-    /// nothing; a `Confirm` on a pane (an actionless focused container) ENTERS it, and
-    /// the left stick then belongs to that pane's interior — its viewport camera, which
-    /// the scene gates on [`entered`](Self::entered). `Cancel` exits. The d-pad (`Nav*`)
-    /// is the in-pane cursor and stays live in BOTH states (menus navigate with it).
-    pub(crate) entered: bool,
+    /// Pane LOCK — the nav-tier contract (MCP 1B5F6BB8, superseding 0EFF5464). `None`
+    /// while NAVIGATING between panes (the LEFT STICK cycles containers, the d-pad no-ops
+    /// on a container); once a `Confirm` ENTERS the focused pane this holds that pane's
+    /// `tab_group`, focus drops to its lowest-ordinal interior, and the d-pad becomes the
+    /// in-pane cursor while the left stick belongs to the pane's interior (its viewport
+    /// camera). `Cancel` exits one level (unlock + refocus the container); a mouse click
+    /// clears it (pointer modality). The container panel whose `id` equals this group
+    /// wears the gold lock rim.
+    pub(crate) entered_group: Option<String>,
     /// Live press-feedback flashes, `action/result name → intensity 0..1`
     /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
     /// click … Even if it does nothing, the visual cue is important UX"* — and
@@ -354,12 +356,18 @@ impl UiState {
         self.focus.as_deref()
     }
 
-    /// The pane LOCK state (MCP 0EFF5464): `true` once a `Confirm` has ENTERED the
-    /// focused pane, so the left stick belongs to that pane's interior. A multi-pane
-    /// scene gates its viewport camera on `entered() && focused() == <pane id>`;
-    /// `Cancel` clears it. Navigating between panes is only possible while `false`.
+    /// Whether a pane is currently LOCKED (entered) — `true` once a `Confirm` has entered
+    /// the focused pane. Bool-compatible shim over [`entered_group`](Self::entered_group).
     pub fn entered(&self) -> bool {
-        self.entered
+        self.entered_group.is_some()
+    }
+
+    /// The `tab_group` of the pane currently LOCKED (entered), or `None` while navigating
+    /// between panes (MCP 1B5F6BB8). The container panel whose `id` equals this group
+    /// wears the gold lock rim; a multi-pane scene gates its viewport camera on this
+    /// (the pane id it feeds), so highlighting a pane no longer implies its input.
+    pub fn entered_group(&self) -> Option<&str> {
+        self.entered_group.as_deref()
     }
 
     /// Programmatically give keyboard focus to a `text_field` by its node `id` —
@@ -631,6 +639,10 @@ pub fn run_ui(
     // that lands in a text_field re-establishes it in that field's hit arm below.
     if input.clicked {
         state.focus = None;
+        // A click is pointer modality — it also drops any pane LOCK (nav-tier contract
+        // 1B5F6BB8), so `PanelNext` revives and the next `Cancel` pops the scene rather
+        // than being eaten as a pane exit (the click-wedge defect).
+        state.entered_group = None;
     }
     // Capture release is a GENERIC rule: everything captured (slider drags) lets go
     // the frame the button is up, before any hit runs — so the release frame already
@@ -860,27 +872,58 @@ pub fn run_ui(
         });
     }
 
-    // Pad nudges — the walker layer's slider channel: step the FOCUSED
-    // slider's bind by the NODE's own `step` (`step_coarse` under the chord),
-    // clamped to its range, written as a committed result exactly like a
-    // stepper click (discrete gesture → immediate write; commit-on-release is
-    // for drags). Applied HERE because the node owns step/min/max, and LAST
-    // among the writes so the every-frame echo cannot put the resting value
-    // back over the step. A nudge for a hidden or vanished slider steps
-    // nothing — drained either way, so stale presses never accumulate.
+    // Pad nudges — the walker layer's STEPPABLE-control channel: operate the FOCUSED value
+    // control (slider · select · pill_toggle · toggle) by the d-pad on its own axis, or a
+    // Confirm-flip on a toggle (`dir == 0`). Written as a committed result exactly like a
+    // click (discrete gesture → immediate write; commit-on-release is for drags). Applied
+    // HERE because the NODE owns its range (step/min/max, or its children count), and LAST
+    // among the writes so the every-frame echo cannot put the resting value back over the
+    // step. A nudge for a hidden, vanished or DISABLED control steps nothing — drained
+    // either way, so stale presses never accumulate.
     for (id, dir, coarse) in std::mem::take(&mut state.nudges) {
-        let Some(p) =
-            placed.iter().find(|p| p.node.component == "slider" && p.node.id == id)
-        else {
-            continue;
-        };
+        let Some(p) = placed.iter().find(|p| p.node.id == id) else { continue };
+        if !enabled(p.node, model) {
+            continue; // an unwired / preview control is pad-inert, as it is click-inert
+        }
         let Some(bind) = p.node.bind.as_deref() else { continue };
-        let min = pnum(p.node, "min").unwrap_or(0.0);
-        let max = pnum(p.node, "max").unwrap_or(1.0);
-        let fine = pnum(p.node, "step").unwrap_or(1.0);
-        let step = if coarse { pnum(p.node, "step_coarse").unwrap_or(fine * 10.0) } else { fine };
-        let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(min);
-        results.set(bind.to_string(), (cur + f64::from(dir) * step).clamp(min, max));
+        match p.node.component.as_str() {
+            "slider" => {
+                let min = pnum(p.node, "min").unwrap_or(0.0);
+                let max = pnum(p.node, "max").unwrap_or(1.0);
+                let fine = pnum(p.node, "step").unwrap_or(1.0);
+                let step = if coarse { pnum(p.node, "step_coarse").unwrap_or(fine * 10.0) } else { fine };
+                let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(min);
+                results.set(bind.to_string(), (cur + f64::from(dir) * step).clamp(min, max));
+            }
+            // A `select` / `pill_toggle` steps its 0-based INDEX by ±1, CLAMPED to its own
+            // children count (no wrap — a linear picker never jumps end-to-end, Aaron
+            // 2026-08-12). Same numeric-index contract a click or a rail step writes.
+            "select" | "pill_toggle" => {
+                let len = p.node.children.len() as f64;
+                if len <= 0.0 {
+                    continue;
+                }
+                let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0);
+                results.set(bind.to_string(), (cur + f64::from(dir)).clamp(0.0, len - 1.0));
+            }
+            // A `toggle`: Right sets on, Left sets off, Confirm (`dir == 0`) flips — the
+            // same bool a click writes (`bool_pick`).
+            "toggle" => {
+                let cur = match results.get(bind) {
+                    Some(Value::Bool(b)) => *b,
+                    _ => model.is_on(bind),
+                };
+                let next = if dir > 0 {
+                    true
+                } else if dir < 0 {
+                    false
+                } else {
+                    !cur
+                };
+                results.set(bind.to_string(), next);
+            }
+            _ => {}
+        }
     }
 
     // Strip stepping — THE OPTION STRIP OWNS ITS OWN STEPPING. A `tabs` /
@@ -924,6 +967,38 @@ pub fn run_ui(
         .filter(|p| !p.node.id.is_empty())
         .map(|p| (p.node.id.clone(), [p.rect.x, p.rect.y, p.rect.w, p.rect.h]))
         .collect();
+
+    // Pad FOCUS-FOLLOW (nav-tier contract 1B5F6BB8): keep the pad-focused control visible
+    // in its scrolling list. Only in nav modality (pointer scrolling is untouched), and only
+    // when the focused node sits OUTSIDE its enclosing `list` viewport — then write the
+    // minimally-corrected scroll offset into `results`, which settles next frame through the
+    // scene's own `scroll_off` fold, exactly like a click write. The focused rect is already
+    // placed WITH the current offset, so adjusting the offset by the overflow brings it in.
+    if state.nav_mode() {
+        if let Some(focus) = state.focused().map(str::to_string) {
+            if let Some(list) = scroll_list_of(tree, &focus) {
+                let find = |id: &str| rects.iter().find(|(rid, _)| rid.as_str() == id).map(|(_, r)| *r);
+                if let (Some(lr), Some(fr), Some(bind)) = (find(&list.id), find(&focus), list.bind.as_deref()) {
+                    let py = pad_y(list);
+                    let vy = lr[1] + py; // viewport top (the list's inner)
+                    let vh = (lr[3] - 2.0 * py).max(0.0);
+                    let max = (scroll_content_h(list, model) - vh).max(0.0);
+                    let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0) as f32;
+                    let (ftop, fbot) = (fr[1], fr[1] + fr[3]);
+                    let mut off = cur;
+                    if ftop < vy {
+                        off -= vy - ftop; // scroll up to reveal a row above the fold
+                    } else if fbot > vy + vh {
+                        off += fbot - (vy + vh); // scroll down to reveal a row below it
+                    }
+                    let off = off.clamp(0.0, max);
+                    if (off - cur).abs() > 0.5 {
+                        results.set(bind.to_string(), f64::from(off));
+                    }
+                }
+            }
+        }
+    }
 
     // Commit-on-release, the held half: the draw above consumed the live in-flight
     // value (the knob follows the hand), but the SCENE must keep seeing the resting
@@ -1192,6 +1267,27 @@ fn scroll_content_h(node: &UiNode, model: &ValueMap) -> f32 {
     let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
     let gaps = node.gap * kids.len().saturating_sub(1) as f32;
     pad_y(node) * 2.0 + gaps + kids.iter().map(|c| child_main(c, model, false)).sum::<f32>()
+}
+
+/// The nearest `list` ANCESTOR (one carrying a scroll `bind`) of `target` in `tree`, if any
+/// — the scrolling region a pad-focused control lives inside, so [`run_ui`] can keep that
+/// control visible (pad focus-follow, nav-tier contract `1B5F6BB8`). Deepest list wins, so
+/// a nested list scrolls the inner one.
+fn scroll_list_of<'a>(tree: &'a UiNode, target: &str) -> Option<&'a UiNode> {
+    fn contains(n: &UiNode, target: &str) -> bool {
+        n.id == target || n.children.iter().any(|c| contains(c, target))
+    }
+    fn walk<'a>(n: &'a UiNode, target: &str, best: &mut Option<&'a UiNode>) {
+        if n.component == "list" && n.bind.is_some() && contains(n, target) {
+            *best = Some(n);
+        }
+        for c in &n.children {
+            walk(c, target, best);
+        }
+    }
+    let mut best = None;
+    walk(tree, target, &mut best);
+    best
 }
 
 /// Place an absolutely-anchored node's box within `parent` (corner/edge + offset).
@@ -2411,6 +2507,12 @@ fn node_fingerprint(
     // (request_focus / clear_focus / Escape) would otherwise replay a stale
     // caret/ring instead of redrawing the field.
     h.bool(hot_matters && focused);
+    // Pane LOCK as its OWN bit (the gold entered rim, nav-tier contract 1B5F6BB8):
+    // entering a pane leaves the focused container's `focused`/`hot` bits unchanged
+    // (focus drops to an interior — the container id no longer equals `focus`), so
+    // without this the cached FOCUSED (sapphire) commands would replay and the gold rim
+    // never draw. `draw_panel` is the only reader and is a rust component (`hot_matters`).
+    h.bool(hot_matters && !node.id.is_empty() && state.entered_group() == Some(node.id.as_str()));
     let ident = if node.id.is_empty() { node.bind.as_deref() } else { Some(node.id.as_str()) };
     let open = ident.is_some() && state.open.as_deref() == ident;
     h.bool(open);
@@ -2635,13 +2737,13 @@ fn component_props(
         "focused".to_string(),
         Json::Bool(!node.id.is_empty() && state.focused() == Some(node.id.as_str())),
     );
-    // "entered": the focused pane is LOCKED (0EFF5464) — the panel draws its distinct
-    // entered rim (the mode's required render affordance), the scene feeds its camera.
+    // "entered": this pane is the LOCKED one (nav-tier contract 1B5F6BB8) — the panel
+    // draws its distinct gold entered rim, the scene feeds its camera. Keyed on the
+    // container id matching the locked GROUP (not on focus), so the rim stays while the
+    // cursor is on an interior child (id == tab_group is the container convention).
     props.insert(
         "entered".to_string(),
-        Json::Bool(
-            state.entered() && !node.id.is_empty() && state.focused() == Some(node.id.as_str()),
-        ),
+        Json::Bool(!node.id.is_empty() && state.entered_group() == Some(node.id.as_str())),
     );
     if let (Some(fg), Some(bind)) = (ptext(node, "focus_group"), node.bind.as_deref()) {
         props.insert("focused".to_string(), Json::Bool(eff_text(results, model, fg) == Some(bind)));
@@ -2861,13 +2963,25 @@ fn offset_layer(c: &mut HudCommand, dl: f32) {
 // ── Templates ────────────────────────────────────────────────────────────────
 
 fn draw_panel_bg(r: Rect, st: &Json, out: &mut Vec<HudCommand>) {
+    draw_panel_bg_rimmed(r, st, None, out);
+}
+
+/// [`draw_panel_bg`] with an optional RIM OVERRIDE `(color, width)`. `None` = the block's
+/// own `border`/`border_w`; `Some` paints a STATE rim (the gold lock) over a base block
+/// that carries no rim of its own, so an entered pane reuses its focused/resting fill
+/// while wearing the compiled lock border.
+fn draw_panel_bg_rimmed(r: Rect, st: &Json, rim: Option<([f32; 4], f32)>, out: &mut Vec<HudCommand>) {
     // Key-aliasing (same spirit as the button variants): a styled container reads
     // its fill from whichever of these its block carries — `fill_top/bot` (panels),
     // `bg_top/bot` (the menu's gradient backdrop), `overlay` (the pause/confirm dim),
     // or a single `color` (the bronze divider rule).
     let top = first_color(st, &["fill_top", "bg_top", "overlay", "panel_bg", "bg", "fill", "color"], PANEL);
     let bot = first_color(st, &["fill_bot", "bg_bot", "overlay", "panel_bg", "bg", "fill", "color"], top);
-    let border = first_color(st, &["panel_border", "border"], [0.0; 4]);
+    let block_border = first_color(st, &["panel_border", "border"], [0.0; 4]);
+    let (border_color, border) = match rim {
+        Some((color, w)) => (color, w),
+        None => (block_border, if block_border[3] > 0.0 { jnum(st, "border_w", 1.0) } else { 0.0 }),
+    };
     out.push(HudCommand::Panel {
         x: r.x,
         y: r.y,
@@ -2880,8 +2994,8 @@ fn draw_panel_bg(r: Rect, st: &Json, out: &mut Vec<HudCommand>) {
         // fade over the Muse needs `grad: 2`.
         grad: jnum(st, "grad", if top == bot { 0.0 } else { 1.0 }),
         radius: jnum(st, "radius", 0.0),
-        border: if border[3] > 0.0 { jnum(st, "border_w", 1.0) } else { 0.0 },
-        border_color: border,
+        border,
+        border_color,
         // `feather` (default 0) lets a styled panel be a soft drop shadow — the
         // menu's popup shadow is just a feathered, offset panel behind the popup.
         feather: jnum(st, "feather", 0.0),
@@ -3001,19 +3115,27 @@ fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     let focused = props.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
     let entered = props.get("entered").and_then(|v| v.as_bool()).unwrap_or(false);
-    // `{ resting, focused, entered }` sub-blocks, each an ordinary container block. The
-    // ENTERED block (the pane is LOCKED — 0EFF5464) draws a rim distinct from FOCUSED
-    // (navigating-to), so the pad player can SEE the mode. A style that carries the
-    // container keys DIRECTLY (no split) is used as-is; each state falls down the chain
-    // (entered → focused → resting → the block), so a plain panel style still draws.
-    let block = if entered {
-        s.get("entered").or_else(|| s.get("focused")).or_else(|| s.get("resting")).unwrap_or(s)
+    // `{ resting, focused, entered }` sub-blocks, each an ordinary container block. A
+    // style that carries the container keys DIRECTLY (no split) is used as-is; each state
+    // falls down the chain (→ focused → resting → the block), so a plain panel still draws.
+    if entered {
+        // LOCKED (nav-tier contract 1B5F6BB8) — the pane wears a rim distinct from FOCUSED
+        // (merely navigated-to) so the pad player SEES the lock. A scene MAY author an
+        // `entered` block (style-block-first); otherwise the compiled GOLD house default
+        // paints over the focused/resting fill — the "defaults ARE the house look" pattern.
+        if let Some(block) = s.get("entered") {
+            draw_panel_bg(r, block, out);
+        } else {
+            let base = s.get("focused").or_else(|| s.get("resting")).unwrap_or(s);
+            draw_panel_bg_rimmed(r, base, Some((GOLD_RING, ENTERED_RIM_W)), out);
+        }
     } else if focused {
-        s.get("focused").or_else(|| s.get("resting")).unwrap_or(s)
+        let block = s.get("focused").or_else(|| s.get("resting")).unwrap_or(s);
+        draw_panel_bg(r, block, out);
     } else {
-        s.get("resting").unwrap_or(s)
-    };
-    draw_panel_bg(r, block, out);
+        let block = s.get("resting").unwrap_or(s);
+        draw_panel_bg(r, block, out);
+    }
 }
 
 /// The **sprite** — an image node: blit the engine texture named by `tex` into the
@@ -5922,13 +6044,15 @@ fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
 }
 
 /// [`paged_layout`] for `page_side: "left"` — the vertical-page-rail variant. Splits the
-/// padded frame into a fixed `page_w`-wide LEFT COLUMN (where the `vertical` `tabs` page
-/// rail is placed) and a RIGHT area, with a 1px vertical `rule` + a small `page_gap`
-/// between them; the right area then gets the SAME `[LB · pill · RB]` tab band over grow-
-/// content the top-rail path lays inside `inner`, only WITHOUT a page band or its LT/RT
-/// gutters (`lt`/`rt` = `None`). No page rail (no `tabs` child, or `hide_pages`) collapses
-/// the column so the right area is the whole inner — the axis twin of the top path dropping
-/// its page band. Duplicates the tab-band math on purpose: the top path stays untouched.
+/// padded frame into a fixed `page_w`-wide LEFT COLUMN and a RIGHT area, with a 1px
+/// vertical `rule` + a small `page_gap` between them. The left column stacks the page
+/// `tabs` at their NATURAL `rail_h` height, TOP-ALIGNED (not stretched to fill — Aaron
+/// 2026-08-14, MCP `7FB7AEB4`), with an LT (page-prev) hint gutter above and an RT
+/// (page-next) hint below — the vertical mirror of the top band's L/R gutters. The right
+/// area then gets the SAME `[LB · pill · RB]` tab band over grow-content the top-rail path
+/// lays inside `inner`. No page rail (no `tabs` child, or `hide_pages`) collapses the
+/// column so the right area is the whole inner. Duplicates the tab-band math on purpose:
+/// the top path stays untouched.
 fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
     let inner = outer.inset_xy(pad_x(node), pad_y(node));
     let child = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
@@ -5936,17 +6060,35 @@ fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayou
     let has_tabsec = child("pill_toggle").is_some() && !pbool(node, "hide_tabs");
     let tabs_open = has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
 
-    // The left column + the vertical rule, and the right area that remains.
-    let (page_rail, rule, right) = if has_page {
+    // The left column (hint · natural tab stack · hint), the vertical rule, and the right
+    // area that remains.
+    let (page_rail, lt, rt, rule, right) = if has_page {
         let page_w = pnum(node, "page_w").unwrap_or(200.0) as f32;
         let gap = pnum(node, "page_gap").unwrap_or(12.0) as f32;
-        let page_rail = Rect { x: inner.x, y: inner.y, w: page_w, h: inner.h };
+        let rail_h = pnum(node, "rail_h").unwrap_or(42.0) as f32;
+        let hint_h = pnum(node, "hint_h").unwrap_or(36.0) as f32;
+        // The rail is the NATURAL stack of the same `rail_h` cells the horizontal band uses,
+        // top-aligned — NOT stretched to fill the column (Aaron 2026-08-14, MCP 7FB7AEB4).
+        // `tab_cell` equal-shares whatever height the rail rect gives it, so sizing the rect
+        // to `n·rail_h + gaps + pad` makes each cell exactly `rail_h`.
+        let tabs_node = child("tabs");
+        let n = tabs_node.map_or(0, |t| t.children.iter().filter(|c| visible(c, model)).count());
+        let (tgap, tpad_y) = tabs_node.map_or((0.0, 0.0), |t| {
+            (pnum(t, "gap").unwrap_or(0.0) as f32, pnum(t, "pad_y").unwrap_or(0.0) as f32)
+        });
+        let stack_h = n as f32 * rail_h + (n as f32 - 1.0).max(0.0) * tgap + 2.0 * tpad_y;
+        // LT (page-prev) above the stack, RT (page-next) below — the vertical mirror of the
+        // top band's L/R hint gutters; `draw_paged_menu`/`hit_paged_menu` pick them up via
+        // `paged_layout`, so the glyphs draw and a click pages, for free.
+        let lt = Rect { x: inner.x, y: inner.y, w: page_w, h: hint_h };
+        let page_rail = Rect { x: inner.x, y: inner.y + hint_h, w: page_w, h: stack_h };
+        let rt = Rect { x: inner.x, y: inner.y + hint_h + stack_h, w: page_w, h: hint_h };
         let rule = Rect { x: inner.x + page_w, y: inner.y, w: 1.0, h: inner.h };
         let rx = inner.x + page_w + gap + 1.0;
         let right = Rect { x: rx, y: inner.y, w: (inner.x + inner.w - rx).max(0.0), h: inner.h };
-        (Some(page_rail), Some(rule), right)
+        (Some(page_rail), Some(lt), Some(rt), Some(rule), right)
     } else {
-        (None, None, inner)
+        (None, None, None, None, inner)
     };
 
     // The tab rail + content, laid horizontally inside the RIGHT area — the identical
@@ -5966,7 +6108,7 @@ fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayou
         y += tab_h;
     }
     let content = Rect { x: right.x, y, w: right.w, h: (right.y + right.h - y).max(0.0) };
-    PagedLayout { page_rail, lt: None, rt: None, rule, tab_pill, lb, rb, content }
+    PagedLayout { page_rail, lt, rt, rule, tab_pill, lb, rb, content }
 }
 
 /// One rail hint — a single atlas cell (from the resolved `glyph_style` block) centred
@@ -6338,6 +6480,13 @@ const PANEL: [f32; 4] = [0.078, 0.09, 0.122, 1.0];
 const RUNE: [f32; 4] = [0.435, 0.592, 1.0, 1.0];
 const SAP: [f32; 4] = [0.141, 0.247, 0.471, 1.0];
 const CLEAR: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+/// The GOLD lock rim — the compiled house default a pane wears when ENTERED (nav-tier
+/// contract 1B5F6BB8). Mirrors `$gold_ring`; a scene that authors its own `entered` style
+/// block overrides it. Drift-gated by `panel_entered_default_matches_theme_gold_ring`.
+const GOLD_RING: [f32; 4] = [0.851, 0.643, 0.255, 1.0];
+/// The entered rim's border width — thicker than the sapphire focus rim (w2, the
+/// merely-navigated-to pane) so the LOCK reads at a glance.
+const ENTERED_RIM_W: f32 = 3.0;
 /// Glyph-face resting tint — mirrors `$bronze`. The authored source is
 /// `pad_glyphs.color` in `ui_theme.json`; this is only the missing-key floor.
 const BRONZE: [f32; 4] = [0.722, 0.592, 0.353, 1.0];
@@ -6822,6 +6971,95 @@ mod tests {
         let f = run_ui(&page, &model, &styles, &input_at(90.0, 6.0, true), &mut fresh);
         assert!(!f.results.is_on("hud_hit"), "the caption row is not a target");
         assert!(!f.results.is_on("b1"), "…and it writes nothing");
+    }
+
+    /// A mouse click drops any pane LOCK (nav-tier contract 1B5F6BB8): `run_ui` clears
+    /// `entered_group` on a clicked frame, the same place it clears keyboard focus.
+    /// Without it a click while a pane is entered wedges the pad — `PanelNext` stays gated
+    /// and the next `Cancel` is eaten as a pane exit instead of popping the scene.
+    #[test]
+    fn a_click_releases_the_pane_lock() {
+        let page = node("cell");
+        let mut state = UiState::new();
+        state.entered_group = Some("pane_a".into());
+        run_ui(&page, &ValueMap::new(), &serde_json::json!({}), &input_at(5.0, 5.0, true), &mut state);
+        assert!(state.entered_group.is_none(), "a click released the pane lock");
+    }
+
+    /// **The pad operates value controls** (nav-tier contract 1B5F6BB8): a `select` steps
+    /// its index ±1 CLAMPED (no wrap), a `toggle` sets by direction and FLIPS on Confirm
+    /// (`dir 0`), and a DISABLED control is inert — the same writes a click makes.
+    #[test]
+    fn a_pad_nudge_operates_value_controls_clamps_and_respects_enabled() {
+        let opt = |i: usize| prop(node("option"), "value", Value::Number(i as f64));
+        let mut sel = node("select");
+        sel.id = "sel".into();
+        sel.bind = Some("sel".into());
+        sel.children = vec![opt(0), opt(1), opt(2)];
+        let mut tog = node("toggle");
+        tog.id = "tog".into();
+        tog.bind = Some("tog".into());
+        let mut dis = node("toggle");
+        dis.id = "dis".into();
+        dis.bind = Some("dis".into());
+        dis.enabled_bind = Some("off".into());
+        let mut page = node("screen");
+        page.children = vec![sel, tog, dis];
+
+        let styles = serde_json::json!({});
+        let step = |id: &str, dir: i32, model: ValueMap| -> ValueMap {
+            let mut state = UiState::new();
+            state.push_nudge(id, dir, false);
+            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut state).results
+        };
+
+        // select: ±1 index, clamped at both ends (a linear picker never wraps).
+        assert_eq!(step("sel", 1, ValueMap::new().with("sel", 1.0)).number("sel"), Some(2.0));
+        assert_eq!(step("sel", 1, ValueMap::new().with("sel", 2.0)).number("sel"), Some(2.0), "clamps at the top");
+        assert_eq!(step("sel", -1, ValueMap::new().with("sel", 0.0)).number("sel"), Some(0.0), "clamps at 0");
+        // toggle: Right on, Left off, Confirm (dir 0) flips.
+        assert!(step("tog", 1, ValueMap::new().with("tog", false)).is_on("tog"), "Right sets on");
+        assert!(!step("tog", -1, ValueMap::new().with("tog", true)).is_on("tog"), "Left sets off");
+        assert!(step("tog", 0, ValueMap::new().with("tog", false)).is_on("tog"), "Confirm flips off→on");
+        assert!(!step("tog", 0, ValueMap::new().with("tog", true)).is_on("tog"), "Confirm flips on→off");
+        // disabled: the nudge is inert (drained, no write) — as it is click-inert.
+        assert!(
+            !step("dis", 1, ValueMap::new().with("dis", false).with("off", false)).is_on("dis"),
+            "a disabled control ignores the pad",
+        );
+    }
+
+    /// **The list follows pad focus** (nav-tier contract 1B5F6BB8): a d-pad focus on a row
+    /// below the fold makes the enclosing `list` write the corrected scroll offset, so the
+    /// focused row scrolls into view — clamped to the list's own max.
+    #[test]
+    fn the_list_scrolls_to_follow_pad_focus_below_the_fold() {
+        let mut list = node("list");
+        list.id = "lst".into();
+        list.bind = Some("off".into()); // the scroll-offset bind
+        list.width = Some(200.0);
+        list.height = Some(100.0); // a 100px viewport …
+        list.anchor = Some(UiAnchor::TopLeft);
+        for i in 0..5u32 {
+            let mut b = node("button"); // … over five 40px rows (content 200)
+            b.id = format!("r{i}");
+            b.tab_group = "g".into();
+            b.nav_ordinal = i;
+            b.size = Some(40.0);
+            list.children.push(b);
+        }
+        let mut page = node("screen");
+        page.children = vec![list];
+
+        let model = ValueMap::new().with("off", 0.0);
+        let mut state = UiState::new();
+        state.request_focus("r4"); // the last row, y 160..200 — below the 100px fold
+        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut state);
+        assert_eq!(
+            f.results.number("off"),
+            Some(100.0),
+            "the list scrolled to its max (content 200 − viewport 100) to reveal the focused row",
+        );
     }
 
     /// `label_bind` resolves like `text_bind` — the bound twin of `label`.
@@ -8602,28 +8840,45 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![pane];
 
-        let border_of = |state: &mut UiState| {
-            let f = run_ui(
-                &page,
-                &ValueMap::new(),
-                &styles,
-                &input_at(-9.0, -9.0, false),
-                state,
-            );
+        let rim_of = |styles: &serde_json::Value, state: &mut UiState| -> (f64, [f32; 4]) {
+            let f = run_ui(&page, &ValueMap::new(), styles, &input_at(-9.0, -9.0, false), state);
             f.commands
                 .iter()
                 .find_map(|c| match c {
-                    HudCommand::Panel { border, .. } => Some(f64::from(*border)),
+                    HudCommand::Panel { border, border_color, .. } => {
+                        Some((f64::from(*border), *border_color))
+                    }
                     _ => None,
                 })
                 .expect("the panel drew its backdrop")
         };
 
         let mut idle = UiState::new();
-        assert_eq!(border_of(&mut idle), resting, "an unfocused pane rests");
+        assert_eq!(rim_of(&styles, &mut idle).0, resting, "an unfocused pane rests");
         let mut focused = UiState::new();
         focused.request_focus("pop_left");
-        assert_eq!(border_of(&mut focused), focus_w, "the focused pane draws its own rim");
+        assert_eq!(rim_of(&styles, &mut focused).0, focus_w, "the focused pane draws its own rim");
+
+        // ENTERED with an authored `entered` block → that block WINS (finally asserting the
+        // fixture's purple entered rim). Keyed on the LOCK, not focus — no focus needed.
+        let mut entered = UiState::new();
+        entered.entered_group = Some("pop_left".into());
+        assert_eq!(
+            rim_of(&styles, &mut entered).1,
+            [0.55, 0.45, 0.85, 1.0],
+            "the authored entered block wins when present",
+        );
+
+        // ENTERED with NO authored `entered` block → the compiled GOLD house default paints
+        // the lock rim over the focused/resting fill (the "defaults ARE the house look").
+        let bare = serde_json::json!({
+            "panel": { "resting": { "border_w": 1.0, "border": [0.3, 0.3, 0.32, 1.0] } }
+        });
+        let mut locked = UiState::new();
+        locked.entered_group = Some("pop_left".into());
+        let (w, c) = rim_of(&bare, &mut locked);
+        assert_eq!(w, f64::from(ENTERED_RIM_W), "the compiled gold default is thicker (w3)");
+        assert_eq!(c, GOLD_RING, "…and gold");
     }
 
     /// **A rail step advances the strip by one, and CLAMPS at the ends** — over the REAL
@@ -8903,8 +9158,10 @@ mod tests {
 
         // inner = (40,40,720,520). page_w 200, page_gap 12 → left column, then a 1px rule at
         // x 240, then the right area at x = 40+200+12+1 = 253 (w 507).
+        // The page rail is the NATURAL stack (3 tabs × rail_h 42 = 126), TOP-ALIGNED below
+        // the LT hint gutter (hint_h 36) — NOT stretched to the 520 column height (7FB7AEB4).
         let pg = r("pg");
-        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (40.0, 40.0, 200.0, 520.0), "page rail is the fixed-width left column");
+        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (40.0, 76.0, 200.0, 126.0), "page rail is a top-aligned natural stack, not stretched");
         // Tab rail rides the top of the right area (cluster centred; pill 520 overflows the
         // 507 area so cx clamps to 253 → pill at 253+46+20 = 319), fully RIGHT of the rule.
         let tb = r("tb");
@@ -8924,6 +9181,42 @@ mod tests {
         let f2 = run_ui(&top, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
         let pg2 = f2.rect("pg").expect("pg placed");
         assert_eq!((pg2.pos.x, pg2.pos.y, pg2.size.x, pg2.size.y), (124.0, 40.0, 552.0, 42.0), "page_side:top (default) geometry is unchanged");
+    }
+
+    /// The vertical page rail carries LT/RT page-hint gutters (prev above, next below the
+    /// top-aligned stack) — the vertical mirror of the top band's L/R hints. A click in the
+    /// RT gutter steps the PAGE rail, exactly as the top band's does (7FB7AEB4): the same
+    /// `hit_paged_menu` path, now reachable on the left axis.
+    #[test]
+    fn the_vertical_page_rail_hint_gutter_pages() {
+        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let mut pages = node("tabs");
+        pages.id = "pg".into();
+        pages.bind = Some("page".into());
+        pages = prop(pages, "vertical", Value::Bool(true));
+        pages = prop(pages, "prev_action", Value::Text("page_prev".into()));
+        pages = prop(pages, "next_action", Value::Text("page_next".into()));
+        pages.children = opts(3);
+        let mut content = node("cell");
+        content.id = "ct".into();
+        content.grow = Some(1.0);
+        let mut pm = node("paged_menu");
+        pm.id = "pm".into();
+        pm.anchor = Some(UiAnchor::TopLeft);
+        pm.width = Some(800.0);
+        pm.height = Some(600.0);
+        pm.pad = 40.0;
+        pm = prop(pm, "page_side", Value::Text("left".into()));
+        pm.children = vec![pages, content];
+        let mut screen = node("screen");
+        screen.children = vec![pm];
+
+        // The RT gutter sits BELOW the top-aligned stack: y = 40 + hint_h 36 + stack 126 =
+        // 202..238, x 40..240. A click there steps the page rail forward (0 → 1 of 3).
+        let model = ValueMap::new().with("page", 0.0);
+        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(120.0, 220.0, true), &mut UiState::new());
+        assert!(f.results.is_on("hud_hit"), "the frame claims the gutter click");
+        assert_eq!(f.results.number("page"), Some(1.0), "the RT gutter stepped the page rail forward");
     }
 
     /// **A strip selection is reported as a NUMBER.** The every-frame echo is the

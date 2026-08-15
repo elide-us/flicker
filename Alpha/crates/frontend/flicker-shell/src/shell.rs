@@ -19,8 +19,8 @@ use flicker::ui::{
     WalkerHandler,
 };
 use flicker_input_core::{
-    AbstractControls, ActionSignal, ContextualBindings, GamepadConfig, InputContext, InputMap,
-    InputProfile, InputState, Key, RebindCapture,
+    AbstractControls, ActionSignal, ContextualBindings, GamepadConfig, InputBinding, InputContext,
+    InputMap, InputProfile, InputState, Key, RebindCapture, SignalGroup,
 };
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx, Router};
 
@@ -677,7 +677,7 @@ impl MainMenuScene {
     /// Map this frame's fired result names to a transition. A `mode_<realm>` result is NOT
     /// routed here — it fires, the engine mirrors `sig_mode_<realm>` one frame, and
     /// `menu.lua`'s arrange() latches the page; the nav buttons drive the PTT, no tier.
-    fn route(&mut self, results: &ValueMap) -> Transition {
+    fn route(&mut self, results: &ValueMap, renderer: &Renderer) -> Transition {
         for entry in self.scenes.iter() {
             if results.is_on(&entry.id) {
                 return Transition::Goto { id: entry.id.clone(), mode: GotoMode::Replace };
@@ -691,7 +691,7 @@ impl MainMenuScene {
                     .cloned()
                     .unwrap_or_else(InputMap::wasd_and_mouse)
             });
-            return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map)));
+            return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map, renderer)));
         }
         if results.is_on("quit") {
             return Transition::Quit;
@@ -729,7 +729,7 @@ impl Scene for MainMenuScene {
             Some(view) => view.update(signals, input, renderer, &ValueMap::new()),
             None => return Transition::None,
         };
-        self.route(&results)
+        self.route(&results, renderer)
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
@@ -1684,6 +1684,73 @@ mod menu_tree_tests {
         );
     }
 
+    /// CATALOG COVERAGE GATE (S4a): every display token the signal/input catalog can emit
+    /// resolves in the shipped stringtable. A `token()` with no seed renders as its raw
+    /// `$stem` in-window (fail-loud, MCP `4BB12A75`); this turns a missing seed into a
+    /// build failure, and covers the channel the derived page depends on (`8634C200`).
+    #[test]
+    fn every_catalog_token_resolves_in_the_shipped_table() {
+        use flicker_input_core::{GamepadAxis, GamepadButton, MouseAxis, MouseButton};
+        let table = flicker::ui::strings::flatten(SHELL_STRINGS_JSON, "en-us")
+            .expect("shell stringtable flattens");
+        let mut tokens: Vec<String> = Vec::new();
+        tokens.extend(ActionSignal::ALL.iter().map(|s| s.token()));
+        tokens.extend(SignalGroup::ALL.iter().map(|g| g.token().to_string()));
+        tokens.extend(Key::ALL.iter().map(|k| k.token()));
+        tokens.extend(MouseButton::ALL.iter().map(|mb| mb.token()));
+        tokens.extend(GamepadButton::ALL.iter().map(|b| b.token()));
+        tokens.extend(GamepadAxis::ALL.iter().map(|a| a.token()));
+        tokens.push(MouseAxis::X.token().to_string());
+        tokens.push(MouseAxis::Y.token().to_string());
+        tokens.push("$bind_hold".to_string());
+        let missing: Vec<&String> = tokens
+            .iter()
+            .filter(|t| !table.contains_key(t.strip_prefix('$').unwrap_or(t)))
+            .collect();
+        assert!(missing.is_empty(), "catalog tokens with no stringtable seed: {missing:?}");
+    }
+
+    /// DERIVED-PAGE GATE (S4a): the keyboard page's keycaps are EXACTLY the Player-scope
+    /// signals — one `kc_<name>` per [`ActionSignal::rebindable`], none beyond. This is the
+    /// gate the old hand-authored list ↔ `KEYBOARD_ACTIONS` pairing never had: a mismatch
+    /// used to ship a blank, dead keycap. Derivation + this gate make drift impossible.
+    #[test]
+    fn derived_keyboard_page_matches_the_rebindable_set() {
+        fn collect(node: &UiNode, out: &mut Vec<String>) {
+            if let Some(kc) = node.id.strip_prefix("kc_") {
+                out.push(kc.to_string());
+            }
+            for c in &node.children {
+                collect(c, out);
+            }
+        }
+        let tree = settings_tree(&display::RESOLUTIONS);
+        let mut caps = Vec::new();
+        collect(&tree, &mut caps);
+        caps.sort();
+        let mut want: Vec<String> =
+            ActionSignal::rebindable().map(|s| s.name().to_string()).collect();
+        want.sort();
+        assert_eq!(caps, want, "keyboard keycaps must be exactly the rebindable signals");
+        assert_eq!(caps.len(), 28, "the ruled Player set (Aaron 2026-08-14: 19 base + souls tier)");
+    }
+
+    /// RETIREMENT GATE (S4a): the hand-authored keyboard schema (`styles.settings.input.
+    /// keyboard` + the dead `.tabs`) and its 22 `$set_*` tokens are gone — the page derives
+    /// from the catalog now. Guards against a reintroduction that forks the vocabulary again.
+    #[test]
+    fn the_retired_keyboard_schema_is_gone() {
+        let def: serde_json::Value =
+            serde_json::from_str(SETTINGS_SCENE_JSON).expect("settings.scene.json parses");
+        let input = &def["styles"]["settings"]["input"];
+        assert!(input.get("keyboard").is_none(), "styles.settings.input.keyboard is retired");
+        assert!(input.get("tabs").is_none(), "styles.settings.input.tabs is retired");
+        let table = flicker::ui::strings::flatten(SHELL_STRINGS_JSON, "en-us").expect("flatten");
+        for stem in ["set_movement", "set_interface", "set_actions", "set_move_forward", "set_quit"] {
+            assert!(!table.contains_key(stem), "retired token `{stem}` lingers");
+        }
+    }
+
     /// STAGE-1 GATE (settings → scene pair, content-layer item #8): the settings screen's
     /// LAYOUT is now a STATIC tree in settings.scene.json — the untrusted Lua no longer
     /// builds structure (the client is in the enemy's hands; a Lua tree-builder is an
@@ -1740,7 +1807,7 @@ mod menu_tree_tests {
         // Gate the PRODUCTION tree the scene walks: it must name only native component kinds
         // (`paged_menu` / `popup_panel` / `tabs` / …, no unknown kind → a kind draws nothing)
         // and ship no raw display literal (every label a `$token`).
-        let tree = settings_tree();
+        let tree = settings_tree(&display::RESOLUTIONS);
         assert!(
             flicker::ui::unknown_kinds(&tree).is_empty(),
             "settings screen names unknown kinds: {:?}",
@@ -1990,10 +2057,12 @@ impl MenuView {
 // Unified Settings Scene
 // ───────────────────────────────────────────────────────────────────
 
-/// A full-screen settings overlay driven by `scripts/shared/settings.lua` (shared until settings becomes a scene pair).
-/// Replaces the old `SettingsPanel` (display dropdowns) and
-/// `InputSettingsPanel` (tabbed input config). Returns a
-/// [`SettingsResult`] when popped so the calling scene can apply changes.
+/// The settings overlay — a compliant SCENE PAIR: static layout in
+/// `scenes/shared/settings.scene.json`, hardened Rust fills the rows ([`settings_tree`]),
+/// and a thin `scripts/shared/settings.lua` `derive()` owns only section/sub-tab
+/// visibility. The Input · Keyboard page DERIVES its rows from the signal catalog
+/// ([`ActionSignal::rebindable`]); the Controller tab selects controller configs
+/// ([`InputProfile::PRESET_NAMES`]). Commits buffered changes to the live scene on pop.
 struct UnifiedSettingsScene {
     theme: Theme,
     /// The 1×1 white + theme textures for `render_hud` (`textures[0]` = white).
@@ -2017,6 +2086,11 @@ struct UnifiedSettingsScene {
     settings: GameSettings,
     /// Current input map (mutated by rebinds).
     input_map: InputMap,
+    /// Device-enumerated resolution rungs, snapshotted at construction (the monitor's video
+    /// modes, or the static fallback when headless). The resolution select's options and the
+    /// video_resolution index↔size mapping both read this — one per scene, never re-queried
+    /// per frame (so the list can't shift mid-scene, e.g. a monitor unplug).
+    resolutions: Vec<display::Resolution>,
     /// The screen's declared surface set (S8): the section rail + input sub-tab
     /// radio groups, the rebind banner + applied flash, and the two overlay
     /// dialogs. Owns every `visible_bind` gate `settings.lua` reads; published
@@ -2038,6 +2112,11 @@ struct UnifiedSettingsScene {
     /// signal bus); every OTHER Esc path rides the pump's Menu-context `Cancel`,
     /// which fires the screen's declared `settings_close` intent (S9).
     rebind_esc_prev: bool,
+    /// Previous-frame Backspace state — **rebind-unbind only** (same raw-poll rationale as
+    /// `rebind_esc_prev`): while capturing, a Backspace EDGE drops the current action's
+    /// binding (the banner's advertised "Backspace to unbind"), caught before `poll` would
+    /// capture Backspace as a new key.
+    rebind_bs_prev: bool,
     /// True once any buffered setting or keybind differs from what was last persisted —
     /// gates the unsaved-changes confirm on close. Set on a real edit, cleared on commit.
     dirty: bool,
@@ -2186,31 +2265,14 @@ struct AudioStub {
     body: String,
 }
 
-/// Input: the keyboard rebind list, the mouse groups, and the controller notes.
+/// Input: the mouse groups and the controller notes. The KEYBOARD rebind list is no
+/// longer schema data — it derives from the signal catalog ([`kb_rows_nodes`] iterates
+/// [`ActionSignal::rebindable`]), so a signal added to the enum shows up on the page with
+/// no hand-authored row (the ratified promise, MCP `C60AE43C §2`).
 #[derive(serde::Deserialize)]
 struct InputSection {
-    keyboard: KeyboardSection,
     mouse: RowSection,
     controller: ControllerSection,
-}
-
-#[derive(serde::Deserialize)]
-struct KeyboardSection {
-    groups: Vec<KbGroup>,
-}
-
-#[derive(serde::Deserialize)]
-struct KbGroup {
-    name: String,
-    actions: Vec<KbAction>,
-}
-
-/// One rebindable action: `id` is matched literally by [`KEYBOARD_ACTIONS`] (its keycap
-/// fires `rebind_<id>` and shows `bind_<id>`).
-#[derive(serde::Deserialize)]
-struct KbAction {
-    id: String,
-    label: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -2234,6 +2296,30 @@ fn bind_key(id: &str) -> String {
         "m_look" => "look_sens_pct".to_string(),
         "m_invert" => "input_mouse_invert_pitch".to_string(),
         other => format!("pv_{other}"),
+    }
+}
+
+/// The LOCALIZED display for one bound control — every part rides the stringtable via the
+/// catalog `token()` (S3), composed in Rust because a compound binding (an axis half, a
+/// gated mouse-motion) has no single token. Published into the Model as a keycap's
+/// `bind_<signal>` value; `node_text` passes it through untouched (already resolved, no `$`
+/// sigil). Composition separators are non-alphabetic, so the tree strings-gate stays clean.
+fn binding_label(b: &InputBinding) -> String {
+    use flicker::ui::strings::resolve;
+    match b {
+        InputBinding::Key(k) => resolve(&k.token()).into_owned(),
+        InputBinding::MouseButton(mb) => resolve(&mb.token()).into_owned(),
+        InputBinding::GamepadButton(gb) => resolve(&gb.token()).into_owned(),
+        InputBinding::GamepadAxis { axis, direction } => {
+            format!("{} {direction}", resolve(&axis.token()))
+        }
+        InputBinding::MouseMotion { axis, direction, gate } => {
+            let base = format!("{} {direction}", resolve(axis.token()));
+            match gate {
+                Some(g) => format!("{base} ({} {})", resolve("$bind_hold"), resolve(&g.token())),
+                None => base,
+            }
+        }
     }
 }
 
@@ -2426,10 +2512,12 @@ fn audio_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
     out
 }
 
-/// INPUT · KEYBOARD rows: a rebind banner (shown while capturing) + one keycap button
-/// per action (fills `kb_rows`). The keycap fires `rebind_<id>` and shows `bind_<id>`;
-/// the scene owns the capture.
-fn kb_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
+/// INPUT · KEYBOARD rows: a rebind banner (shown while capturing) + one keycap button per
+/// PLAYER-scope signal (fills `kb_rows`), DERIVED from the signal catalog — grouped by
+/// [`SignalGroup`], each row keyed by the signal's stable `name()`. No hand-authored list:
+/// a signal marked `RebindScope::Player` appears here automatically (MCP `C60AE43C §2`).
+/// The keycap fires `rebind_<name>` and shows `bind_<name>`; the scene owns the capture.
+fn kb_rows_nodes() -> Vec<UiNode> {
     let mut banner = settings_line(
         "$set_press_any_key_to_bind_esc_to_cancel_back",
         24.0,
@@ -2440,30 +2528,38 @@ fn kb_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
     );
     banner.visible_bind = Some("rebinding".to_string());
     let mut out = vec![banner];
-    for g in &schema.input.keyboard.groups {
-        out.push(group_head(&g.name));
-        for a in &g.actions {
+    for group in SignalGroup::ALL {
+        let mut rows = Vec::new();
+        for sig in ActionSignal::rebindable().filter(|s| s.group() == *group) {
+            let name = sig.name();
             let mut name_cell = kind("cell");
             name_cell.grow = Some(1.0);
+            let label = sig.token();
             name_cell.children = vec![
                 grow_stack(1.0),
-                settings_line(&a.label, 18.0, 16.0, "settings.row.name_color", "body", "left"),
+                settings_line(&label, 18.0, 16.0, "settings.row.name_color", "body", "left"),
                 grow_stack(1.0),
             ];
 
             let mut cap = kind("button");
-            cap.id = format!("kc_{}", a.id);
-            cap.action = Some(format!("rebind_{}", a.id));
+            cap.id = format!("kc_{name}");
+            cap.action = Some(format!("rebind_{name}"));
             cap.size = Some(KEYCAP_W);
-            cap.props.insert("text_bind".to_string(), Value::Text(format!("bind_{}", a.id)));
+            cap.props.insert("text_bind".to_string(), Value::Text(format!("bind_{name}")));
             cap.props.insert("label_size".to_string(), Value::Number(KEYCAP_LABEL_SIZE));
             cap.props.insert("variant".to_string(), Value::Text("secondary".to_string()));
 
             let mut r = kind("row");
             r.size = Some(42.0);
             r.children = vec![name_cell, cap];
-            out.push(r);
+            rows.push(r);
         }
+        // A group with no Player-scope member draws no header (e.g. Camera / Nav / Text).
+        if rows.is_empty() {
+            continue;
+        }
+        out.push(group_head(group.token()));
+        out.append(&mut rows);
         out.push(fixed_stack(10.0));
     }
     out
@@ -2534,7 +2630,43 @@ fn controller_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
 /// then FILL each empty per-section container with hardened Rust-built rows read from the
 /// scene's row schema. The untrusted Lua composes NO structure (the client is in the
 /// enemy's hands; security). Menu fill precedent: [`main_menu_tree`].
-fn settings_tree() -> UiNode {
+/// Assign the flat `settings_rows` nav group + a running `nav_ordinal` to every interactive
+/// control in a freshly-built section, top-to-bottom (pre-order), so the d-pad walks the
+/// rows in visual order. Recurses the row wrappers; only value controls + keycap buttons
+/// become focusable (labels, spacers, badges and group heads stay inert). The rails are NOT
+/// numbered — they are driven by L2/R2 (pages) and L1/R1 (sub-tabs), never the d-pad. The
+/// footer's Restore/Apply/Save are authored at ordinals 9000+ so they follow the rows.
+/// Nav-tier contract MCP `1B5F6BB8`.
+fn number_steppables(nodes: &mut [UiNode], group: &str, next: &mut u32) {
+    for n in nodes.iter_mut() {
+        if !n.id.is_empty()
+            && matches!(n.component.as_str(), "select" | "slider" | "toggle" | "pill_toggle" | "button")
+        {
+            n.tab_group = group.to_string();
+            n.nav_ordinal = *next;
+            *next += 1;
+        }
+        number_steppables(&mut n.children, group, next);
+    }
+}
+
+/// The resolution dropdown's options — DEVICE-enumerated (`display::enumerate`), not
+/// authored: `value` is the 0-based index, `label` the `"W × H"` size (digits + `×`, so
+/// the strings gate — which forbids alphabetic display literals — passes). Rust-built like
+/// [`controller_options`]; the JSON row carries no `options` array.
+fn resolution_options(list: &[display::Resolution]) -> Vec<UiNode> {
+    list.iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut n = kind("option");
+            n.props.insert("value".to_string(), Value::Number(i as f64));
+            n.props.insert("label".to_string(), Value::Text(format!("{} \u{00d7} {}", r.w, r.h)));
+            n
+        })
+        .collect()
+}
+
+fn settings_tree(resolutions: &[display::Resolution]) -> UiNode {
     let fallback = || {
         // Even the degenerate no-scene root keeps its S9 input declaration so Esc → close
         // never depends on layout (the screen IS the declaration).
@@ -2563,23 +2695,37 @@ fn settings_tree() -> UiNode {
             return tree;
         }
     };
-    for (id, nodes) in [
+    for (id, mut nodes) in [
         ("video_rows", video_rows_nodes(&schema)),
         ("audio_rows", audio_rows_nodes(&schema)),
-        ("kb_rows", kb_rows_nodes(&schema)),
+        ("kb_rows", kb_rows_nodes()),
         ("mouse_rows", mouse_rows_nodes(&schema)),
         ("controller_rows", controller_rows_nodes(&schema)),
     ] {
+        // Each section's controls join the ONE flat `settings_rows` group, numbered from 1
+        // top-to-bottom. Sections are never co-visible (the sec_*/sub_* visibility gates
+        // prune the hidden ones from the nav ring), so the ordinals may repeat across them.
+        let mut ord = 1;
+        number_steppables(&mut nodes, "settings_rows", &mut ord);
         match find_by_id_mut(&mut tree, id) {
             Some(container) => container.children = nodes,
             None => tracing::error!("settings fill container `{id}` missing from settings.scene.json"),
         }
     }
+    // The resolution select's options are DEVICE-enumerated (per-monitor), so they are
+    // filled here from the snapshot rather than authored in the scene JSON.
+    match find_by_id_mut(&mut tree, "c_resolution") {
+        Some(sel) => sel.children = resolution_options(resolutions),
+        None => tracing::error!("settings resolution select `c_resolution` missing from the tree"),
+    }
     tree
 }
 
 impl UnifiedSettingsScene {
-    fn new(theme: Theme, input_map: &InputMap) -> Self {
+    fn new(theme: Theme, input_map: &InputMap, renderer: &Renderer) -> Self {
+        // Snapshot the monitor's resolution rungs ONCE (fallback to the static ladder when
+        // headless). The tree's resolution options + the index↔size mapping read this.
+        let resolutions = display::enumerate(&renderer.video_mode_sizes());
         let entries = theme.lua_textures();
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
         let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
@@ -2594,7 +2740,7 @@ impl UnifiedSettingsScene {
         // structure, then FILL each empty per-section container with hardened Rust-built
         // rows ([`settings_tree`]). The tree is fully-owned data and every control draws
         // in the engine — the menu's ratified fill precedent (`main_menu_tree`).
-        let tree = Some(settings_tree());
+        let tree = Some(settings_tree(&resolutions));
         let settings = GAME_SETTINGS.lock().expect("settings lock").clone();
         // The screen's declarative bindings (S9), read off the filled root once.
         let intents = tree.as_ref().map(UiIntents::of).unwrap_or_default();
@@ -2609,12 +2755,14 @@ impl UnifiedSettingsScene {
             rebind: RebindCapture::new(),
             settings,
             input_map: input_map.clone(),
+            resolutions,
             surfaces: settings_surfaces(),
             input_subtab: "keyboard".to_string(),
-            ctrl_profile: "default".to_string(),
+            ctrl_profile: "xbox_souls".to_string(),
             scroll_off: 0.0,
             applied: 0.0,
             rebind_esc_prev: false,
+            rebind_bs_prev: false,
             dirty: false,
             intents,
             fired_sigs: Vec::new(),
@@ -2695,7 +2843,7 @@ impl UnifiedSettingsScene {
         // ── wired VIDEO (display mode + resolution ride the live DisplaySetting) ──
         let disp = display::current();
         m.set("video_display_mode", display::mode_index(disp.mode) as f64);
-        m.set("video_resolution", display::resolution_index(disp.res) as f64);
+        m.set("video_resolution", display::resolution_index(&self.resolutions, disp.res) as f64);
         m.set("video_quality", self.settings.video.quality as f64);
         m.set("video_vsync", self.settings.video.vsync);
         m.set("video_fps_limit", self.settings.video.fps_limit as f64);
@@ -2716,15 +2864,17 @@ impl UnifiedSettingsScene {
             m.set(*k, *v);
         }
 
-        // Current keyboard bindings → the key caps show real keys (`bind_<ActionId>`).
-        for (id, action) in KEYBOARD_ACTIONS {
+        // Current keyboard bindings → the key caps show real keys, LOCALIZED
+        // (`bind_<signal>`). Same derived set the page's rows come from, so a keycap and
+        // its publish can never drift. Slot-0 binding only (the page edits one slot).
+        for action in ActionSignal::rebindable() {
             let label = self
                 .input_map
-                .bindings_for(*action)
+                .bindings_for(action)
                 .first()
-                .map(|b| b.to_string())
+                .map(binding_label)
                 .unwrap_or_default();
-            m.set(format!("bind_{id}"), label);
+            m.set(format!("bind_{}", action.name()), label);
         }
 
         // The transient `sig_<name>` mirror (S9): intent names fired last frame
@@ -2846,6 +2996,9 @@ impl Scene for UnifiedSettingsScene {
         let esc_down = input.key_down(Key::Escape);
         let rebind_esc_edge = esc_down && !self.rebind_esc_prev;
         self.rebind_esc_prev = esc_down;
+        let bs_down = input.key_down(Key::Backspace);
+        let rebind_bs_edge = bs_down && !self.rebind_bs_prev;
+        self.rebind_bs_prev = bs_down;
 
         // Derived surface flags: the banner mirrors the capture, the flash its timer.
         self.surfaces.set("rebinding", self.rebind.is_active());
@@ -2917,6 +3070,13 @@ impl Scene for UnifiedSettingsScene {
         if self.rebind.is_active() {
             if rebind_esc_edge || input.mouse_left_pressed {
                 self.rebind.cancel();
+            } else if rebind_bs_edge {
+                // Backspace UNBINDS the current action (the banner's advertised behaviour);
+                // caught before `poll`, which would otherwise capture Backspace as a key.
+                if let Some((action, binding)) = self.rebind.unbind_current(&mut self.input_map) {
+                    tracing::info!("unbound {action} (was {binding})");
+                    self.dirty = true;
+                }
             } else if let Some((action, binding)) = self.rebind.poll(input, &mut self.input_map) {
                 tracing::info!("rebound {action} to {binding}");
                 self.dirty = true;
@@ -3012,7 +3172,7 @@ impl Scene for UnifiedSettingsScene {
             }
         }
         if let Some(idx) = results.number("video_resolution") {
-            if let Some(res) = display::resolution_at(idx as usize) {
+            if let Some(res) = display::resolution_at(&self.resolutions, idx as usize) {
                 if res != display::current().res {
                     if let Some(prev) = apply_display_change(DisplayChange::Resolution(res), renderer)
                     {
@@ -3057,10 +3217,11 @@ impl Scene for UnifiedSettingsScene {
             }
         }
 
-        // ── Start rebind (a keycap button fires `rebind_<ActionId>`) ──
-        for (id, action) in KEYBOARD_ACTIONS {
-            if results.is_on(&format!("rebind_{id}")) {
-                self.rebind.start(*action, false);
+        // ── Start rebind (a keycap button fires `rebind_<signal>`) — the SAME derived
+        //    Player set the page's keycaps come from, so every keycap has a live handler ──
+        for action in ActionSignal::rebindable() {
+            if results.is_on(&format!("rebind_{}", action.name())) {
+                self.rebind.start(action, false);
                 break;
             }
         }
@@ -3075,32 +3236,6 @@ impl Scene for UnifiedSettingsScene {
         }
     }
 }
-
-/// The keyboard actions the settings screen lists, in display order — the id
-/// strings match `ui_theme.json`'s `settings.input.keyboard` groups. Used both
-/// to publish each action's current binding (`bind_<id>`) and to dispatch a
-/// `rebind_<id>` action fired by its keycap button back to the `ActionSignal`.
-const KEYBOARD_ACTIONS: &[(&str, ActionSignal)] = &[
-    ("MoveForward", ActionSignal::MoveForward),
-    ("MoveBackward", ActionSignal::MoveBackward),
-    ("StrafeLeft", ActionSignal::StrafeLeft),
-    ("StrafeRight", ActionSignal::StrafeRight),
-    ("MoveUp", ActionSignal::MoveUp),
-    ("MoveDown", ActionSignal::MoveDown),
-    ("Jump", ActionSignal::Jump),
-    ("Sprint", ActionSignal::Sprint),
-    ("Crouch", ActionSignal::Crouch),
-    ("Interact", ActionSignal::Interact),
-    ("Inventory", ActionSignal::Inventory),
-    ("Map", ActionSignal::Map),
-    ("Menu", ActionSignal::Menu),
-    ("PrimaryAction", ActionSignal::PrimaryAction),
-    ("SecondaryAction", ActionSignal::SecondaryAction),
-    ("Reload", ActionSignal::Reload),
-    ("Confirm", ActionSignal::Confirm),
-    ("Cancel", ActionSignal::Cancel),
-    ("Quit", ActionSignal::Quit),
-];
 
 /// Pause overlay pushed over the frozen game. Resume (or Escape) pops back to
 /// the game; Quit exits. Reuses the game's already-uploaded [`Theme`].
@@ -3160,6 +3295,7 @@ impl Scene for PauseScene {
             return Transition::Push(Box::new(UnifiedSettingsScene::new(
                 self.theme,
                 &self.bindings,
+                renderer,
             )));
         }
         if actions.is_on("main_menu") {
@@ -3756,7 +3892,7 @@ mod script_smoke {
         // The layout is the STATIC scene filled by hardened Rust rows — the PRODUCTION tree
         // ([`settings_tree`]); the untrusted Lua composes no structure. Its `derive()` still
         // drives the section / sub-tab VISIBILITY, so hold a host to fold it in like `update`.
-        let tree = settings_tree();
+        let tree = settings_tree(&display::RESOLUTIONS);
         let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
 
         // The per-frame model the scene publishes for `(section, sub-tab)`: the RAW page /
@@ -3818,15 +3954,82 @@ mod script_smoke {
         assert!(has(&run("audio", "keyboard"), "NOT YET IMPLEMENTED"), "audio stub");
         assert!(has(&run("input", "keyboard"), "MOVEMENT"), "input keyboard groups");
         assert!(has(&run("input", "mouse"), "Look Sensitivity"), "input mouse rows");
-        // Controller tab is now a data-driven profile SELECTOR (§7.3): the refreshed notes
-        // copy renders, and the selected profile (`ctrl_profile = "default"`) shows the
-        // label PROFILES supplied — proving the selector options came from the data global.
+        // Controller tab is a data-driven CONTROLLER-config selector (§7.3): the notes copy
+        // renders, and the active controller config (`PRESET_NAMES[0]` = `xbox_souls`) shows
+        // its label — proving the selector options came from the profile roster.
         let controller = run("input", "controller");
-        assert!(has(&controller, "Choose a control profile"), "refreshed controller notes");
+        assert!(has(&controller, "Choose a control profile"), "controller notes render");
         assert!(
-            has(&controller, "Default (Keyboard & Mouse)"),
-            "selector shows the PROFILES-driven label for the active profile"
+            has(&controller, "Default (Xbox)"),
+            "selector shows the roster label for the default controller config"
         );
+    }
+
+    /// **The settings modal is pad-navigable** (nav-tier contract 1B5F6BB8): every control
+    /// of the VISIBLE section joins the one flat `settings_rows` group with the footer,
+    /// hidden sections are pruned from the ring, the rails are NOT focusable (they are the
+    /// L2/R2 · L1/R1 tier), and the footer follows the rows. This is the root-cause fix —
+    /// the settings tree used to carry zero `tab_group`, so the pad passed straight through.
+    #[test]
+    fn the_settings_modal_is_pad_navigable() {
+        flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
+        let tree = settings_tree(&display::RESOLUTIONS);
+        let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
+        let model = |section: &str, subtab: &str| {
+            let mut m = ValueMap::new();
+            let sec = ["video", "audio", "input"].iter().position(|s| *s == section).unwrap_or(0);
+            m.set("settings_page", sec as f64);
+            m.set("input_subtab", INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64);
+            m.set("off", false);
+            host.set_model(&m).expect("publish settings model");
+            if let Some(derived) = host.derive().expect("settings derive()") {
+                for (k, v) in derived.entries() {
+                    m.set(k.clone(), v.clone());
+                }
+            }
+            m
+        };
+
+        // Input · Keyboard: the ring is the keycaps + the footer, and NOTHING from the other
+        // sections; the rails are absent; one flat group; the footer follows the keycaps.
+        let kb = flicker::ui::focusables_of(&tree, &model("input", "keyboard"));
+        let ids: Vec<&str> = kb.iter().map(|f| f.id.as_str()).collect();
+        assert!(ids.contains(&"kc_MoveForward") && ids.contains(&"kc_Quit"), "keycaps are focusable");
+        assert!(
+            ids.contains(&"restore") && ids.contains(&"apply") && ids.contains(&"save_close"),
+            "the footer is in the ring",
+        );
+        assert!(!ids.iter().any(|id| id.starts_with("c_m_")), "mouse controls pruned off the keyboard sub-tab");
+        assert!(
+            !ids.contains(&"settings_page") && !ids.contains(&"input_subtab"),
+            "the rails are NOT focusable — they are the shoulder tier",
+        );
+        assert!(kb.iter().all(|f| f.group == "settings_rows"), "one flat settings group");
+        let restore = kb.iter().find(|f| f.id == "restore").expect("restore focusable");
+        assert!(
+            kb.iter().filter(|f| f.id.starts_with("kc_")).all(|f| f.ordinal < restore.ordinal),
+            "the footer follows the rows",
+        );
+
+        // Video: the resolution select is focusable; no keycaps leak onto the video page.
+        let vid = flicker::ui::focusables_of(&tree, &model("video", "keyboard"));
+        let vids: Vec<&str> = vid.iter().map(|f| f.id.as_str()).collect();
+        assert!(vids.contains(&"c_resolution"), "the resolution select is focusable");
+        assert!(!vids.iter().any(|id| id.starts_with("kc_")), "keycaps pruned off the video page");
+    }
+
+    /// The settings root declares the four rail STEP intents, so L2/R2 (pages) and L1/R1
+    /// (sub-tabs) fire the names the rails carry as `next_action`/`prev_action` — the strip
+    /// then steps its own bind (no scene stepper, no new ladder arm). Nav-tier contract.
+    #[test]
+    fn the_settings_root_declares_the_rail_step_intents() {
+        use flicker_input_core::ActionSignal;
+        let intents = flicker::ui::UiIntents::of(&settings_tree(&display::RESOLUTIONS));
+        assert_eq!(intents.result_for(ActionSignal::PageNext), Some("page_next"));
+        assert_eq!(intents.result_for(ActionSignal::PagePrev), Some("page_prev"));
+        assert_eq!(intents.result_for(ActionSignal::TabNext), Some("tab_next"));
+        assert_eq!(intents.result_for(ActionSignal::TabPrev), Some("tab_prev"));
+        assert_eq!(intents.result_for(ActionSignal::Cancel), Some("settings_close"));
     }
 
     /// **A settings dropdown pick is an INDEX, and an index is a NUMBER.** The real
@@ -3843,7 +4046,7 @@ mod script_smoke {
         let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
         // The PRODUCTION tree: the STATIC scene filled by hardened Rust rows ([`settings_tree`]).
         // The untrusted `settings.lua` derive drives section visibility; fold it as `update` does.
-        let tree = settings_tree();
+        let tree = settings_tree(&display::RESOLUTIONS);
         let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
 
         // The published selection: index 2 (1920×1080), the shell's own default rung.
@@ -3908,9 +4111,32 @@ mod script_smoke {
         assert_eq!(f.results.text("video_resolution"), None, "…and never as text");
         // …and that index is what moves the window: a different rung than the shown one.
         assert_ne!(
-            display::resolution_at(PICK),
-            display::resolution_at(SHOWN),
+            display::resolution_at(&display::RESOLUTIONS, PICK),
+            display::resolution_at(&display::RESOLUTIONS, SHOWN),
             "the pick names a different resolution — the change `update` applies"
+        );
+    }
+
+    /// The resolution options are DEVICE-enumerated, not authored: the built select carries
+    /// exactly one option per snapshot rung labelled `"W × H"`, and the scene JSON no longer
+    /// ships the hard-coded list. (Strings-gate safety of the digit+`×` labels is covered by
+    /// `the_shipped_screens_name_only_kinds_the_engine_knows` over the production tree.)
+    #[test]
+    fn the_resolution_options_are_device_enumerated() {
+        let list = display::enumerate(&[(1280, 720), (1920, 1080), (2560, 1440)]);
+        let mut tree = settings_tree(&list);
+        let sel = find_by_id_mut(&mut tree, "c_resolution").expect("resolution select present");
+        assert_eq!(sel.children.len(), list.len(), "one option per enumerated rung, device-built");
+        for (opt, r) in sel.children.iter().zip(&list) {
+            let label = match opt.props.get("label") {
+                Some(Value::Text(t)) => t.clone(),
+                _ => String::new(),
+            };
+            assert_eq!(label, format!("{} \u{00d7} {}", r.w, r.h), "label is the W × H size");
+        }
+        assert!(
+            !SETTINGS_SCENE_JSON.contains("1920 \u{00d7} 1080"),
+            "the hard-coded resolution options are gone from the scene JSON",
         );
     }
 
@@ -3926,7 +4152,7 @@ mod script_smoke {
         // The settings screen, built exactly as the scene caches it: the STATIC tree
         // ([`settings_tree`]) filled by hardened Rust rows — the untrusted Lua composes no
         // structure, but the root's S9 `on_cancel` declaration is authored right in the scene.
-        let tree = settings_tree();
+        let tree = settings_tree(&display::RESOLUTIONS);
 
         // The declaration is DATA on the root, collected once like the scene does.
         let intents = UiIntents::of(&tree);

@@ -266,14 +266,6 @@
                 "kind": "dropdown",
                 "name": "$set_resolution",
                 "desc": "$set_rendering_resolution_of_the_viewport",
-                "options": [
-                  "1280 × 720",
-                  "1600 × 900",
-                  "1920 × 1080",
-                  "2560 × 1440",
-                  "3440 × 1440",
-                  "3840 × 2160"
-                ],
                 "wired": true
               },
               {
@@ -427,115 +419,6 @@
         ]
       },
       "input": {
-        "tabs": [
-          {
-            "id": "keyboard",
-            "label": "$set_keyboard"
-          },
-          {
-            "id": "mouse",
-            "label": "$set_mouse"
-          },
-          {
-            "id": "controller",
-            "label": "$set_controller"
-          }
-        ],
-        "keyboard": {
-          "groups": [
-            {
-              "name": "$set_movement",
-              "actions": [
-                {
-                  "id": "MoveForward",
-                  "label": "$set_move_forward"
-                },
-                {
-                  "id": "MoveBackward",
-                  "label": "$set_move_backward"
-                },
-                {
-                  "id": "StrafeLeft",
-                  "label": "$set_strafe_left"
-                },
-                {
-                  "id": "StrafeRight",
-                  "label": "$set_strafe_right"
-                },
-                {
-                  "id": "MoveUp",
-                  "label": "$set_move_up"
-                },
-                {
-                  "id": "MoveDown",
-                  "label": "$set_move_down"
-                },
-                {
-                  "id": "Jump",
-                  "label": "$set_jump"
-                },
-                {
-                  "id": "Sprint",
-                  "label": "$set_sprint"
-                },
-                {
-                  "id": "Crouch",
-                  "label": "$set_crouch"
-                }
-              ]
-            },
-            {
-              "name": "$set_interface",
-              "actions": [
-                {
-                  "id": "Interact",
-                  "label": "$set_interact"
-                },
-                {
-                  "id": "Inventory",
-                  "label": "$set_inventory"
-                },
-                {
-                  "id": "Map",
-                  "label": "$set_world_map"
-                },
-                {
-                  "id": "Menu",
-                  "label": "$set_menu"
-                }
-              ]
-            },
-            {
-              "name": "$set_actions",
-              "actions": [
-                {
-                  "id": "PrimaryAction",
-                  "label": "$set_primary_action"
-                },
-                {
-                  "id": "SecondaryAction",
-                  "label": "$set_secondary_action"
-                },
-                {
-                  "id": "Reload",
-                  "label": "$set_reload"
-                },
-                {
-                  "id": "Confirm",
-                  "label": "$set_confirm"
-                },
-                {
-                  "id": "Cancel",
-                  "label": "$set_cancel"
-                },
-                {
-                  "id": "Quit",
-                  "label": "$set_quit"
-                }
-              ]
-            }
-          ]
-        },
         "mouse": {
           "groups": [
             {
@@ -603,9 +486,7 @@
           "title_size": 21,
           "title_color": "$ink_label",
           "body": "$set_pick_a_starting_layout_above_rebind_indi",
-          "body_color": "$dim_soft",
-          "detect": "DETECT CONTROLLER",
-          "enable": "Enable support"
+          "body_color": "$dim_soft"
         }
       }
     }
@@ -614,6 +495,10 @@
     "component": "screen",
     "id": "settings",
     "on_cancel": "settings_close",
+    "on_page_next": "page_next",
+    "on_page_prev": "page_prev",
+    "on_tab_next": "tab_next",
+    "on_tab_prev": "tab_prev",
     "children": [
       {
         "component": "cell",
@@ -701,6 +586,8 @@
                     "bind": "settings_page",
                     "vertical": true,
                     "gap": 8,
+                    "prev_action": "page_prev",
+                    "next_action": "page_next",
                     "tab_active_variant": "primary",
                     "tab_idle_variant": "secondary",
                     "children": [
@@ -726,6 +613,8 @@
                     "id": "input_subtab",
                     "bind": "input_subtab",
                     "size": 330,
+                    "prev_action": "tab_prev",
+                    "next_action": "tab_next",
                     "style": "settings.controls.pill",
                     "children": [
                       {
@@ -805,7 +694,9 @@
                     "label": "$set_restore_defaults",
                     "size": 180,
                     "label_size": 12,
-                    "variant": "secondary"
+                    "variant": "secondary",
+                    "tab_group": "settings_rows",
+                    "nav_ordinal": 9000
                   },
                   {
                     "component": "text",
@@ -828,7 +719,9 @@
                     "label": "$set_apply",
                     "size": 104,
                     "label_size": 14,
-                    "variant": "secondary"
+                    "variant": "secondary",
+                    "tab_group": "settings_rows",
+                    "nav_ordinal": 9001
                   },
                   {
                     "component": "button",
@@ -837,7 +730,9 @@
                     "label": "$set_save_and_close",
                     "size": 168,
                     "label_size": 14,
-                    "variant": "primary"
+                    "variant": "primary",
+                    "tab_group": "settings_rows",
+                    "nav_ordinal": 9002
                   }
                 ]
               }

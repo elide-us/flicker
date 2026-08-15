@@ -9,8 +9,13 @@
 //! the type name. **ADD variants only, never rename** (`C60AE43C §2`).
 //!
 //! The enum holds *intents* (buttons / nav / text / movement). It NEVER holds
-//! resolved abilities (`Kick`, a specific parry, a slotted item) — those are a
-//! `flicker-mechanics` concern, resolved downstream, server-authoritative.
+//! resolved abilities (the concrete parry a rapier's `Defend` becomes, a
+//! slotted item's effect) — those are a `flicker-mechanics` concern, resolved
+//! downstream, server-authoritative. `Kick` / `CounterPerilous` (Aaron
+//! 2026-08-14) sit on the intent side of that line: the chord expresses the
+//! player's INTENT; what the kick or counter resolves to stays loadout data.
+//! Parry stays folded into `Defend` (re-affirmed same day — variance is DATA,
+//! `C60AE43C §4/5`).
 
 use std::fmt;
 
@@ -21,8 +26,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// Extend with new intents as needed (append only). Every variant must be
 /// listed in [`ActionSignal::ALL`] and handled by the exhaustive matches in
-/// [`label`](Self::label) and [`Display`] — a new variant is a compile error
-/// until it is, which keeps the count and coverage honest with no bare literal.
+/// [`label`](Self::label), [`Display`], [`group`](Self::group) and
+/// [`rebind_scope`](Self::rebind_scope) — a new variant is a compile error
+/// until it is named, labelled AND classified, which keeps the count, the
+/// coverage and the DERIVED settings surface honest with no bare literal
+/// (`C60AE43C §2`: a new signal shows up in the remap surface automatically).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ActionSignal {
     // ── Movement (digital; analog Move*/Look* live on the analog channel) ──
@@ -67,6 +75,15 @@ pub enum ActionSignal {
     LockOn,
     /// Use the readied item / consumable.
     UseItem,
+    /// Guard-break kick / posture poke (pad default: the chord layer, hold
+    /// North + LT — ruled OFF `Special`, Aaron's Elden Ring complaint; the
+    /// keyboard binding is the player's).
+    Kick,
+    /// Counter a PERILOUS attack — the mikiri (pad default: the chord layer,
+    /// hold North + LB and LT pressed together; keyboard binding is the
+    /// player's). The intent only: what the counter resolves to stays a
+    /// loadout/state-machine concern.
+    CounterPerilous,
 
     // ── UI ──
     Confirm,
@@ -188,6 +205,8 @@ impl ActionSignal {
         ActionSignal::Dodge,
         ActionSignal::LockOn,
         ActionSignal::UseItem,
+        ActionSignal::Kick,
+        ActionSignal::CounterPerilous,
         ActionSignal::Confirm,
         ActionSignal::Cancel,
         ActionSignal::Menu,
@@ -262,6 +281,8 @@ impl ActionSignal {
             Self::Dodge => "Dodge",
             Self::LockOn => "LockOn",
             Self::UseItem => "UseItem",
+            Self::Kick => "Kick",
+            Self::CounterPerilous => "CounterPerilous",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel",
             Self::Menu => "Menu",
@@ -336,6 +357,8 @@ impl ActionSignal {
             Self::Dodge => "Dodge / roll",
             Self::LockOn => "Lock-on",
             Self::UseItem => "Use Item",
+            Self::Kick => "Kick",
+            Self::CounterPerilous => "Mikiri",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel / back",
             Self::Menu => "Menu",
@@ -372,6 +395,171 @@ impl ActionSignal {
             Self::CancelText => "Cancel text",
         }
     }
+
+    /// The catalog GROUP this signal belongs to — the enum's own section
+    /// comments made queryable, so a derived surface (the settings key-bindings
+    /// page heads its rows with [`SignalGroup::token`]) never keeps a second
+    /// hand-maintained partition. Exhaustive — no `_` arm — a new variant will
+    /// not compile until classified.
+    pub fn group(self) -> SignalGroup {
+        match self {
+            Self::MoveForward
+            | Self::MoveBackward
+            | Self::StrafeLeft
+            | Self::StrafeRight
+            | Self::MoveUp
+            | Self::MoveDown => SignalGroup::Movement,
+            Self::LookUp | Self::LookDown | Self::LookLeft | Self::LookRight => {
+                SignalGroup::Camera
+            }
+            Self::PrimaryAction
+            | Self::SecondaryAction
+            | Self::Jump
+            | Self::Sprint
+            | Self::Crouch
+            | Self::Interact
+            | Self::Reload => SignalGroup::Combat,
+            Self::AttackLight
+            | Self::AttackHeavy
+            | Self::Defend
+            | Self::Special
+            | Self::Dodge
+            | Self::LockOn
+            | Self::UseItem
+            | Self::Kick
+            | Self::CounterPerilous => SignalGroup::Souls,
+            Self::Confirm | Self::Cancel | Self::Menu | Self::Inventory | Self::Map => {
+                SignalGroup::Ui
+            }
+            Self::Quit => SignalGroup::System,
+            Self::ChordBegin
+            | Self::Activate
+            | Self::ItemSelect
+            | Self::NavUp
+            | Self::NavDown
+            | Self::NavLeft
+            | Self::NavRight
+            | Self::TabNext
+            | Self::TabPrev
+            | Self::PageNext
+            | Self::PagePrev => SignalGroup::Nav,
+            Self::PanelNext
+            | Self::PanelPrev
+            | Self::ModeNext
+            | Self::ModePrev
+            | Self::ZoomIn
+            | Self::ZoomOut => SignalGroup::EditorNav,
+            Self::Undo
+            | Self::Redo
+            | Self::Cut
+            | Self::Paste
+            | Self::Rename
+            | Self::CreateFolder
+            | Self::ContextMenu
+            | Self::Yes
+            | Self::No => SignalGroup::EditorVerbs,
+            Self::SubmitText | Self::CancelText => SignalGroup::Text,
+        }
+    }
+
+    /// Where this signal sits on the remap/settings surface (Aaron's rulings,
+    /// 2026-08-14: the Souls tier is player-rebindable; the analog Look channel
+    /// and every system-owned default stay off the page). Exhaustive — no `_`
+    /// arm — a new variant will not compile until scoped, which is what makes
+    /// the settings page's row set a DERIVATION instead of a parallel list.
+    pub fn rebind_scope(self) -> RebindScope {
+        match self {
+            // Player: movement + combat/interaction + souls intents + UI verbs + Quit.
+            Self::MoveForward
+            | Self::MoveBackward
+            | Self::StrafeLeft
+            | Self::StrafeRight
+            | Self::MoveUp
+            | Self::MoveDown
+            | Self::PrimaryAction
+            | Self::SecondaryAction
+            | Self::Jump
+            | Self::Sprint
+            | Self::Crouch
+            | Self::Interact
+            | Self::Reload
+            | Self::AttackLight
+            | Self::AttackHeavy
+            | Self::Defend
+            | Self::Special
+            | Self::Dodge
+            | Self::LockOn
+            | Self::UseItem
+            | Self::Kick
+            | Self::CounterPerilous
+            | Self::Confirm
+            | Self::Cancel
+            | Self::Menu
+            | Self::Inventory
+            | Self::Map
+            | Self::Quit => RebindScope::Player,
+            // Locked: the analog/pointer Look channel, the walker's nav family,
+            // the tab/page rails, bench panel/zoom nav, the chord layer's editor
+            // verbs and the text-terminal pair — system-owned defaults.
+            Self::LookUp
+            | Self::LookDown
+            | Self::LookLeft
+            | Self::LookRight
+            | Self::ChordBegin
+            | Self::NavUp
+            | Self::NavDown
+            | Self::NavLeft
+            | Self::NavRight
+            | Self::TabNext
+            | Self::TabPrev
+            | Self::PageNext
+            | Self::PagePrev
+            | Self::PanelNext
+            | Self::PanelPrev
+            | Self::ZoomIn
+            | Self::ZoomOut
+            | Self::Undo
+            | Self::Redo
+            | Self::Cut
+            | Self::Paste
+            | Self::Rename
+            | Self::CreateFolder
+            | Self::ContextMenu
+            | Self::SubmitText
+            | Self::CancelText => RebindScope::Locked,
+            // Reserved: declared with zero engine bindings — hidden from
+            // surfaces until wired.
+            Self::Activate
+            | Self::ItemSelect
+            | Self::ModeNext
+            | Self::ModePrev
+            | Self::Yes
+            | Self::No => RebindScope::Reserved,
+        }
+    }
+
+    /// The stringtable token for this signal's player-facing display name —
+    /// `"$sig_" + snake(name())`, in the `$`-sigil form authored straight into
+    /// a node's `text` prop (the `PRESET_NAMES` precedent; the widgets
+    /// stringtable resolves it at draw). ONE mechanical fold of the ONE
+    /// vocabulary ([`name`](Self::name)) — never a second naming. The
+    /// stringtable's `sig_*` STEMS and the Model's transient `sig_<result>`
+    /// intent mirror are different namespaces (stringtable keys vs ValueMap
+    /// keys).
+    pub fn token(self) -> String {
+        format!("$sig_{}", snake(self.name()))
+    }
+
+    /// The settings key-bindings page's row source: every
+    /// [`RebindScope::Player`] signal, in declaration order. The page's rows,
+    /// its model publishes and its rebind dispatch all iterate THIS — there is
+    /// no parallel list to drift.
+    pub fn rebindable() -> impl Iterator<Item = ActionSignal> {
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|s| s.rebind_scope() == RebindScope::Player)
+    }
 }
 
 impl fmt::Display for ActionSignal {
@@ -402,6 +590,8 @@ impl fmt::Display for ActionSignal {
             Self::Dodge => "Dodge",
             Self::LockOn => "Lock On",
             Self::UseItem => "Use Item",
+            Self::Kick => "Kick",
+            Self::CounterPerilous => "Perilous Counter",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel",
             Self::Menu => "Menu",
@@ -439,6 +629,103 @@ impl fmt::Display for ActionSignal {
         };
         write!(f, "{s}")
     }
+}
+
+/// One Pascal→snake fold for stringtable token stems (`"MoveForward"` →
+/// `"move_forward"`, `"F10"` → `"f10"`, `"DPadUp"` → `"d_pad_up"`): an
+/// underscore before each interior uppercase, everything lowercased. The
+/// inverse of the widgets-side `snake_to_pascal` (intents.rs) — each crate
+/// folds its own direction of the same convention; neither is a second
+/// vocabulary.
+pub(crate) fn snake(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// The catalog grouping of the signal vocabulary — [`ActionSignal`]'s section
+/// comments made queryable via [`ActionSignal::group`]. Membership lives ONLY
+/// in that exhaustive match; this enum is the section list a derived surface
+/// iterates (heading each section with [`token`](Self::token)), so the
+/// partition can never fork into a second hand-maintained list.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SignalGroup {
+    /// Digital movement intents.
+    Movement,
+    /// The analog/pointer Look channel.
+    Camera,
+    /// Combat / interaction basics.
+    Combat,
+    /// Souls combat intents (loadout-resolved).
+    Souls,
+    /// Menu / UI verbs.
+    Ui,
+    /// Engine-level intents.
+    System,
+    /// Walker nav family, the tab/page rails, chord + dialog plumbing.
+    Nav,
+    /// Bench editor navigation (panels, view modes, viewport zoom).
+    EditorNav,
+    /// Chord-layer editor verbs + dialog terminals.
+    EditorVerbs,
+    /// The text-terminal pair.
+    Text,
+}
+
+impl SignalGroup {
+    /// Every group, in [`ActionSignal`] declaration order (the order a derived
+    /// page walks its sections).
+    pub const ALL: &'static [SignalGroup] = &[
+        SignalGroup::Movement,
+        SignalGroup::Camera,
+        SignalGroup::Combat,
+        SignalGroup::Souls,
+        SignalGroup::Ui,
+        SignalGroup::System,
+        SignalGroup::Nav,
+        SignalGroup::EditorNav,
+        SignalGroup::EditorVerbs,
+        SignalGroup::Text,
+    ];
+
+    /// The stringtable token for the group's section header, in the `$`-sigil
+    /// form like [`ActionSignal::token`]. Exhaustive — no `_` arm.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Movement => "$siggroup_movement",
+            Self::Camera => "$siggroup_camera",
+            Self::Combat => "$siggroup_combat",
+            Self::Souls => "$siggroup_souls",
+            Self::Ui => "$siggroup_ui",
+            Self::System => "$siggroup_system",
+            Self::Nav => "$siggroup_nav",
+            Self::EditorNav => "$siggroup_editor_nav",
+            Self::EditorVerbs => "$siggroup_editor_verbs",
+            Self::Text => "$siggroup_text",
+        }
+    }
+}
+
+/// Where a signal sits on the remap/settings surface
+/// ([`ActionSignal::rebind_scope`]).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RebindScope {
+    /// Listed AND rebindable on the settings key-bindings page.
+    Player,
+    /// System-owned default bindings (walker nav, rails, bench nav, chord
+    /// verbs, text terminals) — catalogued, not player-editable.
+    Locked,
+    /// Declared with zero engine bindings — hidden from surfaces until wired.
+    Reserved,
 }
 
 #[cfg(test)]
@@ -511,5 +798,88 @@ mod tests {
         assert_eq!(ActionSignal::MoveForward.to_string(), "Move Forward");
         assert_eq!(ActionSignal::AttackLight.to_string(), "Light Attack");
         assert_eq!(ActionSignal::Quit.to_string(), "Quit");
+    }
+
+    /// S1 catalog: the group partition covers both directions — every signal's
+    /// group is listed in `SignalGroup::ALL`, and every listed group has at
+    /// least one member (no orphan section on a derived page).
+    #[test]
+    fn every_signal_is_grouped_and_every_group_has_members() {
+        let mut member_counts = std::collections::HashMap::new();
+        for &s in ActionSignal::ALL {
+            assert!(
+                SignalGroup::ALL.contains(&s.group()),
+                "{s:?} groups outside SignalGroup::ALL"
+            );
+            *member_counts.entry(s.group()).or_insert(0usize) += 1;
+        }
+        for &g in SignalGroup::ALL {
+            assert!(
+                member_counts.get(&g).copied().unwrap_or(0) > 0,
+                "{g:?} has no members"
+            );
+        }
+    }
+
+    /// The settings page's row source, pinned: 28 Player signals (Aaron's
+    /// 2026-08-14 rulings fold the Souls tier onto the page and add
+    /// `Kick` / `CounterPerilous` as chord-reached souls INTENTS), the analog
+    /// Look channel and the walker-owned nav family stay off it, and the whole
+    /// vocabulary is classified (Player + Locked + Reserved == ALL).
+    #[test]
+    fn rebindable_set_is_the_ruled_28() {
+        let rows: Vec<ActionSignal> = ActionSignal::rebindable().collect();
+        assert_eq!(rows.len(), 28);
+        for s in [
+            ActionSignal::AttackLight,
+            ActionSignal::Dodge,
+            ActionSignal::UseItem,
+            ActionSignal::Kick,
+            ActionSignal::CounterPerilous,
+        ] {
+            assert!(rows.contains(&s), "souls tier is Player-rebindable: {s:?}");
+        }
+        for s in [
+            ActionSignal::LookUp,
+            ActionSignal::NavUp,
+            ActionSignal::Undo,
+            ActionSignal::Activate,
+        ] {
+            assert!(!rows.contains(&s), "{s:?} must stay off the page");
+        }
+        let (mut player, mut locked, mut reserved) = (0usize, 0usize, 0usize);
+        for &s in ActionSignal::ALL {
+            match s.rebind_scope() {
+                RebindScope::Player => player += 1,
+                RebindScope::Locked => locked += 1,
+                RebindScope::Reserved => reserved += 1,
+            }
+        }
+        assert_eq!((player, locked, reserved), (28, 26, 6));
+        assert_eq!(player + locked + reserved, ActionSignal::ALL.len());
+    }
+
+    /// Token derivation is ONE mechanical fold of the ONE vocabulary: every
+    /// signal token is unique, `$sig_`-prefixed and exactly
+    /// `"$sig_" + snake(name())`; group tokens are unique and
+    /// `$siggroup_`-prefixed. Spot-pins for the fold itself.
+    #[test]
+    fn tokens_are_the_snake_fold_of_the_one_vocabulary() {
+        let mut seen = HashSet::new();
+        for &s in ActionSignal::ALL {
+            let t = s.token();
+            assert!(t.starts_with("$sig_"), "{s:?} token {t:?} lacks $sig_");
+            assert_eq!(t, format!("$sig_{}", snake(s.name())));
+            assert!(seen.insert(t), "duplicate token for {s:?}");
+        }
+        assert_eq!(seen.len(), ActionSignal::ALL.len());
+        let mut groups = HashSet::new();
+        for &g in SignalGroup::ALL {
+            assert!(g.token().starts_with("$siggroup_"), "{g:?}");
+            assert!(groups.insert(g.token()), "duplicate group token for {g:?}");
+        }
+        assert_eq!(snake("MoveForward"), "move_forward");
+        assert_eq!(snake("CreateFolder"), "create_folder");
+        assert_eq!(snake("Quit"), "quit");
     }
 }

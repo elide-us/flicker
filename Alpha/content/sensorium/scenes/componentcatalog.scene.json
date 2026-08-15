@@ -328,6 +328,8 @@
                     "component": "panel",
                     "id": "cat_content",
                     "style": "panel",
+                    "tab_group": "cat_content",
+                    "nav_ordinal": 0,
                     "pad": 12,
                     "grow": 1.0,
                     "children": [

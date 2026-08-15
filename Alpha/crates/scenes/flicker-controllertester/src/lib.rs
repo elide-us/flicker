@@ -35,6 +35,7 @@ use golem::GolemStage;
 use flicker_input_core::{
     AbstractControls, ActionSignal, AnalogFrame, ContextualBindings, EventKind, Fired, GamepadAxis,
     GamepadButton, GamepadConfig, InputBinding, InputContext, InputMap, InputState, Key, Resolver,
+    SignalGroup,
 };
 use flicker_input_router::{DispatchReport, Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
@@ -201,26 +202,31 @@ fn demo_bindings() -> ContextualBindings {
 
 // ── the demo handler chain (a real Router bus) ──────────────────────
 
-/// UI / menu / dialog / text signals — the Modal layer's remit when a modal
-/// context is active.
+/// UI / menu / dialog / text signals — the Modal layer's remit when a modal context is
+/// active. EXHAUSTIVE (no `_` arm): a signal's Modal-layer membership is a per-signal
+/// routing decision, not a group, so a NEW `ActionSignal` variant must be classified here
+/// at compile time — the tester's partition can never silently drop one.
 fn is_ui_signal(s: ActionSignal) -> bool {
     use ActionSignal::*;
-    matches!(
-        s,
+    match s {
         Confirm | Cancel | NavUp | NavDown | NavLeft | NavRight | TabNext | TabPrev | ItemSelect
-            | Yes | No | Activate | SubmitText | CancelText
-    )
+        | Yes | No | Activate | SubmitText | CancelText => true,
+        MoveForward | MoveBackward | StrafeLeft | StrafeRight | MoveUp | MoveDown | LookUp
+        | LookDown | LookLeft | LookRight | PrimaryAction | SecondaryAction | Jump | Sprint
+        | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
+        | LockOn | UseItem | Kick | CounterPerilous | Menu | Inventory | Map | Quit | ChordBegin
+        | PageNext | PagePrev | PanelNext | PanelPrev | ModeNext | ModePrev | ZoomIn | ZoomOut
+        | Undo | Redo | Cut | Paste | Rename | CreateFolder | ContextMenu => false,
+    }
 }
 
-/// Gameplay signals — the base handler's remit (movement / combat / interaction).
+/// Gameplay signals — the base handler's remit. DERIVED from the signal catalog: the
+/// gameplay tier IS the Movement / Camera / Combat / Souls groups, so this can never fork
+/// from the vocabulary (a new gameplay-group signal — e.g. `Kick` — is included for free).
 fn is_gameplay_signal(s: ActionSignal) -> bool {
-    use ActionSignal::*;
     matches!(
-        s,
-        MoveForward | MoveBackward | StrafeLeft | StrafeRight | MoveUp | MoveDown | LookUp
-            | LookDown | LookLeft | LookRight | PrimaryAction | SecondaryAction | Jump | Sprint
-            | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
-            | LockOn | UseItem
+        s.group(),
+        SignalGroup::Movement | SignalGroup::Camera | SignalGroup::Combat | SignalGroup::Souls
     )
 }
 

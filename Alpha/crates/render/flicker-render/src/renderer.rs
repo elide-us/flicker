@@ -335,6 +335,24 @@ impl Renderer {
         })
     }
 
+    /// The distinct physical sizes `(width, height)` of the current monitor's video modes —
+    /// the device-enumerated resolution rungs the settings panel offers. Empty when there
+    /// is no current monitor (headless), so the caller falls back to a static list. May
+    /// carry duplicate sizes (one per refresh rate); the caller dedupes.
+    pub fn video_mode_sizes(&self) -> Vec<(u32, u32)> {
+        self.window
+            .current_monitor()
+            .map(|m| {
+                m.video_modes()
+                    .map(|v| {
+                        let s = v.size();
+                        (s.width, s.height)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// `true` when the window is in any fullscreen mode (borderless or
     /// exclusive); `false` when windowed.
     pub fn is_fullscreen(&self) -> bool {

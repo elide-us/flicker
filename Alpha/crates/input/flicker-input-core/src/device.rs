@@ -12,6 +12,15 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+/// `"$<prefix>_" + snake(variant-name)` — the device-enum token fold, the
+/// input-side twin of `ActionSignal::token`. The variant name is read from the
+/// derived `Debug` form, which for these unit enums is exactly the serde-stable
+/// variant identifier (pinned for every catalogued control by the
+/// `tokens_ride_the_serde_names` test below, so any drift is loud).
+fn variant_token(prefix: &str, variant: &impl fmt::Debug) -> String {
+    format!("${prefix}_{}", crate::signal::snake(&format!("{variant:?}")))
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Keyboard
 // ───────────────────────────────────────────────────────────────────
@@ -63,6 +72,41 @@ pub enum Key {
     NumpadAdd, NumpadSubtract, NumpadMultiply, NumpadDivide,
     NumpadDecimal, NumpadEnter, NumpadEqual,
     NumLock,
+}
+
+impl Key {
+    /// Every key, in declaration order — THE canonical keyboard catalog
+    /// (relocated from rebind.rs's `ALL_KEYS`; rebind capture and the derived
+    /// settings surface iterate this). Length + uniqueness pinned by tests.
+    pub const ALL: &'static [Key] = &[
+        Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H,
+        Key::I, Key::J, Key::K, Key::L, Key::M, Key::N, Key::O, Key::P,
+        Key::Q, Key::R, Key::S, Key::T, Key::U, Key::V, Key::W, Key::X,
+        Key::Y, Key::Z,
+        Key::Digit0, Key::Digit1, Key::Digit2, Key::Digit3, Key::Digit4,
+        Key::Digit5, Key::Digit6, Key::Digit7, Key::Digit8, Key::Digit9,
+        Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6,
+        Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12,
+        Key::Up, Key::Down, Key::Left, Key::Right,
+        Key::LeftShift, Key::RightShift, Key::LeftControl, Key::RightControl,
+        Key::LeftAlt, Key::RightAlt, Key::LeftSuper, Key::RightSuper,
+        Key::Space, Key::Enter, Key::Escape, Key::Tab, Key::Backspace,
+        Key::Delete, Key::Insert, Key::Home, Key::End, Key::PageUp, Key::PageDown,
+        Key::PrintScreen, Key::ScrollLock, Key::Pause,
+        Key::Minus, Key::Equal, Key::LeftBracket, Key::RightBracket,
+        Key::Backslash, Key::Semicolon, Key::Apostrophe,
+        Key::Comma, Key::Period, Key::Slash, Key::Grave,
+        Key::Numpad0, Key::Numpad1, Key::Numpad2, Key::Numpad3, Key::Numpad4,
+        Key::Numpad5, Key::Numpad6, Key::Numpad7, Key::Numpad8, Key::Numpad9,
+        Key::NumpadAdd, Key::NumpadSubtract, Key::NumpadMultiply, Key::NumpadDivide,
+        Key::NumpadDecimal, Key::NumpadEnter, Key::NumpadEqual, Key::NumLock,
+    ];
+
+    /// The stringtable token for this key's player-facing display name —
+    /// `"$key_" + snake(variant)`, e.g. `$key_left_shift`, `$key_f10`.
+    pub fn token(self) -> String {
+        variant_token("key", &self)
+    }
 }
 
 impl fmt::Display for Key {
@@ -131,6 +175,25 @@ pub enum MouseButton {
     Forward,
 }
 
+impl MouseButton {
+    /// Every mouse button, in declaration order — the canonical pointer-button
+    /// catalog (new in S2; rebind capture and the derived settings surface
+    /// iterate this).
+    pub const ALL: &'static [MouseButton] = &[
+        MouseButton::Left,
+        MouseButton::Right,
+        MouseButton::Middle,
+        MouseButton::Back,
+        MouseButton::Forward,
+    ];
+
+    /// The stringtable token for this button's player-facing display name —
+    /// `"$mbtn_" + snake(variant)`, e.g. `$mbtn_left`.
+    pub fn token(self) -> String {
+        variant_token("mbtn", &self)
+    }
+}
+
 impl fmt::Display for MouseButton {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -186,6 +249,41 @@ pub enum GamepadButton {
     Z,
 }
 
+impl GamepadButton {
+    /// Every pad button, in declaration order — the canonical catalog
+    /// (relocated from rebind.rs's `ALL_GAMEPAD_BUTTONS`; rebind capture, the
+    /// device backends and the derived settings surface iterate this).
+    pub const ALL: &'static [GamepadButton] = &[
+        GamepadButton::South,
+        GamepadButton::East,
+        GamepadButton::North,
+        GamepadButton::West,
+        GamepadButton::LeftBumper,
+        GamepadButton::RightBumper,
+        GamepadButton::LeftTrigger,
+        GamepadButton::RightTrigger,
+        GamepadButton::Select,
+        GamepadButton::Start,
+        GamepadButton::Guide,
+        GamepadButton::Mode,
+        GamepadButton::LeftStick,
+        GamepadButton::RightStick,
+        GamepadButton::DPadUp,
+        GamepadButton::DPadDown,
+        GamepadButton::DPadLeft,
+        GamepadButton::DPadRight,
+        GamepadButton::Touchpad,
+        GamepadButton::C,
+        GamepadButton::Z,
+    ];
+
+    /// The stringtable token for this button's player-facing display name —
+    /// `"$pad_" + snake(variant)`, e.g. `$pad_south`, `$pad_d_pad_up`.
+    pub fn token(self) -> String {
+        variant_token("pad", &self)
+    }
+}
+
 impl fmt::Display for GamepadButton {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -223,6 +321,25 @@ pub enum GamepadAxis {
     RightStickY,
     LeftTrigger,
     RightTrigger,
+}
+
+impl GamepadAxis {
+    /// Every pad axis, in declaration order — the canonical catalog (relocated
+    /// from rebind.rs's `ALL_GAMEPAD_AXES`).
+    pub const ALL: &'static [GamepadAxis] = &[
+        GamepadAxis::LeftStickX,
+        GamepadAxis::LeftStickY,
+        GamepadAxis::RightStickX,
+        GamepadAxis::RightStickY,
+        GamepadAxis::LeftTrigger,
+        GamepadAxis::RightTrigger,
+    ];
+
+    /// The stringtable token for this axis' player-facing display name —
+    /// `"$axis_" + snake(variant)`, e.g. `$axis_left_stick_x`.
+    pub fn token(self) -> String {
+        variant_token("axis", &self)
+    }
 }
 
 impl fmt::Display for GamepadAxis {
@@ -282,6 +399,66 @@ impl fmt::Display for DeadzoneShape {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    /// The relocated rebind-era size test + uniqueness: the `ALL` catalogs are
+    /// complete (length pinned — bump ONLY when a variant is added) and carry
+    /// no duplicate.
+    #[test]
+    fn all_catalogs_are_complete_and_unique() {
+        assert_eq!(Key::ALL.len(), 103);
+        assert_eq!(MouseButton::ALL.len(), 5);
+        assert_eq!(GamepadButton::ALL.len(), 21);
+        assert_eq!(GamepadAxis::ALL.len(), 6);
+        assert_eq!(Key::ALL.iter().collect::<HashSet<_>>().len(), Key::ALL.len());
+        assert_eq!(
+            MouseButton::ALL.iter().collect::<HashSet<_>>().len(),
+            MouseButton::ALL.len()
+        );
+        assert_eq!(
+            GamepadButton::ALL.iter().collect::<HashSet<_>>().len(),
+            GamepadButton::ALL.len()
+        );
+        assert_eq!(
+            GamepadAxis::ALL.iter().collect::<HashSet<_>>().len(),
+            GamepadAxis::ALL.len()
+        );
+    }
+
+    /// The token fold reads the derived `Debug` name; this pins that name to
+    /// the serde-stable variant identifier for EVERY catalogued control (the
+    /// ONE persisted vocabulary — a manual `Debug` impl or a serde rename
+    /// would fail here loudly), and pins each family's tokens unique with the
+    /// right prefix.
+    #[test]
+    fn tokens_ride_the_serde_names() {
+        fn check<T: fmt::Debug + serde::Serialize>(all: &[T], prefix: &str) {
+            let mut seen = HashSet::new();
+            for v in all {
+                let dbg = format!("{v:?}");
+                let serde_name = serde_json::to_value(v).expect("control serializes");
+                assert_eq!(
+                    serde_name.as_str(),
+                    Some(dbg.as_str()),
+                    "{dbg}: Debug must equal the serde variant name"
+                );
+                let token = variant_token(prefix.trim_start_matches('$').trim_end_matches('_'), v);
+                assert!(token.starts_with(prefix), "{dbg}: token {token:?} lacks {prefix}");
+                assert!(seen.insert(token), "duplicate token for {dbg}");
+            }
+        }
+        check(Key::ALL, "$key_");
+        check(MouseButton::ALL, "$mbtn_");
+        check(GamepadButton::ALL, "$pad_");
+        check(GamepadAxis::ALL, "$axis_");
+        // Spot-pins for the fold on device names.
+        assert_eq!(Key::F10.token(), "$key_f10");
+        assert_eq!(Key::Digit0.token(), "$key_digit0");
+        assert_eq!(Key::LeftShift.token(), "$key_left_shift");
+        assert_eq!(GamepadButton::DPadUp.token(), "$pad_d_pad_up");
+        assert_eq!(GamepadAxis::LeftStickX.token(), "$axis_left_stick_x");
+        assert_eq!(MouseButton::Left.token(), "$mbtn_left");
+    }
 
     #[test]
     fn face_button_labels_match_physical_position() {

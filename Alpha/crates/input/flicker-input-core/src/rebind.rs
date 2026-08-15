@@ -2,11 +2,12 @@
 //! and turn it into an [`InputBinding`].
 //!
 //! Relocated from `flicker-core::input::settings_gui` (spec R6 / §3.4): the
-//! capture logic is pure and needs the `ALL_*` enumerations, so it belongs in
-//! core beside the device symbols. [`RebindCapture`] is the lightweight,
-//! standalone driver the Lua settings screen uses; [`capture_input`] is the
-//! shared edge-detector (previously the `InputSettingsPanel::capture_input`
-//! method, which the panel now calls through here).
+//! capture logic is pure and rides the device catalogs (`Key::ALL`,
+//! `MouseButton::ALL`, `GamepadButton::ALL`, `GamepadAxis::ALL` — canonical on
+//! the enums since S2), so it belongs in core beside the device symbols.
+//! [`RebindCapture`] is the lightweight, standalone driver the settings screen
+//! uses; [`capture_input`] is the shared edge-detector (previously the
+//! settings panel's `capture_input` method, which now lives here).
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,95 +17,29 @@ use crate::signal::ActionSignal;
 use crate::snapshot::InputState;
 
 // ───────────────────────────────────────────────────────────────────
-// Input lists for rebind capture
-// ───────────────────────────────────────────────────────────────────
-
-pub const ALL_GAMEPAD_BUTTONS: [GamepadButton; 21] = [
-    GamepadButton::South,
-    GamepadButton::East,
-    GamepadButton::North,
-    GamepadButton::West,
-    GamepadButton::LeftBumper,
-    GamepadButton::RightBumper,
-    GamepadButton::LeftTrigger,
-    GamepadButton::RightTrigger,
-    GamepadButton::Select,
-    GamepadButton::Start,
-    GamepadButton::Guide,
-    GamepadButton::Mode,
-    GamepadButton::LeftStick,
-    GamepadButton::RightStick,
-    GamepadButton::DPadUp,
-    GamepadButton::DPadDown,
-    GamepadButton::DPadLeft,
-    GamepadButton::DPadRight,
-    GamepadButton::Touchpad,
-    GamepadButton::C,
-    GamepadButton::Z,
-];
-
-pub const ALL_GAMEPAD_AXES: [GamepadAxis; 6] = [
-    GamepadAxis::LeftStickX,
-    GamepadAxis::LeftStickY,
-    GamepadAxis::RightStickX,
-    GamepadAxis::RightStickY,
-    GamepadAxis::LeftTrigger,
-    GamepadAxis::RightTrigger,
-];
-
-pub const ALL_KEYS: [Key; 103] = [
-    Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H,
-    Key::I, Key::J, Key::K, Key::L, Key::M, Key::N, Key::O, Key::P,
-    Key::Q, Key::R, Key::S, Key::T, Key::U, Key::V, Key::W, Key::X,
-    Key::Y, Key::Z,
-    Key::Digit0, Key::Digit1, Key::Digit2, Key::Digit3, Key::Digit4,
-    Key::Digit5, Key::Digit6, Key::Digit7, Key::Digit8, Key::Digit9,
-    Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6,
-    Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12,
-    Key::Up, Key::Down, Key::Left, Key::Right,
-    Key::LeftShift, Key::RightShift, Key::LeftControl, Key::RightControl,
-    Key::LeftAlt, Key::RightAlt, Key::LeftSuper, Key::RightSuper,
-    Key::Space, Key::Enter, Key::Escape, Key::Tab, Key::Backspace,
-    Key::Delete, Key::Insert, Key::Home, Key::End, Key::PageUp, Key::PageDown,
-    Key::PrintScreen, Key::ScrollLock, Key::Pause,
-    Key::Minus, Key::Equal, Key::LeftBracket, Key::RightBracket,
-    Key::Backslash, Key::Semicolon, Key::Apostrophe,
-    Key::Comma, Key::Period, Key::Slash, Key::Grave,
-    Key::Numpad0, Key::Numpad1, Key::Numpad2, Key::Numpad3, Key::Numpad4,
-    Key::Numpad5, Key::Numpad6, Key::Numpad7, Key::Numpad8, Key::Numpad9,
-    Key::NumpadAdd, Key::NumpadSubtract, Key::NumpadMultiply, Key::NumpadDivide,
-    Key::NumpadDecimal, Key::NumpadEnter, Key::NumpadEqual, Key::NumLock,
-];
-
-// ───────────────────────────────────────────────────────────────────
 // Shared edge-detecting capture
 // ───────────────────────────────────────────────────────────────────
 
 /// Scan the input snapshot for the first freshly-pressed key/mouse/gamepad
 /// control (edge vs the supplied previous-frame state) and return it as an
-/// [`InputBinding`], or `None` while still waiting. Previously
-/// `InputSettingsPanel::capture_input`.
-#[allow(clippy::too_many_arguments)] // faithful relocation of the panel's edge-capture signature
+/// [`InputBinding`], or `None` while still waiting. Iterates the device
+/// catalogs, so a control added to an enum is capturable the moment it exists.
 pub fn capture_input(
     input: &InputState,
     prev_keys: &HashSet<Key>,
-    prev_mouse_left: &bool,
-    prev_mouse_right: &bool,
-    prev_mouse_middle: &bool,
-    prev_mouse_back: &bool,
-    prev_mouse_forward: &bool,
+    prev_mouse: &HashSet<MouseButton>,
     prev_gp_buttons: &HashSet<GamepadButton>,
     prev_gp_axes: &HashMap<GamepadAxis, f32>,
     for_gamepad: bool,
 ) -> Option<InputBinding> {
     if for_gamepad {
         if let Some(gp) = input.gamepad(0) {
-            for &btn in &ALL_GAMEPAD_BUTTONS {
+            for &btn in GamepadButton::ALL {
                 if gp.button_down(btn) && !prev_gp_buttons.contains(&btn) {
                     return Some(InputBinding::GamepadButton(btn));
                 }
             }
-            for &axis in &ALL_GAMEPAD_AXES {
+            for &axis in GamepadAxis::ALL {
                 let val = gp.axis_value(axis);
                 let prev = prev_gp_axes.get(&axis).copied().unwrap_or(0.0);
                 if prev <= 0.7 && val > 0.7 {
@@ -121,25 +56,15 @@ pub fn capture_input(
             }
         }
     } else {
-        for &key in &ALL_KEYS {
+        for &key in Key::ALL {
             if input.key_down(key) && !prev_keys.contains(&key) {
                 return Some(InputBinding::Key(key));
             }
         }
-        if input.mouse_left && !prev_mouse_left {
-            return Some(InputBinding::MouseButton(MouseButton::Left));
-        }
-        if input.mouse_right && !prev_mouse_right {
-            return Some(InputBinding::MouseButton(MouseButton::Right));
-        }
-        if input.mouse_middle && !prev_mouse_middle {
-            return Some(InputBinding::MouseButton(MouseButton::Middle));
-        }
-        if input.mouse_back && !prev_mouse_back {
-            return Some(InputBinding::MouseButton(MouseButton::Back));
-        }
-        if input.mouse_forward && !prev_mouse_forward {
-            return Some(InputBinding::MouseButton(MouseButton::Forward));
+        for &mb in MouseButton::ALL {
+            if input.mouse_button_down(mb) && !prev_mouse.contains(&mb) {
+                return Some(InputBinding::MouseButton(mb));
+            }
         }
     }
     None
@@ -159,11 +84,7 @@ pub struct RebindCapture {
     for_gamepad: bool,
     /// Previous-frame input snapshots for edge detection.
     prev_keys: HashSet<Key>,
-    prev_mouse_left: bool,
-    prev_mouse_right: bool,
-    prev_mouse_middle: bool,
-    prev_mouse_back: bool,
-    prev_mouse_forward: bool,
+    prev_mouse: HashSet<MouseButton>,
     prev_gamepad_buttons: HashSet<GamepadButton>,
     prev_gamepad_axes: HashMap<GamepadAxis, f32>,
 }
@@ -174,11 +95,7 @@ impl RebindCapture {
             action: None,
             for_gamepad: false,
             prev_keys: HashSet::new(),
-            prev_mouse_left: false,
-            prev_mouse_right: false,
-            prev_mouse_middle: false,
-            prev_mouse_back: false,
-            prev_mouse_forward: false,
+            prev_mouse: HashSet::new(),
             prev_gamepad_buttons: HashSet::new(),
             prev_gamepad_axes: HashMap::new(),
         }
@@ -223,11 +140,7 @@ impl RebindCapture {
         let captured = capture_input(
             input,
             &self.prev_keys,
-            &self.prev_mouse_left,
-            &self.prev_mouse_right,
-            &self.prev_mouse_middle,
-            &self.prev_mouse_back,
-            &self.prev_mouse_forward,
+            &self.prev_mouse,
             &self.prev_gamepad_buttons,
             &self.prev_gamepad_axes,
             self.for_gamepad,
@@ -256,27 +169,44 @@ impl RebindCapture {
         Some((action, binding))
     }
 
+    /// UNBIND the current action's slot-0 binding and end capture — the sibling of
+    /// [`poll`](Self::poll) (which binds slot 0) and the "Backspace to unbind" the settings
+    /// rebind banner advertises. Returns `(action, removed binding)`, or `None` if nothing
+    /// was being rebound or the action had no binding. Capture always ends. The CALLER
+    /// detects the Backspace edge — Backspace is otherwise a bindable key, so it must be
+    /// intercepted before `poll` would capture it.
+    pub fn unbind_current(&mut self, input_map: &mut InputMap) -> Option<(ActionSignal, InputBinding)> {
+        let action = self.action?;
+        let removed = input_map.bindings_for(action).first().copied();
+        if let Some(binding) = removed {
+            input_map.unbind(action, binding);
+        }
+        self.action = None;
+        removed.map(|binding| (action, binding))
+    }
+
     fn update_prev(&mut self, input: &InputState) {
         self.prev_keys.clear();
-        for &key in &ALL_KEYS {
+        for &key in Key::ALL {
             if input.key_down(key) {
                 self.prev_keys.insert(key);
             }
         }
-        self.prev_mouse_left = input.mouse_left;
-        self.prev_mouse_right = input.mouse_right;
-        self.prev_mouse_middle = input.mouse_middle;
-        self.prev_mouse_back = input.mouse_back;
-        self.prev_mouse_forward = input.mouse_forward;
+        self.prev_mouse.clear();
+        for &mb in MouseButton::ALL {
+            if input.mouse_button_down(mb) {
+                self.prev_mouse.insert(mb);
+            }
+        }
         self.prev_gamepad_buttons.clear();
         self.prev_gamepad_axes.clear();
         if let Some(gp) = input.gamepad(0) {
-            for &btn in &ALL_GAMEPAD_BUTTONS {
+            for &btn in GamepadButton::ALL {
                 if gp.button_down(btn) {
                     self.prev_gamepad_buttons.insert(btn);
                 }
             }
-            for &axis in &ALL_GAMEPAD_AXES {
+            for &axis in GamepadAxis::ALL {
                 self.prev_gamepad_axes.insert(axis, gp.axis_value(axis));
             }
         }
@@ -312,10 +242,48 @@ mod tests {
         assert!(!rc.is_active());
     }
 
+    // The catalog size/uniqueness pins moved to device.rs beside the `ALL`
+    // consts (`all_catalogs_are_complete_and_unique`).
+
     #[test]
-    fn all_lists_are_the_expected_size() {
-        assert_eq!(ALL_GAMEPAD_BUTTONS.len(), 21);
-        assert_eq!(ALL_GAMEPAD_AXES.len(), 6);
-        assert_eq!(ALL_KEYS.len(), 103);
+    fn captures_fresh_mouse_press_as_binding() {
+        // The MouseButton::ALL loop must behave exactly like the old five
+        // per-button if-blocks: edge on a held-down button, none on repeat.
+        let mut rc = RebindCapture::new();
+        let mut map = InputMap::empty();
+        rc.start(ActionSignal::Interact, false);
+        let mut down = InputState::new();
+        down.mouse_middle = true;
+        let got = rc.poll(&down, &mut map);
+        assert_eq!(
+            got,
+            Some((
+                ActionSignal::Interact,
+                InputBinding::MouseButton(MouseButton::Middle)
+            ))
+        );
+        // Held across frames after the capture consumed it: no re-capture.
+        rc.start(ActionSignal::Interact, false);
+        assert_eq!(rc.poll(&down, &mut map), None);
+    }
+
+    #[test]
+    fn unbind_current_drops_slot_zero_and_ends_capture() {
+        let mut rc = RebindCapture::new();
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
+        rc.start(ActionSignal::Jump, false);
+        assert_eq!(
+            rc.unbind_current(&mut map),
+            Some((ActionSignal::Jump, InputBinding::Key(Key::Space))),
+        );
+        assert!(map.bindings_for(ActionSignal::Jump).is_empty(), "slot 0 removed");
+        assert!(!rc.is_active(), "capture ends after an unbind");
+        // Backspace on an already-unbound action: capture still ends, nothing removed.
+        rc.start(ActionSignal::Reload, false);
+        assert_eq!(rc.unbind_current(&mut map), None);
+        assert!(!rc.is_active());
+        // No action being rebound → None, no panic.
+        assert_eq!(rc.unbind_current(&mut map), None);
     }
 }
