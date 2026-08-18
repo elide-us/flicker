@@ -118,7 +118,10 @@ mod tests {
             Flow::Pass
         );
         assert_eq!(
-            root.handle(&ev(ActionSignal::PrimaryAction, EventKind::Press, &raw), &mut rc),
+            root.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Pass
         );
     }
@@ -130,15 +133,24 @@ mod tests {
         let mut g = GameplayBase::default();
         // A release edge, or an unrouted signal, is not a ray-pick.
         assert_eq!(
-            g.handle(&ev(ActionSignal::PrimaryAction, EventKind::Release, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Release, &raw),
+                &mut rc
+            ),
             Flow::Pass
         );
         assert!(!g.pick);
         assert_eq!(
-            g.handle(&ev(ActionSignal::PrimaryAction, EventKind::Press, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Consumed
         );
-        assert!(g.pick, "a PrimaryAction press that reached the base is a ray-pick");
+        assert!(
+            g.pick,
+            "a PrimaryAction press that reached the base is a ray-pick"
+        );
     }
 
     /// S9b: the combat feed's discrete edges ride the bus — a `Jump` press and an
@@ -150,20 +162,38 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut g = GameplayBase::default();
 
-        assert_eq!(g.handle(&ev(ActionSignal::Jump, EventKind::Release, &raw), &mut rc), Flow::Pass);
-        assert!(!g.jump);
-        assert_eq!(g.handle(&ev(ActionSignal::Jump, EventKind::Press, &raw), &mut rc), Flow::Consumed);
-        assert!(g.jump, "the resolver's Jump press replaces the raw space_edge latch");
-
         assert_eq!(
-            g.handle(&ev(ActionSignal::AttackLight, EventKind::Press, &raw), &mut rc),
+            g.handle(&ev(ActionSignal::Jump, EventKind::Release, &raw), &mut rc),
+            Flow::Pass
+        );
+        assert!(!g.jump);
+        assert_eq!(
+            g.handle(&ev(ActionSignal::Jump, EventKind::Press, &raw), &mut rc),
             Flow::Consumed
         );
-        assert!(g.attack, "the first souls-intent consumer: AttackLight feeds attack");
+        assert!(
+            g.jump,
+            "the resolver's Jump press replaces the raw space_edge latch"
+        );
+
+        assert_eq!(
+            g.handle(
+                &ev(ActionSignal::AttackLight, EventKind::Press, &raw),
+                &mut rc
+            ),
+            Flow::Consumed
+        );
+        assert!(
+            g.attack,
+            "the first souls-intent consumer: AttackLight feeds attack"
+        );
 
         // A held-stance signal (Sprint/Crouch) is NOT an edge concern here — the
         // scene polls those via `signal_held`; the base passes them through.
-        assert_eq!(g.handle(&ev(ActionSignal::Sprint, EventKind::Press, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            g.handle(&ev(ActionSignal::Sprint, EventKind::Press, &raw), &mut rc),
+            Flow::Pass
+        );
     }
 
     /// The scene's defining behaviour: a click over the HUD is swallowed by the
@@ -183,8 +213,7 @@ mod tests {
             let mut gameplay = GameplayBase::default();
             let mut rc = RouteCtx::new();
             let report = {
-                let mut chain: [&mut dyn InputHandler; 3] =
-                    [&mut root, &mut walker, &mut gameplay];
+                let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
             assert!(gameplay.pick, "a viewport click reaches the gameplay base");
@@ -199,11 +228,13 @@ mod tests {
             let mut gameplay = GameplayBase::default();
             let mut rc = RouteCtx::new();
             let report = {
-                let mut chain: [&mut dyn InputHandler; 3] =
-                    [&mut root, &mut walker, &mut gameplay];
+                let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
-            assert!(!gameplay.pick, "a HUD click never reaches the gameplay base");
+            assert!(
+                !gameplay.pick,
+                "a HUD click never reaches the gameplay base"
+            );
             assert!(
                 report.consumed_by(1, ActionSignal::PrimaryAction),
                 "the walker consumed it"
@@ -221,8 +252,12 @@ mod tests {
 
         let raw = InputState::new();
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
-        let mut tree = UiNode { component: "screen".into(), ..Default::default() };
-        tree.props.insert("on_menu".into(), Value::Text("pause_open".into()));
+        let mut tree = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
+        tree.props
+            .insert("on_menu".into(), Value::Text("pause_open".into()));
         let intents = UiIntents::of(&tree);
 
         let mut root = RootHandler;
@@ -234,8 +269,14 @@ mod tests {
             let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
             Router::dispatch(&events, &mut chain, &mut rc)
         };
-        assert!(report.consumed_by(1, ActionSignal::Menu), "the walker layer consumed it");
-        assert!(!report.consumed_by(ROOT, ActionSignal::Menu), "the root has no Menu arm");
+        assert!(
+            report.consumed_by(1, ActionSignal::Menu),
+            "the walker layer consumed it"
+        );
+        assert!(
+            !report.consumed_by(ROOT, ActionSignal::Menu),
+            "the root has no Menu arm"
+        );
         assert_eq!(walker.take_fired(), vec!["pause_open".to_string()]);
         assert!(!gameplay.pick);
     }

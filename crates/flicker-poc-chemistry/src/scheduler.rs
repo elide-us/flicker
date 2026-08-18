@@ -281,7 +281,10 @@ mod tests {
         let mut world = tiny_world();
         let core_before = world.reservoirs.core.total();
         sched.step(&mut world, 1.0, None);
-        assert!(world.reservoirs.core.total() > core_before, "iron sank into the core");
+        assert!(
+            world.reservoirs.core.total() > core_before,
+            "iron sank into the core"
+        );
         assert_eq!(world.tick_myr, 1.0);
         assert_eq!(sched.ticks(), 1);
     }
@@ -307,7 +310,11 @@ mod tests {
         sched.sweep(world.cell_count(), "generate", &tx);
         drop(tx);
         let got: Vec<_> = rx.iter().collect();
-        assert_eq!(got.len(), world.cell_count(), "one progress message per cell");
+        assert_eq!(
+            got.len(),
+            world.cell_count(),
+            "one progress message per cell"
+        );
         assert!(got.iter().all(|p| p.stage == "generate"));
     }
 
@@ -318,8 +325,16 @@ mod tests {
         let mut a = StageRng::for_stage(1234, 3);
         let mut b = StageRng::for_stage(1234, 3);
         let mut c = StageRng::for_stage(1234, 4);
-        assert_eq!(a.next_u64(), b.next_u64(), "same (seed, index) → same stream");
-        assert_ne!(StageRng::for_stage(1234, 3).next_u64(), c.next_u64(), "different index → different stream");
+        assert_eq!(
+            a.next_u64(),
+            b.next_u64(),
+            "same (seed, index) → same stream"
+        );
+        assert_ne!(
+            StageRng::for_stage(1234, 3).next_u64(),
+            c.next_u64(),
+            "different index → different stream"
+        );
     }
 }
 
@@ -352,17 +367,29 @@ mod tick_zero_gates {
             crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk());
         let state = PlanetState::sample(&w);
 
-        let live: Vec<&str> =
-            stages.iter().filter(|s| s.is_live(&state)).map(|s| s.name()).collect();
-        let waiting: Vec<&str> =
-            stages.iter().filter(|s| !s.is_live(&state)).map(|s| s.name()).collect();
+        let live: Vec<&str> = stages
+            .iter()
+            .filter(|s| s.is_live(&state))
+            .map(|s| s.name())
+            .collect();
+        let waiting: Vec<&str> = stages
+            .iter()
+            .filter(|s| !s.is_live(&state))
+            .map(|s| s.name())
+            .collect();
         eprintln!("t=0 running: {live:?}\nt=0 waiting: {waiting:?}");
 
         // The interior drives everything and is hot from the first tick; water
         // starts arriving from outside immediately. That is the whole list.
         assert_eq!(
             live,
-            vec!["RadiogenicDecay", "CoreFormation", "MantleConvection", "Outgassing", "WaterDelivery"],
+            vec![
+                "RadiogenicDecay",
+                "CoreFormation",
+                "MantleConvection",
+                "Outgassing",
+                "WaterDelivery"
+            ],
             "only the interior and the infall may run on a bare magma ball"
         );
         // And the rest are explicitly waiting on the world, not silently idle.
@@ -379,7 +406,10 @@ mod tick_zero_gates {
             "Crystallization",
             "StrataReconcile",
         ] {
-            assert!(waiting.contains(&shut), "{shut} should be waiting at t=0, not running");
+            assert!(
+                waiting.contains(&shut),
+                "{shut} should be waiting at t=0, not running"
+            );
         }
     }
 }
@@ -426,8 +456,10 @@ mod no_scripted_outcomes {
                 std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("t"));
             let b = Budget::from_dir(&dir, &t).expect("b");
             let mut w = World::seed(icosphere(4), b, &t, 7);
-            let levers =
-                crate::Levers { water_coverage_target: target, ..crate::Levers::brisk() };
+            let levers = crate::Levers {
+                water_coverage_target: target,
+                ..crate::Levers::brisk()
+            };
             let mut s = super::Scheduler::new(
                 crate::formation_stages(std::sync::Arc::clone(&t), &w, &levers),
                 7,
@@ -469,12 +501,20 @@ mod no_scripted_outcomes {
         let mut stage = crate::infall::WaterDelivery::new(&t);
         stage.target_coverage = 0.30;
         assert!(
-            !crate::process_file::gate_of("WaterDelivery").holds(&capped, &crate::Levers { water_coverage_target: 0.30, ..crate::Levers::brisk() }),
+            !crate::process_file::gate_of("WaterDelivery").holds(
+                &capped,
+                &crate::Levers {
+                    water_coverage_target: 0.30,
+                    ..crate::Levers::brisk()
+                }
+            ),
             "at coverage {:.3} the capped gate must read shut",
             capped.submerged_frac
         );
         assert!(
-            crate::process_file::gate_of("WaterDelivery").holds(&PlanetState::default(), &crate::Levers::brisk()) || PlanetState::default().submerged_frac == 0.0,
+            crate::process_file::gate_of("WaterDelivery")
+                .holds(&PlanetState::default(), &crate::Levers::brisk())
+                || PlanetState::default().submerged_frac == 0.0,
             "and a dry world's gate reads open"
         );
     }
@@ -492,7 +532,10 @@ mod no_scripted_outcomes {
     /// there is no ground.
     #[test]
     fn the_cutoff_waits_for_ground_before_measuring_coverage() {
-        let levers = crate::Levers { water_coverage_target: 0.5, ..crate::Levers::brisk() };
+        let levers = crate::Levers {
+            water_coverage_target: 0.5,
+            ..crate::Levers::brisk()
+        };
         let gate = crate::process_file::gate_of("WaterDelivery");
 
         // The film world: no lid anywhere, yet 100% "submerged" — the reading
@@ -511,15 +554,24 @@ mod no_scripted_outcomes {
 
         // The same coverage numbers with a real lid: now the reading MEANS
         // something, and the cutoff bites exactly as the lever asks.
-        let lidded = PlanetState { lid_frac: 0.2, ..film.clone() };
+        let lidded = PlanetState {
+            lid_frac: 0.2,
+            ..film.clone()
+        };
         assert!(
             !gate.holds(&lidded, &levers),
             "with ground standing, a sea past target genuinely shuts the infall"
         );
 
         // And below target with a lid, delivery runs — the lever's actual job.
-        let drier = PlanetState { submerged_frac: 0.3, ..lidded };
-        assert!(gate.holds(&drier, &levers), "below target, the comets keep coming");
+        let drier = PlanetState {
+            submerged_frac: 0.3,
+            ..lidded
+        };
+        assert!(
+            gate.holds(&drier, &levers),
+            "below target, the comets keep coming"
+        );
     }
 
     /// **NOTHING IS SCRIPTED.** Denying the world its water infall — holding
@@ -541,8 +593,14 @@ mod no_scripted_outcomes {
         let (_, without) = grown(7, ticks, &["WaterDelivery"]);
 
         // The hold held: not a kilogram arrived from outside.
-        assert_eq!(without.delivered_water_kg, 0.0, "held infall delivers NOTHING");
-        assert!(with.delivered_water_kg > 0.0, "the twin control received its water");
+        assert_eq!(
+            without.delivered_water_kg, 0.0,
+            "held infall delivers NOTHING"
+        );
+        assert!(
+            with.delivered_water_kg > 0.0,
+            "the twin control received its water"
+        );
 
         // And the world is genuinely different for it — not the same story on
         // a different label. The denied world's hydrosphere is what the mantle
@@ -667,20 +725,38 @@ mod gates_match_their_ticks {
         assert!(state.mean_mantle_temp_k < 1200.0, "the AVERAGE is cold");
         assert!(state.max_mantle_temp_k > 1800.0, "but one cell is not");
 
-        assert!(crate::process_file::gate_of("Volcanism").holds(&state, &crate::Levers::default()), "the plume can still erupt");
-        assert!(crate::process_file::gate_of("Outgassing").holds(&state, &crate::Levers::default()), "and still degas");
-        assert!(crate::process_file::gate_of("CoreFormation").holds(&state, &crate::Levers::default()), "and still sink iron");
+        assert!(
+            crate::process_file::gate_of("Volcanism").holds(&state, &crate::Levers::default()),
+            "the plume can still erupt"
+        );
+        assert!(
+            crate::process_file::gate_of("Outgassing").holds(&state, &crate::Levers::default()),
+            "and still degas"
+        );
+        assert!(
+            crate::process_file::gate_of("CoreFormation").holds(&state, &crate::Levers::default()),
+            "and still sink iron"
+        );
 
         // Cool that last cell and all three shut for good — the gates close on
         // the world, not on a clock.
         w.mantle.temp_k[0] = 500.0;
         let cold = PlanetState::sample(&w);
-        assert!(!crate::process_file::gate_of("Volcanism").holds(&cold, &crate::Levers::default()), "no melt anywhere: volcanism is over");
-        assert!(!crate::process_file::gate_of("CoreFormation").holds(&cold, &crate::Levers::default()), "no segregation anywhere: the core is done");
+        assert!(
+            !crate::process_file::gate_of("Volcanism").holds(&cold, &crate::Levers::default()),
+            "no melt anywhere: volcanism is over"
+        );
+        assert!(
+            !crate::process_file::gate_of("CoreFormation").holds(&cold, &crate::Levers::default()),
+            "no segregation anywhere: the core is done"
+        );
 
         // Outgassing's floor is the lowest in the vocabulary (nitrogen, 600 K),
         // so 500 K silences it too — the distillation series has run out.
-        assert!(!crate::process_file::gate_of("Outgassing").holds(&cold, &crate::Levers::default()), "below every release floor: the sky is finished");
+        assert!(
+            !crate::process_file::gate_of("Outgassing").holds(&cold, &crate::Levers::default()),
+            "below every release floor: the sky is finished"
+        );
     }
 }
 
@@ -712,7 +788,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, 0.15)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, 0.15)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -764,7 +842,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -796,9 +876,13 @@ mod bake_report {
         w.audit("crust budget");
         let end = crust(&w);
 
-        eprintln!("\n== crust budget over {WATCH} ticks: {start:.4e} -> {end:.4e} kg ({:+.2}%) ==",
-            100.0 * (end - start) / start);
-        let mut rows: Vec<usize> = (0..stages.len()).filter(|&i| delta[i].abs() > 0.0).collect();
+        eprintln!(
+            "\n== crust budget over {WATCH} ticks: {start:.4e} -> {end:.4e} kg ({:+.2}%) ==",
+            100.0 * (end - start) / start
+        );
+        let mut rows: Vec<usize> = (0..stages.len())
+            .filter(|&i| delta[i].abs() > 0.0)
+            .collect();
         rows.sort_by(|&a, &b| delta[b].abs().partial_cmp(&delta[a].abs()).unwrap());
         for i in rows {
             eprintln!("  {:<20} {:>+12.4e} kg", names[i], delta[i]);
@@ -830,7 +914,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         // **Resolution is PLANET SIZE here** — same hex span, more cells, bigger
         // world. It is not a detail setting: sea-floor age is basin width in
         // cells divided by one cell per tick, so a small planet's basins are
@@ -850,8 +936,9 @@ mod bake_report {
 
         let n = w.columns.len();
         let area = w.cell_area_m2();
-        let cont: Vec<bool> =
-            (0..n).map(|i| crust_kind(&w.columns[i]) == CrustKind::Continental).collect();
+        let cont: Vec<bool> = (0..n)
+            .map(|i| crust_kind(&w.columns[i]) == CrustKind::Continental)
+            .collect();
         let sea = crate::planet::sea_level_m(&w);
         // **On the FLEXED surface** — the one the sea level was solved against.
         // Comparing Airy elevation to a flexed sea level measures neither, and
@@ -938,8 +1025,13 @@ mod bake_report {
         let q = |v: &[f64], p: f64| v[((v.len() - 1) as f64 * p) as usize];
         eprintln!(
             "  p01 {:.0} · p10 {:.0} · p25 {:.0} · p50 {:.0} · p75 {:.0} · p90 {:.0} · p99 {:.0}",
-            q(&dens, 0.01), q(&dens, 0.10), q(&dens, 0.25), q(&dens, 0.50),
-            q(&dens, 0.75), q(&dens, 0.90), q(&dens, 0.99),
+            q(&dens, 0.01),
+            q(&dens, 0.10),
+            q(&dens, 0.25),
+            q(&dens, 0.50),
+            q(&dens, 0.75),
+            q(&dens, 0.90),
+            q(&dens, 0.99),
         );
         // A histogram tight around the cut: a gap here means two families.
         let near = (cut - 300.0, cut + 300.0);
@@ -951,11 +1043,25 @@ mod bake_report {
                 hist[(((d - near.0) / width) as usize).min(bins - 1)] += 1;
             }
         }
-        eprintln!("  within ±300 of the cut, {} of {} columns:", hist.iter().sum::<usize>(), dens.len());
+        eprintln!(
+            "  within ±300 of the cut, {} of {} columns:",
+            hist.iter().sum::<usize>(),
+            dens.len()
+        );
         for (k, &c) in hist.iter().enumerate() {
             let lo = near.0 + k as f64 * width;
-            let mark = if lo <= cut && cut < lo + width { " ← CUT" } else { "" };
-            eprintln!("    {:>6.0}–{:<6.0} {:>5}  {}{mark}", lo, lo + width, c, "#".repeat(c / 8));
+            let mark = if lo <= cut && cut < lo + width {
+                " ← CUT"
+            } else {
+                ""
+            };
+            eprintln!(
+                "    {:>6.0}–{:<6.0} {:>5}  {}{mark}",
+                lo,
+                lo + width,
+                c,
+                "#".repeat(c / 8)
+            );
         }
 
         // **Would FLEXURE fix it?** Isostasy here is Airy — purely local, each
@@ -969,8 +1075,9 @@ mod bake_report {
         // alone, so a large weight is stiff/local and a small one is a limp
         // plate spreading everything. Reported at three stiffnesses so the
         // answer is a curve, not a single number that could be luck.
-        let elev_local: Vec<f64> =
-            (0..n).map(|i| crate::column::elevation_m(&w.columns[i], area)).collect();
+        let elev_local: Vec<f64> = (0..n)
+            .map(|i| crate::column::elevation_m(&w.columns[i], area))
+            .collect();
         let _ = &elev_local;
         eprintln!("\n── would flexure correlate it? (Airy today = infinitely stiff) ──");
         for self_weight in [6.0f64, 3.0, 1.0] {
@@ -1125,7 +1232,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1137,8 +1246,11 @@ mod bake_report {
         let n = w.columns.len();
         let area = w.cell_area_m2();
         let weather = crate::surface::Weather::observe(&w, dt, levers.stellar_heat);
-        let elevation: Vec<f64> =
-            w.columns.iter().map(|c| crate::column::elevation_m(c, area)).collect();
+        let elevation: Vec<f64> = w
+            .columns
+            .iter()
+            .map(|c| crate::column::elevation_m(c, area))
+            .collect();
 
         // The tick's own drainage: lowest neighbour, then gather high-to-low.
         let downhill: Vec<Option<usize>> = (0..n)
@@ -1148,13 +1260,17 @@ mod bake_report {
                     .map(|&j| j as usize)
                     .filter(|&j| elevation[j] < elevation[i])
                     .min_by(|&a, &b| {
-                        elevation[a].partial_cmp(&elevation[b]).unwrap_or(std::cmp::Ordering::Equal)
+                        elevation[a]
+                            .partial_cmp(&elevation[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
             })
             .collect();
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| {
-            elevation[b].partial_cmp(&elevation[a]).unwrap_or(std::cmp::Ordering::Equal)
+            elevation[b]
+                .partial_cmp(&elevation[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut flow: Vec<f64> = weather.rain.clone();
         for &cell in &order {
@@ -1212,7 +1328,11 @@ mod bake_report {
             "\n── erosion forcing at {:.0} My · {land} land cells · {sinks} sinks · {sea} submerged ──",
             w.tick_myr
         );
-        eprintln!("  cell spacing {:.0} m · dt {dt} My · rate {}", cell_spacing_m(), levers.erosion_rate);
+        eprintln!(
+            "  cell spacing {:.0} m · dt {dt} My · rate {}",
+            cell_spacing_m(),
+            levers.erosion_rate
+        );
         for (label, v, unit) in [
             ("rain", &mut rains, "m/My"),
             ("flow (gathered)", &mut flows, "m/My"),
@@ -1267,7 +1387,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1280,7 +1402,10 @@ mod bake_report {
         let area = w.cell_area_m2();
         let span = area.sqrt();
         let elevations = |w: &World| -> Vec<f64> {
-            w.columns.iter().map(|c| crate::column::elevation_m(c, area)).collect()
+            w.columns
+                .iter()
+                .map(|c| crate::column::elevation_m(c, area))
+                .collect()
         };
         // The same slope read the bake prints: drop to the lowest neighbour,
         // over the cell spacing.
@@ -1338,11 +1463,14 @@ mod bake_report {
             "  {:<20} {:>13} {:>13} {:>13} {:>7}",
             "stage", "moved |Δ| m", "net Δ m", "Δ slope p90", "ticks"
         );
-        let mut rows: Vec<usize> =
-            (0..stages.len()).filter(|&i| moved[i] > 0.0 || steepened[i] != 0.0).collect();
+        let mut rows: Vec<usize> = (0..stages.len())
+            .filter(|&i| moved[i] > 0.0 || steepened[i] != 0.0)
+            .collect();
         // Sorted by who STEEPENS, because that is the question.
         rows.sort_by(|&a, &b| {
-            steepened[b].partial_cmp(&steepened[a]).unwrap_or(std::cmp::Ordering::Equal)
+            steepened[b]
+                .partial_cmp(&steepened[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         for i in rows {
             eprintln!(
@@ -1375,7 +1503,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, 0.15)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, 0.15)]);
         let mut w = World::seed(icosphere(FREQ), b, &t, 42);
         eprintln!("── {} cells ──", w.columns.len());
         let levers = crate::Levers::default();
@@ -1433,7 +1563,9 @@ mod bake_report {
         const TICKS: usize = 120;
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, 0.15)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, 0.15)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1460,7 +1592,11 @@ mod bake_report {
                         "tick {tick:>4} ({:>8.1} My)  {:<20} {}",
                         w.tick_myr,
                         names[i],
-                        if after { "OPENED — the bench pauses here" } else { "shut" }
+                        if after {
+                            "OPENED — the bench pauses here"
+                        } else {
+                            "shut"
+                        }
                     );
                 }
             }
@@ -1491,7 +1627,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1564,7 +1702,9 @@ mod bake_report {
 
         // And what the converted rock IS — the claim is that it is deep root,
         // not surface continent.
-        let cont = (0..n).filter(|&i| crust_kind(&w.columns[i]) == CrustKind::Continental).count();
+        let cont = (0..n)
+            .filter(|&i| crust_kind(&w.columns[i]) == CrustKind::Continental)
+            .count();
         let cont_converted = (0..n)
             .filter(|&i| crust_kind(&w.columns[i]) == CrustKind::Continental)
             .filter(|&i| w.columns[i].layers.iter().any(|l| l.eclogitised > 0.01))
@@ -1594,7 +1734,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1604,9 +1746,15 @@ mod bake_report {
         }
         let n = w.columns.len();
         let cont = |w: &World| {
-            (0..n).filter(|&i| crust_kind(&w.columns[i]) == CrustKind::Continental).count()
+            (0..n)
+                .filter(|&i| crust_kind(&w.columns[i]) == CrustKind::Continental)
+                .count()
         };
-        eprintln!("at {:.0} My: {} of {n} cells continental", w.tick_myr, cont(&w));
+        eprintln!(
+            "at {:.0} My: {} of {n} cells continental",
+            w.tick_myr,
+            cont(&w)
+        );
 
         let stages = crate::formation_stages(Arc::clone(&t), &w, &levers);
         let names: Vec<&'static str> = stages.iter().map(|s| s.name()).collect();
@@ -1689,7 +1837,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1738,8 +1888,9 @@ mod bake_report {
         w.audit("who-eats watch");
 
         eprintln!("\n── crust-bearing → BARE, whole planet, {WATCH} ticks ──");
-        let mut rows: Vec<usize> =
-            (0..stages.len()).filter(|&i| emptied[i] > 0 || refilled[i] > 0).collect();
+        let mut rows: Vec<usize> = (0..stages.len())
+            .filter(|&i| emptied[i] > 0 || refilled[i] > 0)
+            .collect();
         rows.sort_by_key(|&i| std::cmp::Reverse(emptied[i]));
         for i in rows {
             eprintln!(
@@ -1785,7 +1936,9 @@ mod bake_report {
         const H_SCALE: f64 = 0.15;
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1927,7 +2080,9 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
         let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
@@ -1961,7 +2116,10 @@ mod bake_report {
             }
             let k = pop.len() as f64;
             let mean = |f: &dyn Fn(usize) -> f64| pop.iter().map(|&i| f(i)).sum::<f64>() / k;
-            let bare = pop.iter().filter(|&&i| w.columns[i].layers.is_empty()).count();
+            let bare = pop
+                .iter()
+                .filter(|&&i| w.columns[i].layers.is_empty())
+                .count();
             let at_datum = pop.iter().filter(|&&i| elev(w, i).abs() < 1.0).count();
             let negative = pop.iter().filter(|&&i| elev(w, i) < -1.0).count();
             let sed = pop
@@ -2028,7 +2186,10 @@ mod bake_report {
                     continue;
                 }
                 let before: Vec<f64> = ring.iter().map(|&i| w.columns[i].mass_kg()).collect();
-                let had: Vec<bool> = ring.iter().map(|&i| !w.columns[i].layers.is_empty()).collect();
+                let had: Vec<bool> = ring
+                    .iter()
+                    .map(|&i| !w.columns[i].layers.is_empty())
+                    .collect();
                 let mut rng = crate::stage::StageRng::for_stage(42, index);
                 stage.tick(&mut w, dt, &mut rng);
                 for (k, &i) in ring.iter().enumerate() {
@@ -2054,7 +2215,10 @@ mod bake_report {
             w.audit("black-dot watch");
         }
 
-        eprintln!("\n── who moves the RING's rock, over {WATCH} ticks ({} cells) ──", ring.len());
+        eprintln!(
+            "\n── who moves the RING's rock, over {WATCH} ticks ({} cells) ──",
+            ring.len()
+        );
         let mut rows: Vec<usize> = (0..stages.len())
             .filter(|&i| removed[i] > 0.0 || added[i] > 0.0 || stripped_bare[i] > 0)
             .collect();
@@ -2160,21 +2324,25 @@ mod bake_report {
 
         let dir = content_data_dir();
         let t = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
-        let b = Budget::from_dir(&dir, &t).expect("budget").rescaled(&[(1, H_SCALE)]);
+        let b = Budget::from_dir(&dir, &t)
+            .expect("budget")
+            .rescaled(&[(1, H_SCALE)]);
         eprintln!("── forge: H × {H_SCALE} ──");
         let mut w = World::seed(icosphere(24), b, &t, 42);
         let levers = crate::Levers::default();
-        let mut sched = Scheduler::new(
-            crate::formation_stages(Arc::clone(&t), &w, &levers),
-            42,
-        );
+        let mut sched = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &levers), 42);
         // A second, identical stage list purely to PROBE `is_live` — the
         // scheduler owns its own.
         let probes = crate::formation_stages(Arc::clone(&t), &w, &levers);
         let mut live: Vec<bool> = vec![false; probes.len()];
 
         let ticks: u64 = (4500.0 / crate::NOMINAL_DT_MYR).ceil() as u64; // 4.5 BY
-        eprintln!("── bake: {} cells · {} ticks · dt {} My ──", w.columns.len(), ticks, crate::NOMINAL_DT_MYR);
+        eprintln!(
+            "── bake: {} cells · {} ticks · dt {} My ──",
+            w.columns.len(),
+            ticks,
+            crate::NOMINAL_DT_MYR
+        );
         // **The hypsometry probe.** Gate timings say WHEN the eras turn; this
         // says whether the world is turning into a planet — is there land, does
         // it stand clear of the sea, and how deep are the basins under it.

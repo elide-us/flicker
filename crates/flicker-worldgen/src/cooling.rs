@@ -235,7 +235,10 @@ pub fn coherent_lid(cells: &[HexState]) -> bool {
     if cells.is_empty() {
         return false;
     }
-    let firm = cells.iter().filter(|c| c.crust_fraction as f32 >= CRUST_FIRM).count();
+    let firm = cells
+        .iter()
+        .filter(|c| c.crust_fraction as f32 >= CRUST_FIRM)
+        .count();
     firm as f32 / cells.len() as f32 >= LID_SHARE
 }
 
@@ -274,7 +277,10 @@ mod tests {
     fn radiogenic_elements_slow_cooling() {
         // Two planets of equal mass: one silica-only, one with a slug of potassium.
         let plain = planet(4, Composition::from_iter([(14u8, 1000.0)]));
-        let hot = planet(4, Composition::from_iter([(14u8, 900.0), (POTASSIUM, 100.0)]));
+        let hot = planet(
+            4,
+            Composition::from_iter([(14u8, 900.0), (POTASSIUM, 100.0)]),
+        );
         assert!(radiogenic_index(&hot) > radiogenic_index(&plain));
         assert!(
             cooling_k(&hot) < cooling_k(&plain),
@@ -292,7 +298,11 @@ mod tests {
         let plain = Composition::from_iter([(14u8, 1000.0)]); // silica, inert
         let potas = Composition::from_iter([(14u8, 900.0), (POTASSIUM, 100.0)]);
         let uran = Composition::from_iter([(14u8, 900.0), (URANIUM, 100.0)]);
-        assert_eq!(cell_radiogenic_heat(&plain), 0.0, "no K/U → no radiogenic heat");
+        assert_eq!(
+            cell_radiogenic_heat(&plain),
+            0.0,
+            "no K/U → no radiogenic heat"
+        );
         assert!(cell_radiogenic_heat(&potas) > 0.0);
         // Uranium is weighted 4× potassium per unit mass.
         assert!(cell_radiogenic_heat(&uran) > cell_radiogenic_heat(&potas));
@@ -304,7 +314,10 @@ mod tests {
         let full = 20;
         let fast = differentiation_settle(0.12, full);
         let slow = differentiation_settle(0.05, full);
-        assert!(slow >= fast, "slower cooling should differentiate at least as much ({slow} vs {fast})");
+        assert!(
+            slow >= fast,
+            "slower cooling should differentiate at least as much ({slow} vs {fast})"
+        );
         assert!((0.0..=1.0).contains(&slow) && (0.0..=1.0).contains(&fast));
     }
 
@@ -313,9 +326,15 @@ mod tests {
         let full = 20;
         let v = convection_vigor(0.06, full);
         assert_eq!(v.len(), full as usize);
-        assert!(v[0] > v[full as usize - 1], "vigor must be fiercer early than late");
+        assert!(
+            v[0] > v[full as usize - 1],
+            "vigor must be fiercer early than late"
+        );
         let mean = v.iter().sum::<f32>() / v.len() as f32;
-        assert!((mean - 1.0).abs() < 1e-5, "vigor must average 1 (same total stir), got {mean}");
+        assert!(
+            (mean - 1.0).abs() < 1e-5,
+            "vigor must average 1 (same total stir), got {mean}"
+        );
     }
 
     #[test]

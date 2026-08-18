@@ -155,12 +155,44 @@ pub fn field(recipe: &TextureRecipe, size: u32) -> Vec<f32> {
     out
 }
 
+/// Seat a glow's band inside the field it will be applied to. `emissive_band` is a
+/// FRACTION — "glow a fraction of the way up the field" — so it must be measured
+/// against the field that exists, not the abstract 0..1: an unseated band lands above
+/// everything a field reaches and bakes a black map. Runs on EVERY bake (it was once
+/// roll-only, which is why hand-set emit controls did nothing). One 32² evaluation; a
+/// no-glow recipe returns immediately, and a range-less field drops the claim.
+fn seat_the_glow(recipe: &mut TextureRecipe) {
+    if recipe.out.emissive_strength <= 0.0 {
+        return;
+    }
+    let f = field(recipe, 32);
+    let (lo, hi) = f
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+    // A field with no range at all cannot show a banded glow anywhere; drop the claim
+    // rather than emit a flat wash the author did not ask for.
+    if hi - lo < 0.02 {
+        recipe.out.emissive_strength = 0.0;
+        return;
+    }
+    // Keep the band's INTENT — a fraction of the way up — measured against the field
+    // that exists rather than the abstract 0..1.
+    let frac = recipe.out.emissive_band.clamp(0.0, 0.95);
+    recipe.out.emissive_band = lo + (hi - lo) * frac * 0.9;
+}
+
 /// Bake a recipe into the full map set at `size × size`.
 ///
 /// `size` is clamped to at least 1. Cost is `O(size² · enabled_channels)`; a 256²
 /// preview is a fraction of a frame and a 2048² commit is a moment.
 pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
     let n = size.max(1);
+    // Seat the emissive band into the field's real range BEFORE reading maps off it —
+    // `emissive_band` is a fraction, so a hand-set band lands where the field is (the
+    // same seating a rolled recipe gets). Cheap clone; only the emit map is affected.
+    let mut seated = recipe.clone();
+    seat_the_glow(&mut seated);
+    let recipe = &seated;
     let h = field(recipe, n);
     let count = (n as usize) * (n as usize);
     let out = &recipe.out;
@@ -246,7 +278,11 @@ pub fn bake(recipe: &TextureRecipe, size: u32) -> MapSet {
         }
     }
 
-    let map = |kind, pixels| Map { kind, size: n, pixels };
+    let map = |kind, pixels| Map {
+        kind,
+        size: n,
+        pixels,
+    };
     MapSet {
         size: n,
         maps: vec![
@@ -304,6 +340,41 @@ mod tests {
         }
     }
 
+    /// REGRESSION: a HAND-SET emit band bakes a visible map. `emissive_band` is a
+    /// fraction of the field, seated into its real range by `bake` — so a band of 0.7
+    /// (which as a raw field value sat above most fields and baked BLACK) now lights
+    /// the crests. The seating was roll-only for a long time, which is why the emit
+    /// controls did nothing on their own.
+    #[test]
+    fn a_hand_set_emit_band_bakes_a_visible_map() {
+        let mut r = busy_recipe();
+        r.out.emissive_strength = 1.0;
+        r.out.emissive_band = 0.7;
+        let set = bake(&r, 64);
+        let emit = set.get(MapKind::Emit).expect("emit map baked");
+        let lit = emit
+            .pixels
+            .chunks_exact(4)
+            .filter(|p| p[0] > 0 || p[1] > 0 || p[2] > 0)
+            .count();
+        assert!(
+            lit > 0,
+            "a strength>0 material must light SOME texel; the emit map baked all-black"
+        );
+
+        // Emission stays opt-in: strength 0 writes a black map whatever the band.
+        r.out.emissive_strength = 0.0;
+        let dark = bake(&r, 64);
+        let emit0 = dark.get(MapKind::Emit).expect("emit map baked");
+        assert!(
+            emit0
+                .pixels
+                .chunks_exact(4)
+                .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0),
+            "an unlit material must write a black emit map",
+        );
+    }
+
     /// THE product guarantee: the baked BYTES wrap. The two edges of a tile are
     /// *adjacent* when it repeats, not identical — so the test is that the step
     /// across the seam is no bigger than an ordinary step between neighbouring
@@ -320,7 +391,11 @@ mod tests {
                 &m.pixels[i..i + 3]
             };
             let step = |a: &[u8], b: &[u8]| -> i32 {
-                a.iter().zip(b).map(|(x, y)| (*x as i32 - *y as i32).abs()).max().unwrap_or(0)
+                a.iter()
+                    .zip(b)
+                    .map(|(x, y)| (*x as i32 - *y as i32).abs())
+                    .max()
+                    .unwrap_or(0)
             };
 
             // The worst ordinary neighbour step anywhere in the interior — the bar
@@ -367,7 +442,10 @@ mod tests {
         for kind in MapKind::ALL {
             let m = set.get(kind).unwrap_or_else(|| panic!("{kind:?} missing"));
             assert_eq!(m.pixels.len(), 16 * 16 * 4, "{kind:?} wrong length");
-            assert!(m.pixels.chunks(4).all(|p| p[3] == 255), "{kind:?} has non-opaque alpha");
+            assert!(
+                m.pixels.chunks(4).all(|p| p[3] == 255),
+                "{kind:?} has non-opaque alpha"
+            );
         }
     }
 
@@ -386,14 +464,23 @@ mod tests {
     fn no_glow_bakes_a_black_emit_map() {
         let set = bake(&TextureRecipe::default(), 16);
         let e = set.get(MapKind::Emit).unwrap();
-        assert!(e.pixels.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0), "unlit is not black");
+        assert!(
+            e.pixels
+                .chunks(4)
+                .all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0),
+            "unlit is not black"
+        );
     }
 
     /// An authored glow must actually reach the map, in its own colour.
     #[test]
     fn an_authored_glow_bakes_coloured_light() {
         let mut r = TextureRecipe::default();
-        r.channels[0] = Channel { enabled: true, source: NoiseKind::Fbm, ..Channel::default() };
+        r.channels[0] = Channel {
+            enabled: true,
+            source: NoiseKind::Fbm,
+            ..Channel::default()
+        };
         r.out.emissive = [0.2, 0.6, 1.0];
         r.out.emissive_strength = 1.0;
         r.out.emissive_band = 0.0; // everything above the midpoint glows
@@ -414,17 +501,29 @@ mod tests {
     #[test]
     fn relief_is_resolution_independent() {
         let mut r = TextureRecipe::default();
-        r.channels[0] = Channel { enabled: true, source: NoiseKind::Fbm, scale: 2, ..Channel::default() };
+        r.channels[0] = Channel {
+            enabled: true,
+            source: NoiseKind::Fbm,
+            scale: 2,
+            ..Channel::default()
+        };
         r.out.relief = 1.0;
 
         let mean_tilt = |size: u32| {
             let m = bake(&r, size);
             let n = m.get(MapKind::Normal).unwrap();
-            let sum: f64 = n.pixels.chunks(4).map(|p| (p[2] as f64 - 128.0).abs()).sum();
+            let sum: f64 = n
+                .pixels
+                .chunks(4)
+                .map(|p| (p[2] as f64 - 128.0).abs())
+                .sum();
             sum / (n.pixels.len() / 4) as f64
         };
         let (a, b) = (mean_tilt(64), mean_tilt(256));
-        assert!((a - b).abs() < a.max(b) * 0.25, "relief drifted with resolution: {a} vs {b}");
+        assert!(
+            (a - b).abs() < a.max(b) * 0.25,
+            "relief drifted with resolution: {a} vs {b}"
+        );
     }
 
     /// Occlusion must describe the surface, not the sampling rate — the same
@@ -436,8 +535,12 @@ mod tests {
     #[test]
     fn occlusion_is_resolution_independent_and_actually_darkens() {
         let mut r = TextureRecipe::default();
-        r.channels[0] =
-            Channel { enabled: true, source: NoiseKind::Fbm, scale: 4, ..Channel::default() };
+        r.channels[0] = Channel {
+            enabled: true,
+            source: NoiseKind::Fbm,
+            scale: 4,
+            ..Channel::default()
+        };
         r.out.ao = 1.0;
 
         let mean_occlusion = |size: u32| {

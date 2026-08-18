@@ -180,7 +180,13 @@ impl StageRig {
         reqs: &[StageReq],
     ) {
         // Split the borrows: the target cache is mutated while the sources are read.
-        let Self { sources, mesh, bone_count, ground, slots } = self;
+        let Self {
+            sources,
+            mesh,
+            bone_count,
+            ground,
+            slots,
+        } = self;
         for req in reqs {
             let Some(src) = sources.get(&req.source) else {
                 continue;
@@ -269,7 +275,12 @@ impl StageRig {
 
 /// The doll's bone palette for one clip at one play-head. Salvaged from the retired pack
 /// editor's `rebuild_palettes` — CPU posing is cheap; the GPU does the vertex skinning.
-fn palette_for(bones: &[Bone], clip: Option<&ResolvedClip>, time: f32, retarget: bool) -> Vec<Mat4> {
+fn palette_for(
+    bones: &[Bone],
+    clip: Option<&ResolvedClip>,
+    time: f32,
+    retarget: bool,
+) -> Vec<Mat4> {
     let locals = match clip {
         Some(c) => {
             let tick = if c.duration_ticks > 0 {
@@ -306,13 +317,22 @@ fn line_layers(layers: &[Layer], active: bool) -> Vec<LineLayer> {
         .iter()
         .filter_map(|l| match l {
             Layer::Skinned => None,
-            Layer::Ring { radius, y, segments, color, color_active } => Some((
+            Layer::Ring {
+                radius,
+                y,
+                segments,
+                color,
+                color_active,
+            } => Some((
                 ring_segments(Vec3::new(0.0, *y, 0.0), *radius, *segments),
                 if active { *color_active } else { *color },
             )),
-            Layer::Grid { spacing, extent, y, color } => {
-                Some((grid_segments(*spacing, *extent, *y), *color))
-            }
+            Layer::Grid {
+                spacing,
+                extent,
+                y,
+                color,
+            } => Some((grid_segments(*spacing, *extent, *y), *color)),
         })
         .collect()
 }
@@ -359,7 +379,11 @@ fn parse_layer(v: &Json) -> Option<Layer> {
             segments: jnum(Some(v), "segments", 24.0).max(0.0) as usize,
             color: jcolor(v, "color", [0.72, 0.59, 0.35, 1.0]),
             // A source may omit the active colour; then the ring simply never lights.
-            color_active: jcolor(v, "color_active", jcolor(v, "color", [0.72, 0.59, 0.35, 1.0])),
+            color_active: jcolor(
+                v,
+                "color_active",
+                jcolor(v, "color", [0.72, 0.59, 0.35, 1.0]),
+            ),
         }),
         "grid" => Some(Layer::Grid {
             spacing: jnum(Some(v), "spacing", 0.5),
@@ -448,9 +472,18 @@ mod tests {
     fn parses_the_shared_stage_sources() {
         let styles = real_styles();
         let sources = parse_sources(&styles);
-        assert!(sources.contains_key("portrait"), "the Loomforge doll source must exist");
-        assert!(sources.contains_key("turntable"), "the TAE preview source must exist");
-        assert!(!sources.contains_key("lighting"), "the preset table is not a source");
+        assert!(
+            sources.contains_key("portrait"),
+            "the Loomforge doll source must exist"
+        );
+        assert!(
+            sources.contains_key("turntable"),
+            "the TAE preview source must exist"
+        );
+        assert!(
+            !sources.contains_key("lighting"),
+            "the preset table is not a source"
+        );
         assert!(
             !sources.keys().any(|k| k.starts_with('_')),
             "comments are not sources"
@@ -470,7 +503,10 @@ mod tests {
         );
         // The turntable is the wider shot over a floor grid.
         let t = &sources["turntable"];
-        assert!(t.dist > p.dist, "the turntable frames wider than the portrait");
+        assert!(
+            t.dist > p.dist,
+            "the turntable frames wider than the portrait"
+        );
         assert!(t.layers.iter().any(|l| matches!(l, Layer::Grid { .. })));
     }
 
@@ -482,7 +518,11 @@ mod tests {
         let layers = &sources["portrait"].layers;
         let idle = line_layers(layers, false);
         let lit = line_layers(layers, true);
-        assert_eq!(idle.len(), lit.len(), "activity changes colour, not geometry");
+        assert_eq!(
+            idle.len(),
+            lit.len(),
+            "activity changes colour, not geometry"
+        );
         assert!(!idle.is_empty(), "the ring produced segments");
         assert_ne!(idle[0].1, lit[0].1, "an active ring is a different colour");
         // And the colours are real rgba, not an unresolved `$token` left as a string.
@@ -511,7 +551,11 @@ mod tests {
         let b = &sources["broken"];
         assert!(b.dist.is_finite() && b.dist > 0.0, "bad dist falls back");
         assert!(b.yaw.is_finite());
-        assert_eq!(b.layers.len(), 1, "only the ring parsed; unknown kinds dropped");
+        assert_eq!(
+            b.layers.len(),
+            1,
+            "only the ring parsed; unknown kinds dropped"
+        );
         // A negative radius yields no geometry rather than a panic (guarded upstream in
         // flicker-render's ring_segments).
         assert!(line_layers(&b.layers, false)[0].0.is_empty());
@@ -543,7 +587,11 @@ mod tests {
     fn ground_transform_puts_the_feet_on_the_floor() {
         let g = ground_transform(Mat4::IDENTITY, &[vert(-0.9), vert(0.9)]);
         let lowest = g.transform_point3(Vec3::new(0.0, -0.9, 0.0));
-        assert!(lowest.y.abs() < 1e-5, "lowest vertex must land on y = 0, got {}", lowest.y);
+        assert!(
+            lowest.y.abs() < 1e-5,
+            "lowest vertex must land on y = 0, got {}",
+            lowest.y
+        );
         // The whole rig shifts together — the top rises by the same drop, it is not scaled.
         let top = g.transform_point3(Vec3::new(0.0, 0.9, 0.0));
         assert!((top.y - 1.8).abs() < 1e-5, "the doll keeps its height");

@@ -245,7 +245,11 @@ mod tests {
         // Every element's mantle total equals its accreted mass to the last ULP —
         // the field IS the undifferentiated ball at t=0.
         for (e, accreted) in b.iter() {
-            assert_eq!(m.element_mass(e), accreted, "element {e} not conserved at seed");
+            assert_eq!(
+                m.element_mass(e),
+                accreted,
+                "element {e} not conserved at seed"
+            );
         }
         assert_eq!(m.n_cells(), grid.len());
     }
@@ -276,6 +280,9 @@ mod tests {
         }
         // Different seeds → different fields (per-seed Home worlds).
         let other = initial_thermal_field(&grid, 8);
-        assert!(field.iter().zip(&other).any(|(a, b)| a != b), "seed had no effect");
+        assert!(
+            field.iter().zip(&other).any(|(a, b)| a != b),
+            "seed had no effect"
+        );
     }
 }

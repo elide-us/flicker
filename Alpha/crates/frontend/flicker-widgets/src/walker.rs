@@ -20,7 +20,11 @@
 //! it also **consumes** the directional-nav signals while it owns a focusable tree.
 //! **One meaning per signal, and the walker owns all of them:**
 //!
-//! * `PanelNext`/`PanelPrev` (the LEFT STICK) pick the PANE — cycling pane CONTAINERS
+//! * `PanelNext`/`PanelPrev` (the LEFT STICK) pick the PANE — cycling pane CONTAINERS,
+//!   in each container's authored `nav_ordinal` order. Panes NEST (Aaron 2026-08-15):
+//!   a container is a node other nodes CLAIM as their `tab_group` (or one authored
+//!   `pane: true`); entering pushes onto a stack, the ring scopes to the top, and
+//!   Cancel pops one level at a time.
 //!   ([`tab`] over the lock-filtered [`ring`](WalkerHandler::ring)), suppressed once a
 //!   pane is entered. The container is a focusable whose `id` equals its own `tab_group`.
 //! * `NavUp/Down/Left/Right` move inside the current ring by `nav_ordinal` ([`nav`]),
@@ -48,7 +52,9 @@
 //! Risk RT-16) — so hosting the adapter here keeps the router frontend-free.
 
 use flicker_input_core::{ActionSignal, EventKind};
-use flicker_input_router::{nav, tab, Flow, Focusable, FocusChange, InputEvent, InputHandler, NavDir, RouteCtx};
+use flicker_input_router::{
+    nav, Flow, FocusChange, Focusable, InputEvent, InputHandler, NavDir, RouteCtx,
+};
 use flicker_script::{UiNode, ValueMap};
 
 use crate::component::{visible, UiState};
@@ -104,6 +110,14 @@ pub struct WalkerHandler<'a> {
     /// Result names fired by declared intents this frame, in firing order.
     /// Drained by the scene via [`take_fired`](Self::take_fired).
     fired: Vec<String>,
+    /// Every `tab_group` some focusable CLAIMS — the OWNERSHIP half of the nested
+    /// pane model (Aaron 2026-08-15): a node whose id is claimed here is a
+    /// CONTAINER, whatever tier it sits on. Filled by [`Self::with_nav`].
+    claimed: std::collections::HashSet<String>,
+    /// Ids of nodes authored `pane: true` — the explicit container marker for a
+    /// pane ownership cannot derive (a viewport-only pane has no focusable
+    /// members to claim it). Filled by [`Self::with_nav`].
+    pane_flagged: std::collections::HashSet<String>,
 }
 
 impl<'a> WalkerHandler<'a> {
@@ -128,6 +142,8 @@ impl<'a> WalkerHandler<'a> {
             cancelled: false,
             intents: None,
             fired: Vec::new(),
+            claimed: std::collections::HashSet::new(),
+            pane_flagged: std::collections::HashSet::new(),
         }
     }
 
@@ -138,8 +154,36 @@ impl<'a> WalkerHandler<'a> {
     /// nodes — and so a hidden overlay contributes nothing (see
     /// [`focusables_of`]).
     pub fn with_nav(mut self, tree: &UiNode, model: &ValueMap) -> Self {
-        collect_nav(tree, model, &mut self.focusables, &mut self.actions, &mut self.steppables);
+        collect_nav(
+            tree,
+            model,
+            &mut self.focusables,
+            &mut self.actions,
+            &mut self.steppables,
+        );
+        // OWNERSHIP vs MEMBERSHIP (nested panes, Aaron 2026-08-15): a node's
+        // `tab_group` names the ring it BELONGS to; a node is a CONTAINER because
+        // other nodes claim its id as their group — or because it authors the
+        // explicit `pane: true` marker (a viewport-only pane has no members to
+        // claim it). Top-tier containers carry no `tab_group`, so the member pass
+        // above skipped them — collect them here into the empty-group ring the
+        // left stick cycles, ordered by their AUTHORED `nav_ordinal`.
+        self.claimed = self.focusables.iter().map(|f| f.group.clone()).collect();
+        collect_containers(
+            tree,
+            model,
+            &self.claimed,
+            &mut self.focusables,
+            &mut self.pane_flagged,
+        );
         self
+    }
+
+    /// Whether `id` is a pane container — claimed by members, or explicitly
+    /// authored `pane: true`. The one test `try_enter`, the ring and the flat-group
+    /// rule all consult, so the tiers can never disagree about what a container is.
+    fn is_container(&self, id: &str) -> bool {
+        self.claimed.contains(id) || self.pane_flagged.contains(id)
     }
 
     /// Bind the screen's declarative intents (S9): a Press of a signal `intents`
@@ -244,15 +288,17 @@ impl<'a> WalkerHandler<'a> {
             ActionSignal::NavDown => self.nudge_or_move(current.as_deref(), NavDir::Down),
             ActionSignal::NavLeft => self.nudge_or_move(current.as_deref(), NavDir::Left),
             ActionSignal::NavRight => self.nudge_or_move(current.as_deref(), NavDir::Right),
-            // The LEFT STICK is the panel tier: it cycles pane CONTAINERS (`tab`). ONLY
-            // while navigating — once a pane is ENTERED (nav-tier contract 1B5F6BB8) the
-            // left stick belongs to that pane's interior (its camera), so panel-cycling is
-            // suppressed until Cancel exits. (The bumpers are NOT here — they belong to the
-            // page/tab control's own rail.)
-            ActionSignal::PanelNext if self.ui.entered_group.is_none() => {
+            // The LEFT STICK is the panel tier: it cycles top-tier pane CONTAINERS
+            // (`tab`), in the AUTHORED order (each container's `nav_ordinal` — Aaron
+            // 2026-08-15: the stick-stop order is explicit, never tree-implicit). ONLY
+            // while navigating — once any pane is ENTERED (nav-tier contract 1B5F6BB8)
+            // the left stick belongs to that pane's interior (its camera), so
+            // panel-cycling is suppressed until Cancel unwinds the stack. (The bumpers
+            // are NOT here — they belong to the page/tab control's own rail.)
+            ActionSignal::PanelNext if !self.ui.entered() => {
                 self.cycle_group(current.as_deref(), true)
             }
-            ActionSignal::PanelPrev if self.ui.entered_group.is_none() => {
+            ActionSignal::PanelPrev if !self.ui.entered() => {
                 self.cycle_group(current.as_deref(), false)
             }
             ActionSignal::PanelNext | ActionSignal::PanelPrev => {}
@@ -277,18 +323,22 @@ impl<'a> WalkerHandler<'a> {
                     // application loop reads as "invert"), so Confirm operates a checkbox
                     // the way it activates a button. Any other actionless node is a pane
                     // container → try to enter it.
-                    None => match current.as_deref().and_then(|id| self.step_kind(id).map(|k| (id, k))) {
+                    None => match current
+                        .as_deref()
+                        .and_then(|id| self.step_kind(id).map(|k| (id, k)))
+                    {
                         Some((id, StepKind::Toggle)) => self.ui.push_nudge(id, 0, false),
                         _ => self.try_enter(current.as_deref()),
                     },
                 }
             }
             // Cancel backs out ONE level (B never skips — BA4487BD): inside an entered
-            // pane it EXITS to navigating and refocuses the container; otherwise it pops
-            // the scene's modal/context.
+            // pane it pops exactly one entry off the enter stack and refocuses the
+            // container it just left — a subpanel exit lands on the subpanel, not the
+            // top tier; only with the stack empty does it pop the scene's modal/context.
             ActionSignal::Cancel => {
-                if let Some(group) = self.ui.entered_group.take() {
-                    self.ui.request_focus(group); // the container id == its tab_group
+                if let Some(container) = self.ui.entered.pop() {
+                    self.ui.request_focus(container);
                 } else {
                     self.cancelled = true;
                     rc.pop_context();
@@ -327,10 +377,25 @@ impl<'a> WalkerHandler<'a> {
 
     /// The [`StepKind`] of a focusable value control, if `id` is one.
     fn step_kind(&self, id: &str) -> Option<StepKind> {
-        self.steppables.iter().find(|(sid, _)| sid == id).map(|(_, k)| *k)
+        self.steppables
+            .iter()
+            .find(|(sid, _)| sid == id)
+            .map(|(_, k)| *k)
     }
 
     fn move_focus(&mut self, current: Option<&str>, dir: NavDir) {
+        // The d-pad never walks the TOP TIER: containers are the left stick's ring,
+        // and a d-pad press on an un-entered container no-ops (explicit entry,
+        // 1B5F6BB8). Once entered, subpanel containers are ordinary ring members
+        // the d-pad moves across; flat-group members (menus, settings rows) were
+        // never containers and keep d-pad nav.
+        if !self.ui.entered() {
+            if let Some(cur) = current {
+                if self.is_container(cur) {
+                    return;
+                }
+            }
+        }
         let ring = self.ring();
         if let Some(id) = nav(&ring, current, dir) {
             self.ui.request_focus(id);
@@ -338,10 +403,53 @@ impl<'a> WalkerHandler<'a> {
     }
 
     fn cycle_group(&mut self, current: Option<&str>, forward: bool) {
+        // The stick's ring is ONE STOP PER PANE-OR-GROUP: a container where one
+        // exists (paned scenes — authored `nav_ordinal` order), else the group's
+        // lowest-(ordinal, id) member — so the flat groups a menu is made of
+        // (the mode rail, the scene list) keep their stick hop with no pane
+        // ceremony. Wraps both ways; standing anywhere INSIDE a flat group
+        // counts as standing on its stop.
         let ring = self.ring();
-        if let Some(id) = tab(&ring, current, forward) {
-            self.ui.request_focus(id);
+        let mut stops: Vec<Focusable> = ring
+            .iter()
+            .filter(|f| f.group.is_empty() && self.is_container(&f.id))
+            .cloned()
+            .collect();
+        let mut flat_groups: Vec<&str> = ring
+            .iter()
+            .filter(|f| !f.group.is_empty())
+            .map(|f| f.group.as_str())
+            .collect();
+        flat_groups.sort_unstable();
+        flat_groups.dedup();
+        for g in flat_groups {
+            if let Some(first) = ring
+                .iter()
+                .filter(|f| f.group == g)
+                .min_by(|a, b| a.ordinal.cmp(&b.ordinal).then_with(|| a.id.cmp(&b.id)))
+            {
+                stops.push(first.clone());
+            }
         }
+        stops.sort_by(|a, b| a.ordinal.cmp(&b.ordinal).then_with(|| a.id.cmp(&b.id)));
+        if stops.is_empty() {
+            return;
+        }
+        let at = current.and_then(|c| {
+            stops.iter().position(|f| f.id == c).or_else(|| {
+                // Inside a flat group: its stop stands for the whole group.
+                let cur_group = ring.iter().find(|f| f.id == c).map(|f| f.group.clone());
+                cur_group
+                    .filter(|g| !g.is_empty())
+                    .and_then(|g| stops.iter().position(|f| f.group == g))
+            })
+        });
+        let next = match at {
+            Some(i) if forward => (i + 1) % stops.len(),
+            Some(i) => (i + stops.len() - 1) % stops.len(),
+            None => 0,
+        };
+        self.ui.request_focus(stops[next].id.clone());
     }
 
     /// The focusables the d-pad / left-stick may land on RIGHT NOW, filtered by the pane
@@ -358,52 +466,58 @@ impl<'a> WalkerHandler<'a> {
     /// collections, so an empty-interior pane never de-navigates the layer.
     fn ring(&self) -> Vec<Focusable> {
         if let Some(g) = self.ui.entered_group() {
+            // Inside a pane (the TOP of the enter stack): its members — controls
+            // AND any subpanel containers, which are ordinary ring members a
+            // Confirm pushes into.
             return self
                 .focusables
                 .iter()
-                .filter(|f| f.group == g && f.id != f.group)
+                .filter(|f| f.group == g)
                 .cloned()
                 .collect();
         }
-        let has_container: std::collections::HashSet<&str> = self
-            .focusables
-            .iter()
-            .filter(|f| f.id == f.group)
-            .map(|f| f.group.as_str())
-            .collect();
+        // Navigating: the top-tier containers (collected under the empty group,
+        // ordered by their authored ordinals) plus every member of a
+        // container-less "flat" group (menus, the settings rows) — so
+        // single-context surfaces navigate with no pane ceremony, while
+        // multi-pane scenes expose only their containers until one is entered.
         self.focusables
             .iter()
-            .filter(|f| f.id == f.group || !has_container.contains(f.group.as_str()))
+            .filter(|f| {
+                (f.group.is_empty() && self.is_container(&f.id))
+                    || (!f.group.is_empty() && !self.container_exists(&f.group))
+            })
             .cloned()
             .collect()
     }
 
-    /// `Confirm` on an actionless focused node: if it is a pane CONTAINER (`id` equals its
-    /// own `tab_group`) and nothing is locked yet, ENTER it and drop focus to its
-    /// lowest-`(ordinal, id)` interior so the d-pad ring has a current inside. A pane with
-    /// no interior (a viewport-only pane) keeps focus on the container — the rim shows and
-    /// its camera consumes the sticks. An actionless NON-container node, or an
-    /// already-locked state, is a no-op (no accidental entry, no wedge).
+    /// Whether a container NODE for `group` is present in this frame's focusables
+    /// — the flat-group rule's other half: members of a group whose container is
+    /// hidden (or was never authored) navigate flat rather than being stranded.
+    fn container_exists(&self, group: &str) -> bool {
+        self.focusables.iter().any(|f| f.id == group)
+    }
+
+    /// `Confirm` on an actionless focused node: if it is a pane CONTAINER (claimed
+    /// by members, or `pane: true`), PUSH it onto the enter stack and drop focus to
+    /// its lowest-`(ordinal, id)` interior so the d-pad ring has a current inside —
+    /// from ANY depth: a subpanel focused inside an entered pane enters the same
+    /// way (nested panes, Aaron 2026-08-15). A pane with no visible interior (a
+    /// viewport-only pane) keeps focus on the container — the rim shows and its
+    /// camera consumes the sticks. An actionless NON-container node is a no-op
+    /// (no accidental entry, no wedge).
     fn try_enter(&mut self, current: Option<&str>) {
-        if self.ui.entered_group.is_some() {
+        let Some(cur) = current else { return };
+        if !self.is_container(cur) {
             return;
         }
-        let Some(cur) = current else { return };
-        let Some(group) = self
-            .focusables
-            .iter()
-            .find(|f| f.id == cur && f.id == f.group)
-            .map(|f| f.group.clone())
-        else {
-            return;
-        };
         let interior = self
             .focusables
             .iter()
-            .filter(|f| f.group == group && f.id != f.group)
+            .filter(|f| f.group == cur)
             .min_by(|a, b| a.ordinal.cmp(&b.ordinal).then_with(|| a.id.cmp(&b.id)))
             .map(|f| f.id.clone());
-        self.ui.entered_group = Some(group);
+        self.ui.entered.push(cur.to_string());
         if let Some(id) = interior {
             self.ui.request_focus(id);
         }
@@ -475,6 +589,42 @@ fn collect_nav(
     }
     for child in &node.children {
         collect_nav(child, model, focusables, actions, steppables);
+    }
+}
+
+/// The OWNERSHIP pass (nested panes): collect the container nodes the member pass
+/// could not — visible nodes with an id but NO `tab_group` of their own that are
+/// either claimed by members or authored `pane: true`. They join the focusable
+/// list under the EMPTY group (the top-tier ring the left stick cycles), carrying
+/// their authored `nav_ordinal` as the explicit stick-stop order. Also records
+/// every `pane: true` id at ANY depth, so `is_container` covers viewport-only
+/// subpanels the same test covers claimed ones.
+fn collect_containers(
+    node: &UiNode,
+    model: &ValueMap,
+    claimed: &std::collections::HashSet<String>,
+    focusables: &mut Vec<Focusable>,
+    pane_flagged: &mut std::collections::HashSet<String>,
+) {
+    if !visible(node, model) {
+        return;
+    }
+    if !node.id.is_empty() {
+        let flagged = crate::config::flag(&node.props, "pane");
+        if flagged {
+            pane_flagged.insert(node.id.clone());
+        }
+        if node.tab_group.is_empty() && (flagged || claimed.contains(&node.id)) {
+            focusables.push(Focusable {
+                id: node.id.clone(),
+                group: String::new(),
+                ordinal: node.nav_ordinal,
+                rect: [0.0; 4],
+            });
+        }
+    }
+    for child in &node.children {
+        collect_containers(child, model, claimed, focusables, pane_flagged);
     }
 }
 
@@ -629,8 +779,14 @@ mod tests {
 
         // hud_hit → the click is consumed; a non-pointer signal still passes.
         let mut h = WalkerHandler::hud(&mut ui, true);
-        assert_eq!(h.handle(&press(ActionSignal::PrimaryAction, &raw), &mut rc), Flow::Consumed);
-        assert_eq!(h.handle(&press(ActionSignal::Jump, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::PrimaryAction, &raw), &mut rc),
+            Flow::Consumed
+        );
+        assert_eq!(
+            h.handle(&press(ActionSignal::Jump, &raw), &mut rc),
+            Flow::Pass
+        );
     }
 
     #[test]
@@ -639,7 +795,10 @@ mod tests {
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false);
-        assert_eq!(h.handle(&press(ActionSignal::PrimaryAction, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::PrimaryAction, &raw), &mut rc),
+            Flow::Pass
+        );
     }
 
     /// **A fired intent lights its RESULT name's flash; the fade runs on the
@@ -654,17 +813,28 @@ mod tests {
         let raw = InputState::new();
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
-        let mut intents_tree =
-            UiNode { component: "screen".into(), id: "root".into(), ..Default::default() };
-        intents_tree
-            .props
-            .insert("on_page_next".into(), flicker_script::Value::Text("page_flip".into()));
+        let mut intents_tree = UiNode {
+            component: "screen".into(),
+            id: "root".into(),
+            ..Default::default()
+        };
+        intents_tree.props.insert(
+            "on_page_next".into(),
+            flicker_script::Value::Text("page_flip".into()),
+        );
         let intents = UiIntents::of(&intents_tree);
 
         let mut h = WalkerHandler::hud(&mut ui, false).with_intents(&intents);
-        assert_eq!(h.handle(&press(ActionSignal::PageNext, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::PageNext, &raw), &mut rc),
+            Flow::Consumed
+        );
         let fired = h.take_fired();
-        assert_eq!(fired, vec!["page_flip".to_string()], "the press fires the result");
+        assert_eq!(
+            fired,
+            vec!["page_flip".to_string()],
+            "the press fires the result"
+        );
         assert_eq!(
             h.ui.flash_intensity("page_flip"),
             1.0,
@@ -687,9 +857,15 @@ mod tests {
             frames += 1;
             assert!(frames < 120, "the flash must expire, not linger forever");
         }
-        assert!(frames >= 5, "\"briefly\" is a fade, not a single-frame blink");
+        assert!(
+            frames >= 5,
+            "\"briefly\" is a fade, not a single-frame blink"
+        );
         // An undeclared signal fires nothing and lights nothing.
-        assert_eq!(h.handle(&press(ActionSignal::TabNext, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::TabNext, &raw), &mut rc),
+            Flow::Pass
+        );
         assert!(h.take_fired().is_empty());
         assert_eq!(h.ui.flash_intensity("tab_next"), 0.0);
     }
@@ -706,8 +882,11 @@ mod tests {
         use flicker_script::Value;
 
         let raw = InputState::new();
-        let mut vdial =
-            UiNode { component: "slider".into(), id: "vdial".into(), ..Default::default() };
+        let mut vdial = UiNode {
+            component: "slider".into(),
+            id: "vdial".into(),
+            ..Default::default()
+        };
         vdial.bind = Some("v".into());
         vdial.tab_group = "g".into();
         vdial.nav_ordinal = 0;
@@ -715,20 +894,29 @@ mod tests {
         vdial.props.insert("vertical".into(), Value::Bool(true));
         vdial.props.insert("min".into(), Value::Number(0.0));
         vdial.props.insert("max".into(), Value::Number(100.0));
-        let mut hdial =
-            UiNode { component: "slider".into(), id: "hdial".into(), ..Default::default() };
+        let mut hdial = UiNode {
+            component: "slider".into(),
+            id: "hdial".into(),
+            ..Default::default()
+        };
         hdial.bind = Some("h".into());
         hdial.tab_group = "g".into();
         hdial.nav_ordinal = 1;
         hdial.size = Some(24.0);
         hdial.props.insert("min".into(), Value::Number(0.0));
         hdial.props.insert("max".into(), Value::Number(10.0));
-        let mut col = UiNode { component: "cell".into(), ..Default::default() };
+        let mut col = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
         col.anchor = Some(flicker_script::UiAnchor::TopLeft);
         col.width = Some(200.0);
         col.children = vec![vdial, hdial];
-        let mut tree =
-            UiNode { component: "screen".into(), id: "root".into(), ..Default::default() };
+        let mut tree = UiNode {
+            component: "screen".into(),
+            id: "root".into(),
+            ..Default::default()
+        };
         tree.children.push(col);
 
         let mut model = ValueMap::new();
@@ -751,18 +939,34 @@ mod tests {
         // Vertical: Up steps toward max by the default step of 1.
         {
             let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
-            assert_eq!(h.handle(&press(ActionSignal::NavUp, &raw), &mut rc), Flow::Consumed);
+            assert_eq!(
+                h.handle(&press(ActionSignal::NavUp, &raw), &mut rc),
+                Flow::Consumed
+            );
         }
         let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
-        assert_eq!(frame.results.number("v"), Some(51.0), "NavUp steps the vertical dial");
+        assert_eq!(
+            frame.results.number("v"),
+            Some(51.0),
+            "NavUp steps the vertical dial"
+        );
 
         // Chord held scales to the coarse step — and the modifier itself is
         // OBSERVED (Flow::Pass), so the chord layer below still sees it.
         {
             let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
-            assert_eq!(h.handle(&press(ActionSignal::ChordBegin, &raw), &mut rc), Flow::Pass);
-            assert_eq!(h.handle(&press(ActionSignal::NavDown, &raw), &mut rc), Flow::Consumed);
-            assert_eq!(h.handle(&release(ActionSignal::ChordBegin, &raw), &mut rc), Flow::Pass);
+            assert_eq!(
+                h.handle(&press(ActionSignal::ChordBegin, &raw), &mut rc),
+                Flow::Pass
+            );
+            assert_eq!(
+                h.handle(&press(ActionSignal::NavDown, &raw), &mut rc),
+                Flow::Consumed
+            );
+            assert_eq!(
+                h.handle(&release(ActionSignal::ChordBegin, &raw), &mut rc),
+                Flow::Pass
+            );
         }
         let frame = crate::run_ui(&tree, &model, &styles, &idle, &mut ui);
         assert_eq!(
@@ -774,7 +978,10 @@ mod tests {
         // The cross axis is never captured: Left moves focus off the dial.
         {
             let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model);
-            assert_eq!(h.handle(&press(ActionSignal::NavLeft, &raw), &mut rc), Flow::Consumed);
+            assert_eq!(
+                h.handle(&press(ActionSignal::NavLeft, &raw), &mut rc),
+                Flow::Consumed
+            );
         }
         assert_eq!(ui.focused(), Some("hdial"), "the cross axis navigates away");
 
@@ -818,14 +1025,26 @@ mod tests {
     #[test]
     fn a_hidden_subtree_contributes_no_focusables() {
         // A visible screen, plus an overlay gated by `dialog_open`.
-        let mut screen = UiNode { component: "screen".into(), ..Default::default() };
-        let mut bench = UiNode { component: "button".into(), ..Default::default() };
+        let mut screen = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
+        let mut bench = UiNode {
+            component: "button".into(),
+            ..Default::default()
+        };
         bench.id = "bench_btn".into();
         bench.tab_group = "bench".into();
 
-        let mut overlay = UiNode { component: "cell".into(), ..Default::default() };
+        let mut overlay = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
         overlay.visible_bind = Some("dialog_open".into());
-        let mut confirm = UiNode { component: "button".into(), ..Default::default() };
+        let mut confirm = UiNode {
+            component: "button".into(),
+            ..Default::default()
+        };
         confirm.id = "dialog_confirm".into();
         confirm.tab_group = "dialog".into();
         overlay.children = vec![confirm];
@@ -834,14 +1053,24 @@ mod tests {
         // Closed: the overlay's button is NOT navigable.
         let closed = focusables_of(&screen, &shown());
         let ids: Vec<_> = closed.iter().map(|f| f.id.as_str()).collect();
-        assert_eq!(ids, vec!["bench_btn"], "a closed overlay is out of the ring: {ids:?}");
+        assert_eq!(
+            ids,
+            vec!["bench_btn"],
+            "a closed overlay is out of the ring: {ids:?}"
+        );
 
         // Open: it joins the ring, so a modal CAN carry focusable controls.
         let mut open = ValueMap::new();
         open.set("dialog_open", true);
-        let shown_ids: Vec<_> =
-            focusables_of(&screen, &open).iter().map(|f| f.id.clone()).collect();
-        assert_eq!(shown_ids, vec!["bench_btn", "dialog_confirm"], "{shown_ids:?}");
+        let shown_ids: Vec<_> = focusables_of(&screen, &open)
+            .iter()
+            .map(|f| f.id.clone())
+            .collect();
+        assert_eq!(
+            shown_ids,
+            vec!["bench_btn", "dialog_confirm"],
+            "{shown_ids:?}"
+        );
     }
 
     #[test]
@@ -849,7 +1078,9 @@ mod tests {
         let items = focusables_of(&menu_tree(), &shown());
         // 5 buttons carry a tab_group; the root column (no tab_group) is skipped.
         assert_eq!(items.len(), 5);
-        assert!(items.iter().all(|f| f.group == "menu" || f.group == "scenes"));
+        assert!(items
+            .iter()
+            .all(|f| f.group == "menu" || f.group == "scenes"));
         assert!(items.iter().any(|f| f.id == "start" && f.ordinal == 0));
     }
 
@@ -876,13 +1107,19 @@ mod tests {
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         // No current focus: NavDown enters the list at the lowest ordinal.
-        assert_eq!(h.handle(&press(ActionSignal::NavDown, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert_eq!(h.ui.focused(), Some("start"));
         // NavDown again steps by ordinal within the group.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
         assert_eq!(h.ui.focused(), Some("settings"));
         // The matching RELEASE is consumed too, but does NOT move focus again.
-        assert_eq!(h.handle(&release(ActionSignal::NavDown, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&release(ActionSignal::NavDown, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert_eq!(h.ui.focused(), Some("settings"));
         // NavUp steps back.
         h.handle(&press(ActionSignal::NavUp, &raw), &mut rc);
@@ -899,18 +1136,23 @@ mod tests {
     #[test]
     fn the_left_stick_cycles_panels_and_wraps() {
         let raw = InputState::new();
-        // Three PANELS, each with its own interior control — the panel node sits
-        // at ordinal 0 so cycling into a group lands on the pane, not its guts.
-        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        // Three PANELS, each with its own interior control. A container carries NO
+        // `tab_group` of its own — its members CLAIM it — and its `nav_ordinal` is
+        // the AUTHORED stick-stop order (Aaron 2026-08-15).
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
         for (i, group) in ["pop_left", "pop_view", "pop_right"].iter().enumerate() {
             let mut pane = UiNode {
                 id: (*group).into(),
                 component: "panel".into(),
-                tab_group: (*group).into(),
-                nav_ordinal: 0,
+                nav_ordinal: i as u32 + 1,
                 ..Default::default()
             };
-            pane.children.push(button(&format!("ctl_{i}"), group, 1, "act"));
+            pane.children
+                .push(button(&format!("ctl_{i}"), group, 1, "act"));
             tree.children.push(pane);
         }
         let mut ui = UiState::new();
@@ -923,7 +1165,11 @@ mod tests {
                 Flow::Consumed,
                 "the panel tier is the walker's"
             );
-            assert_eq!(h.ui.focused(), Some(want), "lands on the group's lowest ordinal");
+            assert_eq!(
+                h.ui.focused(),
+                Some(want),
+                "lands on the group's lowest ordinal"
+            );
         }
         // …and backwards, wrapping the other way.
         h.handle(&press(ActionSignal::PanelPrev, &raw), &mut rc);
@@ -937,17 +1183,24 @@ mod tests {
     #[test]
     fn confirm_enters_a_pane_panel_cycle_gates_and_cancel_exits_one_level() {
         let raw = InputState::new();
-        // Two actionless PANE containers (panels at ordinal 0 — no `action`, so Confirm
-        // enters rather than activates).
-        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
-        for group in ["pop_left", "pop_view"] {
-            tree.children.push(UiNode {
-                id: group.into(),
+        // Two actionless, interior-less PANE containers — nothing claims them, so
+        // each authors the explicit `pane: true` marker (the viewport-pane form),
+        // with the stick-stop order authored on their ordinals.
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
+        for (i, group) in ["pop_left", "pop_view"].iter().enumerate() {
+            let mut pane = UiNode {
+                id: (*group).into(),
                 component: "panel".into(),
-                tab_group: group.into(),
-                nav_ordinal: 0,
+                nav_ordinal: i as u32 + 1,
                 ..Default::default()
-            });
+            };
+            pane.props
+                .insert("pane".into(), flicker_script::Value::Bool(true));
+            tree.children.push(pane);
         }
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
@@ -963,18 +1216,193 @@ mod tests {
 
         // PanelNext is now suppressed — the left stick belongs to the interior.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("pop_left"), "panel cycle gated while entered");
+        assert_eq!(
+            h.ui.focused(),
+            Some("pop_left"),
+            "panel cycle gated while entered"
+        );
         assert!(h.ui.entered());
 
         // Cancel EXITS one level (0EFF5464 / BA4487BD "B never skips") — back to
         // navigating, and it does NOT pop the scene's context.
-        assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Cancel, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert!(!h.ui.entered(), "Cancel exited the pane");
         assert!(!h.cancelled(), "exiting a pane is not a scene-level cancel");
 
         // Navigating resumes — PanelNext cycles panes again.
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("pop_view"), "navigating resumes after exit");
+        assert_eq!(
+            h.ui.focused(),
+            Some("pop_view"),
+            "navigating resumes after exit"
+        );
+    }
+
+    /// **THE STICK HOPS FLAT GROUPS TOO** — the main-menu regression pin
+    /// (2026-08-15): a menu is flat groups with NO containers (the mode rail, the
+    /// scene list), and the stick must hop between them exactly as it cycles a
+    /// bench's panes; standing anywhere inside a group counts as standing on its
+    /// stop. Without this the pad could never reach the scene list to launch.
+    #[test]
+    fn the_stick_hops_between_flat_groups_with_no_containers() {
+        let raw = InputState::new();
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
+        // Two flat groups, menu-shaped: a mode rail and a scene list. No node has
+        // a claimed id, so there are no containers anywhere.
+        for (i, id) in ["explore", "build", "developer"].iter().enumerate() {
+            tree.children.push(button(id, "menu", i as u32, id));
+        }
+        for (i, id) in ["populous", "sablework"].iter().enumerate() {
+            tree.children.push(button(id, "scenes", i as u32, id));
+        }
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+
+        // First press lands on the first stop; d-pad walks WITHIN the group.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("explore"));
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("build"),
+            "d-pad stays inside the flat group"
+        );
+
+        // The stick hops to the OTHER group — even from mid-group.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("populous"),
+            "stick hops to the scene list"
+        );
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("sablework"),
+            "…whose rows the d-pad walks"
+        );
+
+        // And back, wrapping.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("explore"), "the stop ring wraps");
+        h.handle(&press(ActionSignal::PanelPrev, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("populous"), "…both ways");
+    }
+
+    /// **PANES NEST (Aaron 2026-08-15).** Enter the rack → the ring is its voice-row
+    /// SUBPANELS; enter a row → the ring is that row's controls; `Cancel` pops exactly
+    /// one level per press, refocusing the container it leaves (B never skips). The
+    /// stick stays suppressed at every depth, and the top tier cycles in AUTHORED
+    /// ordinal order.
+    #[test]
+    fn panes_nest_and_cancel_pops_one_level_at_a_time() {
+        let raw = InputState::new();
+        let mut rack = UiNode {
+            id: "rack".into(),
+            component: "panel".into(),
+            nav_ordinal: 1,
+            ..Default::default()
+        };
+        for n in 1..=2u32 {
+            let mut row = UiNode {
+                id: format!("voice_{n}"),
+                component: "stack".into(),
+                tab_group: "rack".into(),
+                nav_ordinal: n,
+                ..Default::default()
+            };
+            row.children.push(button(
+                &format!("v{n}_a"),
+                &format!("voice_{n}"),
+                1,
+                "act_a",
+            ));
+            row.children.push(button(
+                &format!("v{n}_b"),
+                &format!("voice_{n}"),
+                2,
+                "act_b",
+            ));
+            rack.children.push(row);
+        }
+        let mut out_pane = UiNode {
+            id: "out".into(),
+            component: "panel".into(),
+            nav_ordinal: 2,
+            ..Default::default()
+        };
+        out_pane.children.push(button("out_a", "out", 1, "act_o"));
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
+        tree.children.push(rack);
+        tree.children.push(out_pane);
+
+        let mut ui = UiState::new();
+        let mut rc = RouteCtx::new();
+        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
+
+        // Top tier in authored order; enter drops onto the first SUBPANEL.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("rack"));
+        h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        assert_eq!(h.ui.entered_group(), Some("rack"), "one level in");
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_1"),
+            "focus lands on the first subpanel"
+        );
+
+        // The ring is the rows.
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("voice_2"));
+
+        // Enter the row: a second level; the ring is its controls.
+        h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
+        assert_eq!(h.ui.entered_group(), Some("voice_2"), "two levels in");
+        assert_eq!(h.ui.focused(), Some("v2_a"));
+        h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("v2_b"),
+            "the d-pad walks the row's controls"
+        );
+
+        // The stick is suppressed at every depth.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(
+            h.ui.focused(),
+            Some("v2_b"),
+            "stick belongs to the pane at depth"
+        );
+
+        // Cancel pops ONE level per press, refocusing what it leaves.
+        h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
+        assert_eq!(h.ui.entered_group(), Some("rack"), "back to the rack ring");
+        assert_eq!(
+            h.ui.focused(),
+            Some("voice_2"),
+            "…standing on the row just left"
+        );
+        assert!(!h.cancelled(), "a pane exit is never a scene cancel");
+        h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
+        assert!(!h.ui.entered(), "navigating again");
+        assert_eq!(h.ui.focused(), Some("rack"));
+        assert!(!h.cancelled());
+
+        // And the stick resumes, in authored order.
+        h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
+        assert_eq!(h.ui.focused(), Some("out"));
     }
 
     /// **Entry is EXPLICIT (nav-tier contract 1B5F6BB8).** On an un-entered pane container
@@ -984,25 +1412,31 @@ mod tests {
     #[test]
     fn strict_entry_gates_the_dpad_until_confirm_then_walks_the_interior() {
         let raw = InputState::new();
-        // A pane CONTAINER (ordinal 0, actionless) with two interior controls, plus a
-        // second empty pane so there is something to cycle between.
+        // A pane CONTAINER (claimed by its two interior controls) plus a second,
+        // interior-less pane (explicit `pane: true`) so there is something to
+        // cycle between. Stick order authored on the ordinals.
         let mut pane_a = UiNode {
             id: "pane_a".into(),
             component: "panel".into(),
-            tab_group: "pane_a".into(),
-            nav_ordinal: 0,
+            nav_ordinal: 1,
             ..Default::default()
         };
         pane_a.children.push(button("a_one", "pane_a", 1, "a_one"));
         pane_a.children.push(button("a_two", "pane_a", 2, "a_two"));
-        let pane_b = UiNode {
+        let mut pane_b = UiNode {
             id: "pane_b".into(),
             component: "panel".into(),
-            tab_group: "pane_b".into(),
-            nav_ordinal: 0,
+            nav_ordinal: 2,
             ..Default::default()
         };
-        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        pane_b
+            .props
+            .insert("pane".into(), flicker_script::Value::Bool(true));
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
         tree.children.push(pane_a);
         tree.children.push(pane_b);
 
@@ -1011,26 +1445,46 @@ mod tests {
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
         h.handle(&press(ActionSignal::PanelNext, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("pane_a"), "left stick lands on the container");
+        assert_eq!(
+            h.ui.focused(),
+            Some("pane_a"),
+            "left stick lands on the container"
+        );
 
         // The D-PAD is dead on an un-entered container — the whole point of explicit entry.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("pane_a"), "d-pad no-ops until the pane is entered");
+        assert_eq!(
+            h.ui.focused(),
+            Some("pane_a"),
+            "d-pad no-ops until the pane is entered"
+        );
         assert!(!h.ui.entered());
 
         // Confirm ENTERS and drops focus to the lowest-ordinal interior.
         h.handle(&press(ActionSignal::Confirm, &raw), &mut rc);
         assert_eq!(h.ui.entered_group(), Some("pane_a"), "the pane is locked");
-        assert_eq!(h.ui.focused(), Some("a_one"), "focus dropped to the lowest-ordinal interior");
+        assert_eq!(
+            h.ui.focused(),
+            Some("a_one"),
+            "focus dropped to the lowest-ordinal interior"
+        );
 
         // The d-pad now walks the INTERIOR only.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("a_two"), "d-pad walks the pane interior");
+        assert_eq!(
+            h.ui.focused(),
+            Some("a_two"),
+            "d-pad walks the pane interior"
+        );
 
         // Cancel EXITS one level and returns focus to the container.
         h.handle(&press(ActionSignal::Cancel, &raw), &mut rc);
         assert!(!h.ui.entered(), "Cancel unlocked the pane");
-        assert_eq!(h.ui.focused(), Some("pane_a"), "Cancel refocused the container");
+        assert_eq!(
+            h.ui.focused(),
+            Some("pane_a"),
+            "Cancel refocused the container"
+        );
     }
 
     /// **A value control STEPS on its own axis and MOVES FOCUS on the cross axis** — never a
@@ -1048,11 +1502,21 @@ mod tests {
             ..Default::default()
         };
         sel.children = vec![
-            UiNode { component: "option".into(), ..Default::default() },
-            UiNode { component: "option".into(), ..Default::default() },
+            UiNode {
+                component: "option".into(),
+                ..Default::default()
+            },
+            UiNode {
+                component: "option".into(),
+                ..Default::default()
+            },
         ];
         let btn = button("b", "g", 1, "b");
-        let mut tree = UiNode { id: "root".into(), component: "cell".into(), ..Default::default() };
+        let mut tree = UiNode {
+            id: "root".into(),
+            component: "cell".into(),
+            ..Default::default()
+        };
         tree.children = vec![sel, btn];
         let mut ui = UiState::new();
         ui.request_focus("sel");
@@ -1061,10 +1525,18 @@ mod tests {
 
         // Own axis (Right): steps the control — focus stays put (a nudge, not a move).
         h.handle(&press(ActionSignal::NavRight, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("sel"), "own-axis nav steps the control, focus stays");
+        assert_eq!(
+            h.ui.focused(),
+            Some("sel"),
+            "own-axis nav steps the control, focus stays"
+        );
         // Cross axis (Down): moves focus to the next control — the control is not a trap.
         h.handle(&press(ActionSignal::NavDown, &raw), &mut rc);
-        assert_eq!(h.ui.focused(), Some("b"), "cross-axis nav moves focus off the control");
+        assert_eq!(
+            h.ui.focused(),
+            Some("b"),
+            "cross-axis nav moves focus off the control"
+        );
     }
 
     /// **The bumpers no longer move focus.** `TabNext`/`TabPrev` belong to the
@@ -1079,9 +1551,19 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
-        assert_eq!(h.handle(&press(ActionSignal::TabNext, &raw), &mut rc), Flow::Pass);
-        assert_eq!(h.handle(&press(ActionSignal::TabPrev, &raw), &mut rc), Flow::Pass);
-        assert_eq!(h.ui.focused(), Some("settings"), "the bumpers moved nothing");
+        assert_eq!(
+            h.handle(&press(ActionSignal::TabNext, &raw), &mut rc),
+            Flow::Pass
+        );
+        assert_eq!(
+            h.handle(&press(ActionSignal::TabPrev, &raw), &mut rc),
+            Flow::Pass
+        );
+        assert_eq!(
+            h.ui.focused(),
+            Some("settings"),
+            "the bumpers moved nothing"
+        );
     }
 
     /// **Confirm on a focused button arrives through `take_fired`** — the ONE
@@ -1097,8 +1579,15 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
-        assert_eq!(h.handle(&press(ActionSignal::Confirm, &raw), &mut rc), Flow::Consumed);
-        assert_eq!(h.take_fired(), vec!["quit".to_string()], "the drain carries the activation");
+        assert_eq!(
+            h.handle(&press(ActionSignal::Confirm, &raw), &mut rc),
+            Flow::Consumed
+        );
+        assert_eq!(
+            h.take_fired(),
+            vec!["quit".to_string()],
+            "the drain carries the activation"
+        );
         assert!(h.take_fired().is_empty(), "and it drains");
 
         // The POINTER twin: a click on the same button writes the same key.
@@ -1116,7 +1605,11 @@ mod tests {
         let mut click = ValueMap::new();
         click.set("quit", true); // what the hit pass writes for a clicked button
         assert!(pad.is_on("quit") && click.is_on("quit"));
-        assert_eq!(pad.get("quit"), click.get("quit"), "same key, same value, same channel");
+        assert_eq!(
+            pad.get("quit"),
+            click.get("quit"),
+            "same key, same value, same channel"
+        );
     }
 
     /// **A mouse CLICK converges with a pad Confirm on the ONE drain (pump P2 /
@@ -1135,12 +1628,18 @@ mod tests {
         // a click at its centre lands inside its resolved rect.
         let mut btn = button("go", "menu", 0, "go");
         btn.size = Some(40.0);
-        let mut col = UiNode { component: "cell".into(), ..Default::default() };
+        let mut col = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
         col.anchor = Some(flicker_script::UiAnchor::TopLeft);
         col.width = Some(200.0);
         col.children = vec![btn];
-        let mut tree =
-            UiNode { component: "screen".into(), id: "root".into(), ..Default::default() };
+        let mut tree = UiNode {
+            component: "screen".into(),
+            id: "root".into(),
+            ..Default::default()
+        };
         tree.children.push(col);
 
         let model = ValueMap::new();
@@ -1159,7 +1658,10 @@ mod tests {
         // Hit pass: the click writes the action into `results` (unchanged) AND records
         // it on the one activation channel for the walker to drain.
         let frame = crate::run_ui(&tree, &model, &styles, &click, &mut ui);
-        assert!(frame.results.is_on("go"), "the click still writes the action into results");
+        assert!(
+            frame.results.is_on("go"),
+            "the click still writes the action into results"
+        );
         let hud_hit = frame.results.is_on("hud_hit");
 
         // The walker drains the SAME name a pad Confirm would — the convergence that
@@ -1182,7 +1684,10 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown());
 
-        assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Cancel, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert!(h.cancelled());
         assert!(rc.requests.contains(&RouterRequest::PopContext));
     }
@@ -1213,13 +1718,22 @@ mod tests {
         let mut h = WalkerHandler::hud(&mut ui, false).with_intents(&intents);
 
         // Press records the declared result name and consumes.
-        assert_eq!(h.handle(&press(ActionSignal::Menu, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Menu, &raw), &mut rc),
+            Flow::Consumed
+        );
         // The matching Release is consumed too but fires nothing again.
-        assert_eq!(h.handle(&release(ActionSignal::Menu, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&release(ActionSignal::Menu, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert_eq!(h.take_fired(), vec!["pause_open".to_string()]);
         assert!(h.take_fired().is_empty(), "take_fired drains");
         // An undeclared signal still passes (the layer is not a black hole).
-        assert_eq!(h.handle(&press(ActionSignal::Jump, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Jump, &raw), &mut rc),
+            Flow::Pass
+        );
     }
 
     #[test]
@@ -1232,15 +1746,30 @@ mod tests {
         let intents = UiIntents::of(&tree);
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
-        let mut h = WalkerHandler::hud(&mut ui, false).with_nav(&tree, &shown()).with_intents(&intents);
+        let mut h = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &shown())
+            .with_intents(&intents);
 
-        assert_eq!(h.handle(&press(ActionSignal::Cancel, &raw), &mut rc), Flow::Consumed);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Cancel, &raw), &mut rc),
+            Flow::Consumed
+        );
         assert_eq!(h.take_fired(), vec!["settings_close".to_string()]);
-        assert!(!h.cancelled(), "declared Cancel does not also run the nav back-out");
+        assert!(
+            !h.cancelled(),
+            "declared Cancel does not also run the nav back-out"
+        );
         assert!(rc.requests.is_empty(), "…and queues no PopContext");
         // Undeclared nav signals keep their defaults on the same handler.
-        assert_eq!(h.handle(&press(ActionSignal::NavDown, &raw), &mut rc), Flow::Consumed);
-        assert_eq!(h.ui.focused(), Some("start"), "nav still walks the focusables");
+        assert_eq!(
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc),
+            Flow::Consumed
+        );
+        assert_eq!(
+            h.ui.focused(),
+            Some("start"),
+            "nav still walks the focusables"
+        );
     }
 
     #[test]
@@ -1250,7 +1779,10 @@ mod tests {
         let mut ui = UiState::new();
         let mut rc = RouteCtx::new();
         let mut h = WalkerHandler::hud(&mut ui, false).with_intents(&intents);
-        assert_eq!(h.handle(&press(ActionSignal::Menu, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::Menu, &raw), &mut rc),
+            Flow::Pass
+        );
         assert!(h.take_fired().is_empty());
     }
 
@@ -1261,8 +1793,14 @@ mod tests {
         let mut rc = RouteCtx::new();
         // Plain hud() (no with_nav) → nav signals fall through to gameplay.
         let mut h = WalkerHandler::hud(&mut ui, false);
-        assert_eq!(h.handle(&press(ActionSignal::NavDown, &raw), &mut rc), Flow::Pass);
-        assert_eq!(h.handle(&press(ActionSignal::Confirm, &raw), &mut rc), Flow::Pass);
+        assert_eq!(
+            h.handle(&press(ActionSignal::NavDown, &raw), &mut rc),
+            Flow::Pass
+        );
+        assert_eq!(
+            h.handle(&press(ActionSignal::Confirm, &raw), &mut rc),
+            Flow::Pass
+        );
         assert_eq!(h.ui.focused(), None);
     }
 }

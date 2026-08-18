@@ -38,8 +38,16 @@ const POLE_EPS: f32 = 1e-4;
 ///
 /// `ctx.dirs` and `ctx.neighbors` must be parallel to `world`'s cells.
 pub fn advect_zonal(world: &HexWorld, dt_myr: f64, ctx: &StepCtx) -> HexWorld {
-    debug_assert_eq!(ctx.dirs.len(), world.cell_count(), "dirs must match the grid");
-    debug_assert_eq!(ctx.neighbors.len(), world.cell_count(), "neighbors must match the grid");
+    debug_assert_eq!(
+        ctx.dirs.len(),
+        world.cell_count(),
+        "dirs must match the grid"
+    );
+    debug_assert_eq!(
+        ctx.neighbors.len(),
+        world.cell_count(),
+        "neighbors must match the grid"
+    );
 
     let mut next = world.clone();
     let axis = Vec3::Y; // spin axis
@@ -105,14 +113,19 @@ mod tests {
                 Vec3::new(r * a.cos(), y, r * a.sin()).normalize()
             })
             .collect();
-        let neighbors = (0..n).map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32]).collect();
+        let neighbors = (0..n)
+            .map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32])
+            .collect();
         (dirs, neighbors)
     }
 
     #[test]
     fn advection_conserves_total_mass_over_many_steps() {
         let (dirs, neighbors) = ring(0.0, 6);
-        let ctx = StepCtx { dirs: &dirs, neighbors: &neighbors };
+        let ctx = StepCtx {
+            dirs: &dirs,
+            neighbors: &neighbors,
+        };
         let mut cells = vec![Composition::new(); 6];
         cells[0].add(O, 100.0);
         cells[2].add(FE, 40.0);
@@ -121,21 +134,41 @@ mod tests {
         for _ in 0..50 {
             w = advect_zonal(&w, 1.0, &ctx);
         }
-        assert!((w.total() - before).abs() < 1e-9, "advection conserves total mass: {} vs {before}", w.total());
+        assert!(
+            (w.total() - before).abs() < 1e-9,
+            "advection conserves total mass: {} vs {before}",
+            w.total()
+        );
         // It actually moved: the material is no longer all in the seed cells.
-        assert!(w.cell(0).unwrap().amount(O) < 100.0, "material left the source cell");
+        assert!(
+            w.cell(0).unwrap().amount(O) < 100.0,
+            "material left the source cell"
+        );
     }
 
     #[test]
     fn material_moves_downstream_eastward_not_upstream() {
         let (dirs, neighbors) = ring(0.0, 4);
-        let ctx = StepCtx { dirs: &dirs, neighbors: &neighbors };
+        let ctx = StepCtx {
+            dirs: &dirs,
+            neighbors: &neighbors,
+        };
         let mut cells = vec![Composition::new(); 4];
         cells[0].add(O, 100.0);
         let next = advect_zonal(&HexWorld::from_cells(1, cells), 1.0, &ctx);
-        assert!(next.cell(0).unwrap().amount(O) < 100.0, "source cell sheds material");
-        assert!(next.cell(1).unwrap().amount(O) > 0.0, "the eastward (downstream) neighbour gains it");
-        assert_eq!(next.cell(3).unwrap().amount(O), 0.0, "the upstream neighbour gains nothing");
+        assert!(
+            next.cell(0).unwrap().amount(O) < 100.0,
+            "source cell sheds material"
+        );
+        assert!(
+            next.cell(1).unwrap().amount(O) > 0.0,
+            "the eastward (downstream) neighbour gains it"
+        );
+        assert_eq!(
+            next.cell(3).unwrap().amount(O),
+            0.0,
+            "the upstream neighbour gains nothing"
+        );
     }
 
     #[test]
@@ -146,11 +179,28 @@ mod tests {
         ce[0].add(O, 100.0);
         let mut cp = vec![Composition::new(); 6];
         cp[0].add(O, 100.0);
-        let we = advect_zonal(&HexWorld::from_cells(1, ce), 1.0, &StepCtx { dirs: &de, neighbors: &ne });
-        let wp = advect_zonal(&HexWorld::from_cells(1, cp), 1.0, &StepCtx { dirs: &dp, neighbors: &np });
+        let we = advect_zonal(
+            &HexWorld::from_cells(1, ce),
+            1.0,
+            &StepCtx {
+                dirs: &de,
+                neighbors: &ne,
+            },
+        );
+        let wp = advect_zonal(
+            &HexWorld::from_cells(1, cp),
+            1.0,
+            &StepCtx {
+                dirs: &dp,
+                neighbors: &np,
+            },
+        );
         let moved_e = 100.0 - we.cell(0).unwrap().amount(O);
         let moved_p = 100.0 - wp.cell(0).unwrap().amount(O);
-        assert!(moved_e > moved_p, "equator ({moved_e}) shears faster than high latitude ({moved_p})");
+        assert!(
+            moved_e > moved_p,
+            "equator ({moved_e}) shears faster than high latitude ({moved_p})"
+        );
         assert!(moved_p > 0.0, "high latitude still advects, just slower");
     }
 
@@ -159,10 +209,17 @@ mod tests {
         // A cell on the spin axis has no zonal direction → it sheds nothing, however long the step.
         let dirs = vec![Vec3::Y, Vec3::new(0.0, 0.999, 0.0447).normalize()];
         let neighbors = vec![vec![1u32], vec![0u32]];
-        let ctx = StepCtx { dirs: &dirs, neighbors: &neighbors };
+        let ctx = StepCtx {
+            dirs: &dirs,
+            neighbors: &neighbors,
+        };
         let mut cells = vec![Composition::new(); 2];
         cells[0].add(O, 100.0);
         let next = advect_zonal(&HexWorld::from_cells(1, cells), 10.0, &ctx);
-        assert_eq!(next.cell(0).unwrap().amount(O), 100.0, "the polar cell sheds nothing");
+        assert_eq!(
+            next.cell(0).unwrap().amount(O),
+            100.0,
+            "the polar cell sheds nothing"
+        );
     }
 }

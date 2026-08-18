@@ -35,8 +35,8 @@
 //! scene builds [`UiIntents`] exactly when it (re)builds its tree and retains
 //! it beside `UiState` — never per frame.
 
-use flicker_script::{UiNode, Value, ValueMap};
 use flicker_input_core::ActionSignal;
+use flicker_script::{UiNode, Value, ValueMap};
 
 /// A screen's collected signal→result-name bindings (the S9 declaration).
 /// Build with [`of`](Self::of) when the tree is built; hand to the walker layer
@@ -58,7 +58,9 @@ impl UiIntents {
     pub fn of(tree: &UiNode) -> Self {
         let mut map = Vec::new();
         for (key, value) in &tree.props {
-            let Some(suffix) = key.strip_prefix("on_") else { continue };
+            let Some(suffix) = key.strip_prefix("on_") else {
+                continue;
+            };
             let Some(signal) = ActionSignal::from_name(&snake_to_pascal(suffix)) else {
                 tracing::warn!(
                     "ui intents: `{key}` names no ActionSignal (root `{}`) — skipped",
@@ -130,7 +132,11 @@ mod tests {
     use flicker_script::UiNode;
 
     fn screen_with(props: &[(&str, Value)]) -> UiNode {
-        let mut n = UiNode { component: "screen".into(), id: "root".into(), ..Default::default() };
+        let mut n = UiNode {
+            component: "screen".into(),
+            id: "root".into(),
+            ..Default::default()
+        };
         for (k, v) in props {
             n.props.insert((*k).to_string(), v.clone());
         }
@@ -148,7 +154,10 @@ mod tests {
         let intents = UiIntents::of(&tree);
         assert!(!intents.is_empty());
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
-        assert_eq!(intents.result_for(ActionSignal::Cancel), Some("settings_close"));
+        assert_eq!(
+            intents.result_for(ActionSignal::Cancel),
+            Some("settings_close")
+        );
         assert_eq!(intents.result_for(ActionSignal::AttackLight), Some("combo"));
         assert_eq!(intents.result_for(ActionSignal::Confirm), None);
     }
@@ -161,15 +170,23 @@ mod tests {
             ("on_cancel", Value::Text(String::new())),    // empty name → skip
         ]);
         let intents = UiIntents::of(&tree);
-        assert!(intents.is_empty(), "every malformed declaration is skipped, never a panic");
+        assert!(
+            intents.is_empty(),
+            "every malformed declaration is skipped, never a panic"
+        );
     }
 
     #[test]
     fn only_the_root_declares() {
         // A child's on_* props are NOT part of the screen declaration — the
         // screen is the declaring unit (child props stay component props).
-        let mut child = UiNode { component: "cell".into(), ..Default::default() };
-        child.props.insert("on_menu".into(), Value::Text("nope".into()));
+        let mut child = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
+        child
+            .props
+            .insert("on_menu".into(), Value::Text("nope".into()));
         let mut tree = screen_with(&[("on_cancel", Value::Text("back".into()))]);
         tree.children.push(child);
         let intents = UiIntents::of(&tree);
@@ -180,7 +197,10 @@ mod tests {
     #[test]
     fn mirror_publishes_sig_keys_transiently() {
         let mut m = ValueMap::new();
-        UiIntents::mirror_into(&mut m, &["pause_open".to_string(), "settings_close".to_string()]);
+        UiIntents::mirror_into(
+            &mut m,
+            &["pause_open".to_string(), "settings_close".to_string()],
+        );
         assert!(m.is_on("sig_pause_open"));
         assert!(m.is_on("sig_settings_close"));
         // Nothing fired → nothing written (absent keys read falsy; no `false` spam).

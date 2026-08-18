@@ -201,11 +201,26 @@ pub fn classify_asset(scan: &Scan, bones: Option<usize>) -> AssetReport {
         (AssetClass::Animation, animation),
     ]
     .into_iter()
-    .fold((AssetClass::Skin, f32::MIN), |best, c| if c.1 > best.1 { c } else { best });
+    .fold((AssetClass::Skin, f32::MIN), |best, c| {
+        if c.1 > best.1 {
+            c
+        } else {
+            best
+        }
+    });
 
     let total = skin + prop + animation;
-    let confidence = if total > 0.0 { (score / total).clamp(0.0, 1.0) } else { 0.0 };
-    AssetReport { class, prop: kind.unwrap_or(PropKind::Accessory), confidence, evidence }
+    let confidence = if total > 0.0 {
+        (score / total).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    AssetReport {
+        class,
+        prop: kind.unwrap_or(PropKind::Accessory),
+        confidence,
+        evidence,
+    }
 }
 
 /// Prop sub-type from a name. `None` when nothing matches, so the caller can tell "no evidence"
@@ -223,8 +238,9 @@ fn prop_kind(name: &str) -> Option<PropKind> {
         "rock", "tree", "wall", "door", "crate", "barrel", "table", "chair", "fence", "pillar",
         "ruin", "bridge",
     ];
-    const ACCESSORY: &[&str] =
-        &["ring", "amulet", "necklace", "belt", "pouch", "bag", "earring", "hair"];
+    const ACCESSORY: &[&str] = &[
+        "ring", "amulet", "necklace", "belt", "pouch", "bag", "earring", "hair",
+    ];
     for (list, kind) in [
         (WEAPON, PropKind::Weapon),
         (CLOTHING, PropKind::Clothing),
@@ -281,9 +297,31 @@ pub fn classify(path: &Path) -> Kind {
 /// and this also catches bare locomotion/action verbs.
 fn looks_like_animation(stem: &str) -> bool {
     const HINTS: &[&str] = &[
-        "animation", "walk", "run", "jog", "idle", "jump", "crouch", "attack", "death", "dame",
-        "hit", "roll", "climb", "turn", "strafe", "dodge", "sprint", "crawl", "vault", "land",
-        "stomp", "sit", "stand", "dance", "wave",
+        "animation",
+        "walk",
+        "run",
+        "jog",
+        "idle",
+        "jump",
+        "crouch",
+        "attack",
+        "death",
+        "dame",
+        "hit",
+        "roll",
+        "climb",
+        "turn",
+        "strafe",
+        "dodge",
+        "sprint",
+        "crawl",
+        "vault",
+        "land",
+        "stomp",
+        "sit",
+        "stand",
+        "dance",
+        "wave",
     ];
     HINTS.iter().any(|h| stem.contains(h))
 }
@@ -392,11 +430,18 @@ pub fn classify_package(path: &Path) -> PackageClass {
     }
     // Strip the at-rest `.gz` so the LOGICAL extension drives the fast paths.
     let logical = path.to_string_lossy();
-    let logical = logical.strip_suffix(".gz").unwrap_or(&logical).to_ascii_lowercase();
+    let logical = logical
+        .strip_suffix(".gz")
+        .unwrap_or(&logical)
+        .to_ascii_lowercase();
 
     // Cheap, unambiguous names first — no read at all.
-    if logical.ends_with(".png") || logical.ends_with(".jpg") || logical.ends_with(".jpeg")
-        || logical.ends_with(".tga") || logical.ends_with(".tif") || logical.ends_with(".tiff")
+    if logical.ends_with(".png")
+        || logical.ends_with(".jpg")
+        || logical.ends_with(".jpeg")
+        || logical.ends_with(".tga")
+        || logical.ends_with(".tif")
+        || logical.ends_with(".tiff")
     {
         return PackageClass::Texture;
     }
@@ -447,7 +492,9 @@ mod texture_recipe_class_tests {
         );
         // At rest it is gz, and the logical extension still drives the answer.
         assert_eq!(
-            classify_package(Path::new("staging/materials/Granite/Granite.texture.json.gz")),
+            classify_package(Path::new(
+                "staging/materials/Granite/Granite.texture.json.gz"
+            )),
             PackageClass::TextureRecipe
         );
         // The maps it produced stay TEXTURES — the recipe is the authored thing,
@@ -486,7 +533,9 @@ fn find_key(head: &[u8], key: &[u8]) -> Option<usize> {
     needle.push(b'"');
     needle.extend_from_slice(key);
     needle.push(b'"');
-    head.windows(needle.len()).position(|w| w == needle).map(|i| i + needle.len())
+    head.windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| i + needle.len())
 }
 
 /// The `"format"` string value, when it is visible in the head.
@@ -504,7 +553,11 @@ fn declared_format(head: &[u8]) -> Option<&[u8]> {
 fn array_is_populated(head: &[u8], key: &[u8]) -> Option<bool> {
     let after = find_key(head, key)?;
     let rest = trim_start(&head[after..]);
-    let rest = if rest.first() == Some(&b':') { trim_start(&rest[1..]) } else { rest };
+    let rest = if rest.first() == Some(&b':') {
+        trim_start(&rest[1..])
+    } else {
+        rest
+    };
     if rest.first() != Some(&b'[') {
         return None;
     }
@@ -512,7 +565,10 @@ fn array_is_populated(head: &[u8], key: &[u8]) -> Option<bool> {
 }
 
 fn trim_start(b: &[u8]) -> &[u8] {
-    let n = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
+    let n = b
+        .iter()
+        .position(|c| !c.is_ascii_whitespace())
+        .unwrap_or(b.len());
     &b[n..]
 }
 
@@ -528,7 +584,11 @@ pub fn scan_folder(root: &Path) -> std::io::Result<Scan> {
         .filter(|(_, e)| e.kind == Kind::MeshFbx)
         .map(|(i, _)| i)
         .collect();
-    Ok(Scan { root: root.to_path_buf(), entries, riggable })
+    Ok(Scan {
+        root: root.to_path_buf(),
+        entries,
+        riggable,
+    })
 }
 
 fn collect(dir: &Path, out: &mut Vec<Entry>) -> std::io::Result<()> {
@@ -537,7 +597,10 @@ fn collect(dir: &Path, out: &mut Vec<Entry>) -> std::io::Result<()> {
         if path.is_dir() {
             collect(&path, out)?;
         } else if path.is_file() {
-            out.push(Entry { kind: classify(&path), path });
+            out.push(Entry {
+                kind: classify(&path),
+                path,
+            });
         }
     }
     Ok(())
@@ -555,10 +618,21 @@ mod tests {
     #[test]
     fn classify_by_extension_and_name() {
         // The real Meshy split: "Character_output" is the mesh, "Animation_Walking" is motion.
-        assert_eq!(classify(Path::new("Female_Human_Base_Character_output.fbx")), Kind::MeshFbx);
-        assert_eq!(classify(Path::new("Female_Human_Base_Animation_Walking_frame_rate_60.fbx")), Kind::AnimFbx);
+        assert_eq!(
+            classify(Path::new("Female_Human_Base_Character_output.fbx")),
+            Kind::MeshFbx
+        );
+        assert_eq!(
+            classify(Path::new(
+                "Female_Human_Base_Animation_Walking_frame_rate_60.fbx"
+            )),
+            Kind::AnimFbx
+        );
         assert_eq!(classify(Path::new("walk_forward.bvh")), Kind::Bvh);
-        assert_eq!(classify(Path::new("body_texture_0_normal.png")), Kind::Texture);
+        assert_eq!(
+            classify(Path::new("body_texture_0_normal.png")),
+            Kind::Texture
+        );
         assert_eq!(classify(Path::new("skin.TGA")), Kind::Texture); // case-insensitive
         assert_eq!(classify(Path::new("manifest.json")), Kind::Manifest);
         assert_eq!(classify(Path::new("PrismHumanBaseA.json")), Kind::Rig);
@@ -596,7 +670,11 @@ mod tests {
         touch(&d.join("set"), "Foot_Boots.fbx"); // nested → recursion must find it
 
         let scan = scan_folder(&d).unwrap();
-        assert_eq!(scan.riggable.len(), 3, "three garment meshes, incl. the nested one");
+        assert_eq!(
+            scan.riggable.len(),
+            3,
+            "three garment meshes, incl. the nested one"
+        );
         assert!(scan.needs_selection(), "editor must prompt which to rig");
         assert!(scan.sole_riggable().is_none());
 
@@ -617,15 +695,30 @@ mod tests {
 
         let skin = classify_asset(&scan, Some(66));
         assert_eq!(skin.class, AssetClass::Skin);
-        assert!(skin.confidence > 0.5, "agreeing signals carry it, got {}", skin.confidence);
-        assert!(skin.evidence.iter().any(|e| e.contains("66 bones")), "{:?}", skin.evidence);
+        assert!(
+            skin.confidence > 0.5,
+            "agreeing signals carry it, got {}",
+            skin.confidence
+        );
+        assert!(
+            skin.evidence.iter().any(|e| e.contains("66 bones")),
+            "{:?}",
+            skin.evidence
+        );
 
         let prop = classify_asset(&scan, Some(0));
-        assert_eq!(prop.class, AssetClass::Prop, "no skeleton → not a character");
+        assert_eq!(
+            prop.class,
+            AssetClass::Prop,
+            "no skeleton → not a character"
+        );
 
         // Unparsed: the folder shape alone must NOT read as confident.
         let unknown = classify_asset(&scan, None);
-        assert!(unknown.confidence < skin.confidence, "unparsed is less certain than parsed");
+        assert!(
+            unknown.confidence < skin.confidence,
+            "unparsed is less certain than parsed"
+        );
 
         let _ = fs::remove_dir_all(&d);
     }
@@ -658,8 +751,8 @@ mod tests {
     /// when the content tree isn't present.
     #[test]
     fn scans_the_real_prismhumanbasea_source() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/source/PrismHumanBaseA");
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
         if !dir.exists() {
             eprintln!("skipping: {} not present", dir.display());
             return;
@@ -669,13 +762,22 @@ mod tests {
             scan.riggable.len(),
             1,
             "one Character mesh to rig, got {:?}",
-            scan.candidates().map(|e| e.path.file_name()).collect::<Vec<_>>()
+            scan.candidates()
+                .map(|e| e.path.file_name())
+                .collect::<Vec<_>>()
         );
         assert!(
-            scan.sole_riggable().unwrap().path.to_string_lossy().contains("Character_output"),
+            scan.sole_riggable()
+                .unwrap()
+                .path
+                .to_string_lossy()
+                .contains("Character_output"),
             "the riggable candidate is the character mesh"
         );
-        assert!(scan.of_kind(Kind::AnimFbx).count() >= 1, "the walking animation classifies as anim");
+        assert!(
+            scan.of_kind(Kind::AnimFbx).count() >= 1,
+            "the walking animation classifies as anim"
+        );
         assert!(scan.of_kind(Kind::Texture).count() >= 1, "textures present");
     }
 
@@ -684,14 +786,35 @@ mod tests {
     #[test]
     fn names_alone_settle_the_unambiguous_classes() {
         // The `.gz` at-rest suffix must not hide the logical extension.
-        assert_eq!(classify_package(Path::new("a/Foo_BaseColor.png")), PackageClass::Texture);
-        assert_eq!(classify_package(Path::new("a/Cinzel.ttf")), PackageClass::Font);
-        assert_eq!(classify_package(Path::new("a/intro.flight.gz")), PackageClass::Flight);
-        assert_eq!(classify_package(Path::new("a/earthlike.epoch.gz")), PackageClass::Epoch);
-        assert_eq!(classify_package(Path::new("a/K.pack.json.gz")), PackageClass::CombatPack);
-        assert_eq!(classify_package(Path::new("a/B.rbp.json.gz")), PackageClass::RetargetBasePose);
+        assert_eq!(
+            classify_package(Path::new("a/Foo_BaseColor.png")),
+            PackageClass::Texture
+        );
+        assert_eq!(
+            classify_package(Path::new("a/Cinzel.ttf")),
+            PackageClass::Font
+        );
+        assert_eq!(
+            classify_package(Path::new("a/intro.flight.gz")),
+            PackageClass::Flight
+        );
+        assert_eq!(
+            classify_package(Path::new("a/earthlike.epoch.gz")),
+            PackageClass::Epoch
+        );
+        assert_eq!(
+            classify_package(Path::new("a/K.pack.json.gz")),
+            PackageClass::CombatPack
+        );
+        assert_eq!(
+            classify_package(Path::new("a/B.rbp.json.gz")),
+            PackageClass::RetargetBasePose
+        );
         assert_eq!(classify_package(Path::new("a/OFL.txt")), PackageClass::Doc);
-        assert_eq!(classify_package(Path::new("a/thing.bin")), PackageClass::Unknown);
+        assert_eq!(
+            classify_package(Path::new("a/thing.bin")),
+            PackageClass::Unknown
+        );
     }
 
     /// The tree carries TWO serialization layouts and the sniff must survive
@@ -699,7 +822,8 @@ mod tests {
     /// so it is invisible to any prefix and `clips` must carry the decision.
     #[test]
     fn the_sniff_is_layout_agnostic() {
-        let field_order_clip = br#"{"format": "flicker.rig", "mesh": {"indices": []}, "clips": [{"name":"walk"}]}"#;
+        let field_order_clip =
+            br#"{"format": "flicker.rig", "mesh": {"indices": []}, "clips": [{"name":"walk"}]}"#;
         assert_eq!(classify_package_head(field_order_clip), PackageClass::Clip);
 
         let alphabetical_clip = br#"{"clips":[{"duration_ticks":599,"name":"army_crawl"}],"#;
@@ -714,7 +838,8 @@ mod tests {
         assert_eq!(classify_package_head(rig), PackageClass::Rig);
 
         // A rig whose mesh pushed `clips` out of the prefix entirely.
-        let truncated_rig = br#"{"format": "flicker.rig", "skeleton": {"bones": [1,2,3]}, "mesh": {"pos"#;
+        let truncated_rig =
+            br#"{"format": "flicker.rig", "skeleton": {"bones": [1,2,3]}, "mesh": {"pos"#;
         assert_eq!(classify_package_head(truncated_rig), PackageClass::Rig);
     }
 
@@ -733,7 +858,10 @@ mod tests {
             classify_package_head(br#"{"version":2,"id":{"lod":0,"x":0,"y":0,"z":0}}"#),
             PackageClass::Bake
         );
-        assert_eq!(classify_package_head(br#"{"something": 1}"#), PackageClass::Unknown);
+        assert_eq!(
+            classify_package_head(br#"{"something": 1}"#),
+            PackageClass::Unknown
+        );
     }
 
     /// An entangled Katanami export carries a mesh AND a clip; geometry wins,
@@ -761,11 +889,23 @@ mod tests {
             .map(|e| (&e.path, classify_package(&e.path)))
             .filter(|(_, c)| *c == PackageClass::Unknown)
             .collect();
-        assert!(unknown.is_empty(), "unclassifiable package content: {unknown:?}");
+        assert!(
+            unknown.is_empty(),
+            "unclassifiable package content: {unknown:?}"
+        );
 
-        let clips = entries.iter().filter(|e| classify_package(&e.path) == PackageClass::Clip).count();
-        let rigs = entries.iter().filter(|e| classify_package(&e.path) == PackageClass::Rig).count();
-        assert!(clips > 100, "the retargeted clip library should dominate, got {clips}");
+        let clips = entries
+            .iter()
+            .filter(|e| classify_package(&e.path) == PackageClass::Clip)
+            .count();
+        let rigs = entries
+            .iter()
+            .filter(|e| classify_package(&e.path) == PackageClass::Rig)
+            .count();
+        assert!(
+            clips > 100,
+            "the retargeted clip library should dominate, got {clips}"
+        );
         assert!(rigs > 0, "at least one skinned rig, got {rigs}");
     }
 }

@@ -85,7 +85,11 @@ pub fn rename_to_canonical(model: &mut RawModel) -> RenameReport {
     }
 
     // 2. drop the head-tip markers, compacting the bone list and rewiring parents + joint indices.
-    let keep: Vec<bool> = model.bones.iter().map(|b| !DROP.contains(&b.name.as_str())).collect();
+    let keep: Vec<bool> = model
+        .bones
+        .iter()
+        .map(|b| !DROP.contains(&b.name.as_str()))
+        .collect();
     report.dropped = keep.iter().filter(|k| !**k).count();
     if report.dropped > 0 {
         // old bone index → new index (None if dropped).
@@ -133,15 +137,20 @@ mod tests {
 
     #[test]
     fn renames_the_real_female_base_to_canonical() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/source/PrismHumanBaseA");
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
         if !dir.exists() {
             eprintln!("skipping: {} not present", dir.display());
             return;
         }
-        let Some(fbx) = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-            p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-        }) else {
+        let Some(fbx) = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| {
+                p.to_string_lossy().contains("Character_output")
+                    && p.extension().map(|e| e == "fbx").unwrap_or(false)
+            })
+        else {
             eprintln!("skipping: no Character_output.fbx");
             return;
         };
@@ -151,21 +160,46 @@ mod tests {
         let report = rename_to_canonical(&mut model);
         eprintln!(
             "renamed {}, dropped {}, {} bones ({before} before); unmapped: {:?}",
-            report.renamed, report.dropped, model.bones.len(), report.unmapped
+            report.renamed,
+            report.dropped,
+            model.bones.len(),
+            report.unmapped
         );
 
         let names: HashSet<&str> = model.bones.iter().map(|b| b.name.as_str()).collect();
         for n in [
-            "pelvis", "spine_01", "spine_02", "spine_03", "head", "clavicle_l", "upperarm_l",
-            "lowerarm_l", "hand_l", "thigh_l", "calf_l", "foot_l", "thigh_r", "hand_r",
+            "pelvis",
+            "spine_01",
+            "spine_02",
+            "spine_03",
+            "head",
+            "clavicle_l",
+            "upperarm_l",
+            "lowerarm_l",
+            "hand_l",
+            "thigh_l",
+            "calf_l",
+            "foot_l",
+            "thigh_r",
+            "hand_r",
         ] {
-            assert!(names.contains(n), "canonical bone '{n}' present after rename (unmapped: {:?})", report.unmapped);
+            assert!(
+                names.contains(n),
+                "canonical bone '{n}' present after rename (unmapped: {:?})",
+                report.unmapped
+            );
         }
         // Parents stay valid after any drop/compaction.
         let nb = model.bones.len() as i32;
-        assert!(model.bones.iter().all(|b| b.parent == -1 || (b.parent >= 0 && b.parent < nb)));
+        assert!(model
+            .bones
+            .iter()
+            .all(|b| b.parent == -1 || (b.parent >= 0 && b.parent < nb)));
         // Joints still valid after re-index.
         let nbu = model.bones.len() as u32;
-        assert!(model.vertices.iter().all(|v| v.joints.iter().all(|&j| j < nbu)));
+        assert!(model
+            .vertices
+            .iter()
+            .all(|v| v.joints.iter().all(|&j| j < nbu)));
     }
 }

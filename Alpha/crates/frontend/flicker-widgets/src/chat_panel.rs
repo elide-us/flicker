@@ -99,7 +99,11 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     let sty = |leaf: &str| format!("{}.{}", view.style, leaf);
 
     // ── title bar (also the drag-to-move grip) ──
-    let mut title = text_node(&format!("⬥  {}", display_channel(view.active)), &sty("title_color"), 16.0);
+    let mut title = text_node(
+        &format!("⬥  {}", display_channel(view.active)),
+        &sty("title_color"),
+        16.0,
+    );
     set_txt(&mut title, "font", "display");
     title.grow = Some(1.0);
     let mut titlebar = styled("row", &sty("titlebar"));
@@ -114,8 +118,12 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     set_txt(&mut tabs, "tab_active", &sty("tab_active"));
     set_txt(&mut tabs, "tab_idle", &sty("tab_idle"));
     tabs.grow = Some(1.0);
-    tabs.children =
-        view.channels.iter().enumerate().map(|(i, c)| tab_child(i, &display_channel(c))).collect();
+    tabs.children = view
+        .channels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| tab_child(i, &display_channel(c)))
+        .collect();
     let mut tabrow = elem("row");
     tabrow.height = Some(TAB_H);
     tabrow.gap = 4.0;
@@ -130,7 +138,11 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     scroll.bind = Some("chat_scroll".to_string());
     scroll.grow = Some(1.0);
     scroll.gap = 2.0;
-    scroll.children = view.lines.iter().map(|l| line_node(l, &sty(l.kind.style_leaf()))).collect();
+    scroll.children = view
+        .lines
+        .iter()
+        .map(|l| line_node(l, &sty(l.kind.style_leaf())))
+        .collect();
     let mut logwell = styled("cell", &sty("log"));
     logwell.grow = Some(1.0);
     logwell.pad = 8.0;
@@ -142,7 +154,11 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     roster.gap = 2.0;
     roster.children = {
         let mut rows = Vec::with_capacity(view.roster.len() + 1);
-        let mut head = text_node(&format!("PRESENT · {}", view.roster.len()), &sty("roster_head"), 11.0);
+        let mut head = text_node(
+            &format!("PRESENT · {}", view.roster.len()),
+            &sty("roster_head"),
+            11.0,
+        );
         set_txt(&mut head, "font", "label");
         head.height = Some(ROSTER_ROW_H);
         rows.push(head);
@@ -161,14 +177,22 @@ pub fn chat_panel(x: f32, y: f32, w: f32, h: f32, view: &ChatView) -> UiNode {
     let mut field = styled("text_field", &sty("input"));
     field.id = "chat_input".to_string();
     field.bind = Some("chat_input".to_string());
-    set_txt(&mut field, "placeholder", &format!("Speak in ⬥ {}…", display_channel(view.active)));
+    set_txt(
+        &mut field,
+        "placeholder",
+        &format!("Speak in ⬥ {}…", display_channel(view.active)),
+    );
     field.grow = Some(1.0);
     let mut inputrow = styled("row", &sty("input_bar"));
     inputrow.height = Some(INPUT_H);
     inputrow.pad_x = Some(PAD);
     inputrow.pad_y = Some(4.0);
     inputrow.gap = GAP;
-    inputrow.children = vec![speaker, field, button(&sty("btn"), "chat_send", "Send", SEND_W)];
+    inputrow.children = vec![
+        speaker,
+        field,
+        button(&sty("btn"), "chat_send", "Send", SEND_W),
+    ];
 
     // ── chrome column (fills the frame) ──
     let mut col = elem("cell");
@@ -316,13 +340,30 @@ mod tests {
     fn builds_expected_tree_shape() {
         let channels = vec!["#general".to_string(), "#trade".to_string()];
         let lines = vec![
-            ChatLineView { kind: ChatLineKind::Joined, text: "◈ ann joined".into() },
-            ChatLineView { kind: ChatLineKind::You, text: "me  hi there".into() },
-            ChatLineView { kind: ChatLineKind::Emote, text: "✦ ann waves".into() },
+            ChatLineView {
+                kind: ChatLineKind::Joined,
+                text: "◈ ann joined".into(),
+            },
+            ChatLineView {
+                kind: ChatLineKind::You,
+                text: "me  hi there".into(),
+            },
+            ChatLineView {
+                kind: ChatLineKind::Emote,
+                text: "✦ ann waves".into(),
+            },
         ];
         let roster = vec![
-            RosterEntry { label: "ann".into(), op: true, you: false },
-            RosterEntry { label: "me".into(), op: false, you: true },
+            RosterEntry {
+                label: "ann".into(),
+                op: true,
+                you: false,
+            },
+            RosterEntry {
+                label: "me".into(),
+                op: false,
+                you: true,
+            },
         ];
         let view = ChatView {
             style: "pocclusters.chat",
@@ -392,11 +433,24 @@ mod tests {
 
         let channels = vec!["#general".to_string(), "#trade".to_string()];
         let lines = vec![
-            ChatLineView { kind: ChatLineKind::Joined, text: "◈ ann joined".into() },
-            ChatLineView { kind: ChatLineKind::Say, text: "ann   hello".into() },
-            ChatLineView { kind: ChatLineKind::Emote, text: "✦ ann waves".into() },
+            ChatLineView {
+                kind: ChatLineKind::Joined,
+                text: "◈ ann joined".into(),
+            },
+            ChatLineView {
+                kind: ChatLineKind::Say,
+                text: "ann   hello".into(),
+            },
+            ChatLineView {
+                kind: ChatLineKind::Emote,
+                text: "✦ ann waves".into(),
+            },
         ];
-        let roster = vec![RosterEntry { label: "ann".into(), op: true, you: false }];
+        let roster = vec![RosterEntry {
+            label: "ann".into(),
+            op: true,
+            you: false,
+        }];
         let view = ChatView {
             style: "pocclusters.chat",
             active: "#general",
@@ -424,7 +478,10 @@ mod tests {
         };
         let mut state = UiState::new();
         let frame = run_ui(&tree, &model, &styles, &input, &mut state);
-        assert!(!frame.commands.is_empty(), "the chat panel should emit draw commands");
+        assert!(
+            !frame.commands.is_empty(),
+            "the chat panel should emit draw commands"
+        );
     }
 
     /// **A channel tab reports its INDEX.** The strip's selection channel is a number
@@ -466,7 +523,15 @@ mod tests {
             &click,
             &mut UiState::new(),
         );
-        assert_eq!(f.results.number("chat_tab"), Some(1.0), "the second tab selects index 1");
-        assert_eq!(f.results.text("chat_tab"), None, "a tab selection is never text");
+        assert_eq!(
+            f.results.number("chat_tab"),
+            Some(1.0),
+            "the second tab selects index 1"
+        );
+        assert_eq!(
+            f.results.text("chat_tab"),
+            None,
+            "a tab selection is never text"
+        );
     }
 }

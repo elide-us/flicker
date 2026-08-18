@@ -175,7 +175,10 @@ mod tests {
             );
             hexes += 1;
         }
-        assert!(hexes >= 15, "expected a populated interior, got {hexes} hexes");
+        assert!(
+            hexes >= 15,
+            "expected a populated interior, got {hexes} hexes"
+        );
     }
 
     #[test]
@@ -216,10 +219,17 @@ mod tests {
         }
         let mean = sum / hex_areas.len() as f32;
         // The pentagon is genuinely smaller than a hex (five wedges, not six).
-        assert!(p.area[0] > 0.0 && p.area[0] < mean, "pentagon should be smaller");
+        assert!(
+            p.area[0] > 0.0 && p.area[0] < mean,
+            "pentagon should be smaller"
+        );
         // The equal-area map holds these together; the residual is Snyder's
         // vertex-ray crease (see `crate::isea`), not the projection drifting.
-        assert!(hi / lo < 1.10, "interior hex area spread too wide: {}", hi / lo);
+        assert!(
+            hi / lo < 1.10,
+            "interior hex area spread too wide: {}",
+            hi / lo
+        );
     }
 
     #[test]

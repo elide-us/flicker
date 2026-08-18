@@ -29,8 +29,12 @@ pub enum PackKind {
 }
 
 impl PackKind {
-    pub const ALL: [PackKind; 4] =
-        [PackKind::Locomotion, PackKind::Weapon, PackKind::Ability, PackKind::Creature];
+    pub const ALL: [PackKind; 4] = [
+        PackKind::Locomotion,
+        PackKind::Weapon,
+        PackKind::Ability,
+        PackKind::Creature,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -228,14 +232,19 @@ mod tests {
 
     fn content_root() -> PathBuf {
         // crates/flicker-loomforge/src → repo root → Alpha/content/package/characters
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/package/characters")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../content/package/characters")
     }
 
     #[test]
     fn display_name_drops_the_double_extension() {
-        assert_eq!(pack_display_name(Path::new("a/b/Katanami.pack.json")), "Katanami");
-        assert_eq!(pack_skeleton(Path::new("a/katanami/Katanami.pack.json")), "katanami");
+        assert_eq!(
+            pack_display_name(Path::new("a/b/Katanami.pack.json")),
+            "Katanami"
+        );
+        assert_eq!(
+            pack_skeleton(Path::new("a/katanami/Katanami.pack.json")),
+            "katanami"
+        );
     }
 
     #[test]
@@ -245,7 +254,10 @@ mod tests {
             return; // content tree not present in this checkout
         }
         let packs = scan_packs(&root);
-        assert!(!packs.is_empty(), "the content tree ships at least one .pack.json");
+        assert!(
+            !packs.is_empty(),
+            "the content tree ships at least one .pack.json"
+        );
         // Every entry is real: a name, a skeleton, and at least one state.
         for p in &packs {
             assert!(!p.name.is_empty());

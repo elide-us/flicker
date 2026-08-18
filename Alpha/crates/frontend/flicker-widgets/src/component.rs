@@ -298,15 +298,17 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
-    /// Pane LOCK — the nav-tier contract (MCP 1B5F6BB8, superseding 0EFF5464). `None`
-    /// while NAVIGATING between panes (the LEFT STICK cycles containers, the d-pad no-ops
-    /// on a container); once a `Confirm` ENTERS the focused pane this holds that pane's
-    /// `tab_group`, focus drops to its lowest-ordinal interior, and the d-pad becomes the
-    /// in-pane cursor while the left stick belongs to the pane's interior (its viewport
-    /// camera). `Cancel` exits one level (unlock + refocus the container); a mouse click
-    /// clears it (pointer modality). The container panel whose `id` equals this group
-    /// wears the gold lock rim.
-    pub(crate) entered_group: Option<String>,
+    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8), NESTED per Aaron's
+    /// 2026-08-15 ruling: panels and subpanels are one mechanism at depth. Empty
+    /// while NAVIGATING between top-tier panes (the LEFT STICK cycles containers,
+    /// the d-pad no-ops on a container); each `Confirm` on a focused container
+    /// PUSHES its id and drops focus to its lowest-ordinal interior — so entering
+    /// the rack scopes the ring to its voice rows, and entering a row scopes it to
+    /// that row's controls. `Cancel` pops exactly ONE level and refocuses the
+    /// popped container (B never skips); a mouse click clears the whole stack
+    /// (pointer modality). The container whose `id` is the TOP of the stack wears
+    /// the gold lock rim; scenes gate viewport cameras on that top entry.
+    pub(crate) entered: Vec<String>,
     /// Live press-feedback flashes, `action/result name → intensity 0..1`
     /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
     /// click … Even if it does nothing, the visual cue is important UX"* — and
@@ -356,18 +358,20 @@ impl UiState {
         self.focus.as_deref()
     }
 
-    /// Whether a pane is currently LOCKED (entered) — `true` once a `Confirm` has entered
-    /// the focused pane. Bool-compatible shim over [`entered_group`](Self::entered_group).
+    /// Whether any pane is currently LOCKED (entered) — `true` once a `Confirm` has
+    /// entered a container. Bool shim over the enter stack.
     pub fn entered(&self) -> bool {
-        self.entered_group.is_some()
+        !self.entered.is_empty()
     }
 
-    /// The `tab_group` of the pane currently LOCKED (entered), or `None` while navigating
-    /// between panes (MCP 1B5F6BB8). The container panel whose `id` equals this group
-    /// wears the gold lock rim; a multi-pane scene gates its viewport camera on this
-    /// (the pane id it feeds), so highlighting a pane no longer implies its input.
+    /// The INNERMOST entered pane (the top of the enter stack), or `None` while
+    /// navigating between panes (MCP 1B5F6BB8). The container whose `id` equals
+    /// this wears the gold lock rim; a multi-pane scene gates its viewport camera
+    /// on this (the pane id it feeds), so highlighting a pane never implies its
+    /// input. Nested entries report the DEEPEST level — the one the d-pad ring is
+    /// scoped to.
     pub fn entered_group(&self) -> Option<&str> {
-        self.entered_group.as_deref()
+        self.entered.last().map(String::as_str)
     }
 
     /// Programmatically give keyboard focus to a `text_field` by its node `id` —
@@ -407,7 +411,10 @@ impl UiState {
 
     /// The current intensity of `key`'s flash — `0.0` when not lit.
     pub fn flash_intensity(&self, key: &str) -> f32 {
-        self.flashes.iter().find(|(k, _)| k == key).map_or(0.0, |(_, v)| *v)
+        self.flashes
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or(0.0, |(_, v)| *v)
     }
 
     /// Record a pad nudge for the focused slider `id` (`dir` +1 toward max,
@@ -531,10 +538,13 @@ impl UiFrame {
     /// fills), so it lives here rather than as a find/map dance every scene
     /// repeats and one of them eventually gets subtly wrong.
     pub fn rtt_rect(&self, id: &str) -> Option<flicker_render::Rect> {
-        self.rtts.iter().find(|s| s.id == id).map(|s| flicker_render::Rect {
-            pos: Vec2::new(s.x, s.y),
-            size: Vec2::new(s.w, s.h),
-        })
+        self.rtts
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| flicker_render::Rect {
+                pos: Vec2::new(s.x, s.y),
+                size: Vec2::new(s.w, s.h),
+            })
     }
 
     /// The rect the layout RESOLVED for the id'd node this frame — any node,
@@ -543,10 +553,13 @@ impl UiFrame {
     /// cannot be seen or clicked, which is exactly what a surface gate asserts
     /// against.
     pub fn rect(&self, id: &str) -> Option<flicker_render::Rect> {
-        self.rects.iter().find(|(n, _)| n == id).map(|(_, r)| flicker_render::Rect {
-            pos: Vec2::new(r[0], r[1]),
-            size: Vec2::new(r[2], r[3]),
-        })
+        self.rects
+            .iter()
+            .find(|(n, _)| n == id)
+            .map(|(_, r)| flicker_render::Rect {
+                pos: Vec2::new(r[0], r[1]),
+                size: Vec2::new(r[2], r[3]),
+            })
     }
 }
 
@@ -628,9 +641,23 @@ pub fn run_ui(
     input: &UiInput,
     state: &mut UiState,
 ) -> UiFrame {
-    let screen = Rect { x: 0.0, y: 0.0, w: input.screen.x, h: input.screen.y };
+    let screen = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: input.screen.x,
+        h: input.screen.y,
+    };
     let mut placed = Vec::new();
-    resolve(tree, screen, model, 0.0, 1.0, None, child_key(0, tree, 0), &mut placed);
+    resolve(
+        tree,
+        screen,
+        model,
+        0.0,
+        1.0,
+        None,
+        child_key(0, tree, 0),
+        &mut placed,
+    );
 
     // Hit-test pass: fold events + value edits into `results`, drag into `state`.
     let mut results = ValueMap::new();
@@ -639,10 +666,12 @@ pub fn run_ui(
     // that lands in a text_field re-establishes it in that field's hit arm below.
     if input.clicked {
         state.focus = None;
-        // A click is pointer modality — it also drops any pane LOCK (nav-tier contract
-        // 1B5F6BB8), so `PanelNext` revives and the next `Cancel` pops the scene rather
-        // than being eaten as a pane exit (the click-wedge defect).
-        state.entered_group = None;
+        // A click is pointer modality — it also drops the WHOLE pane enter stack
+        // (nav-tier contract 1B5F6BB8), so `PanelNext` revives and the next `Cancel`
+        // pops the scene rather than being eaten as pane exits (the click-wedge
+        // defect). Popping one level per click would strand the pad mid-hierarchy
+        // the pointer never sees.
+        state.entered.clear();
     }
     // Capture release is a GENERIC rule: everything captured (slider drags) lets go
     // the frame the button is up, before any hit runs — so the release frame already
@@ -736,7 +765,10 @@ pub fn run_ui(
     // (see `DrawCache`) — the ratified bounded-dispatch rule. The cache is moved out of
     // `state` for the pass so the per-node draw can keep borrowing `state` immutably.
     let mut commands = Vec::new();
-    let mut stats = UiStats { nodes: placed.len() as u32, ..UiStats::default() };
+    let mut stats = UiStats {
+        nodes: placed.len() as u32,
+        ..UiStats::default()
+    };
     let mut cache = std::mem::take(&mut state.cache);
     cache.frame = cache.frame.wrapping_add(1);
     let frame = cache.frame;
@@ -764,7 +796,15 @@ pub fn run_ui(
         let replay = match cache.entries.get(&p.key) {
             Some(e) => {
                 node_fingerprint(
-                    p, st, styles, &e.read_keys, model, &results, input, state, hot_matters,
+                    p,
+                    st,
+                    styles,
+                    &e.read_keys,
+                    model,
+                    &results,
+                    input,
+                    state,
+                    hot_matters,
                 ) == e.fingerprint
             }
             None => false,
@@ -785,8 +825,17 @@ pub fn run_ui(
         // here rather than reused because a tree rebuilt from scratch each frame (the
         // Loomforge bench, the chat panel) may hand this identity different props.
         let read_keys = read_keys_of(p.node);
-        let fp =
-            node_fingerprint(p, st, styles, &read_keys, model, &results, input, state, hot_matters);
+        let fp = node_fingerprint(
+            p,
+            st,
+            styles,
+            &read_keys,
+            model,
+            &results,
+            input,
+            state,
+            hot_matters,
+        );
         let start = commands.len();
         let props = draw_node(p, model, &results, styles, input, state, &mut commands);
         // Lift this node's commands onto its sub-layer. Within one layer the 2D
@@ -820,7 +869,9 @@ pub fn run_ui(
     // the live tree — a screen that toggles between two panels should keep both cached,
     // while a tree that structurally churns must not leak.
     if cache.entries.len() > 2 * placed.len().max(16) {
-        cache.entries.retain(|_, e| frame.wrapping_sub(e.touched) < 120);
+        cache
+            .entries
+            .retain(|_, e| frame.wrapping_sub(e.touched) < 120);
     }
     state.cache = cache;
     // Restore the full frame after a trailing clipped run so nothing downstream inherits it.
@@ -838,7 +889,10 @@ pub fn run_ui(
             continue;
         }
         let Some(source) = ptext(p.node, "source") else {
-            tracing::warn!("rtt node {:?} has no `source` prop — slot skipped", p.node.id);
+            tracing::warn!(
+                "rtt node {:?} has no `source` prop — slot skipped",
+                p.node.id
+            );
             continue;
         };
         let st = style_of(p.node, styles);
@@ -881,19 +935,33 @@ pub fn run_ui(
     // step. A nudge for a hidden, vanished or DISABLED control steps nothing — drained
     // either way, so stale presses never accumulate.
     for (id, dir, coarse) in std::mem::take(&mut state.nudges) {
-        let Some(p) = placed.iter().find(|p| p.node.id == id) else { continue };
+        let Some(p) = placed.iter().find(|p| p.node.id == id) else {
+            continue;
+        };
         if !enabled(p.node, model) {
             continue; // an unwired / preview control is pad-inert, as it is click-inert
         }
-        let Some(bind) = p.node.bind.as_deref() else { continue };
+        let Some(bind) = p.node.bind.as_deref() else {
+            continue;
+        };
         match p.node.component.as_str() {
             "slider" => {
                 let min = pnum(p.node, "min").unwrap_or(0.0);
                 let max = pnum(p.node, "max").unwrap_or(1.0);
                 let fine = pnum(p.node, "step").unwrap_or(1.0);
-                let step = if coarse { pnum(p.node, "step_coarse").unwrap_or(fine * 10.0) } else { fine };
-                let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(min);
-                results.set(bind.to_string(), (cur + f64::from(dir) * step).clamp(min, max));
+                let step = if coarse {
+                    pnum(p.node, "step_coarse").unwrap_or(fine * 10.0)
+                } else {
+                    fine
+                };
+                let cur = results
+                    .number(bind)
+                    .or_else(|| model.number(bind))
+                    .unwrap_or(min);
+                results.set(
+                    bind.to_string(),
+                    (cur + f64::from(dir) * step).clamp(min, max),
+                );
             }
             // A `select` / `pill_toggle` steps its 0-based INDEX by ±1, CLAMPED to its own
             // children count (no wrap — a linear picker never jumps end-to-end, Aaron
@@ -903,8 +971,14 @@ pub fn run_ui(
                 if len <= 0.0 {
                     continue;
                 }
-                let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0);
-                results.set(bind.to_string(), (cur + f64::from(dir)).clamp(0.0, len - 1.0));
+                let cur = results
+                    .number(bind)
+                    .or_else(|| model.number(bind))
+                    .unwrap_or(0.0);
+                results.set(
+                    bind.to_string(),
+                    (cur + f64::from(dir)).clamp(0.0, len - 1.0),
+                );
             }
             // A `toggle`: Right sets on, Left sets off, Confirm (`dir == 0`) flips — the
             // same bool a click writes (`bool_pick`).
@@ -947,12 +1021,17 @@ pub fn run_ui(
                 (_, Some(n)) if n == name => -1.0,
                 _ => continue,
             };
-            let Some(bind) = p.node.bind.as_deref() else { continue };
+            let Some(bind) = p.node.bind.as_deref() else {
+                continue;
+            };
             let len = p.node.children.len() as f64;
             if len <= 0.0 {
                 continue;
             }
-            let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0);
+            let cur = results
+                .number(bind)
+                .or_else(|| model.number(bind))
+                .unwrap_or(0.0);
             // CLAMP at the ends — next stops on the last entry, prev on the first; a
             // linear rail must NOT wrap (right→leftmost / left→rightmost is an
             // unexpected-UX anti-pattern, Aaron 2026-08-12).
@@ -977,13 +1056,23 @@ pub fn run_ui(
     if state.nav_mode() {
         if let Some(focus) = state.focused().map(str::to_string) {
             if let Some(list) = scroll_list_of(tree, &focus) {
-                let find = |id: &str| rects.iter().find(|(rid, _)| rid.as_str() == id).map(|(_, r)| *r);
-                if let (Some(lr), Some(fr), Some(bind)) = (find(&list.id), find(&focus), list.bind.as_deref()) {
+                let find = |id: &str| {
+                    rects
+                        .iter()
+                        .find(|(rid, _)| rid.as_str() == id)
+                        .map(|(_, r)| *r)
+                };
+                if let (Some(lr), Some(fr), Some(bind)) =
+                    (find(&list.id), find(&focus), list.bind.as_deref())
+                {
                     let py = pad_y(list);
                     let vy = lr[1] + py; // viewport top (the list's inner)
                     let vh = (lr[3] - 2.0 * py).max(0.0);
                     let max = (scroll_content_h(list, model) - vh).max(0.0);
-                    let cur = results.number(bind).or_else(|| model.number(bind)).unwrap_or(0.0) as f32;
+                    let cur = results
+                        .number(bind)
+                        .or_else(|| model.number(bind))
+                        .unwrap_or(0.0) as f32;
                     let (ftop, fbot) = (fr[1], fr[1] + fr[3]);
                     let mut off = cur;
                     if ftop < vy {
@@ -1010,7 +1099,13 @@ pub fn run_ui(
         }
     }
 
-    UiFrame { commands, results, rtts, rects, stats }
+    UiFrame {
+        commands,
+        results,
+        rtts,
+        rects,
+        stats,
+    }
 }
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -1034,7 +1129,15 @@ fn resolve<'a>(
     let layer = layer + pnum(node, "layer").map(|n| n as f32).unwrap_or(0.0);
     // `faded` accumulates the same way: a faded container dims its whole subtree.
     let fade = fade * node_fade(node, model);
-    out.push(Placed { node, rect, enabled: enabled(node, model), layer, fade, clip, key });
+    out.push(Placed {
+        node,
+        rect,
+        enabled: enabled(node, model),
+        layer,
+        fade,
+        clip,
+        key,
+    });
     if node.children.is_empty() || no_descend(&node.component) {
         return;
     }
@@ -1059,7 +1162,12 @@ fn resolve<'a>(
             // its edge gets shaved by the viewport clip.
             let gutter = pnum(node, "gutter").map(|n| n as f32).unwrap_or(16.0);
             let view_w = (inner.w - gutter).max(0.0);
-            let content = Rect { x: inner.x, y: inner.y - offset, w: view_w, h: content_h };
+            let content = Rect {
+                x: inner.x,
+                y: inner.y - offset,
+                w: view_w,
+                h: content_h,
+            };
             let view = Some([inner.x, inner.y, view_w, inner.h]);
             flow(node, content, model, layer, fade, view, key, out, false);
         }
@@ -1085,10 +1193,29 @@ fn resolve<'a>(
         "popup_panel" => {
             let c = popup_chrome(node, rect);
             let mut y = c.items_top;
-            for (i, child) in node.children.iter().enumerate().filter(|(_, c)| visible(c, model)) {
+            for (i, child) in node
+                .children
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| visible(c, model))
+            {
                 let mh = child_main(child, model, false);
-                let r = Rect { x: c.inner_x, y, w: c.inner_w, h: mh };
-                resolve(child, r, model, layer, fade, clip, child_key(key, child, i), out);
+                let r = Rect {
+                    x: c.inner_x,
+                    y,
+                    w: c.inner_w,
+                    h: mh,
+                };
+                resolve(
+                    child,
+                    r,
+                    model,
+                    layer,
+                    fade,
+                    clip,
+                    child_key(key, child, i),
+                    out,
+                );
                 y += mh + c.items_gap;
             }
         }
@@ -1110,19 +1237,67 @@ fn resolve<'a>(
                     "tabs" if !tabs_done => {
                         tabs_done = true;
                         if let Some(rail) = lay.page_rail {
-                            resolve(child, rail, model, layer, fade, clip, child_key(key, child, i), out);
+                            resolve(
+                                child,
+                                rail,
+                                model,
+                                layer,
+                                fade,
+                                clip,
+                                child_key(key, child, i),
+                                out,
+                            );
                         }
                     }
                     "pill_toggle" if !pills_done => {
                         pills_done = true;
                         if let Some(pill) = lay.tab_pill {
-                            resolve(child, pill, model, layer, fade, clip, child_key(key, child, i), out);
+                            resolve(
+                                child,
+                                pill,
+                                model,
+                                layer,
+                                fade,
+                                clip,
+                                child_key(key, child, i),
+                                out,
+                            );
                         }
                     }
                     _ => content.push((i, child)),
                 }
             }
-            flow_kids(node, &content, lay.content, model, layer, fade, clip, key, out, false);
+            flow_kids(
+                node,
+                &content,
+                lay.content,
+                model,
+                layer,
+                fade,
+                clip,
+                key,
+                out,
+                false,
+            );
+        }
+        // The nav footer: `option` children are LEGEND chrome the component draws
+        // (never placed); every other child is the right-aligned BUTTON CLUSTER,
+        // placed at the band rects keyed by its original sibling index.
+        "nav_footer" => {
+            let lay = footer_layout(node, rect, model);
+            for (i, r) in lay.cluster {
+                let child = &node.children[i];
+                resolve(
+                    child,
+                    r,
+                    model,
+                    layer,
+                    fade,
+                    clip,
+                    child_key(key, child, i),
+                    out,
+                );
+            }
         }
         // page / stack / anything else: overlay children, each placed by its own anchor.
         _ => {
@@ -1173,9 +1348,15 @@ fn flow<'a>(
 ) {
     // Carry each visible child's index among ALL siblings, so its cache key is stable
     // when a sibling above it hides.
-    let kids: Vec<(usize, &UiNode)> =
-        node.children.iter().enumerate().filter(|(_, c)| visible(c, model)).collect();
-    flow_kids(node, &kids, area, model, layer, fade, clip, key, out, horizontal);
+    let kids: Vec<(usize, &UiNode)> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| visible(c, model))
+        .collect();
+    flow_kids(
+        node, &kids, area, model, layer, fade, clip, key, out, horizontal,
+    );
 }
 
 /// The flow engine over an EXPLICIT (index, child) list — so a composite that owns a
@@ -1248,9 +1429,19 @@ fn flow_kids<'a>(
             _ => (cross_full, 0.0),
         };
         let r = if horizontal {
-            Rect { x: pos, y: area.y + cross_off, w: len, h: cross_len }
+            Rect {
+                x: pos,
+                y: area.y + cross_off,
+                w: len,
+                h: cross_len,
+            }
         } else {
-            Rect { x: area.x + cross_off, y: pos, w: cross_len, h: len }
+            Rect {
+                x: area.x + cross_off,
+                y: pos,
+                w: cross_len,
+                h: len,
+            }
         };
         resolve(c, r, model, layer, fade, clip, child_key(key, c, *i), out);
         pos += len + node.gap;
@@ -1266,7 +1457,12 @@ fn flow_kids<'a>(
 fn scroll_content_h(node: &UiNode, model: &ValueMap) -> f32 {
     let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
     let gaps = node.gap * kids.len().saturating_sub(1) as f32;
-    pad_y(node) * 2.0 + gaps + kids.iter().map(|c| child_main(c, model, false)).sum::<f32>()
+    pad_y(node) * 2.0
+        + gaps
+        + kids
+            .iter()
+            .map(|c| child_main(c, model, false))
+            .sum::<f32>()
 }
 
 /// The nearest `list` ANCESTOR (one carrying a scroll `bind`) of `target` in `tree`, if any
@@ -1362,11 +1558,16 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
     match node.component.as_str() {
         "row" => {
             let w = node.width.unwrap_or_else(|| {
-                pad_x(node) * 2.0 + gaps + kids.iter().map(|c| child_main(c, model, true)).sum::<f32>()
+                pad_x(node) * 2.0
+                    + gaps
+                    + kids.iter().map(|c| child_main(c, model, true)).sum::<f32>()
             });
             let h = node.height.unwrap_or_else(|| {
                 pad_y(node) * 2.0
-                    + kids.iter().map(|c| child_cross(c, model, true)).fold(0.0, f32::max)
+                    + kids
+                        .iter()
+                        .map(|c| child_cross(c, model, true))
+                        .fold(0.0, f32::max)
             });
             Vec2::new(w, h)
         }
@@ -1374,11 +1575,17 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
             let h = node.height.unwrap_or_else(|| {
                 pad_y(node) * 2.0
                     + gaps
-                    + kids.iter().map(|c| child_main(c, model, false)).sum::<f32>()
+                    + kids
+                        .iter()
+                        .map(|c| child_main(c, model, false))
+                        .sum::<f32>()
             });
             let w = node.width.unwrap_or_else(|| {
                 pad_x(node) * 2.0
-                    + kids.iter().map(|c| child_cross(c, model, false)).fold(0.0, f32::max)
+                    + kids
+                        .iter()
+                        .map(|c| child_cross(c, model, false))
+                        .fold(0.0, f32::max)
             });
             Vec2::new(w, h)
         }
@@ -1386,9 +1593,18 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
             // Overlay container: hug the largest child (so a styled panel sizes to
             // its content column while corner decorations anchor to its edges),
             // unless an explicit width/height/size overrides.
-            let cw = kids.iter().map(|c| measure(c, model).x).fold(0.0_f32, f32::max);
-            let ch = kids.iter().map(|c| measure(c, model).y).fold(0.0_f32, f32::max);
-            Vec2::new(node.width.or(node.size).unwrap_or(cw), node.height.or(node.size).unwrap_or(ch))
+            let cw = kids
+                .iter()
+                .map(|c| measure(c, model).x)
+                .fold(0.0_f32, f32::max);
+            let ch = kids
+                .iter()
+                .map(|c| measure(c, model).y)
+                .fold(0.0_f32, f32::max);
+            Vec2::new(
+                node.width.or(node.size).unwrap_or(cw),
+                node.height.or(node.size).unwrap_or(ch),
+            )
         }
         // A content-sized / nested grid must report a real intrinsic box (auto
         // tracks sum from their cells); without this arm it would collapse to the
@@ -1399,10 +1615,25 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
         // Shares [`popup_chrome`] with resolve/draw so the reserved space can never drift.
         "popup_panel" => {
             let w = pnum(node, "panel_w").unwrap_or(404.0) as f32;
-            let c = popup_chrome(node, Rect { x: 0.0, y: 0.0, w, h: 0.0 });
-            let items: f32 = kids.iter().map(|k| child_main(k, model, false)).sum::<f32>()
+            let c = popup_chrome(
+                node,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w,
+                    h: 0.0,
+                },
+            );
+            let items: f32 = kids
+                .iter()
+                .map(|k| child_main(k, model, false))
+                .sum::<f32>()
                 + c.items_gap * kids.len().saturating_sub(1) as f32;
-            let footer = if c.has_footer { c.gap + text_line_h(c.footer_size) } else { 0.0 };
+            let footer = if c.has_footer {
+                c.gap + text_line_h(c.footer_size)
+            } else {
+                0.0
+            };
             // `items_top` (relative to y=0) already carries the top pad + title block +
             // the gap before the items; the footer block and bottom pad close it out.
             let h = node.height.unwrap_or(c.items_top + items + footer + c.pad);
@@ -1440,6 +1671,25 @@ fn measure(node: &UiNode, model: &ValueMap) -> Vec2 {
                 .or(if square { ladder.map(|l| l.h) } else { None })
                 .unwrap_or(0.0);
             Vec2::new(w, h)
+        }
+        // The nav-footer band hugs its tallest CLUSTER child (a button's DS ladder rung
+        // under the author's hand) plus the vertical pad — the bench-footer height
+        // without a hand-carried number. `option` children are legend chrome and take
+        // no part. Explicit height (or `size`, the main extent in a vertical parent)
+        // wins; width stays explicit/stretch — a footer fills its parent's cross axis.
+        "nav_footer" => {
+            let tallest = kids
+                .iter()
+                .filter(|c| c.component != "option")
+                .map(|c| child_cross(c, model, true))
+                .fold(0.0_f32, f32::max);
+            let content = if tallest > 0.0 { tallest } else { SIZE_MD.h };
+            Vec2::new(
+                node.width.unwrap_or(0.0),
+                node.height
+                    .or(node.size)
+                    .unwrap_or(pad_y(node) * 2.0 + content),
+            )
         }
         _ => Vec2::new(
             node.width.or(node.size).unwrap_or(0.0),
@@ -1563,7 +1813,15 @@ fn child_placement(c: &UiNode, n_cols: usize) -> (Placement, bool) {
     let row = place_index(c, "row", 0);
     let col_span = place_index(c, "col_span", 1).max(1).min(n_cols.max(1));
     let row_span = place_index(c, "row_span", 1).max(1);
-    (Placement { col, row, col_span, row_span }, explicit)
+    (
+        Placement {
+            col,
+            row,
+            col_span,
+            row_span,
+        },
+        explicit,
+    )
 }
 
 /// Grow a `Vec<bool>` occupancy grid so it covers at least `rows` rows of `n_cols`.
@@ -1638,7 +1896,12 @@ fn place_children(kids: &[&UiNode], n_cols: usize) -> Vec<Placement> {
                         occ[r * n_cols + cc] = true;
                     }
                 }
-                places[i] = Some(Placement { col, row, col_span, row_span });
+                places[i] = Some(Placement {
+                    col,
+                    row,
+                    col_span,
+                    row_span,
+                });
                 cursor = row * n_cols + col + col_span;
                 break;
             }
@@ -1647,7 +1910,10 @@ fn place_children(kids: &[&UiNode], n_cols: usize) -> Vec<Placement> {
     }
 
     // Every slot was filled (Pass A explicit or Pass B auto-flow).
-    places.into_iter().map(|p| p.expect("every child placed")).collect()
+    places
+        .into_iter()
+        .map(|p| p.expect("every child placed"))
+        .collect()
 }
 
 /// Clone `rows_spec` and pad it to `n_rows` with the node's `auto_rows` sizing
@@ -1779,13 +2045,23 @@ fn grid_arrange<'a>(
     let cols = parse_tracks(ptext(node, "cols"));
     let rows_spec = parse_tracks(ptext(node, "rows"));
     // Sibling indices ride along for cache keying (see `child_key`).
-    let idx: Vec<usize> =
-        node.children.iter().enumerate().filter(|(_, c)| visible(c, model)).map(|(i, _)| i).collect();
+    let idx: Vec<usize> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| visible(c, model))
+        .map(|(i, _)| i)
+        .collect();
     let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
     let places = place_children(&kids, cols.len());
     // Implicit rows: auto-flow may reference rows past the spec — extend with
     // `auto_rows` so every placed row has a track to size and offset.
-    let n_rows = places.iter().map(|p| p.row + p.row_span).max().unwrap_or(0).max(rows_spec.len());
+    let n_rows = places
+        .iter()
+        .map(|p| p.row + p.row_span)
+        .max()
+        .unwrap_or(0)
+        .max(rows_spec.len());
     let rows = extend_rows(&rows_spec, n_rows, node);
     let col_gap = pnum(node, "col_gap").map(|n| n as f32).unwrap_or(node.gap);
     let row_gap = pnum(node, "row_gap").map(|n| n as f32).unwrap_or(node.gap);
@@ -1817,7 +2093,12 @@ fn grid_measure(node: &UiNode, model: &ValueMap) -> Vec2 {
     let rows_spec = parse_tracks(ptext(node, "rows"));
     let kids: Vec<&UiNode> = node.children.iter().filter(|c| visible(c, model)).collect();
     let places = place_children(&kids, cols.len());
-    let n_rows = places.iter().map(|p| p.row + p.row_span).max().unwrap_or(0).max(rows_spec.len());
+    let n_rows = places
+        .iter()
+        .map(|p| p.row + p.row_span)
+        .max()
+        .unwrap_or(0)
+        .max(rows_spec.len());
     let rows = extend_rows(&rows_spec, n_rows, node);
     let col_gap = pnum(node, "col_gap").map(|n| n as f32).unwrap_or(node.gap);
     let row_gap = pnum(node, "row_gap").map(|n| n as f32).unwrap_or(node.gap);
@@ -1829,12 +2110,12 @@ fn grid_measure(node: &UiNode, model: &ValueMap) -> Vec2 {
         .map(|i| track_intrinsic(&rows, i, &kids, &places, Axis::Row, model))
         .sum();
 
-    let w = node
-        .width
-        .unwrap_or_else(|| pad_x(node) * 2.0 + col_gap * cols.len().saturating_sub(1) as f32 + cols_w);
-    let h = node
-        .height
-        .unwrap_or_else(|| pad_y(node) * 2.0 + row_gap * rows.len().saturating_sub(1) as f32 + rows_h);
+    let w = node.width.unwrap_or_else(|| {
+        pad_x(node) * 2.0 + col_gap * cols.len().saturating_sub(1) as f32 + cols_w
+    });
+    let h = node.height.unwrap_or_else(|| {
+        pad_y(node) * 2.0 + row_gap * rows.len().saturating_sub(1) as f32 + rows_h
+    });
     Vec2::new(w, h)
 }
 
@@ -1866,7 +2147,10 @@ fn node_fade(node: &UiNode, model: &ValueMap) -> f32 {
         None => pbool(node, "faded"),
     };
     if faded {
-        pnum(node, "fade").map(|n| n as f32).unwrap_or(0.45).clamp(0.0, 1.0)
+        pnum(node, "fade")
+            .map(|n| n as f32)
+            .unwrap_or(0.45)
+            .clamp(0.0, 1.0)
     } else {
         1.0
     }
@@ -1967,8 +2251,13 @@ fn hit_node(
     // reports it, and the scene-owned canvas decides what the drop means.
     if input.clicked && p.enabled && state.drag.is_none() && r.contains(input.mouse) {
         if let Some(kind) = ptext(node, "drag_kind") {
-            let id = ptext(node, "drag_id").unwrap_or(node.id.as_str()).to_string();
-            state.drag = Some(DragPayload { kind: kind.to_string(), id });
+            let id = ptext(node, "drag_id")
+                .unwrap_or(node.id.as_str())
+                .to_string();
+            state.drag = Some(DragPayload {
+                kind: kind.to_string(),
+                id,
+            });
             *hud_hit = true;
         }
     }
@@ -2043,6 +2332,10 @@ fn hit_node(
                 // neighbouring rail's step name (read live off the rail child) — so the
                 // rail steps itself, exactly as the old hint button did.
                 "paged_menu" => hit_paged_menu(input.mouse, r, node, model, click),
+                // The nav footer: claims its band, and a legend-entry click fires the
+                // option's authored action (read live off the child) — the same shape
+                // as the PTT's gutters. Cluster children answer their own clicks.
+                "nav_footer" => hit_nav_footer(input.mouse, r, node, model, click),
                 _ => hit_checkbox(input.mouse, r, &props, click),
             };
             // ONE seam: a verdict touches state/results in exactly one place, so every
@@ -2124,7 +2417,12 @@ fn component_hit_props(
     styles: &Json,
 ) -> Json {
     let node = p.node;
-    let mut props = match state.cache.entries.get(&p.key).and_then(|e| e.props.clone()) {
+    let mut props = match state
+        .cache
+        .entries
+        .get(&p.key)
+        .and_then(|e| e.props.clone())
+    {
         Some(props) => props,
         None => {
             let st = resolve_style(node, styles, model, results);
@@ -2132,7 +2430,11 @@ fn component_hit_props(
         }
     };
     if let Json::Object(map) = &mut props {
-        match node.bind.as_deref().and_then(|b| eff_value(results, model, b)) {
+        match node
+            .bind
+            .as_deref()
+            .and_then(|b| eff_value(results, model, b))
+        {
             Some(v) => {
                 map.insert("bind_value".to_string(), value_to_json(v));
             }
@@ -2145,7 +2447,10 @@ fn component_hit_props(
             "open".to_string(),
             Json::Bool(!ident.is_empty() && state.open.as_deref() == Some(ident)),
         );
-        map.insert("captured".to_string(), Json::Bool(state.dragging.contains(ident)));
+        map.insert(
+            "captured".to_string(),
+            Json::Bool(state.dragging.contains(ident)),
+        );
         map.insert("wheel".to_string(), serde_json::json!(input.wheel));
     }
     props
@@ -2272,12 +2577,16 @@ fn fold_typed(
     if input.typed.is_empty() && !input.backspace {
         return;
     }
-    let Some(focus) = state.focus.as_deref().filter(|id| !id.is_empty()) else { return };
+    let Some(focus) = state.focus.as_deref().filter(|id| !id.is_empty()) else {
+        return;
+    };
     for p in placed {
         if p.node.id != focus || !p.enabled {
             continue;
         }
-        let Some(bind) = p.node.bind.as_deref() else { continue };
+        let Some(bind) = p.node.bind.as_deref() else {
+            continue;
+        };
         let mut text = eff_text(results, model, bind).unwrap_or("").to_string();
         text.push_str(&input.typed);
         if input.backspace {
@@ -2301,8 +2610,12 @@ fn fold_typed(
 /// NEW edit — re-stamps the entry.
 fn record_local(placed: &[Placed], model: &ValueMap, results: &ValueMap, state: &mut UiState) {
     for p in placed {
-        let Some(bind) = p.node.bind.as_deref() else { continue };
-        let Some(val) = results.get(bind) else { continue };
+        let Some(bind) = p.node.bind.as_deref() else {
+            continue;
+        };
+        let Some(val) = results.get(bind) else {
+            continue;
+        };
         let seen = model.get(bind);
         if seen == Some(val) {
             continue;
@@ -2310,7 +2623,9 @@ fn record_local(placed: &[Placed], model: &ValueMap, results: &ValueMap, state: 
         if matches!(state.local.get(bind), Some((held, _)) if held == val) {
             continue;
         }
-        state.local.insert(bind.to_string(), (val.clone(), seen.cloned()));
+        state
+            .local
+            .insert(bind.to_string(), (val.clone(), seen.cloned()));
     }
 }
 
@@ -2343,7 +2658,9 @@ fn echo_binds(placed: &[Placed], model: &ValueMap, results: &mut ValueMap) {
                 }
             }
         }
-        let Some(bind) = node.bind.as_deref() else { continue };
+        let Some(bind) = node.bind.as_deref() else {
+            continue;
+        };
         if results.get(bind).is_some() {
             continue;
         }
@@ -2362,10 +2679,13 @@ fn echo_binds(placed: &[Placed], model: &ValueMap, results: &mut ValueMap) {
                 // Which segment is selected is an INDEX — a number — so the echo
                 // reports a number, defaulting to the first child's numeric `value`
                 // (a strip always has one active tab).
-                let first = node.children.first().and_then(|c| match c.props.get("value") {
-                    Some(Value::Number(n)) => Some(*n),
-                    _ => None,
-                });
+                let first = node
+                    .children
+                    .first()
+                    .and_then(|c| match c.props.get("value") {
+                        Some(Value::Number(n)) => Some(*n),
+                        _ => None,
+                    });
                 if let Some(n) = model.number(bind).or(first) {
                     results.set(bind.to_string(), n);
                 }
@@ -2496,6 +2816,37 @@ fn node_fingerprint(
         }
     }
 
+    // A `nav_footer`'s chrome is laid from its CHILDREN's data — the legend options'
+    // glyph/label/size, each child's visibility (a dynamic button re-right-aligns the
+    // cluster and re-clips the legend), and a legend `label_bind`'s live text — none
+    // of which ride this node's own props, so they are folded by KIND exactly like
+    // `list` folds its content height.
+    if node.component == "nav_footer" {
+        let mut kids_fold = 0u64;
+        for (i, c) in node.children.iter().enumerate() {
+            let mut e = Fnv::new();
+            e.u64(i as u64);
+            e.bool(visible(c, model));
+            e.f32(c.size.unwrap_or(f32::NAN));
+            let mut props_fold = 0u64;
+            for (k, v) in &c.props {
+                let mut kv = Fnv::new();
+                kv.str(k);
+                kv.value(v);
+                props_fold ^= kv.finish();
+            }
+            e.u64(props_fold);
+            if let Some(k) = ptext(c, "label_bind") {
+                match eff_value(results, model, k) {
+                    Some(v) => e.value(v),
+                    None => e.u64(u64::MAX),
+                }
+            }
+            kids_fold ^= e.finish();
+        }
+        h.u64(kids_fold);
+    }
+
     // The node's own scalar props, order-independently (a HashMap has no stable order,
     // so each entry is hashed alone and the results XOR-folded).
     let mut props_fold = 0u64;
@@ -2512,7 +2863,16 @@ fn node_fingerprint(
     // `style_off`, a tab strip's active/idle pair, a text's `color`, a stage's `tint`,
     // a tooltip's `rune_color`) — plus `color_bind`, where the Model holds the path.
     h.json(st);
-    for key in ["style_off", "tab_active", "tab_idle", "glyph_style", "color", "tint", "rune_color", "runes_style"] {
+    for key in [
+        "style_off",
+        "tab_active",
+        "tab_idle",
+        "glyph_style",
+        "color",
+        "tint",
+        "rune_color",
+        "runes_style",
+    ] {
         if let Some(path) = ptext(node, key) {
             h.json(jpath(styles, path));
         }
@@ -2549,7 +2909,21 @@ fn node_fingerprint(
     // without this the cached FOCUSED (sapphire) commands would replay and the gold rim
     // never draw. `draw_panel` is the only reader and is a rust component (`hot_matters`).
     h.bool(hot_matters && !node.id.is_empty() && state.entered_group() == Some(node.id.as_str()));
-    let ident = if node.id.is_empty() { node.bind.as_deref() } else { Some(node.id.as_str()) };
+    // Styled STRUCTURAL containers (the window strips, subpanel rows) wear the
+    // pane states too (nested panes 2026-08-15) — fold both bits so their rims
+    // draw and undraw through the cache exactly like a panel's.
+    let structural_pane = !node.id.is_empty()
+        && matches!(
+            node.component.as_str(),
+            "cell" | "row" | "stack" | "screen" | "rtt" | "grid"
+        );
+    h.bool(structural_pane && state.focused() == Some(node.id.as_str()));
+    h.bool(structural_pane && state.entered_group() == Some(node.id.as_str()));
+    let ident = if node.id.is_empty() {
+        node.bind.as_deref()
+    } else {
+        Some(node.id.as_str())
+    };
     let open = ident.is_some() && state.open.as_deref() == ident;
     h.bool(open);
 
@@ -2611,8 +2985,18 @@ fn node_fingerprint(
 /// user text (a chat buffer) are never substituted. `pub(crate)` so the
 /// [`raw_display_literals`](crate::raw_display_literals) audit walks the SAME list
 /// (one vocabulary, never a drifting twin).
-pub(crate) const DISPLAY_STR_PROPS: [&str; 10] =
-    ["label", "text", "title", "subtitle", "footer", "placeholder", "hint", "name", "meta", "prefix"];
+pub(crate) const DISPLAY_STR_PROPS: [&str; 10] = [
+    "label",
+    "text",
+    "title",
+    "subtitle",
+    "footer",
+    "placeholder",
+    "hint",
+    "name",
+    "meta",
+    "prefix",
+];
 
 fn display_prop_json(key: &str, v: &Value) -> Json {
     match v {
@@ -2654,18 +3038,37 @@ fn component_props(
     // `*_bind` key is already in the fingerprint's read set. Binds the walker
     // consumes itself stay out so their stems keep walker semantics.
     const WALKER_BINDS: [&str; 10] = [
-        "text_bind", "label_bind", "visible_bind", "enabled_bind", "style_bind",
-        "color_bind", "live_bind", "rune_bind", "name_bind", "meta_bind",
+        "text_bind",
+        "label_bind",
+        "visible_bind",
+        "enabled_bind",
+        "style_bind",
+        "color_bind",
+        "live_bind",
+        "rune_bind",
+        "name_bind",
+        "meta_bind",
     ];
     // Stems the walker itself inserts below — an authored `<stem>_bind` here
     // would be silently overwritten, so it is a warned authoring error, not a
     // quiet no-op (the fail-loud law for authored names).
     const WALKER_STEMS: [&str; 11] = [
-        "hot", "pressed", "enabled", "focused", "open", "captured", "wheel", "label", "style",
-        "layer", "content_h",
+        "hot",
+        "pressed",
+        "enabled",
+        "focused",
+        "open",
+        "captured",
+        "wheel",
+        "label",
+        "style",
+        "layer",
+        "content_h",
     ];
     for (k, v) in &node.props {
-        let Some(stem) = k.strip_suffix("_bind") else { continue };
+        let Some(stem) = k.strip_suffix("_bind") else {
+            continue;
+        };
         if WALKER_BINDS.contains(&k.as_str()) {
             continue;
         }
@@ -2682,7 +3085,10 @@ fn component_props(
             }
         }
     }
-    props.insert("label".to_string(), Json::String(node_text(node, model, results)));
+    props.insert(
+        "label".to_string(),
+        Json::String(node_text(node, model, results)),
+    );
     props.insert("hot".to_string(), Json::Bool(hovered));
     // Pressed = hot + primary held; the fingerprint folds the same bit, so a
     // component drawing its press state (nudge + press_* stops) invalidates on
@@ -2710,8 +3116,14 @@ fn component_props(
     // present and so could not carry a default.
     match node.component.as_str() {
         "popup_panel" => {
-            for (key, dflt) in [("panel_style", "modal.panel"), ("divider_style", "modal.divider")] {
-                props.insert(key.to_string(), jpath(styles, ptext(node, key).unwrap_or(dflt)).clone());
+            for (key, dflt) in [
+                ("panel_style", "modal.panel"),
+                ("divider_style", "modal.divider"),
+            ] {
+                props.insert(
+                    key.to_string(),
+                    jpath(styles, ptext(node, key).unwrap_or(dflt)).clone(),
+                );
             }
             // The title/subtitle/footer colours are dotted paths (a colour cannot ride as
             // a scalar prop) — resolved to rgba here, like a `text` node's `color`, since
@@ -2722,7 +3134,10 @@ fn component_props(
                 ("footer_color", "modal.footer.color"),
             ] {
                 let c = json_color(jpath(styles, ptext(node, key).unwrap_or(dflt)), INK);
-                props.insert(format!("{key}_rgba"), serde_json::json!([c[0], c[1], c[2], c[3]]));
+                props.insert(
+                    format!("{key}_rgba"),
+                    serde_json::json!([c[0], c[1], c[2], c[3]]),
+                );
             }
             // A live subtitle: `subtitle_bind` names the Model key whose CURRENT text
             // the chrome draws (the display-confirm countdown). Resolved here because
@@ -2734,8 +3149,45 @@ fn component_props(
             }
         }
         "paged_menu" => {
-            props.insert("rule_style".to_string(), jpath(styles, ptext(node, "rule_style").unwrap_or("paged_menu.rule")).clone());
-            props.insert("glyph_style".to_string(), jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone());
+            props.insert(
+                "rule_style".to_string(),
+                jpath(
+                    styles,
+                    ptext(node, "rule_style").unwrap_or("paged_menu.rule"),
+                )
+                .clone(),
+            );
+            props.insert(
+                "glyph_style".to_string(),
+                jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
+            );
+        }
+        "nav_footer" => {
+            props.insert(
+                "rule_style".to_string(),
+                jpath(
+                    styles,
+                    ptext(node, "rule_style").unwrap_or("nav_footer.rule"),
+                )
+                .clone(),
+            );
+            props.insert(
+                "glyph_style".to_string(),
+                jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
+            );
+            // The legend label colour is a dotted path (a colour cannot ride as a
+            // scalar prop) — resolved to rgba here, like the popup chrome colours.
+            let c = json_color(
+                jpath(
+                    styles,
+                    ptext(node, "label_color").unwrap_or("nav_footer.label"),
+                ),
+                DIM,
+            );
+            props.insert(
+                "label_color_rgba".to_string(),
+                serde_json::json!([c[0], c[1], c[2], c[3]]),
+            );
         }
         "sprite" => {
             // `backdrop` is a dotted style path (a colour cannot ride as a scalar
@@ -2743,7 +3195,10 @@ fn component_props(
             // with nothing behind it, and only a presenting one paints a slate.
             if let Some(path) = ptext(node, "backdrop") {
                 let c = json_color(jpath(styles, path), [0.0, 0.0, 0.0, 1.0]);
-                props.insert("backdrop_rgba".to_string(), serde_json::json!([c[0], c[1], c[2], c[3]]));
+                props.insert(
+                    "backdrop_rgba".to_string(),
+                    serde_json::json!([c[0], c[1], c[2], c[3]]),
+                );
             }
         }
         _ => {}
@@ -2760,12 +3215,22 @@ fn component_props(
     // fingerprint already folds), so the module's bar can never disagree with the
     // placement. List-only: no other kind reads it, and it walks the children.
     if node.component == "list" {
-        props.insert("content_h".to_string(), serde_json::json!(scroll_content_h(node, model)));
+        props.insert(
+            "content_h".to_string(),
+            serde_json::json!(scroll_content_h(node, model)),
+        );
     }
     // Whether THIS node is the currently-open one (a select's popup): its identity is its
     // `id`, else its `bind` (the `node_ident` rule), matched against the retained open id.
-    let ident = if node.id.is_empty() { node.bind.as_deref() } else { Some(node.id.as_str()) };
-    props.insert("open".to_string(), Json::Bool(ident.is_some() && state.open.as_deref() == ident));
+    let ident = if node.id.is_empty() {
+        node.bind.as_deref()
+    } else {
+        Some(node.id.as_str())
+    };
+    props.insert(
+        "open".to_string(),
+        Json::Bool(ident.is_some() && state.open.as_deref() == ident),
+    );
     // "focused": the walker's retained focus, as one prop covering both models — a
     // module never reads walker state directly. Generically it is KEYBOARD focus
     // (this node's id owns `state.focus` — a text_field's ring + caret); a
@@ -2784,18 +3249,28 @@ fn component_props(
         Json::Bool(!node.id.is_empty() && state.entered_group() == Some(node.id.as_str())),
     );
     if let (Some(fg), Some(bind)) = (ptext(node, "focus_group"), node.bind.as_deref()) {
-        props.insert("focused".to_string(), Json::Bool(eff_text(results, model, fg) == Some(bind)));
+        props.insert(
+            "focused".to_string(),
+            Json::Bool(eff_text(results, model, fg) == Some(bind)),
+        );
     }
     // A tooltip's rune/name/meta content: the Model text under `<field>_bind` (this
     // frame's edit, else the model), else the literal `<field>` prop; absent when empty.
-    for (field, bind) in [("rune", "rune_bind"), ("name", "name_bind"), ("meta", "meta_bind")] {
+    for (field, bind) in [
+        ("rune", "rune_bind"),
+        ("name", "name_bind"),
+        ("meta", "meta_bind"),
+    ] {
         let v = match ptext(node, bind) {
             Some(key) => eff_text(results, model, key),
             None => ptext(node, field),
         };
         match v.filter(|s| !s.is_empty()) {
             Some(s) => {
-                props.insert(field.to_string(), Json::String(crate::strings::resolve(s).into_owned()));
+                props.insert(
+                    field.to_string(),
+                    Json::String(crate::strings::resolve(s).into_owned()),
+                );
             }
             None => {
                 props.remove(field);
@@ -2805,7 +3280,10 @@ fn component_props(
     // A tooltip's rune colour: a dotted `rune_color` path resolved to rgba.
     if let Some(path) = ptext(node, "rune_color") {
         let c = json_color(jpath(styles, path), RUNE);
-        props.insert("rune_color".to_string(), serde_json::json!([c[0], c[1], c[2], c[3]]));
+        props.insert(
+            "rune_color".to_string(),
+            serde_json::json!([c[0], c[1], c[2], c[3]]),
+        );
     }
     // Segmented controls (pill_toggle / tabs / select / context_menu) iterate their
     // children's props (each carries a `value` / `label`); pass them as a plain list so
@@ -2818,6 +3296,16 @@ fn component_props(
                 let mut m = serde_json::Map::new();
                 for (k, v) in &c.props {
                     m.insert(k.clone(), display_prop_json(k, v));
+                }
+                // An option may bind its LABEL from the Model, exactly like a text / button
+                // caption's `text_bind` / `label_bind`. A data-driven list — e.g. the runtime
+                // material names filled into a `select` — then renders through the bind channel
+                // the localisation gate EXEMPTS, instead of a raw English literal in the tree.
+                // The bound value wins over any static `label` (the literal is the dead twin).
+                if let Some(Value::Text(key)) = c.props.get("label_bind") {
+                    if let Some(Value::Text(s)) = model.get(key) {
+                        m.insert("label".to_string(), Json::String(s.clone()));
+                    }
                 }
                 // A child's `action` is a STRUCT field (never in `props`), so cross it
                 // explicitly: a control that owns its rows (context_menu) sees which are
@@ -2903,6 +3391,7 @@ fn draw_node(
                 "badge" => draw_badge(r, &props, out),
                 "popup_panel" => draw_popup_panel(r, node, &props, out),
                 "paged_menu" => draw_paged_menu(r, node, model, &props, out),
+                "nav_footer" => draw_nav_footer(r, node, model, &props, out),
                 _ => draw_button(r, &props, out),
             }
             // CORNER RUNES are a DECORATION FLAG on any component, not a kind of
@@ -2921,7 +3410,27 @@ fn draw_node(
         // box (a plain unstyled `cell`) is transparent structure.
         "cell" | "row" | "stack" | "screen" | "rtt" | "grid" => {
             if !st.is_null() {
-                draw_panel_bg(r, st, out);
+                // A styled structural box that IS a pane wears the same states a
+                // `panel` does (nested panes 2026-08-15) — the window strips and
+                // subpanel rows are rows/stacks, and pane focus must be VISIBLE
+                // on them: the entered top-of-stack wears the gold lock rim, the
+                // focused container its style's `focused` sub-block, everything
+                // else `resting` (or the block itself).
+                let id_is =
+                    |cur: Option<&str>| !node.id.is_empty() && cur == Some(node.id.as_str());
+                if id_is(state.entered_group()) {
+                    let base = st.get("resting").unwrap_or(st);
+                    draw_panel_bg_rimmed(r, base, Some((GOLD_RING, ENTERED_RIM_W)), out);
+                } else if id_is(state.focused()) {
+                    let block = st
+                        .get("focused")
+                        .or_else(|| st.get("resting"))
+                        .unwrap_or(st);
+                    draw_panel_bg(r, block, out);
+                } else {
+                    let block = st.get("resting").unwrap_or(st);
+                    draw_panel_bg(r, block, out);
+                }
             }
             // The same corner-rune DECORATION FLAG the component arm honours —
             // the window slabs are stacks, and a slab that wears the carved
@@ -2939,7 +3448,10 @@ fn draw_node(
             let text = node_text(node, model, results);
             // Font size: an explicit `text_size` prop, else the node's layout height
             // (a single line is usually its own height), else a default.
-            let size = pnum(node, "text_size").map(|n| n as f32).or(node.size).unwrap_or(14.0);
+            let size = pnum(node, "text_size")
+                .map(|n| n as f32)
+                .or(node.size)
+                .unwrap_or(14.0);
             // Colour: a dotted `color` path into a token-resolved rgba (text's escape
             // hatch, since colours can't ride as scalar props), else the style block.
             // `color_bind` names a Model key holding that same dotted path, so a row whose
@@ -2966,7 +3478,20 @@ fn draw_node(
             // HEIGHT for the wrapped lines (the geometry `measure` can't know the line count without
             // font metrics), so a wrapped text is authored with an explicit multi-line height.
             let wrap = if pbool(node, "wrap") { Some(r.w) } else { None };
-            push_text(out, x, r.y, &text, size, color, align, node_font(node), pbool(node, "italic"), pbool(node, "bold"), pnum(node, "tracking").map(|n| n as f32).unwrap_or(-1.0), wrap);
+            push_text(
+                out,
+                x,
+                r.y,
+                &text,
+                size,
+                color,
+                align,
+                node_font(node),
+                pbool(node, "italic"),
+                pbool(node, "bold"),
+                pnum(node, "tracking").map(|n| n as f32).unwrap_or(-1.0),
+                wrap,
+            );
         }
         // Anything else is not a component kind at all (the roster gate in this
         // module's tests holds every interactive kind to an arm above), so there is
@@ -2987,7 +3512,12 @@ fn fade_commands(cmds: &mut [HudCommand], f: f32) {
             | HudCommand::Sprite { color, .. }
             | HudCommand::Text { color, .. }
             | HudCommand::TextCaret { color, .. } => color[3] *= f,
-            HudCommand::Panel { color, color2, border_color, .. } => {
+            HudCommand::Panel {
+                color,
+                color2,
+                border_color,
+                ..
+            } => {
                 color[3] *= f;
                 color2[3] *= f;
                 border_color[3] *= f;
@@ -3021,17 +3551,41 @@ fn draw_panel_bg(r: Rect, st: &Json, out: &mut Vec<HudCommand>) {
 /// own `border`/`border_w`; `Some` paints a STATE rim (the gold lock) over a base block
 /// that carries no rim of its own, so an entered pane reuses its focused/resting fill
 /// while wearing the compiled lock border.
-fn draw_panel_bg_rimmed(r: Rect, st: &Json, rim: Option<([f32; 4], f32)>, out: &mut Vec<HudCommand>) {
+fn draw_panel_bg_rimmed(
+    r: Rect,
+    st: &Json,
+    rim: Option<([f32; 4], f32)>,
+    out: &mut Vec<HudCommand>,
+) {
     // Key-aliasing (same spirit as the button variants): a styled container reads
     // its fill from whichever of these its block carries — `fill_top/bot` (panels),
     // `bg_top/bot` (the menu's gradient backdrop), `overlay` (the pause/confirm dim),
     // or a single `color` (the bronze divider rule).
-    let top = first_color(st, &["fill_top", "bg_top", "overlay", "panel_bg", "bg", "fill", "color"], PANEL);
-    let bot = first_color(st, &["fill_bot", "bg_bot", "overlay", "panel_bg", "bg", "fill", "color"], top);
+    let top = first_color(
+        st,
+        &[
+            "fill_top", "bg_top", "overlay", "panel_bg", "bg", "fill", "color",
+        ],
+        PANEL,
+    );
+    let bot = first_color(
+        st,
+        &[
+            "fill_bot", "bg_bot", "overlay", "panel_bg", "bg", "fill", "color",
+        ],
+        top,
+    );
     let block_border = first_color(st, &["panel_border", "border"], [0.0; 4]);
     let (border_color, border) = match rim {
         Some((color, w)) => (color, w),
-        None => (block_border, if block_border[3] > 0.0 { jnum(st, "border_w", 1.0) } else { 0.0 }),
+        None => (
+            block_border,
+            if block_border[3] > 0.0 {
+                jnum(st, "border_w", 1.0)
+            } else {
+                0.0
+            },
+        ),
     };
     out.push(HudCommand::Panel {
         x: r.x,
@@ -3101,8 +3655,7 @@ fn rust_hit_shape(kind: &str) -> Option<HitShape> {
         // BESPOKE tier: a raw image passes clicks through, a PRESENTING one — it
         // carries the fade ramp — is a boot surface and claims, so a click lands on
         // it as the skip.)
-        "tooltip" | "gauge" | "resource_gauge" | "stat_dot"
-        | "medallion" => Some(HitShape::None),
+        "tooltip" | "gauge" | "resource_gauge" | "stat_dot" | "medallion" => Some(HitShape::None),
         _ => None,
     }
 }
@@ -3147,6 +3700,10 @@ fn rust_owns_hit(kind: &str) -> bool {
             // an action or bind of the menu node — geometry and a dispatch no trivial
             // shape can carry.
             | "paged_menu"
+            // A `nav_footer` owns its hit for the same reason: its legend entries are
+            // sub-rects it lays out itself, and a click on one fires that entry's
+            // authored action rather than an action or bind of the footer node.
+            | "nav_footer"
     )
 }
 
@@ -3167,8 +3724,14 @@ fn rust_owns_hit(kind: &str) -> bool {
 /// Anything interactive inside it is its own component, in its own node.
 fn draw_panel(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
-    let focused = props.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
-    let entered = props.get("entered").and_then(|v| v.as_bool()).unwrap_or(false);
+    let focused = props
+        .get("focused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let entered = props
+        .get("entered")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     // `{ resting, focused, entered }` sub-blocks, each an ordinary container block. A
     // style that carries the container keys DIRECTLY (no split) is used as-is; each state
     // falls down the chain (→ focused → resting → the block), so a plain panel still draws.
@@ -3219,12 +3782,23 @@ fn draw_sprite(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut
     // The slate first, so a missing image is a visible void on it, not a hole.
     if let Some(bg) = props.get("backdrop_rgba") {
         let bg = json_color(bg, [0.0, 0.0, 0.0, 1.0]);
-        out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color: bg, layer: 0.0 });
+        out.push(HudCommand::Rect {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            color: bg,
+            layer: 0.0,
+        });
     }
     let Some(tex) = props.get("tex").and_then(|v| v.as_f64()) else {
         return;
     };
-    let ramp = if sprite_has_ramp(node) { sprite_ramp_of(node, model) } else { 1.0 };
+    let ramp = if sprite_has_ramp(node) {
+        sprite_ramp_of(node, model)
+    } else {
+        1.0
+    };
     let alpha = ramp * jnum(props, "alpha", 1.0);
 
     // Contain-fit only when asked: the image's native size inside `fit` of the
@@ -3257,7 +3831,9 @@ fn draw_sprite(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut
 /// draw, the cache fingerprint and the hit tier all consult, so the three can
 /// never disagree about which mode a node is in.
 fn sprite_has_ramp(node: &UiNode) -> bool {
-    ["fade_in", "hold", "fade_out"].iter().any(|k| pnum(node, k).is_some())
+    ["fade_in", "hold", "fade_out"]
+        .iter()
+        .any(|k| pnum(node, k).is_some())
 }
 
 /// The pure ramp: linear rise over `fade_in`, flat 1.0 through `hold`, linear
@@ -3265,9 +3841,17 @@ fn sprite_has_ramp(node: &UiNode) -> bool {
 /// duplicate before the component owned it.
 pub(crate) fn sprite_ramp(elapsed: f32, fade_in: f32, hold: f32, fade_out: f32) -> f32 {
     let alpha = if elapsed < fade_in {
-        if fade_in <= 0.0 { 1.0 } else { elapsed / fade_in }
+        if fade_in <= 0.0 {
+            1.0
+        } else {
+            elapsed / fade_in
+        }
     } else if elapsed > fade_in + hold {
-        if fade_out <= 0.0 { 0.0 } else { 1.0 - (elapsed - fade_in - hold) / fade_out }
+        if fade_out <= 0.0 {
+            0.0
+        } else {
+            1.0 - (elapsed - fade_in - hold) / fade_out
+        }
     } else {
         1.0
     };
@@ -3312,8 +3896,9 @@ fn draw_corner_runes(r: Rect, node: &UiNode, s: &Json, out: &mut Vec<HudCommand>
     // `corner_rune_defaults_match_theme_tokens` fails loud if they diverge.
     let inset = jnum(s, "inset", 14.0);
     // The node may pin a glyph size; otherwise the block's, else the house default.
-    let size =
-        pnum(node, "glyph_size").map(|n| n as f32).unwrap_or_else(|| jnum(s, "size", 16.0));
+    let size = pnum(node, "glyph_size")
+        .map(|n| n as f32)
+        .unwrap_or_else(|| jnum(s, "size", 16.0));
     let glow = first_color(s, &["top"], RUNE);
     let bronze = first_color(s, &["bot"], BRONZE_DIM);
     let by = r.y + r.h - inset - size;
@@ -3321,12 +3906,32 @@ fn draw_corner_runes(r: Rect, node: &UiNode, s: &Json, out: &mut Vec<HudCommand>
     // the same visual margin without measuring a glyph.
     for (key, dflt, x, y, color, align) in [
         ("tl", "ᛞ", r.x + inset, r.y + inset, glow, TextAlign::Left),
-        ("tr", "ᛝ", r.x + r.w - inset, r.y + inset, glow, TextAlign::Right),
+        (
+            "tr",
+            "ᛝ",
+            r.x + r.w - inset,
+            r.y + inset,
+            glow,
+            TextAlign::Right,
+        ),
         ("bl", "ᚨ", r.x + inset, by, bronze, TextAlign::Left),
         ("br", "ᛟ", r.x + r.w - inset, by, bronze, TextAlign::Right),
     ] {
         let glyph = ptext(node, key).unwrap_or(dflt);
-        push_text(out, x, y, glyph, size, color, align, FontRole::Rune, false, false, -1.0, None);
+        push_text(
+            out,
+            x,
+            y,
+            glyph,
+            size,
+            color,
+            align,
+            FontRole::Rune,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 }
 
@@ -3356,20 +3961,71 @@ fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // Optional element rune, top-left — the text column then indents past it so the
     // glyph and the headline share one baseline.
     let mut indent = 0.0;
-    if let Some(rune) = props.get("rune").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+    if let Some(rune) = props
+        .get("rune")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+    {
         // `rune_color` arrives as a resolved rgba (the walker walks the dotted path),
         // because a colour cannot ride as a scalar prop.
         let color = first_color(props, &["rune_color"], RUNE);
-        push_text(out, inner.x, inner.y, rune, name_sz, color, TextAlign::Left, FontRole::Rune, false, false, -1.0, None);
+        push_text(
+            out,
+            inner.x,
+            inner.y,
+            rune,
+            name_sz,
+            color,
+            TextAlign::Left,
+            FontRole::Rune,
+            false,
+            false,
+            -1.0,
+            None,
+        );
         indent = name_sz * 1.3 + 4.0;
     }
-    if let Some(name) = props.get("name").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+    if let Some(name) = props
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+    {
         let color = first_color(s, &["name_color"], INK);
-        push_text(out, inner.x + indent, inner.y, name, name_sz, color, TextAlign::Left, FontRole::Display, false, false, -1.0, None);
+        push_text(
+            out,
+            inner.x + indent,
+            inner.y,
+            name,
+            name_sz,
+            color,
+            TextAlign::Left,
+            FontRole::Display,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
-    if let Some(meta) = props.get("meta").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) {
+    if let Some(meta) = props
+        .get("meta")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+    {
         let color = first_color(s, &["meta_color"], DIM);
-        push_text(out, inner.x + indent, inner.y + name_sz + gap, meta, meta_sz, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        push_text(
+            out,
+            inner.x + indent,
+            inner.y + name_sz + gap,
+            meta,
+            meta_sz,
+            color,
+            TextAlign::Left,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 }
 
@@ -3397,8 +4053,14 @@ fn cell_uv(idx: f32, cols: f32, rows: f32) -> [f32; 4] {
 /// hint silently showing the wrong button is worse than one visibly missing.
 fn draw_glyph_face(r: Rect, props: &Json, flash: f32, out: &mut Vec<HudCommand>) {
     let g = props.get("glyph_style").unwrap_or(&Json::Null);
-    let name = props.get("glyph").and_then(|v| v.as_str()).unwrap_or_default();
-    let idx = g.get("cells").and_then(|c| c.get(name)).and_then(|v| v.as_f64());
+    let name = props
+        .get("glyph")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    let idx = g
+        .get("cells")
+        .and_then(|c| c.get(name))
+        .and_then(|v| v.as_f64());
     let (Some(tex), Some(idx)) = (g.get("tex").and_then(|v| v.as_f64()), idx) else {
         return;
     };
@@ -3438,7 +4100,11 @@ fn draw_glyph_face(r: Rect, props: &Json, flash: f32, out: &mut Vec<HudCommand>)
         h: box_.h,
         color,
         layer: 0.0,
-        uv: cell_uv(idx.floor() as f32, jnum(g, "cols", 4.0), jnum(g, "rows", 4.0)),
+        uv: cell_uv(
+            idx.floor() as f32,
+            jnum(g, "cols", 4.0),
+            jnum(g, "rows", 4.0),
+        ),
     });
 }
 
@@ -3469,68 +4135,68 @@ struct BtnVariant {
 
 const BTN_PRIMARY: BtnVariant = BtnVariant {
     idle: BtnFace {
-        top: [0.141, 0.247, 0.471, 1.0],  // sap_base
-        bot: [0.082, 0.153, 0.267, 1.0],  // sap_base_lo
+        top: [0.141, 0.247, 0.471, 1.0],    // sap_base
+        bot: [0.082, 0.153, 0.267, 1.0],    // sap_base_lo
         border: [0.227, 0.353, 0.627, 1.0], // sap_border
-        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire
+        label: [0.933, 0.949, 1.0, 1.0],    // ink_sapphire
     },
     hover: BtnFace {
-        top: [0.173, 0.298, 0.557, 1.0],  // sap_hover
-        bot: [0.102, 0.188, 0.341, 1.0],  // sap_hover_lo
+        top: [0.173, 0.298, 0.557, 1.0],    // sap_hover
+        bot: [0.102, 0.188, 0.341, 1.0],    // sap_hover_lo
         border: [0.286, 0.416, 0.722, 1.0], // sap_hover_border
-        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire
+        label: [0.933, 0.949, 1.0, 1.0],    // ink_sapphire
     },
     press: BtnFace {
-        top: [0.09, 0.173, 0.329, 1.0],   // sap_press
-        bot: [0.063, 0.122, 0.235, 1.0],  // sap_press_lo
+        top: [0.09, 0.173, 0.329, 1.0],     // sap_press
+        bot: [0.063, 0.122, 0.235, 1.0],    // sap_press_lo
         border: [0.165, 0.267, 0.471, 1.0], // sap_press_border
-        label: [0.933, 0.949, 1.0, 1.0],  // ink_sapphire (press falls to label)
+        label: [0.933, 0.949, 1.0, 1.0],    // ink_sapphire (press falls to label)
     },
-    glow: [0.094, 0.188, 0.384, 0.45],    // sap_glow
+    glow: [0.094, 0.188, 0.384, 0.45], // sap_glow
 };
 
 const BTN_SECONDARY: BtnVariant = BtnVariant {
     idle: BtnFace {
-        top: [0.125, 0.141, 0.18, 1.0],   // stone_btn
-        bot: [0.078, 0.09, 0.122, 1.0],   // stone2
+        top: [0.125, 0.141, 0.18, 1.0],     // stone_btn
+        bot: [0.078, 0.09, 0.122, 1.0],     // stone2
         border: [0.227, 0.255, 0.314, 1.0], // edge4
-        label: [0.839, 0.816, 0.761, 1.0], // ink_button
+        label: [0.839, 0.816, 0.761, 1.0],  // ink_button
     },
     hover: BtnFace {
-        top: [0.157, 0.176, 0.22, 1.0],   // stone_btn_hi
-        bot: [0.098, 0.114, 0.149, 1.0],  // surface_top
+        top: [0.157, 0.176, 0.22, 1.0],     // stone_btn_hi
+        bot: [0.098, 0.114, 0.149, 1.0],    // surface_top
         border: [0.431, 0.353, 0.204, 1.0], // bronze_dim
-        label: [0.906, 0.882, 0.824, 1.0], // ink_bright
+        label: [0.906, 0.882, 0.824, 1.0],  // ink_bright
     },
     press: BtnFace {
-        top: [0.078, 0.09, 0.122, 1.0],   // stone2
-        bot: [0.055, 0.063, 0.086, 1.0],  // stone1
+        top: [0.078, 0.09, 0.122, 1.0],     // stone2
+        bot: [0.055, 0.063, 0.086, 1.0],    // stone1
         border: [0.169, 0.188, 0.235, 1.0], // edge2
-        label: [0.839, 0.816, 0.761, 1.0], // ink_button (press falls to label)
+        label: [0.839, 0.816, 0.761, 1.0],  // ink_button (press falls to label)
     },
-    glow: [0.0, 0.0, 0.0, 0.0],           // none
+    glow: [0.0, 0.0, 0.0, 0.0], // none
 };
 
 const BTN_DANGER: BtnVariant = BtnVariant {
     idle: BtnFace {
-        top: [0.659, 0.216, 0.255, 1.0],  // danger_base
-        bot: [0.439, 0.102, 0.133, 1.0],  // danger_base_lo
+        top: [0.659, 0.216, 0.255, 1.0],    // danger_base
+        bot: [0.439, 0.102, 0.133, 1.0],    // danger_base_lo
         border: [0.784, 0.439, 0.478, 1.0], // danger_hi
-        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi
+        label: [0.949, 0.827, 0.839, 1.0],  // danger_text_hi
     },
     hover: BtnFace {
-        top: [0.776, 0.255, 0.302, 1.0],  // danger_hover
-        bot: [0.518, 0.122, 0.157, 1.0],  // danger_hover_lo
+        top: [0.776, 0.255, 0.302, 1.0],    // danger_hover
+        bot: [0.518, 0.122, 0.157, 1.0],    // danger_hover_lo
         border: [0.784, 0.439, 0.478, 1.0], // danger_hi
-        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi
+        label: [0.949, 0.827, 0.839, 1.0],  // danger_text_hi
     },
     press: BtnFace {
-        top: [0.439, 0.102, 0.133, 1.0],  // danger_base_lo
-        bot: [0.29, 0.067, 0.086, 1.0],   // danger_press_lo
+        top: [0.439, 0.102, 0.133, 1.0],    // danger_base_lo
+        bot: [0.29, 0.067, 0.086, 1.0],     // danger_press_lo
         border: [0.353, 0.165, 0.188, 1.0], // danger_border
-        label: [0.949, 0.827, 0.839, 1.0], // danger_text_hi (press falls to label)
+        label: [0.949, 0.827, 0.839, 1.0],  // danger_text_hi (press falls to label)
     },
-    glow: [0.659, 0.216, 0.255, 0.4],     // danger_glow
+    glow: [0.659, 0.216, 0.255, 0.4], // danger_glow
 };
 
 const BTN_GHOST: BtnVariant = BtnVariant {
@@ -3541,10 +4207,10 @@ const BTN_GHOST: BtnVariant = BtnVariant {
         label: [0.561, 0.541, 0.49, 1.0], // dim
     },
     hover: BtnFace {
-        top: [0.0, 0.0, 0.0, 0.0],        // stage_void
-        bot: [0.0, 0.0, 0.0, 0.0],        // stage_void
+        top: [0.0, 0.0, 0.0, 0.0],          // stage_void
+        bot: [0.0, 0.0, 0.0, 0.0],          // stage_void
         border: [0.169, 0.188, 0.235, 1.0], // edge2
-        label: [0.871, 0.847, 0.788, 1.0], // ink
+        label: [0.871, 0.847, 0.788, 1.0],  // ink
     },
     press: BtnFace {
         top: [0.0, 0.0, 0.0, 0.0],        // stage_void (press falls to idle)
@@ -3552,7 +4218,7 @@ const BTN_GHOST: BtnVariant = BtnVariant {
         border: [0.0, 0.0, 0.0, 0.0],     // none
         label: [0.561, 0.541, 0.49, 1.0], // dim
     },
-    glow: [0.0, 0.0, 0.0, 0.0],           // none
+    glow: [0.0, 0.0, 0.0, 0.0], // none
 };
 
 /// A garish MAGENTA palette drawn for an UNKNOWN `variant` name — fail-loud, so a
@@ -3608,9 +4274,21 @@ pub struct BtnSize {
     pub pad_x: f32,
     pub label_size: f32,
 }
-pub const SIZE_SM: BtnSize = BtnSize { h: 28.0, pad_x: 14.0, label_size: 10.0 };
-pub const SIZE_MD: BtnSize = BtnSize { h: 32.0, pad_x: 20.0, label_size: 12.0 };
-pub const SIZE_LG: BtnSize = BtnSize { h: 45.0, pad_x: 22.0, label_size: 15.0 };
+pub const SIZE_SM: BtnSize = BtnSize {
+    h: 28.0,
+    pad_x: 14.0,
+    label_size: 10.0,
+};
+pub const SIZE_MD: BtnSize = BtnSize {
+    h: 32.0,
+    pad_x: 20.0,
+    label_size: 12.0,
+};
+pub const SIZE_LG: BtnSize = BtnSize {
+    h: 45.0,
+    pad_x: 22.0,
+    label_size: 15.0,
+};
 
 /// Resolve a `size_class` name to its ladder rung. An unrecognised name WARNS and
 /// returns `None` (the button falls to its explicit/legacy geometry) — geometry has
@@ -3653,20 +4331,30 @@ fn button_size(name: &str) -> Option<BtnSize> {
 fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     let hot = props.get("hot").and_then(|v| v.as_bool()).unwrap_or(false);
-    let pressed = props.get("pressed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pressed = props
+        .get("pressed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     // Activate feedback, injected by the walker only while a flash is live.
     let flash = jnum(props, "flash", 0.0);
 
     // DS press contract: the whole slab (glow included) nudges down 1px while
     // held; `press_*` stops pick the darker fill, falling to the idle fill for
     // variants that define none.
-    let r = if pressed { Rect { y: r.y + 1.0, ..r } } else { r };
+    let r = if pressed {
+        Rect { y: r.y + 1.0, ..r }
+    } else {
+        r
+    };
 
     // A `variant` names one of the compiled house palettes (primary / secondary /
     // danger / ghost); its stops become the per-state DEFAULTS below. A variant-less
     // button keeps the neutral sapphire fallback, and an explicit `style` block still
     // overrides any stop key-by-key.
-    let v = props.get("variant").and_then(|x| x.as_str()).map(button_variant);
+    let v = props
+        .get("variant")
+        .and_then(|x| x.as_str())
+        .map(button_variant);
 
     // Optional sapphire glow halo behind the button, only on hover.
     let glow = first_color(s, &["glow"], v.map(|v| v.glow).unwrap_or(CLEAR));
@@ -3691,28 +4379,68 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // the button OWNS this state→style logic.
     let (top, bot, mut border, mut label_color) = if pressed {
         let f = v.map(|v| v.press);
-        let top = first_color(s, &["press_top", "fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
+        let top = first_color(
+            s,
+            &["press_top", "fill_top", "cell", "fill"],
+            f.map(|f| f.top).unwrap_or(SAP),
+        );
         (
             top,
-            first_color(s, &["press_bot", "fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
-            first_color(s, &["press_border", "border"], f.map(|f| f.border).unwrap_or(CLEAR)),
-            first_color(s, &["press_label", "label"], f.map(|f| f.label).unwrap_or(INK)),
+            first_color(
+                s,
+                &["press_bot", "fill_bot", "cell", "fill"],
+                f.map(|f| f.bot).unwrap_or(top),
+            ),
+            first_color(
+                s,
+                &["press_border", "border"],
+                f.map(|f| f.border).unwrap_or(CLEAR),
+            ),
+            first_color(
+                s,
+                &["press_label", "label"],
+                f.map(|f| f.label).unwrap_or(INK),
+            ),
         )
     } else if hot {
         let f = v.map(|v| v.hover);
-        let top = first_color(s, &["hover_top", "hot", "fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
+        let top = first_color(
+            s,
+            &["hover_top", "hot", "fill_top", "cell", "fill"],
+            f.map(|f| f.top).unwrap_or(SAP),
+        );
         (
             top,
-            first_color(s, &["hover_bot", "hot", "fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
-            first_color(s, &["hover_border", "border"], f.map(|f| f.border).unwrap_or(CLEAR)),
-            first_color(s, &["hover_label", "label"], f.map(|f| f.label).unwrap_or(INK)),
+            first_color(
+                s,
+                &["hover_bot", "hot", "fill_bot", "cell", "fill"],
+                f.map(|f| f.bot).unwrap_or(top),
+            ),
+            first_color(
+                s,
+                &["hover_border", "border"],
+                f.map(|f| f.border).unwrap_or(CLEAR),
+            ),
+            first_color(
+                s,
+                &["hover_label", "label"],
+                f.map(|f| f.label).unwrap_or(INK),
+            ),
         )
     } else {
         let f = v.map(|v| v.idle);
-        let top = first_color(s, &["fill_top", "cell", "fill"], f.map(|f| f.top).unwrap_or(SAP));
+        let top = first_color(
+            s,
+            &["fill_top", "cell", "fill"],
+            f.map(|f| f.top).unwrap_or(SAP),
+        );
         (
             top,
-            first_color(s, &["fill_bot", "cell", "fill"], f.map(|f| f.bot).unwrap_or(top)),
+            first_color(
+                s,
+                &["fill_bot", "cell", "fill"],
+                f.map(|f| f.bot).unwrap_or(top),
+            ),
             first_color(s, &["border"], f.map(|f| f.border).unwrap_or(CLEAR)),
             first_color(s, &["label"], f.map(|f| f.label).unwrap_or(INK)),
         )
@@ -3736,7 +4464,11 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         color2: bot,
         grad: if top == bot { 0.0 } else { 1.0 },
         radius: jnum(s, "radius", 3.0),
-        border: if border[3] > 0.0 { jnum(s, "border_w", 1.0) } else { 0.0 },
+        border: if border[3] > 0.0 {
+            jnum(s, "border_w", 1.0)
+        } else {
+            0.0
+        },
         border_color: border,
         feather: 0.0,
         layer: 0.0,
@@ -3757,7 +4489,10 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         .map(|l| l.label_size)
         .unwrap_or(14.0);
     let lsz = jnum(props, "label_size", jnum(s, "label_size", rung));
-    let label = props.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+    let label = props
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     push_text(
         out,
         r.x + r.w * 0.5,
@@ -3774,11 +4509,6 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     );
 }
 
-
-
-
-
-
 /// A boxed picker's **box**: a `box`-sized square at the node rect's top-left, shared
 /// by `checkbox` and `radio`.
 ///
@@ -3790,7 +4520,12 @@ fn draw_button(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// layout the row height was authored around, not part of its palette.
 fn box_rect(r: Rect, props: &Json) -> Rect {
     let size = jnum(props, "box", 14.0);
-    Rect { x: r.x, y: r.y, w: size, h: size }
+    Rect {
+        x: r.x,
+        y: r.y,
+        w: size,
+        h: size,
+    }
 }
 
 /// The row caption a boxed picker (`checkbox` / `radio`) wears to the RIGHT of its
@@ -3804,12 +4539,29 @@ fn box_rect(r: Rect, props: &Json) -> Rect {
 /// rect's left edge) · `label_gap` (8) · `label_size` (13). Node props rather than
 /// style keys, so a dense list can tighten its gutter without a palette of its own.
 fn draw_box_caption(r: Rect, bx: Rect, props: &Json, color: [f32; 4], out: &mut Vec<HudCommand>) {
-    let Some(label) = props.get("label").and_then(|v| v.as_str()).filter(|t| !t.is_empty()) else {
+    let Some(label) = props
+        .get("label")
+        .and_then(|v| v.as_str())
+        .filter(|t| !t.is_empty())
+    else {
         return;
     };
     let size = jnum(props, "label_size", 13.0);
     let x = r.x + jnum(props, "label_x", bx.w + jnum(props, "label_gap", 8.0));
-    push_text(out, x, bx.y + (bx.h - size) * 0.5, label, size, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    push_text(
+        out,
+        x,
+        bx.y + (bx.h - size) * 0.5,
+        label,
+        size,
+        color,
+        TextAlign::Left,
+        FontRole::Body,
+        false,
+        false,
+        -1.0,
+        None,
+    );
 }
 
 /// The **checkbox** — a square box, an inset tick while its bound bool is true, and an
@@ -3834,7 +4586,15 @@ fn draw_checkbox(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // The box, with a hairline edge only when the style authorises one.
     let border = first_color(s, &["border"], CLEAR);
     let radius = jnum(s, "radius", 0.0);
-    push_panel(out, bx, first_color(s, &["box"], PANEL), None, radius, border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        bx,
+        first_color(s, &["box"], PANEL),
+        None,
+        radius,
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     // The tick draws only for a TRUE bind: a box bound to a key the model has not set
     // yet reads as OFF, never blank.
@@ -3843,7 +4603,15 @@ fn draw_checkbox(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         // the raw arithmetic would go negative — unreachable from any authored style,
         // and the SDF prefers the clamp.
         let tick = bx.inset(jnum(s, "pad", 3.0));
-        push_panel(out, tick, first_color(s, &["check"], INK), None, jnum(s, "check_radius", 0.0), CLEAR, 0.0);
+        push_panel(
+            out,
+            tick,
+            first_color(s, &["check"], INK),
+            None,
+            jnum(s, "check_radius", 0.0),
+            CLEAR,
+            0.0,
+        );
     }
     draw_box_caption(r, bx, props, first_color(s, &["label"], INK), out);
 }
@@ -3856,7 +4624,10 @@ fn draw_checkbox(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// never set turns it ON — what an author expects of a box that drew unchecked.
 /// Reporting the value on idle frames is `echo_binds`'s job, not this one's.
 fn bool_pick(over: bool, click: bool, props: &Json) -> HitVerdict {
-    let mut v = HitVerdict { hit: over, ..Default::default() };
+    let mut v = HitVerdict {
+        hit: over,
+        ..Default::default()
+    };
     if over && click {
         let on = props.get("bind_value").and_then(|b| b.as_bool()) == Some(true);
         v.value = Some(Value::Bool(!on));
@@ -3879,7 +4650,12 @@ fn hit_checkbox(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
 /// than a second, invisible click target.
 fn toggle_pill(r: Rect, s: &Json) -> Rect {
     let (w, h) = (jnum(s, "w", 50.0), jnum(s, "h", 25.0));
-    Rect { x: r.x, y: r.y + (r.h - h) * 0.5, w, h }
+    Rect {
+        x: r.x,
+        y: r.y + (r.h - h) * 0.5,
+        w,
+        h,
+    }
 }
 
 /// The **toggle** — a rounded pill switch: ON draws an `on_top`→`on_bot` gradient
@@ -3928,9 +4704,30 @@ fn draw_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         )
     };
     let border_w = jnum(s, "border_w", 1.0);
-    push_panel(out, pill, track, Some(track2), jnum(s, "radius", pill.h * 0.5), border, border_w);
-    let knob_r = Rect { x: knob_x, y: pill.y + pad, w: knob, h: knob };
-    push_panel(out, knob_r, knob_fill, None, jnum(s, "knob_radius", knob * 0.5), CLEAR, 0.0);
+    push_panel(
+        out,
+        pill,
+        track,
+        Some(track2),
+        jnum(s, "radius", pill.h * 0.5),
+        border,
+        border_w,
+    );
+    let knob_r = Rect {
+        x: knob_x,
+        y: pill.y + pad,
+        w: knob,
+        h: knob,
+    };
+    push_panel(
+        out,
+        knob_r,
+        knob_fill,
+        None,
+        jnum(s, "knob_radius", knob * 0.5),
+        CLEAR,
+        0.0,
+    );
 }
 
 /// The toggle's tight region is its PILL — a click in the rest of the row it sits in
@@ -3965,7 +4762,15 @@ fn draw_radio(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let bx = box_rect(r, props);
     let border = first_color(s, &["border"], CLEAR);
     let fill = first_color(s, &["box"], PANEL);
-    push_panel(out, bx, fill, None, jnum(s, "radius", bx.w * 0.5), border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        bx,
+        fill,
+        None,
+        jnum(s, "radius", bx.w * 0.5),
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     let selected = props
         .get("value")
@@ -3974,7 +4779,15 @@ fn draw_radio(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     if selected {
         let dot = bx.inset(jnum(s, "pad", 3.0));
         let dot_fill = first_color(s, &["check"], INK);
-        push_panel(out, dot, dot_fill, None, jnum(s, "check_radius", dot.w * 0.5), CLEAR, 0.0);
+        push_panel(
+            out,
+            dot,
+            dot_fill,
+            None,
+            jnum(s, "check_radius", dot.w * 0.5),
+            CLEAR,
+            0.0,
+        );
     }
     // The caption NAMES the option here, so — unlike a checkbox's, which is body copy
     // in someone else's row — it is part of the choice and styles with it.
@@ -3992,7 +4805,10 @@ fn draw_radio(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// no row could ever match.
 fn hit_radio(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     let over = box_rect(r, props).contains(m);
-    let mut v = HitVerdict { hit: over, ..Default::default() };
+    let mut v = HitVerdict {
+        hit: over,
+        ..Default::default()
+    };
     if over && click {
         if let Some(id) = props.get("value").and_then(|v| v.as_str()) {
             v.value = Some(Value::Text(id.to_string()));
@@ -4026,14 +4842,31 @@ fn hit_radio(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
 /// alpha) · `label` (caption colour) · `label_size` (12).
 fn draw_tile(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let loaded = props.get("enabled").and_then(|v| v.as_bool()) == Some(true);
-    let s = props.get(if loaded { "style" } else { "style_off" }).unwrap_or(&Json::Null);
+    let s = props
+        .get(if loaded { "style" } else { "style_off" })
+        .unwrap_or(&Json::Null);
     let on = loaded && props.get("bind_value").and_then(|v| v.as_bool()) == Some(true);
-    let fill = if on { first_color(s, &["hot"], SAP) } else { first_color(s, &["cell"], PANEL) };
+    let fill = if on {
+        first_color(s, &["hot"], SAP)
+    } else {
+        first_color(s, &["cell"], PANEL)
+    };
     let border = first_color(s, &["border"], CLEAR);
-    push_panel(out, r, fill, None, jnum(s, "radius", 0.0), border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        r,
+        fill,
+        None,
+        jnum(s, "radius", 0.0),
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     let size = jnum(s, "label_size", 12.0);
-    let label = props.get("label").and_then(|v| v.as_str()).unwrap_or_default();
+    let label = props
+        .get("label")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     push_text(
         out,
         r.x + r.w * 0.5,
@@ -4093,7 +4926,12 @@ fn strip_value_warn(kind: &str, i: usize, child: &Json) -> String {
 fn pill_well(r: Rect, s: &Json) -> Rect {
     let sh = jnum(s, "h", r.h);
     let h = if r.h > 0.0 { sh.min(r.h) } else { sh };
-    Rect { x: r.x, y: r.y + ((r.h - h) * 0.5).max(0.0), w: r.w, h }
+    Rect {
+        x: r.x,
+        y: r.y + ((r.h - h) * 0.5).max(0.0),
+        w: r.w,
+        h,
+    }
 }
 
 /// The `i`-th of `n` segment **cells**: the well inset by `pad` all round, split into
@@ -4102,7 +4940,12 @@ fn pill_well(r: Rect, s: &Json) -> Rect {
 /// the pointer while selecting nothing.
 fn pill_cell(well: Rect, pad: f32, n: usize, i: usize) -> Rect {
     let cw = (well.w - pad * 2.0) / n as f32;
-    Rect { x: well.x + pad + i as f32 * cw, y: well.y + pad, w: cw, h: (well.h - pad * 2.0).max(0.0) }
+    Rect {
+        x: well.x + pad + i as f32 * cw,
+        y: well.y + pad,
+        w: cw,
+        h: (well.h - pad * 2.0).max(0.0),
+    }
 }
 
 /// The **pill toggle** — a segmented control: a rounded WELL (fill + hairline edge)
@@ -4137,7 +4980,15 @@ fn draw_pill_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 
     // The well: a `bg` fill and a hairline `border`.
     let border = first_color(s, &["border"], CLEAR);
-    push_panel(out, well, first_color(s, &["bg"], PANEL), None, radius, border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        well,
+        first_color(s, &["bg"], PANEL),
+        None,
+        radius,
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     let kids = jkids(props);
     if kids.is_empty() {
@@ -4201,7 +5052,10 @@ fn draw_pill_toggle(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 fn hit_pill_toggle(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     let s = props.get("style").unwrap_or(&Json::Null);
     let well = pill_well(r, s);
-    let mut v = HitVerdict { hit: well.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: well.contains(m),
+        ..HitVerdict::default()
+    };
     if !click {
         return v;
     }
@@ -4246,14 +5100,28 @@ fn tabs_vertical(props: &Json) -> bool {
 fn tab_cell(r: Rect, props: &Json, n: usize, i: usize) -> Rect {
     let (px, py) = (jnum(props, "pad_x", 0.0), jnum(props, "pad_y", 0.0));
     let gap = jnum(props, "gap", 0.0);
-    let inner =
-        Rect { x: r.x + px, y: r.y + py, w: r.w - 2.0 * px, h: r.h - 2.0 * py };
+    let inner = Rect {
+        x: r.x + px,
+        y: r.y + py,
+        w: r.w - 2.0 * px,
+        h: r.h - 2.0 * py,
+    };
     if tabs_vertical(props) {
         let th = ((inner.h - gap * (n as f32 - 1.0)) / n as f32).max(0.0);
-        return Rect { x: inner.x, y: inner.y + i as f32 * (th + gap), w: inner.w, h: th };
+        return Rect {
+            x: inner.x,
+            y: inner.y + i as f32 * (th + gap),
+            w: inner.w,
+            h: th,
+        };
     }
     let tw = ((inner.w - gap * (n as f32 - 1.0)) / n as f32).max(0.0);
-    Rect { x: inner.x + i as f32 * (tw + gap), y: inner.y, w: tw, h: inner.h }
+    Rect {
+        x: inner.x + i as f32 * (tw + gap),
+        y: inner.y,
+        w: tw,
+        h: inner.h,
+    }
 }
 
 /// One tab **cell**: fill / border / label picked down the hover-vs-resting alias
@@ -4282,10 +5150,18 @@ fn draw_tab_cell(
         let f = if hovered { v.hover } else { v.idle };
         (f.top, f.bot, f.border, f.label)
     } else if hovered {
-        let top = first_color(s, &["hover_top", "hot", "fill_top", "active_top", "fill"], PANEL);
+        let top = first_color(
+            s,
+            &["hover_top", "hot", "fill_top", "active_top", "fill"],
+            PANEL,
+        );
         (
             top,
-            first_color(s, &["hover_bot", "hot", "fill_bot", "active_bot", "fill"], top),
+            first_color(
+                s,
+                &["hover_bot", "hot", "fill_bot", "active_bot", "fill"],
+                top,
+            ),
             first_color(s, &["hover_border", "border"], CLEAR),
             first_color(s, &["hover_label", "active_label", "label"], INK),
         )
@@ -4298,7 +5174,15 @@ fn draw_tab_cell(
             first_color(s, &["active_label", "label"], INK),
         )
     };
-    push_panel(out, r, top, Some(bot), jnum(s, "radius", 3.0), border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        r,
+        top,
+        Some(bot),
+        jnum(s, "radius", 3.0),
+        border,
+        jnum(s, "border_w", 1.0),
+    );
     // UNDERLINE variant: a style carrying `underline` marks its state with a rule along
     // the cell's bottom edge instead of (or over) the filled pill. This is what a PAGE
     // rail wants — the pill reads as a control, the underline as "where you are" — and
@@ -4309,7 +5193,12 @@ fn draw_tab_cell(
         let inset = jnum(s, "underline_inset", 0.0);
         push_rect(
             out,
-            Rect { x: r.x + inset, y: r.y + r.h - uw, w: (r.w - 2.0 * inset).max(0.0), h: uw },
+            Rect {
+                x: r.x + inset,
+                y: r.y + r.h - uw,
+                w: (r.w - 2.0 * inset).max(0.0),
+                h: uw,
+            },
             ul,
         );
     }
@@ -4363,8 +5252,14 @@ fn draw_tabs(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // A rail may name a compiled button VARIANT per state instead of a style block —
     // the retired-`modal.buttons.variants` path. Additive: a strip that names neither
     // draws exactly as before (from its `tab_active`/`tab_idle` blocks).
-    let active_var = props.get("tab_active_variant").and_then(|v| v.as_str()).map(button_variant);
-    let idle_var = props.get("tab_idle_variant").and_then(|v| v.as_str()).map(button_variant);
+    let active_var = props
+        .get("tab_active_variant")
+        .and_then(|v| v.as_str())
+        .map(button_variant);
+    let idle_var = props
+        .get("tab_idle_variant")
+        .and_then(|v| v.as_str())
+        .map(button_variant);
     let want = jopt(props, "bind_value");
     let m = pointer(props);
     for (i, child) in kids.iter().enumerate() {
@@ -4392,7 +5287,10 @@ fn draw_tabs(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// that child's index. The default-to-first echo on idle frames is the walker's generic
 /// pass ([`echo_binds`]).
 fn hit_tabs(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
-    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
     let kids = jkids(props);
     for (i, child) in kids.iter().enumerate() {
         if !tab_cell(r, props, kids.len(), i).contains(m) {
@@ -4422,8 +5320,12 @@ fn hit_tabs(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
 /// pre-filters say.
 fn select_menu(r: Rect, menu: &Json, n: usize) -> (Rect, f32) {
     let row_h = jnum(menu, "row_h", 30.0);
-    let rect =
-        Rect { x: r.x, y: r.y + r.h + jnum(menu, "gap", 6.0), w: r.w, h: row_h * n as f32 };
+    let rect = Rect {
+        x: r.x,
+        y: r.y + r.h + jnum(menu, "gap", 6.0),
+        w: r.w,
+        h: row_h * n as f32,
+    };
     (rect, row_h)
 }
 
@@ -4431,7 +5333,12 @@ fn select_menu(r: Rect, menu: &Json, n: usize) -> (Rect, f32) {
 /// ROW is the region — both the hover test and the click test read it — while the band
 /// actually drawn is inset within it.
 fn select_row(r: Rect, menu: Rect, row_h: f32, i: usize) -> Rect {
-    Rect { x: r.x, y: menu.y + i as f32 * row_h, w: r.w, h: row_h }
+    Rect {
+        x: r.x,
+        y: menu.y + i as f32 * row_h,
+        w: r.w,
+        h: row_h,
+    }
 }
 
 /// Whether an option row is the SELECTED one: its INDEX equals the bound one. Both sides
@@ -4466,10 +5373,26 @@ fn select_display<'a>(props: &'a Json, kids: &'a [Json]) -> (&'a str, bool) {
 /// last by `size / steps` — a triangle with no glyph-font dependency, so a dropdown
 /// needs no icon sheet. `steps` is both the row count and the taper, so the wedge keeps
 /// its proportions at any count.
-fn draw_select_caret(cx: f32, cy: f32, size: f32, steps: usize, color: [f32; 4], out: &mut Vec<HudCommand>) {
+fn draw_select_caret(
+    cx: f32,
+    cy: f32,
+    size: f32,
+    steps: usize,
+    color: [f32; 4],
+    out: &mut Vec<HudCommand>,
+) {
     for i in 0..steps {
         let w = size * (1.0 - i as f32 / steps as f32);
-        push_rect(out, Rect { x: cx - w * 0.5, y: cy - 1.0 + i as f32, w, h: 1.0 }, color);
+        push_rect(
+            out,
+            Rect {
+                x: cx - w * 0.5,
+                y: cy - 1.0 + i as f32,
+                w,
+                h: 1.0,
+            },
+            color,
+        );
     }
 }
 
@@ -4526,7 +5449,20 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         first_color(field, &["label"], INK)
     };
     let pad_x = jnum(field, "pad_x", 14.0);
-    push_text(out, r.x + pad_x, r.y + (r.h - lsz) * 0.5, label, lsz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    push_text(
+        out,
+        r.x + pad_x,
+        r.y + (r.h - lsz) * 0.5,
+        label,
+        lsz,
+        lc,
+        TextAlign::Left,
+        FontRole::Body,
+        false,
+        false,
+        -1.0,
+        None,
+    );
     draw_select_caret(
         r.x + r.w - jnum(field, "caret_inset", 16.0),
         r.y + r.h * 0.5,
@@ -4573,7 +5509,12 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         if let Some(color) = band {
             push_rect(
                 out,
-                Rect { x: row.x + row_pad, y: row.y, w: row.w - 2.0 * row_pad, h: row.h },
+                Rect {
+                    x: row.x + row_pad,
+                    y: row.y,
+                    w: row.w - 2.0 * row_pad,
+                    h: row.h,
+                },
                 color,
             );
         }
@@ -4582,7 +5523,20 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         } else {
             first_color(menu, &["label"], INK)
         };
-        push_text(out, r.x + row_x, row.y + (row_h - msz) * 0.5, jstr(child, "label"), msz, rc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + row_x,
+            row.y + (row_h - msz) * 0.5,
+            jstr(child, "label"),
+            msz,
+            rc,
+            TextAlign::Left,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
     // Lift the whole popup run above the field. The walker adds the NODE's own sub-layer
     // on top of this afterwards, so the +1 stays relative to the field wherever the
@@ -4598,12 +5552,18 @@ fn draw_select(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// dropdown — and one inside the popup also picks the row under the pointer. The
 /// selected-value echo on idle frames is the walker's generic pass ([`echo_binds`]).
 fn hit_select(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
-    let menu = props.get("style").and_then(|s| s.get("menu")).unwrap_or(&Json::Null);
+    let menu = props
+        .get("style")
+        .and_then(|s| s.get("menu"))
+        .unwrap_or(&Json::Null);
     let kids = jkids(props);
     let open = props.get("open").and_then(|v| v.as_bool()) == Some(true);
     let (m_rect, row_h) = select_menu(r, menu, kids.len());
     let over_menu = open && m_rect.contains(m);
-    let mut v = HitVerdict { hit: r.contains(m) || over_menu, ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m) || over_menu,
+        ..HitVerdict::default()
+    };
     if !click {
         return v;
     }
@@ -4709,7 +5669,12 @@ fn slider_track(r: Rect, props: &Json) -> Rect {
             jnum(s, "label_size", 13.0) + jnum(s, "label_gap", 8.0)
         };
         let w = jnum(props, "slider_h", 10.0);
-        return Rect { x: r.x + (r.w - w) * 0.5, y: r.y + top, w, h: (r.h - top).max(0.0) };
+        return Rect {
+            x: r.x + (r.w - w) * 0.5,
+            y: r.y + top,
+            w,
+            h: (r.h - top).max(0.0),
+        };
     }
     let label_w = jnum(props, "label_w", 0.0);
     let h = jnum(props, "slider_h", r.h);
@@ -4772,9 +5737,30 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let lsz = jnum(s, "label_size", 13.0);
     let label = jstr(props, "label");
     if !label.is_empty() {
-        let lc = if focused { first_color(s, &["focus_label"], RUNE) } else { INK };
-        let ly = if vertical { r.y } else { r.y + (r.h - lsz) * 0.5 };
-        push_text(out, r.x, ly, label, lsz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        let lc = if focused {
+            first_color(s, &["focus_label"], RUNE)
+        } else {
+            INK
+        };
+        let ly = if vertical {
+            r.y
+        } else {
+            r.y + (r.h - lsz) * 0.5
+        };
+        push_text(
+            out,
+            r.x,
+            ly,
+            label,
+            lsz,
+            lc,
+            TextAlign::Left,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     // Rail, the fill up to the value, then the handle riding on it. The rail is a
@@ -4786,8 +5772,11 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     } else {
         first_color(s, &["track"], STONE)
     };
-    let fill_col =
-        if focused { first_color(s, &["focus_fill"], RUNE) } else { first_color(s, &["fill"], SAP) };
+    let fill_col = if focused {
+        first_color(s, &["focus_fill"], RUNE)
+    } else {
+        first_color(s, &["fill"], SAP)
+    };
     let thin = if vertical { track.w } else { track.h };
     let radius = jnum(s, "radius", thin * 0.5);
     let border = first_color(s, &["border"], CLEAR);
@@ -4805,14 +5794,39 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         // The fill RISES from the floor of the rail; the handle is a bar across it.
         let fh = track.h * t;
         let fy = track.y + track.h - fh;
-        push_panel(out, Rect { y: fy, h: fh, ..track }, fill_col, None, radius, CLEAR, 0.0);
+        push_panel(
+            out,
+            Rect {
+                y: fy,
+                h: fh,
+                ..track
+            },
+            fill_col,
+            None,
+            radius,
+            CLEAR,
+            0.0,
+        );
         if fill_hi[3] > 0.0 && fh > 0.0 {
-            push_rect(out, Rect { y: fy, h: hi_w, ..track }, fill_hi);
+            push_rect(
+                out,
+                Rect {
+                    y: fy,
+                    h: hi_w,
+                    ..track
+                },
+                fill_hi,
+            );
         }
         let hy = track.y + track.h * (1.0 - t);
         push_panel(
             out,
-            Rect { x: track.x - over, y: hy - hw * 0.5, w: track.w + 2.0 * over, h: hw },
+            Rect {
+                x: track.x - over,
+                y: hy - hw * 0.5,
+                w: track.w + 2.0 * over,
+                h: hw,
+            },
             handle,
             None,
             handle_radius,
@@ -4831,18 +5845,73 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
             } else {
                 first_color(s, &["value_color"], DIM)
             };
-            push_text(out, track.x + track.w + gap, hy - vsz * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+            push_text(
+                out,
+                track.x + track.w + gap,
+                hy - vsz * 0.5,
+                &fmt_val(value, props),
+                vsz,
+                vc,
+                TextAlign::Left,
+                FontRole::Body,
+                false,
+                false,
+                -1.0,
+                None,
+            );
             let rsz = jnum(s, "range_size", (vsz - 2.0).max(8.0));
             let rc = first_color(s, &["value_color"], DIM);
-            push_text(out, track.x - gap, track.y - rsz * 0.5, &fmt_val(max, props), rsz, rc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
-            push_text(out, track.x - gap, track.y + track.h - rsz * 0.5, &fmt_val(min, props), rsz, rc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+            push_text(
+                out,
+                track.x - gap,
+                track.y - rsz * 0.5,
+                &fmt_val(max, props),
+                rsz,
+                rc,
+                TextAlign::Right,
+                FontRole::Body,
+                false,
+                false,
+                -1.0,
+                None,
+            );
+            push_text(
+                out,
+                track.x - gap,
+                track.y + track.h - rsz * 0.5,
+                &fmt_val(min, props),
+                rsz,
+                rc,
+                TextAlign::Right,
+                FontRole::Body,
+                false,
+                false,
+                -1.0,
+                None,
+            );
         }
         return;
     }
     let fw = track.w * t;
-    push_panel(out, Rect { w: fw, ..track }, fill_col, None, radius, CLEAR, 0.0);
+    push_panel(
+        out,
+        Rect { w: fw, ..track },
+        fill_col,
+        None,
+        radius,
+        CLEAR,
+        0.0,
+    );
     if fill_hi[3] > 0.0 && fw > 0.0 {
-        push_rect(out, Rect { w: fw, h: hi_w, ..track }, fill_hi);
+        push_rect(
+            out,
+            Rect {
+                w: fw,
+                h: hi_w,
+                ..track
+            },
+            fill_hi,
+        );
     }
     push_panel(
         out,
@@ -4863,7 +5932,20 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     if jnum(props, "value_w", 0.0) > 0.0 {
         let vsz = jnum(s, "value_size", 12.0);
         let vc = first_color(s, &["value_color"], DIM);
-        push_text(out, r.x + r.w, r.y + (r.h - vsz) * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + r.w,
+            r.y + (r.h - vsz) * 0.5,
+            &fmt_val(value, props),
+            vsz,
+            vc,
+            TextAlign::Right,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 }
 
@@ -4887,14 +5969,25 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 fn hit_slider(m: Vec2, r: Rect, props: &Json, click: bool, down: bool) -> HitVerdict {
     let track = slider_track(r, props);
     let vertical = slider_vertical(props);
-    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
     if v.hit && click {
         v.group_focus = true;
         let pad = jnum(props, "grab_pad", 6.0);
         let grab = if vertical {
-            Rect { x: track.x - pad, w: track.w + 2.0 * pad, ..track }
+            Rect {
+                x: track.x - pad,
+                w: track.w + 2.0 * pad,
+                ..track
+            }
         } else {
-            Rect { y: track.y - pad, h: track.h + 2.0 * pad, ..track }
+            Rect {
+                y: track.y - pad,
+                h: track.h + 2.0 * pad,
+                ..track
+            }
         };
         // Only ever `Some(true)`: `Some(false)` would RELEASE a capture, and letting go
         // is the walker's generic button-up rule, never a component's decision.
@@ -4902,7 +5995,10 @@ fn hit_slider(m: Vec2, r: Rect, props: &Json, click: bool, down: bool) -> HitVer
     }
     // The HELD state, not the click edge — the press frame takes the capture and this
     // same frame maps it, then every held frame after keeps following the hand.
-    if down && (props.get("captured").and_then(|c| c.as_bool()) == Some(true) || v.capture == Some(true)) {
+    if down
+        && (props.get("captured").and_then(|c| c.as_bool()) == Some(true)
+            || v.capture == Some(true))
+    {
         let (min, max) = (jnum(props, "min", 0.0), jnum(props, "max", 1.0));
         let t = if vertical {
             // Bottom is min, top is max: the upright rail maps its pointer INVERTED.
@@ -4930,9 +6026,22 @@ fn hit_slider(m: Vec2, r: Rect, props: &Json, click: bool, down: bool) -> HitVer
 fn stepper_cells(r: Rect, props: &Json) -> (Rect, Rect, Rect) {
     let label_w = jnum(props, "label_w", 0.0);
     let h = jnum(props, "field_h", r.h);
-    let field = Rect { x: r.x + label_w, y: r.y + (r.h - h) * 0.5, w: (r.w - label_w).max(0.0), h };
+    let field = Rect {
+        x: r.x + label_w,
+        y: r.y + (r.h - h) * 0.5,
+        w: (r.w - label_w).max(0.0),
+        h,
+    };
     let bw = jnum(props, "btn_w", field.h);
-    (field, Rect { w: bw, ..field }, Rect { x: field.x + field.w - bw, w: bw, ..field })
+    (
+        field,
+        Rect { w: bw, ..field },
+        Rect {
+            x: field.x + field.w - bw,
+            w: bw,
+            ..field
+        },
+    )
 }
 
 /// The **stepper** — a −[value]+ numeric box: an optional caption column, then a field
@@ -4966,7 +6075,20 @@ fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // a stack of the two reads as one column of rows.
     let label = jstr(props, "label");
     if !label.is_empty() {
-        push_text(out, r.x, r.y + (r.h - lsz) * 0.5, label, lsz, label_col, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x,
+            r.y + (r.h - lsz) * 0.5,
+            label,
+            lsz,
+            label_col,
+            TextAlign::Left,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     // The field, then the two end buttons over it — inputs-class rounding
@@ -4974,7 +6096,15 @@ fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // `border`, the end cells their own `btn_border`.
     let radius = jnum(s, "radius", 3.0);
     let border_w = jnum(s, "border_w", 1.0);
-    push_panel(out, field, first_color(s, &["field", "box"], PANEL), None, radius, first_color(s, &["border"], CLEAR), border_w);
+    push_panel(
+        out,
+        field,
+        first_color(s, &["field", "box"], PANEL),
+        None,
+        radius,
+        first_color(s, &["border"], CLEAR),
+        border_w,
+    );
     let btn_col = first_color(s, &["btn"], STONE);
     let btn_border = first_color(s, &["btn_border"], CLEAR);
     let btn_radius = jnum(s, "btn_radius", radius);
@@ -4987,11 +6117,37 @@ fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let gsz = jnum(s, "glyph_size", lsz);
     for (cell, key, dflt) in [(minus, "dec_glyph", "-"), (plus, "inc_glyph", "+")] {
         let glyph = props.get(key).and_then(|v| v.as_str()).unwrap_or(dflt);
-        push_text(out, cell.x + cell.w * 0.5, cell.y + (cell.h - gsz) * 0.5, glyph, gsz, label_col, TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            cell.x + cell.w * 0.5,
+            cell.y + (cell.h - gsz) * 0.5,
+            glyph,
+            gsz,
+            label_col,
+            TextAlign::Center,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
     let vsz = jnum(s, "value_size", lsz);
     let vc = first_color(s, &["value_color", "label"], label_col);
-    push_text(out, field.x + field.w * 0.5, field.y + (field.h - vsz) * 0.5, &fmt_val(value, props), vsz, vc, TextAlign::Center, FontRole::Body, false, false, -1.0, None);
+    push_text(
+        out,
+        field.x + field.w * 0.5,
+        field.y + (field.h - vsz) * 0.5,
+        &fmt_val(value, props),
+        vsz,
+        vc,
+        TextAlign::Center,
+        FontRole::Body,
+        false,
+        false,
+        -1.0,
+        None,
+    );
 }
 
 /// The stepper's hit: the whole ROW claims, but only the two square end cells STEP — `-`
@@ -5009,7 +6165,10 @@ fn draw_stepper(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// **props**: `bind_value` · `min` (0) · `max` (1) · `step` (1) · plus everything
 /// [`stepper_cells`] reads.
 fn hit_stepper(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
-    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
     if !click {
         return v;
     }
@@ -5025,7 +6184,11 @@ fn hit_stepper(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
     let (min, max) = (num("min", 0.0), num("max", 1.0));
     // Clamped in the module's order — NOT `f64::clamp`, which PANICS on an inverted
     // authored range where this quietly lets `min` win.
-    v.value = Some(Value::Number((num("bind_value", min) + dir * num("step", 1.0)).min(max).max(min)));
+    v.value = Some(Value::Number(
+        (num("bind_value", min) + dir * num("step", 1.0))
+            .min(max)
+            .max(min),
+    ));
     v
 }
 
@@ -5071,13 +6234,27 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let top = first_color(s, &["top", "fill_top", "bg"], STONE);
     let bot = first_color(s, &["bot", "fill_bot", "bg"], top);
     let (border, border_w) = if focused {
-        (first_color(s, &["caret", "focus_border", "border"], RUNE), jnum(s, "focus_border_w", 2.0))
+        (
+            first_color(s, &["caret", "focus_border", "border"], RUNE),
+            jnum(s, "focus_border_w", 2.0),
+        )
     } else if hovered {
-        (first_color(s, &["hover_border", "border"], DIM), jnum(s, "border_w", 1.0))
+        (
+            first_color(s, &["hover_border", "border"], DIM),
+            jnum(s, "border_w", 1.0),
+        )
     } else {
         (first_color(s, &["border"], STONE), jnum(s, "border_w", 1.0))
     };
-    push_panel(out, r, top, Some(bot), jnum(s, "radius", 3.0), border, border_w);
+    push_panel(
+        out,
+        r,
+        top,
+        Some(bot),
+        jnum(s, "radius", 3.0),
+        border,
+        border_w,
+    );
 
     // The value, or the placeholder while it is empty. `label_size`: the NODE's own
     // prop wins over the style block (prop-wins, uniform across kinds — the tree is
@@ -5086,12 +6263,28 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let pad = jnum(props, "text_pad", 8.0);
     let value = jstr(props, "bind_value");
     let (shown, color) = if value.is_empty() {
-        (jstr(props, "placeholder"), first_color(s, &["placeholder"], DIM))
+        (
+            jstr(props, "placeholder"),
+            first_color(s, &["placeholder"], DIM),
+        )
     } else {
         (value, first_color(s, &["label", "color"], INK))
     };
     let (tx, ty) = (r.x + pad, r.y + (r.h - lsz) * 0.5);
-    push_text(out, tx, ty, shown, lsz, color, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+    push_text(
+        out,
+        tx,
+        ty,
+        shown,
+        lsz,
+        color,
+        TextAlign::Left,
+        FontRole::Body,
+        false,
+        false,
+        -1.0,
+        None,
+    );
 
     if focused {
         let cw = jnum(props, "caret_w", 2.0);
@@ -5127,7 +6320,11 @@ fn draw_text_field(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// path entirely. It reads no props, so it takes none.
 fn hit_text_field(m: Vec2, r: Rect, click: bool) -> HitVerdict {
     let over = r.contains(m);
-    HitVerdict { hit: over, focus: (over && click).then_some(true), ..HitVerdict::default() }
+    HitVerdict {
+        hit: over,
+        focus: (over && click).then_some(true),
+        ..HitVerdict::default()
+    }
 }
 
 // ── Containers (a surface that holds OTHER content) ──────────────────────────
@@ -5183,8 +6380,11 @@ fn draw_list(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     if max > 0.0 {
         let offset = jnum(props, "bind_value", 0.0).max(0.0).min(max);
         let bw = jnum(s, "bar_w", 4.0);
-        let track =
-            Rect { x: inner.x + inner.w - bw - jnum(s, "bar_inset", 0.0), w: bw, ..inner };
+        let track = Rect {
+            x: inner.x + inner.w - bw - jnum(s, "bar_inset", 0.0),
+            w: bw,
+            ..inner
+        };
         push_rect(out, track, first_color(s, &["track"], STONE));
         // Proportional thumb (viewport ÷ content, of the viewport) with a floor so a mile
         // of content still leaves something to grab. The free travel shrinks by the same
@@ -5192,7 +6392,15 @@ fn draw_list(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         let floor = jnum(s, "thumb_min", 28.0).min(inner.h);
         let thumb_h = (inner.h * (inner.h / content_h)).max(floor).min(inner.h);
         let ty = inner.y + (offset / max) * (inner.h - thumb_h);
-        push_rect(out, Rect { y: ty, h: thumb_h, ..track }, first_color(s, &["thumb"], SAP));
+        push_rect(
+            out,
+            Rect {
+                y: ty,
+                h: thumb_h,
+                ..track
+            },
+            first_color(s, &["thumb"], SAP),
+        );
     }
 }
 
@@ -5222,16 +6430,24 @@ fn hit_list(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
     if !r.contains(m) {
         return HitVerdict::default();
     }
-    let mut v = HitVerdict { hit: true, ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: true,
+        ..HitVerdict::default()
+    };
     let wheel = jnum(props, "wheel", 0.0);
     if wheel != 0.0 {
         let max = (f64::from(jnum(props, "content_h", 0.0)) - f64::from(list_viewport(r, props).h))
             .max(0.0);
-        let cur = props.get("bind_value").and_then(|n| n.as_f64()).unwrap_or(0.0);
+        let cur = props
+            .get("bind_value")
+            .and_then(|n| n.as_f64())
+            .unwrap_or(0.0);
         let speed = f64::from(jnum(props, "scroll_speed", 46.0));
         // Clamped in the module's own order — NOT `f64::clamp`, whose `min > max`
         // contract would panic if a future edit let the ceiling go negative.
-        v.value = Some(Value::Number((cur - f64::from(wheel) * speed).max(0.0).min(max)));
+        v.value = Some(Value::Number(
+            (cur - f64::from(wheel) * speed).max(0.0).min(max),
+        ));
     }
     v
 }
@@ -5245,7 +6461,11 @@ fn hit_list(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
 /// Deliberately UNBOUNDED by the rect: a menu with more items than its authored height
 /// covers lays rows past the bottom, and those rows are real (see [`hit_context_menu`]).
 fn menu_row(r: Rect, row_h: f32, i: usize) -> Rect {
-    Rect { y: r.y + i as f32 * row_h, h: row_h, ..r }
+    Rect {
+        y: r.y + i as f32 * row_h,
+        h: row_h,
+        ..r
+    }
 }
 
 /// The **context menu** — a standalone floating menu (DS `ContextMenu`), the reusable
@@ -5331,7 +6551,11 @@ fn draw_context_menu(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         if let Some(color) = wash {
             push_rect(
                 out,
-                Rect { x: r.x + row_pad, w: (r.w - 2.0 * row_pad).max(0.0), ..row },
+                Rect {
+                    x: r.x + row_pad,
+                    w: (r.w - 2.0 * row_pad).max(0.0),
+                    ..row
+                },
                 color,
             );
         }
@@ -5344,16 +6568,46 @@ fn draw_context_menu(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         // `label` else `text`, by PRESENCE — an authored `label` shadows `text` even when
         // it is not display copy, which is the module's own selection rule and `jstr`'s
         // ruling about what counts as text.
-        let label = if jopt(c, "label").is_some() { jstr(c, "label") } else { jstr(c, "text") };
+        let label = if jopt(c, "label").is_some() {
+            jstr(c, "label")
+        } else {
+            jstr(c, "text")
+        };
         let ty = row.y + (row_h - msz) * 0.5;
-        push_text(out, r.x + pad_x, ty, label, msz, lc, TextAlign::Left, FontRole::Body, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + pad_x,
+            ty,
+            label,
+            msz,
+            lc,
+            TextAlign::Left,
+            FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
         // Optional right-aligned keybind hint, always dim — a shortcut is a reminder,
         // never competition for the label. Only a STRING is a hint (a stray number would
         // be an authoring error, and drawing nothing is how it shows).
         if let Some(hint) = c.get("hint").and_then(|h| h.as_str()) {
             let hc = first_color(st, &["hint"], DIM);
             let hx = r.x + r.w - jnum(st, "hint_pad", pad_x);
-            push_text(out, hx, ty, hint, msz, hc, TextAlign::Right, FontRole::Body, false, false, -1.0, None);
+            push_text(
+                out,
+                hx,
+                ty,
+                hint,
+                msz,
+                hc,
+                TextAlign::Right,
+                FontRole::Body,
+                false,
+                false,
+                -1.0,
+                None,
+            );
         }
     }
 }
@@ -5371,7 +6625,10 @@ fn draw_context_menu(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// bands contain it, [`Rect::contains`] being inclusive) resolves to the lower row rather
 /// than firing two.
 fn hit_context_menu(m: Vec2, r: Rect, props: &Json, click: bool) -> HitVerdict {
-    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
     if !click {
         return v;
     }
@@ -5416,11 +6673,24 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // The sunk track (styling S3): slots-class rounding with an alpha-gated
     // border; the band and caliper marker stay crisp rects inside/across it.
     let radius = jnum(s, "radius", 3.0);
-    push_panel(out, r, first_color(s, &["track"], WELL), None, radius, first_color(s, &["border"], CLEAR), jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        r,
+        first_color(s, &["track"], WELL),
+        None,
+        radius,
+        first_color(s, &["border"], CLEAR),
+        jnum(s, "border_w", 1.0),
+    );
     // The habitable band — the green zone in the middle of the bar.
     push_rect(
         out,
-        Rect { x: r.x + r.w * lo, y: r.y, w: r.w * (hi - lo), h: r.h },
+        Rect {
+            x: r.x + r.w * lo,
+            y: r.y,
+            w: r.w * (hi - lo),
+            h: r.h,
+        },
         first_color(s, &["band"], BAND),
     );
     // The top hairline. This and the `no_signal` wash below are gated on ALPHA where
@@ -5429,15 +6699,25 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // fewer, and the guard `resource_gauge` already used for its own sheen.
     let sheen = first_color(s, &["sheen"], CLEAR);
     if sheen[3] > 0.0 {
-        push_rect(out, Rect { h: jnum(s, "sheen_h", 1.0), ..r }, sheen);
+        push_rect(
+            out,
+            Rect {
+                h: jnum(s, "sheen_h", 1.0),
+                ..r
+            },
+            sheen,
+        );
     }
 
     // No signal yet: wash the whole bar out and stop. A NON-NUMERIC reading takes this
     // branch too (the module's `type(value) ~= "number"` guard) — "the observer
     // published nothing usable" and "the observer published nothing" are the same fact
     // to a read-out, and so is a NaN.
-    let Some(value) =
-        props.get("bind_value").and_then(|v| v.as_f64()).map(|v| v as f32).filter(|v| *v >= 0.0)
+    let Some(value) = props
+        .get("bind_value")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+        .filter(|v| *v >= 0.0)
     else {
         let wash = first_color(s, &["no_signal"], CLEAR);
         if wash[3] > 0.0 {
@@ -5451,8 +6731,11 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // The marker sits at the CLAMPED position but takes its colour from the RAW
     // reading, so a value past the end of the track still reports out-of-band instead
     // of being dragged into the green by the clamp.
-    let keys: &[&str] =
-        if value >= lo && value <= hi { &["marker_in", "marker"] } else { &["marker"] };
+    let keys: &[&str] = if value >= lo && value <= hi {
+        &["marker_in", "marker"]
+    } else {
+        &["marker"]
+    };
     let mw = jnum(s, "marker_w", 4.0);
     // A caliper ACROSS the bar rather than a fill inside it: the marker overhangs the
     // track by `marker_over` at each end, which is what keeps it readable over the band.
@@ -5501,7 +6784,10 @@ fn draw_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// `readout_color`.
 fn draw_resource_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
-    let tone = props.get("tone").and_then(|v| v.as_str()).unwrap_or("health");
+    let tone = props
+        .get("tone")
+        .and_then(|v| v.as_str())
+        .unwrap_or("health");
     let low = jbool(props, "low");
 
     // The optional caps label row; the track takes whatever height is left.
@@ -5517,13 +6803,39 @@ fn draw_resource_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         } else {
             first_color(s, &[tone_label.as_str(), "label"], INK)
         };
-        push_text(out, r.x, r.y, label, label_sz, label_color, TextAlign::Left, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x,
+            r.y,
+            label,
+            label_sz,
+            label_color,
+            TextAlign::Left,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
         // The readout keeps the SHARED colour in every state: the label carries the tone
         // and the warning, the number stays legible.
         let readout = jstr(props, "readout");
         if !readout.is_empty() {
             let color = first_color(s, &["readout_color"], INK);
-            push_text(out, r.x + r.w, r.y, readout, jnum(s, "readout_size", 12.0), color, TextAlign::Right, FontRole::Label, false, false, -1.0, None);
+            push_text(
+                out,
+                r.x + r.w,
+                r.y,
+                readout,
+                jnum(s, "readout_size", 12.0),
+                color,
+                TextAlign::Right,
+                FontRole::Label,
+                false,
+                false,
+                -1.0,
+                None,
+            );
         }
         let row = label_sz + jnum(s, "label_gap", 6.0);
         track_y = r.y + row;
@@ -5543,27 +6855,55 @@ fn draw_resource_gauge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     } else {
         first_color(s, &[tone_border.as_str(), "border"], CLEAR)
     };
-    let track = Rect { x: r.x, y: track_y, w: r.w, h: track_h };
-    push_panel(out, track, first_color(s, &["track"], WELL), None, radius, border, jnum(s, "border_w", 1.0));
+    let track = Rect {
+        x: r.x,
+        y: track_y,
+        w: r.w,
+        h: track_h,
+    };
+    push_panel(
+        out,
+        track,
+        first_color(s, &["track"], WELL),
+        None,
+        radius,
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     // The lit fill: the tone's two-stop gradient inset by `pad`, plus a sheen along its
     // top edge. A sub-pixel fill is dropped — a bar at half a percent would otherwise
     // draw a sliver that reads as a rounding artefact rather than as a value.
     let pad = jnum(s, "pad", 2.0);
-    let frac = saturate(props.get("bind_value").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32);
+    let frac = saturate(
+        props
+            .get("bind_value")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32,
+    );
     let fw = (r.w - 2.0 * pad) * frac;
     if fw > 1.0 {
         let (tone_top, tone_bot) = (format!("{tone}_top"), format!("{tone}_bot"));
         let top = first_color(s, &[tone_top.as_str()], INK);
         let bot = first_color(s, &[tone_bot.as_str()], top);
-        let fr = Rect { x: r.x + pad, y: track_y + pad, w: fw, h: track_h - 2.0 * pad };
+        let fr = Rect {
+            x: r.x + pad,
+            y: track_y + pad,
+            w: fw,
+            h: track_h - 2.0 * pad,
+        };
         push_panel(out, fr, top, Some(bot), (radius - pad).max(0.0), CLEAR, 0.0);
         let sheen = first_color(s, &["sheen"], CLEAR);
         if sheen[3] > 0.0 {
             let inset = jnum(s, "sheen_inset", 1.0);
             push_rect(
                 out,
-                Rect { x: fr.x + inset, w: (fr.w - 2.0 * inset).max(0.0), h: jnum(s, "sheen_h", 1.0), ..fr },
+                Rect {
+                    x: fr.x + inset,
+                    w: (fr.w - 2.0 * inset).max(0.0),
+                    h: jnum(s, "sheen_h", 1.0),
+                    ..fr
+                },
                 sheen,
             );
         }
@@ -5605,7 +6945,9 @@ fn draw_stat_dot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         Some(Json::String(n)) => Some(n.as_str()),
         _ => None,
     };
-    let hue = name.and_then(|n| s.get("hues").and_then(|h| h.get(n))).unwrap_or(&Json::Null);
+    let hue = name
+        .and_then(|n| s.get("hues").and_then(|h| h.get(n)))
+        .unwrap_or(&Json::Null);
     let radius = jnum(s, "radius", d * 0.5);
 
     // The glow is on unless the node says EXACTLY `false`: opting out is a deliberate
@@ -5719,7 +7061,15 @@ fn draw_action_slot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     };
     let top = first_color(s, &["bg_top"], STONE_BTN);
     let bot = first_color(s, &["bg_bot"], WELL);
-    push_panel(out, r, top, Some(bot), radius, border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        r,
+        top,
+        Some(bot),
+        radius,
+        border,
+        jnum(s, "border_w", 1.0),
+    );
 
     // The recess INTERIOR — one step in from the slab, with the radius stepped down to
     // match. The bronze rim and the cooldown veil are the two things that live in it, so
@@ -5729,7 +7079,15 @@ fn draw_action_slot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let inner_radius = (radius - inset).max(0.0);
     let rim = first_color(s, &["rim"], CLEAR);
     if rim[3] > 0.0 {
-        push_panel(out, inner, CLEAR, None, inner_radius, rim, jnum(s, "rim_w", 1.0));
+        push_panel(
+            out,
+            inner,
+            CLEAR,
+            None,
+            inner_radius,
+            rim,
+            jnum(s, "rim_w", 1.0),
+        );
     }
 
     // The rune glyph, centred, over its halo. The size is a FRACTION of the slot height
@@ -5755,28 +7113,70 @@ fn draw_action_slot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
                 layer: 0.0,
             });
         }
-        push_text(out, r.x + r.w * 0.5, r.y + (r.h - gsz) * 0.5, rune, gsz, first_color(s, &["rune_color"], BRONZE), TextAlign::Center, FontRole::Rune, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + r.w * 0.5,
+            r.y + (r.h - gsz) * 0.5,
+            rune,
+            gsz,
+            first_color(s, &["rune_color"], BRONZE),
+            TextAlign::Center,
+            FontRole::Rune,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     // The keybind tag, top-left.
     let key = jstr(props, "key");
     if !key.is_empty() {
         let ksz = jnum(s, "key_size", 10.0);
-        push_text(out, r.x + jnum(s, "key_x", 4.0), r.y + jnum(s, "key_y", 2.0), key, ksz, first_color(s, &["key_color"], BRONZE), TextAlign::Left, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + jnum(s, "key_x", 4.0),
+            r.y + jnum(s, "key_y", 2.0),
+            key,
+            ksz,
+            first_color(s, &["key_color"], BRONZE),
+            TextAlign::Left,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     // The charge count, bottom-right. A NUMBER is truncated toward zero — the `%d` the
     // module formatted it with — and a STRING is passed through, so a slot can read
     // "3/5" or "∞" as well as "3". Anything else has nothing to say and draws no row.
     let charges = match jopt(props, "charges") {
-        Some(Json::Number(n)) => n.as_f64().map(|v| (v as i64).to_string()).unwrap_or_default(),
+        Some(Json::Number(n)) => n
+            .as_f64()
+            .map(|v| (v as i64).to_string())
+            .unwrap_or_default(),
         Some(Json::String(t)) => t.clone(),
         _ => String::new(),
     };
     if !charges.is_empty() {
         let csz = jnum(s, "charge_size", 11.0);
         let y = r.y + r.h - csz - jnum(s, "charge_y", 2.0);
-        push_text(out, r.x + r.w - jnum(s, "charge_x", 5.0), y, &charges, csz, first_color(s, &["charge_color"], BRONZE), TextAlign::Right, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            r.x + r.w - jnum(s, "charge_x", 5.0),
+            y,
+            &charges,
+            csz,
+            first_color(s, &["charge_color"], BRONZE),
+            TextAlign::Right,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     // The cooldown veil: a top-down wipe over the `cd` fraction of the interior.
@@ -5784,8 +7184,19 @@ fn draw_action_slot(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     // naming no `cd_veil` still spends its one transparent command while cooling.
     let cd = saturate(jnum(props, "cd", 0.0));
     if cd > 0.0 {
-        let veil = Rect { h: inner.h * cd, ..inner };
-        push_panel(out, veil, first_color(s, &["cd_veil"], CLEAR), None, inner_radius, CLEAR, 0.0);
+        let veil = Rect {
+            h: inner.h * cd,
+            ..inner
+        };
+        push_panel(
+            out,
+            veil,
+            first_color(s, &["cd_veil"], CLEAR),
+            None,
+            inner_radius,
+            CLEAR,
+            0.0,
+        );
     }
 }
 
@@ -5819,7 +7230,12 @@ fn draw_medallion(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let s = props.get("style").unwrap_or(&Json::Null);
     // The largest inscribed square, centred — a true circle in any slot.
     let d = r.w.min(r.h);
-    let disc = Rect { x: r.x + (r.w - d) * 0.5, y: r.y + (r.h - d) * 0.5, w: d, h: d };
+    let disc = Rect {
+        x: r.x + (r.w - d) * 0.5,
+        y: r.y + (r.h - d) * 0.5,
+        w: d,
+        h: d,
+    };
     let name = match props.get("ring") {
         // Absent / null / `false` are the Lua-falsy cases the `or "bronze"` default was
         // written for; any other non-name is a lookup that misses on purpose.
@@ -5827,7 +7243,9 @@ fn draw_medallion(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         Some(Json::String(n)) => Some(n.as_str()),
         _ => None,
     };
-    let ring = name.and_then(|n| s.get("rings").and_then(|r| r.get(n))).unwrap_or(&Json::Null);
+    let ring = name
+        .and_then(|n| s.get("rings").and_then(|r| r.get(n)))
+        .unwrap_or(&Json::Null);
 
     // The ACTIVE ring's light, outside the metal: a feathered glow disc under a thin
     // rune-light outline, both standing `glow_pad` off the ring on every side.
@@ -5853,12 +7271,28 @@ fn draw_medallion(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     }
     let halo = first_color(ring, &["halo"], CLEAR);
     if halo[3] > 0.0 {
-        push_panel(out, halo_box, CLEAR, None, halo_radius, halo, jnum(s, "halo_w", 1.0));
+        push_panel(
+            out,
+            halo_box,
+            CLEAR,
+            None,
+            halo_radius,
+            halo,
+            jnum(s, "halo_w", 1.0),
+        );
     }
 
     // The metal ring: a full-round slab in the variant's gradient pair.
     let ring_top = first_color(ring, &["top"], BRONZE);
-    push_panel(out, disc, ring_top, Some(first_color(ring, &["bot"], BRONZE_DIM)), d * 0.5, CLEAR, 0.0);
+    push_panel(
+        out,
+        disc,
+        ring_top,
+        Some(first_color(ring, &["bot"], BRONZE_DIM)),
+        d * 0.5,
+        CLEAR,
+        0.0,
+    );
 
     // The gem well inside the band: a dark radial look drawn as a vertical pair. A band
     // wider than the medallion leaves no well worth drawing.
@@ -5894,8 +7328,25 @@ fn draw_medallion(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
         let gsz = (d * jnum(s, "rune_scale", 0.5) + 0.5).floor();
         // A dotted `rune_color` prop (already resolved to rgba by the walker) overrides
         // the style block's — one unit's affinity colour without a style block per unit.
-        let color = first_color(props, &["rune_color"], first_color(s, &["rune_color"], RUNE));
-        push_text(out, disc.x + d * 0.5, disc.y + (d - gsz) * 0.5, rune, gsz, color, TextAlign::Center, FontRole::Rune, false, false, -1.0, None);
+        let color = first_color(
+            props,
+            &["rune_color"],
+            first_color(s, &["rune_color"], RUNE),
+        );
+        push_text(
+            out,
+            disc.x + d * 0.5,
+            disc.y + (d - gsz) * 0.5,
+            rune,
+            gsz,
+            color,
+            TextAlign::Center,
+            FontRole::Rune,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 }
 
@@ -5912,7 +7363,12 @@ fn badge_pill(r: Rect, s: &Json) -> Rect {
     // A node with no height yet (measured before layout) leaves the style's own height
     // standing alone rather than clamping the chip to nothing.
     let h = if r.h > 0.0 { sh.min(r.h) } else { sh };
-    Rect { x: r.x + pad, y: r.y + ((r.h - h) * 0.5).max(0.0), w: (r.w - pad * 2.0).max(0.0), h }
+    Rect {
+        x: r.x + pad,
+        y: r.y + ((r.h - h) * 0.5).max(0.0),
+        w: (r.w - pad * 2.0).max(0.0),
+        h,
+    }
 }
 
 /// The **badge** — a small rounded chip with a centred label: a `solid` badge fills
@@ -5940,17 +7396,26 @@ fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let pill = badge_pill(r, s);
 
     let (bg, label_color) = if jbool(props, "solid") {
-        (first_color(s, &["solid_bg"], INK), first_color(s, &["solid_label"], STONE))
+        (
+            first_color(s, &["solid_bg"], INK),
+            first_color(s, &["solid_label"], STONE),
+        )
     } else {
         // A non-string `tone` (a mistyped bind) reads as `neutral`, exactly as the
         // module's two string compares both failing did.
-        match props.get("tone").and_then(|v| v.as_str()).unwrap_or("neutral") {
-            "accent" => {
-                (first_color(s, &["accent_bg"], SAP), first_color(s, &["accent_label"], INK))
-            }
-            "bronze" => {
-                (first_color(s, &["bronze_bg"], STONE), first_color(s, &["bronze_label"], INK))
-            }
+        match props
+            .get("tone")
+            .and_then(|v| v.as_str())
+            .unwrap_or("neutral")
+        {
+            "accent" => (
+                first_color(s, &["accent_bg"], SAP),
+                first_color(s, &["accent_label"], INK),
+            ),
+            "bronze" => (
+                first_color(s, &["bronze_bg"], STONE),
+                first_color(s, &["bronze_label"], INK),
+            ),
             other => {
                 let (bg, label) = (format!("{other}_bg"), format!("{other}_label"));
                 (
@@ -5962,11 +7427,32 @@ fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     };
 
     let border = first_color(s, &["border"], CLEAR);
-    push_panel(out, pill, bg, None, jnum(s, "radius", pill.h * 0.5), border, jnum(s, "border_w", 1.0));
+    push_panel(
+        out,
+        pill,
+        bg,
+        None,
+        jnum(s, "radius", pill.h * 0.5),
+        border,
+        jnum(s, "border_w", 1.0),
+    );
     // The NODE's own prop wins over the style block (prop-wins, uniform across
     // kinds — the tree is the author's hand); the style supplies the default.
     let lsz = jnum(props, "label_size", jnum(s, "label_size", 11.0));
-    push_text(out, pill.x + pill.w * 0.5, pill.y + (pill.h - lsz) * 0.5, jstr(props, "label"), lsz, label_color, TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+    push_text(
+        out,
+        pill.x + pill.w * 0.5,
+        pill.y + (pill.h - lsz) * 0.5,
+        jstr(props, "label"),
+        lsz,
+        label_color,
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        -1.0,
+        None,
+    );
 }
 
 /// The badge's tight region is its PILL — a style that insets the chip (`pad` / `h`)
@@ -5978,9 +7464,11 @@ fn draw_badge(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
 /// would be the node rect and whose click would fire an action a chip does not have.
 fn hit_badge(m: Vec2, r: Rect, props: &Json) -> HitVerdict {
     let pill = badge_pill(r, props.get("style").unwrap_or(&Json::Null));
-    HitVerdict { hit: pill.contains(m), ..Default::default() }
+    HitVerdict {
+        hit: pill.contains(m),
+        ..Default::default()
+    }
 }
-
 
 // ── Composites (engine-drawn assemblies) ─────────────────────────────────────
 //
@@ -6084,7 +7572,20 @@ fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComma
     let cx = c.inner_x + c.inner_w * 0.5;
     // Title — always drawn (empty copy centres nothing, faithful to the proto's `@title=`).
     let title = crate::strings::resolve(ptext(node, "title").unwrap_or_default());
-    push_text(out, cx, c.title_y, &title, c.title_size, first_color(props, &["title_color_rgba"], INK), TextAlign::Center, FontRole::Display, false, false, -1.0, None);
+    push_text(
+        out,
+        cx,
+        c.title_y,
+        &title,
+        c.title_size,
+        first_color(props, &["title_color_rgba"], INK),
+        TextAlign::Center,
+        FontRole::Display,
+        false,
+        false,
+        -1.0,
+        None,
+    );
     if let Some(sy) = c.subtitle_y {
         // A bound subtitle's LIVE text (injected by `component_props`) wins over the
         // authored static copy; both resolve $tokens the same way.
@@ -6092,11 +7593,33 @@ fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComma
             Some(live) => crate::strings::resolve(live),
             None => crate::strings::resolve(ptext(node, "subtitle").unwrap_or_default()),
         };
-        push_text(out, cx, sy, &sub, c.subtitle_size, first_color(props, &["subtitle_color_rgba"], DIM), TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            cx,
+            sy,
+            &sub,
+            c.subtitle_size,
+            first_color(props, &["subtitle_color_rgba"], DIM),
+            TextAlign::Center,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
     if let Some(dy) = c.divider_y {
         if let Some(ds) = jopt(props, "divider_style") {
-            draw_panel_bg(Rect { x: c.inner_x, y: dy, w: c.inner_w, h: 1.0 }, ds, out);
+            draw_panel_bg(
+                Rect {
+                    x: c.inner_x,
+                    y: dy,
+                    w: c.inner_w,
+                    h: 1.0,
+                },
+                ds,
+                out,
+            );
         }
     }
     if c.has_footer {
@@ -6104,7 +7627,20 @@ fn draw_popup_panel(r: Rect, node: &UiNode, props: &Json, out: &mut Vec<HudComma
         // Pinned to the slab's bottom edge (its measured height reserved this line + the
         // bottom pad), so it sits below the last item wherever the item count lands.
         let fy = r.y + r.h - c.pad - text_line_h(c.footer_size);
-        push_text(out, cx, fy, &foot, c.footer_size, first_color(props, &["footer_color_rgba"], DIM), TextAlign::Center, FontRole::Label, false, false, -1.0, None);
+        push_text(
+            out,
+            cx,
+            fy,
+            &foot,
+            c.footer_size,
+            first_color(props, &["footer_color_rgba"], DIM),
+            TextAlign::Center,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 }
 
@@ -6139,10 +7675,15 @@ fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
     // The frame inset is the node's own `pad` structural field (scene-authored
     // arrangement), read via the standard `inner` insets like every other container.
     let inner = outer.inset_xy(pad_x(node), pad_y(node));
-    let child = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
+    let child = |kind: &'static str| {
+        node.children
+            .iter()
+            .find(move |c| visible(c, model) && c.component == kind)
+    };
     let has_page = child("tabs").is_some() && !pbool(node, "hide_pages");
     let has_tabsec = child("pill_toggle").is_some() && !pbool(node, "hide_tabs");
-    let tabs_open = has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
+    let tabs_open =
+        has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
 
     let mut y = inner.y;
     let (mut page_rail, mut lt, mut rt) = (None, None, None);
@@ -6150,14 +7691,34 @@ fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
         let rail_h = pnum(node, "rail_h").unwrap_or(42.0) as f32;
         let hw = pnum(node, "hint_w").unwrap_or(54.0) as f32;
         let rgap = pnum(node, "rail_gap").unwrap_or(30.0) as f32;
-        lt = Some(Rect { x: inner.x, y, w: hw, h: rail_h });
-        rt = Some(Rect { x: inner.x + inner.w - hw, y, w: hw, h: rail_h });
-        page_rail = Some(Rect { x: inner.x + hw + rgap, y, w: (inner.w - 2.0 * (hw + rgap)).max(0.0), h: rail_h });
+        lt = Some(Rect {
+            x: inner.x,
+            y,
+            w: hw,
+            h: rail_h,
+        });
+        rt = Some(Rect {
+            x: inner.x + inner.w - hw,
+            y,
+            w: hw,
+            h: rail_h,
+        });
+        page_rail = Some(Rect {
+            x: inner.x + hw + rgap,
+            y,
+            w: (inner.w - 2.0 * (hw + rgap)).max(0.0),
+            h: rail_h,
+        });
         y += rail_h;
     }
     let mut rule = None;
     if has_tabsec {
-        rule = Some(Rect { x: inner.x, y, w: inner.w, h: 1.0 });
+        rule = Some(Rect {
+            x: inner.x,
+            y,
+            w: inner.w,
+            h: 1.0,
+        });
         y += 1.0;
     }
     let (mut tab_pill, mut lb, mut rb) = (None, None, None);
@@ -6167,16 +7728,47 @@ fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
         let tgap = pnum(node, "tab_gap").unwrap_or(20.0) as f32;
         // The pill carries its own width (its `size` in the horizontal band); the
         // [LB · pill · RB] cluster is centred, exactly as the builder's grow spacers did.
-        let pill_w = child("pill_toggle").map(|c| child_main(c, model, true)).unwrap_or(0.0);
+        let pill_w = child("pill_toggle")
+            .map(|c| child_main(c, model, true))
+            .unwrap_or(0.0);
         let cluster = 2.0 * hw2 + 2.0 * tgap + pill_w;
         let cx = inner.x + ((inner.w - cluster) * 0.5).max(0.0);
-        lb = Some(Rect { x: cx, y, w: hw2, h: tab_h });
-        tab_pill = Some(Rect { x: cx + hw2 + tgap, y, w: pill_w, h: tab_h });
-        rb = Some(Rect { x: cx + hw2 + tgap + pill_w + tgap, y, w: hw2, h: tab_h });
+        lb = Some(Rect {
+            x: cx,
+            y,
+            w: hw2,
+            h: tab_h,
+        });
+        tab_pill = Some(Rect {
+            x: cx + hw2 + tgap,
+            y,
+            w: pill_w,
+            h: tab_h,
+        });
+        rb = Some(Rect {
+            x: cx + hw2 + tgap + pill_w + tgap,
+            y,
+            w: hw2,
+            h: tab_h,
+        });
         y += tab_h;
     }
-    let content = Rect { x: inner.x, y, w: inner.w, h: (inner.y + inner.h - y).max(0.0) };
-    PagedLayout { page_rail, lt, rt, rule, tab_pill, lb, rb, content }
+    let content = Rect {
+        x: inner.x,
+        y,
+        w: inner.w,
+        h: (inner.y + inner.h - y).max(0.0),
+    };
+    PagedLayout {
+        page_rail,
+        lt,
+        rt,
+        rule,
+        tab_pill,
+        lb,
+        rb,
+        content,
+    }
 }
 
 /// [`paged_layout`] for `page_side: "left"` — the vertical-page-rail variant. Splits the
@@ -6191,10 +7783,15 @@ fn paged_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
 /// the top path stays untouched.
 fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayout {
     let inner = outer.inset_xy(pad_x(node), pad_y(node));
-    let child = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
+    let child = |kind: &'static str| {
+        node.children
+            .iter()
+            .find(move |c| visible(c, model) && c.component == kind)
+    };
     let has_page = child("tabs").is_some() && !pbool(node, "hide_pages");
     let has_tabsec = child("pill_toggle").is_some() && !pbool(node, "hide_tabs");
-    let tabs_open = has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
+    let tabs_open =
+        has_tabsec && model.is_on(ptext(node, "tabs_shown").unwrap_or("paged_tabs_shown"));
 
     // The left column (hint · natural tab stack · hint), the vertical rule, and the right
     // area that remains.
@@ -6208,20 +7805,50 @@ fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayou
         // `tab_cell` equal-shares whatever height the rail rect gives it, so sizing the rect
         // to `n·rail_h + gaps + pad` makes each cell exactly `rail_h`.
         let tabs_node = child("tabs");
-        let n = tabs_node.map_or(0, |t| t.children.iter().filter(|c| visible(c, model)).count());
+        let n = tabs_node.map_or(0, |t| {
+            t.children.iter().filter(|c| visible(c, model)).count()
+        });
         let (tgap, tpad_y) = tabs_node.map_or((0.0, 0.0), |t| {
-            (pnum(t, "gap").unwrap_or(0.0) as f32, pnum(t, "pad_y").unwrap_or(0.0) as f32)
+            (
+                pnum(t, "gap").unwrap_or(0.0) as f32,
+                pnum(t, "pad_y").unwrap_or(0.0) as f32,
+            )
         });
         let stack_h = n as f32 * rail_h + (n as f32 - 1.0).max(0.0) * tgap + 2.0 * tpad_y;
         // LT (page-prev) above the stack, RT (page-next) below — the vertical mirror of the
         // top band's L/R hint gutters; `draw_paged_menu`/`hit_paged_menu` pick them up via
         // `paged_layout`, so the glyphs draw and a click pages, for free.
-        let lt = Rect { x: inner.x, y: inner.y, w: page_w, h: hint_h };
-        let page_rail = Rect { x: inner.x, y: inner.y + hint_h, w: page_w, h: stack_h };
-        let rt = Rect { x: inner.x, y: inner.y + hint_h + stack_h, w: page_w, h: hint_h };
-        let rule = Rect { x: inner.x + page_w, y: inner.y, w: 1.0, h: inner.h };
+        let lt = Rect {
+            x: inner.x,
+            y: inner.y,
+            w: page_w,
+            h: hint_h,
+        };
+        let page_rail = Rect {
+            x: inner.x,
+            y: inner.y + hint_h,
+            w: page_w,
+            h: stack_h,
+        };
+        let rt = Rect {
+            x: inner.x,
+            y: inner.y + hint_h + stack_h,
+            w: page_w,
+            h: hint_h,
+        };
+        let rule = Rect {
+            x: inner.x + page_w,
+            y: inner.y,
+            w: 1.0,
+            h: inner.h,
+        };
         let rx = inner.x + page_w + gap + 1.0;
-        let right = Rect { x: rx, y: inner.y, w: (inner.x + inner.w - rx).max(0.0), h: inner.h };
+        let right = Rect {
+            x: rx,
+            y: inner.y,
+            w: (inner.x + inner.w - rx).max(0.0),
+            h: inner.h,
+        };
         (Some(page_rail), Some(lt), Some(rt), Some(rule), right)
     } else {
         (None, None, None, None, inner)
@@ -6235,21 +7862,59 @@ fn paged_layout_left(node: &UiNode, outer: Rect, model: &ValueMap) -> PagedLayou
         let tab_h = pnum(node, "tab_h").unwrap_or(44.0) as f32;
         let hw2 = pnum(node, "hint_w2").unwrap_or(46.0) as f32;
         let tgap = pnum(node, "tab_gap").unwrap_or(20.0) as f32;
-        let pill_w = child("pill_toggle").map(|c| child_main(c, model, true)).unwrap_or(0.0);
+        let pill_w = child("pill_toggle")
+            .map(|c| child_main(c, model, true))
+            .unwrap_or(0.0);
         let cluster = 2.0 * hw2 + 2.0 * tgap + pill_w;
         let cx = right.x + ((right.w - cluster) * 0.5).max(0.0);
-        lb = Some(Rect { x: cx, y, w: hw2, h: tab_h });
-        tab_pill = Some(Rect { x: cx + hw2 + tgap, y, w: pill_w, h: tab_h });
-        rb = Some(Rect { x: cx + hw2 + tgap + pill_w + tgap, y, w: hw2, h: tab_h });
+        lb = Some(Rect {
+            x: cx,
+            y,
+            w: hw2,
+            h: tab_h,
+        });
+        tab_pill = Some(Rect {
+            x: cx + hw2 + tgap,
+            y,
+            w: pill_w,
+            h: tab_h,
+        });
+        rb = Some(Rect {
+            x: cx + hw2 + tgap + pill_w + tgap,
+            y,
+            w: hw2,
+            h: tab_h,
+        });
         y += tab_h;
     }
-    let content = Rect { x: right.x, y, w: right.w, h: (right.y + right.h - y).max(0.0) };
-    PagedLayout { page_rail, lt, rt, rule, tab_pill, lb, rb, content }
+    let content = Rect {
+        x: right.x,
+        y,
+        w: right.w,
+        h: (right.y + right.h - y).max(0.0),
+    };
+    PagedLayout {
+        page_rail,
+        lt,
+        rt,
+        rule,
+        tab_pill,
+        lb,
+        rb,
+        content,
+    }
 }
 
 /// One rail hint — a single atlas cell (from the resolved `glyph_style` block) centred
 /// in its gutter rect, the SAME emit convention [`draw_button`] uses for a glyph face.
-fn draw_paged_hint(rect: Option<Rect>, name: &str, size: f32, glyph_style: &Json, flash: f32, out: &mut Vec<HudCommand>) {
+fn draw_paged_hint(
+    rect: Option<Rect>,
+    name: &str,
+    size: f32,
+    glyph_style: &Json,
+    flash: f32,
+    out: &mut Vec<HudCommand>,
+) {
     let Some(rect) = rect else { return };
     let p = serde_json::json!({ "glyph": name, "glyph_size": size, "glyph_style": glyph_style.clone() });
     draw_glyph_face(rect, &p, flash, out);
@@ -6261,7 +7926,13 @@ fn draw_paged_hint(rect: Option<Rect>, name: &str, size: f32, glyph_style: &Json
 /// are AUTHORED child components (a `tabs` page rail, a `pill_toggle` tab rail) the walker
 /// placed at the band rects; the content is every other child, flowed below. The rails own
 /// their own stepping — the hints only FIRE their step names (see [`hit_paged_menu`]).
-fn draw_paged_menu(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: &mut Vec<HudCommand>) {
+fn draw_paged_menu(
+    r: Rect,
+    node: &UiNode,
+    model: &ValueMap,
+    props: &Json,
+    out: &mut Vec<HudCommand>,
+) {
     if let Some(st) = jopt(props, "style") {
         draw_panel_bg(r, st, out);
     }
@@ -6276,10 +7947,19 @@ fn draw_paged_menu(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: 
     // carry, restored on the native PTT kind. Press-only (`pressed` = mouse-down over the
     // frame, `mx`/`my` = the injected pointer): it clears on release, so no highlight
     // lingers on the last-clicked hint.
-    let pressed = props.get("pressed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let pressed = props
+        .get("pressed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mouse = Vec2::new(
-        props.get("mx").and_then(|v| v.as_f64()).unwrap_or(f64::from(f32::MIN)) as f32,
-        props.get("my").and_then(|v| v.as_f64()).unwrap_or(f64::from(f32::MIN)) as f32,
+        props
+            .get("mx")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::from(f32::MIN)) as f32,
+        props
+            .get("my")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(f64::from(f32::MIN)) as f32,
     );
     let hot = |rect: Option<Rect>| {
         if pressed && rect.is_some_and(|rc| rc.contains(mouse)) {
@@ -6300,13 +7980,24 @@ fn draw_paged_menu(r: Rect, node: &UiNode, model: &ValueMap, props: &Json, out: 
 /// activation channel ([`HitVerdict::fire`]), so the rail steps ITSELF on the very name a
 /// shoulder signal or a pad Confirm on that rail carries — one channel, no scene stepper.
 fn hit_paged_menu(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool) -> HitVerdict {
-    let mut v = HitVerdict { hit: r.contains(m), ..HitVerdict::default() };
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
     if !click {
         return v;
     }
     let lay = paged_layout(node, r, model);
-    let rail = |kind: &'static str| node.children.iter().find(move |c| visible(c, model) && c.component == kind);
-    let act = |n: Option<&UiNode>, key: &str| n.and_then(|n| ptext(n, key)).filter(|s| !s.is_empty()).map(str::to_string);
+    let rail = |kind: &'static str| {
+        node.children
+            .iter()
+            .find(move |c| visible(c, model) && c.component == kind)
+    };
+    let act = |n: Option<&UiNode>, key: &str| {
+        n.and_then(|n| ptext(n, key))
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     let over = |rect: Option<Rect>| rect.is_some_and(|rc| rc.contains(m));
     if over(lay.lt) {
         v.fire = act(rail("tabs"), "prev_action");
@@ -6316,6 +8007,199 @@ fn hit_paged_menu(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool
         v.fire = act(rail("pill_toggle"), "prev_action");
     } else if over(lay.rb) {
         v.fire = act(rail("pill_toggle"), "next_action");
+    }
+    v
+}
+
+/// The nav-footer band's computed geometry, shared by layout / draw / hit (the same
+/// no-drift contract as [`paged_layout`]): the 1px top rule, each visible LEGEND
+/// entry's glyph box + label box (chrome, keyed by child index), and each visible
+/// CLUSTER child's placement rect (real nodes, keyed likewise).
+struct FooterLayout {
+    rule: Rect,
+    hints: Vec<(usize, Rect, Rect)>,
+    cluster: Vec<(usize, Rect)>,
+}
+
+/// The **nav footer**'s one-band split: `option` children are the LEGEND — controller
+/// glyph + help-label pairs flowed from the LEFT — and every other child is the BUTTON
+/// CLUSTER, right-aligned in tree order (`[ MENU ] [ BACK ] [ NEXT ]`). A cluster child
+/// takes its measured width (its `size`, or a glyph face's square) and its measured
+/// height (its DS ladder rung, else the band), vertically centred. A legend entry is a
+/// `hint_glyph` square + `hint_gap` + the option's authored `size` label width; entries
+/// stop before they would run under the cluster — truncated visibly, never overlapped.
+fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
+    let inner = outer.inset_xy(pad_x(node), pad_y(node));
+    let rule = Rect {
+        x: outer.x,
+        y: outer.y,
+        w: outer.w,
+        h: 1.0,
+    };
+    // The cluster first: the legend needs to know where it must stop.
+    let kids: Vec<(usize, &UiNode)> = node
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.component != "option" && visible(c, model))
+        .collect();
+    let widths: Vec<f32> = kids
+        .iter()
+        .map(|(_, c)| child_main(c, model, true))
+        .collect();
+    let total = widths.iter().sum::<f32>() + node.gap * kids.len().saturating_sub(1) as f32;
+    let mut x = inner.x + inner.w - total;
+    let cluster_left = x;
+    let mut cluster = Vec::new();
+    for ((i, c), w) in kids.into_iter().zip(widths) {
+        let ch = child_cross(c, model, true);
+        let h = if ch > 0.0 { ch.min(inner.h) } else { inner.h };
+        cluster.push((
+            i,
+            Rect {
+                x,
+                y: inner.y + (inner.h - h) * 0.5,
+                w,
+                h,
+            },
+        ));
+        x += w + node.gap;
+    }
+    // The legend: glyph + label pairs from the left, clipped at the cluster.
+    let g = pnum(node, "hint_glyph").unwrap_or(20.0) as f32;
+    let hgap = pnum(node, "hint_gap").unwrap_or(8.0) as f32;
+    let mut hx = inner.x;
+    let mut hints = Vec::new();
+    for (i, c) in node.children.iter().enumerate() {
+        if c.component != "option" || !visible(c, model) {
+            continue;
+        }
+        let lw = c.size.unwrap_or(80.0);
+        if hx + g + hgap + lw > cluster_left - node.gap {
+            break;
+        }
+        hints.push((
+            i,
+            Rect {
+                x: hx,
+                y: inner.y + (inner.h - g) * 0.5,
+                w: g,
+                h: g,
+            },
+            Rect {
+                x: hx + g + hgap,
+                y: inner.y,
+                w: lw,
+                h: inner.h,
+            },
+        ));
+        hx += g + hgap + lw + node.gap;
+    }
+    FooterLayout {
+        rule,
+        hints,
+        cluster,
+    }
+}
+
+/// One legend entry's whole span — glyph box through label box — the press-highlight
+/// and hit target, so pointing anywhere on the pair reads as the entry.
+fn footer_span(glyph: &Rect, label: &Rect) -> Rect {
+    Rect {
+        x: glyph.x,
+        y: label.y,
+        w: label.x + label.w - glyph.x,
+        h: label.h,
+    }
+}
+
+/// The **nav footer** — the bench-standard bottom band: a LEGEND of controller-glyph +
+/// help-label pairs on the left, the scene's authored button cluster (`[ MENU ]`
+/// always, `[ BACK ]`/`[ NEXT ]`/… as relevant) right-aligned. The footer itself is
+/// STATELESS chrome: the buttons are real child nodes firing their authored `action`
+/// names — the SAME result names the screen's declared Next/Prev/Menu/Cancel intents
+/// fire, so a pad signal and a click ride ONE channel (never an index) and the
+/// button's flash acknowledges both. It draws its backdrop (`style`), the 1px top rule
+/// (`rule_style`), and the legend (`glyph_style` atlas + `label_color` text); the
+/// cluster children draw themselves at the band rects.
+fn draw_nav_footer(
+    r: Rect,
+    node: &UiNode,
+    model: &ValueMap,
+    props: &Json,
+    out: &mut Vec<HudCommand>,
+) {
+    if let Some(st) = jopt(props, "style") {
+        draw_panel_bg(r, st, out);
+    }
+    let lay = footer_layout(node, r, model);
+    if let Some(rs) = jopt(props, "rule_style") {
+        draw_panel_bg(lay.rule, rs, out);
+    }
+    let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
+    let label_color = first_color(props, &["label_color_rgba"], DIM);
+    // A pressed pointer lights the entry under it — the same press-only highlight the
+    // PTT's hint gutters carry (clears on release, so nothing lingers).
+    let pressed = jbool(props, "pressed");
+    let mouse = pointer(props);
+    for (i, gr, lr) in &lay.hints {
+        let c = &node.children[*i];
+        let flash = if pressed && footer_span(gr, lr).contains(mouse) {
+            1.0
+        } else {
+            0.0
+        };
+        draw_paged_hint(
+            Some(*gr),
+            ptext(c, "glyph").unwrap_or_default(),
+            gr.h,
+            glyph_style,
+            flash,
+            out,
+        );
+        // The help label: `label_bind` (live Model text) else the `$token` literal.
+        let text = match ptext(c, "label_bind").and_then(|k| model.text(k)) {
+            Some(t) => t.to_string(),
+            None => crate::strings::resolve(ptext(c, "label").unwrap_or_default()).into_owned(),
+        };
+        let ts = pnum(c, "text_size").unwrap_or(12.0) as f32;
+        let ty = lr.y + (lr.h - text_line_h(ts)) * 0.5;
+        push_text(
+            out,
+            lr.x,
+            ty,
+            &text,
+            ts,
+            label_color,
+            TextAlign::Left,
+            FontRole::Label,
+            false,
+            false,
+            -1.0,
+            None,
+        );
+    }
+}
+
+/// The nav footer's hit: the band CLAIMS (a bench's footer must not pick through to
+/// the content behind it), and a click on a LEGEND entry fires that option's authored
+/// `action` down the full activation channel ([`HitVerdict::fire`] — flash, strip-step
+/// and the `sig_` mirror included), the same name a pad signal or a cluster button
+/// carries. The cluster children are real placed nodes and answer their own clicks.
+fn hit_nav_footer(m: Vec2, r: Rect, node: &UiNode, model: &ValueMap, click: bool) -> HitVerdict {
+    let mut v = HitVerdict {
+        hit: r.contains(m),
+        ..HitVerdict::default()
+    };
+    if !click {
+        return v;
+    }
+    let lay = footer_layout(node, r, model);
+    for (i, gr, lr) in &lay.hints {
+        if footer_span(gr, lr).contains(m) {
+            v.fire = node.children[*i].action.clone().filter(|a| !a.is_empty());
+            break;
+        }
     }
     v
 }
@@ -6354,13 +8238,18 @@ fn node_text(node: &UiNode, model: &ValueMap, results: &ValueMap) -> String {
     // which is why nothing had caught it.
     let body = match ptext(node, "text_bind").or_else(|| ptext(node, "label_bind")) {
         Some(key) => eff_text(results, model, key).unwrap_or_default(),
-        None => ptext(node, "text").or(ptext(node, "label")).unwrap_or_default(),
+        None => ptext(node, "text")
+            .or(ptext(node, "label"))
+            .unwrap_or_default(),
     };
     // Display strings resolve through the stringtable (`$token` → active locale;
     // sigil-gated, so Model-driven data text passes through untouched).
-    format!("{}{}", crate::strings::resolve(prefix), crate::strings::resolve(body))
+    format!(
+        "{}{}",
+        crate::strings::resolve(prefix),
+        crate::strings::resolve(body)
+    )
 }
-
 
 fn node_align(node: &UiNode) -> TextAlign {
     match ptext(node, "align") {
@@ -6394,7 +8283,12 @@ fn style_of<'a>(node: &UiNode, styles: &'a Json) -> &'a Json {
 /// style path — so a node's whole styling can follow its STATE (an active vs idle tab) through
 /// the one two-way name channel, exactly as a text node's `color_bind` does for its colour. A
 /// literal `style` is the fallback when no bind is set, or the bound key is absent this frame.
-fn resolve_style<'a>(node: &UiNode, styles: &'a Json, model: &ValueMap, results: &ValueMap) -> &'a Json {
+fn resolve_style<'a>(
+    node: &UiNode,
+    styles: &'a Json,
+    model: &ValueMap,
+    results: &ValueMap,
+) -> &'a Json {
     if let Some(key) = ptext(node, "style_bind") {
         if let Some(path) = eff_text(results, model, key) {
             return jpath(styles, path);
@@ -6417,7 +8311,10 @@ fn jpath<'a>(root: &'a Json, path: &str) -> &'a Json {
 }
 
 fn jnum(v: &Json, key: &str, dflt: f32) -> f32 {
-    v.get(key).and_then(|n| n.as_f64()).map(|n| n as f32).unwrap_or(dflt)
+    v.get(key)
+        .and_then(|n| n.as_f64())
+        .map(|n| n as f32)
+        .unwrap_or(dflt)
 }
 
 /// First present rgba among `keys`, else `dflt`.
@@ -6465,14 +8362,20 @@ fn jbool(v: &Json, key: &str) -> bool {
 /// A control's option CHILDREN — the plain `{ value, label }` maps [`component_props`]
 /// passes down for the children-as-data kinds ([`no_descend`]). Empty when it has none.
 fn jkids(props: &Json) -> &[Json] {
-    props.get("children").and_then(|k| k.as_array()).map_or(&[][..], |k| k.as_slice())
+    props
+        .get("children")
+        .and_then(|k| k.as_array())
+        .map_or(&[][..], |k| k.as_slice())
 }
 
 /// The pointer, for a component that lights a sub-region it laid out itself (a tab cell,
 /// an option row). The walker injects `mx`/`my` every frame; the unreachable fallback
 /// keeps a props map built without one (a unit test) from hovering the origin.
 fn pointer(props: &Json) -> Vec2 {
-    Vec2::new(jnum(props, "mx", f32::NEG_INFINITY), jnum(props, "my", f32::NEG_INFINITY))
+    Vec2::new(
+        jnum(props, "mx", f32::NEG_INFINITY),
+        jnum(props, "my", f32::NEG_INFINITY),
+    )
 }
 
 /// The LUA type name of an authored prop — for a component's complaint about it. The
@@ -6562,7 +8465,14 @@ fn value_to_json(v: &Value) -> Json {
 /// whole run onto its sub-layer afterwards, and a component that stacks WITHIN itself
 /// (a select's popup over its field) lifts its own run with [`offset_layer`].
 fn push_rect(out: &mut Vec<HudCommand>, r: Rect, color: [f32; 4]) {
-    out.push(HudCommand::Rect { x: r.x, y: r.y, w: r.w, h: r.h, color, layer: 0.0 });
+    out.push(HudCommand::Rect {
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        color,
+        layer: 0.0,
+    });
 }
 
 /// One rounded-rect SDF **panel** with explicit colours — the command-level sibling
@@ -6605,8 +8515,34 @@ fn push_panel(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_text(out: &mut Vec<HudCommand>, x: f32, y: f32, text: &str, size: f32, color: [f32; 4], align: TextAlign, font: FontRole, italic: bool, bold: bool, tracking: f32, wrap: Option<f32>) {
-    out.push(HudCommand::Text { x, y, text: text.to_string(), size, color, layer: 0.0, align, font, italic, bold, tracking, wrap });
+fn push_text(
+    out: &mut Vec<HudCommand>,
+    x: f32,
+    y: f32,
+    text: &str,
+    size: f32,
+    color: [f32; 4],
+    align: TextAlign,
+    font: FontRole,
+    italic: bool,
+    bold: bool,
+    tracking: f32,
+    wrap: Option<f32>,
+) {
+    out.push(HudCommand::Text {
+        x,
+        y,
+        text: text.to_string(),
+        size,
+        color,
+        layer: 0.0,
+        align,
+        font,
+        italic,
+        bold,
+        tracking,
+        wrap,
+    });
 }
 
 // Neutral fallbacks (only used when a style path is missing — real colour comes
@@ -6664,13 +8600,38 @@ mod tests {
     /// repaints every ladder button in the app, and this fails first.
     #[test]
     fn button_size_ladder_matches_the_ds_contract() {
-        assert_eq!(SIZE_SM, BtnSize { h: 28.0, pad_x: 14.0, label_size: 10.0 });
-        assert_eq!(SIZE_MD, BtnSize { h: 32.0, pad_x: 20.0, label_size: 12.0 });
-        assert_eq!(SIZE_LG, BtnSize { h: 45.0, pad_x: 22.0, label_size: 15.0 });
+        assert_eq!(
+            SIZE_SM,
+            BtnSize {
+                h: 28.0,
+                pad_x: 14.0,
+                label_size: 10.0
+            }
+        );
+        assert_eq!(
+            SIZE_MD,
+            BtnSize {
+                h: 32.0,
+                pad_x: 20.0,
+                label_size: 12.0
+            }
+        );
+        assert_eq!(
+            SIZE_LG,
+            BtnSize {
+                h: 45.0,
+                pad_x: 22.0,
+                label_size: 15.0
+            }
+        );
         assert_eq!(button_size("sm"), Some(SIZE_SM));
         assert_eq!(button_size("md"), Some(SIZE_MD));
         assert_eq!(button_size("lg"), Some(SIZE_LG));
-        assert_eq!(button_size("xl"), None, "an unknown rung warns and falls to legacy geometry");
+        assert_eq!(
+            button_size("xl"),
+            None,
+            "an unknown rung warns and falls to legacy geometry"
+        );
     }
 
     /// A `size_class` button MEASURES its rung: the height is the ladder's (so a
@@ -6679,19 +8640,43 @@ mod tests {
     #[test]
     fn a_size_class_button_measures_its_rung() {
         let model = ValueMap::default();
-        let mut b = UiNode { component: "button".into(), ..Default::default() };
-        b.props.insert("size_class".into(), Value::Text("lg".into()));
-        assert_eq!(measure(&b, &model).y, SIZE_LG.h, "the rung supplies the height");
-        assert_eq!(measure(&b, &model).x, 0.0, "width stays the author's (or grow's)");
+        let mut b = UiNode {
+            component: "button".into(),
+            ..Default::default()
+        };
+        b.props
+            .insert("size_class".into(), Value::Text("lg".into()));
+        assert_eq!(
+            measure(&b, &model).y,
+            SIZE_LG.h,
+            "the rung supplies the height"
+        );
+        assert_eq!(
+            measure(&b, &model).x,
+            0.0,
+            "width stays the author's (or grow's)"
+        );
 
         b.height = Some(40.0);
-        assert_eq!(measure(&b, &model).y, 40.0, "an explicit height beats the rung");
+        assert_eq!(
+            measure(&b, &model).y,
+            40.0,
+            "an explicit height beats the rung"
+        );
 
-        let mut g = UiNode { component: "button".into(), ..Default::default() };
-        g.props.insert("size_class".into(), Value::Text("sm".into()));
+        let mut g = UiNode {
+            component: "button".into(),
+            ..Default::default()
+        };
+        g.props
+            .insert("size_class".into(), Value::Text("sm".into()));
         g.props.insert("glyph".into(), Value::Number(3.0));
         let m = measure(&g, &model);
-        assert_eq!((m.x, m.y), (SIZE_SM.h, SIZE_SM.h), "a widthless glyph button is square");
+        assert_eq!(
+            (m.x, m.y),
+            (SIZE_SM.h, SIZE_SM.h),
+            "a widthless glyph button is square"
+        );
     }
 
     /// STYLING S3: the three flat-rect kinds wear the SUNK-TRACK shape channel —
@@ -6706,10 +8691,19 @@ mod tests {
         };
 
         // Slider (label-less, so the track is the first command).
-        let r = Rect { x: 0.0, y: 0.0, w: 200.0, h: 10.0 };
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 10.0,
+        };
         let mut out = Vec::new();
         draw_slider(r, &serde_json::json!({ "bind_value": 0.5 }), &mut out);
-        assert_eq!(track_of(&out), (5.0, 0.0), "capsule by derivation; no border colour → no border");
+        assert_eq!(
+            track_of(&out),
+            (5.0, 0.0),
+            "capsule by derivation; no border colour → no border"
+        );
 
         out.clear();
         let styled = serde_json::json!({
@@ -6717,7 +8711,11 @@ mod tests {
             "style": { "radius": 0.0, "border": [1.0, 1.0, 1.0, 1.0], "border_w": 2.0 }
         });
         draw_slider(r, &styled, &mut out);
-        assert_eq!(track_of(&out), (0.0, 2.0), "explicit radius squares; a styled border draws");
+        assert_eq!(
+            track_of(&out),
+            (0.0, 2.0),
+            "explicit radius squares; a styled border draws"
+        );
 
         // Stepper: the sunk field opens on the inputs-class rounding.
         out.clear();
@@ -6754,7 +8752,10 @@ mod tests {
             .expect("theme reads"),
         )
         .expect("theme parses");
-        let tokens = theme.get("theme").and_then(|t| t.get("tokens")).expect("theme.tokens");
+        let tokens = theme
+            .get("theme")
+            .and_then(|t| t.get("tokens"))
+            .expect("theme.tokens");
         let tok = |name: &str| -> [f32; 4] {
             let a = tokens
                 .get(name)
@@ -6802,7 +8803,11 @@ mod tests {
             (BTN_GHOST.hover.label, "ink"),
         ];
         for (got, name) in checks {
-            assert_eq!(*got, tok(name), "button variant default drifted from token `{name}`");
+            assert_eq!(
+                *got,
+                tok(name),
+                "button variant default drifted from token `{name}`"
+            );
         }
     }
 
@@ -6827,8 +8832,16 @@ mod tests {
                 .unwrap_or_else(|| panic!("token `{name}` missing"));
             std::array::from_fn(|i| a[i].as_f64().unwrap() as f32)
         };
-        assert_eq!(RUNE, tok("rune_glow"), "corner-rune top default mirrors rune_glow");
-        assert_eq!(BRONZE_DIM, tok("bronze_dim"), "corner-rune bottom default mirrors bronze_dim");
+        assert_eq!(
+            RUNE,
+            tok("rune_glow"),
+            "corner-rune top default mirrors rune_glow"
+        );
+        assert_eq!(
+            BRONZE_DIM,
+            tok("bronze_dim"),
+            "corner-rune bottom default mirrors bronze_dim"
+        );
     }
 
     /// The splash timeline, ported verbatim from the retired per-scene scripts:
@@ -6843,7 +8856,11 @@ mod tests {
         assert!((a(2.1) - 0.5).abs() < 1e-6, "halfway down the fade-out");
         assert_eq!(a(2.4), 0.0);
         assert_eq!(a(9.0), 0.0, "clamped after the end");
-        assert_eq!(sprite_ramp(0.0, 0.0, 1.0, 0.5), 1.0, "zero fade-in shows instantly");
+        assert_eq!(
+            sprite_ramp(0.0, 0.0, 1.0, 0.5),
+            1.0,
+            "zero fade-in shows instantly"
+        );
     }
 
     /// A PRESENTING SPRITE ANIMATES THROUGH THE CACHE: its ramp alpha is driven
@@ -6868,8 +8885,10 @@ mod tests {
         let input = input_at(-9.0, -9.0, false);
         let mut state = UiState::new();
         let mut at = |t: f64| {
-            let model =
-                ValueMap::new().with("elapsed", t).with("img_w", 100.0).with("img_h", 50.0);
+            let model = ValueMap::new()
+                .with("elapsed", t)
+                .with("img_w", 100.0)
+                .with("img_h", 50.0);
             run_ui(&sp, &model, &styles(), &input, &mut state)
         };
         let alpha_of = |f: &UiFrame| {
@@ -6883,22 +8902,40 @@ mod tests {
         };
 
         let rise = at(0.3);
-        assert!((alpha_of(&rise) - 0.5).abs() < 0.01, "mid-rise draws at half alpha");
+        assert!(
+            (alpha_of(&rise) - 0.5).abs() < 0.01,
+            "mid-rise draws at half alpha"
+        );
         let top = at(0.6);
-        assert_eq!(top.stats.redraw_nodes, 1, "the clock advancing invalidates the splash");
+        assert_eq!(
+            top.stats.redraw_nodes, 1,
+            "the clock advancing invalidates the splash"
+        );
         assert!(alpha_of(&top) > 0.99, "the ramp completed");
         at(1.0);
         let plateau = at(1.5);
-        assert_eq!(plateau.stats.redraw_nodes, 0, "the hold plateau replays from cache");
+        assert_eq!(
+            plateau.stats.redraw_nodes, 0,
+            "the hold plateau replays from cache"
+        );
         assert_eq!(alpha_of(&plateau), 1.0);
         let faded = at(2.1);
-        assert_eq!(faded.stats.redraw_nodes, 1, "the fade-out invalidates again");
-        assert!((alpha_of(&faded) - 0.5).abs() < 0.01, "halfway down the fade-out");
+        assert_eq!(
+            faded.stats.redraw_nodes, 1,
+            "the fade-out invalidates again"
+        );
+        assert!(
+            (alpha_of(&faded) - 0.5).abs() < 0.01,
+            "halfway down the fade-out"
+        );
     }
     use std::collections::HashMap;
 
     fn node(component: &str) -> UiNode {
-        UiNode { component: component.to_string(), ..Default::default() }
+        UiNode {
+            component: component.to_string(),
+            ..Default::default()
+        }
     }
 
     fn prop(mut n: UiNode, k: &str, v: Value) -> UiNode {
@@ -6946,12 +8983,23 @@ mod tests {
     }
 
     fn input_at(x: f32, y: f32, clicked: bool) -> UiInput {
-        UiInput { mouse: Vec2::new(x, y), clicked, down: clicked, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 }
+        UiInput {
+            mouse: Vec2::new(x, y),
+            clicked,
+            down: clicked,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        }
     }
 
     /// A wheel tick at a parked pointer — the input a `list` scrolls on.
     fn input_wheel(x: f32, y: f32, wheel: f32) -> UiInput {
-        UiInput { wheel, ..input_at(x, y, false) }
+        UiInput {
+            wheel,
+            ..input_at(x, y, false)
+        }
     }
 
     /// A per-id ARRANGE bind (`<id>_off_x`/`_off_y`/`_anchor`) overrides a node's authored
@@ -6966,11 +9014,20 @@ mod tests {
         hud.height = Some(50.0);
         hud.anchor = Some(UiAnchor::TopLeft);
         hud.offset = [0.0, 0.0];
-        let parent = Rect { x: 0.0, y: 0.0, w: 800.0, h: 600.0 };
+        let parent = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
 
         // No bind → the authored top-left placement stands.
         let base = anchored(&hud, parent, &ValueMap::new());
-        assert_eq!((base.x, base.y), (0.0, 0.0), "authored placement stands when no arrange bind");
+        assert_eq!(
+            (base.x, base.y),
+            (0.0, 0.0),
+            "authored placement stands when no arrange bind"
+        );
 
         // arrange() moved it: a centre anchor + a (40, 25) offset override wins.
         let mut model = ValueMap::new();
@@ -7015,7 +9072,13 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![col];
 
-        let f = run_ui(&page, &ValueMap::new(), &styles(), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &ValueMap::new(),
+            &styles(),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let ys: Vec<f32> = f
             .commands
             .iter()
@@ -7071,13 +9134,19 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(texts.contains(&"GO!"), "the text primitive resolved its token: {texts:?}");
+        assert!(
+            texts.contains(&"GO!"),
+            "the text primitive resolved its token: {texts:?}"
+        );
         assert_eq!(
             texts.iter().filter(|t| **t == "GO!").count(),
             2,
             "the button's label prop resolved too: {texts:?}"
         );
-        assert!(!texts.iter().any(|t| t.contains('$')), "no raw sigil reached a command: {texts:?}");
+        assert!(
+            !texts.iter().any(|t| t.contains('$')),
+            "no raw sigil reached a command: {texts:?}"
+        );
     }
 
     #[test]
@@ -7092,15 +9161,30 @@ mod tests {
         let model = ValueMap::new().with("flag", true);
         let mut state = UiState::new();
         let go = |state: &mut UiState| {
-            run_ui(&page, &model, &styles(), &input_at(-9.0, -9.0, false), state)
+            run_ui(
+                &page,
+                &model,
+                &styles(),
+                &input_at(-9.0, -9.0, false),
+                state,
+            )
         };
 
         let first = go(&mut state);
-        assert_eq!(first.stats.redraw_nodes, first.stats.nodes, "cold frame draws every node");
+        assert_eq!(
+            first.stats.redraw_nodes, first.stats.nodes,
+            "cold frame draws every node"
+        );
 
         let second = go(&mut state);
-        assert_eq!(second.stats.redraw_nodes, 0, "an unchanged frame redraws nothing");
-        assert_eq!(second.commands, first.commands, "the replay is byte-identical");
+        assert_eq!(
+            second.stats.redraw_nodes, 0,
+            "an unchanged frame redraws nothing"
+        );
+        assert_eq!(
+            second.commands, first.commands,
+            "the replay is byte-identical"
+        );
     }
 
     #[test]
@@ -7118,7 +9202,10 @@ mod tests {
 
         run_ui(&page, &off, &styles(), &input, &mut state);
         let flipped = run_ui(&page, &on, &styles(), &input, &mut state);
-        assert_eq!(flipped.stats.redraw_nodes, 1, "only the checkbox reads `flag`");
+        assert_eq!(
+            flipped.stats.redraw_nodes, 1,
+            "only the checkbox reads `flag`"
+        );
     }
 
     // ── Hit + the draw cache together ────────────────────────────────────────
@@ -7140,11 +9227,17 @@ mod tests {
         let over = input_at(22.0, 22.0, false);
 
         let first = run_ui(&page, &model, &styles(), &over, &mut state);
-        assert!(first.results.is_on("hud_hit"), "pointer over the box claims");
+        assert!(
+            first.results.is_on("hud_hit"),
+            "pointer over the box claims"
+        );
 
         let second = run_ui(&page, &model, &styles(), &over, &mut state);
         assert_eq!(second.stats.redraw_nodes, 0, "still frame: nothing redraws");
-        assert!(second.results.is_on("hud_hit"), "the claim survives the idle frame");
+        assert!(
+            second.results.is_on("hud_hit"),
+            "the claim survives the idle frame"
+        );
     }
 
     #[test]
@@ -7172,23 +9265,56 @@ mod tests {
 
         // Move frame: the pointer lands inside p1's 14×14 box (rows are y 0..20 and
         // 20..40, each box pinned to its row's top-left).
-        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(6.0, 6.0, false),
+            &mut state,
+        );
         assert!(f.results.is_on("hud_hit"), "the box claimed the pointer");
 
         // Rest frame: the claim is recomputed, not remembered, so it survives.
-        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(6.0, 6.0, false),
+            &mut state,
+        );
         assert!(f.results.is_on("hud_hit"));
 
         // Click frame: the verdict's value routes into the bind — for that node alone.
-        let f = run_ui(&page, &model, &styles, &input_at(6.0, 6.0, true), &mut state);
-        assert!(f.results.is_on("b1"), "verdict value wrote the clicked node's bind");
-        assert!(!f.results.is_on("b2"), "the un-clicked sibling only echoes its rest value");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(6.0, 6.0, true),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("b1"),
+            "verdict value wrote the clicked node's bind"
+        );
+        assert!(
+            !f.results.is_on("b2"),
+            "the un-clicked sibling only echoes its rest value"
+        );
 
         // A click on the caption row BESIDE the box is inert — the tight region is the
         // box, not the row, so nothing claims and nothing writes.
         let mut fresh = UiState::new();
-        let f = run_ui(&page, &model, &styles, &input_at(90.0, 6.0, true), &mut fresh);
-        assert!(!f.results.is_on("hud_hit"), "the caption row is not a target");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(90.0, 6.0, true),
+            &mut fresh,
+        );
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "the caption row is not a target"
+        );
         assert!(!f.results.is_on("b1"), "…and it writes nothing");
     }
 
@@ -7200,9 +9326,18 @@ mod tests {
     fn a_click_releases_the_pane_lock() {
         let page = node("cell");
         let mut state = UiState::new();
-        state.entered_group = Some("pane_a".into());
-        run_ui(&page, &ValueMap::new(), &serde_json::json!({}), &input_at(5.0, 5.0, true), &mut state);
-        assert!(state.entered_group.is_none(), "a click released the pane lock");
+        state.entered = vec!["pane_a".into()];
+        run_ui(
+            &page,
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(5.0, 5.0, true),
+            &mut state,
+        );
+        assert!(
+            state.entered.is_empty(),
+            "a click released the whole pane stack"
+        );
     }
 
     /// **The pad operates value controls** (nav-tier contract 1B5F6BB8): a `select` steps
@@ -7229,21 +9364,56 @@ mod tests {
         let step = |id: &str, dir: i32, model: ValueMap| -> ValueMap {
             let mut state = UiState::new();
             state.push_nudge(id, dir, false);
-            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut state).results
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut state,
+            )
+            .results
         };
 
         // select: ±1 index, clamped at both ends (a linear picker never wraps).
-        assert_eq!(step("sel", 1, ValueMap::new().with("sel", 1.0)).number("sel"), Some(2.0));
-        assert_eq!(step("sel", 1, ValueMap::new().with("sel", 2.0)).number("sel"), Some(2.0), "clamps at the top");
-        assert_eq!(step("sel", -1, ValueMap::new().with("sel", 0.0)).number("sel"), Some(0.0), "clamps at 0");
+        assert_eq!(
+            step("sel", 1, ValueMap::new().with("sel", 1.0)).number("sel"),
+            Some(2.0)
+        );
+        assert_eq!(
+            step("sel", 1, ValueMap::new().with("sel", 2.0)).number("sel"),
+            Some(2.0),
+            "clamps at the top"
+        );
+        assert_eq!(
+            step("sel", -1, ValueMap::new().with("sel", 0.0)).number("sel"),
+            Some(0.0),
+            "clamps at 0"
+        );
         // toggle: Right on, Left off, Confirm (dir 0) flips.
-        assert!(step("tog", 1, ValueMap::new().with("tog", false)).is_on("tog"), "Right sets on");
-        assert!(!step("tog", -1, ValueMap::new().with("tog", true)).is_on("tog"), "Left sets off");
-        assert!(step("tog", 0, ValueMap::new().with("tog", false)).is_on("tog"), "Confirm flips off→on");
-        assert!(!step("tog", 0, ValueMap::new().with("tog", true)).is_on("tog"), "Confirm flips on→off");
+        assert!(
+            step("tog", 1, ValueMap::new().with("tog", false)).is_on("tog"),
+            "Right sets on"
+        );
+        assert!(
+            !step("tog", -1, ValueMap::new().with("tog", true)).is_on("tog"),
+            "Left sets off"
+        );
+        assert!(
+            step("tog", 0, ValueMap::new().with("tog", false)).is_on("tog"),
+            "Confirm flips off→on"
+        );
+        assert!(
+            !step("tog", 0, ValueMap::new().with("tog", true)).is_on("tog"),
+            "Confirm flips on→off"
+        );
         // disabled: the nudge is inert (drained, no write) — as it is click-inert.
         assert!(
-            !step("dis", 1, ValueMap::new().with("dis", false).with("off", false)).is_on("dis"),
+            !step(
+                "dis",
+                1,
+                ValueMap::new().with("dis", false).with("off", false)
+            )
+            .is_on("dis"),
             "a disabled control ignores the pad",
         );
     }
@@ -7273,7 +9443,13 @@ mod tests {
         let model = ValueMap::new().with("off", 0.0);
         let mut state = UiState::new();
         state.request_focus("r4"); // the last row, y 160..200 — below the 100px fold
-        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         assert_eq!(
             f.results.number("off"),
             Some(100.0),
@@ -7291,7 +9467,9 @@ mod tests {
     /// which is why it survived unnoticed.
     #[test]
     fn label_bind_resolves_like_text_bind() {
-        let model = ValueMap::new().with("pill", "Worley").with("cap", "Granite");
+        let model = ValueMap::new()
+            .with("pill", "Worley")
+            .with("cap", "Granite");
 
         let bound = prop(node("button"), "label_bind", Value::Text("pill".into()));
         assert_eq!(node_text(&bound, &model, &ValueMap::new()), "Worley");
@@ -7341,24 +9519,66 @@ mod tests {
         let mut state = UiState::new();
 
         // Click the named node → its verdict claims focus.
-        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(60.0, 6.0, true),
+            &mut state,
+        );
         assert!(f.results.is_on("hud_hit"));
-        assert_eq!(state.focused(), Some("f1"), "focus=true set state.focus to the node id");
+        assert_eq!(
+            state.focused(),
+            Some("f1"),
+            "focus=true set state.focus to the node id"
+        );
 
         // A non-click frame leaves focus alone.
-        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, false), &mut state);
-        assert_eq!(state.focused(), Some("f1"), "focus persists across idle frames");
+        run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(60.0, 6.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            state.focused(),
+            Some("f1"),
+            "focus persists across idle frames"
+        );
 
         // Clicking the ID-LESS node: the clicked frame clears focus up front, and an
         // empty-id claim is a no-op — nothing re-establishes it.
-        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 26.0, true), &mut state);
+        run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(60.0, 26.0, true),
+            &mut state,
+        );
         assert_eq!(state.focused(), None, "an id-less node cannot hold focus");
 
         // Re-claim, then click empty space: the generic click-away rule clears.
-        run_ui(&page, &model, &serde_json::json!({}), &input_at(60.0, 6.0, true), &mut state);
+        run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(60.0, 6.0, true),
+            &mut state,
+        );
         assert_eq!(state.focused(), Some("f1"));
-        run_ui(&page, &model, &serde_json::json!({}), &input_at(400.0, 300.0, true), &mut state);
-        assert_eq!(state.focused(), None, "clicking away clears focus generically");
+        run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(400.0, 300.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            state.focused(),
+            None,
+            "clicking away clears focus generically"
+        );
     }
 
     /// The **generic full-rect claim** ([`HitShape::Rect`]) — held over a `tile`, the
@@ -7380,13 +9600,25 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(25.0, 10.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(25.0, 10.0, true),
+            &mut state,
+        );
         assert!(f.results.is_on("hud_hit"), "the rect claims the pointer");
         assert!(f.results.is_on("poke"), "click inside fires the action");
         assert!(f.results.is_on("lit"), "click inside toggles the bool bind");
 
         // Outside: no claim, no fire.
-        let f = run_ui(&page, &model, &serde_json::json!({}), &input_at(200.0, 200.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(200.0, 200.0, true),
+            &mut state,
+        );
         assert!(!f.results.is_on("hud_hit"));
         assert!(!f.results.is_on("poke"));
     }
@@ -7403,11 +9635,27 @@ mod tests {
         let model = ValueMap::new().with("flag", false);
         let mut state = UiState::new();
 
-        run_ui(&page, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state);
+        run_ui(
+            &page,
+            &model,
+            &styles(),
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         // (20, 45) is inside the button: the column sits at 16,16 with a 20px checkbox
         // above a 24px button.
-        let hover = run_ui(&page, &model, &styles(), &input_at(20.0, 45.0, false), &mut state);
-        assert_eq!(hover.stats.redraw_nodes, 1, "only the button's hover state changed: {:?}", hover.stats);
+        let hover = run_ui(
+            &page,
+            &model,
+            &styles(),
+            &input_at(20.0, 45.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            hover.stats.redraw_nodes, 1,
+            "only the button's hover state changed: {:?}",
+            hover.stats
+        );
     }
 
     #[test]
@@ -7424,8 +9672,14 @@ mod tests {
 
         let first = run_ui(&tree(), &model, &styles(), &input, &mut state);
         let rebuilt = run_ui(&tree(), &model, &styles(), &input, &mut state);
-        assert_eq!(rebuilt.stats.redraw_nodes, 0, "an equal tree rebuilt from scratch replays");
-        assert_eq!(rebuilt.commands, first.commands, "…and the replay is byte-identical");
+        assert_eq!(
+            rebuilt.stats.redraw_nodes, 0,
+            "an equal tree rebuilt from scratch replays"
+        );
+        assert_eq!(
+            rebuilt.commands, first.commands,
+            "…and the replay is byte-identical"
+        );
     }
 
     #[test]
@@ -7444,12 +9698,19 @@ mod tests {
 
         run_ui(&page, &model, &styles(), &input, &mut state);
         let same = run_ui(&page, &model, &styles(), &input, &mut state);
-        assert_eq!(same.stats.redraw_nodes, 0, "an equal styles tree still replays");
+        assert_eq!(
+            same.stats.redraw_nodes, 0,
+            "an equal styles tree still replays"
+        );
 
         let mut restyled = styles();
         restyled["btn"]["fill_top"] = serde_json::json!([1.0, 0.0, 0.0, 1.0]);
         let reloaded = run_ui(&page, &model, &restyled, &input, &mut state);
-        assert_eq!(reloaded.stats.redraw_nodes, 1, "only the button reads `btn`: {:?}", reloaded.stats);
+        assert_eq!(
+            reloaded.stats.redraw_nodes, 1,
+            "only the button reads `btn`: {:?}",
+            reloaded.stats
+        );
     }
 
     #[test]
@@ -7490,7 +9751,10 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, HudCommand::Rect { .. }))
             .count();
-        assert!(bars > 0, "200 content over a 100 viewport still overflows, so a bar draws");
+        assert!(
+            bars > 0,
+            "200 content over a 100 viewport still overflows, so a bar draws"
+        );
         assert!(
             hidden.stats.redraw_nodes >= 1,
             "the list region redraws when a row leaves: {:?}",
@@ -7530,7 +9794,10 @@ mod tests {
         let same = run_ui(&seg("ONE"), &model, &styles, &input, &mut state);
         assert_eq!(same.stats.redraw_nodes, 0, "an unchanged strip replays");
         let renamed = run_ui(&seg("TWO"), &model, &styles, &input, &mut state);
-        assert_eq!(renamed.stats.redraw_nodes, 1, "a renamed segment redraws the strip");
+        assert_eq!(
+            renamed.stats.redraw_nodes, 1,
+            "a renamed segment redraws the strip"
+        );
     }
 
     #[test]
@@ -7555,27 +9822,55 @@ mod tests {
 
         // At rest: the content subtree is clipped to the 200×100 viewport, then reset.
         let model = ValueMap::new().with("sy", 0.0);
-        let frame = run_ui(&page, &model, &styles, &input_at(-1.0, -1.0, false), &mut UiState::new());
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-1.0, -1.0, false),
+            &mut UiState::new(),
+        );
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Clip { rect: Some(r) }
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Clip { rect: Some(r) }
                 if (r[2] - 200.0).abs() < 0.5 && (r[3] - 100.0).abs() < 0.5)),
             "list subtree is clipped to its viewport"
         );
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Clip { rect: None })),
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Clip { rect: None })),
             "the clip is reset after the list region"
         );
 
         // Wheel down over the region moves the bound offset, within [0, 50] — the
         // wheel rides `UiInput.wheel` now, not a Model-key convention.
         let model = ValueMap::new().with("sy", 0.0);
-        let frame = run_ui(&page, &model, &styles, &input_wheel(100.0, 50.0, -1.0), &mut UiState::new());
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_wheel(100.0, 50.0, -1.0),
+            &mut UiState::new(),
+        );
         let sy = frame.results.number("sy").expect("scroll offset reported");
         assert!(sy > 0.0 && sy <= 50.0, "wheel scrolled within bounds: {sy}");
 
         // A large delta clamps at the content max.
-        let frame = run_ui(&page, &model, &styles, &input_wheel(100.0, 50.0, -10.0), &mut UiState::new());
-        assert_eq!(frame.results.number("sy"), Some(50.0), "clamped to the content max");
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_wheel(100.0, 50.0, -10.0),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            frame.results.number("sy"),
+            Some(50.0),
+            "clamped to the content max"
+        );
     }
 
     /// Build the canonical list-region fixture the S7 behaviour tests share: a
@@ -7614,7 +9909,9 @@ mod tests {
     fn bar_rects(cmds: &[HudCommand]) -> Vec<(f32, f32, f32, f32, [f32; 4])> {
         cmds.iter()
             .filter_map(|c| match c {
-                HudCommand::Rect { x, y, w, h, color, .. } => Some((*x, *y, *w, *h, *color)),
+                HudCommand::Rect {
+                    x, y, w, h, color, ..
+                } => Some((*x, *y, *w, *h, *color)),
                 _ => None,
             })
             .collect()
@@ -7628,7 +9925,13 @@ mod tests {
         let styles = serde_json::json!({});
         let run = |sy: f64| {
             let m = ValueMap::new().with("sy", sy);
-            run_ui(&page, &m, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
+            run_ui(
+                &page,
+                &m,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
         };
 
         // At rest: track spans the viewport at the inner right edge (bar_w default 4);
@@ -7636,25 +9939,46 @@ mod tests {
         let bars = bar_rects(&run(0.0).commands);
         assert_eq!(
             bars,
-            vec![(252.0, 0.0, 4.0, 128.0, STONE), (252.0, 0.0, 4.0, 64.0, SAP)],
+            vec![
+                (252.0, 0.0, 4.0, 128.0, STONE),
+                (252.0, 0.0, 4.0, 64.0, SAP)
+            ],
             "track + thumb at offset 0"
         );
 
         // Mid offset maps linearly over the free travel (128−64): 32/128 · 64 = 16.
         let bars = bar_rects(&run(32.0).commands);
-        assert_eq!(bars[1], (252.0, 16.0, 4.0, 64.0, SAP), "thumb rides the offset");
+        assert_eq!(
+            bars[1],
+            (252.0, 16.0, 4.0, 64.0, SAP),
+            "thumb rides the offset"
+        );
 
         // An over-max bound value draws clamped: the thumb parks at the bottom.
         let bars = bar_rects(&run(999.0).commands);
-        assert_eq!(bars[1], (252.0, 64.0, 4.0, 64.0, SAP), "thumb clamps to the end of travel");
+        assert_eq!(
+            bars[1],
+            (252.0, 64.0, 4.0, 64.0, SAP),
+            "thumb clamps to the end of travel"
+        );
 
         // Very tall content: the proportional thumb (128·128/4096 = 4) clamps to the
         // 28px minimum, and the travel shrinks to match (max offset → y = 128−28).
         let tall = scroll_fixture(256.0, 128.0, 64, 64.0, None);
         let m = ValueMap::new().with("sy", 4096.0);
-        let f = run_ui(&tall, &m, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &tall,
+            &m,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let bars = bar_rects(&f.commands);
-        assert_eq!(bars[1], (252.0, 100.0, 4.0, 28.0, SAP), "thumb has a 28px floor");
+        assert_eq!(
+            bars[1],
+            (252.0, 100.0, 4.0, 28.0, SAP),
+            "thumb has a 28px floor"
+        );
     }
 
     #[test]
@@ -7678,34 +10002,72 @@ mod tests {
         );
         let bars = bar_rects(&f.commands);
         // x = inner right (256) − bar_w (10) − bar_inset (6) = 240.
-        assert_eq!(bars[0], (240.0, 0.0, 10.0, 128.0, [0.25, 0.5, 0.75, 1.0]), "authored track");
-        assert_eq!(bars[1], (240.0, 0.0, 10.0, 40.0, [1.0, 0.5, 0.25, 1.0]), "authored grab floor");
+        assert_eq!(
+            bars[0],
+            (240.0, 0.0, 10.0, 128.0, [0.25, 0.5, 0.75, 1.0]),
+            "authored track"
+        );
+        assert_eq!(
+            bars[1],
+            (240.0, 0.0, 10.0, 40.0, [1.0, 0.5, 0.25, 1.0]),
+            "authored grab floor"
+        );
     }
 
     #[test]
     fn list_backdrop_only_when_styled_and_no_bar_when_content_fits() {
         // Content (1 row of 64) fits the 128 viewport: no track/thumb either way; the
         // backdrop panel appears ONLY when the node carries a style.
-        let styles = serde_json::json!({ "well": { "panel_bg": [0.125, 0.25, 0.5, 1.0], "radius": 2 } });
+        let styles =
+            serde_json::json!({ "well": { "panel_bg": [0.125, 0.25, 0.5, 1.0], "radius": 2 } });
         let go = |style: Option<&str>| {
             let page = scroll_fixture(256.0, 128.0, 1, 64.0, style);
-            run_ui(&page, &ValueMap::new(), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
+            run_ui(
+                &page,
+                &ValueMap::new(),
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
         };
 
         let unstyled = go(None);
-        assert_eq!(bar_rects(&unstyled.commands), vec![], "fitting content draws no bar");
+        assert_eq!(
+            bar_rects(&unstyled.commands),
+            vec![],
+            "fitting content draws no bar"
+        );
         assert!(
-            !unstyled.commands.iter().any(|c| matches!(c, HudCommand::Panel { .. })),
+            !unstyled
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Panel { .. })),
             "an unstyled region is transparent structure"
         );
 
         let styled = go(Some("well"));
         assert_eq!(bar_rects(&styled.commands), vec![], "styling adds no bar");
-        let panels: Vec<_> =
-            styled.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).collect();
-        assert_eq!(panels.len(), 1, "the styled region draws exactly its backdrop");
+        let panels: Vec<_> = styled
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Panel { .. }))
+            .collect();
+        assert_eq!(
+            panels.len(),
+            1,
+            "the styled region draws exactly its backdrop"
+        );
         assert!(
-            matches!(panels[0], HudCommand::Panel { x: 0.0, y: 0.0, w: 256.0, h: 128.0, .. }),
+            matches!(
+                panels[0],
+                HudCommand::Panel {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 256.0,
+                    h: 128.0,
+                    ..
+                }
+            ),
             "the backdrop fills the node rect (unclipped): {:?}",
             panels[0]
         );
@@ -7718,16 +10080,41 @@ mod tests {
 
         // Pointer over the region claims; parked outside it does not.
         let m = ValueMap::new().with("sy", 0.0);
-        let f = run_ui(&page, &m, &styles, &input_at(100.0, 60.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_at(100.0, 60.0, false),
+            &mut UiState::new(),
+        );
         assert!(f.results.is_on("hud_hit"), "the region claims the pointer");
-        let f = run_ui(&page, &m, &styles, &input_at(400.0, 300.0, false), &mut UiState::new());
-        assert!(!f.results.is_on("hud_hit"), "outside the region nothing claims");
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_at(400.0, 300.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "outside the region nothing claims"
+        );
 
         // Wheel UP at the top edge stays clamped at 0 (the lower bound's twin of the
         // content-max clamp the sibling test pins).
         let m = ValueMap::new().with("sy", 0.0);
-        let f = run_ui(&page, &m, &styles, &input_wheel(100.0, 60.0, 1.0), &mut UiState::new());
-        assert_eq!(f.results.number("sy"), Some(0.0), "wheel up from the top clamps at 0");
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(100.0, 60.0, 1.0),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("sy"),
+            Some(0.0),
+            "wheel up from the top clamps at 0"
+        );
     }
 
     #[test]
@@ -7764,15 +10151,31 @@ mod tests {
                 })
                 .collect()
         };
-        let at0 = run_ui(&page, &ValueMap::new().with("sy", 0.0), &styles, &input, &mut state);
+        let at0 = run_ui(
+            &page,
+            &ValueMap::new().with("sy", 0.0),
+            &styles,
+            &input,
+            &mut state,
+        );
         assert_eq!(ys(&at0.commands), vec![0.0, 64.0, 128.0, 192.0]);
-        let at40 = run_ui(&page, &ValueMap::new().with("sy", 40.0), &styles, &input, &mut state);
+        let at40 = run_ui(
+            &page,
+            &ValueMap::new().with("sy", 40.0),
+            &styles,
+            &input,
+            &mut state,
+        );
         assert_eq!(
             ys(&at40.commands),
             vec![-40.0, 24.0, 88.0, 152.0],
             "every row redrew at its scrolled position"
         );
-        assert!(at40.stats.redraw_nodes >= 4, "the moved rows really redrew: {:?}", at40.stats);
+        assert!(
+            at40.stats.redraw_nodes >= 4,
+            "the moved rows really redrew: {:?}",
+            at40.stats
+        );
     }
 
     // (This pin is the SAME command list the Lua module emitted before the draw came
@@ -7821,7 +10224,9 @@ mod tests {
         };
         // The children's viewport clip: inner (248 wide) minus the default 16px bar
         // gutter the layout reserves on the right.
-        let clip = HudCommand::Clip { rect: Some([4.0, 4.0, 232.0, 120.0]) };
+        let clip = HudCommand::Clip {
+            rect: Some([4.0, 4.0, 232.0, 120.0]),
+        };
         let unclip = HudCommand::Clip { rect: None };
 
         // Styled + overflowing at a mid offset: backdrop, then track + thumb
@@ -7853,7 +10258,10 @@ mod tests {
             clip.clone(),
             unclip.clone(),
         ];
-        assert_eq!(f.commands, expected, "the styled overflowing draw is byte-stable");
+        assert_eq!(
+            f.commands, expected,
+            "the styled overflowing draw is byte-stable"
+        );
 
         // An over-max offset draws clamped: the thumb parks at the end of travel.
         let f = run_ui(
@@ -7863,7 +10271,11 @@ mod tests {
             &input_at(-9.0, -9.0, false),
             &mut UiState::new(),
         );
-        assert_eq!(f.commands[2], bar(64.0, 60.0, [1.0, 0.5, 0.25, 1.0]), "clamped thumb pins");
+        assert_eq!(
+            f.commands[2],
+            bar(64.0, 60.0, [1.0, 0.5, 0.25, 1.0]),
+            "clamped thumb pins"
+        );
 
         // Unstyled + fitting content: transparent structure — only the clip toggles.
         let f = run_ui(
@@ -7873,7 +10285,11 @@ mod tests {
             &input_at(-9.0, -9.0, false),
             &mut UiState::new(),
         );
-        assert_eq!(f.commands, vec![clip, unclip], "the empty draw is byte-stable");
+        assert_eq!(
+            f.commands,
+            vec![clip, unclip],
+            "the empty draw is byte-stable"
+        );
     }
 
     #[test]
@@ -7889,20 +10305,50 @@ mod tests {
 
         run_ui(&page, &m, &styles, &over, &mut state);
         let still = run_ui(&page, &m, &styles, &over, &mut state);
-        assert_eq!(still.stats.redraw_nodes, 0, "a wheel-less still frame redraws nothing");
-        assert!(still.results.is_on("hud_hit"), "the claim survives the still frame");
+        assert_eq!(
+            still.stats.redraw_nodes, 0,
+            "a wheel-less still frame redraws nothing"
+        );
+        assert!(
+            still.results.is_on("hud_hit"),
+            "the claim survives the still frame"
+        );
 
         // Wheel tick, pointer unmoved: one notch scrolls the bind by the default 46px
         // speed, and the moved thumb redraws the region.
-        let f = run_ui(&page, &m, &styles, &input_wheel(100.0, 60.0, -1.0), &mut state);
-        assert_eq!(f.results.number("sy"), Some(46.0), "one notch × the default speed");
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(100.0, 60.0, -1.0),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("sy"),
+            Some(46.0),
+            "one notch × the default speed"
+        );
         assert!(f.results.is_on("hud_hit"));
-        assert!(f.stats.redraw_nodes >= 1, "the scrolled region redrew: {:?}", f.stats);
+        assert!(
+            f.stats.redraw_nodes >= 1,
+            "the scrolled region redrew: {:?}",
+            f.stats
+        );
 
         // A wheel tick with the pointer OFF the region scrolls nothing.
         let mut fresh = UiState::new();
-        let f = run_ui(&page, &m, &styles, &input_wheel(400.0, 300.0, -1.0), &mut fresh);
-        assert_eq!(f.results.number("sy"), Some(0.0), "off-region wheel only echoes");
+        let f = run_ui(
+            &page,
+            &m,
+            &styles,
+            &input_wheel(400.0, 300.0, -1.0),
+            &mut fresh,
+        );
+        assert_eq!(
+            f.results.number("sy"),
+            Some(0.0),
+            "off-region wheel only echoes"
+        );
     }
 
     #[test]
@@ -7913,10 +10359,24 @@ mod tests {
         let page = scroll_fixture(256.0, 128.0, 4, 64.0, None);
         let styles = serde_json::json!({});
         let idle = input_at(-9.0, -9.0, false);
-        let f = run_ui(&page, &ValueMap::new().with("sy", 12.0), &styles, &idle, &mut UiState::new());
-        assert_eq!(f.results.number("sy"), Some(12.0), "idle echo reports the model value");
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("sy", 12.0),
+            &styles,
+            &idle,
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("sy"),
+            Some(12.0),
+            "idle echo reports the model value"
+        );
         let f = run_ui(&page, &ValueMap::new(), &styles, &idle, &mut UiState::new());
-        assert_eq!(f.results.number("sy"), Some(0.0), "an absent offset defaults to 0");
+        assert_eq!(
+            f.results.number("sy"),
+            Some(0.0),
+            "an absent offset defaults to 0"
+        );
     }
 
     #[test]
@@ -7925,12 +10385,23 @@ mod tests {
         let model = ValueMap::new().with("flag", false);
         let mut state = UiState::new();
         // Column at (16,16) width 120: checkbox rows y 16..36, button y 36..60.
-        let frame =
-            run_ui(&t, &model, &styles(), &input_at(50.0, 48.0, true), &mut state);
+        let frame = run_ui(
+            &t,
+            &model,
+            &styles(),
+            &input_at(50.0, 48.0, true),
+            &mut state,
+        );
         assert!(frame.results.is_on("go"), "button action fired");
-        assert!(frame.results.is_on("hud_hit"), "pointer over UI claims the mouse");
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over UI claims the mouse"
+        );
         assert!(!frame.commands.is_empty(), "something was drawn");
-        assert!(!frame.results.is_on("flag"), "checkbox untouched by a button click");
+        assert!(
+            !frame.results.is_on("flag"),
+            "checkbox untouched by a button click"
+        );
     }
 
     /// THE ENGINE ROSTER GATE — held against EVERY control the engine claims, so a new
@@ -7950,7 +10421,10 @@ mod tests {
     #[test]
     fn every_engine_component_is_legal_and_answers_its_hit_in_rust() {
         for kind in crate::rust_component_kinds() {
-            assert!(crate::is_known_kind(kind), "{kind} must be a legal authored kind");
+            assert!(
+                crate::is_known_kind(kind),
+                "{kind} must be a legal authored kind"
+            );
             assert!(
                 rust_hit_shape(kind).is_some() || rust_owns_hit(kind),
                 "{kind} must answer its hit in Rust — a declared shape or a bespoke \
@@ -7977,9 +10451,22 @@ mod tests {
         let border_of = |focused: bool| {
             let props = serde_json::json!({ "style": style, "focused": focused });
             let mut out = Vec::new();
-            draw_panel(Rect { x: 0.0, y: 0.0, w: 40.0, h: 20.0 }, &props, &mut out);
+            draw_panel(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 20.0,
+                },
+                &props,
+                &mut out,
+            );
             match out.first().expect("a panel drew its backdrop") {
-                HudCommand::Panel { border, border_color, .. } => (*border, *border_color),
+                HudCommand::Panel {
+                    border,
+                    border_color,
+                    ..
+                } => (*border, *border_color),
                 other => panic!("expected a Panel command, got {other:?}"),
             }
         };
@@ -7987,14 +10474,31 @@ mod tests {
         let (focused_w, focused_color) = border_of(true);
         assert_eq!(resting_w, 0.0, "a resting pane wears no rim");
         assert!(focused_w > 0.0, "a focused pane wears one");
-        assert_eq!(focused_color, [1.0, 1.0, 1.0, 1.0], "and it is the focused block's edge");
+        assert_eq!(
+            focused_color,
+            [1.0, 1.0, 1.0, 1.0],
+            "and it is the focused block's edge"
+        );
 
         // A style with NO resting/focused split is used as-is for both states, so a plain
         // container style still draws rather than silently rendering nothing.
         let plain = serde_json::json!({ "style": { "fill": [0.2, 0.2, 0.2, 1.0] } });
         let mut out = Vec::new();
-        draw_panel(Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 }, &plain, &mut out);
-        assert_eq!(out.len(), 1, "an unsplit panel style still draws its backdrop");
+        draw_panel(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 10.0,
+                h: 10.0,
+            },
+            &plain,
+            &mut out,
+        );
+        assert_eq!(
+            out.len(),
+            1,
+            "an unsplit panel style still draws its backdrop"
+        );
     }
 
     /// `button` keeps its BEHAVIOUR now that the engine owns its draw and hit — the
@@ -8022,13 +10526,27 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
         // Column at (16,16) width 120 → the button occupies y 16..40.
-        let frame =
-            run_ui(&t, &model, &styles(), &input_at(50.0, 28.0, true), &mut state);
+        let frame = run_ui(
+            &t,
+            &model,
+            &styles(),
+            &input_at(50.0, 28.0, true),
+            &mut state,
+        );
 
-        assert!(frame.results.is_on("go"), "the Rust button still fires its action");
-        assert!(frame.results.is_on("hud_hit"), "and still claims the pointer");
+        assert!(
+            frame.results.is_on("go"),
+            "the Rust button still fires its action"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "and still claims the pointer"
+        );
         assert!(!frame.commands.is_empty(), "and drew something");
-        assert_eq!(frame.stats.redraw_nodes, frame.stats.nodes, "and the cold frame drew it all");
+        assert_eq!(
+            frame.stats.redraw_nodes, frame.stats.nodes,
+            "and the cold frame drew it all"
+        );
     }
 
     #[test]
@@ -8037,7 +10555,13 @@ mod tests {
         let model = ValueMap::new().with("flag", false);
         let mut state = UiState::new();
         // Checkbox box is the 14×14 at the column's top-left (16..30, 16..30).
-        let frame = run_ui(&t, &model, &styles(), &input_at(22.0, 22.0, true), &mut state);
+        let frame = run_ui(
+            &t,
+            &model,
+            &styles(),
+            &input_at(22.0, 22.0, true),
+            &mut state,
+        );
         assert!(frame.results.is_on("flag"), "checkbox toggled its bind on");
     }
 
@@ -8061,7 +10585,10 @@ mod tests {
         let f = run_ui(&page, &model, &st, &input_at(30.0, 30.0, false), &mut state);
         assert!(f.results.is_on("hud_hit"), "tile hover claims the pointer");
         assert!(!f.results.is_on("sel"), "hover alone does not toggle");
-        assert!(f.results.get("sel").is_some(), "bind echoes on a hover frame");
+        assert!(
+            f.results.get("sel").is_some(),
+            "bind echoes on a hover frame"
+        );
 
         // Click inside: toggles on.
         let f = run_ui(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state);
@@ -8071,10 +10598,22 @@ mod tests {
         // has folded the toggle above by now, so `on` is what BOTH the model and the
         // control hold; an outside click must leave it there rather than toggle again.
         let folded = ValueMap::new().with("sel", true);
-        let f = run_ui(&page, &folded, &st, &input_at(300.0, 300.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &folded,
+            &st,
+            &input_at(300.0, 300.0, true),
+            &mut state,
+        );
         assert!(!f.results.is_on("hud_hit"));
-        assert!(f.results.is_on("sel"), "outside click leaves the bind alone");
-        assert!(f.results.get("sel").is_some(), "bind echoes on an off-pointer frame");
+        assert!(
+            f.results.is_on("sel"),
+            "outside click leaves the bind alone"
+        );
+        assert!(
+            f.results.get("sel").is_some(),
+            "bind echoes on an off-pointer frame"
+        );
     }
 
     #[test]
@@ -8097,13 +10636,22 @@ mod tests {
         // Pill spans x 6..54, y 4..20. The left rim (x=2) is inside the node rect
         // but outside the pill.
         let f = run_ui(&page, &model, &st, &input_at(2.0, 12.0, false), &mut state);
-        assert!(!f.results.is_on("hud_hit"), "the rim outside the pill claims nothing");
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "the rim outside the pill claims nothing"
+        );
         // Above the pill (y=2) likewise.
         let f = run_ui(&page, &model, &st, &input_at(30.0, 2.0, false), &mut state);
-        assert!(!f.results.is_on("hud_hit"), "above the centred pill claims nothing");
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "above the centred pill claims nothing"
+        );
         // Inside the pill: claims.
         let f = run_ui(&page, &model, &st, &input_at(30.0, 12.0, false), &mut state);
-        assert!(f.results.is_on("hud_hit"), "the pill itself claims the pointer");
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the pill itself claims the pointer"
+        );
     }
 
     #[test]
@@ -8116,13 +10664,34 @@ mod tests {
         let mut state = UiState::new();
         // Node rect spans (16,16)..(136,36); the box only (16,16)..(30,30). Click the
         // label area at (60,22).
-        let frame = run_ui(&t, &model, &styles(), &input_at(60.0, 22.0, true), &mut state);
-        assert!(!frame.results.is_on("flag"), "label-row click does not toggle");
-        assert!(!frame.results.is_on("hud_hit"), "label-row click does not claim");
-        assert!(frame.results.get("flag").is_some(), "the bind still echoes every frame");
+        let frame = run_ui(
+            &t,
+            &model,
+            &styles(),
+            &input_at(60.0, 22.0, true),
+            &mut state,
+        );
+        assert!(
+            !frame.results.is_on("flag"),
+            "label-row click does not toggle"
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "label-row click does not claim"
+        );
+        assert!(
+            frame.results.get("flag").is_some(),
+            "the bind still echoes every frame"
+        );
 
         // And hovering the box WITHOUT clicking claims but does not toggle.
-        let frame = run_ui(&t, &model, &styles(), &input_at(22.0, 22.0, false), &mut state);
+        let frame = run_ui(
+            &t,
+            &model,
+            &styles(),
+            &input_at(22.0, 22.0, false),
+            &mut state,
+        );
         assert!(frame.results.is_on("hud_hit"), "box hover claims");
         assert!(!frame.results.is_on("flag"), "hover alone does not toggle");
     }
@@ -8156,7 +10725,10 @@ mod tests {
         // Off → a click anywhere on the pill (spans 0..50 × 0..25) flips it on.
         let frame = run_ui(&page, &model, &st, &input_at(25.0, 12.0, true), &mut state);
         assert!(frame.results.is_on("sw"), "toggle flipped its bind on");
-        assert!(frame.results.is_on("hud_hit"), "pointer over the pill claims the mouse");
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over the pill claims the mouse"
+        );
 
         // Every emitted panel (pill + knob) stays inside the 50×25 node rect.
         for c in &frame.commands {
@@ -8170,9 +10742,20 @@ mod tests {
 
         // Two-way echo: a non-click frame reports the model's current value unchanged.
         let on = ValueMap::new().with("sw", true);
-        let idle = UiInput { mouse: Vec2::new(999.0, 999.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let idle = UiInput {
+            mouse: Vec2::new(999.0, 999.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let frame = run_ui(&page, &on, &st, &idle, &mut state);
-        assert!(frame.results.is_on("sw"), "off-pointer frame still echoes the bound bool");
+        assert!(
+            frame.results.is_on("sw"),
+            "off-pointer frame still echoes the bound bool"
+        );
     }
 
     #[test]
@@ -8195,13 +10778,25 @@ mod tests {
         // Pill spans x 0..50, y 8..33 ((41-25)/2 = 8). Click at x=120 — inside the
         // node rect, right of the pill.
         let frame = run_ui(&page, &model, &st, &input_at(120.0, 20.0, true), &mut state);
-        assert!(!frame.results.is_on("sw"), "row click outside the pill does not flip");
-        assert!(!frame.results.is_on("hud_hit"), "…and does not claim the pointer");
-        assert!(frame.results.get("sw").is_some(), "the bind still echoes every frame");
+        assert!(
+            !frame.results.is_on("sw"),
+            "row click outside the pill does not flip"
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "…and does not claim the pointer"
+        );
+        assert!(
+            frame.results.get("sw").is_some(),
+            "the bind still echoes every frame"
+        );
 
         // Above the pill (y=3 < 8) inside the row: still inert.
         let frame = run_ui(&page, &model, &st, &input_at(25.0, 3.0, true), &mut state);
-        assert!(!frame.results.is_on("sw"), "click above the centred pill does not flip");
+        assert!(
+            !frame.results.is_on("sw"),
+            "click above the centred pill does not flip"
+        );
 
         // Inside the pill: flips and claims.
         let frame = run_ui(&page, &model, &st, &input_at(25.0, 20.0, true), &mut state);
@@ -8242,12 +10837,21 @@ mod tests {
             &input_at(22.0, 42.0, true),
             &mut state,
         );
-        assert_eq!(frame.results.text("choice"), Some("b"), "clicking row B selects b");
-        assert!(frame.results.is_on("hud_hit"), "the radio circle claims the pointer");
+        assert_eq!(
+            frame.results.text("choice"),
+            Some("b"),
+            "clicking row B selects b"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "the radio circle claims the pointer"
+        );
 
         // The selected row draws a filled inner dot INSIDE row B's 14×14 box.
         let dot = frame.commands.iter().find_map(|c| match c {
-            HudCommand::Panel { x, y, w, h, .. } if *w < 14.0 && *h < 14.0 => Some((*x, *y, *w, *h)),
+            HudCommand::Panel { x, y, w, h, .. } if *w < 14.0 && *h < 14.0 => {
+                Some((*x, *y, *w, *h))
+            }
             _ => None,
         });
         let (dx, dy, dw, dh) = dot.expect("selected radio draws an inner dot");
@@ -8267,7 +10871,11 @@ mod tests {
             &input_at(300.0, 300.0, false),
             &mut state,
         );
-        assert_eq!(frame.results.text("choice"), Some("b"), "no-click frame echoes current selection");
+        assert_eq!(
+            frame.results.text("choice"),
+            Some("b"),
+            "no-click frame echoes current selection"
+        );
 
         // The radio's TIGHT region is its circle: a click on row B's LABEL area
         // (inside the node rect, right of the 14×14 circle) neither selects nor
@@ -8279,8 +10887,15 @@ mod tests {
             &input_at(70.0, 42.0, true),
             &mut state,
         );
-        assert_eq!(frame.results.text("choice"), Some("a"), "label-row click does not select");
-        assert!(!frame.results.is_on("hud_hit"), "label-row click does not claim");
+        assert_eq!(
+            frame.results.text("choice"),
+            Some("a"),
+            "label-row click does not select"
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "label-row click does not claim"
+        );
     }
 
     #[test]
@@ -8306,8 +10921,15 @@ mod tests {
         let model = ValueMap::new().with("qty", 5.0);
         let mut state = UiState::new();
         let frame = run_ui(&page, &model, &st, &input_at(12.0, 12.0, true), &mut state);
-        assert_eq!(frame.results.number("qty"), Some(4.0), "− steps down by step");
-        assert!(frame.results.is_on("hud_hit"), "pointer over the stepper claims the mouse");
+        assert_eq!(
+            frame.results.number("qty"),
+            Some(4.0),
+            "− steps down by step"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over the stepper claims the mouse"
+        );
 
         // + button (right square): 5 → 6. Its own `UiState`: this is the other button
         // acting on the same resting 5, not a second press after the one above (which
@@ -8319,7 +10941,11 @@ mod tests {
         // No click (pointer between the buttons) → echoes the bound value.
         let mut state = UiState::new();
         let frame = run_ui(&page, &model, &st, &input_at(60.0, 12.0, false), &mut state);
-        assert_eq!(frame.results.number("qty"), Some(5.0), "reports current value each frame");
+        assert_eq!(
+            frame.results.number("qty"),
+            Some(5.0),
+            "reports current value each frame"
+        );
 
         // Clamp at the floor: 0 − step stays at min.
         let lo = ValueMap::new().with("qty", 0.0);
@@ -8334,8 +10960,15 @@ mod tests {
         // A CLICK between the end buttons (the value field, x 24..96) steps nothing —
         // the tight regions are the two squares — but still claims and echoes.
         let frame = run_ui(&page, &model, &st, &input_at(60.0, 12.0, true), &mut state);
-        assert_eq!(frame.results.number("qty"), Some(5.0), "field click steps nothing");
-        assert!(frame.results.is_on("hud_hit"), "the stepper row claims the pointer");
+        assert_eq!(
+            frame.results.number("qty"),
+            Some(5.0),
+            "field click steps nothing"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "the stepper row claims the pointer"
+        );
     }
 
     #[test]
@@ -8353,7 +10986,13 @@ mod tests {
 
         let model = ValueMap::new().with("qty", 5.0);
         let mut state = UiState::new();
-        let frame = run_ui(&page, &model, &serde_json::json!({}), &input_at(0.0, 0.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(0.0, 0.0, false),
+            &mut state,
+        );
         // Every drawn box (field + both end buttons) lands inside the 120×24 rect.
         for c in &frame.commands {
             if let HudCommand::Rect { x, y, w, h, .. } = c {
@@ -8397,9 +11036,22 @@ mod tests {
 
         // Pill at (0,0) 180×30. Inner strip x 3..177 (174 wide) → 3 cells of 58:
         // low 3..61, med 61..119, high 119..177. Click the middle cell → index 1.
-        let frame = run_ui(&page, &model, &styles, &input_at(90.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.number("mode"), Some(1.0), "middle segment selects its index");
-        assert!(frame.results.is_on("hud_hit"), "pointer over the pill claims the mouse");
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(90.0, 15.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            frame.results.number("mode"),
+            Some(1.0),
+            "middle segment selects its index"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over the pill claims the mouse"
+        );
 
         // Every drawn panel stays within the 180×30 node rect (well + highlight).
         for c in &frame.commands {
@@ -8414,18 +11066,48 @@ mod tests {
         // No click → echoes the current selection unchanged (two-way sync each frame).
         // The scene has folded the pick above, so the current selection is "med".
         let picked = ValueMap::new().with("mode", 1.0);
-        let frame = run_ui(&page, &picked, &styles, &input_at(90.0, 15.0, false), &mut state);
-        assert_eq!(frame.results.number("mode"), Some(1.0), "non-click frame reports current value");
+        let frame = run_ui(
+            &page,
+            &picked,
+            &styles,
+            &input_at(90.0, 15.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            frame.results.number("mode"),
+            Some(1.0),
+            "non-click frame reports current value"
+        );
 
         // A click OUTSIDE every cell leaves the selection untouched.
-        let frame = run_ui(&page, &picked, &styles, &input_at(300.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.number("mode"), Some(1.0), "a miss doesn't change the value");
+        let frame = run_ui(
+            &page,
+            &picked,
+            &styles,
+            &input_at(300.0, 15.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            frame.results.number("mode"),
+            Some(1.0),
+            "a miss doesn't change the value"
+        );
 
         // A click on the well's PAD RIM (x=1 < the 3px pad, inside the well) claims
         // the pointer but lands in no segment — the selection stays put.
-        let frame = run_ui(&page, &model, &styles, &input_at(1.0, 15.0, true), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(1.0, 15.0, true),
+            &mut state,
+        );
         assert!(frame.results.is_on("hud_hit"), "the well rim still claims");
-        assert_eq!(frame.results.number("mode"), Some(0.0), "rim click selects nothing");
+        assert_eq!(
+            frame.results.number("mode"),
+            Some(0.0),
+            "rim click selects nothing"
+        );
     }
 
     #[test]
@@ -8458,16 +11140,36 @@ mod tests {
 
         // Click the middle cell (x 100..200) → selects its index 1.
         let frame = run_ui(&page, &model, &st, &input_at(150.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.number("tab"), Some(1.0), "clicking tab 2 writes its index");
-        assert!(frame.results.is_on("hud_hit"), "pointer over the strip claims the mouse");
+        assert_eq!(
+            frame.results.number("tab"),
+            Some(1.0),
+            "clicking tab 2 writes its index"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over the strip claims the mouse"
+        );
 
         // No prior value + pointer off the strip → reports the first tab (a strip
         // always has one active tab), and claims nothing. Its own `UiState`: "no prior
         // value" means no prior PICK either, and the click above is one.
         let mut state = UiState::new();
-        let frame = run_ui(&page, &model, &st, &input_at(400.0, 400.0, false), &mut state);
-        assert_eq!(frame.results.number("tab"), Some(0.0), "unset bind defaults to the first tab");
-        assert!(!frame.results.is_on("hud_hit"), "pointer off the strip doesn't claim the mouse");
+        let frame = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(400.0, 400.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            frame.results.number("tab"),
+            Some(0.0),
+            "unset bind defaults to the first tab"
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "pointer off the strip doesn't claim the mouse"
+        );
 
         // Every drawn cell / label stays within the 300×30 strip rect.
         for c in &frame.commands {
@@ -8518,12 +11220,23 @@ mod tests {
 
         // Click in the gap between cell 1 and cell 2 (x ≈ 106).
         let frame = run_ui(&page, &model, &st, &input_at(106.0, 15.0, true), &mut state);
-        assert!(frame.results.is_on("hud_hit"), "the strip claims between cells");
-        assert_eq!(frame.results.number("tab"), Some(2.0), "a gap click selects nothing");
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "the strip claims between cells"
+        );
+        assert_eq!(
+            frame.results.number("tab"),
+            Some(2.0),
+            "a gap click selects nothing"
+        );
 
         // Click inside cell 2 (x ≈ 160) → selects index 1.
         let frame = run_ui(&page, &model, &st, &input_at(160.0, 15.0, true), &mut state);
-        assert_eq!(frame.results.number("tab"), Some(1.0), "cell click selects its index");
+        assert_eq!(
+            frame.results.number("tab"),
+            Some(1.0),
+            "cell click selects its index"
+        );
     }
 
     #[test]
@@ -8554,20 +11267,56 @@ mod tests {
         let model = ValueMap::new();
 
         // The 2nd row (y 100..200) picks index 1 — the click the task calls out.
-        let f = run_ui(&page, &model, &st, &input_at(100.0, 150.0, true), &mut UiState::new());
-        assert_eq!(f.results.number("cat"), Some(1.0), "a click on the 2nd row picks index 1");
-        assert!(f.results.is_on("hud_hit"), "the vertical strip claims the pointer");
+        let f = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(100.0, 150.0, true),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("cat"),
+            Some(1.0),
+            "a click on the 2nd row picks index 1"
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the vertical strip claims the pointer"
+        );
 
         // Discriminators vs a HORIZONTAL strip: a 200-wide horizontal strip would split on
         // X (cells 0..66.7, 66.7..133.3, 133.3..200), so BOTH of these clicks would pick the
         // opposite index there — proving the cell axis really flipped to Y.
-        let f = run_ui(&page, &model, &st, &input_at(180.0, 50.0, true), &mut UiState::new());
-        assert_eq!(f.results.number("cat"), Some(0.0), "top row picks 0 (a horizontal strip picks 2 at x=180)");
-        let f = run_ui(&page, &model, &st, &input_at(20.0, 250.0, true), &mut UiState::new());
-        assert_eq!(f.results.number("cat"), Some(2.0), "bottom row picks 2 (a horizontal strip picks 0 at x=20)");
+        let f = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(180.0, 50.0, true),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("cat"),
+            Some(0.0),
+            "top row picks 0 (a horizontal strip picks 2 at x=180)"
+        );
+        let f = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(20.0, 250.0, true),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("cat"),
+            Some(2.0),
+            "bottom row picks 2 (a horizontal strip picks 0 at x=20)"
+        );
 
         // A drawn cell spans the FULL width (a horizontal cell would be ~66.7 wide).
-        let full_w = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { w, .. } if (*w - 200.0).abs() < 0.5));
+        let full_w = f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Panel { w, .. } if (*w - 200.0).abs() < 0.5));
         assert!(full_w, "vertical cells span the full strip width");
     }
 
@@ -8603,6 +11352,56 @@ mod tests {
         page
     }
 
+    /// An option can BIND its label from the Model — a data-driven `select` (e.g. runtime
+    /// material names filled into the dropdown) renders through the same bind channel a
+    /// text / button caption uses, so the name is never a raw literal in the tree. The FIELD
+    /// shows the SELECTED option's bound label; the bind overrides any static `label` twin.
+    #[test]
+    fn select_option_label_binds_from_the_model() {
+        let bound = |i: f64, key: &str| {
+            let mut n = node("option");
+            n = prop(n, "value", Value::Number(i));
+            prop(n, "label_bind", Value::Text(key.into()))
+        };
+        let mut sel = node("select");
+        sel.id = "sel".into();
+        sel.bind = Some("mode".into());
+        sel.width = Some(200.0);
+        sel.height = Some(40.0);
+        sel.anchor = Some(UiAnchor::TopLeft);
+        sel = prop(sel, "style", Value::Text("controls".into()));
+        sel.children = vec![bound(0.0, "opt0_name"), bound(1.0, "opt1_name")];
+        let mut page = node("screen");
+        page.children = vec![sel];
+
+        let styles = select_styles_json();
+        let mut model = ValueMap::new();
+        model.set("mode", 1.0); // option 1 is selected
+        model.set("opt0_name", "Granite");
+        model.set("opt1_name", "Basalt");
+
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(400.0, 400.0, false),
+            &mut UiState::new(),
+        );
+        let drew = |want: &str| {
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == want))
+        };
+        assert!(
+            drew("Basalt"),
+            "the field renders the selected option's Model-bound label"
+        );
+        assert!(
+            !drew("Granite"),
+            "the unselected option's label is not on the closed field"
+        );
+    }
+
     #[test]
     fn select_click_opens_then_option_click_writes_bind_and_closes() {
         let t = select_tree();
@@ -8612,7 +11411,13 @@ mod tests {
 
         // Closed: idle pointer far away. The field panel fills the node rect exactly
         // and is the ONLY panel (no popup rows drawn while closed).
-        let f0 = run_ui(&t, &model, &styles, &input_at(400.0, 400.0, false), &mut state);
+        let f0 = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(400.0, 400.0, false),
+            &mut state,
+        );
         assert!(state.open.is_none(), "starts closed");
         let panels: Vec<_> = f0
             .commands
@@ -8622,23 +11427,59 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(panels, vec![(0.0, 0.0, 200.0, 40.0)], "closed = just the field panel, within the node rect");
+        assert_eq!(
+            panels,
+            vec![(0.0, 0.0, 200.0, 40.0)],
+            "closed = just the field panel, within the node rect"
+        );
 
         // Click the field (0..200 × 0..40) → opens into state.open, writes nothing yet.
-        let f1 = run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
-        assert_eq!(state.open.as_deref(), Some("sel"), "clicking the field opens the menu");
+        let f1 = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            state.open.as_deref(),
+            Some("sel"),
+            "clicking the field opens the menu"
+        );
         assert!(f1.results.is_on("hud_hit"), "the field claims the pointer");
 
         // Menu open (state persists). Rows start at y = 40 + 6 = 46, row_h 30:
         // row 0 = 46..76 (Alpha), row 1 = 76..106 (Beta). Click Beta.
-        let f2 = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state);
-        assert_eq!(f2.results.number("mode"), Some(1.0), "clicking Beta writes its index");
+        let f2 = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 90.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f2.results.number("mode"),
+            Some(1.0),
+            "clicking Beta writes its index"
+        );
         assert!(state.open.is_none(), "picking an option closes the menu");
 
         // A click outside a re-opened menu just closes it (writes nothing new).
-        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state); // re-open
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        ); // re-open
         assert_eq!(state.open.as_deref(), Some("sel"));
-        run_ui(&t, &model, &styles, &input_at(600.0, 500.0, true), &mut state); // click far outside
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(600.0, 500.0, true),
+            &mut state,
+        ); // click far outside
         assert!(state.open.is_none(), "a click outside closes the menu");
     }
 
@@ -8657,22 +11498,56 @@ mod tests {
         let mut state = UiState::new();
 
         // Open via a field click.
-        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
         assert_eq!(state.open.as_deref(), Some("sel"));
 
         // Hover row 1 (y=90 — outside the node rect): the popup claims. `hit_select`
         // reaches PAST the node rect, which is why the select is answered every frame
         // rather than only when a rect test would have let it through.
-        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state);
-        assert!(f.results.is_on("hud_hit"), "the open popup claims outside the node rect");
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 90.0, false),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the open popup claims outside the node rect"
+        );
 
         // Idle frame (nothing moved): the claim persists.
-        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, false), &mut state);
-        assert!(f.results.is_on("hud_hit"), "the claim survives an idle frame");
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 90.0, false),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the claim survives an idle frame"
+        );
 
         // Click the hovered row: Beta is picked and the menu closes.
-        let f = run_ui(&t, &model, &styles, &input_at(100.0, 90.0, true), &mut state);
-        assert_eq!(f.results.number("mode"), Some(1.0), "the row outside the rect picks");
+        let f = run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 90.0, true),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("mode"),
+            Some(1.0),
+            "the row outside the rect picks"
+        );
         assert!(state.open.is_none(), "picking closes the menu");
     }
 
@@ -8683,7 +11558,13 @@ mod tests {
         let model = ValueMap::new().with("mode", 0.0);
         let mut state = UiState::new();
         // Force it open, then draw: the field is layer 0, the popup panel + rows layer 1.
-        run_ui(&t, &model, &styles, &input_at(100.0, 20.0, true), &mut state);
+        run_ui(
+            &t,
+            &model,
+            &styles,
+            &input_at(100.0, 20.0, true),
+            &mut state,
+        );
         assert_eq!(state.open.as_deref(), Some("sel"));
         let frame = run_ui(&t, &model, &styles, &input_at(0.0, 0.0, false), &mut state);
         // First panel = field (layer 0); a later panel = the popup (layer 1).
@@ -8695,8 +11576,15 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(panel_layers.first(), Some(&0.0), "field sits on the base layer");
-        assert!(panel_layers.contains(&1.0), "popup panel is lifted a sub-layer");
+        assert_eq!(
+            panel_layers.first(),
+            Some(&0.0),
+            "field sits on the base layer"
+        );
+        assert!(
+            panel_layers.contains(&1.0),
+            "popup panel is lifted a sub-layer"
+        );
 
         // The popup's TEXT is lifted with it. The render pass is ascending-layer
         // painter's order ACROSS pipelines, so a row label left behind on layer 0 would
@@ -8716,7 +11604,11 @@ mod tests {
             "every option label rides the popup's sub-layer: {row_texts:?}"
         );
         // …and the field's own label stays on the base layer beneath it.
-        assert_eq!(row_texts.first().map(|(l, _)| *l), Some(0.0), "the field label is not lifted");
+        assert_eq!(
+            row_texts.first().map(|(l, _)| *l),
+            Some(0.0),
+            "the field label is not lifted"
+        );
     }
 
     #[test]
@@ -8746,9 +11638,22 @@ mod tests {
 
         // Click inside the well → focuses the field and claims the mouse.
         let model = ValueMap::new().with("name", "");
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, true), &mut state);
-        assert!(f.results.is_on("hud_hit"), "a click in the well claims the mouse");
-        assert_eq!(state.focus.as_deref(), Some("name_field"), "click focuses the field");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, true),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "a click in the well claims the mouse"
+        );
+        assert_eq!(
+            state.focus.as_deref(),
+            Some("name_field"),
+            "click focuses the field"
+        );
 
         // Type two chars on a non-click frame → appended to the bound string. Feed
         // the prior frame's result back as the model, as the engine would.
@@ -8756,43 +11661,81 @@ mod tests {
         let mut typing = input_at(100.0, 30.0, false);
         typing.typed = "Hi".into();
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
-        assert_eq!(f.results.text("name"), Some("Hi"), "typed chars append to the value");
+        assert_eq!(
+            f.results.text("name"),
+            Some("Hi"),
+            "typed chars append to the value"
+        );
 
         // Backspace → pops the last char.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
         let mut bs = input_at(100.0, 30.0, false);
         bs.backspace = true;
         let f = run_ui(&page, &model, &styles, &bs, &mut state);
-        assert_eq!(f.results.text("name"), Some("H"), "backspace pops the last char");
+        assert_eq!(
+            f.results.text("name"),
+            Some("H"),
+            "backspace pops the last char"
+        );
 
         // Well geometry stays within the node rect (10,10 .. 210,50), and while
         // focused a caret rect is emitted inside it.
-        let well = f.commands.iter().find_map(|c| match c {
-            HudCommand::Panel { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
-            _ => None,
-        }).expect("well drawn");
-        assert!(well.0 >= 10.0 && well.1 >= 10.0 && well.0 + well.2 <= 210.0 && well.1 + well.3 <= 50.0, "well within node rect: {well:?}");
+        let well = f
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Panel { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .expect("well drawn");
+        assert!(
+            well.0 >= 10.0 && well.1 >= 10.0 && well.0 + well.2 <= 210.0 && well.1 + well.3 <= 50.0,
+            "well within node rect: {well:?}"
+        );
         // The caret is a MEASURED command: the walker emits the buffer as `prefix`
         // and the render bridge shapes it — never a char-count estimate.
-        let caret = f.commands.iter().find_map(|c| match c {
-            HudCommand::TextCaret { x, prefix, max_x, .. } => Some((*x, prefix.clone(), *max_x)),
-            _ => None,
-        }).expect("a measured caret is emitted while focused");
-        assert!(caret.0 >= 10.0 && caret.2 <= 210.0, "caret anchors + clamps inside the well: {caret:?}");
+        let caret = f
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::TextCaret {
+                    x, prefix, max_x, ..
+                } => Some((*x, prefix.clone(), *max_x)),
+                _ => None,
+            })
+            .expect("a measured caret is emitted while focused");
+        assert!(
+            caret.0 >= 10.0 && caret.2 <= 210.0,
+            "caret anchors + clamps inside the well: {caret:?}"
+        );
         assert_eq!(caret.1, "H", "the caret prefix is the buffer to measure");
 
         // Click OUTSIDE the well → de-focuses; the value survives.
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
-        let f = run_ui(&page, &model, &styles, &input_at(400.0, 300.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(400.0, 300.0, true),
+            &mut state,
+        );
         assert!(state.focus.is_none(), "clicking away clears focus");
-        assert_eq!(f.results.text("name"), Some("H"), "value preserved on click-away");
+        assert_eq!(
+            f.results.text("name"),
+            Some("H"),
+            "value preserved on click-away"
+        );
 
         // A keystroke while unfocused is ignored.
         let model = ValueMap::new().with("name", "H");
         let mut typing = input_at(400.0, 300.0, false);
         typing.typed = "X".into();
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
-        assert_eq!(f.results.text("name"), Some("H"), "typing is ignored when unfocused");
+        assert_eq!(
+            f.results.text("name"),
+            Some("H"),
+            "typing is ignored when unfocused"
+        );
     }
 
     // ── text_field behaviour (S6) ────────────────────────────────────────────
@@ -8829,11 +11772,31 @@ mod tests {
             let styles = serde_json::json!({});
             // Idle: the echo reports the resting selection — that is the
             // contract the dispatcher's changed-value test leans on.
-            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-            assert_eq!(f.results.number("pick"), Some(0.0), "{kind}: idle echoes the resting value");
+            let f = run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            assert_eq!(
+                f.results.number("pick"),
+                Some(0.0),
+                "{kind}: idle echoes the resting value"
+            );
             // A click in the SECOND cell writes that entry's numeric value.
-            let f = run_ui(&page, &model, &styles, &input_at(225.0, 20.0, true), &mut UiState::new());
-            assert_eq!(f.results.number("pick"), Some(1.0), "{kind}: the click selects index 1");
+            let f = run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(225.0, 20.0, true),
+                &mut UiState::new(),
+            );
+            assert_eq!(
+                f.results.number("pick"),
+                Some(1.0),
+                "{kind}: the click selects index 1"
+            );
         }
     }
 
@@ -8885,9 +11848,19 @@ mod tests {
             let mut state = UiState::new();
             // The pointer sits on the SECOND option: cell 2 of the strips (x 225),
             // popup row 2 of the select (y 40 + 6 + 45).
-            let at = if opens { input_at(150.0, 91.0, true) } else { input_at(225.0, 20.0, true) };
+            let at = if opens {
+                input_at(150.0, 91.0, true)
+            } else {
+                input_at(225.0, 20.0, true)
+            };
             if opens {
-                run_ui(&page, &model, &styles, &input_at(150.0, 20.0, true), &mut state);
+                run_ui(
+                    &page,
+                    &model,
+                    &styles,
+                    &input_at(150.0, 20.0, true),
+                    &mut state,
+                );
             }
             let f = run_ui(&page, &model, &styles, &at, &mut state);
             assert_eq!(
@@ -8911,9 +11884,25 @@ mod tests {
                 "open": true,
                 "bind_value": 0.0,
             });
-            let v = hit(at.mouse, Rect { x: 0.0, y: 0.0, w: 300.0, h: 40.0 }, &props, true);
-            assert_eq!(v.value, None, "{kind}: no value is written for a text option");
-            assert!(v.warn.is_some(), "{kind}: the refusal warns — it never fails to nothing");
+            let v = hit(
+                at.mouse,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 300.0,
+                    h: 40.0,
+                },
+                &props,
+                true,
+            );
+            assert_eq!(
+                v.value, None,
+                "{kind}: no value is written for a text option"
+            );
+            assert!(
+                v.warn.is_some(),
+                "{kind}: the refusal warns — it never fails to nothing"
+            );
         }
     }
 
@@ -8924,13 +11913,20 @@ mod tests {
     /// still draws the old picture, and the key actually moves it.
     #[test]
     fn promoted_strip_style_keys_are_real_knobs() {
-        let opts = serde_json::json!([{ "value": 0.0, "label": "A" }, { "value": 1.0, "label": "B" }]);
+        let opts =
+            serde_json::json!([{ "value": 0.0, "label": "A" }, { "value": 1.0, "label": "B" }]);
         let panels = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32, f32, f32)> {
             cmds.iter()
                 .filter_map(|c| match c {
-                    HudCommand::Panel { x, y, w, h, radius, layer, .. } => {
-                        Some((*x, *y, *w, *h, *radius, *layer))
-                    }
+                    HudCommand::Panel {
+                        x,
+                        y,
+                        w,
+                        h,
+                        radius,
+                        layer,
+                        ..
+                    } => Some((*x, *y, *w, *h, *radius, *layer)),
                     _ => None,
                 })
                 .collect()
@@ -8938,7 +11934,9 @@ mod tests {
         let rects = |cmds: &[HudCommand]| -> Vec<(f32, f32, f32, f32, f32)> {
             cmds.iter()
                 .filter_map(|c| match c {
-                    HudCommand::Rect { x, y, w, h, layer, .. } => Some((*x, *y, *w, *h, *layer)),
+                    HudCommand::Rect {
+                        x, y, w, h, layer, ..
+                    } => Some((*x, *y, *w, *h, *layer)),
                     _ => None,
                 })
                 .collect()
@@ -8946,7 +11944,12 @@ mod tests {
 
         // ── pill_toggle: where the floating highlight sits inside its cell ──
         // A 180×30 well, pad 3 → two 87px cells from x 3.
-        let pill_rect = Rect { x: 0.0, y: 0.0, w: 180.0, h: 30.0 };
+        let pill_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 180.0,
+            h: 30.0,
+        };
         let pill = |style: Json| {
             let mut out = Vec::new();
             let props =
@@ -8954,7 +11957,8 @@ mod tests {
             draw_pill_toggle(pill_rect, &props, &mut out);
             out
         };
-        let base = serde_json::json!({ "pad": 3, "h": 30, "radius": 15, "active_top": [0.1,0.2,0.3,1.0] });
+        let base =
+            serde_json::json!({ "pad": 3, "h": 30, "radius": 15, "active_top": [0.1,0.2,0.3,1.0] });
         assert_eq!(
             panels(&pill(base))[1],
             (4.0, 3.0, 85.0, 24.0, 14.0, 0.0),
@@ -8971,7 +11975,12 @@ mod tests {
         );
 
         // ── tabs: how far the underline rule runs inside its cell ──
-        let strip = Rect { x: 0.0, y: 0.0, w: 200.0, h: 30.0 };
+        let strip = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 30.0,
+        };
         let underline = |inset: Json| {
             let mut out = Vec::new();
             let props = serde_json::json!({
@@ -8984,8 +11993,16 @@ mod tests {
             draw_tabs(strip, &props, &mut out);
             rects(&out)[0]
         };
-        assert_eq!(underline(Json::Null), (0.0, 27.0, 200.0, 3.0, 0.0), "default: the full cell width");
-        assert_eq!(underline(serde_json::json!(6)), (6.0, 27.0, 188.0, 3.0, 0.0), "`underline_inset` shortens it");
+        assert_eq!(
+            underline(Json::Null),
+            (0.0, 27.0, 200.0, 3.0, 0.0),
+            "default: the full cell width"
+        );
+        assert_eq!(
+            underline(serde_json::json!(6)),
+            (6.0, 27.0, 188.0, 3.0, 0.0),
+            "`underline_inset` shortens it"
+        );
 
         // ── select: the popup's drop + sub-layer, the field's and rows' insets ──
         let mut sel = Vec::new();
@@ -8997,14 +12014,27 @@ mod tests {
             },
             "children": opts.clone(), "bind_value": 0.0, "open": true, "placeholder": "…"
         });
-        draw_select(Rect { x: 0.0, y: 0.0, w: 200.0, h: 40.0 }, &props, &mut sel);
+        draw_select(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 200.0,
+                h: 40.0,
+            },
+            &props,
+            &mut sel,
+        );
         assert_eq!(
             panels(&sel)[1],
             (0.0, 52.0, 200.0, 60.0, 3.0, 3.0),
             "`menu.gap` drops the popup under the field and `menu.lift` raises it"
         );
         let all = rects(&sel);
-        assert_eq!(all[0], (164.0, 19.0, 12.0, 1.0, 0.0), "`caret_inset` / `caret_size` place the caret");
+        assert_eq!(
+            all[0],
+            (164.0, 19.0, 12.0, 1.0, 0.0),
+            "`caret_inset` / `caret_size` place the caret"
+        );
         assert_eq!(
             all.last().copied(),
             Some((10.0, 52.0, 180.0, 30.0, 3.0)),
@@ -9017,7 +12047,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(texts[0], (20.0, 0.0), "`field.pad_x` insets the field's own label");
+        assert_eq!(
+            texts[0],
+            (20.0, 0.0),
+            "`field.pad_x` insets the field's own label"
+        );
         assert!(
             texts[1..].iter().all(|t| *t == (25.0, 3.0)),
             "`menu.pad_x` insets every row label, and each rides the popup's layer: {texts:?}"
@@ -9041,9 +12075,16 @@ mod tests {
                 "entered": { "border_w": 2.0, "border": [0.55, 0.45, 0.85, 1.0] }
             }
         });
-        let resting = styles["panel"]["resting"]["border_w"].as_f64().expect("panel.resting");
-        let focus_w = styles["panel"]["focused"]["border_w"].as_f64().expect("panel.focused");
-        assert_ne!(resting, focus_w, "the two states must be distinguishable at all");
+        let resting = styles["panel"]["resting"]["border_w"]
+            .as_f64()
+            .expect("panel.resting");
+        let focus_w = styles["panel"]["focused"]["border_w"]
+            .as_f64()
+            .expect("panel.focused");
+        assert_ne!(
+            resting, focus_w,
+            "the two states must be distinguishable at all"
+        );
 
         let mut pane = node("panel");
         pane.id = "pop_left".into();
@@ -9053,35 +12094,54 @@ mod tests {
         pane.height = Some(120.0);
         pane.anchor = Some(UiAnchor::TopLeft);
         assert!(
-            !pane.props.keys().any(|k| k == "focused" || k.ends_with("_style")),
+            !pane
+                .props
+                .keys()
+                .any(|k| k == "focused" || k.ends_with("_style")),
             "the caller passes no focus flag and no rim style — only the block name"
         );
         let mut page = node("screen");
         page.children = vec![pane];
 
         let rim_of = |styles: &serde_json::Value, state: &mut UiState| -> (f64, [f32; 4]) {
-            let f = run_ui(&page, &ValueMap::new(), styles, &input_at(-9.0, -9.0, false), state);
+            let f = run_ui(
+                &page,
+                &ValueMap::new(),
+                styles,
+                &input_at(-9.0, -9.0, false),
+                state,
+            );
             f.commands
                 .iter()
                 .find_map(|c| match c {
-                    HudCommand::Panel { border, border_color, .. } => {
-                        Some((f64::from(*border), *border_color))
-                    }
+                    HudCommand::Panel {
+                        border,
+                        border_color,
+                        ..
+                    } => Some((f64::from(*border), *border_color)),
                     _ => None,
                 })
                 .expect("the panel drew its backdrop")
         };
 
         let mut idle = UiState::new();
-        assert_eq!(rim_of(&styles, &mut idle).0, resting, "an unfocused pane rests");
+        assert_eq!(
+            rim_of(&styles, &mut idle).0,
+            resting,
+            "an unfocused pane rests"
+        );
         let mut focused = UiState::new();
         focused.request_focus("pop_left");
-        assert_eq!(rim_of(&styles, &mut focused).0, focus_w, "the focused pane draws its own rim");
+        assert_eq!(
+            rim_of(&styles, &mut focused).0,
+            focus_w,
+            "the focused pane draws its own rim"
+        );
 
         // ENTERED with an authored `entered` block → that block WINS (finally asserting the
         // fixture's purple entered rim). Keyed on the LOCK, not focus — no focus needed.
         let mut entered = UiState::new();
-        entered.entered_group = Some("pop_left".into());
+        entered.entered = vec!["pop_left".into()];
         assert_eq!(
             rim_of(&styles, &mut entered).1,
             [0.55, 0.45, 0.85, 1.0],
@@ -9094,9 +12154,13 @@ mod tests {
             "panel": { "resting": { "border_w": 1.0, "border": [0.3, 0.3, 0.32, 1.0] } }
         });
         let mut locked = UiState::new();
-        locked.entered_group = Some("pop_left".into());
+        locked.entered = vec!["pop_left".into()];
         let (w, c) = rim_of(&bare, &mut locked);
-        assert_eq!(w, f64::from(ENTERED_RIM_W), "the compiled gold default is thicker (w3)");
+        assert_eq!(
+            w,
+            f64::from(ENTERED_RIM_W),
+            "the compiled gold default is thicker (w3)"
+        );
         assert_eq!(c, GOLD_RING, "…and gold");
     }
 
@@ -9115,35 +12179,88 @@ mod tests {
         let screen = paged_menu_tree(false);
 
         // The authored tab rail carries its own step names — the SAME the hint gutter fires.
-        let tabs = screen.children[0].children.iter().find(|n| n.id == "tb").expect("the tab rail");
-        assert_eq!(tabs.props.get("next_action"), Some(&Value::Text("tab_next".into())));
-        assert_eq!(tabs.props.get("prev_action"), Some(&Value::Text("tab_prev".into())));
+        let tabs = screen.children[0]
+            .children
+            .iter()
+            .find(|n| n.id == "tb")
+            .expect("the tab rail");
+        assert_eq!(
+            tabs.props.get("next_action"),
+            Some(&Value::Text("tab_next".into()))
+        );
+        assert_eq!(
+            tabs.props.get("prev_action"),
+            Some(&Value::Text("tab_prev".into()))
+        );
 
         // Three tabs, resting on 0: `tab_next` walks 0 → 1 → 2 → 2 (CLAMPS at the last,
         // never wraps back to 0).
         let mut state = UiState::new();
-        let mut model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let mut model = ValueMap::new()
+            .with("page", 0.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
         for want in [1.0, 2.0, 2.0] {
             state.push_step("tab_next");
-            let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-            assert_eq!(f.results.number("tab"), Some(want), "the strip steps itself, clamping at the last");
+            let f = run_ui(
+                &screen,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut state,
+            );
+            assert_eq!(
+                f.results.number("tab"),
+                Some(want),
+                "the strip steps itself, clamping at the last"
+            );
             model = model.with("tab", want); // the scene folded it back
         }
         // ...and `tab_prev` walks 2 → 1 → 0 → 0 (CLAMPS at the first, never wraps to the last).
         for want in [1.0, 0.0, 0.0] {
             state.push_step("tab_prev");
-            let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-            assert_eq!(f.results.number("tab"), Some(want), "prev clamps at the first");
+            let f = run_ui(
+                &screen,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut state,
+            );
+            assert_eq!(
+                f.results.number("tab"),
+                Some(want),
+                "prev clamps at the first"
+            );
             model = model.with("tab", want);
         }
         // The step is over each rail's OWN length: the 2-page rail's prev at 0 stays 0.
         state.push_step("page_prev");
-        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(f.results.number("page"), Some(0.0), "two pages: prev at 0 clamps to 0, never wraps to 1");
+        let f = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("page"),
+            Some(0.0),
+            "two pages: prev at 0 clamps to 0, never wraps to 1"
+        );
         // A name no strip claims steps nothing, and never accumulates.
         state.push_step("something_else");
-        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(f.results.number("tab"), Some(0.0), "an unclaimed name is inert");
+        let f = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("tab"),
+            Some(0.0),
+            "an unclaimed name is inert"
+        );
         assert_eq!(f.results.number("page"), Some(0.0));
     }
 
@@ -9179,11 +12296,23 @@ mod tests {
         let mut state = UiState::new();
         let model = ValueMap::new().with("idx", 0.0);
         // The hint is the first child: y 16..40. Click it.
-        let f1 = run_ui(&screen, &model, &styles, &input_at(50.0, 28.0, true), &mut state);
+        let f1 = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(50.0, 28.0, true),
+            &mut state,
+        );
         // The step channel is one-frame (like the signal path): fold f1's value and run
         // once more without a click so a same-frame OR next-frame step both land.
         let model = model.with("idx", f1.results.number("idx").unwrap_or(0.0));
-        let f2 = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        let f2 = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         assert_eq!(
             f2.results.number("idx"),
             Some(1.0),
@@ -9214,13 +12343,31 @@ mod tests {
         let mut screen = node("screen");
         screen.children = vec![pop];
 
-        let f = run_ui(&screen, &ValueMap::new(), &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &screen,
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
         // Defaults: panel_pad 38, panel_gap 16, title_size 52 → items_top = 38 + (52+10) + 16 = 116.
         let (pop_r, it0, it1) = (r("pop"), r("it0"), r("it1"));
-        assert_eq!((pop_r.size.x, pop_r.size.y), (404.0, 246.0), "slab is panel_w × content height");
-        assert_eq!((it0.pos.x, it0.pos.y), (38.0, 116.0), "first item flows under the title block");
-        assert_eq!((it0.size.x, it1.pos.y), (328.0, 168.0), "items span the inner width, spaced by items_gap");
+        assert_eq!(
+            (pop_r.size.x, pop_r.size.y),
+            (404.0, 246.0),
+            "slab is panel_w × content height"
+        );
+        assert_eq!(
+            (it0.pos.x, it0.pos.y),
+            (38.0, 116.0),
+            "first item flows under the title block"
+        );
+        assert_eq!(
+            (it0.size.x, it1.pos.y),
+            (328.0, 168.0),
+            "items span the inner width, spaced by items_gap"
+        );
     }
 
     /// A `popup_panel` DRAWS its own chrome: the styled backdrop and the centred title.
@@ -9234,20 +12381,34 @@ mod tests {
         screen.children = vec![pop];
         let styles = serde_json::json!({ "modal": { "panel": { "fill": [0.1, 0.1, 0.1, 1.0] } } });
 
-        let f = run_ui(&screen, &ValueMap::new(), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        let titled = f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "PAUSED"));
-        let backed = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { .. }));
+        let f = run_ui(
+            &screen,
+            &ValueMap::new(),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        let titled = f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "PAUSED"));
+        let backed = f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Panel { .. }));
         assert!(titled, "the panel drew its title");
         assert!(backed, "the panel drew its backdrop");
     }
-
-
 
     /// A `paged_menu` whose two authored rails and a content child are present: the page
     /// rail (`tabs`) sits between the LT/RT hint gutters, the tab rail (`pill_toggle`) is
     /// centred below the 1px rule, and the content child GROWS to fill the rest.
     fn paged_menu_tree(hide_tabs: bool) -> UiNode {
-        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let opts = |n: usize| {
+            (0..n)
+                .map(|i| prop(node("option"), "value", Value::Number(i as f64)))
+                .collect::<Vec<_>>()
+        };
         let mut pages = node("tabs");
         pages.id = "pg".into();
         pages.bind = Some("page".into());
@@ -9283,41 +12444,91 @@ mod tests {
     #[test]
     fn paged_menu_places_both_rails_and_grows_content() {
         let screen = paged_menu_tree(false);
-        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
-        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let model = ValueMap::new()
+            .with("page", 0.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
+        let f = run_ui(
+            &screen,
+            &model,
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
         // inner = (40,40,720,520). Page band: hint_w 54, rail_gap 30, rail_h 42.
         let pg = r("pg");
-        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (124.0, 40.0, 552.0, 42.0), "page rail between the LT/RT gutters");
+        assert_eq!(
+            (pg.pos.x, pg.pos.y, pg.size.x, pg.size.y),
+            (124.0, 40.0, 552.0, 42.0),
+            "page rail between the LT/RT gutters"
+        );
         // Rule 1px at y 82; tab band centred: cluster = 2*46 + 2*20 + 520 = 652, cx = 40 + 34 = 74.
         let tb = r("tb");
-        assert_eq!((tb.pos.x, tb.pos.y, tb.size.x, tb.size.y), (140.0, 83.0, 520.0, 44.0), "tab pill centred below the rule");
+        assert_eq!(
+            (tb.pos.x, tb.pos.y, tb.size.x, tb.size.y),
+            (140.0, 83.0, 520.0, 44.0),
+            "tab pill centred below the rule"
+        );
         // Content grows to fill below the tab band (y = 40+42+1+44 = 127).
         let ct = r("ct");
-        assert_eq!((ct.pos.y, ct.size.y), (127.0, 433.0), "content grows to fill the rest");
+        assert_eq!(
+            (ct.pos.y, ct.size.y),
+            (127.0, 433.0),
+            "content grows to fill the rest"
+        );
     }
 
     #[test]
     fn paged_menu_hidden_tab_rail_collapses_and_content_reclaims_it() {
         let screen = paged_menu_tree(true);
-        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
-        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
-        assert!(f.rect("tb").is_none(), "hide_tabs drops the pill rail entirely");
+        let model = ValueMap::new()
+            .with("page", 0.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
+        let f = run_ui(
+            &screen,
+            &model,
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.rect("tb").is_none(),
+            "hide_tabs drops the pill rail entirely"
+        );
         // No rule, no tab band: content starts right under the page rail (y = 82).
         let ct = f.rect("ct").expect("content placed");
-        assert_eq!((ct.pos.y, ct.size.y), (82.0, 478.0), "content reclaims the collapsed rail space");
+        assert_eq!(
+            (ct.pos.y, ct.size.y),
+            (82.0, 478.0),
+            "content reclaims the collapsed rail space"
+        );
     }
 
     #[test]
     fn paged_menu_draws_the_rule_and_four_glyph_hints() {
         let screen = paged_menu_tree(false);
-        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let model = ValueMap::new()
+            .with("page", 0.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
         let styles = serde_json::json!({
             "paged_menu": { "frame": { "fill": [0.05, 0.05, 0.07, 1.0] }, "rule": { "color": [0.4, 0.3, 0.2, 1.0] } },
             "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3 } },
         });
-        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        let sprites = f.commands.iter().filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })).count();
+        let f = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        let sprites = f
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. }))
+            .count();
         assert_eq!(sprites, 4, "all four rail-hint glyphs drew from the atlas");
         let rule = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { h, y, .. } if (*h - 1.0).abs() < 0.01 && (*y - 82.0).abs() < 0.01));
         assert!(rule, "the 1px rule drew between the rails");
@@ -9327,14 +12538,37 @@ mod tests {
     fn paged_menu_hint_gutter_click_fires_the_rails_step() {
         // Start on the LAST page (1 of 2) so a prev actually MOVES — a clamp at the
         // first would hide whether the gutter even fired.
-        let model = ValueMap::new().with("page", 1.0).with("tab", 0.0).with("paged_tabs_shown", true);
+        let model = ValueMap::new()
+            .with("page", 1.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
         // LT gutter (x 40..94, y 40..82): fires the PAGE rail's prev_action → page 1 → 0.
-        let f = run_ui(&paged_menu_tree(false), &model, &serde_json::json!({}), &input_at(60.0, 60.0, true), &mut UiState::new());
+        let f = run_ui(
+            &paged_menu_tree(false),
+            &model,
+            &serde_json::json!({}),
+            &input_at(60.0, 60.0, true),
+            &mut UiState::new(),
+        );
         assert!(f.results.is_on("hud_hit"), "the frame claims the click");
-        assert_eq!(f.results.number("page"), Some(0.0), "LT stepped the page rail back");
+        assert_eq!(
+            f.results.number("page"),
+            Some(0.0),
+            "LT stepped the page rail back"
+        );
         // RB gutter (x 680..726, y 83..127): fires the TAB rail's next_action → tab 0 → 1 (3 tabs).
-        let f = run_ui(&paged_menu_tree(false), &model, &serde_json::json!({}), &input_at(700.0, 100.0, true), &mut UiState::new());
-        assert_eq!(f.results.number("tab"), Some(1.0), "RB stepped the tab rail forward");
+        let f = run_ui(
+            &paged_menu_tree(false),
+            &model,
+            &serde_json::json!({}),
+            &input_at(700.0, 100.0, true),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.number("tab"),
+            Some(1.0),
+            "RB stepped the tab rail forward"
+        );
     }
 
     /// `page_side: "left"` stands the PAGE rail up as a fixed-width LEFT COLUMN (the authored
@@ -9342,7 +12576,11 @@ mod tests {
     /// rail + content take that right area — while the default (top) geometry is unchanged.
     #[test]
     fn paged_menu_left_side_stands_the_page_rail_in_a_left_column() {
-        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let opts = |n: usize| {
+            (0..n)
+                .map(|i| prop(node("option"), "value", Value::Number(i as f64)))
+                .collect::<Vec<_>>()
+        };
         let mut pages = node("tabs");
         pages.id = "pg".into();
         pages.bind = Some("page".into());
@@ -9371,8 +12609,17 @@ mod tests {
         let styles = serde_json::json!({
             "paged_menu": { "frame": { "fill": [0.05,0.05,0.07,1.0] }, "rule": { "color": [0.4,0.3,0.2,1.0] } },
         });
-        let model = ValueMap::new().with("page", 0.0).with("tab", 0.0).with("paged_tabs_shown", true);
-        let f = run_ui(&screen, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let model = ValueMap::new()
+            .with("page", 0.0)
+            .with("tab", 0.0)
+            .with("paged_tabs_shown", true);
+        let f = run_ui(
+            &screen,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
 
         // inner = (40,40,720,520). page_w 200, page_gap 12 → left column, then a 1px rule at
@@ -9380,26 +12627,56 @@ mod tests {
         // The page rail is the NATURAL stack (3 tabs × rail_h 42 = 126), TOP-ALIGNED below
         // the LT hint gutter (hint_h 36) — NOT stretched to the 520 column height (7FB7AEB4).
         let pg = r("pg");
-        assert_eq!((pg.pos.x, pg.pos.y, pg.size.x, pg.size.y), (40.0, 76.0, 200.0, 126.0), "page rail is a top-aligned natural stack, not stretched");
+        assert_eq!(
+            (pg.pos.x, pg.pos.y, pg.size.x, pg.size.y),
+            (40.0, 76.0, 200.0, 126.0),
+            "page rail is a top-aligned natural stack, not stretched"
+        );
         // Tab rail rides the top of the right area (cluster centred; pill 520 overflows the
         // 507 area so cx clamps to 253 → pill at 253+46+20 = 319), fully RIGHT of the rule.
         let tb = r("tb");
-        assert_eq!((tb.pos.x, tb.pos.y, tb.size.x, tb.size.y), (319.0, 40.0, 520.0, 44.0), "tab rail rides the top of the right area");
-        assert!(tb.pos.x > 240.0, "the tab rail sits right of the vertical rule");
+        assert_eq!(
+            (tb.pos.x, tb.pos.y, tb.size.x, tb.size.y),
+            (319.0, 40.0, 520.0, 44.0),
+            "tab rail rides the top of the right area"
+        );
+        assert!(
+            tb.pos.x > 240.0,
+            "the tab rail sits right of the vertical rule"
+        );
         // Content fills the right area BELOW the tab band (y = 40+44 = 84).
         let ct = r("ct");
-        assert_eq!((ct.pos.x, ct.pos.y, ct.size.x, ct.size.y), (253.0, 84.0, 507.0, 476.0), "content fills the right area below the tab band");
+        assert_eq!(
+            (ct.pos.x, ct.pos.y, ct.size.x, ct.size.y),
+            (253.0, 84.0, 507.0, 476.0),
+            "content fills the right area below the tab band"
+        );
         // The divider is a 1px-WIDE, full-height vertical rule (top mode's is 1px-TALL).
-        let vrule = f.commands.iter().any(|c| matches!(c, HudCommand::Panel { x, w, h, .. }
-            if (*w - 1.0).abs() < 0.01 && (*h - 520.0).abs() < 0.01 && (*x - 240.0).abs() < 0.01));
-        assert!(vrule, "a 1px vertical rule divides the left column from the right area");
+        let vrule = f.commands.iter().any(|c| {
+            matches!(c, HudCommand::Panel { x, w, h, .. }
+            if (*w - 1.0).abs() < 0.01 && (*h - 520.0).abs() < 0.01 && (*x - 240.0).abs() < 0.01)
+        });
+        assert!(
+            vrule,
+            "a 1px vertical rule divides the left column from the right area"
+        );
 
         // The DEFAULT (top) path is byte-for-byte unchanged: the same kind with no
         // `page_side` lays the page rail horizontally between the LT/RT gutters, as before.
         let top = paged_menu_tree(false);
-        let f2 = run_ui(&top, &model, &serde_json::json!({}), &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f2 = run_ui(
+            &top,
+            &model,
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let pg2 = f2.rect("pg").expect("pg placed");
-        assert_eq!((pg2.pos.x, pg2.pos.y, pg2.size.x, pg2.size.y), (124.0, 40.0, 552.0, 42.0), "page_side:top (default) geometry is unchanged");
+        assert_eq!(
+            (pg2.pos.x, pg2.pos.y, pg2.size.x, pg2.size.y),
+            (124.0, 40.0, 552.0, 42.0),
+            "page_side:top (default) geometry is unchanged"
+        );
     }
 
     /// The vertical page rail carries LT/RT page-hint gutters (prev above, next below the
@@ -9408,7 +12685,11 @@ mod tests {
     /// `hit_paged_menu` path, now reachable on the left axis.
     #[test]
     fn the_vertical_page_rail_hint_gutter_pages() {
-        let opts = |n: usize| (0..n).map(|i| prop(node("option"), "value", Value::Number(i as f64))).collect::<Vec<_>>();
+        let opts = |n: usize| {
+            (0..n)
+                .map(|i| prop(node("option"), "value", Value::Number(i as f64)))
+                .collect::<Vec<_>>()
+        };
         let mut pages = node("tabs");
         pages.id = "pg".into();
         pages.bind = Some("page".into());
@@ -9433,9 +12714,189 @@ mod tests {
         // The RT gutter sits BELOW the top-aligned stack: y = 40 + hint_h 36 + stack 126 =
         // 202..238, x 40..240. A click there steps the page rail forward (0 → 1 of 3).
         let model = ValueMap::new().with("page", 0.0);
-        let f = run_ui(&screen, &model, &serde_json::json!({}), &input_at(120.0, 220.0, true), &mut UiState::new());
-        assert!(f.results.is_on("hud_hit"), "the frame claims the gutter click");
-        assert_eq!(f.results.number("page"), Some(1.0), "the RT gutter stepped the page rail forward");
+        let f = run_ui(
+            &screen,
+            &model,
+            &serde_json::json!({}),
+            &input_at(120.0, 220.0, true),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the frame claims the gutter click"
+        );
+        assert_eq!(
+            f.results.number("page"),
+            Some(1.0),
+            "the RT gutter stepped the page rail forward"
+        );
+    }
+
+    /// The bench-footer harness: `[A Select] [B Back] [X Copy]` legend + a
+    /// `[ MENU ] [ BACK ] [ NEXT ]` cluster in an 800×52 band, pad 10 gap 8.
+    fn nav_footer_tree() -> UiNode {
+        let hint = |glyph: &str, label: &str, action: Option<&str>| {
+            let mut o = node("option");
+            o = prop(o, "glyph", Value::Text(glyph.into()));
+            o = prop(o, "label", Value::Text(label.into()));
+            o.size = Some(60.0);
+            o.action = action.map(str::to_string);
+            o
+        };
+        let btn = |id: &str, action: &str| {
+            let mut b = node("button");
+            b.id = id.into();
+            b.action = Some(action.into());
+            b.size = Some(90.0);
+            prop(b, "size_class", Value::Text("md".into()))
+        };
+        let mut ft = node("nav_footer");
+        ft.id = "ft".into();
+        ft.anchor = Some(UiAnchor::TopLeft);
+        ft.width = Some(800.0);
+        ft.height = Some(52.0);
+        ft.pad = 10.0;
+        ft.gap = 8.0;
+        ft.children = vec![
+            hint("a", "Select", None),
+            hint("b", "Back", Some("ft_back")),
+            hint("x", "Copy", None),
+            btn("menu", "menu_open"),
+            btn("back", "ft_back"),
+            btn("next", "ft_next"),
+        ];
+        let mut screen = node("screen");
+        screen.children = vec![ft];
+        screen
+    }
+
+    #[test]
+    fn nav_footer_right_aligns_the_cluster_and_draws_the_legend() {
+        let styles = serde_json::json!({
+            "nav_footer": { "rule": { "color": [0.4, 0.3, 0.2, 1.0] }, "label": [0.5, 0.5, 0.5, 1.0] },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "a": 4, "b": 5, "x": 6 } },
+        });
+        let f = run_ui(
+            &nav_footer_tree(),
+            &ValueMap::new(),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        // inner = (10,10,780,32); cluster = 3×90 + 2×8 = 286, right-aligned from 504;
+        // each button at its md ladder height (32), vertically centred (y 10).
+        let r = |id: &str| f.rect(id).unwrap_or_else(|| panic!("{id} placed"));
+        for (id, x) in [("menu", 504.0), ("back", 602.0), ("next", 700.0)] {
+            let b = r(id);
+            assert_eq!(
+                (b.pos.x, b.pos.y, b.size.x, b.size.y),
+                (x, 10.0, 90.0, 32.0),
+                "{id} sits in the right-aligned cluster"
+            );
+        }
+        // The legend drew all three glyphs from the atlas + their three help labels.
+        let sprites = f
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. }))
+            .count();
+        assert_eq!(sprites, 3, "every legend glyph drew from the atlas");
+        for label in ["Select", "Back", "Copy"] {
+            assert!(
+                f.commands
+                    .iter()
+                    .any(|c| matches!(c, HudCommand::Text { text, .. } if text == label)),
+                "legend label {label} drew"
+            );
+        }
+        // The 1px rule rides the band's top edge, full width.
+        let rule = f.commands.iter().any(|c| {
+            matches!(c, HudCommand::Panel { y, w, h, .. }
+            if (*h - 1.0).abs() < 0.01 && y.abs() < 0.01 && (*w - 800.0).abs() < 0.01)
+        });
+        assert!(rule, "the 1px top rule drew across the band");
+    }
+
+    #[test]
+    fn nav_footer_legend_click_fires_the_entrys_action_and_the_band_claims() {
+        // Entry 1 (`b` → ft_back) spans x 106..194: a click on it fires the authored name.
+        let f = run_ui(
+            &nav_footer_tree(),
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(120.0, 26.0, true),
+            &mut UiState::new(),
+        );
+        assert!(f.results.is_on("hud_hit"), "the band claims the click");
+        assert!(
+            f.results.is_on("ft_back"),
+            "the legend entry fired its action"
+        );
+        // Entry 0 carries NO action, and the open band between legend and cluster is
+        // inert: both claim (nothing picks through) and fire nothing.
+        for x in [30.0, 400.0] {
+            let f = run_ui(
+                &nav_footer_tree(),
+                &ValueMap::new(),
+                &serde_json::json!({}),
+                &input_at(x, 26.0, true),
+                &mut UiState::new(),
+            );
+            assert!(f.results.is_on("hud_hit"), "the band claims at x {x}");
+            assert!(!f.results.is_on("ft_back"), "nothing fired at x {x}");
+        }
+        // A cluster button is a real placed node answering its own click.
+        let f = run_ui(
+            &nav_footer_tree(),
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(549.0, 26.0, true),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.results.is_on("menu_open"),
+            "the MENU button fired its action"
+        );
+    }
+
+    /// With no authored height the band hugs its tallest cluster child's DS rung
+    /// (md = 32) plus the vertical pad — the bench-footer height with no
+    /// hand-carried number. A hidden button re-right-aligns the cluster.
+    #[test]
+    fn nav_footer_measures_from_its_ladder_and_reflows_on_visibility() {
+        let mut tree = nav_footer_tree();
+        let ft = &mut tree.children[0];
+        ft.height = None;
+        ft.anchor = None;
+        let mut cell = node("cell");
+        cell.children = std::mem::take(&mut tree.children);
+        tree.children = vec![cell];
+        let f = run_ui(
+            &tree,
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.rect("ft").expect("footer placed").size.y,
+            52.0,
+            "band = md rung 32 + 2×pad 10"
+        );
+
+        // Hide NEXT (visible_bind off): the cluster re-right-aligns — BACK now ends the row.
+        let mut tree = nav_footer_tree();
+        tree.children[0].children[5].visible_bind = Some("show_next".into());
+        let f = run_ui(
+            &tree,
+            &ValueMap::new(),
+            &serde_json::json!({}),
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(f.rect("next").is_none(), "hidden NEXT is not placed");
+        let b = f.rect("back").expect("back placed");
+        assert_eq!(b.pos.x, 700.0, "the cluster re-right-aligns without NEXT");
     }
 
     /// **A strip selection is reported as a NUMBER.** The every-frame echo is the
@@ -9447,9 +12908,23 @@ mod tests {
         for kind in ["tabs", "pill_toggle", "select"] {
             let page = strip_page(kind, [Value::Number(0.0), Value::Number(1.0)]);
             let model = ValueMap::new().with("pick", 1.0);
-            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-            assert_eq!(f.results.number("pick"), Some(1.0), "{kind}: the echo is a number");
-            assert_eq!(f.results.text("pick"), None, "{kind}: the echo is never text");
+            let f = run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            assert_eq!(
+                f.results.number("pick"),
+                Some(1.0),
+                "{kind}: the echo is a number"
+            );
+            assert_eq!(
+                f.results.text("pick"),
+                None,
+                "{kind}: the echo is never text"
+            );
         }
         // `radio` is the exception that proves the boundary: a row's literal NAME is
         // text, and its echo stays text.
@@ -9462,8 +12937,18 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![radio];
         let model = ValueMap::new().with("sec", "sec_audio");
-        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        assert_eq!(f.results.text("sec"), Some("sec_audio"), "radio echoes the row NAME as text");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert_eq!(
+            f.results.text("sec"),
+            Some("sec_audio"),
+            "radio echoes the row NAME as text"
+        );
     }
 
     /// One text_field (bind "name", id "name_field") at (10,10) 200×40 under a screen.
@@ -9504,10 +12989,18 @@ mod tests {
         let _g = crate::strings::test_guard();
         crate::strings::load_str(r#"{ "tf_hint": { "en-us": "enter name" } }"#, "en-us");
         let mut page = text_field_tree();
-        page.children[0].props.insert("placeholder".into(), Value::Text("$tf_hint".into()));
+        page.children[0]
+            .props
+            .insert("placeholder".into(), Value::Text("$tf_hint".into()));
         let styles = text_field_styles();
 
-        let f = run_ui(&page, &ValueMap::new().with("name", ""), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", ""),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let (text, color) = f
             .commands
             .iter()
@@ -9517,9 +13010,19 @@ mod tests {
             })
             .expect("the empty field drew its placeholder");
         assert_eq!(text, "enter name", "the $token placeholder resolved");
-        assert_eq!(color, [0.35, 0.35, 0.3, 1.0], "placeholder uses the dim placeholder colour");
+        assert_eq!(
+            color,
+            [0.35, 0.35, 0.3, 1.0],
+            "placeholder uses the dim placeholder colour"
+        );
 
-        let f = run_ui(&page, &ValueMap::new().with("name", "Ada"), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", "Ada"),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let texts: Vec<(String, [f32; 4])> = f
             .commands
             .iter()
@@ -9528,9 +13031,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(texts.len(), 1, "a valued field draws the value only: {texts:?}");
+        assert_eq!(
+            texts.len(),
+            1,
+            "a valued field draws the value only: {texts:?}"
+        );
         assert_eq!(texts[0].0, "Ada", "the bound value is shown");
-        assert_eq!(texts[0].1, [0.9, 0.9, 0.85, 1.0], "the value uses the label colour");
+        assert_eq!(
+            texts[0].1,
+            [0.9, 0.9, 0.85, 1.0],
+            "the value uses the label colour"
+        );
     }
 
     #[test]
@@ -9544,23 +13055,45 @@ mod tests {
             f.commands
                 .iter()
                 .find_map(|c| match c {
-                    HudCommand::Panel { border, border_color, .. } => Some((*border, *border_color)),
+                    HudCommand::Panel {
+                        border,
+                        border_color,
+                        ..
+                    } => Some((*border, *border_color)),
                     _ => None,
                 })
                 .expect("the well drew")
         };
 
         // Resting: pointer far away, no focus.
-        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         assert_eq!(well(&f), (1.0, [0.2, 0.2, 0.2, 1.0]), "resting edge");
 
         // Hovered (no click): pointer in the well.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, false),
+            &mut UiState::new(),
+        );
         assert_eq!(well(&f), (1.0, [0.5, 0.4, 0.2, 1.0]), "bronze hover edge");
 
         // Focused (click in the well): the 2px rune-light ring wins over hover.
         let mut state = UiState::new();
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, true),
+            &mut state,
+        );
         assert_eq!(state.focused(), Some("name_field"));
         assert_eq!(well(&f), (2.0, [0.43, 0.59, 1.0, 1.0]), "focus ring");
     }
@@ -9574,22 +13107,44 @@ mod tests {
         let styles = text_field_styles();
         let model = ValueMap::new().with("name", "Ada");
 
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, false),
+            &mut UiState::new(),
+        );
         assert!(
-            !f.commands.iter().any(|c| matches!(c, HudCommand::TextCaret { .. })),
+            !f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::TextCaret { .. })),
             "no caret while unfocused"
         );
 
         let mut state = UiState::new();
         state.request_focus("name_field");
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, false),
+            &mut state,
+        );
         let carets: Vec<_> = f
             .commands
             .iter()
             .filter_map(|c| match c {
-                HudCommand::TextCaret { x, y, w, h, prefix, size, color, max_x, .. } => {
-                    Some((*x, *y, *w, *h, prefix.clone(), *size, *color, *max_x))
-                }
+                HudCommand::TextCaret {
+                    x,
+                    y,
+                    w,
+                    h,
+                    prefix,
+                    size,
+                    color,
+                    max_x,
+                    ..
+                } => Some((*x, *y, *w, *h, prefix.clone(), *size, *color, *max_x)),
                 _ => None,
             })
             .collect();
@@ -9600,7 +13155,10 @@ mod tests {
         assert_eq!((w, h, size), (2.0, 15.0, 15.0));
         assert_eq!(prefix, "Ada", "the prefix is the WHOLE buffer to measure");
         assert_eq!(color, [0.43, 0.59, 1.0, 1.0], "caret colour from the style");
-        assert_eq!(max_x, 200.0, "clamped to the well's right text edge (210 - pad 8 - w 2)");
+        assert_eq!(
+            max_x, 200.0,
+            "clamped to the well's right text edge (210 - pad 8 - w 2)"
+        );
     }
 
     #[test]
@@ -9618,19 +13176,41 @@ mod tests {
         let mut state = UiState::new();
 
         // Click in the well (focus), then a neutral frame to absorb the release edge.
-        let f = run_ui(&page, &ValueMap::new().with("name", ""), &styles, &input_at(100.0, 30.0, true), &mut state);
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", ""),
+            &styles,
+            &input_at(100.0, 30.0, true),
+            &mut state,
+        );
         assert_eq!(state.focused(), Some("name_field"));
         let model = ValueMap::new().with("name", f.results.text("name").unwrap_or("").to_string());
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 30.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 30.0, false),
+            &mut state,
+        );
         let model = ValueMap::new().with("name", f.results.text("name").unwrap_or("").to_string());
 
         // Typing frame: pointer/buttons identical to the previous frame.
         let mut typing = input_at(100.0, 30.0, false);
         typing.typed = "Q".into();
         let f = run_ui(&page, &model, &styles, &typing, &mut state);
-        assert_eq!(f.results.text("name"), Some("Q"), "the parked-pointer frame still folds");
-        assert_eq!(f.stats.redraw_nodes, 1, "exactly the field redraws for the new value");
-        assert!(f.results.is_on("hud_hit"), "the resting claim survives the typing frame");
+        assert_eq!(
+            f.results.text("name"),
+            Some("Q"),
+            "the parked-pointer frame still folds"
+        );
+        assert_eq!(
+            f.stats.redraw_nodes, 1,
+            "exactly the field redraws for the new value"
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the resting claim survives the typing frame"
+        );
     }
 
     #[test]
@@ -9641,10 +13221,22 @@ mod tests {
         let styles = text_field_styles();
         let mut state = UiState::new();
 
-        run_ui(&page, &ValueMap::new().with("name", ""), &styles, &input_at(100.0, 30.0, true), &mut state);
+        run_ui(
+            &page,
+            &ValueMap::new().with("name", ""),
+            &styles,
+            &input_at(100.0, 30.0, true),
+            &mut state,
+        );
         let mut typing = input_at(100.0, 30.0, false);
         typing.typed = "é⬥".into();
-        let f = run_ui(&page, &ValueMap::new().with("name", ""), &styles, &typing, &mut state);
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", ""),
+            &styles,
+            &typing,
+            &mut state,
+        );
         assert_eq!(f.results.text("name"), Some("é⬥"));
 
         let model = ValueMap::new().with("name", f.results.text("name").unwrap().to_string());
@@ -9665,20 +13257,32 @@ mod tests {
         let model = ValueMap::new().with("name", "Ada");
         let mut state = UiState::new();
         let over = input_at(100.0, 30.0, false);
-        let has_caret =
-            |f: &UiFrame| f.commands.iter().any(|c| matches!(c, HudCommand::TextCaret { .. }));
+        let has_caret = |f: &UiFrame| {
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::TextCaret { .. }))
+        };
 
         let f = run_ui(&page, &model, &styles, &over, &mut state);
         assert!(!has_caret(&f), "unfocused: no caret");
 
         state.request_focus("name_field");
         let f = run_ui(&page, &model, &styles, &over, &mut state);
-        assert!(has_caret(&f), "gaining focus under a parked pointer draws the caret");
-        assert_eq!(f.stats.redraw_nodes, 1, "…by redrawing the field, not replaying");
+        assert!(
+            has_caret(&f),
+            "gaining focus under a parked pointer draws the caret"
+        );
+        assert_eq!(
+            f.stats.redraw_nodes, 1,
+            "…by redrawing the field, not replaying"
+        );
 
         state.clear_focus();
         let f = run_ui(&page, &model, &styles, &over, &mut state);
-        assert!(!has_caret(&f), "losing focus under a parked pointer removes the caret");
+        assert!(
+            !has_caret(&f),
+            "losing focus under a parked pointer removes the caret"
+        );
         assert_eq!(f.stats.redraw_nodes, 1);
     }
 
@@ -9722,7 +13326,13 @@ mod tests {
         };
 
         // Focused + valued: click in the well — the same frame draws the ring + caret.
-        let f = run_ui(&page, &ValueMap::new().with("name", "Ada"), &styles, &input_at(100.0, 30.0, true), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", "Ada"),
+            &styles,
+            &input_at(100.0, 30.0, true),
+            &mut UiState::new(),
+        );
         let expected = vec![
             well(2.0, [0.43, 0.59, 1.0, 1.0]),
             text("Ada", [0.9, 0.9, 0.85, 1.0]),
@@ -9742,7 +13352,13 @@ mod tests {
         assert_eq!(f.commands, expected, "the focused draw is byte-stable");
 
         // Empty + resting: the placeholder branch, no caret.
-        let f = run_ui(&page, &ValueMap::new().with("name", ""), &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &ValueMap::new().with("name", ""),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         let expected = vec![
             well(1.0, [0.2, 0.2, 0.2, 1.0]),
             text("enter name", [0.35, 0.35, 0.3, 1.0]),
@@ -9764,11 +13380,22 @@ mod tests {
 
         let model = ValueMap::new().with("caption", "\u{25c9}  Skin");
         let mut state = UiState::new();
-        let f = run_ui(&b, &model, &styles(), &input_at(-9.0, -9.0, false), &mut state);
-        let drew = f.commands.iter().any(
-            |c| matches!(c, HudCommand::Text { text, .. } if text.contains("Skin")),
+        let f = run_ui(
+            &b,
+            &model,
+            &styles(),
+            &input_at(-9.0, -9.0, false),
+            &mut state,
         );
-        assert!(drew, "the bound caption reached the draw commands: {:?}", f.commands);
+        let drew = f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Text { text, .. } if text.contains("Skin")));
+        assert!(
+            drew,
+            "the bound caption reached the draw commands: {:?}",
+            f.commands
+        );
 
         // With no bind, the literal label still wins — existing buttons are unaffected.
         let plain = prop(node("button"), "label", Value::Text("GO".into()));
@@ -9793,7 +13420,12 @@ mod tests {
     /// exists to close), so each is asserted here to change the picture.
     #[test]
     fn boolean_controls_honour_their_promoted_keys() {
-        let r = Rect { x: 0.0, y: 0.0, w: 120.0, h: 20.0 };
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 120.0,
+            h: 20.0,
+        };
 
         // checkbox — box radius + authored edge width, the tick's own radius, and the
         // caption's gutter and colour.
@@ -9806,13 +13438,28 @@ mod tests {
         let mut out = Vec::new();
         draw_checkbox(r, &props, &mut out);
         match &out[..] {
-            [HudCommand::Panel { radius: box_r, border, border_color, .. }, HudCommand::Panel { radius: tick_r, .. }, HudCommand::Text { x, color, .. }] =>
-            {
+            [HudCommand::Panel {
+                radius: box_r,
+                border,
+                border_color,
+                ..
+            }, HudCommand::Panel { radius: tick_r, .. }, HudCommand::Text { x, color, .. }] => {
                 assert_eq!(*box_r, 4.0, "the box takes the style radius");
-                assert_eq!((*border, *border_color), (3.0, [1.0, 0.0, 0.0, 1.0]), "authored edge width");
+                assert_eq!(
+                    (*border, *border_color),
+                    (3.0, [1.0, 0.0, 0.0, 1.0]),
+                    "authored edge width"
+                );
                 assert_eq!(*tick_r, 2.0, "the tick takes its own radius");
-                assert_eq!(*x, 34.0, "the caption sits `box` + `label_gap` from the rect edge");
-                assert_eq!(*color, [0.0, 1.0, 0.0, 1.0], "…in the style's caption colour");
+                assert_eq!(
+                    *x, 34.0,
+                    "the caption sits `box` + `label_gap` from the rect edge"
+                );
+                assert_eq!(
+                    *color,
+                    [0.0, 1.0, 0.0, 1.0],
+                    "…in the style's caption colour"
+                );
             }
             other => panic!("checkbox drew {other:?}"),
         }
@@ -9828,11 +13475,35 @@ mod tests {
         let mut out = Vec::new();
         draw_toggle(r, &props, &mut out);
         match &out[..] {
-            [HudCommand::Panel { radius: track_r, border, color2, grad, .. }, HudCommand::Panel { x, y, w, h, radius: knob_r, .. }] =>
-            {
-                assert_eq!((*track_r, *border), (2.0, 4.0), "track radius + authored edge width");
-                assert_eq!((*color2, *grad), ([0.0, 0.0, 1.0, 1.0], 1.0), "`off_bot` ramps the OFF track");
-                assert_eq!((*x, *w, *h), (5.0, 15.0, 15.0), "`knob_pad` insets and sizes the knob");
+            [HudCommand::Panel {
+                radius: track_r,
+                border,
+                color2,
+                grad,
+                ..
+            }, HudCommand::Panel {
+                x,
+                y,
+                w,
+                h,
+                radius: knob_r,
+                ..
+            }] => {
+                assert_eq!(
+                    (*track_r, *border),
+                    (2.0, 4.0),
+                    "track radius + authored edge width"
+                );
+                assert_eq!(
+                    (*color2, *grad),
+                    ([0.0, 0.0, 1.0, 1.0], 1.0),
+                    "`off_bot` ramps the OFF track"
+                );
+                assert_eq!(
+                    (*x, *w, *h),
+                    (5.0, 15.0, 15.0),
+                    "`knob_pad` insets and sizes the knob"
+                );
                 assert_eq!(*y, r.y + (r.h - 25.0) * 0.5 + 5.0, "…on both axes");
                 assert_eq!(*knob_r, 1.0, "the knob takes its own radius");
             }
@@ -9849,7 +13520,11 @@ mod tests {
         draw_radio(r, &props, &mut out);
         match &out[..] {
             [HudCommand::Panel { radius: box_r, .. }, HudCommand::Panel { radius: dot_r, .. }] => {
-                assert_eq!((*box_r, *dot_r), (0.0, 0.0), "a radio can be authored square");
+                assert_eq!(
+                    (*box_r, *dot_r),
+                    (0.0, 0.0),
+                    "a radio can be authored square"
+                );
             }
             other => panic!("radio drew {other:?}"),
         }
@@ -9863,9 +13538,18 @@ mod tests {
         let mut out = Vec::new();
         draw_tile(r, &props, &mut out);
         match &out[..] {
-            [HudCommand::Panel { radius, border, border_color, .. }, HudCommand::Text { .. }] => {
+            [HudCommand::Panel {
+                radius,
+                border,
+                border_color,
+                ..
+            }, HudCommand::Text { .. }] => {
                 assert_eq!(*radius, 6.0, "the cell takes the style radius");
-                assert_eq!((*border, *border_color), (2.0, [1.0, 1.0, 0.0, 1.0]), "and an authored edge");
+                assert_eq!(
+                    (*border, *border_color),
+                    (2.0, [1.0, 1.0, 0.0, 1.0]),
+                    "and an authored edge"
+                );
             }
             other => panic!("tile drew {other:?}"),
         }
@@ -9896,19 +13580,34 @@ mod tests {
 
         let panels = |checked: bool| {
             let model = ValueMap::new().with("flag", checked);
-            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
-                .commands
-                .iter()
-                .filter(|c| matches!(c, HudCommand::Panel { .. }))
-                .count()
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Panel { .. }))
+            .count()
         };
         assert_eq!(panels(false), 1, "unchecked: just the box");
         assert_eq!(panels(true), 2, "checked: box + tick");
 
         // The row label (a merged node prop) reaches the component's draw.
         let model = ValueMap::new().with("flag", false);
-        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        assert!(f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Enable")));
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Enable")));
     }
 
     /// A toggle's knob sits at the RIGHT of the pill when its bound value is true, at the
@@ -9930,16 +13629,25 @@ mod tests {
         // The knob is the small SQUARE panel (w == h, smaller than the 24px pill height).
         let knob_x = |on: bool| {
             let model = ValueMap::new().with("on", on);
-            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
-                .commands
-                .iter()
-                .find_map(|c| match c {
-                    HudCommand::Panel { x, w, h, .. } if (w - h).abs() < 0.5 && *w < 24.0 => Some(*x),
-                    _ => None,
-                })
-                .expect("toggle draws a knob")
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Panel { x, w, h, .. } if (w - h).abs() < 0.5 && *w < 24.0 => Some(*x),
+                _ => None,
+            })
+            .expect("toggle draws a knob")
         };
-        assert!(knob_x(true) > knob_x(false), "the knob shifts right when the toggle is on");
+        assert!(
+            knob_x(true) > knob_x(false),
+            "the knob shifts right when the toggle is on"
+        );
     }
 
     /// A tile fills from `style` when its enabled binding is loaded, and from `style_off`
@@ -9963,17 +13671,27 @@ mod tests {
         page.children = vec![tile];
         let fill = |loaded: bool| {
             let model = ValueMap::new().with("loaded", loaded).with("sel", false);
-            run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new())
-                .commands
-                .iter()
-                .find_map(|c| match c {
-                    HudCommand::Panel { color, .. } => Some(*color),
-                    _ => None,
-                })
-                .expect("tile draws a fill panel")
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Panel { color, .. } => Some(*color),
+                _ => None,
+            })
+            .expect("tile draws a fill panel")
         };
         assert_eq!(fill(true), [0.2, 0.2, 0.2, 1.0], "loaded uses `style`");
-        assert_eq!(fill(false), [0.9, 0.0, 0.0, 1.0], "unloaded uses `style_off`");
+        assert_eq!(
+            fill(false),
+            [0.9, 0.0, 0.0, 1.0],
+            "unloaded uses `style_off`"
+        );
     }
 
     /// A pill_toggle draws its well, plus a highlight panel on the segment whose child
@@ -10003,12 +13721,25 @@ mod tests {
 
         let panels = |selected: &str| {
             let model = ValueMap::new().with("mode", selected);
-            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
+            let f = run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
             assert!(f.stats.redraw_nodes >= 1, "the pill really drew this frame");
-            f.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count()
+            f.commands
+                .iter()
+                .filter(|c| matches!(c, HudCommand::Panel { .. }))
+                .count()
         };
         assert_eq!(panels("none"), 1, "no active segment: just the well");
-        assert_eq!(panels("run"), 2, "the selected segment adds a highlight panel");
+        assert_eq!(
+            panels("run"),
+            2,
+            "the selected segment adds a highlight panel"
+        );
     }
 
     /// A tab strip styles the cell whose child `value` == the bound selection from
@@ -10037,8 +13768,17 @@ mod tests {
         page.children = vec![strip];
 
         let model = ValueMap::new().with("sel", "a");
-        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        assert!(f.stats.redraw_nodes >= 1, "the strip really drew this frame");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.stats.redraw_nodes >= 1,
+            "the strip really drew this frame"
+        );
         let fills: Vec<[f32; 4]> = f
             .commands
             .iter()
@@ -10048,8 +13788,16 @@ mod tests {
             })
             .collect();
         assert_eq!(fills.len(), 2, "one cell panel per tab (no strip style)");
-        assert_eq!(fills[0], [0.2, 0.4, 0.7, 1.0], "the selected tab 'a' uses the active fill");
-        assert_eq!(fills[1], [0.1, 0.1, 0.1, 1.0], "the unselected tab 'b' uses the idle fill");
+        assert_eq!(
+            fills[0],
+            [0.2, 0.4, 0.7, 1.0],
+            "the selected tab 'a' uses the active fill"
+        );
+        assert_eq!(
+            fills[1],
+            [0.1, 0.1, 0.1, 1.0],
+            "the unselected tab 'b' uses the idle fill"
+        );
     }
 
     /// A slider's fill rect spans the track proportionally to its bound value (mapped
@@ -10073,16 +13821,33 @@ mod tests {
         // (value-scaled), handle.
         let fill_w = |v: f64| {
             let model = ValueMap::new().with("v", v);
-            let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-            assert!(f.stats.redraw_nodes >= 1, "the slider really drew this frame");
-            let widths: Vec<f32> = f.commands.iter().filter_map(|c| match c {
-                HudCommand::Panel { w, .. } => Some(*w),
-                _ => None,
-            }).collect();
+            let f = run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            assert!(
+                f.stats.redraw_nodes >= 1,
+                "the slider really drew this frame"
+            );
+            let widths: Vec<f32> = f
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    HudCommand::Panel { w, .. } => Some(*w),
+                    _ => None,
+                })
+                .collect();
             widths[1]
         };
         assert_eq!(fill_w(0.0), 0.0, "value 0 → empty fill");
-        assert_eq!(fill_w(50.0), 50.0, "value 50 of 100 → half of the 100px track");
+        assert_eq!(
+            fill_w(50.0),
+            50.0,
+            "value 50 of 100 → half of the 100px track"
+        );
     }
 
     /// A stepper draws its field + two end buttons (3 rects) and the value formatted with
@@ -10103,12 +13868,30 @@ mod tests {
         let mut page = node("screen");
         page.children = vec![sp];
         let model = ValueMap::new().with("n", 60.0);
-        let f = run_ui(&page, &model, &styles, &input_at(-9.0, -9.0, false), &mut UiState::new());
-        assert!(f.stats.redraw_nodes >= 1, "the stepper really drew this frame");
-        let slabs = f.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count();
-        assert_eq!(slabs, 3, "field background + two end buttons (S3: SDF slabs)");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
         assert!(
-            f.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "60 fps")),
+            f.stats.redraw_nodes >= 1,
+            "the stepper really drew this frame"
+        );
+        let slabs = f
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Panel { .. }))
+            .count();
+        assert_eq!(
+            slabs, 3,
+            "field background + two end buttons (S3: SDF slabs)"
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "60 fps")),
             "the value renders formatted with decimals + suffix"
         );
     }
@@ -10127,16 +13910,32 @@ mod tests {
 
         let mut state = UiState::new();
         let green = ValueMap::new().with("row_color", "map.ok");
-        let f = run_ui(&t, &green, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        let f = run_ui(
+            &t,
+            &green,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         let color = f.commands.iter().find_map(|c| match c {
             HudCommand::Text { color, .. } => Some(*color),
             _ => None,
         });
-        assert_eq!(color, Some([0.0, 1.0, 0.0, 1.0]), "resolved through the bound path");
+        assert_eq!(
+            color,
+            Some([0.0, 1.0, 0.0, 1.0]),
+            "resolved through the bound path"
+        );
 
         // The SAME node, a different bound path → a different colour. One node, N states.
         let amber = ValueMap::new().with("row_color", "map.review");
-        let f = run_ui(&t, &amber, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        let f = run_ui(
+            &t,
+            &amber,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         let color = f.commands.iter().find_map(|c| match c {
             HudCommand::Text { color, .. } => Some(*color),
             _ => None,
@@ -10170,18 +13969,42 @@ mod tests {
         };
 
         let active = ValueMap::new().with("tab_style", "tab_active");
-        let f = run_ui(&t, &active, &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(panel_fill(&f), Some([0.1, 0.2, 0.4, 1.0]), "bound path selects the active style");
+        let f = run_ui(
+            &t,
+            &active,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            panel_fill(&f),
+            Some([0.1, 0.2, 0.4, 1.0]),
+            "bound path selects the active style"
+        );
 
         // The SAME node, a different bound value → the idle style. One node, N states.
         let idle = ValueMap::new().with("tab_style", "tab_idle");
         let f = run_ui(&t, &idle, &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(panel_fill(&f), Some([0.2, 0.2, 0.2, 1.0]), "a different bound value → idle");
+        assert_eq!(
+            panel_fill(&f),
+            Some([0.2, 0.2, 0.2, 1.0]),
+            "a different bound value → idle"
+        );
 
         // With the bound key absent, the literal `style` fallback still draws — existing nodes are
         // unaffected by the new channel.
-        let f = run_ui(&t, &ValueMap::new(), &styles, &input_at(-9.0, -9.0, false), &mut state);
-        assert_eq!(panel_fill(&f), Some([0.2, 0.2, 0.2, 1.0]), "no bound value → literal style");
+        let f = run_ui(
+            &t,
+            &ValueMap::new(),
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            panel_fill(&f),
+            Some([0.2, 0.2, 0.2, 1.0]),
+            "no bound value → literal style"
+        );
     }
 
     #[test]
@@ -10197,25 +14020,56 @@ mod tests {
         let mut state = UiState::new();
 
         // Press inside the source → payload picked up, active while held.
-        let press = UiInput { mouse: Vec2::new(50.0, 50.0), clicked: true, down: true, screen, typed: String::new(), backspace: false, wheel: 0.0 };
+        let press = UiInput {
+            mouse: Vec2::new(50.0, 50.0),
+            clicked: true,
+            down: true,
+            screen,
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&row, &model, &styles(), &press, &mut state);
         assert_eq!(f.results.text("drag_kind"), Some("clip"));
         assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
         assert!(f.results.is_on("drag_active"), "held drag is active");
-        assert!(!f.results.is_on("drag_dropped"), "not dropped while still held");
+        assert!(
+            !f.results.is_on("drag_dropped"),
+            "not dropped while still held"
+        );
         assert_eq!(state.drag().map(|d| d.id.as_str()), Some("walk_forward"));
 
         // Still held, cursor moved — the payload is retained across frames.
-        let hold = UiInput { mouse: Vec2::new(180.0, 90.0), clicked: false, down: true, screen, typed: String::new(), backspace: false, wheel: 0.0 };
+        let hold = UiInput {
+            mouse: Vec2::new(180.0, 90.0),
+            clicked: false,
+            down: true,
+            screen,
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&row, &model, &styles(), &hold, &mut state);
         assert!(f.results.is_on("drag_active"));
         assert_eq!(f.results.text("drag_id"), Some("walk_forward"));
 
         // Release → exactly one drop edge carrying the payload, then the drag clears.
-        let release = UiInput { mouse: Vec2::new(180.0, 90.0), clicked: false, down: false, screen, typed: String::new(), backspace: false, wheel: 0.0 };
+        let release = UiInput {
+            mouse: Vec2::new(180.0, 90.0),
+            clicked: false,
+            down: false,
+            screen,
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&row, &model, &styles(), &release, &mut state);
         assert!(f.results.is_on("drag_dropped"), "release reports the drop");
-        assert_eq!(f.results.text("drag_id"), Some("walk_forward"), "drop carries the payload");
+        assert_eq!(
+            f.results.text("drag_id"),
+            Some("walk_forward"),
+            "drop carries the payload"
+        );
         assert!(state.drag().is_none(), "drag clears after the drop");
 
         // A node without `drag_kind` never picks anything up.
@@ -10252,19 +14106,48 @@ mod tests {
         let frame = run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
         assert!(frame.results.is_on("hud_hit"));
         assert!(state.dragging.contains("s"), "grab-band press captures");
-        assert_eq!(frame.results.number("v"), Some(0.0), "mid-drag results stay at rest");
+        assert_eq!(
+            frame.results.number("v"),
+            Some(0.0),
+            "mid-drag results stay at rest"
+        );
 
         // Still held, cursor moved right → the drag keeps TRACKING (even
         // off-track), but still emits nothing.
-        let held = UiInput { mouse: Vec2::new(180.0, 10.0), clicked: false, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let held = UiInput {
+            mouse: Vec2::new(180.0, 10.0),
+            clicked: false,
+            down: true,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let frame = run_ui(&page, &model, &st, &held, &mut state);
-        assert_eq!(frame.results.number("v"), Some(0.0), "still no emission while held");
-        let live = state.drag_value.as_ref().expect("the drag holds its value in flight");
-        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
+        assert_eq!(
+            frame.results.number("v"),
+            Some(0.0),
+            "still no emission while held"
+        );
+        let live = state
+            .drag_value
+            .as_ref()
+            .expect("the drag holds its value in flight");
+        let Value::Number(n) = live.1 else {
+            panic!("a slider drags a number")
+        };
         assert!(n > 80.0, "the in-flight value follows the hand: {n}");
 
         // Release: the ONE real write, at the last dragged position.
-        let up = UiInput { mouse: Vec2::new(180.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let up = UiInput {
+            mouse: Vec2::new(180.0, 10.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let frame = run_ui(&page, &model, &st, &up, &mut state);
         let v = frame.results.number("v").expect("release commits the bind");
         assert!(v > 80.0, "release commits the dragged value: {v}");
@@ -10316,14 +14199,29 @@ mod tests {
             wheel: 0.0,
         };
         let f = run_ui(&page, &model, &st, &off(180.0, true), &mut state);
-        assert_eq!(f.results.number("v"), Some(0.0), "commit-on-release still holds off-rect");
-        let live = state.drag_value.as_ref().expect("the off-rect drag still holds a value");
-        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
-        assert!(n > 80.0, "the value tracks the pointer's x even off the row: {n}");
+        assert_eq!(
+            f.results.number("v"),
+            Some(0.0),
+            "commit-on-release still holds off-rect"
+        );
+        let live = state
+            .drag_value
+            .as_ref()
+            .expect("the off-rect drag still holds a value");
+        let Value::Number(n) = live.1 else {
+            panic!("a slider drags a number")
+        };
+        assert!(
+            n > 80.0,
+            "the value tracks the pointer's x even off the row: {n}"
+        );
 
         // Release from out there: the one real write lands, and the capture ends.
         let f = run_ui(&page, &model, &st, &off(180.0, false), &mut state);
-        let v = f.results.number("v").expect("an off-rect release still commits");
+        let v = f
+            .results
+            .number("v")
+            .expect("an off-rect release still commits");
         assert!(v > 80.0, "release commits the off-rect dragged value: {v}");
         assert!(state.dragging.is_empty(), "capture released");
     }
@@ -10357,12 +14255,32 @@ mod tests {
         let mut state = UiState::new();
         let f = run_ui(&page, &model, &st, &input_at(30.0, 20.0, true), &mut state);
         assert!(f.results.is_on("hud_hit"), "the whole row claims");
-        assert_eq!(f.results.text("fit_focus"), Some("v"), "a row click grabs group focus");
-        assert_eq!(f.results.number("v"), Some(25.0), "no drag: the value just echoes");
+        assert_eq!(
+            f.results.text("fit_focus"),
+            Some("v"),
+            "a row click grabs group focus"
+        );
+        assert_eq!(
+            f.results.number("v"),
+            Some(25.0),
+            "no drag: the value just echoes"
+        );
         // Held next frame with the pointer over the track x: still no capture.
-        let held = UiInput { mouse: Vec2::new(170.0, 20.0), clicked: false, down: true, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let held = UiInput {
+            mouse: Vec2::new(170.0, 20.0),
+            clicked: false,
+            down: true,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&page, &model, &st, &held, &mut state);
-        assert_eq!(f.results.number("v"), Some(25.0), "label-press never became a drag");
+        assert_eq!(
+            f.results.number("v"),
+            Some(25.0),
+            "label-press never became a drag"
+        );
 
         // Click INSIDE the row but ABOVE the grab band (y=4 < 8): claims + focuses,
         // no capture.
@@ -10370,7 +14288,11 @@ mod tests {
         let f = run_ui(&page, &model, &st, &input_at(170.0, 4.0, true), &mut state);
         assert!(f.results.is_on("hud_hit"));
         assert_eq!(f.results.text("fit_focus"), Some("v"));
-        assert_eq!(f.results.number("v"), Some(25.0), "outside the grab band nothing captures");
+        assert_eq!(
+            f.results.number("v"),
+            Some(25.0),
+            "outside the grab band nothing captures"
+        );
 
         // Click in the ±6px slop ABOVE the track (y=10, inside 8..14): captures,
         // maps the pointer over the track ((170-80)/180 = 50) into the in-flight
@@ -10378,21 +14300,54 @@ mod tests {
         // keep echoing the resting 25).
         let mut state = UiState::new();
         let f = run_ui(&page, &model, &st, &input_at(170.0, 10.0, true), &mut state);
-        assert_eq!(f.results.number("v"), Some(25.0), "the press frame emits nothing yet");
-        let live = state.drag_value.as_ref().expect("grab-band press captures the value");
-        let Value::Number(n) = live.1 else { panic!("a slider drags a number") };
-        assert!((n - 50.0).abs() < 2.0, "press maps the pointer over the track: {n}");
-        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        assert_eq!(
+            f.results.number("v"),
+            Some(25.0),
+            "the press frame emits nothing yet"
+        );
+        let live = state
+            .drag_value
+            .as_ref()
+            .expect("grab-band press captures the value");
+        let Value::Number(n) = live.1 else {
+            panic!("a slider drags a number")
+        };
+        assert!(
+            (n - 50.0).abs() < 2.0,
+            "press maps the pointer over the track: {n}"
+        );
+        let up = UiInput {
+            mouse: Vec2::new(170.0, 10.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&page, &model, &st, &up, &mut state);
         let v = f.results.number("v").expect("release commits");
-        assert!((v - 50.0).abs() < 2.0, "release commits the mapped value: {v}");
+        assert!(
+            (v - 50.0).abs() < 2.0,
+            "release commits the mapped value: {v}"
+        );
 
         // Idle frame with the pointer off the row: the group-focus key echoes the
         // model's persisted focus.
         let mut state = UiState::new();
         let focused = ValueMap::new().with("v", 25.0).with("fit_focus", "v");
-        let f = run_ui(&page, &focused, &st, &input_at(700.0, 500.0, false), &mut state);
-        assert_eq!(f.results.text("fit_focus"), Some("v"), "focus echoes off-pointer");
+        let f = run_ui(
+            &page,
+            &focused,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.text("fit_focus"),
+            Some("v"),
+            "focus echoes off-pointer"
+        );
     }
 
     /// Local display ownership: a committed control does NOT wait on the scene. The
@@ -10406,16 +14361,36 @@ mod tests {
         let mut state = UiState::new();
 
         run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
-        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let up = UiInput {
+            mouse: Vec2::new(170.0, 10.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         let f = run_ui(&page, &stale, &st, &up, &mut state);
         let committed = f.results.number("v").expect("release commits");
-        assert!((committed - 50.0).abs() < 2.0, "release commits: {committed}");
+        assert!(
+            (committed - 50.0).abs() < 2.0,
+            "release commits: {committed}"
+        );
 
         // The frames that used to snap back. Nothing has changed the model, so nothing
         // has the standing to move the control.
         for frame in 0..3 {
-            let f = run_ui(&page, &stale, &st, &input_at(700.0, 500.0, false), &mut state);
-            let v = f.results.number("v").expect("a bound control always reports");
+            let f = run_ui(
+                &page,
+                &stale,
+                &st,
+                &input_at(700.0, 500.0, false),
+                &mut state,
+            );
+            let v = f
+                .results
+                .number("v")
+                .expect("a bound control always reports");
             assert!(
                 (v - committed).abs() < f32::EPSILON as f64,
                 "frame {frame} after release fell back to the stale model: {v}",
@@ -10433,15 +14408,36 @@ mod tests {
         let mut state = UiState::new();
 
         run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
-        let up = UiInput { mouse: Vec2::new(170.0, 10.0), clicked: false, down: false, screen: Vec2::new(800.0, 600.0), typed: String::new(), backspace: false, wheel: 0.0 };
+        let up = UiInput {
+            mouse: Vec2::new(170.0, 10.0),
+            clicked: false,
+            down: false,
+            screen: Vec2::new(800.0, 600.0),
+            typed: String::new(),
+            backspace: false,
+            wheel: 0.0,
+        };
         run_ui(&page, &stale, &st, &up, &mut state);
 
         // The scene honours the edit as 40 (a clamp, a snap-to-step, a sim talking
         // back) rather than the 50 the pointer asked for.
         let clamped = ValueMap::new().with("v", 40.0);
-        let f = run_ui(&page, &clamped, &st, &input_at(700.0, 500.0, false), &mut state);
-        assert_eq!(f.results.number("v"), Some(40.0), "the control follows the authority");
-        assert!(state.local.is_empty(), "an overruled entry stops being held");
+        let f = run_ui(
+            &page,
+            &clamped,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            f.results.number("v"),
+            Some(40.0),
+            "the control follows the authority"
+        );
+        assert!(
+            state.local.is_empty(),
+            "an overruled entry stops being held"
+        );
 
         // And the ordinary agreement case: the scene arrives at exactly what was
         // committed, so the entry has nothing left to carry.
@@ -10449,9 +14445,18 @@ mod tests {
         run_ui(&page, &stale, &st, &input_at(170.0, 10.0, true), &mut state);
         run_ui(&page, &stale, &st, &up, &mut state);
         let agreed = ValueMap::new().with("v", 50.0);
-        let f = run_ui(&page, &agreed, &st, &input_at(700.0, 500.0, false), &mut state);
+        let f = run_ui(
+            &page,
+            &agreed,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
         assert_eq!(f.results.number("v"), Some(50.0));
-        assert!(state.local.is_empty(), "the scene agreed — nothing left to hold");
+        assert!(
+            state.local.is_empty(),
+            "the scene agreed — nothing left to hold"
+        );
     }
 
     /// The grab-band slider both ownership tests drive: track x 80..260, y 14..26,
@@ -10485,11 +14490,26 @@ mod tests {
 
         let model = ValueMap::new().with("shown", false);
         let mut state = UiState::new();
-        let frame = run_ui(&page, &model, &serde_json::json!({}), &input_at(5.0, 5.0, true), &mut state);
-        assert!(!frame.results.is_on("nope"), "a hidden button can't be clicked");
+        let frame = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(5.0, 5.0, true),
+            &mut state,
+        );
+        assert!(
+            !frame.results.is_on("nope"),
+            "a hidden button can't be clicked"
+        );
 
         let model = ValueMap::new().with("shown", true);
-        let frame = run_ui(&page, &model, &serde_json::json!({}), &input_at(5.0, 5.0, true), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(5.0, 5.0, true),
+            &mut state,
+        );
         assert!(frame.results.is_on("nope"), "shown → clickable");
     }
 
@@ -10510,8 +14530,13 @@ mod tests {
 
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let frame =
-            run_ui(&page, &model, &serde_json::json!({}), &input_at(0.0, 0.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &serde_json::json!({}),
+            &input_at(0.0, 0.0, false),
+            &mut state,
+        );
         let (x, y, w, h) = frame
             .commands
             .iter()
@@ -10521,9 +14546,18 @@ mod tests {
             })
             .expect("sprite drawn");
         assert!((w - 800.0).abs() < 0.5, "full viewport width, got {w}");
-        assert!((h - 800.0).abs() < 0.5, "aspect=1 derives height from width, got {h}");
-        assert!((x - 0.0).abs() < 0.5, "full-width plate reaches the right edge, got x={x}");
-        assert!((y - (-100.0)).abs() < 0.5, "vertically centred → equal 100px spill, got y={y}");
+        assert!(
+            (h - 800.0).abs() < 0.5,
+            "aspect=1 derives height from width, got {h}"
+        );
+        assert!(
+            (x - 0.0).abs() < 0.5,
+            "full-width plate reaches the right edge, got x={x}"
+        );
+        assert!(
+            (y - (-100.0)).abs() < 0.5,
+            "vertically centred → equal 100px spill, got y={y}"
+        );
     }
 
     #[test]
@@ -10549,20 +14583,31 @@ mod tests {
 
         let model = ValueMap::new();
         let mut state = UiState::new();
-        let frame = run_ui(&page, &model, &styles(), &input_at(0.0, 0.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles(),
+            &input_at(0.0, 0.0, false),
+            &mut state,
+        );
 
         // The sprite blits tex 4 at 1.14 × the 600px screen height = 684px, square, layer 0.
         let (tex, w, h, slayer) = frame
             .commands
             .iter()
             .find_map(|c| match c {
-                HudCommand::Sprite { tex, w, h, layer, .. } => Some((*tex, *w, *h, *layer)),
+                HudCommand::Sprite {
+                    tex, w, h, layer, ..
+                } => Some((*tex, *w, *h, *layer)),
                 _ => None,
             })
             .expect("sprite drawn");
         assert_eq!(tex, 4);
         assert!((h - 684.0).abs() < 0.5, "height = 1.14×600, got {h}");
-        assert!((w - h).abs() < 0.5, "aspect=1 keeps the Muse square, got w={w} h={h}");
+        assert!(
+            (w - h).abs() < 0.5,
+            "aspect=1 keeps the Muse square, got w={w} h={h}"
+        );
         assert_eq!(slayer, 0.0, "the Muse stays on the base layer");
 
         // The popup panel is lifted a whole layer above the backdrop sprite.
@@ -10597,7 +14642,13 @@ mod tests {
         page.children = vec![s];
 
         let mut state = UiState::new();
-        let frame = run_ui(&page, &ValueMap::new(), &st, &input_at(50.0, 60.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &ValueMap::new(),
+            &st,
+            &input_at(50.0, 60.0, false),
+            &mut state,
+        );
 
         assert_eq!(frame.rtts.len(), 1, "one PiP slot reserved");
         let slot = &frame.rtts[0];
@@ -10606,12 +14657,19 @@ mod tests {
         // The image rect is the node rect inset by the STYLE's `inset` — so a whole
         // family of stages shares one inset without repeating it per node.
         assert_eq!((slot.x, slot.y, slot.w, slot.h), (12.0, 22.0, 88.0, 88.0));
-        assert_eq!(slot.tint, [1.0, 0.9, 0.8, 1.0], "tint resolved from its dotted path");
+        assert_eq!(
+            slot.tint,
+            [1.0, 0.9, 0.8, 1.0],
+            "tint resolved from its dotted path"
+        );
         assert!(slot.live, "a stage with no liveness policy renders");
         // The walker draws the backdrop itself, which is why the scene passes
         // `frame: None` to composite_panel — one panel, one code path.
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Panel { .. })),
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Panel { .. })),
             "stage drew its panel backdrop"
         );
         assert!(frame.results.is_on("hud_hit"), "a stage claims the pointer");
@@ -10641,12 +14699,25 @@ mod tests {
 
         let model = ValueMap::new().with("sel", true).with("unsel", false);
         let mut state = UiState::new();
-        let frame = run_ui(&page, &model, &st, &input_at(700.0, 500.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(700.0, 500.0, false),
+            &mut state,
+        );
 
-        assert_eq!(frame.rtts.len(), 2, "the source-less stage reserved nothing");
+        assert_eq!(
+            frame.rtts.len(),
+            2,
+            "the source-less stage reserved nothing"
+        );
         let live_of = |id: &str| frame.rtts.iter().find(|s| s.id == id).unwrap().live;
         assert!(live_of("hot"), "bound true → renders a fresh target");
-        assert!(!live_of("cold"), "bound false → scene reuses its cached poster");
+        assert!(
+            !live_of("cold"),
+            "bound false → scene reuses its cached poster"
+        );
     }
 
     #[test]
@@ -10676,16 +14747,27 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        let frame = run_ui(&page, &model, &styles, &input_at(400.0, 400.0, false), &mut state);
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(400.0, 400.0, false),
+            &mut state,
+        );
 
         // Exactly four Rune-font glyphs, emitted in TL, TR, BL, BR order.
         let runes: Vec<(&str, f32, f32, [f32; 4])> = frame
             .commands
             .iter()
             .filter_map(|c| match c {
-                HudCommand::Text { text, x, y, color, font: FontRole::Rune, .. } => {
-                    Some((text.as_str(), *x, *y, *color))
-                }
+                HudCommand::Text {
+                    text,
+                    x,
+                    y,
+                    color,
+                    font: FontRole::Rune,
+                    ..
+                } => Some((text.as_str(), *x, *y, *color)),
                 _ => None,
             })
             .collect();
@@ -10703,17 +14785,32 @@ mod tests {
 
         // Left pair anchors at the left inset; right pair anchors at the right inset
         // (right-aligned). Every glyph anchor sits inside the 200×120 node rect.
-        assert!((runes[0].1 - 12.0).abs() < 0.01 && (runes[2].1 - 12.0).abs() < 0.01, "left glyphs at inset 12");
-        assert!((runes[1].1 - 188.0).abs() < 0.01 && (runes[3].1 - 188.0).abs() < 0.01, "right glyphs at w - inset");
+        assert!(
+            (runes[0].1 - 12.0).abs() < 0.01 && (runes[2].1 - 12.0).abs() < 0.01,
+            "left glyphs at inset 12"
+        );
+        assert!(
+            (runes[1].1 - 188.0).abs() < 0.01 && (runes[3].1 - 188.0).abs() < 0.01,
+            "right glyphs at w - inset"
+        );
         for &(g, x, y, _) in &runes {
-            assert!((0.0..=200.0).contains(&x) && (0.0..=120.0).contains(&y), "glyph {g} anchor within rect: ({x},{y})");
+            assert!(
+                (0.0..=200.0).contains(&x) && (0.0..=120.0).contains(&y),
+                "glyph {g} anchor within rect: ({x},{y})"
+            );
         }
 
         // Top pair sits above the bottom pair (a corner decoration, not a pile).
-        assert!(runes[0].2 < runes[2].2 && runes[1].2 < runes[3].2, "top pair above bottom pair");
+        assert!(
+            runes[0].2 < runes[2].2 && runes[1].2 < runes[3].2,
+            "top pair above bottom pair"
+        );
 
         // No interaction: a bare decoration doesn't claim the pointer on its own.
-        assert!(!frame.results.is_on("hud_hit"), "a rune-flagged bare cell claims nothing");
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "a rune-flagged bare cell claims nothing"
+        );
     }
 
     #[test]
@@ -10731,7 +14828,11 @@ mod tests {
         tip = prop(tip, "name", Value::Text("Emberlash".into()));
         tip = prop(tip, "rune", Value::Text("\u{16A0}".into())); // ᚠ Elder Futhark 'fehu'
         tip = prop(tip, "rune_color", Value::Text("elem.fire".into()));
-        tip = prop(tip, "meta", Value::Text("evocation · 1 action · 3 mana".into()));
+        tip = prop(
+            tip,
+            "meta",
+            Value::Text("evocation · 1 action · 3 mana".into()),
+        );
 
         let styles = serde_json::json!({
             "elem": { "fire": [1.0, 0.4, 0.1, 1.0] },
@@ -10750,43 +14851,79 @@ mod tests {
 
         // Click squarely over the card (rect 20,20 .. 240,84; centre ≈ 130,52) — a
         // presentational tip claims nothing.
-        let frame = run_ui(&page, &model, &styles, &input_at(130.0, 52.0, true), &mut state);
-        assert!(!frame.results.is_on("hud_hit"), "a presentational tooltip never steals the pointer");
+        let frame = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(130.0, 52.0, true),
+            &mut state,
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "a presentational tooltip never steals the pointer"
+        );
 
         // The backdrop panel fills the node rect (the single Panel command).
         let panel = frame.commands.iter().find_map(|c| match c {
             HudCommand::Panel { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
             _ => None,
         });
-        assert_eq!(panel, Some((20.0, 20.0, 220.0, 64.0)), "card backdrop fills the node rect");
+        assert_eq!(
+            panel,
+            Some((20.0, 20.0, 220.0, 64.0)),
+            "card backdrop fills the node rect"
+        );
 
         // Name headline drawn in the Display face.
-        let name = frame.commands.iter().find_map(|c| match c {
-            HudCommand::Text { text, font, y, .. } if text == "Emberlash" => Some((*font, *y)),
-            _ => None,
-        }).expect("name headline drawn");
+        let name = frame
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Text { text, font, y, .. } if text == "Emberlash" => Some((*font, *y)),
+                _ => None,
+            })
+            .expect("name headline drawn");
         assert_eq!(name.0, FontRole::Display, "the name uses the display face");
 
         // Meta line drawn in the dim meta colour, on the row below the name.
-        let meta = frame.commands.iter().find_map(|c| match c {
-            HudCommand::Text { text, color, y, .. } if text.contains("evocation") => Some((*color, *y)),
-            _ => None,
-        }).expect("meta line drawn");
+        let meta = frame
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Text { text, color, y, .. } if text.contains("evocation") => {
+                    Some((*color, *y))
+                }
+                _ => None,
+            })
+            .expect("meta line drawn");
         assert_eq!(meta.0, [0.5, 0.5, 0.5, 1.0], "meta uses the dim meta_color");
         assert!(meta.1 > name.1, "meta sits on the line below the name");
 
         // Element rune drawn in the Rune face, coloured by its dotted rune_color path.
-        let rune = frame.commands.iter().find_map(|c| match c {
-            HudCommand::Text { text, font, color, .. } if *font == FontRole::Rune => Some((text.clone(), *color)),
-            _ => None,
-        }).expect("rune glyph drawn in the rune face");
+        let rune = frame
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                HudCommand::Text {
+                    text, font, color, ..
+                } if *font == FontRole::Rune => Some((text.clone(), *color)),
+                _ => None,
+            })
+            .expect("rune glyph drawn in the rune face");
         assert_eq!(rune.0.as_str(), "\u{16A0}", "the glyph is the node's rune");
-        assert_eq!(rune.1, [1.0, 0.4, 0.1, 1.0], "rune colour resolved from the dotted rune_color path");
+        assert_eq!(
+            rune.1,
+            [1.0, 0.4, 0.1, 1.0],
+            "rune colour resolved from the dotted rune_color path"
+        );
 
         // Every glyph origin sits inside the node rect (20,20 .. 240,84).
         for c in &frame.commands {
             if let HudCommand::Text { x, y, .. } = c {
-                assert!(*x >= 20.0 && *y >= 20.0 && *x <= 240.0 && *y <= 84.0, "text within card: {x},{y}");
+                assert!(
+                    *x >= 20.0 && *y >= 20.0 && *x <= 240.0 && *y <= 84.0,
+                    "text within card: {x},{y}"
+                );
             }
         }
 
@@ -10796,13 +14933,25 @@ mod tests {
         plain.props.remove("rune");
         let mut page2 = node("screen");
         page2.children = vec![plain];
-        let frame = run_ui(&page2, &model, &styles, &input_at(-9.0, -9.0, false), &mut state);
+        let frame = run_ui(
+            &page2,
+            &model,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut state,
+        );
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Emberlash")),
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "Emberlash")),
             "name still drawn without a rune"
         );
         assert!(
-            !frame.commands.iter().any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
+            !frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
             "no rune glyph when the prop is absent"
         );
     }
@@ -10840,21 +14989,45 @@ mod tests {
         };
 
         // Frame 1: pointer parked far away, never moved — nav mode, the seed lights.
-        let f1 =
-            run_ui(&page, &model, &st, &input_at(500.0, 400.0, false), &mut state);
+        let f1 = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(500.0, 400.0, false),
+            &mut state,
+        );
         assert!(state.nav_mode(), "entry state is nav modality");
-        assert_eq!(first_fill(&f1)[0], 0.9, "seeded nav focus draws the hover state");
+        assert_eq!(
+            first_fill(&f1)[0],
+            0.9,
+            "seeded nav focus draws the hover state"
+        );
 
         // Frame 2: the pointer MOVES (still outside the rect) — takeover, highlight yields.
-        let f2 =
-            run_ui(&page, &model, &st, &input_at(510.0, 400.0, false), &mut state);
-        assert!(!state.nav_mode(), "real pointer movement takes the modality over");
-        assert_eq!(first_fill(&f2)[0], 0.1, "the focused button unlights under pointer modality");
+        let f2 = run_ui(
+            &page,
+            &model,
+            &st,
+            &input_at(510.0, 400.0, false),
+            &mut state,
+        );
+        assert!(
+            !state.nav_mode(),
+            "real pointer movement takes the modality over"
+        );
+        assert_eq!(
+            first_fill(&f2)[0],
+            0.1,
+            "the focused button unlights under pointer modality"
+        );
 
         // Frame 3: hover the button — pointer hover works on the very same node.
-        let f3 =
-            run_ui(&page, &model, &st, &input_at(60.0, 20.0, false), &mut state);
-        assert_eq!(first_fill(&f3)[0], 0.9, "pointer hover lights it in pointer modality");
+        let f3 = run_ui(&page, &model, &st, &input_at(60.0, 20.0, false), &mut state);
+        assert_eq!(
+            first_fill(&f3)[0],
+            0.9,
+            "pointer hover lights it in pointer modality"
+        );
     }
 
     #[test]
@@ -10882,10 +15055,15 @@ mod tests {
         let model = ValueMap::new().with("mp", 0.5);
         let mut state = UiState::new();
 
-        let frame =
-            run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
-        assert!(!frame.results.is_on("hud_hit"), "a read-only gauge never claims the pointer");
-        assert!(frame.stats.redraw_nodes >= 1, "the bar really drew this frame");
+        let frame = run_ui(&page, &model, &st, &input_at(100.0, 10.0, true), &mut state);
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "a read-only gauge never claims the pointer"
+        );
+        assert!(
+            frame.stats.redraw_nodes >= 1,
+            "the bar really drew this frame"
+        );
         let panels: Vec<_> = frame
             .commands
             .iter()
@@ -10933,10 +15111,15 @@ mod tests {
         let mut state = UiState::new();
         let read = |v: f64, state: &mut UiState| {
             let model = ValueMap::new().with("temp", v);
-            let frame =
-                run_ui(&page, &model, &st, &input_at(100.0, 6.0, true), state);
-            assert!(!frame.results.is_on("hud_hit"), "a read-out never claims the pointer");
-            assert!(frame.stats.redraw_nodes >= 1, "the gauge really drew this frame");
+            let frame = run_ui(&page, &model, &st, &input_at(100.0, 6.0, true), state);
+            assert!(
+                !frame.results.is_on("hud_hit"),
+                "a read-out never claims the pointer"
+            );
+            assert!(
+                frame.stats.redraw_nodes >= 1,
+                "the gauge really drew this frame"
+            );
             frame
                 .commands
                 .iter()
@@ -10953,20 +15136,41 @@ mod tests {
         // Inside the band: track + band + sheen, then a marker in the in-band colour.
         let inside = read(0.5, &mut state);
         assert_eq!(inside.len(), 4, "track + band + sheen + marker: {inside:?}");
-        assert!((inside[1].0 - 60.0).abs() < 0.01, "the band starts at `lo` along the track");
+        assert!(
+            (inside[1].0 - 60.0).abs() < 0.01,
+            "the band starts at `lo` along the track"
+        );
         assert!((inside[1].1 - 80.0).abs() < 0.01, "…and spans `hi - lo`");
-        assert!((inside[3].0 - 98.0).abs() < 0.01, "the marker is centred on the reading");
-        assert_eq!(inside[3].2, [0.18, 0.62, 0.36, 1.0], "an in-band reading marks green");
+        assert!(
+            (inside[3].0 - 98.0).abs() < 0.01,
+            "the marker is centred on the reading"
+        );
+        assert_eq!(
+            inside[3].2,
+            [0.18, 0.62, 0.36, 1.0],
+            "an in-band reading marks green"
+        );
 
         // Outside it, the caution stop — the `marker_in` alias must not leak out here.
         let outside = read(0.9, &mut state);
-        assert_eq!(outside[3].2, [0.94, 0.8, 0.42, 1.0], "an out-of-band reading marks caution");
+        assert_eq!(
+            outside[3].2,
+            [0.94, 0.8, 0.42, 1.0],
+            "an out-of-band reading marks caution"
+        );
 
         // Negative = NO SIGNAL: the wash covers the bar and no marker is drawn at all.
         let quiet = read(-1.0, &mut state);
         assert_eq!(quiet.len(), 4, "track + band + sheen + wash: {quiet:?}");
-        assert_eq!(quiet[3].2, [0.06, 0.06, 0.09, 0.72], "the last rect is the wash…");
-        assert!((quiet[3].1 - 200.0).abs() < 0.01, "…covering the whole bar, marker-free");
+        assert_eq!(
+            quiet[3].2,
+            [0.06, 0.06, 0.09, 0.72],
+            "the last rect is the wash…"
+        );
+        assert!(
+            (quiet[3].1 - 200.0).abs() < 0.01,
+            "…covering the whole bar, marker-free"
+        );
     }
 
     /// **The promoted knobs are live.** Restoring the two gauges and the stat dot also
@@ -10985,12 +15189,29 @@ mod tests {
             "lo": 0.25, "hi": 0.75, "bind_value": 1.0
         });
         let mut out = Vec::new();
-        draw_gauge(Rect { x: 0.0, y: 10.0, w: 100.0, h: 20.0 }, &props, &mut out);
+        draw_gauge(
+            Rect {
+                x: 0.0,
+                y: 10.0,
+                w: 100.0,
+                h: 20.0,
+            },
+            &props,
+            &mut out,
+        );
         match &out[..] {
             [_, _, HudCommand::Rect { h: sheen_h, .. }, HudCommand::Rect { x, y, w, h, .. }] => {
                 assert_eq!(*sheen_h, 3.0, "`sheen_h` thickens the top rule");
-                assert_eq!((*x, *w), (97.0, 6.0), "`marker_w` sizes the caliper, centred on the value");
-                assert_eq!((*y, *h), (5.0, 30.0), "`marker_over` overhangs the track at both ends");
+                assert_eq!(
+                    (*x, *w),
+                    (97.0, 6.0),
+                    "`marker_w` sizes the caliper, centred on the value"
+                );
+                assert_eq!(
+                    (*y, *h),
+                    (5.0, 30.0),
+                    "`marker_over` overhangs the track at both ends"
+                );
             }
             other => panic!("gauge drew {other:?}"),
         }
@@ -11005,14 +15226,39 @@ mod tests {
             "tone": "mana", "label": "MP", "bind_value": 1.0
         });
         let mut out = Vec::new();
-        draw_resource_gauge(Rect { x: 0.0, y: 0.0, w: 100.0, h: 60.0 }, &props, &mut out);
+        draw_resource_gauge(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 60.0,
+            },
+            &props,
+            &mut out,
+        );
         match &out[..] {
-            [HudCommand::Text { .. }, HudCommand::Panel { y: track_y, h: track_h, border, .. }, HudCommand::Panel { color2, grad, .. }, HudCommand::Rect { x, w, h, .. }] =>
-            {
-                assert_eq!((*track_y, *track_h), (30.0, 30.0), "`label_gap` clears the caps row");
+            [HudCommand::Text { .. }, HudCommand::Panel {
+                y: track_y,
+                h: track_h,
+                border,
+                ..
+            }, HudCommand::Panel { color2, grad, .. }, HudCommand::Rect { x, w, h, .. }] => {
+                assert_eq!(
+                    (*track_y, *track_h),
+                    (30.0, 30.0),
+                    "`label_gap` clears the caps row"
+                );
                 assert_eq!(*border, 3.0, "`border_w` sets the track's rim");
-                assert_eq!((*color2, *grad), ([0.0, 0.0, 0.5, 1.0], 1.0), "the tone's second stop ramps the fill");
-                assert_eq!((*x, *w, *h), (6.0, 88.0, 2.0), "`sheen_inset` + `sheen_h` size the highlight");
+                assert_eq!(
+                    (*color2, *grad),
+                    ([0.0, 0.0, 0.5, 1.0], 1.0),
+                    "the tone's second stop ramps the fill"
+                );
+                assert_eq!(
+                    (*x, *w, *h),
+                    (6.0, 88.0, 2.0),
+                    "`sheen_inset` + `sheen_h` size the highlight"
+                );
             }
             other => panic!("resource_gauge drew {other:?}"),
         }
@@ -11026,13 +15272,43 @@ mod tests {
             "hue": "red"
         });
         let mut out = Vec::new();
-        draw_stat_dot(Rect { x: 0.0, y: 0.0, w: 20.0, h: 16.0 }, &props, &mut out);
+        draw_stat_dot(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 20.0,
+                h: 16.0,
+            },
+            &props,
+            &mut out,
+        );
         match &out[..] {
-            [HudCommand::Panel { x, w, radius: glow_r, feather, .. }, HudCommand::Panel { radius: gem_r, border, .. }] =>
-            {
-                assert_eq!((*x, *w), (-4.0, 28.0), "`glow_pad` stands the ring off the gem");
-                assert_eq!((*glow_r, *feather), (9.0, 9.0), "…and `glow_feather` softens it");
-                assert_eq!((*gem_r, *border), (3.0, 2.0), "a rounded sigil with an authored rim");
+            [HudCommand::Panel {
+                x,
+                w,
+                radius: glow_r,
+                feather,
+                ..
+            }, HudCommand::Panel {
+                radius: gem_r,
+                border,
+                ..
+            }] => {
+                assert_eq!(
+                    (*x, *w),
+                    (-4.0, 28.0),
+                    "`glow_pad` stands the ring off the gem"
+                );
+                assert_eq!(
+                    (*glow_r, *feather),
+                    (9.0, 9.0),
+                    "…and `glow_feather` softens it"
+                );
+                assert_eq!(
+                    (*gem_r, *border),
+                    (3.0, 2.0),
+                    "a rounded sigil with an authored rim"
+                );
             }
             other => panic!("stat_dot drew {other:?}"),
         }
@@ -11045,7 +15321,16 @@ mod tests {
             "hue": 3
         });
         let mut out = Vec::new();
-        draw_stat_dot(Rect { x: 0.0, y: 0.0, w: 16.0, h: 16.0 }, &props, &mut out);
+        draw_stat_dot(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 16.0,
+                h: 16.0,
+            },
+            &props,
+            &mut out,
+        );
         match &out[..] {
             [HudCommand::Panel { color, .. }] => {
                 assert_eq!(*color, SIG_BLUE, "no block, no glow — just the const floor");
@@ -11086,10 +15371,15 @@ mod tests {
         let model = ValueMap::new().with("cd1", 0.25).with("ch1", 3.0);
         let mut state = UiState::new();
 
-        let frame =
-            run_ui(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state);
-        assert!(frame.results.is_on("hud_hit"), "the slot claims the pointer");
-        assert!(frame.results.is_on("cast_1"), "click fires the slot's action");
+        let frame = run_ui(&page, &model, &st, &input_at(30.0, 30.0, true), &mut state);
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "the slot claims the pointer"
+        );
+        assert!(
+            frame.results.is_on("cast_1"),
+            "click fires the slot's action"
+        );
         let veil = frame
             .commands
             .iter()
@@ -11099,12 +15389,21 @@ mod tests {
             })
             .next_back()
             .expect("cooldown veil drawn");
-        assert!((veil - 56.0 * 0.25).abs() < 0.6, "veil covers the cd fraction: {veil}");
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "3")),
+            (veil - 56.0 * 0.25).abs() < 0.6,
+            "veil covers the cd fraction: {veil}"
+        );
+        assert!(
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "3")),
             "bound charge count renders as an integer"
         );
-        assert!(frame.stats.redraw_nodes >= 1, "the slot really drew this frame");
+        assert!(
+            frame.stats.redraw_nodes >= 1,
+            "the slot really drew this frame"
+        );
     }
 
     #[test]
@@ -11145,14 +15444,25 @@ mod tests {
         let model = ValueMap::new();
         let mut state = UiState::new();
 
-        let frame =
-            run_ui(&page, &model, &st, &input_at(29.0, 29.0, true), &mut state);
-        assert!(!frame.results.is_on("hud_hit"), "presentational kinds never claim");
-        let panels =
-            frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).count();
-        assert!(panels >= 5, "halo + ring + well + glow + gem drew: {panels}");
+        let frame = run_ui(&page, &model, &st, &input_at(29.0, 29.0, true), &mut state);
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
+            !frame.results.is_on("hud_hit"),
+            "presentational kinds never claim"
+        );
+        let panels = frame
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Panel { .. }))
+            .count();
+        assert!(
+            panels >= 5,
+            "halo + ring + well + glow + gem drew: {panels}"
+        );
+        assert!(
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { font, .. } if *font == FontRole::Rune)),
             "the medallion rune renders in the Rune face"
         );
         assert!(frame.stats.redraw_nodes >= 1, "both really drew this frame");
@@ -11186,8 +15496,14 @@ mod tests {
 
         // Pointer over the pill → the badge claims the mouse (scene can't pick through).
         let frame = run_ui(&page, &model, &st, &input_at(30.0, 10.0, true), &mut state);
-        assert!(frame.results.is_on("hud_hit"), "pointer over the badge claims the mouse");
-        assert!(frame.stats.redraw_nodes >= 1, "the chip really drew this frame");
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "pointer over the badge claims the mouse"
+        );
+        assert!(
+            frame.stats.redraw_nodes >= 1,
+            "the chip really drew this frame"
+        );
 
         // The pill uses the accent tone's bg, a pill radius (≈ h/2), and stays inside the
         // 60×20 node rect.
@@ -11195,14 +15511,32 @@ mod tests {
             .commands
             .iter()
             .find_map(|c| match c {
-                HudCommand::Panel { x, y, w, h, color, radius, .. } => Some((*x, *y, *w, *h, *color, *radius)),
+                HudCommand::Panel {
+                    x,
+                    y,
+                    w,
+                    h,
+                    color,
+                    radius,
+                    ..
+                } => Some((*x, *y, *w, *h, *color, *radius)),
                 _ => None,
             })
             .expect("badge drew its pill");
-        assert_eq!(pill.4, [0.14, 0.25, 0.47, 1.0], "accent tone fills with accent_bg");
-        assert!((pill.5 - 10.0).abs() < 0.01, "radius ≈ h/2 (a full capsule)");
+        assert_eq!(
+            pill.4,
+            [0.14, 0.25, 0.47, 1.0],
+            "accent tone fills with accent_bg"
+        );
         assert!(
-            pill.0 >= -0.01 && pill.1 >= -0.01 && pill.0 + pill.2 <= 60.01 && pill.1 + pill.3 <= 20.01,
+            (pill.5 - 10.0).abs() < 0.01,
+            "radius ≈ h/2 (a full capsule)"
+        );
+        assert!(
+            pill.0 >= -0.01
+                && pill.1 >= -0.01
+                && pill.0 + pill.2 <= 60.01
+                && pill.1 + pill.3 <= 20.01,
             "pill within the node rect: {pill:?}"
         );
 
@@ -11211,7 +15545,9 @@ mod tests {
             .commands
             .iter()
             .find_map(|c| match c {
-                HudCommand::Text { text, color, align, .. } => Some((text.clone(), *color, *align)),
+                HudCommand::Text {
+                    text, color, align, ..
+                } => Some((text.clone(), *color, *align)),
                 _ => None,
             })
             .expect("badge drew its label");
@@ -11231,7 +15567,13 @@ mod tests {
         b2 = prop(b2, "style", Value::Text("badge".into()));
         let mut page2 = node("screen");
         page2.children = vec![b2];
-        let frame = run_ui(&page2, &model, &st, &input_at(500.0, 500.0, false), &mut state);
+        let frame = run_ui(
+            &page2,
+            &model,
+            &st,
+            &input_at(500.0, 500.0, false),
+            &mut state,
+        );
         let fill = frame
             .commands
             .iter()
@@ -11240,7 +15582,11 @@ mod tests {
                 _ => None,
             })
             .expect("solid badge drew its pill");
-        assert_eq!(fill, [0.72, 0.59, 0.35, 1.0], "solid overrides tone → solid_bg (bronze)");
+        assert_eq!(
+            fill,
+            [0.72, 0.59, 0.35, 1.0],
+            "solid overrides tone → solid_bg (bronze)"
+        );
 
         // TONE IS A PREFIX: a tone the arm never names reads its own `<tone>_bg` when the
         // block carries one, and falls through to the neutral pair when it does not — so
@@ -11257,7 +15603,13 @@ mod tests {
             let mut page = node("screen");
             page.children = vec![b];
             let mut state = UiState::new();
-            let f = run_ui(&page, &ValueMap::new(), style, &input_at(500.0, 500.0, false), &mut state);
+            let f = run_ui(
+                &page,
+                &ValueMap::new(),
+                style,
+                &input_at(500.0, 500.0, false),
+                &mut state,
+            );
             f.commands
                 .iter()
                 .find_map(|c| match c {
@@ -11282,104 +15634,158 @@ mod tests {
 
     // ── Add inside `mod tests`, alongside the other per-kind tests. Uses the same
     // `node` / `prop` / `input_at` / `run_ui` harness the existing tests use.
-        #[test]
-        fn context_menu_row_click_fires_action_skips_divider_and_disabled() {
-            // Items are CHILD data nodes: a plain row (+keybind hint), an active row, a
-            // divider, a disabled row, and a final plain row. row_h 30 → five 30px slots
-            // stacked from the top of the menu rect.
-            let mut cut = prop(node("item"), "label", Value::Text("Cut".into()));
-            cut.action = Some("cut".into());
-            cut = prop(cut, "hint", Value::Text("X".into()));
+    #[test]
+    fn context_menu_row_click_fires_action_skips_divider_and_disabled() {
+        // Items are CHILD data nodes: a plain row (+keybind hint), an active row, a
+        // divider, a disabled row, and a final plain row. row_h 30 → five 30px slots
+        // stacked from the top of the menu rect.
+        let mut cut = prop(node("item"), "label", Value::Text("Cut".into()));
+        cut.action = Some("cut".into());
+        cut = prop(cut, "hint", Value::Text("X".into()));
 
-            let mut copy = prop(node("item"), "label", Value::Text("Copy".into()));
-            copy.action = Some("copy".into());
-            copy = prop(copy, "active", Value::Bool(true));
+        let mut copy = prop(node("item"), "label", Value::Text("Copy".into()));
+        copy.action = Some("copy".into());
+        copy = prop(copy, "active", Value::Bool(true));
 
-            let divider = prop(node("item"), "divider", Value::Bool(true));
+        let divider = prop(node("item"), "divider", Value::Bool(true));
 
-            let mut paste = prop(node("item"), "label", Value::Text("Paste".into()));
-            paste.action = Some("paste".into());
-            paste = prop(paste, "disabled", Value::Bool(true));
+        let mut paste = prop(node("item"), "label", Value::Text("Paste".into()));
+        paste.action = Some("paste".into());
+        paste = prop(paste, "disabled", Value::Bool(true));
 
-            let mut del = prop(node("item"), "label", Value::Text("Delete".into()));
-            del.action = Some("del".into());
+        let mut del = prop(node("item"), "label", Value::Text("Delete".into()));
+        del.action = Some("del".into());
 
-            let mut menu = node("context_menu");
-            menu.id = "ctx".into();
-            menu.width = Some(200.0);
-            menu.height = Some(150.0);
-            menu.anchor = Some(UiAnchor::TopLeft);
-            menu = prop(menu, "style", Value::Text("menu".into()));
-            menu.children = vec![cut, copy, divider, paste, del];
+        let mut menu = node("context_menu");
+        menu.id = "ctx".into();
+        menu.width = Some(200.0);
+        menu.height = Some(150.0);
+        menu.anchor = Some(UiAnchor::TopLeft);
+        menu = prop(menu, "style", Value::Text("menu".into()));
+        menu.children = vec![cut, copy, divider, paste, del];
 
-            let mut page = node("screen");
-            page.children = vec![menu];
+        let mut page = node("screen");
+        page.children = vec![menu];
 
-            // The reused settings.controls.menu block shape (values inline, not a live path).
-            let styles = serde_json::json!({
-                "menu": {
-                    "top": [0.1,0.1,0.1,1.0], "bot": [0.0,0.0,0.0,1.0],
-                    "border": [0.2,0.2,0.2,1.0], "radius": 3, "row_h": 30, "label_size": 15,
-                    "label": [1.0,1.0,1.0,1.0], "sel_bg": [0.2,0.3,0.5,1.0],
-                    "sel_label": [1.0,1.0,1.0,1.0], "hover_bg": [0.1,0.15,0.25,1.0]
-                }
-            });
-            let model = ValueMap::new();
-            let mut state = UiState::new();
-
-            // Row 0 (y 0..30) is live → fires "cut" and the menu claims the pointer.
-            let f = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, true), &mut state);
-            assert!(f.results.is_on("cut"), "clicking a live row fires its action");
-            assert!(f.results.is_on("hud_hit"), "the menu surface claims the pointer");
-
-            // Row 3 (y 90..120) is disabled → its action never fires, but the surface
-            // still claims the pointer (no pick-through to the scene behind).
-            let f = run_ui(&page, &model, &styles, &input_at(100.0, 105.0, true), &mut state);
-            assert!(!f.results.is_on("paste"), "a disabled row is not clickable");
-            assert!(f.results.is_on("hud_hit"), "still claims the pointer over a disabled row");
-
-            // Row 2 (y 60..90) is a divider → inert; nothing fires.
-            let f = run_ui(&page, &model, &styles, &input_at(100.0, 75.0, true), &mut state);
-            assert!(
-                !f.results.is_on("cut") && !f.results.is_on("copy") && !f.results.is_on("paste") && !f.results.is_on("del"),
-                "a divider row fires no action"
-            );
-
-            // Row 4 (y 120..150) is live → fires "del".
-            let f = run_ui(&page, &model, &styles, &input_at(100.0, 135.0, true), &mut state);
-            assert!(f.results.is_on("del"), "the last row fires its action");
-
-            // Idle draw frame: pointer over row 0. Every drawn panel / row band / hairline /
-            // label stays within the 200×150 node rect, and the active row draws its wash.
-            let f = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, false), &mut state);
-            for c in &f.commands {
-                match c {
-                    HudCommand::Panel { x, y, w, h, .. } => assert!(
-                        *x >= -0.01 && *y >= -0.01 && x + w <= 200.01 && y + h <= 150.01,
-                        "menu panel within node rect: {x},{y} {w}×{h}"
-                    ),
-                    HudCommand::Rect { x, y, w, h, .. } => assert!(
-                        *x >= -0.01 && *y >= -0.01 && x + w <= 200.01 && y + h <= 150.01,
-                        "row wash / hairline within node rect: {x},{y} {w}×{h}"
-                    ),
-                    HudCommand::Text { x, y, .. } => assert!(
-                        *x >= -0.01 && *x <= 200.01 && *y >= -0.01 && *y <= 150.01,
-                        "menu text within node rect: {x},{y}"
-                    ),
-                    _ => {}
-                }
+        // The reused settings.controls.menu block shape (values inline, not a live path).
+        let styles = serde_json::json!({
+            "menu": {
+                "top": [0.1,0.1,0.1,1.0], "bot": [0.0,0.0,0.0,1.0],
+                "border": [0.2,0.2,0.2,1.0], "radius": 3, "row_h": 30, "label_size": 15,
+                "label": [1.0,1.0,1.0,1.0], "sel_bg": [0.2,0.3,0.5,1.0],
+                "sel_label": [1.0,1.0,1.0,1.0], "hover_bg": [0.1,0.15,0.25,1.0]
             }
-            let has_sel = f
-                .commands
-                .iter()
-                .any(|c| matches!(c, HudCommand::Rect { color, .. } if *color == [0.2, 0.3, 0.5, 1.0]));
-            assert!(has_sel, "the active row draws a selection wash (sel_bg)");
+        });
+        let model = ValueMap::new();
+        let mut state = UiState::new();
 
-            // A click fully OUTSIDE the menu fires nothing and claims nothing.
-            let f = run_ui(&page, &model, &styles, &input_at(400.0, 400.0, true), &mut state);
-            assert!(!f.results.is_on("cut") && !f.results.is_on("del"), "a click off the menu fires nothing");
-            assert!(!f.results.is_on("hud_hit"), "a click off the menu doesn't claim the pointer");
+        // Row 0 (y 0..30) is live → fires "cut" and the menu claims the pointer.
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, true),
+            &mut state,
+        );
+        assert!(
+            f.results.is_on("cut"),
+            "clicking a live row fires its action"
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the menu surface claims the pointer"
+        );
+
+        // Row 3 (y 90..120) is disabled → its action never fires, but the surface
+        // still claims the pointer (no pick-through to the scene behind).
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 105.0, true),
+            &mut state,
+        );
+        assert!(!f.results.is_on("paste"), "a disabled row is not clickable");
+        assert!(
+            f.results.is_on("hud_hit"),
+            "still claims the pointer over a disabled row"
+        );
+
+        // Row 2 (y 60..90) is a divider → inert; nothing fires.
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 75.0, true),
+            &mut state,
+        );
+        assert!(
+            !f.results.is_on("cut")
+                && !f.results.is_on("copy")
+                && !f.results.is_on("paste")
+                && !f.results.is_on("del"),
+            "a divider row fires no action"
+        );
+
+        // Row 4 (y 120..150) is live → fires "del".
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 135.0, true),
+            &mut state,
+        );
+        assert!(f.results.is_on("del"), "the last row fires its action");
+
+        // Idle draw frame: pointer over row 0. Every drawn panel / row band / hairline /
+        // label stays within the 200×150 node rect, and the active row draws its wash.
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, false),
+            &mut state,
+        );
+        for c in &f.commands {
+            match c {
+                HudCommand::Panel { x, y, w, h, .. } => assert!(
+                    *x >= -0.01 && *y >= -0.01 && x + w <= 200.01 && y + h <= 150.01,
+                    "menu panel within node rect: {x},{y} {w}×{h}"
+                ),
+                HudCommand::Rect { x, y, w, h, .. } => assert!(
+                    *x >= -0.01 && *y >= -0.01 && x + w <= 200.01 && y + h <= 150.01,
+                    "row wash / hairline within node rect: {x},{y} {w}×{h}"
+                ),
+                HudCommand::Text { x, y, .. } => assert!(
+                    *x >= -0.01 && *x <= 200.01 && *y >= -0.01 && *y <= 150.01,
+                    "menu text within node rect: {x},{y}"
+                ),
+                _ => {}
+            }
         }
+        let has_sel = f
+            .commands
+            .iter()
+            .any(|c| matches!(c, HudCommand::Rect { color, .. } if *color == [0.2, 0.3, 0.5, 1.0]));
+        assert!(has_sel, "the active row draws a selection wash (sel_bg)");
+
+        // A click fully OUTSIDE the menu fires nothing and claims nothing.
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(400.0, 400.0, true),
+            &mut state,
+        );
+        assert!(
+            !f.results.is_on("cut") && !f.results.is_on("del"),
+            "a click off the menu fires nothing"
+        );
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "a click off the menu doesn't claim the pointer"
+        );
+    }
 
     /// The S5 context-menu behaviour fixture: a 200×150 menu at the origin whose
     /// style block carries the FULL alias set (divider/disabled/hint included), so
@@ -11435,48 +15841,101 @@ mod tests {
         // inset geometry (x+4, row top, w−8, row_h); the active row keeps its
         // selection wash; the divider hairline is centred in its band; the hint is
         // right-aligned 14px in from the menu's right edge; the disabled label dims.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, false), &mut UiState::new());
-        assert!(f.results.is_on("hud_hit"), "the menu surface claims the hover");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.results.is_on("hud_hit"),
+            "the menu surface claims the hover"
+        );
         let rects: Vec<(f32, f32, f32, f32, [f32; 4])> = f
             .commands
             .iter()
             .filter_map(|c| match c {
-                HudCommand::Rect { x, y, w, h, color, .. } => Some((*x, *y, *w, *h, *color)),
+                HudCommand::Rect {
+                    x, y, w, h, color, ..
+                } => Some((*x, *y, *w, *h, *color)),
                 _ => None,
             })
             .collect();
-        let hover: Vec<_> =
-            rects.iter().filter(|r| r.4 == [0.1, 0.15, 0.25, 1.0]).collect();
+        let hover: Vec<_> = rects
+            .iter()
+            .filter(|r| r.4 == [0.1, 0.15, 0.25, 1.0])
+            .collect();
         assert_eq!(hover.len(), 1, "exactly one hovered row washes: {rects:?}");
-        assert_eq!((hover[0].0, hover[0].1, hover[0].2, hover[0].3), (4.0, 0.0, 192.0, 30.0));
-        let sel: Vec<_> = rects.iter().filter(|r| r.4 == [0.2, 0.3, 0.5, 1.0]).collect();
+        assert_eq!(
+            (hover[0].0, hover[0].1, hover[0].2, hover[0].3),
+            (4.0, 0.0, 192.0, 30.0)
+        );
+        let sel: Vec<_> = rects
+            .iter()
+            .filter(|r| r.4 == [0.2, 0.3, 0.5, 1.0])
+            .collect();
         assert_eq!(sel.len(), 1, "the active row washes sel_bg");
-        assert_eq!((sel[0].0, sel[0].1, sel[0].2, sel[0].3), (4.0, 30.0, 192.0, 30.0));
-        let hairline: Vec<_> = rects.iter().filter(|r| r.4 == [0.3, 0.3, 0.3, 1.0]).collect();
+        assert_eq!(
+            (sel[0].0, sel[0].1, sel[0].2, sel[0].3),
+            (4.0, 30.0, 192.0, 30.0)
+        );
+        let hairline: Vec<_> = rects
+            .iter()
+            .filter(|r| r.4 == [0.3, 0.3, 0.3, 1.0])
+            .collect();
         assert_eq!(hairline.len(), 1, "the divider draws one hairline");
-        assert_eq!((hairline[0].0, hairline[0].1, hairline[0].2, hairline[0].3), (8.0, 75.0, 184.0, 1.0));
+        assert_eq!(
+            (hairline[0].0, hairline[0].1, hairline[0].2, hairline[0].3),
+            (8.0, 75.0, 184.0, 1.0)
+        );
         let texts: Vec<(&str, f32, f32, [f32; 4], TextAlign)> = f
             .commands
             .iter()
             .filter_map(|c| match c {
-                HudCommand::Text { text, x, y, color, align, .. } => {
-                    Some((text.as_str(), *x, *y, *color, *align))
-                }
+                HudCommand::Text {
+                    text,
+                    x,
+                    y,
+                    color,
+                    align,
+                    ..
+                } => Some((text.as_str(), *x, *y, *color, *align)),
                 _ => None,
             })
             .collect();
         let hint = texts.iter().find(|t| t.0 == "X").expect("hint drew");
         assert!(matches!(hint.4, TextAlign::Right), "hint is right-aligned");
-        assert_eq!((hint.1, hint.2), (186.0, 7.5), "hint anchors 14px in from the right edge");
+        assert_eq!(
+            (hint.1, hint.2),
+            (186.0, 7.5),
+            "hint anchors 14px in from the right edge"
+        );
         assert_eq!(hint.3, [0.5, 0.5, 0.5, 1.0], "hint uses the hint colour");
-        let paste = texts.iter().find(|t| t.0 == "Paste").expect("disabled row drew");
+        let paste = texts
+            .iter()
+            .find(|t| t.0 == "Paste")
+            .expect("disabled row drew");
         assert_eq!(paste.3, [0.4, 0.4, 0.4, 1.0], "a disabled label dims");
-        let copy = texts.iter().find(|t| t.0 == "Copy").expect("active row drew");
-        assert_eq!(copy.3, [0.9, 0.95, 1.0, 1.0], "the active label uses sel_label");
+        let copy = texts
+            .iter()
+            .find(|t| t.0 == "Copy")
+            .expect("active row drew");
+        assert_eq!(
+            copy.3,
+            [0.9, 0.95, 1.0, 1.0],
+            "the active label uses sel_label"
+        );
 
         // Hovering the DISABLED row (y 90..120): no hover wash anywhere — an inert
         // row never highlights — yet the surface still claims the pointer.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 105.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 105.0, false),
+            &mut UiState::new(),
+        );
         assert!(
             !f.commands.iter().any(
                 |c| matches!(c, HudCommand::Rect { color, .. } if *color == [0.1, 0.15, 0.25, 1.0])
@@ -11486,7 +15945,13 @@ mod tests {
         assert!(f.results.is_on("hud_hit"));
 
         // Hovering the divider band (y 60..90): inert too — no hover wash.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 75.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 75.0, false),
+            &mut UiState::new(),
+        );
         assert!(
             !f.commands.iter().any(
                 |c| matches!(c, HudCommand::Rect { color, .. } if *color == [0.1, 0.15, 0.25, 1.0])
@@ -11522,12 +15987,30 @@ mod tests {
 
         // Click mid-row-5 (y=165, beyond the 150px rect): its action fires; the
         // claim does not extend past the authored rect.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 165.0, true), &mut UiState::new());
-        assert!(f.results.is_on("a6"), "a row laid past the rect bottom still fires");
-        assert!(!f.results.is_on("hud_hit"), "only the authored rect claims the pointer");
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 165.0, true),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.results.is_on("a6"),
+            "a row laid past the rect bottom still fires"
+        );
+        assert!(
+            !f.results.is_on("hud_hit"),
+            "only the authored rect claims the pointer"
+        );
 
         // The same row hover-washes when the frame draws (draw shares the row math).
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 165.0, false), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 165.0, false),
+            &mut UiState::new(),
+        );
         assert!(
             f.commands.iter().any(|c| matches!(
                 c,
@@ -11538,7 +16021,13 @@ mod tests {
         );
 
         // A row inside the rect keeps firing as before.
-        let f = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, true), &mut UiState::new());
+        let f = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, true),
+            &mut UiState::new(),
+        );
         assert!(f.results.is_on("a1"));
         assert!(f.results.is_on("hud_hit"));
     }
@@ -11604,14 +16093,35 @@ mod tests {
                 layer: 0.0,
             },
             // Row 0: hover wash (4px inset), left label, right-aligned hint.
-            HudCommand::Rect { x: 4.0, y: 0.0, w: 192.0, h: 30.0, color: [0.1, 0.15, 0.25, 1.0], layer: 0.0 },
+            HudCommand::Rect {
+                x: 4.0,
+                y: 0.0,
+                w: 192.0,
+                h: 30.0,
+                color: [0.1, 0.15, 0.25, 1.0],
+                layer: 0.0,
+            },
             text(14.0, 7.5, "Cut", [1.0, 1.0, 1.0, 1.0], TextAlign::Left),
             text(186.0, 7.5, "X", [0.5, 0.5, 0.5, 1.0], TextAlign::Right),
             // Row 1: selection wash + sel_label.
-            HudCommand::Rect { x: 4.0, y: 30.0, w: 192.0, h: 30.0, color: [0.2, 0.3, 0.5, 1.0], layer: 0.0 },
+            HudCommand::Rect {
+                x: 4.0,
+                y: 30.0,
+                w: 192.0,
+                h: 30.0,
+                color: [0.2, 0.3, 0.5, 1.0],
+                layer: 0.0,
+            },
             text(14.0, 37.5, "Copy", [0.9, 0.95, 1.0, 1.0], TextAlign::Left),
             // Row 2: the divider hairline, centred in its band.
-            HudCommand::Rect { x: 8.0, y: 75.0, w: 184.0, h: 1.0, color: [0.3, 0.3, 0.3, 1.0], layer: 0.0 },
+            HudCommand::Rect {
+                x: 8.0,
+                y: 75.0,
+                w: 184.0,
+                h: 1.0,
+                color: [0.3, 0.3, 0.3, 1.0],
+                layer: 0.0,
+            },
         ];
         assert_eq!(f.commands, expected, "the context menu draw is byte-stable");
     }
@@ -11642,11 +16152,35 @@ mod tests {
         };
 
         // Row 0 (y 0..30), then row 4 (y 120..150) — both live rows, so both wash.
-        let first = run_ui(&page, &model, &styles, &input_at(100.0, 15.0, false), &mut state);
-        assert_eq!(wash_ys(&first), vec![0.0], "the cold frame washes the hovered row");
-        let moved = run_ui(&page, &model, &styles, &input_at(100.0, 135.0, false), &mut state);
-        assert_eq!(wash_ys(&moved), vec![120.0], "a warm menu's wash follows the pointer");
-        assert!(moved.stats.redraw_nodes >= 1, "the moved pointer redrew it: {:?}", moved.stats);
+        let first = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 15.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            wash_ys(&first),
+            vec![0.0],
+            "the cold frame washes the hovered row"
+        );
+        let moved = run_ui(
+            &page,
+            &model,
+            &styles,
+            &input_at(100.0, 135.0, false),
+            &mut state,
+        );
+        assert_eq!(
+            wash_ys(&moved),
+            vec![120.0],
+            "a warm menu's wash follows the pointer"
+        );
+        assert!(
+            moved.stats.redraw_nodes >= 1,
+            "the moved pointer redrew it: {:?}",
+            moved.stats
+        );
     }
 
     #[test]
@@ -11656,9 +16190,13 @@ mod tests {
         // hairline 1) — `context_menu_draw_is_byte_pinned` holds those defaults, so this
         // only has to show the knobs reach the geometry. 200-wide menu, row_h 30.
         let mut styles = context_menu_styles();
-        for (k, v) in
-            [("row_pad", 10.0), ("pad_x", 20.0), ("hint_pad", 6.0), ("divider_inset", 24.0), ("divider_h", 3.0)]
-        {
+        for (k, v) in [
+            ("row_pad", 10.0),
+            ("pad_x", 20.0),
+            ("hint_pad", 6.0),
+            ("divider_inset", 24.0),
+            ("divider_h", 3.0),
+        ] {
             styles["menu"][k] = serde_json::json!(v);
         }
         let f = run_ui(
@@ -11672,15 +16210,28 @@ mod tests {
             f.commands
                 .iter()
                 .find_map(|c| match c {
-                    HudCommand::Rect { x, y, w, h, color: c2, .. } if *c2 == color => {
-                        Some((*x, *y, *w, *h))
-                    }
+                    HudCommand::Rect {
+                        x,
+                        y,
+                        w,
+                        h,
+                        color: c2,
+                        ..
+                    } if *c2 == color => Some((*x, *y, *w, *h)),
                     _ => None,
                 })
                 .expect("that wash / hairline drew")
         };
-        assert_eq!(rect_at([0.1, 0.15, 0.25, 1.0]), (10.0, 0.0, 180.0, 30.0), "row_pad insets the wash");
-        assert_eq!(rect_at([0.3, 0.3, 0.3, 1.0]), (24.0, 75.0, 152.0, 3.0), "the hairline's inset + weight");
+        assert_eq!(
+            rect_at([0.1, 0.15, 0.25, 1.0]),
+            (10.0, 0.0, 180.0, 30.0),
+            "row_pad insets the wash"
+        );
+        assert_eq!(
+            rect_at([0.3, 0.3, 0.3, 1.0]),
+            (24.0, 75.0, 152.0, 3.0),
+            "the hairline's inset + weight"
+        );
         let text_x = |s: &str| {
             f.commands
                 .iter()
@@ -11691,7 +16242,11 @@ mod tests {
                 .expect("that label drew")
         };
         assert_eq!(text_x("Cut"), 20.0, "pad_x insets the label");
-        assert_eq!(text_x("X"), 194.0, "hint_pad insets the keybind from the right edge");
+        assert_eq!(
+            text_x("X"),
+            194.0,
+            "hint_pad insets the keybind from the right edge"
+        );
     }
 
     #[test]
@@ -11707,13 +16262,26 @@ mod tests {
         let over = input_at(100.0, 15.0, false);
 
         let first = run_ui(&page, &model, &styles, &over, &mut state);
-        assert!(first.results.is_on("hud_hit"), "pointer over the menu claims");
-        assert!(first.stats.redraw_nodes >= 1, "the cold frame really drew it: {:?}", first.stats);
+        assert!(
+            first.results.is_on("hud_hit"),
+            "pointer over the menu claims"
+        );
+        assert!(
+            first.stats.redraw_nodes >= 1,
+            "the cold frame really drew it: {:?}",
+            first.stats
+        );
 
         let second = run_ui(&page, &model, &styles, &over, &mut state);
         assert_eq!(second.stats.redraw_nodes, 0, "idle frame: nothing redraws");
-        assert_eq!(second.commands, first.commands, "…and the replay is byte-identical");
-        assert!(second.results.is_on("hud_hit"), "the claim survives the idle frame");
+        assert_eq!(
+            second.commands, first.commands,
+            "…and the replay is byte-identical"
+        );
+        assert!(
+            second.results.is_on("hud_hit"),
+            "the claim survives the idle frame"
+        );
     }
 
     // ── Grid layout ──────────────────────────────────────────────────────────
@@ -11776,72 +16344,157 @@ mod tests {
     }
 
     fn assert_rects_eq(a: &[(f32, f32, f32, f32)], b: &[(f32, f32, f32, f32)], what: &str) {
-        assert_eq!(a.len(), b.len(), "{what}: child count differs ({a:?} vs {b:?})");
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "{what}: child count differs ({a:?} vs {b:?})"
+        );
         for (i, (ra, rb)) in a.iter().zip(b.iter()).enumerate() {
-            let d = (ra.0 - rb.0).abs() + (ra.1 - rb.1).abs() + (ra.2 - rb.2).abs() + (ra.3 - rb.3).abs();
+            let d = (ra.0 - rb.0).abs()
+                + (ra.1 - rb.1).abs()
+                + (ra.2 - rb.2).abs()
+                + (ra.3 - rb.3).abs();
             assert!(d < 1e-3, "{what}: child {i} rect {ra:?} != {rb:?}");
         }
     }
 
     fn run(page: &UiNode) -> UiFrame {
-        run_ui(page, &ValueMap::new(), &boxes(), &input_at(-1.0, -1.0, false), &mut UiState::new())
+        run_ui(
+            page,
+            &ValueMap::new(),
+            &boxes(),
+            &input_at(-1.0, -1.0, false),
+            &mut UiState::new(),
+        )
     }
 
     #[test]
     fn grid_fixed_fr_fixed_track_sizing() {
         // cols "40 1fr 60" in an 800-wide grid, no gap: the middle fr track eats the
         // 700px remainder; x offsets fall at 0 / 40 / 740.
-        let g = grid(800.0, 100.0, "40 1fr 60", "1fr", 0.0, vec![cell(None, None, None), cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            800.0,
+            100.0,
+            "40 1fr 60",
+            "1fr",
+            0.0,
+            vec![
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert_rects_eq(&ps, &[(0.0, 0.0, 40.0, 100.0), (40.0, 0.0, 700.0, 100.0), (740.0, 0.0, 60.0, 100.0)], "fixed/fr/fixed");
+        assert_rects_eq(
+            &ps,
+            &[
+                (0.0, 0.0, 40.0, 100.0),
+                (40.0, 0.0, 700.0, 100.0),
+                (740.0, 0.0, 60.0, 100.0),
+            ],
+            "fixed/fr/fixed",
+        );
     }
 
     #[test]
     fn grid_fr_ratio_distribution() {
         // "1fr 2fr" splits a 600px extent 1:2 → 200 / 400, summing to the full width.
-        let g = grid(600.0, 50.0, "1fr 2fr", "1fr", 0.0, vec![cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            600.0,
+            50.0,
+            "1fr 2fr",
+            "1fr",
+            0.0,
+            vec![cell(None, None, None), cell(None, None, None)],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert_rects_eq(&ps, &[(0.0, 0.0, 200.0, 50.0), (200.0, 0.0, 400.0, 50.0)], "fr ratio");
+        assert_rects_eq(
+            &ps,
+            &[(0.0, 0.0, 200.0, 50.0), (200.0, 0.0, 400.0, 50.0)],
+            "fr ratio",
+        );
     }
 
     #[test]
     fn grid_auto_track_from_content() {
         // "auto auto" sizes each column to its cell's intrinsic width (30, 70); no
         // free space is distributed (there is no fr track), so the columns pack left.
-        let g = grid(800.0, 40.0, "auto auto", "1fr", 0.0, vec![cell(None, None, Some(30.0)), cell(None, None, Some(70.0))]);
+        let g = grid(
+            800.0,
+            40.0,
+            "auto auto",
+            "1fr",
+            0.0,
+            vec![cell(None, None, Some(30.0)), cell(None, None, Some(70.0))],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[0].2 - 30.0).abs() < 1e-3 && (ps[1].2 - 70.0).abs() < 1e-3, "auto tracks size to content: {ps:?}");
-        assert!((ps[0].0 - 0.0).abs() < 1e-3 && (ps[1].0 - 30.0).abs() < 1e-3, "auto columns pack left: {ps:?}");
+        assert!(
+            (ps[0].2 - 30.0).abs() < 1e-3 && (ps[1].2 - 70.0).abs() < 1e-3,
+            "auto tracks size to content: {ps:?}"
+        );
+        assert!(
+            (ps[0].0 - 0.0).abs() < 1e-3 && (ps[1].0 - 30.0).abs() < 1e-3,
+            "auto columns pack left: {ps:?}"
+        );
     }
 
     #[test]
     fn grid_auto_then_fr() {
         // "auto 1fr": the auto column resolves to its 52px content FIRST, then the fr
         // column takes the remaining 748 — proving auto is sized before fr.
-        let g = grid(800.0, 40.0, "auto 1fr", "1fr", 0.0, vec![cell(None, None, Some(52.0)), cell(None, None, None)]);
+        let g = grid(
+            800.0,
+            40.0,
+            "auto 1fr",
+            "1fr",
+            0.0,
+            vec![cell(None, None, Some(52.0)), cell(None, None, None)],
+        );
         let ps = panels(&run(&page_of(g)));
         assert!((ps[0].2 - 52.0).abs() < 1e-3, "auto col = 52: {ps:?}");
-        assert!((ps[1].2 - 748.0).abs() < 1e-3, "fr col = extent - 52: {ps:?}");
+        assert!(
+            (ps[1].2 - 748.0).abs() < 1e-3,
+            "fr col = extent - 52: {ps:?}"
+        );
     }
 
     #[test]
     fn grid_row_gap_and_col_gap_default_to_node_gap() {
         // A 2×2 grid with node.gap = 10 and no explicit col_gap/row_gap: both axes
         // inherit 10, so cell 1 starts at 215 on each axis.
-        let kids = || vec![cell(None, None, None), cell(None, None, None), cell(None, None, None), cell(None, None, None)];
+        let kids = || {
+            vec![
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ]
+        };
         let g = grid(420.0, 420.0, "1fr 1fr", "1fr 1fr", 10.0, kids());
         let ps = panels(&run(&page_of(g)));
         // cols: (420 - 10) / 2 = 205; second column x = 205 + 10 = 215. Same on rows.
-        assert!((ps[1].0 - 215.0).abs() < 1e-3, "col_gap defaults to node.gap: {ps:?}");
-        assert!((ps[2].1 - 215.0).abs() < 1e-3, "row_gap defaults to node.gap: {ps:?}");
+        assert!(
+            (ps[1].0 - 215.0).abs() < 1e-3,
+            "col_gap defaults to node.gap: {ps:?}"
+        );
+        assert!(
+            (ps[2].1 - 215.0).abs() < 1e-3,
+            "row_gap defaults to node.gap: {ps:?}"
+        );
 
         // Now override row_gap = 4 while leaving col_gap on the default: rows use 4
         // (row 1 y = 208 + 4 = 212), columns still use 10 (col 1 x = 215).
         let mut g = grid(420.0, 420.0, "1fr 1fr", "1fr 1fr", 10.0, kids());
         g = prop(g, "row_gap", Value::Number(4.0));
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[1].0 - 215.0).abs() < 1e-3, "cols keep the node.gap of 10: {ps:?}");
-        assert!((ps[2].1 - 212.0).abs() < 1e-3, "rows use the overridden gap of 4: {ps:?}");
+        assert!(
+            (ps[1].0 - 215.0).abs() < 1e-3,
+            "cols keep the node.gap of 10: {ps:?}"
+        );
+        assert!(
+            (ps[2].1 - 212.0).abs() < 1e-3,
+            "rows use the overridden gap of 4: {ps:?}"
+        );
     }
 
     #[test]
@@ -11849,18 +16502,42 @@ mod tests {
         // "500 1fr" in a 400px extent: the fixed track already overflows, so the fr
         // track's free space is -100 → a negative-width cell, exactly as flow yields
         // a negative grow length. This intentional no-clamp is what makes parity exact.
-        let g = grid(400.0, 50.0, "500 1fr", "1fr", 0.0, vec![cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            400.0,
+            50.0,
+            "500 1fr",
+            "1fr",
+            0.0,
+            vec![cell(None, None, None), cell(None, None, None)],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[0].2 - 500.0).abs() < 1e-3, "fixed track keeps its 500: {ps:?}");
-        assert!((ps[1].2 + 100.0).abs() < 1e-3, "fr track is negative (extent - 500): {ps:?}");
+        assert!(
+            (ps[0].2 - 500.0).abs() < 1e-3,
+            "fixed track keeps its 500: {ps:?}"
+        );
+        assert!(
+            (ps[1].2 + 100.0).abs() < 1e-3,
+            "fr track is negative (extent - 500): {ps:?}"
+        );
     }
 
     #[test]
     fn grid_explicit_placement() {
         // A child explicitly at col=1,row=1 lands in the bottom-right cell of a 2×2.
-        let g = grid(200.0, 200.0, "1fr 1fr", "1fr 1fr", 0.0, vec![cell(Some(1), Some(1), None)]);
+        let g = grid(
+            200.0,
+            200.0,
+            "1fr 1fr",
+            "1fr 1fr",
+            0.0,
+            vec![cell(Some(1), Some(1), None)],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert_rects_eq(&ps, &[(100.0, 100.0, 100.0, 100.0)], "explicit bottom-right cell");
+        assert_rects_eq(
+            &ps,
+            &[(100.0, 100.0, 100.0, 100.0)],
+            "explicit bottom-right cell",
+        );
     }
 
     #[test]
@@ -11871,7 +16548,10 @@ mod tests {
         c = prop(c, "col_span", Value::Number(2.0));
         let g = grid(200.0, 50.0, "50 50 50", "1fr", 8.0, vec![c]);
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[0].2 - 108.0).abs() < 1e-3, "col_span covers tracks + interior gap: {ps:?}");
+        assert!(
+            (ps[0].2 - 108.0).abs() < 1e-3,
+            "col_span covers tracks + interior gap: {ps:?}"
+        );
     }
 
     #[test]
@@ -11881,28 +16561,68 @@ mod tests {
         c = prop(c, "row_span", Value::Number(2.0));
         let g = grid(50.0, 200.0, "1fr", "50 50 50", 8.0, vec![c]);
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[0].3 - 108.0).abs() < 1e-3, "row_span covers tracks + interior gap: {ps:?}");
+        assert!(
+            (ps[0].3 - 108.0).abs() < 1e-3,
+            "row_span covers tracks + interior gap: {ps:?}"
+        );
     }
 
     #[test]
     fn grid_auto_flow_row_major() {
         // Three auto children in a 2-column grid wrap row-major into (0,0),(1,0),(0,1)
         // — the third generating an implicit second row.
-        let g = grid(200.0, 200.0, "1fr 1fr", "1fr", 0.0, vec![cell(None, None, None), cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            200.0,
+            200.0,
+            "1fr 1fr",
+            "1fr",
+            0.0,
+            vec![
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[0].0 - 0.0).abs() < 1e-3 && (ps[0].1 - 0.0).abs() < 1e-3, "child 0 at (0,0): {ps:?}");
-        assert!((ps[1].0 - 100.0).abs() < 1e-3 && (ps[1].1 - 0.0).abs() < 1e-3, "child 1 at (1,0): {ps:?}");
-        assert!((ps[2].0 - 0.0).abs() < 1e-3 && (ps[2].1 - 200.0).abs() < 1e-3, "child 2 wraps to the implicit row (0,1): {ps:?}");
+        assert!(
+            (ps[0].0 - 0.0).abs() < 1e-3 && (ps[0].1 - 0.0).abs() < 1e-3,
+            "child 0 at (0,0): {ps:?}"
+        );
+        assert!(
+            (ps[1].0 - 100.0).abs() < 1e-3 && (ps[1].1 - 0.0).abs() < 1e-3,
+            "child 1 at (1,0): {ps:?}"
+        );
+        assert!(
+            (ps[2].0 - 0.0).abs() < 1e-3 && (ps[2].1 - 200.0).abs() < 1e-3,
+            "child 2 wraps to the implicit row (0,1): {ps:?}"
+        );
     }
 
     #[test]
     fn grid_auto_flow_skips_explicit() {
         // An explicit child at (0,0) plus two auto children: the autos step around the
         // occupied cell, landing at (1,0) then (0,1).
-        let g = grid(200.0, 200.0, "1fr 1fr", "1fr 1fr", 0.0, vec![cell(Some(0), Some(0), None), cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            200.0,
+            200.0,
+            "1fr 1fr",
+            "1fr 1fr",
+            0.0,
+            vec![
+                cell(Some(0), Some(0), None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert!((ps[1].0 - 100.0).abs() < 1e-3 && (ps[1].1 - 0.0).abs() < 1e-3, "auto skips to (1,0): {ps:?}");
-        assert!((ps[2].0 - 0.0).abs() < 1e-3 && (ps[2].1 - 100.0).abs() < 1e-3, "auto continues at (0,1): {ps:?}");
+        assert!(
+            (ps[1].0 - 100.0).abs() < 1e-3 && (ps[1].1 - 0.0).abs() < 1e-3,
+            "auto skips to (1,0): {ps:?}"
+        );
+        assert!(
+            (ps[2].0 - 0.0).abs() < 1e-3 && (ps[2].1 - 100.0).abs() < 1e-3,
+            "auto continues at (0,1): {ps:?}"
+        );
     }
 
     #[test]
@@ -11910,13 +16630,28 @@ mod tests {
         // An empty cols/rows spec degrades to one 1fr track each — a single fill cell.
         let g = grid(300.0, 200.0, "", "", 0.0, vec![cell(None, None, None)]);
         let ps = panels(&run(&page_of(g)));
-        assert_rects_eq(&ps, &[(0.0, 0.0, 300.0, 200.0)], "empty spec fills the inner rect");
+        assert_rects_eq(
+            &ps,
+            &[(0.0, 0.0, 300.0, 200.0)],
+            "empty spec fills the inner rect",
+        );
 
         // A garbage spec never panics: unparseable tokens fall back to auto tracks and
         // the child still gets placed (a panel is emitted).
-        let g = grid(300.0, 200.0, "?? %%", "", 0.0, vec![cell(None, None, Some(40.0))]);
+        let g = grid(
+            300.0,
+            200.0,
+            "?? %%",
+            "",
+            0.0,
+            vec![cell(None, None, Some(40.0))],
+        );
         let ps = panels(&run(&page_of(g)));
-        assert_eq!(ps.len(), 1, "garbage spec still places the child without panicking: {ps:?}");
+        assert_eq!(
+            ps.len(),
+            1,
+            "garbage spec still places the child without panicking: {ps:?}"
+        );
     }
 
     #[test]
@@ -11928,7 +16663,11 @@ mod tests {
         c.grow = Some(5.0);
         let g = grid(300.0, 100.0, "1fr", "1fr", 0.0, vec![c]);
         let ps = panels(&run(&page_of(g)));
-        assert_rects_eq(&ps, &[(0.0, 0.0, 300.0, 100.0)], "child fills its cell, ignoring size/grow");
+        assert_rects_eq(
+            &ps,
+            &[(0.0, 0.0, 300.0, 100.0)],
+            "child fills its cell, ignoring size/grow",
+        );
     }
 
     #[test]
@@ -11938,7 +16677,14 @@ mod tests {
         // panel lifted onto that sub-layer above a plain sibling.
         let mut lifted = prop(node("cell"), "style", Value::Text("box".into()));
         lifted = prop(lifted, "layer", Value::Number(5.0));
-        let g = grid(200.0, 100.0, "1fr 1fr", "1fr", 0.0, vec![cell(None, None, None), lifted]);
+        let g = grid(
+            200.0,
+            100.0,
+            "1fr 1fr",
+            "1fr",
+            0.0,
+            vec![cell(None, None, None), lifted],
+        );
 
         let mut sc = node("list");
         sc.id = "sc".into();
@@ -11951,16 +16697,35 @@ mod tests {
 
         let f = run(&page_of(sc));
         // A viewport clip opens the list subtree before the grid's child panels.
-        let clip_idx = f.commands.iter().position(|c| matches!(c, HudCommand::Clip { rect: Some(_) }));
-        let panel_idx = f.commands.iter().position(|c| matches!(c, HudCommand::Panel { .. }));
-        assert!(clip_idx.is_some() && panel_idx.is_some() && clip_idx < panel_idx, "grid children carry the list viewport clip");
+        let clip_idx = f
+            .commands
+            .iter()
+            .position(|c| matches!(c, HudCommand::Clip { rect: Some(_) }));
+        let panel_idx = f
+            .commands
+            .iter()
+            .position(|c| matches!(c, HudCommand::Panel { .. }));
+        assert!(
+            clip_idx.is_some() && panel_idx.is_some() && clip_idx < panel_idx,
+            "grid children carry the list viewport clip"
+        );
         // The lifted child's panel sits on layer 5; a plain sibling stays at 0.
-        let layers: Vec<f32> = f.commands.iter().filter_map(|c| match c {
-            HudCommand::Panel { layer, .. } => Some(*layer),
-            _ => None,
-        }).collect();
-        assert!(layers.iter().any(|l| (l - 5.0).abs() < 1e-3), "a layer-tagged grid child is lifted: {layers:?}");
-        assert!(layers.iter().any(|l| l.abs() < 1e-3), "a plain grid child stays on the base layer: {layers:?}");
+        let layers: Vec<f32> = f
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                HudCommand::Panel { layer, .. } => Some(*layer),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            layers.iter().any(|l| (l - 5.0).abs() < 1e-3),
+            "a layer-tagged grid child is lifted: {layers:?}"
+        );
+        assert!(
+            layers.iter().any(|l| l.abs() < 1e-3),
+            "a plain grid child stays on the base layer: {layers:?}"
+        );
     }
 
     #[test]
@@ -11980,15 +16745,31 @@ mod tests {
 
         let ps = panels(&run(&page_of(col)));
         // The column's own panel (drawn first) reflects the measured grid box.
-        assert!((ps[0].2 - 70.0).abs() < 1e-3, "column width == 30 + 40: {ps:?}");
-        assert!((ps[0].3 - 20.0).abs() < 1e-3, "column height == the 20px row: {ps:?}");
+        assert!(
+            (ps[0].2 - 70.0).abs() < 1e-3,
+            "column width == 30 + 40: {ps:?}"
+        );
+        assert!(
+            (ps[0].3 - 20.0).abs() < 1e-3,
+            "column height == the 20px row: {ps:?}"
+        );
     }
 
     #[test]
     fn grid_reproduces_row() {
         // PARITY: a horizontal flow (A size=40, B grow=1, C size=60, gap=8) and the
         // grid cols="40 1fr 60" rows="1fr" produce byte-identical child rects.
-        let styled = |id: &str| prop({ let mut n = node("cell"); n.id = id.into(); n }, "style", Value::Text("box".into()));
+        let styled = |id: &str| {
+            prop(
+                {
+                    let mut n = node("cell");
+                    n.id = id.into();
+                    n
+                },
+                "style",
+                Value::Text("box".into()),
+            )
+        };
         let mut a = styled("a");
         a.size = Some(40.0);
         let mut b = styled("b");
@@ -12003,16 +16784,41 @@ mod tests {
         row.gap = 8.0;
         row.children = vec![a, b, c];
 
-        let g = grid(800.0, 600.0, "40 1fr 60", "1fr", 8.0, vec![cell(None, None, None), cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            800.0,
+            600.0,
+            "40 1fr 60",
+            "1fr",
+            8.0,
+            vec![
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ],
+        );
 
-        assert_rects_eq(&panels(&run(&page_of(g))), &panels(&run(&page_of(row))), "grid reproduces row");
+        assert_rects_eq(
+            &panels(&run(&page_of(g))),
+            &panels(&run(&page_of(row))),
+            "grid reproduces row",
+        );
     }
 
     #[test]
     fn grid_reproduces_column() {
         // PARITY: a vertical flow (A size=30, B grow=1, C size=50, gap=8) and the grid
         // rows="30 1fr 50" cols="1fr" produce byte-identical child rects.
-        let styled = |id: &str| prop({ let mut n = node("cell"); n.id = id.into(); n }, "style", Value::Text("box".into()));
+        let styled = |id: &str| {
+            prop(
+                {
+                    let mut n = node("cell");
+                    n.id = id.into();
+                    n
+                },
+                "style",
+                Value::Text("box".into()),
+            )
+        };
         let mut a = styled("a");
         a.size = Some(30.0);
         let mut b = styled("b");
@@ -12027,9 +16833,24 @@ mod tests {
         col.gap = 8.0;
         col.children = vec![a, b, c];
 
-        let g = grid(400.0, 600.0, "1fr", "30 1fr 50", 8.0, vec![cell(None, None, None), cell(None, None, None), cell(None, None, None)]);
+        let g = grid(
+            400.0,
+            600.0,
+            "1fr",
+            "30 1fr 50",
+            8.0,
+            vec![
+                cell(None, None, None),
+                cell(None, None, None),
+                cell(None, None, None),
+            ],
+        );
 
-        assert_rects_eq(&panels(&run(&page_of(g))), &panels(&run(&page_of(col))), "grid reproduces column");
+        assert_rects_eq(
+            &panels(&run(&page_of(g))),
+            &panels(&run(&page_of(col))),
+            "grid reproduces column",
+        );
     }
 
     #[test]
@@ -12050,12 +16871,23 @@ mod tests {
         stack.height = Some(200.0);
         stack.children = vec![full(), full()];
 
-        let g = grid(300.0, 200.0, "1fr", "1fr", 0.0, vec![cell(Some(0), Some(0), None), cell(Some(0), Some(0), None)]);
+        let g = grid(
+            300.0,
+            200.0,
+            "1fr",
+            "1fr",
+            0.0,
+            vec![cell(Some(0), Some(0), None), cell(Some(0), Some(0), None)],
+        );
 
         let gp = panels(&run(&page_of(g)));
         let sp = panels(&run(&page_of(stack)));
         assert_rects_eq(&gp, &sp, "grid reproduces stack");
-        assert_rects_eq(&gp, &[(0.0, 0.0, 300.0, 200.0), (0.0, 0.0, 300.0, 200.0)], "both children fill the container");
+        assert_rects_eq(
+            &gp,
+            &[(0.0, 0.0, 300.0, 200.0), (0.0, 0.0, 300.0, 200.0)],
+            "both children fill the container",
+        );
     }
 
     /// Cross-axis `align` on a container sizes each child to its intrinsic cross extent
@@ -12076,8 +16908,14 @@ mod tests {
         let ps = panels(&run(&page_of(col)));
         assert_eq!(ps.len(), 1, "one child box: {ps:?}");
         let (x, _, w, _) = ps[0];
-        assert!((w - 60.0).abs() < 1e-3, "child keeps its intrinsic 60 width (not stretched): {ps:?}");
-        assert!((x - 70.0).abs() < 1e-3, "centered in 200 → x offset (200-60)/2 = 70: {ps:?}");
+        assert!(
+            (w - 60.0).abs() < 1e-3,
+            "child keeps its intrinsic 60 width (not stretched): {ps:?}"
+        );
+        assert!(
+            (x - 70.0).abs() < 1e-3,
+            "centered in 200 → x offset (200-60)/2 = 70: {ps:?}"
+        );
         // Default (no align) STRETCHES to the full 200, proving align is opt-in / non-breaking.
         let mut stretch = node("cell");
         stretch.id = "s".into();
@@ -12088,7 +16926,10 @@ mod tests {
         k.size = Some(20.0);
         stretch.children = vec![k];
         let sp = panels(&run(&page_of(stretch)));
-        assert!((sp[0].2 - 200.0).abs() < 1e-3, "no align → child fills cross (200): {sp:?}");
+        assert!(
+            (sp[0].2 - 200.0).abs() < 1e-3,
+            "no align → child fills cross (200): {sp:?}"
+        );
     }
 
     /// `cell` is THE layout box — the one vertical-flow engine, and
@@ -12108,8 +16949,15 @@ mod tests {
         c.height = Some(100.0);
         c.children = vec![kid(), kid()];
         let ps = panels(&run(&page_of(c)));
-        assert_eq!(ps.len(), 2, "unstyled cell draws no bg — only its two children: {ps:?}");
-        assert!((ps[0].1).abs() < 1e-3 && (ps[1].1 - 30.0).abs() < 1e-3, "children flow as a column (y 0, 30): {ps:?}");
+        assert_eq!(
+            ps.len(),
+            2,
+            "unstyled cell draws no bg — only its two children: {ps:?}"
+        );
+        assert!(
+            (ps[0].1).abs() < 1e-3 && (ps[1].1 - 30.0).abs() < 1e-3,
+            "children flow as a column (y 0, 30): {ps:?}"
+        );
 
         let mut styled = node("cell");
         styled.id = "s".into();
@@ -12118,7 +16966,11 @@ mod tests {
         styled.height = Some(40.0);
         styled = prop(styled, "style", Value::Text("box".into()));
         let ps2 = panels(&run(&page_of(styled)));
-        assert_eq!(ps2.len(), 1, "a styled cell draws its carved-stone bg: {ps2:?}");
+        assert_eq!(
+            ps2.len(),
+            1,
+            "a styled cell draws its carved-stone bg: {ps2:?}"
+        );
     }
 
     // Keep HashMap import used even if the struct-literal path changes.
@@ -12138,7 +16990,14 @@ mod tests {
     // ARE the module's output, transcribed after that diff came back clean.
 
     fn pin_rect(x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) -> HudCommand {
-        HudCommand::Rect { x, y, w, h, color, layer: 0.0 }
+        HudCommand::Rect {
+            x,
+            y,
+            w,
+            h,
+            color,
+            layer: 0.0,
+        }
     }
 
     /// A borderless SDF slab pin — the S3 sunk-track shape (solid fill, no grad,
@@ -12214,7 +17073,12 @@ mod tests {
         // LYING DOWN, a full row at (12,20) 300×40: an 80px caption column, a 40px
         // readout column, a 12px rail centred between them, the value 2.5 of −10..10
         // (t = 0.625) and a `+`-signed one-decimal readout with a suffix.
-        let row = Rect { x: 12.0, y: 20.0, w: 300.0, h: 40.0 };
+        let row = Rect {
+            x: 12.0,
+            y: 20.0,
+            w: 300.0,
+            h: 40.0,
+        };
         let props = serde_json::json!({
             "style": pinned_slider_style(), "label": "SIZE", "layer": 0.0,
             "label_w": 80.0, "value_w": 40.0, "slider_h": 12.0,
@@ -12225,7 +17089,15 @@ mod tests {
             draw(row, &props),
             vec![
                 // Caption: the rect's left edge, centred on the 15px line.
-                pin_text(12.0, 32.5, "SIZE", 15.0, INK_C, TextAlign::Left, FontRole::Body),
+                pin_text(
+                    12.0,
+                    32.5,
+                    "SIZE",
+                    15.0,
+                    INK_C,
+                    TextAlign::Left,
+                    FontRole::Body
+                ),
                 // Rail: x 12+80, w 300−80−40, y centred for a 12px height — a sunk
                 // slab capsuled at half its height (S3), fill matching, knob at the
                 // chips radius.
@@ -12236,7 +17108,15 @@ mod tests {
                 // Handle: 7 wide, centred on the fill's end, overhanging 4px each side.
                 pin_panel(201.0, 30.0, 7.0, 20.0, HANDLE, 2.0),
                 // Readout: right-aligned on the row's own right edge.
-                pin_text(312.0, 34.5, "+2.5 kg", 11.0, VALUE, TextAlign::Right, FontRole::Body),
+                pin_text(
+                    312.0,
+                    34.5,
+                    "+2.5 kg",
+                    11.0,
+                    VALUE,
+                    TextAlign::Right,
+                    FontRole::Body
+                ),
             ],
             "the horizontal slider draw is byte-stable"
         );
@@ -12245,7 +17125,12 @@ mod tests {
         // + an 8px gap), the rail takes the remaining 177px, BOTTOM is min — value 4 of
         // 1..9 fills 0.375 of the rail FROM THE FLOOR — the handle is a bar, the live
         // readout rides beside it and the range marks sit off the rail's far side.
-        let dial = Rect { x: 40.0, y: 10.0, w: 60.0, h: 200.0 };
+        let dial = Rect {
+            x: 40.0,
+            y: 10.0,
+            w: 60.0,
+            h: 200.0,
+        };
         let props = serde_json::json!({
             "style": pinned_slider_style(), "label": "POP", "layer": 0.0, "vertical": true,
             "slider_h": 10.0, "value_w": 44.0, "min": 1.0, "max": 9.0,
@@ -12254,15 +17139,47 @@ mod tests {
         assert_eq!(
             draw(dial, &props),
             vec![
-                pin_text(40.0, 10.0, "POP", 15.0, INK_C, TextAlign::Left, FontRole::Body),
+                pin_text(
+                    40.0,
+                    10.0,
+                    "POP",
+                    15.0,
+                    INK_C,
+                    TextAlign::Left,
+                    FontRole::Body
+                ),
                 pin_panel(65.0, 33.0, 10.0, 177.0, TRACK, 5.0),
                 pin_panel(65.0, 143.625, 10.0, 66.375, FILL, 5.0),
                 pin_rect(65.0, 143.625, 10.0, 1.0, HI),
                 pin_panel(61.0, 140.125, 18.0, 7.0, HANDLE, 2.0),
-                pin_text(85.0, 138.125, "4", 11.0, VALUE, TextAlign::Left, FontRole::Body),
+                pin_text(
+                    85.0,
+                    138.125,
+                    "4",
+                    11.0,
+                    VALUE,
+                    TextAlign::Left,
+                    FontRole::Body
+                ),
                 // Range marks: `value_size` − 2, the MAX at the top (a planet grows up).
-                pin_text(55.0, 28.5, "9", 9.0, VALUE, TextAlign::Right, FontRole::Body),
-                pin_text(55.0, 205.5, "1", 9.0, VALUE, TextAlign::Right, FontRole::Body),
+                pin_text(
+                    55.0,
+                    28.5,
+                    "9",
+                    9.0,
+                    VALUE,
+                    TextAlign::Right,
+                    FontRole::Body
+                ),
+                pin_text(
+                    55.0,
+                    205.5,
+                    "1",
+                    9.0,
+                    VALUE,
+                    TextAlign::Right,
+                    FontRole::Body
+                ),
             ],
             "the upright slider draw is byte-stable"
         );
@@ -12276,20 +17193,52 @@ mod tests {
             draw_stepper(r, props, &mut out);
             out
         };
-        let row = Rect { x: 12.0, y: 20.0, w: 160.0, h: 28.0 };
+        let row = Rect {
+            x: 12.0,
+            y: 20.0,
+            w: 160.0,
+            h: 28.0,
+        };
 
         // Bare style, no caption: every fallback const and default fires — the panel
         // floor for the field, the stone floor for the end cells, ink for all three
         // faces, a 13px line and `value_size` falling back to it.
         assert_eq!(
-            draw(row, &serde_json::json!({ "style": {}, "label": "", "layer": 0.0, "bind_value": 0.5 })),
+            draw(
+                row,
+                &serde_json::json!({ "style": {}, "label": "", "layer": 0.0, "bind_value": 0.5 })
+            ),
             vec![
                 pin_panel(12.0, 20.0, 160.0, 28.0, PANEL, 3.0),
                 pin_panel(12.0, 20.0, 28.0, 28.0, STONE, 3.0),
                 pin_panel(144.0, 20.0, 28.0, 28.0, STONE, 3.0),
-                pin_text(26.0, 27.5, "-", 13.0, INK_C, TextAlign::Center, FontRole::Label),
-                pin_text(158.0, 27.5, "+", 13.0, INK_C, TextAlign::Center, FontRole::Label),
-                pin_text(92.0, 27.5, "0.50", 13.0, INK_C, TextAlign::Center, FontRole::Body),
+                pin_text(
+                    26.0,
+                    27.5,
+                    "-",
+                    13.0,
+                    INK_C,
+                    TextAlign::Center,
+                    FontRole::Label
+                ),
+                pin_text(
+                    158.0,
+                    27.5,
+                    "+",
+                    13.0,
+                    INK_C,
+                    TextAlign::Center,
+                    FontRole::Label
+                ),
+                pin_text(
+                    92.0,
+                    27.5,
+                    "0.50",
+                    13.0,
+                    INK_C,
+                    TextAlign::Center,
+                    FontRole::Body
+                ),
             ],
             "the unstyled stepper draw is byte-stable"
         );
@@ -12309,15 +17258,47 @@ mod tests {
         assert_eq!(
             draw(row, &props),
             vec![
-                pin_text(12.0, 26.5, "FPS", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Left, FontRole::Body),
+                pin_text(
+                    12.0,
+                    26.5,
+                    "FPS",
+                    15.0,
+                    [0.9, 0.88, 0.8, 1.0],
+                    TextAlign::Left,
+                    FontRole::Body
+                ),
                 // Field: past the 60px caption column, 20 tall and centred in the row.
                 pin_panel(72.0, 24.0, 100.0, 20.0, [0.1, 0.11, 0.12, 1.0], 3.0),
                 // Each end cell is as wide as the field is TALL — square at any height.
                 pin_panel(72.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0], 3.0),
                 pin_panel(152.0, 24.0, 20.0, 20.0, [0.2, 0.2, 0.24, 1.0], 3.0),
-                pin_text(82.0, 26.5, "-", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
-                pin_text(162.0, 26.5, "+", 15.0, [0.9, 0.88, 0.8, 1.0], TextAlign::Center, FontRole::Label),
-                pin_text(122.0, 28.5, "60 fps", 11.0, [0.5, 0.5, 0.45, 1.0], TextAlign::Center, FontRole::Body),
+                pin_text(
+                    82.0,
+                    26.5,
+                    "-",
+                    15.0,
+                    [0.9, 0.88, 0.8, 1.0],
+                    TextAlign::Center,
+                    FontRole::Label
+                ),
+                pin_text(
+                    162.0,
+                    26.5,
+                    "+",
+                    15.0,
+                    [0.9, 0.88, 0.8, 1.0],
+                    TextAlign::Center,
+                    FontRole::Label
+                ),
+                pin_text(
+                    122.0,
+                    28.5,
+                    "60 fps",
+                    11.0,
+                    [0.5, 0.5, 0.45, 1.0],
+                    TextAlign::Center,
+                    FontRole::Body
+                ),
             ],
             "the styled stepper draw is byte-stable"
         );
@@ -12345,28 +17326,49 @@ mod tests {
         let texts = |cmds: &[HudCommand]| -> Vec<(f32, f32, String, f32)> {
             cmds.iter()
                 .filter_map(|c| match c {
-                    HudCommand::Text { x, y, text, size, .. } => {
-                        Some((*x, *y, text.clone(), *size))
-                    }
+                    HudCommand::Text {
+                        x, y, text, size, ..
+                    } => Some((*x, *y, text.clone(), *size)),
                     _ => None,
                 })
                 .collect()
         };
-        let row = Rect { x: 0.0, y: 0.0, w: 200.0, h: 20.0 };
+        let row = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 20.0,
+        };
 
         // `handle_over` — the handle's overhang past the rail, 4px on each side.
         let over = |style: Json| {
             let mut out = Vec::new();
-            draw_slider(row, &serde_json::json!({ "style": style, "label": "", "bind_value": 0.0 }), &mut out);
+            draw_slider(
+                row,
+                &serde_json::json!({ "style": style, "label": "", "bind_value": 0.0 }),
+                &mut out,
+            );
             rects(&out)[2]
         };
-        assert_eq!(over(serde_json::json!({})).3, 28.0, "the default still overhangs 4px each side");
-        assert_eq!(over(serde_json::json!({ "handle_over": 0.0 })).3, 20.0, "0 flushes it to the rail");
+        assert_eq!(
+            over(serde_json::json!({})).3,
+            28.0,
+            "the default still overhangs 4px each side"
+        );
+        assert_eq!(
+            over(serde_json::json!({ "handle_over": 0.0 })).3,
+            20.0,
+            "0 flushes it to the rail"
+        );
 
         // `fill_hi_w` — the highlight line's thickness along the fill's leading edge.
         let hi = |style: Json| {
             let mut out = Vec::new();
-            draw_slider(row, &serde_json::json!({ "style": style, "label": "", "bind_value": 1.0 }), &mut out);
+            draw_slider(
+                row,
+                &serde_json::json!({ "style": style, "label": "", "bind_value": 1.0 }),
+                &mut out,
+            );
             rects(&out)[2].3
         };
         let lit = serde_json::json!({ "fill_hi": [1.0, 1.0, 1.0, 1.0] });
@@ -12377,11 +17379,18 @@ mod tests {
 
         // `grab_pad` — how far off a thin rail a press still takes the drag.
         let grabbed = |pad: Json, my: f32| {
-            let props = serde_json::json!({ "style": {}, "label": "", "slider_h": 4.0, "grab_pad": pad });
+            let props =
+                serde_json::json!({ "style": {}, "label": "", "slider_h": 4.0, "grab_pad": pad });
             hit_slider(Vec2::new(100.0, my), row, &props, true, true).capture == Some(true)
         };
-        assert!(grabbed(Json::Null, 4.0), "the default band reaches 6px above the rail");
-        assert!(!grabbed(serde_json::json!(0.0), 4.0), "…and `grab_pad` 0 tightens it to the rail");
+        assert!(
+            grabbed(Json::Null, 4.0),
+            "the default band reaches 6px above the rail"
+        );
+        assert!(
+            !grabbed(serde_json::json!(0.0), 4.0),
+            "…and `grab_pad` 0 tightens it to the rail"
+        );
 
         // `btn_w` — the stepper's end cells stop being squares when a row says so.
         let cells = |props: Json| {
@@ -12389,9 +17398,17 @@ mod tests {
             draw_stepper(row, &props, &mut out);
             rects(&out)
         };
-        assert_eq!(cells(serde_json::json!({ "style": {}, "label": "" }))[1].2, 20.0, "square by default");
+        assert_eq!(
+            cells(serde_json::json!({ "style": {}, "label": "" }))[1].2,
+            20.0,
+            "square by default"
+        );
         let wide = cells(serde_json::json!({ "style": {}, "label": "", "btn_w": 40.0 }));
-        assert_eq!((wide[1].2, wide[2].0), (40.0, 160.0), "`btn_w` widens both ends");
+        assert_eq!(
+            (wide[1].2, wide[2].0),
+            (40.0, 160.0),
+            "`btn_w` widens both ends"
+        );
 
         // `dec_glyph` / `inc_glyph` — the two faces, ASCII by default.
         let faces = |props: Json| {
@@ -12400,9 +17417,17 @@ mod tests {
             let t = texts(&out);
             (t[0].2.clone(), t[1].2.clone())
         };
-        assert_eq!(faces(serde_json::json!({ "style": {}, "label": "" })), ("-".into(), "+".into()));
-        let arrows = serde_json::json!({ "style": {}, "label": "", "dec_glyph": "◀", "inc_glyph": "▶" });
-        assert_eq!(faces(arrows), ("◀".to_string(), "▶".to_string()), "the faces are authorable");
+        assert_eq!(
+            faces(serde_json::json!({ "style": {}, "label": "" })),
+            ("-".into(), "+".into())
+        );
+        let arrows =
+            serde_json::json!({ "style": {}, "label": "", "dec_glyph": "◀", "inc_glyph": "▶" });
+        assert_eq!(
+            faces(arrows),
+            ("◀".to_string(), "▶".to_string()),
+            "the faces are authorable"
+        );
 
         // `focus_border_w` — the text field's focus ring, 2px against a 1px rest.
         let ring = |props: Json| {
@@ -12414,10 +17439,17 @@ mod tests {
             }
         };
         let lit_border = serde_json::json!({ "border": [1.0, 1.0, 1.0, 1.0] });
-        assert_eq!(ring(serde_json::json!({ "style": lit_border, "mx": -9.0, "my": -9.0 })), 1.0);
+        assert_eq!(
+            ring(serde_json::json!({ "style": lit_border, "mx": -9.0, "my": -9.0 })),
+            1.0
+        );
         let mut focused = serde_json::json!({ "style": lit_border, "mx": -9.0, "my": -9.0 });
         focused["focused"] = Json::Bool(true);
-        assert_eq!(ring(focused.clone()), 2.0, "the focus ring is 2px by default");
+        assert_eq!(
+            ring(focused.clone()),
+            2.0,
+            "the focus ring is 2px by default"
+        );
         focused["style"]["focus_border_w"] = serde_json::json!(4.0);
         assert_eq!(ring(focused), 4.0, "…and the style can thicken it");
     }

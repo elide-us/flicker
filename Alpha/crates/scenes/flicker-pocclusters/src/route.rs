@@ -229,15 +229,24 @@ mod tests {
         let mut rc = RouteCtx::new();
         let mut g = GameplayBase::default();
         assert_eq!(
-            g.handle(&ev(ActionSignal::SecondaryAction, EventKind::Press, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::SecondaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Pass
         );
         assert!(!g.pick);
         assert_eq!(
-            g.handle(&ev(ActionSignal::PrimaryAction, EventKind::Press, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Consumed
         );
-        assert!(g.pick, "a PrimaryAction press that reached the base requests a pick");
+        assert!(
+            g.pick,
+            "a PrimaryAction press that reached the base requests a pick"
+        );
     }
 
     #[test]
@@ -252,14 +261,21 @@ mod tests {
         let out = cmd.drive(&down, false, false, &mut rc);
         assert!(!out.submit && !out.cancel);
         assert!(cmd.guard(), "the trigger key is guarded out of the buffer");
-        assert!(rc.requests.contains(&RouterRequest::PushContext(InputContext::TextEntry)));
-        assert!(rc.requests.contains(&RouterRequest::SetFocus("chat_input".into())));
+        assert!(rc
+            .requests
+            .contains(&RouterRequest::PushContext(InputContext::TextEntry)));
+        assert!(rc
+            .requests
+            .contains(&RouterRequest::SetFocus("chat_input".into())));
 
         // Frame 1: still held, now focused → NO second hand-off (one-way), guard held.
         rc.requests.clear();
         let _ = cmd.drive(&down, true, false, &mut rc);
         assert!(cmd.guard());
-        assert!(rc.requests.is_empty(), "one-way: no re-entry while already focused");
+        assert!(
+            rc.requests.is_empty(),
+            "one-way: no re-entry while already focused"
+        );
 
         // Frame 2: T released THIS frame → guard persists one more frame (macOS commits
         // key text a frame late).
@@ -280,8 +296,12 @@ mod tests {
         let idle = InputState::new();
         let _ = cmd.drive(&idle, false, true, &mut rc);
         assert!(!cmd.guard());
-        assert!(rc.requests.contains(&RouterRequest::PushContext(InputContext::TextEntry)));
-        assert!(rc.requests.contains(&RouterRequest::SetFocus("chat_input".into())));
+        assert!(rc
+            .requests
+            .contains(&RouterRequest::PushContext(InputContext::TextEntry)));
+        assert!(rc
+            .requests
+            .contains(&RouterRequest::SetFocus("chat_input".into())));
     }
 
     #[test]
@@ -291,7 +311,11 @@ mod tests {
         // Esc while NOT focused → nothing (Esc→Menu is the scene root's job).
         let mut esc = InputState::new();
         esc.set_key(Key::Escape, true);
-        assert!(!CommandHandler::default().drive(&esc, false, false, &mut rc).cancel);
+        assert!(
+            !CommandHandler::default()
+                .drive(&esc, false, false, &mut rc)
+                .cancel
+        );
 
         // Esc while focused → cancel (draft kept).
         let out = CommandHandler::default().drive(&esc, true, false, &mut rc);
@@ -317,8 +341,12 @@ mod tests {
         let raw = InputState::new();
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
         // The screen declaration, exactly as hud_pocclusters.lua's root carries it.
-        let mut tree = UiNode { component: "screen".into(), ..Default::default() };
-        tree.props.insert("on_menu".into(), Value::Text("pause_open".into()));
+        let mut tree = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
+        tree.props
+            .insert("on_menu".into(), Value::Text("pause_open".into()));
         let intents = UiIntents::of(&tree);
 
         // Not focused: the Menu press reaches the walker layer → the declared name fires.
@@ -334,8 +362,14 @@ mod tests {
                     [&mut root, &mut cmd, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
-            assert!(report.consumed_by(2, ActionSignal::Menu), "the walker layer consumed it");
-            assert!(!report.consumed_by(ROOT, ActionSignal::Menu), "the root has no Menu arm");
+            assert!(
+                report.consumed_by(2, ActionSignal::Menu),
+                "the walker layer consumed it"
+            );
+            assert!(
+                !report.consumed_by(ROOT, ActionSignal::Menu),
+                "the root has no Menu arm"
+            );
             assert_eq!(walker.take_fired(), vec!["pause_open".to_string()]);
         }
 
@@ -357,8 +391,14 @@ mod tests {
                     [&mut root, &mut cmd, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
-            assert!(report.consumed_by(1, ActionSignal::Menu), "command captured it first");
-            assert!(walker.take_fired().is_empty(), "the declared intent never fired");
+            assert!(
+                report.consumed_by(1, ActionSignal::Menu),
+                "command captured it first"
+            );
+            assert!(
+                walker.take_fired().is_empty(),
+                "the declared intent never fired"
+            );
         }
     }
 }

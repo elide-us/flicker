@@ -2,6 +2,7 @@
 name = "flicker-godmode"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # God Mode — the world-simulation console, as a scene PACKAGE (library only). The
@@ -23,9 +24,9 @@ flicker-worldtile.workspace = true
 flicker-worldgrid.workspace = true
 flicker-materials.workspace = true
 
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The shared hex-globe mesh builder (was this crate's own `globe.rs`).
-flicker-globe = { path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.0", path = "../../frontend/flicker-globe" }
 flicker-shell.workspace = true
 # Input event bus (spec §4/§9): the shared resolve → route seam.
 flicker-input-core.workspace = true

@@ -46,9 +46,7 @@ pub use snapshot::{masses_agree, EpochSnapshot, Provenance};
 
 // Re-export the per-cell state the public API exposes (`World.cells`, `EpochSnapshot.cells`)
 // so viewers can name it without depending on `flicker-worldgen` directly.
-pub use flicker_worldgen::{
-    classify, HexState, Layer, LayerClass, LayerKind, LayerLedger, Phase,
-};
+pub use flicker_worldgen::{classify, HexState, Layer, LayerClass, LayerKind, LayerLedger, Phase};
 // Re-export the material vocabulary type the viewer needs to name for classification reads.
 pub use flicker_materials::Tables;
 // Re-export the thermal helpers (Kelvin ↔ normalized) the viewer reads for the heat view.
@@ -73,15 +71,24 @@ mod tests {
         // Epochs 1-3 form compounds without adding element mass — exactly conserved.
         for epoch in 1..=3 {
             let m = e.snapshot(epoch).conserved_mass();
-            assert!(masses_agree(m, seed_mass, 1e-9), "epoch {epoch} drifted pre-delivery ({m} vs {seed_mass})");
+            assert!(
+                masses_agree(m, seed_mass, 1e-9),
+                "epoch {epoch} drifted pre-delivery ({m} vs {seed_mass})"
+            );
         }
         // Epoch 4 delivers water from the outer system — element mass jumps up.
         let e4 = e.snapshot(4).conserved_mass();
-        assert!(e4 > seed_mass, "E4 water delivery should add mass ({e4} vs {seed_mass})");
+        assert!(
+            e4 > seed_mass,
+            "E4 water delivery should add mass ({e4} vs {seed_mass})"
+        );
         // Epochs 4-9: no further additions or losses — conserved among themselves.
         for epoch in 4..=WORLD_EPOCHS {
             let m = e.snapshot(epoch).conserved_mass();
-            assert!(masses_agree(m, e4, 1e-9), "epoch {epoch} drifted post-delivery ({m} vs {e4})");
+            assert!(
+                masses_agree(m, e4, 1e-9),
+                "epoch {epoch} drifted post-delivery ({m} vs {e4})"
+            );
         }
     }
 
@@ -93,10 +100,18 @@ mod tests {
         let tables = e.tables();
         let snap = e.peek(6).expect("epoch 6 computed");
         // Real chemistry happened.
-        assert!(snap.cells.iter().any(|c| !c.compounds.is_empty()), "no compounds formed");
+        assert!(
+            snap.cells.iter().any(|c| !c.compounds.is_empty()),
+            "no compounds formed"
+        );
         // Water is present as a compound (delivered + accounted).
         let water_id = tables.compound("Water").expect("Water compound").id;
-        assert!(snap.cells.iter().any(|c| c.compounds.amount(water_id) > 0.0), "no water compound");
+        assert!(
+            snap.cells
+                .iter()
+                .any(|c| c.compounds.amount(water_id) > 0.0),
+            "no water compound"
+        );
         // The second-ledger invariant: no cell locks more of any element into
         // compounds than its element ledger holds.
         for c in &snap.cells {
@@ -119,13 +134,22 @@ mod tests {
 
         // Edit an Epoch-6 lever: epochs 1..=5 stay frozen (still cached), 6..=9 drop.
         e.set_lever("e6_erosion_rate", 0.05);
-        assert!(e.peek(2).is_some(), "epoch 2 should stay cached after a late edit");
-        assert!(e.peek(6).is_none(), "epoch 6 should be invalidated by its own lever");
+        assert!(
+            e.peek(2).is_some(),
+            "epoch 2 should stay cached after a late edit"
+        );
+        assert!(
+            e.peek(6).is_none(),
+            "epoch 6 should be invalidated by its own lever"
+        );
 
         let e2_after = e.snapshot(2).clone();
         let e6_after = e.snapshot(6).clone();
         assert_eq!(e2_before.cells, e2_after.cells, "an E6 edit changed E2");
-        assert_ne!(e6_before.cells, e6_after.cells, "the E6 edit didn't change E6");
+        assert_ne!(
+            e6_before.cells, e6_after.cells,
+            "the E6 edit didn't change E6"
+        );
     }
 
     #[test]
@@ -133,7 +157,10 @@ mod tests {
         let mut e = engine();
         e.snapshot(WORLD_EPOCHS); // fill everything
         e.set_lever("e3_plates", 3.0);
-        assert!(e.peek(2).is_some(), "epoch 2 (before the edit) stays cached");
+        assert!(
+            e.peek(2).is_some(),
+            "epoch 2 (before the edit) stays cached"
+        );
         assert!(e.peek(3).is_none(), "epoch 3 invalidated");
         assert!(e.peek(9).is_none(), "epoch 9 (after the edit) invalidated");
     }
@@ -145,7 +172,11 @@ mod tests {
         let e3_before = e.snapshot(3).clone();
         e.reseed(3);
         assert_eq!(e2.cells, e.snapshot(2).cells, "an E3 reseed changed E2");
-        assert_ne!(e3_before.cells, e.snapshot(3).cells, "the E3 reseed didn't change E3");
+        assert_ne!(
+            e3_before.cells,
+            e.snapshot(3).cells,
+            "the E3 reseed didn't change E3"
+        );
     }
 
     #[test]
@@ -157,7 +188,10 @@ mod tests {
         let before: Vec<u16> = e.snapshot(3).cells.iter().map(|c| c.plate).collect();
         e.reseed(3);
         let after: Vec<u16> = e.snapshot(3).cells.iter().map(|c| c.plate).collect();
-        assert_eq!(before, after, "reseeding Epoch 3 reshuffled the material-derived plate layout");
+        assert_eq!(
+            before, after,
+            "reseeding Epoch 3 reshuffled the material-derived plate layout"
+        );
     }
 
     #[test]
@@ -190,7 +224,9 @@ mod tests {
         // And the wrong rule is gone: a non-harvestable element (hydrogen) gets no
         // silly forced vein.
         assert!(
-            !e.tables().harvestable_compounds().any(|c| c.name == "Water"),
+            !e.tables()
+                .harvestable_compounds()
+                .any(|c| c.name == "Water"),
             "water should not be a mineable ore"
         );
     }
@@ -199,20 +235,39 @@ mod tests {
     fn the_cooling_clock_spans_every_epoch_as_one_axis() {
         let mut e = engine();
         // Epoch 1 is the molten seed — it advances no cooling steps; the clock starts at E2.
-        assert_eq!(e.epoch_cool_steps(1), 0, "the seed layer advances no cooling steps");
+        assert_eq!(
+            e.epoch_cool_steps(1),
+            0,
+            "the seed layer advances no cooling steps"
+        );
         // Per-epoch boundaries are cumulative and strictly increasing across E2..=E9, and
         // each epoch's start is the previous epoch's end — one contiguous axis.
         let mut prev = e.cool_step_before(2);
         for ep in 3..=WORLD_EPOCHS {
             let b = e.cool_step_before(ep);
-            assert!(b > prev, "cooling boundary must advance at E{ep} ({b} vs {prev})");
-            assert_eq!(b, e.cool_step_end(ep - 1), "start of E{ep} == end of E{}", ep - 1);
+            assert!(
+                b > prev,
+                "cooling boundary must advance at E{ep} ({b} vs {prev})"
+            );
+            assert_eq!(
+                b,
+                e.cool_step_end(ep - 1),
+                "start of E{ep} == end of E{}",
+                ep - 1
+            );
             prev = b;
         }
-        assert_eq!(e.cooling_total_steps(), e.cool_step_end(WORLD_EPOCHS), "span == end of E9");
+        assert_eq!(
+            e.cooling_total_steps(),
+            e.cool_step_end(WORLD_EPOCHS),
+            "span == end of E9"
+        );
         // The tectonics onset lands within the molten+tectonic span (default: at the boundary).
         if let Some(onset) = e.tectonics_onset_step() {
-            assert!(onset <= e.cool_step_before(4), "tectonics onset sits in the molten+tectonic span");
+            assert!(
+                onset <= e.cool_step_before(4),
+                "tectonics onset sits in the molten+tectonic span"
+            );
         }
     }
 

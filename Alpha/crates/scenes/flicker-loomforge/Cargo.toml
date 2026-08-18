@@ -2,6 +2,7 @@
 name = "flicker-loomforge"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # flicker-loomforge — "Loomforge Bench", the animation-authoring editor. A four-tab
@@ -27,7 +28,7 @@ path = "src/lib.rs"
 # glam math), flicker-scene (Scene/Transition), flicker-script (UiNode/HudCommand/
 # Value), and flicker-widgets (the component walker: run_ui/UiState/UiInput/render_hud +
 # WalkerHandler, the walker's bus adapter).
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The new input model (Resolver/Fired/ActionSignal) + the event bus
 # (Router/InputHandler/RouteCtx) this scene routes Menu + the HUD pointer-consume
 # through (spec §9); the bespoke node/timeline canvas tools stay scene-owned.

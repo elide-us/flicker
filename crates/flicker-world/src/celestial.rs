@@ -94,13 +94,22 @@ mod tests {
     /// at an equinox it stays on the equatorial plane.
     #[test]
     fn sun_orbits_with_the_day() {
-        let mut c = CelestialState { year_month: 0.0, ..CelestialState::default() };
+        let mut c = CelestialState {
+            year_month: 0.0,
+            ..CelestialState::default()
+        };
         c.time_of_day = 0.0;
         let a = c.sun_dir();
         c.time_of_day = 6.0;
         let b = c.sun_dir();
-        assert!(approx(a.length(), 1.0) && approx(b.length(), 1.0), "sun dir is unit");
-        assert!(approx(a.y, 0.0) && approx(b.y, 0.0), "equinox sun on the equatorial plane");
+        assert!(
+            approx(a.length(), 1.0) && approx(b.length(), 1.0),
+            "sun dir is unit"
+        );
+        assert!(
+            approx(a.y, 0.0) && approx(b.y, 0.0),
+            "equinox sun on the equatorial plane"
+        );
         assert!(a.dot(b).abs() < 1e-3, "a quarter day is a quarter turn");
     }
 
@@ -108,25 +117,54 @@ mod tests {
     #[test]
     fn season_sets_the_declination() {
         let tilt = DEFAULT_AXIAL_TILT_DEG.to_radians();
-        let equinox = CelestialState { year_month: 0.0, ..CelestialState::default() };
+        let equinox = CelestialState {
+            year_month: 0.0,
+            ..CelestialState::default()
+        };
         assert!(approx(equinox.sun_dir().y, 0.0), "equinox on the equator");
-        let summer = CelestialState { year_month: 3.0, ..CelestialState::default() };
-        assert!(approx(summer.sun_dir().y, tilt.sin()), "midsummer lifted +tilt");
-        let winter = CelestialState { year_month: 9.0, ..CelestialState::default() };
-        assert!(approx(winter.sun_dir().y, -tilt.sin()), "midwinter dipped -tilt");
+        let summer = CelestialState {
+            year_month: 3.0,
+            ..CelestialState::default()
+        };
+        assert!(
+            approx(summer.sun_dir().y, tilt.sin()),
+            "midsummer lifted +tilt"
+        );
+        let winter = CelestialState {
+            year_month: 9.0,
+            ..CelestialState::default()
+        };
+        assert!(
+            approx(winter.sun_dir().y, -tilt.sin()),
+            "midwinter dipped -tilt"
+        );
     }
 
     /// `update` advances the clock at the sim speed and wraps the day at 24h.
     #[test]
     fn update_advances_and_wraps_the_day() {
-        let mut c = CelestialState { time_of_day: 23.0, sim_speed: 60.0, ..CelestialState::default() };
+        let mut c = CelestialState {
+            time_of_day: 23.0,
+            sim_speed: 60.0,
+            ..CelestialState::default()
+        };
         c.update(Duration::from_secs(2)); // 2 sim-hours: 23 → 1
-        assert!(approx(c.time_of_day, 1.0), "day wraps past midnight, got {}", c.time_of_day);
+        assert!(
+            approx(c.time_of_day, 1.0),
+            "day wraps past midnight, got {}",
+            c.time_of_day
+        );
 
-        let mut paused = CelestialState { sim_speed: 0.0, ..CelestialState::default() };
+        let mut paused = CelestialState {
+            sim_speed: 0.0,
+            ..CelestialState::default()
+        };
         let before = paused.time_of_day;
         paused.update(Duration::from_secs(10));
-        assert!(approx(paused.time_of_day, before), "paused clock does not move");
+        assert!(
+            approx(paused.time_of_day, before),
+            "paused clock does not move"
+        );
     }
 
     /// The frame lighting is finite with the sun on.
@@ -135,7 +173,13 @@ mod tests {
         let s = CelestialState::default().lighting();
         assert!(approx(s.sun_dir.length(), 1.0), "sun dir normalized");
         assert!(s.sun_color.length() > 0.5, "sun is on");
-        for v in [s.sun_dir, s.sun_color, s.ambient, s.sky_zenith, s.sky_horizon] {
+        for v in [
+            s.sun_dir,
+            s.sun_color,
+            s.ambient,
+            s.sky_zenith,
+            s.sky_horizon,
+        ] {
             assert!(v.is_finite(), "lighting vectors finite");
         }
     }

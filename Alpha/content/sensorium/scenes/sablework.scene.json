@@ -1,5 +1,5 @@
 {
-  "_comment": "Sablework Bench SCENE DEFINITION (201F4F51 template-free). The texture SYNTHESIZER console: LEFT the 6-voice channel rack (each voice row is authored DATA — arrangement, not a template), CENTRE the tiled-swatch preview under an 8-tab view selector (7 flat maps + the LIT turntable; the tabs bind `sel_map`, a NUMBER), RIGHT the output stage over the selected voice's fine knobs. Header: patch stepper + Roll/Reseed. Footer: material binding · bake rung · Commit · status. The `sablework` behaviour plays it (flicker-sablework); sablework.lua derives the row washes + view-cell visibility. Styles were folded in from the crate's quarantined scene_styles.json (its layout block described the deleted workbench template and did not move).",
+  "_comment": "Sablework Bench SCENE DEFINITION (201F4F51 template-free). The texture SYNTHESIZER console: LEFT the 6-voice channel rack (each voice row is authored DATA — arrangement, not a template), CENTRE the tiled-swatch preview under an 8-tab view selector (7 flat maps + the LIT turntable; the tabs bind `sel_map`, a NUMBER), RIGHT the output stage over the selected voice's fine knobs. Header: material dropdown (Rust-filled from the index, binds `sel_material`) + patch stepper + Roll/Reseed. Footer: bake rung · Commit · status. The `sablework` behaviour plays it (flicker-sablework); sablework.lua derives the row washes + view-cell visibility. Styles were folded in from the crate's quarantined scene_styles.json (its layout block described the deleted workbench template and did not move).",
   "behaviour": "sablework",
   "params": {},
   "styles": {
@@ -30,7 +30,14 @@
         "fill_bot": "$stone1",
         "border": "$edge2",
         "border_w": 1,
-        "radius": 4
+        "radius": 4,
+        "focused": {
+          "fill_top": "$stone4",
+          "fill_bot": "$stone2",
+          "border": "$sap_border",
+          "border_w": 1,
+          "radius": 4
+        }
       },
       "well": {
         "fill_top": "$stone0",
@@ -51,14 +58,28 @@
         "fill_bot": "$stone1",
         "border": "$edge1",
         "border_w": 1,
-        "radius": 3
+        "radius": 3,
+        "focused": {
+          "fill_top": "$stone3",
+          "fill_bot": "$stone1",
+          "border": "$sap_border",
+          "border_w": 1,
+          "radius": 3
+        }
       },
       "row_sel": {
         "fill_top": "$stone4",
         "fill_bot": "$stone2",
         "border": "$sap_border",
         "border_w": 1,
-        "radius": 3
+        "radius": 3,
+        "focused": {
+          "fill_top": "$stone4",
+          "fill_bot": "$stone2",
+          "border": "$sap_hover_border",
+          "border_w": 1,
+          "radius": 3
+        }
       },
       "checkbox": {
         "box": "$stone2",
@@ -88,10 +109,33 @@
         "border_w": 1,
         "radius": 3
       },
+      "select": {
+        "_comment": "The material binding dropdown (header). `field` = the closed control; `menu` = the open popup rows. Options are Rust-filled from the material index (label_bind per row), so the names ride the Model bind channel, not raw tree literals.",
+        "field": { "top": "$stone4", "bot": "$stone2", "border": "$edge3", "hover_border": "$sap_border", "radius": 3, "label": "$ink", "label_size": 13, "caret": "$bronze" },
+        "menu": { "top": "$stone3", "bot": "$stone0", "border": "$edge2", "radius": 3, "row_h": 26, "label": "$ink", "label_size": 13, "sel_bg": "$sap_base", "sel_label": "$ink_bright", "hover_bg": "$sap_hover" }
+      },
+      "bar": {
+        "_comment": "Header/footer band — a subtly raised slab so the top + bottom rows read as bars distinct from the body panels (UX pass may refine).",
+        "fill_top": "$stone4",
+        "fill_bot": "$stone3",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 3
+      },
       "preview": {
         "_comment": "`tiles` = how many times the scene repeats the baked swatch per axis BEFORE uploading, so the seam shows in one sprite. Read by the Rust scene when it creates the preview textures.",
         "tiles": 3
       }
+    },
+    "nav_footer": {
+      "_comment": "Bench nav rail band (like the Component Catalog's). `frame` = the node's own slab; `rule` (top hairline) + `label` (legend ink) + the `pad_glyphs` atlas resolve as the component's defaults.",
+      "frame": { "fill_top": "$surface_top", "fill_bot": "$stage_void", "border": "$edge2", "border_w": 1, "radius": 6 },
+      "rule": { "color": "$seam" },
+      "label": "$dim"
+    },
+    "pad_glyphs": {
+      "tex": 2, "cols": 4, "rows": 4, "color": "$bronze", "flash": "$rune_glow_hi",
+      "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3, "a": 4, "b": 5, "x": 6, "y": 7, "menu": 8, "view": 9, "dpad": 10, "dpad_up": 11, "dpad_down": 12, "dpad_left": 13, "dpad_right": 14, "stick": 15 }
     }
   },
   "tree": {
@@ -104,7 +148,7 @@
     "on_page_prev": "patch_prev",
     "children": [
       {
-        "component": "stack",
+        "component": "cell",
         "style": "window",
         "anchor": "top_left",
         "width_frac": 1.0,
@@ -114,7 +158,9 @@
         "children": [
           {
             "component": "row",
-            "id": "sw_header",
+            "id": "sw_top",
+            "style": "sablework.bar",
+            "nav_ordinal": 1,
             "size": 46,
             "pad_x": 12,
             "pad_y": 6,
@@ -138,6 +184,57 @@
                 "grow": 1.0
               },
               {
+                "component": "text",
+                "text": "$sw_material",
+                "text_size": 11,
+                "font": "label",
+                "color": "sablework.col.label",
+                "size": 58
+              },
+              {
+                "component": "select",
+                "id": "material_select",
+                "bind": "sel_material",
+                "style": "sablework.select",
+                "visible_bind": "not_renaming",
+                "size": 150,
+                "tab_group": "sw_top",
+                "nav_ordinal": 1,
+                "children": [
+                  { "component": "option", "value": 0, "label": "$sw_unbound" }
+                ]
+              },
+              {
+                "component": "text",
+                "id": "rename_field",
+                "text_bind": "rename_draft",
+                "visible_bind": "renaming",
+                "text_size": 13,
+                "font": "label",
+                "color": "sablework.col.accent",
+                "size": 150
+              },
+              {
+                "component": "text",
+                "text_bind": "material_id_label",
+                "text_size": 12,
+                "font": "label",
+                "color": "sablework.col.dim",
+                "size": 38
+              },
+              {
+                "component": "button",
+                "id": "rename",
+                "action": "rename",
+                "label": "$sw_rename",
+                "visible_bind": "can_rename",
+                "style": "sablework.button",
+                "size": 66,
+                "size_class": "sm",
+                "tab_group": "sw_top",
+                "nav_ordinal": 2
+              },
+              {
                 "component": "button",
                 "id": "patch_prev",
                 "action": "patch_prev",
@@ -146,7 +243,7 @@
                 "size": 34,
                 "size_class": "sm",
                 "tab_group": "sw_top",
-                "nav_ordinal": 1
+                "nav_ordinal": 3
               },
               {
                 "component": "button",
@@ -157,7 +254,7 @@
                 "size": 34,
                 "size_class": "sm",
                 "tab_group": "sw_top",
-                "nav_ordinal": 2
+                "nav_ordinal": 4
               },
               {
                 "component": "button",
@@ -168,7 +265,7 @@
                 "size": 72,
                 "size_class": "md",
                 "tab_group": "sw_top",
-                "nav_ordinal": 3
+                "nav_ordinal": 5
               },
               {
                 "component": "button",
@@ -179,7 +276,7 @@
                 "size": 88,
                 "size_class": "md",
                 "tab_group": "sw_top",
-                "nav_ordinal": 4
+                "nav_ordinal": 6
               }
             ]
           },
@@ -196,8 +293,7 @@
                 "size": 620,
                 "pad": 14,
                 "gap": 8,
-                "tab_group": "sw_rack",
-                "nav_ordinal": 0,
+                "nav_ordinal": 2,
                 "children": [
                   {
                     "component": "text",
@@ -208,9 +304,11 @@
                     "size": 20
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_1",
                     "style_bind": "ch1_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 1,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -221,10 +319,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch1_on", "bind": "ch1_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 1 },
+                          { "component": "checkbox", "id": "ch1_on", "bind": "ch1_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_1", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch1", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch1_source", "action": "ch1_source", "label_bind": "ch1_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 2 },
-                          { "component": "button", "id": "ch1_blend", "action": "ch1_blend", "label_bind": "ch1_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 3 }
+                          { "component": "button", "id": "ch1_source", "action": "ch1_source", "label_bind": "ch1_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_1", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch1_blend", "action": "ch1_blend", "label_bind": "ch1_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_1", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -232,18 +330,20 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch1_scale", "bind": "ch1_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 4 },
-                          { "component": "slider", "id": "ch1_octaves", "bind": "ch1_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 5 },
-                          { "component": "slider", "id": "ch1_warp", "bind": "ch1_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 6 },
-                          { "component": "slider", "id": "ch1_amount", "bind": "ch1_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 7 }
+                          { "component": "slider", "id": "ch1_scale", "bind": "ch1_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_1", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch1_octaves", "bind": "ch1_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_1", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch1_warp", "bind": "ch1_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_1", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch1_amount", "bind": "ch1_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_1", "nav_ordinal": 7 }
                         ]
                       }
                     ]
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_2",
                     "style_bind": "ch2_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 2,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -254,10 +354,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch2_on", "bind": "ch2_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 8 },
+                          { "component": "checkbox", "id": "ch2_on", "bind": "ch2_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_2", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch2", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch2_source", "action": "ch2_source", "label_bind": "ch2_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 9 },
-                          { "component": "button", "id": "ch2_blend", "action": "ch2_blend", "label_bind": "ch2_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 10 }
+                          { "component": "button", "id": "ch2_source", "action": "ch2_source", "label_bind": "ch2_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_2", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch2_blend", "action": "ch2_blend", "label_bind": "ch2_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_2", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -265,18 +365,20 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch2_scale", "bind": "ch2_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 11 },
-                          { "component": "slider", "id": "ch2_octaves", "bind": "ch2_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 12 },
-                          { "component": "slider", "id": "ch2_warp", "bind": "ch2_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 13 },
-                          { "component": "slider", "id": "ch2_amount", "bind": "ch2_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 14 }
+                          { "component": "slider", "id": "ch2_scale", "bind": "ch2_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_2", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch2_octaves", "bind": "ch2_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_2", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch2_warp", "bind": "ch2_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_2", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch2_amount", "bind": "ch2_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_2", "nav_ordinal": 7 }
                         ]
                       }
                     ]
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_3",
                     "style_bind": "ch3_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 3,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -287,10 +389,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch3_on", "bind": "ch3_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 15 },
+                          { "component": "checkbox", "id": "ch3_on", "bind": "ch3_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_3", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch3", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch3_source", "action": "ch3_source", "label_bind": "ch3_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 16 },
-                          { "component": "button", "id": "ch3_blend", "action": "ch3_blend", "label_bind": "ch3_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 17 }
+                          { "component": "button", "id": "ch3_source", "action": "ch3_source", "label_bind": "ch3_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_3", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch3_blend", "action": "ch3_blend", "label_bind": "ch3_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_3", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -298,18 +400,20 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch3_scale", "bind": "ch3_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 18 },
-                          { "component": "slider", "id": "ch3_octaves", "bind": "ch3_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 19 },
-                          { "component": "slider", "id": "ch3_warp", "bind": "ch3_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 20 },
-                          { "component": "slider", "id": "ch3_amount", "bind": "ch3_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 21 }
+                          { "component": "slider", "id": "ch3_scale", "bind": "ch3_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_3", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch3_octaves", "bind": "ch3_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_3", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch3_warp", "bind": "ch3_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_3", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch3_amount", "bind": "ch3_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_3", "nav_ordinal": 7 }
                         ]
                       }
                     ]
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_4",
                     "style_bind": "ch4_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 4,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -320,10 +424,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch4_on", "bind": "ch4_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 22 },
+                          { "component": "checkbox", "id": "ch4_on", "bind": "ch4_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_4", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch4", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch4_source", "action": "ch4_source", "label_bind": "ch4_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 23 },
-                          { "component": "button", "id": "ch4_blend", "action": "ch4_blend", "label_bind": "ch4_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 24 }
+                          { "component": "button", "id": "ch4_source", "action": "ch4_source", "label_bind": "ch4_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_4", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch4_blend", "action": "ch4_blend", "label_bind": "ch4_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_4", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -331,18 +435,20 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch4_scale", "bind": "ch4_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 25 },
-                          { "component": "slider", "id": "ch4_octaves", "bind": "ch4_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 26 },
-                          { "component": "slider", "id": "ch4_warp", "bind": "ch4_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 27 },
-                          { "component": "slider", "id": "ch4_amount", "bind": "ch4_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 28 }
+                          { "component": "slider", "id": "ch4_scale", "bind": "ch4_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_4", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch4_octaves", "bind": "ch4_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_4", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch4_warp", "bind": "ch4_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_4", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch4_amount", "bind": "ch4_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_4", "nav_ordinal": 7 }
                         ]
                       }
                     ]
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_5",
                     "style_bind": "ch5_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 5,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -353,10 +459,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch5_on", "bind": "ch5_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 29 },
+                          { "component": "checkbox", "id": "ch5_on", "bind": "ch5_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_5", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch5", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch5_source", "action": "ch5_source", "label_bind": "ch5_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 30 },
-                          { "component": "button", "id": "ch5_blend", "action": "ch5_blend", "label_bind": "ch5_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 31 }
+                          { "component": "button", "id": "ch5_source", "action": "ch5_source", "label_bind": "ch5_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_5", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch5_blend", "action": "ch5_blend", "label_bind": "ch5_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_5", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -364,18 +470,20 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch5_scale", "bind": "ch5_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 32 },
-                          { "component": "slider", "id": "ch5_octaves", "bind": "ch5_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 33 },
-                          { "component": "slider", "id": "ch5_warp", "bind": "ch5_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 34 },
-                          { "component": "slider", "id": "ch5_amount", "bind": "ch5_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 35 }
+                          { "component": "slider", "id": "ch5_scale", "bind": "ch5_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_5", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch5_octaves", "bind": "ch5_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_5", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch5_warp", "bind": "ch5_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_5", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch5_amount", "bind": "ch5_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_5", "nav_ordinal": 7 }
                         ]
                       }
                     ]
                   },
                   {
-                    "component": "stack",
+                    "component": "cell",
                     "id": "sw_voice_6",
                     "style_bind": "ch6_sty",
+                    "tab_group": "sw_rack",
+                    "nav_ordinal": 6,
                     "size": 80,
                     "pad": 8,
                     "gap": 4,
@@ -386,10 +494,10 @@
                         "size": 32,
                         "align": "center",
                         "children": [
-                          { "component": "checkbox", "id": "ch6_on", "bind": "ch6_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_rack", "nav_ordinal": 36 },
+                          { "component": "checkbox", "id": "ch6_on", "bind": "ch6_on", "box": 16, "size": 26, "style": "sablework.checkbox", "tab_group": "sw_voice_6", "nav_ordinal": 1 },
                           { "component": "text", "text": "$sw_ch6", "text_size": 12, "font": "label", "color": "sablework.col.title", "size": 42 },
-                          { "component": "button", "id": "ch6_source", "action": "ch6_source", "label_bind": "ch6_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 37 },
-                          { "component": "button", "id": "ch6_blend", "action": "ch6_blend", "label_bind": "ch6_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_rack", "nav_ordinal": 38 }
+                          { "component": "button", "id": "ch6_source", "action": "ch6_source", "label_bind": "ch6_source_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_6", "nav_ordinal": 2 },
+                          { "component": "button", "id": "ch6_blend", "action": "ch6_blend", "label_bind": "ch6_blend_label", "style": "sablework.button", "size": 84, "size_class": "md", "tab_group": "sw_voice_6", "nav_ordinal": 3 }
                         ]
                       },
                       {
@@ -397,10 +505,10 @@
                         "gap": 8,
                         "size": 24,
                         "children": [
-                          { "component": "slider", "id": "ch6_scale", "bind": "ch6_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 39 },
-                          { "component": "slider", "id": "ch6_octaves", "bind": "ch6_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 40 },
-                          { "component": "slider", "id": "ch6_warp", "bind": "ch6_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 41 },
-                          { "component": "slider", "id": "ch6_amount", "bind": "ch6_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_rack", "nav_ordinal": 42 }
+                          { "component": "slider", "id": "ch6_scale", "bind": "ch6_scale", "label": "$sw_scale", "min": 1, "max": 64, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_6", "nav_ordinal": 4 },
+                          { "component": "slider", "id": "ch6_octaves", "bind": "ch6_octaves", "label": "$sw_oct", "min": 1, "max": 8, "step": 1, "decimals": 0, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_6", "nav_ordinal": 5 },
+                          { "component": "slider", "id": "ch6_warp", "bind": "ch6_warp", "label": "$sw_warp", "min": 0, "max": 2, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_6", "nav_ordinal": 6 },
+                          { "component": "slider", "id": "ch6_amount", "bind": "ch6_amount", "label": "$sw_amt", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 38, "grow": 1.0, "style": "sablework.slider", "tab_group": "sw_voice_6", "nav_ordinal": 7 }
                         ]
                       }
                     ]
@@ -414,8 +522,7 @@
                 "grow": 1.0,
                 "pad": 14,
                 "gap": 8,
-                "tab_group": "sw_view",
-                "nav_ordinal": 0,
+                "nav_ordinal": 3,
                 "children": [
                   {
                     "component": "tabs",
@@ -493,8 +600,7 @@
                 "size": 330,
                 "pad": 14,
                 "gap": 6,
-                "tab_group": "sw_out",
-                "nav_ordinal": 0,
+                "nav_ordinal": 4,
                 "children": [
                   { "component": "text", "text": "$sw_output_stage", "text_size": 11, "font": "label", "color": "sablework.col.label", "size": 20 },
                   { "component": "slider", "id": "relief", "bind": "relief", "label": "$sw_relief", "min": 0, "max": 1, "step": 0.01, "decimals": 2, "slider_h": 7, "value_w": 46, "size": 24, "style": "sablework.slider", "tab_group": "sw_out", "nav_ordinal": 1 },
@@ -510,7 +616,7 @@
                     "size": 20,
                     "gap": 6,
                     "children": [
-                      { "component": "text", "text": "$sw_voice", "text_size": 11, "font": "label", "color": "sablework.col.label", "size": 60 },
+                      { "component": "text", "text": "$sw_voice", "text_size": 11, "font": "label", "color": "sablework.col.label", "size": 104 },
                       { "component": "text", "text_bind": "sel_voice", "text_size": 11, "font": "label", "color": "sablework.col.accent", "grow": 1.0 }
                     ]
                   },
@@ -525,19 +631,36 @@
           {
             "component": "row",
             "id": "sw_footer",
+            "style": "sablework.bar",
+            "nav_ordinal": 5,
             "size": 52,
             "pad_x": 12,
             "pad_y": 10,
             "gap": 8,
             "align": "center",
             "children": [
-              { "component": "text", "text": "$sw_material", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 70 },
-              { "component": "button", "id": "material", "action": "material", "label_bind": "material_label", "style": "sablework.button", "size": 150, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 1 },
               { "component": "text", "text": "$sw_size", "text_size": 12, "font": "label", "color": "sablework.col.label", "size": 40 },
-              { "component": "button", "id": "bake_size", "action": "bake_size", "label_bind": "size_label", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 2 },
-              { "component": "button", "id": "commit", "action": "commit", "label": "$sw_commit", "style": "sablework.button", "size": 110, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 3 },
+              { "component": "button", "id": "bake_size", "action": "bake_size", "label_bind": "size_label", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 1 },
+              { "component": "button", "id": "commit", "action": "commit", "label": "$sw_commit", "style": "sablework.button", "size": 110, "size_class": "md", "tab_group": "sw_footer", "nav_ordinal": 2 },
               { "component": "text", "text_bind": "commit_status", "text_size": 12, "font": "label", "color": "sablework.col.value", "grow": 1.0 },
               { "component": "text", "text_bind": "bake_info", "text_size": 12, "font": "label", "color": "sablework.col.dim", "size": 180 }
+            ]
+          },
+          {
+            "component": "nav_footer",
+            "id": "sw_nav",
+            "style": "nav_footer.frame",
+            "nav_ordinal": 6,
+            "size": 52,
+            "pad_x": 12,
+            "pad_y": 10,
+            "gap": 8,
+            "children": [
+              { "component": "option", "glyph": "lb", "label": "$sw_ft_prev", "size": 56 },
+              { "component": "option", "glyph": "rb", "label": "$sw_ft_next", "size": 56 },
+              { "component": "button", "id": "sw_nav_menu", "action": "pause_open", "label": "$sw_ft_menu", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_nav", "nav_ordinal": 1 },
+              { "component": "button", "id": "sw_nav_prev", "action": "map_prev", "label": "$sw_ft_prev", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_nav", "nav_ordinal": 2 },
+              { "component": "button", "id": "sw_nav_next", "action": "map_next", "label": "$sw_ft_next", "style": "sablework.button", "size": 90, "size_class": "md", "tab_group": "sw_nav", "nav_ordinal": 3 }
             ]
           }
         ]

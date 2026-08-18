@@ -36,8 +36,8 @@
 //! `wf_<id>_style` (a dotted style path for `style_bind` rail chips:
 //! `workflow.chip.active` / `.visited` / `.todo`).
 
-use flicker::ui::{Surface, Surfaces};
 use flicker::script::ValueMap;
+use flicker::ui::{Surface, Surfaces};
 use std::collections::HashMap;
 
 /// One declared step of a workflow: its stable `id`, its rail title (a
@@ -71,7 +71,9 @@ impl Step {
     /// the NAMESPACED default `wf_step_<id>` — bare ids collided with sibling
     /// Model namespaces (and with document keys like `attach`).
     fn surface_key(&self) -> String {
-        self.surface.clone().unwrap_or_else(|| format!("wf_step_{}", self.id))
+        self.surface
+            .clone()
+            .unwrap_or_else(|| format!("wf_step_{}", self.id))
     }
 }
 
@@ -130,7 +132,9 @@ impl Workflow {
     pub fn new(steps: Vec<Step>) -> Self {
         for (i, s) in steps.iter().enumerate() {
             for need in &s.needs {
-                let upstream = steps[..i].iter().any(|p| p.yields.iter().any(|y| y == need));
+                let upstream = steps[..i]
+                    .iter()
+                    .any(|p| p.yields.iter().any(|y| y == need));
                 if !upstream {
                     tracing::warn!(
                         "workflow: step `{}` needs `{need}`, which no earlier step yields — \
@@ -156,7 +160,13 @@ impl Workflow {
             .collect();
         decls.push(Surface::new(DISCARD));
         let visited = vec![false; steps.len()];
-        Self { steps, current: 0, visited, dirty: false, surfaces: Surfaces::new(decls) }
+        Self {
+            steps,
+            current: 0,
+            visited,
+            dirty: false,
+            surfaces: Surfaces::new(decls),
+        }
     }
 
     /// Build from a loaded definition.
@@ -269,8 +279,14 @@ impl Workflow {
             } else {
                 "todo"
             };
-            m.set(format!("wf_{}_title", s.id), flicker::ui::strings::resolve(&s.title).into_owned());
-            m.set(format!("wf_{}_style", s.id), format!("workflow.chip.{state}"));
+            m.set(
+                format!("wf_{}_title", s.id),
+                flicker::ui::strings::resolve(&s.title).into_owned(),
+            );
+            m.set(
+                format!("wf_{}_style", s.id),
+                format!("workflow.chip.{state}"),
+            );
             // Rail MEMBERSHIP: true for every step of the running definition, so
             // the rail derives from the data — a chip's visible_bind names this,
             // and adding a step to ui_workflows.json grows the rail with no
@@ -278,7 +294,6 @@ impl Workflow {
             m.set(format!("wf_{}_show", s.id), true);
         }
     }
-
 }
 
 #[cfg(test)]
@@ -320,7 +335,10 @@ mod tests {
         let doc = doc.with("rig", "humanoid");
         w.handle(&fired("wf_next"), &doc);
         assert_eq!(w.step(), "review");
-        assert!(!w.can_next(&doc), "the last step's Next is the bench's finish");
+        assert!(
+            !w.can_next(&doc),
+            "the last step's Next is the bench's finish"
+        );
         w.handle(&fired("wf_next"), &doc);
         assert_eq!(w.step(), "review", "…and the runtime ignores it");
     }
@@ -418,6 +436,9 @@ mod tests {
         w.handle(&fired("wf_next"), &doc);
         assert_eq!(w.step(), "review");
 
-        assert!(workflows_from_json("not json").is_empty(), "a bad file warns, never panics");
+        assert!(
+            workflows_from_json("not json").is_empty(),
+            "a bad file warns, never panics"
+        );
     }
 }

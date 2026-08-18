@@ -273,7 +273,11 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
                 Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, m)
             } else {
                 let fractional = h - top_y as f32;
-                Voxel::new(VoxelState::Solid, CornerVector::from_components(0.5, fractional, 0.5), m)
+                Voxel::new(
+                    VoxelState::Solid,
+                    CornerVector::from_components(0.5, fractional, 0.5),
+                    m,
+                )
             };
             c.set(LocalCoord::new(x, top_y, z).expect("in bounds"), top_voxel);
         }

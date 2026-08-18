@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::compound::CompoundDef;
-use crate::rock::RockDef;
 use crate::element::Element;
-use crate::material::MaterialDef;
+use crate::material::{MaterialDef, MaterialId};
+use crate::rock::RockDef;
 
 /// Filename of the periodic table within a [`JsonTableSource`] directory.
 pub const PERIODIC_TABLE_FILE: &str = "periodic_table.json";
@@ -41,6 +41,11 @@ pub enum MaterialError {
         #[source]
         source: serde_json::Error,
     },
+    /// The file parsed but did not carry the expected structure — no `materials` array, an
+    /// id not present, or a value that would not serialise back. A write target that is not
+    /// what the reader validated.
+    #[error("material table `{path}`: {detail}")]
+    Schema { path: String, detail: String },
 }
 
 /// Where the vocabulary rows come from. Implementors return the raw row lists;
@@ -74,6 +79,48 @@ impl JsonTableSource {
     /// A source reading the JSON tables from `dir` (e.g. `Alpha/content/data`).
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
+    }
+
+    /// Relabel the material with byte id `id` in `materials.json`, keyed STRICTLY by the id —
+    /// the `u8` wire value a voxel carries — while preserving the file's `_meta` and every
+    /// other row and field. A rename changes one byte's LABEL; it never moves the mapping.
+    /// The read seam ([`TableSource::load_materials`]) is unchanged, and a network/DB source
+    /// later implements the same write behind its own type.
+    pub fn save_material_name(&self, id: MaterialId, name: &str) -> Result<(), MaterialError> {
+        let path = self.dir.join(MATERIALS_FILE);
+        let display = path.display().to_string();
+        // Edit the parsed VALUE in place — only the one row's `name` — so `_meta`, field
+        // order, and every other material survive the round-trip untouched.
+        let mut root: serde_json::Value = read_json(&path)?;
+        let rows = root
+            .get_mut("materials")
+            .and_then(|m| m.as_array_mut())
+            .ok_or_else(|| MaterialError::Schema {
+                path: display.clone(),
+                detail: "no `materials` array".into(),
+            })?;
+        let hit = rows.iter_mut().any(|row| {
+            if row.get("id").and_then(|v| v.as_u64()) == Some(id as u64) {
+                row["name"] = serde_json::Value::String(name.to_string());
+                true
+            } else {
+                false
+            }
+        });
+        if !hit {
+            return Err(MaterialError::Schema {
+                path: display,
+                detail: format!("no material with id {id}"),
+            });
+        }
+        let text = serde_json::to_string_pretty(&root).map_err(|e| MaterialError::Schema {
+            path: display.clone(),
+            detail: format!("serialising: {e}"),
+        })?;
+        std::fs::write(&path, text).map_err(|source| MaterialError::Io {
+            path: display,
+            source,
+        })
     }
 }
 
@@ -145,5 +192,55 @@ impl TableSource for JsonTableSource {
         }
         let file: RocksFile = read_json(&path)?;
         Ok(file.rocks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The write seam relabels STRICTLY by byte id, preserves `_meta` and every other row,
+    /// and a miss is a loud error — never a silent no-op that would drift a wire byte's label.
+    #[test]
+    fn save_material_name_relabels_by_id_and_preserves_the_rest() {
+        let dir = std::env::temp_dir().join("flicker_mat_rename_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(MATERIALS_FILE);
+        std::fs::write(
+            &path,
+            r#"{ "_meta": { "purpose": "keepme" },
+                "materials": [
+                    { "id": 10, "name": "Granite", "category": "rock", "hardness": 6.5, "brittleness": 0.5, "water_capacity": 0.04, "viscosity": 1.0, "density_g_cm3": 2.7, "color": [0.7,0.68,0.66] },
+                    { "id": 11, "name": "Basalt", "category": "rock", "hardness": 6.0, "brittleness": 0.5, "water_capacity": 0.04, "viscosity": 1.0, "density_g_cm3": 3.0, "color": [0.24,0.24,0.26] }
+                ] }"#,
+        )
+        .unwrap();
+
+        let src = JsonTableSource::new(&dir);
+        src.save_material_name(10, "PinkGranite").unwrap();
+
+        // The read seam sees the new name on id 10; id 11 and id 10's other fields survive.
+        let mats = src.load_materials().unwrap();
+        let g = mats.iter().find(|m| m.id == 10).unwrap();
+        assert_eq!(g.name, "PinkGranite", "id 10 relabelled");
+        assert_eq!(
+            g.hardness, 6.5,
+            "id 10's other fields survive the round-trip"
+        );
+        assert_eq!(
+            mats.iter().find(|m| m.id == 11).unwrap().name,
+            "Basalt",
+            "a different id is untouched"
+        );
+        assert!(
+            std::fs::read_to_string(&path).unwrap().contains("keepme"),
+            "_meta is preserved"
+        );
+
+        // A strict miss is an error, not a silent no-op.
+        assert!(
+            src.save_material_name(200, "Nope").is_err(),
+            "an absent id is a strict error"
+        );
     }
 }

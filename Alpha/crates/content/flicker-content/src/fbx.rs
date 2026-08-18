@@ -56,11 +56,16 @@ pub struct RawModel {
 /// accumulate float drift into the baked rig.
 pub fn quarter_turn(axis: usize) -> Mat4 {
     let (x, y, z) = match axis {
-        0 => (Vec3::X, Vec3::Z, Vec3::NEG_Y),          // about X: y→z, z→−y
-        1 => (Vec3::NEG_Z, Vec3::Y, Vec3::X),          // about Y: z→x, x→−z
-        _ => (Vec3::Y, Vec3::NEG_X, Vec3::Z),          // about Z: x→y, y→−x
+        0 => (Vec3::X, Vec3::Z, Vec3::NEG_Y), // about X: y→z, z→−y
+        1 => (Vec3::NEG_Z, Vec3::Y, Vec3::X), // about Y: z→x, x→−z
+        _ => (Vec3::Y, Vec3::NEG_X, Vec3::Z), // about Z: x→y, y→−x
     };
-    Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), Vec3::ZERO.extend(1.0))
+    Mat4::from_cols(
+        x.extend(0.0),
+        y.extend(0.0),
+        z.extend(0.0),
+        Vec3::ZERO.extend(1.0),
+    )
 }
 
 /// Rotate a whole parsed asset into a different **ground reckoning** — every vertex and the ROOT
@@ -121,7 +126,9 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
     // carries the axis/unit conversion, taking geometry-local verts into world/armature space.
     let mut vertices = Vec::new();
     for node in &scene.nodes {
-        let Some(mesh) = node.mesh.as_ref() else { continue };
+        let Some(mesh) = node.mesh.as_ref() else {
+            continue;
+        };
         let g2w = &node.geometry_to_world;
         let skin = skin_table(mesh, &bone_index);
         let mut tri = vec![0u32; mesh.max_face_triangles * 3];
@@ -133,7 +140,15 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
                 let n = if mesh.vertex_normal.exists {
                     let d = ufbx::transform_direction(g2w, mesh.vertex_normal[ci]);
                     let len = (d.x * d.x + d.y * d.y + d.z * d.z).sqrt();
-                    if len > 1e-9 { ufbx::Vec3 { x: d.x / len, y: d.y / len, z: d.z / len } } else { d }
+                    if len > 1e-9 {
+                        ufbx::Vec3 {
+                            x: d.x / len,
+                            y: d.y / len,
+                            z: d.z / len,
+                        }
+                    } else {
+                        d
+                    }
                 } else {
                     ufbx::Vec3::default()
                 };
@@ -142,7 +157,10 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
                     // (io_scene_flicker_rig.py). FBX/ufbx UVs are bottom-origin, so flip V here or
                     // the texture atlas reads scrambled.
                     let uv = mesh.vertex_uv[ci];
-                    ufbx::Vec2 { x: uv.x, y: 1.0 - uv.y }
+                    ufbx::Vec2 {
+                        x: uv.x,
+                        y: 1.0 - uv.y,
+                    }
                 } else {
                     ufbx::Vec2::default()
                 };
@@ -162,7 +180,11 @@ pub fn parse_fbx(path: &Path) -> Result<RawModel> {
         bail!("no mesh geometry found in {}", path.display());
     }
     let indices = (0..vertices.len() as u32).collect();
-    Ok(RawModel { vertices, indices, bones })
+    Ok(RawModel {
+        vertices,
+        indices,
+        bones,
+    })
 }
 
 /// The skeleton = every node that is a bone (has a Bone attribute) OR is bound by a skin cluster,
@@ -320,11 +342,19 @@ mod tests {
                     let m = parse_fbx(&rig.path).unwrap();
                     eprintln!(
                         "{:<16} {:>6} {:>7} {:>9} {:>5} {:>4}  {}",
-                        name, m.bones.len(), m.indices.len() / 3, m.vertices.len(), anim, tex,
+                        name,
+                        m.bones.len(),
+                        m.indices.len() / 3,
+                        m.vertices.len(),
+                        anim,
+                        tex,
                         rig.path.file_name().unwrap().to_string_lossy()
                     );
                 }
-                None => eprintln!("{name:<16} !! riggable={} (needs disambiguation)", s.riggable.len()),
+                None => eprintln!(
+                    "{name:<16} !! riggable={} (needs disambiguation)",
+                    s.riggable.len()
+                ),
             }
         }
         assert_eq!(subs.len(), 6, "six race bases");
@@ -338,28 +368,57 @@ mod tests {
     #[ignore]
     fn dump_meshy_skeleton() {
         use glam::{Mat4 as M, Quat as Q, Vec3 as V};
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismRaces/HumanBaseA_Low");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/source/PrismRaces/HumanBaseA_Low");
         let Some(fbx) = dir.exists().then_some(()).and_then(|_| {
-            std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-                p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-            })
+            std::fs::read_dir(&dir)
+                .ok()?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .find(|p| {
+                    p.to_string_lossy().contains("Character_output")
+                        && p.extension().map(|e| e == "fbx").unwrap_or(false)
+                })
         }) else {
             eprintln!("skipping: no HumanBaseA_Low");
             return;
         };
         let model = parse_fbx(&fbx).unwrap();
         // world positions via FK
-        let locals: Vec<M> = model.bones.iter().map(|b| M::from_scale_rotation_translation(V::from(b.scale), Q::from_array(b.rotation), V::from(b.translation))).collect();
+        let locals: Vec<M> = model
+            .bones
+            .iter()
+            .map(|b| {
+                M::from_scale_rotation_translation(
+                    V::from(b.scale),
+                    Q::from_array(b.rotation),
+                    V::from(b.translation),
+                )
+            })
+            .collect();
         let mut world = vec![M::IDENTITY; model.bones.len()];
         for i in 0..model.bones.len() {
             let p = model.bones[i].parent;
-            world[i] = if p < 0 { locals[i] } else { world[p as usize] * locals[i] };
+            world[i] = if p < 0 {
+                locals[i]
+            } else {
+                world[p as usize] * locals[i]
+            };
         }
-        eprintln!("HumanBaseA_Low RAW Meshy skeleton ({} bones):", model.bones.len());
+        eprintln!(
+            "HumanBaseA_Low RAW Meshy skeleton ({} bones):",
+            model.bones.len()
+        );
         for (i, b) in model.bones.iter().enumerate() {
-            let pn = if b.parent < 0 { "-".into() } else { model.bones[b.parent as usize].name.clone() };
+            let pn = if b.parent < 0 {
+                "-".into()
+            } else {
+                model.bones[b.parent as usize].name.clone()
+            };
             let w = world[i].w_axis;
-            eprintln!("  {i:2} {:22} parent={:14} world=[{:6.1} {:6.1} {:6.1}]", b.name, pn, w.x, w.y, w.z);
+            eprintln!(
+                "  {i:2} {:22} parent={:14} world=[{:6.1} {:6.1} {:6.1}]",
+                b.name, pn, w.x, w.y, w.z
+            );
         }
     }
 
@@ -368,8 +427,8 @@ mod tests {
     /// Skips when the source content isn't present.
     #[test]
     fn parses_the_real_female_base_character() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/source/PrismHumanBaseA");
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
         if !dir.exists() {
             eprintln!("skipping: {} not present", dir.display());
             return;
@@ -395,26 +454,50 @@ mod tests {
             model.indices.len() / 3
         );
 
-        assert!(model.bones.len() >= 10, "a biped has a real skeleton, got {}", model.bones.len());
-        assert!(model.vertices.len() >= 1000, "a body mesh has geometry, got {}", model.vertices.len());
-        assert_eq!(model.indices.len(), model.vertices.len(), "non-deduped: one index per vertex");
+        assert!(
+            model.bones.len() >= 10,
+            "a biped has a real skeleton, got {}",
+            model.bones.len()
+        );
+        assert!(
+            model.vertices.len() >= 1000,
+            "a body mesh has geometry, got {}",
+            model.vertices.len()
+        );
+        assert_eq!(
+            model.indices.len(),
+            model.vertices.len(),
+            "non-deduped: one index per vertex"
+        );
         assert_eq!(model.indices.len() % 3, 0, "triangulated");
 
         let nb = model.bones.len() as u32;
         assert!(
-            model.vertices.iter().all(|v| v.joints.iter().all(|&j| j < nb)),
+            model
+                .vertices
+                .iter()
+                .all(|v| v.joints.iter().all(|&j| j < nb)),
             "every joint index is a valid bone"
         );
         // Parents are valid indices or -1.
-        assert!(model.bones.iter().all(|b| b.parent == -1 || (b.parent >= 0 && (b.parent as usize) < model.bones.len())));
+        assert!(model
+            .bones
+            .iter()
+            .all(|b| b.parent == -1 || (b.parent >= 0 && (b.parent as usize) < model.bones.len())));
         // At least one root, and most skinned verts sum to ~1.
-        assert!(model.bones.iter().any(|b| b.parent == -1), "there is a root bone");
+        assert!(
+            model.bones.iter().any(|b| b.parent == -1),
+            "there is a root bone"
+        );
         let skinned = model
             .vertices
             .iter()
             .filter(|v| v.weights.iter().sum::<f32>() > 0.5)
             .count();
-        assert!(skinned >= model.vertices.len() / 2, "most vertices are skinned ({skinned})");
+        assert!(
+            skinned >= model.vertices.len() / 2,
+            "most vertices are skinned ({skinned})"
+        );
 
         // Normalised to Z-up centimetres, world space: a ~170 cm biped stands on z≈0, is far taller
         // (z) than wide (x) or deep (y). If the axis/unit conversion were missing this would be y-up
@@ -426,12 +509,22 @@ mod tests {
                 hi[k] = hi[k].max(v.p[k]);
             }
         }
-        eprintln!("world verts cm: x:[{:.1},{:.1}] y:[{:.1},{:.1}] z:[{:.1},{:.1}]", lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]);
+        eprintln!(
+            "world verts cm: x:[{:.1},{:.1}] y:[{:.1},{:.1}] z:[{:.1},{:.1}]",
+            lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]
+        );
         let (span_x, span_y, span_z) = (hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-        assert!((150.0..200.0).contains(&hi[2]), "standing height ~170 cm in +z, got {}", hi[2]);
+        assert!(
+            (150.0..200.0).contains(&hi[2]),
+            "standing height ~170 cm in +z, got {}",
+            hi[2]
+        );
         assert!(lo[2] > -5.0 && lo[2] < 20.0, "feet near z=0, got {}", lo[2]);
         assert!(span_z > span_x && span_z > span_y, "tallest span is z (up)");
-        assert!(span_y < span_x, "body depth (y) is the smallest lateral span");
+        assert!(
+            span_y < span_x,
+            "body depth (y) is the smallest lateral span"
+        );
     }
 
     /// The orientation control must be EXACT — four quarter-turns about an axis return the asset
@@ -469,12 +562,21 @@ mod tests {
             (p[2] - 170.0).abs() < 1e-4 && p[1].abs() < 1e-4,
             "a turn about X stands the asset up along +Z, got {p:?}"
         );
-        assert!((m.vertices[0].n[2] - 1.0).abs() < 1e-4, "its normal came with it");
+        assert!(
+            (m.vertices[0].n[2] - 1.0).abs() < 1e-4,
+            "its normal came with it"
+        );
 
         for _ in 0..3 {
             apply_orientation(&mut m, quarter_turn(0));
         }
-        assert_eq!(m.vertices[0].p, before, "four quarter-turns are EXACTLY the identity");
-        assert_eq!(m.bones[0].inverse_bind, IDENT, "and the bone frames return too");
+        assert_eq!(
+            m.vertices[0].p, before,
+            "four quarter-turns are EXACTLY the identity"
+        );
+        assert_eq!(
+            m.bones[0].inverse_bind, IDENT,
+            "and the bone frames return too"
+        );
     }
 }

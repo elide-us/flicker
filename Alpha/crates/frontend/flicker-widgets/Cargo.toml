@@ -25,6 +25,11 @@ flicker-scene.workspace = true
 # One-way edge: widgets → router → core; the router never depends on widgets (no cycle).
 flicker-input-core.workspace = true
 flicker-input-router.workspace = true
+# Content-roots service (flicker-core::roots): the shared ui_theme.json path
+# resolves through the ONE root knob instead of a per-crate manifest-dir climb.
+# Deliberately flicker-core, NOT flicker-content — the UI toolkit must not drag
+# the content pipeline's closure (ufbx, skeletal) into every client.
+flicker-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

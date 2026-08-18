@@ -119,17 +119,25 @@ pub fn random(seed: u64) -> TextureRecipe {
             gain: r.range(0.35, 0.65) as f64,
             // Warp is what turns ruled patterns into rock, so it is generous —
             // but only sometimes, or everything comes out equally churned.
-            warp: if r.chance(0.55) { r.range(0.1, 1.1) as f64 } else { 0.0 },
+            warp: if r.chance(0.55) {
+                r.range(0.1, 1.1) as f64
+            } else {
+                0.0
+            },
             salt: r.next(),
             contrast: r.range(0.7, 2.6) as f64,
             invert: r.chance(0.25),
-            blend: if bed { BlendMode::Base } else { r.pick(&DETAIL_BLENDS) },
+            blend: if bed {
+                BlendMode::Base
+            } else {
+                r.pick(&DETAIL_BLENDS)
+            },
             // Detail voices sit back: a rack of six full-amount folds saturates.
             amount: if bed { 1.0 } else { r.range(0.2, 0.8) as f64 },
         };
     }
 
-    let mut recipe = TextureRecipe {
+    let recipe = TextureRecipe {
         id: "rolled".into(),
         name: "Rolled".into(),
         material: None,
@@ -137,37 +145,11 @@ pub fn random(seed: u64) -> TextureRecipe {
         channels,
         out: random_output(&mut r),
     };
-    seat_the_glow(&mut recipe);
+    // `emissive_band` stays a FRACTION here; `bake` seats it into the field's real
+    // range (it used to be seated here, roll-only, which is why hand-set emit
+    // controls baked black — MCP). A rolled recipe now behaves exactly like a
+    // hand-built one: the band means the same thing however the recipe was made.
     recipe
-}
-
-/// Pull a rolled glow's band down under the field it will actually be applied to.
-///
-/// `emissive_band` means "glow above THIS field value" — an authored control with
-/// real meaning. But the roll picks the band and the rack independently, so it can
-/// land above everything the field ever reaches: the console then reports a glow
-/// of 0.94 and bakes a black map. A roll that lies about what it produced is worse
-/// than a roll with no glow.
-///
-/// So the roll checks its own work: sample the field cheaply, and if the band
-/// missed, seat it inside the field's real range. Costs one 32² evaluation.
-/// Authored recipes are untouched — this runs only where the roll chose both.
-fn seat_the_glow(recipe: &mut TextureRecipe) {
-    if recipe.out.emissive_strength <= 0.0 {
-        return;
-    }
-    let f = crate::bake::field(recipe, 32);
-    let (lo, hi) = f.iter().fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
-    // A field with no range at all cannot show a banded glow anywhere; drop the
-    // claim rather than emit a flat wash the author did not ask for.
-    if hi - lo < 0.02 {
-        recipe.out.emissive_strength = 0.0;
-        return;
-    }
-    // Keep the band's INTENT — a fraction of the way up — but measured against the
-    // field that exists rather than against the abstract 0..1.
-    let frac = recipe.out.emissive_band.clamp(0.0, 0.95);
-    recipe.out.emissive_band = lo + (hi - lo) * frac * 0.9;
 }
 
 /// The output stage: one hue walked through value, plus a surface finish.
@@ -183,7 +165,10 @@ fn random_output(r: &mut Roll) -> OutputStage {
             // Value climbs but never reaches the ends — pure black and pure white
             // both read as broken lighting rather than as a surface.
             let v = 0.06 + t * r.range(0.55, 0.85);
-            RampStop { at: t, color: hsv(hue + drift * t, sat, v) }
+            RampStop {
+                at: t,
+                color: hsv(hue + drift * t, sat, v),
+            }
         })
         .collect();
 
@@ -195,10 +180,18 @@ fn random_output(r: &mut Roll) -> OutputStage {
     OutputStage {
         ramp: ColorRamp { stops },
         relief: r.range(0.2, 1.0),
-        roughness: if metallic { r.range(0.1, 0.55) } else { r.range(0.45, 0.95) },
+        roughness: if metallic {
+            r.range(0.1, 0.55)
+        } else {
+            r.range(0.45, 0.95)
+        },
         roughness_mod: r.range(-0.4, 0.4),
         metalness: if metallic { r.range(0.7, 1.0) } else { 0.0 },
-        metalness_mod: if metallic { r.range(-0.5, 0.2) } else { r.range(0.0, 0.5) },
+        metalness_mod: if metallic {
+            r.range(-0.5, 0.2)
+        } else {
+            r.range(0.0, 0.5)
+        },
         ao: r.range(0.2, 0.9),
         // A glow is rare and, when it happens, SATURATED and banded — lava in the
         // cracks, runes in the crests. A dim wide glow just looks like fog.
@@ -248,10 +241,26 @@ mod tests {
             let r = random(seed.wrapping_mul(0x9E37_79B9));
             assert!(r.active_channels() >= 2, "seed {seed}: too few voices");
             for ch in &r.channels {
-                assert!((1..=64).contains(&ch.scale), "seed {seed}: scale {}", ch.scale);
-                assert!((1..=8).contains(&ch.octaves), "seed {seed}: octaves {}", ch.octaves);
-                assert!((0.0..=1.0).contains(&ch.amount), "seed {seed}: amount {}", ch.amount);
-                assert!(ch.warp >= 0.0 && ch.warp.is_finite(), "seed {seed}: warp {}", ch.warp);
+                assert!(
+                    (1..=64).contains(&ch.scale),
+                    "seed {seed}: scale {}",
+                    ch.scale
+                );
+                assert!(
+                    (1..=8).contains(&ch.octaves),
+                    "seed {seed}: octaves {}",
+                    ch.octaves
+                );
+                assert!(
+                    (0.0..=1.0).contains(&ch.amount),
+                    "seed {seed}: amount {}",
+                    ch.amount
+                );
+                assert!(
+                    ch.warp >= 0.0 && ch.warp.is_finite(),
+                    "seed {seed}: warp {}",
+                    ch.warp
+                );
                 assert!(ch.contrast > 0.0, "seed {seed}: contrast {}", ch.contrast);
             }
             let o = &r.out;
@@ -266,7 +275,10 @@ mod tests {
             }
             assert!(o.ramp.stops.len() >= 2, "seed {seed}: a ramp needs stops");
             for st in &o.ramp.stops {
-                assert!(st.color.iter().all(|c| (0.0..=1.0).contains(c)), "seed {seed}: colour");
+                assert!(
+                    st.color.iter().all(|c| (0.0..=1.0).contains(c)),
+                    "seed {seed}: colour"
+                );
             }
         }
     }
@@ -279,7 +291,11 @@ mod tests {
         for seed in 0..32u64 {
             let r = random(seed);
             assert!(r.channels[0].enabled, "seed {seed}: no bed voice");
-            assert_eq!(r.channels[0].blend, BlendMode::Base, "seed {seed}: bed does not set the bus");
+            assert_eq!(
+                r.channels[0].blend,
+                BlendMode::Base,
+                "seed {seed}: bed does not set the bus"
+            );
             assert_eq!(r.channels[0].amount, 1.0, "seed {seed}: bed is not at full");
         }
         // And no LATER voice may replace the bus, which would erase the rack.
@@ -332,7 +348,8 @@ mod tests {
     fn adversarially_structured_seeds_still_vary() {
         // Multiples of the very constant the stream advances by — the worst case.
         const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
-        let rolls: Vec<TextureRecipe> = (0..16u64).map(|i| random(i.wrapping_mul(GOLDEN))).collect();
+        let rolls: Vec<TextureRecipe> =
+            (0..16u64).map(|i| random(i.wrapping_mul(GOLDEN))).collect();
 
         let metals: Vec<bool> = rolls.iter().map(|r| r.out.metalness > 0.0).collect();
         assert!(
@@ -341,12 +358,18 @@ mod tests {
         );
         let voices: std::collections::BTreeSet<usize> =
             rolls.iter().map(|r| r.active_channels()).collect();
-        assert!(voices.len() >= 3, "structured seeds barely vary the rack: {voices:?}");
+        assert!(
+            voices.len() >= 3,
+            "structured seeds barely vary the rack: {voices:?}"
+        );
 
         // And plain sequential seeds, the other obvious caller shape.
         let seq: std::collections::BTreeSet<usize> =
             (0..16u64).map(|i| random(i).active_channels()).collect();
-        assert!(seq.len() >= 3, "sequential seeds barely vary the rack: {seq:?}");
+        assert!(
+            seq.len() >= 3,
+            "sequential seeds barely vary the rack: {seq:?}"
+        );
     }
 
     /// Metal is a commitment: a rolled surface is a conductor or it is not, never
@@ -355,7 +378,10 @@ mod tests {
     fn metalness_picks_a_side() {
         for seed in 0..48u64 {
             let m = random(seed.wrapping_mul(7)).out.metalness;
-            assert!(m == 0.0 || m >= 0.7, "seed {seed}: metalness {m} is neither");
+            assert!(
+                m == 0.0 || m >= 0.7,
+                "seed {seed}: metalness {m} is neither"
+            );
         }
     }
 
@@ -363,10 +389,14 @@ mod tests {
     /// but bakes black would be a lie in the readout.
     #[test]
     fn glow_is_occasional_and_real() {
-        let glowing: Vec<u64> =
-            (0..64u64).filter(|s| random(s.wrapping_mul(13)).out.emissive_strength > 0.0).collect();
+        let glowing: Vec<u64> = (0..64u64)
+            .filter(|s| random(s.wrapping_mul(13)).out.emissive_strength > 0.0)
+            .collect();
         assert!(!glowing.is_empty(), "no roll ever glows");
-        assert!(glowing.len() < 48, "almost every roll glows — it should be a surprise");
+        assert!(
+            glowing.len() < 48,
+            "almost every roll glows — it should be a surprise"
+        );
         for s in glowing.iter().take(4) {
             let r = random(s.wrapping_mul(13));
             let set = bake(&r, 32);

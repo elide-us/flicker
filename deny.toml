@@ -1,0 +1,69 @@
+# cargo-deny configuration — the standing supply-chain gate (run in CI on every
+# push/PR, and locally via `cargo deny check`). Posture ratified 2026-08-17:
+# the committed Cargo.lock (+ --locked builds) is the exact pin; workspace
+# manifests carry reviewed version FLOORS; this file gates advisories, sources,
+# and licenses so drift on the dependency channel fails loud.
+
+[graph]
+# Audit what we actually build for the shipping targets (plus the host dev triple).
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained TRANSITIVE deps (rustybuzz, ttf-parser via the glyphon 0.6 /
+# cosmic-text era) are upstream's migration to make — surfaced as warnings, not
+# failures. A DIRECT dep going unmaintained still fails the gate.
+unmaintained = "workspace"
+# Accepted-and-visible (warnings, not ignored — they surface in every run):
+# - RUSTSEC-2024-0436 `paste`, RUSTSEC-2026-0206 `rustybuzz`, RUSTSEC-2026-0192
+#   `ttf-parser`: unmaintained transitives of the glyphon 0.6 / wgpu 22 era; no fix
+#   short of the (deliberately deferred) wgpu/glyphon upgrade.
+# - RUSTSEC-2026-0253/0002 `lru`, RUSTSEC-2026-0186 `memmap2`: unsound-class
+#   warnings with no in-range fix at review time (2026-08-17).
+ignore = []
+
+[licenses]
+version = 2
+# Permissive-only allowlist; anything new fails the gate and gets reviewed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+]
+
+# ring bundles ISC/MIT/OpenSSL-derived license text that SPDX detection trips on.
+[[licenses.clarify]]
+crate = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Duplicate major versions are a size/attention cost, not a security failure.
+multiple-versions = "warn"
+# A bare `*` requirement would defeat the reviewed-floor discipline. Internal
+# path-only deps (version-less `{ path = ... }`) are exempt — they resolve inside
+# this repo, not through a registry.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only — no git dependencies, no alternate registries. A typosquat or a
+# pivoted git ref cannot enter the graph without this gate failing the build.
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -21,13 +21,20 @@ const AUTOFIT_RADIUS_MAX: f32 = 15.0;
 /// Runtime shape from the wire `collision` shape.
 pub fn shape_from_format(s: &format::CollisionShape) -> Shape {
     match *s {
-        format::CollisionShape::Sphere { center, radius } => {
-            Shape::Sphere { center: Vec3::from(center), radius }
-        }
-        format::CollisionShape::Capsule { a, b, radius } => {
-            Shape::Capsule { a: Vec3::from(a), b: Vec3::from(b), radius }
-        }
-        format::CollisionShape::Box { center, half_extents, rotation } => Shape::Obb {
+        format::CollisionShape::Sphere { center, radius } => Shape::Sphere {
+            center: Vec3::from(center),
+            radius,
+        },
+        format::CollisionShape::Capsule { a, b, radius } => Shape::Capsule {
+            a: Vec3::from(a),
+            b: Vec3::from(b),
+            radius,
+        },
+        format::CollisionShape::Box {
+            center,
+            half_extents,
+            rotation,
+        } => Shape::Obb {
             center: Vec3::from(center),
             half_extents: Vec3::from(half_extents),
             rotation: Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3]),
@@ -48,14 +55,21 @@ pub fn role_from_format(r: format::CollisionRole) -> Role {
 /// bone NAME against `bones` (share-by-name, the format contract). A volume whose bone is absent
 /// from the skeleton is dropped (not fatal — same policy as unresolved clip tracks).
 pub fn volumes_from_format(collision: &format::Collision, bones: &[Bone]) -> Vec<Volume> {
-    let index: HashMap<&str, usize> =
-        bones.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let index: HashMap<&str, usize> = bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.as_str(), i))
+        .collect();
     collision
         .volumes
         .iter()
         .filter_map(|v| {
             let bone = *index.get(v.bone.as_str())?;
-            Some(Volume::new(shape_from_format(&v.shape), bone, role_from_format(v.role)))
+            Some(Volume::new(
+                shape_from_format(&v.shape),
+                bone,
+                role_from_format(v.role),
+            ))
         })
         .collect()
 }
@@ -69,7 +83,11 @@ pub fn volumes_from_format(collision: &format::Collision, bones: &[Bone]) -> Vec
 /// (the persistent occupancy/hurtbox role); the editor re-tags hitboxes.
 pub fn autofit_capsules(bones: &[Bone]) -> Vec<Volume> {
     // A bone's `local` IS its parent-relative translation, so `child_local(c)` is `bones[c].local`.
-    autofit_volumes(bones.len(), |i| bones[i].parent, |c| bones[c].local.w_axis.truncate())
+    autofit_volumes(
+        bones.len(),
+        |i| bones[i].parent,
+        |c| bones[c].local.w_axis.truncate(),
+    )
 }
 
 /// Auto-fit collision volumes from plain skeleton TOPOLOGY + rest-pose GLOBAL frames — the SAME
@@ -114,15 +132,27 @@ fn autofit_volumes(
         let farthest_child = (0..n)
             .filter(|&c| parent(c) == i as i32)
             .map(&child_local)
-            .max_by(|p, q| p.length().partial_cmp(&q.length()).unwrap_or(std::cmp::Ordering::Equal));
+            .max_by(|p, q| {
+                p.length()
+                    .partial_cmp(&q.length())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
         let shape = match farthest_child {
             Some(end) if end.length() > 1e-3 => {
                 let len = end.length();
-                let radius = (len * AUTOFIT_RADIUS_FRAC).clamp(AUTOFIT_RADIUS_MIN, AUTOFIT_RADIUS_MAX);
-                Shape::Capsule { a: Vec3::ZERO, b: end, radius }
+                let radius =
+                    (len * AUTOFIT_RADIUS_FRAC).clamp(AUTOFIT_RADIUS_MIN, AUTOFIT_RADIUS_MAX);
+                Shape::Capsule {
+                    a: Vec3::ZERO,
+                    b: end,
+                    radius,
+                }
             }
-            _ => Shape::Sphere { center: Vec3::ZERO, radius: LEAF_RADIUS_CM },
+            _ => Shape::Sphere {
+                center: Vec3::ZERO,
+                radius: LEAF_RADIUS_CM,
+            },
         };
         out.push(Volume::new(shape, i, Role::Physics));
     }
@@ -135,7 +165,12 @@ mod tests {
     use glam::Mat4;
 
     fn bone(name: &str, parent: i32, local: Mat4) -> Bone {
-        Bone { name: name.to_string(), parent, local, inverse_bind: Mat4::IDENTITY }
+        Bone {
+            name: name.to_string(),
+            parent,
+            local,
+            inverse_bind: Mat4::IDENTITY,
+        }
     }
 
     #[test]
@@ -146,7 +181,10 @@ mod tests {
             radius: 2.0,
         });
         assert!(matches!(s, Shape::Capsule { radius, .. } if (radius - 2.0).abs() < 1e-6));
-        assert_eq!(role_from_format(format::CollisionRole::Hitbox), Role::Hitbox);
+        assert_eq!(
+            role_from_format(format::CollisionRole::Hitbox),
+            Role::Hitbox
+        );
         assert!(matches!(
             shape_from_format(&format::CollisionShape::Box {
                 center: [0.0; 3],
@@ -159,19 +197,28 @@ mod tests {
 
     #[test]
     fn volumes_resolve_bone_names_and_drop_unknowns() {
-        let bones = [bone("root", -1, Mat4::IDENTITY), bone("pelvis", 0, Mat4::IDENTITY)];
+        let bones = [
+            bone("root", -1, Mat4::IDENTITY),
+            bone("pelvis", 0, Mat4::IDENTITY),
+        ];
         let collision = format::Collision {
             volumes: vec![
                 format::CollisionVolume {
                     name: "hull".into(),
                     bone: "pelvis".into(),
-                    shape: format::CollisionShape::Sphere { center: [0.0; 3], radius: 8.0 },
+                    shape: format::CollisionShape::Sphere {
+                        center: [0.0; 3],
+                        radius: 8.0,
+                    },
                     role: format::CollisionRole::Physics,
                 },
                 format::CollisionVolume {
                     name: "ghost".into(),
                     bone: "no_such_bone".into(),
-                    shape: format::CollisionShape::Sphere { center: [0.0; 3], radius: 1.0 },
+                    shape: format::CollisionShape::Sphere {
+                        center: [0.0; 3],
+                        radius: 1.0,
+                    },
                     role: format::CollisionRole::Physics,
                 },
             ],
@@ -196,13 +243,18 @@ mod tests {
         match a.shape {
             Shape::Capsule { a: s, b: e, radius } => {
                 assert!(s.length() < 1e-6 && (e - Vec3::new(0.0, 0.0, 5.0)).length() < 1e-6);
-                assert!((radius - 1.0).abs() < 1e-6, "5cm*0.15=0.75 clamped up to 1.0");
+                assert!(
+                    (radius - 1.0).abs() < 1e-6,
+                    "5cm*0.15=0.75 clamped up to 1.0"
+                );
             }
             _ => panic!("bone a should be a capsule"),
         }
         // bone `b` (index 2) is a leaf → sphere.
         let b = vols.iter().find(|v| v.bone == 2).unwrap();
-        assert!(matches!(b.shape, Shape::Sphere { radius, .. } if (radius - LEAF_RADIUS_CM).abs() < 1e-6));
+        assert!(
+            matches!(b.shape, Shape::Sphere { radius, .. } if (radius - LEAF_RADIUS_CM).abs() < 1e-6)
+        );
     }
 
     /// The globals-based entry point must produce byte-identical volumes to the bone-based one — it
@@ -228,7 +280,11 @@ mod tests {
         let parents: Vec<i32> = locals.iter().map(|(p, _)| *p).collect();
         let mut globals = vec![Mat4::IDENTITY; locals.len()];
         for (i, (p, l)) in locals.iter().enumerate() {
-            globals[i] = if *p < 0 { *l } else { globals[*p as usize] * *l };
+            globals[i] = if *p < 0 {
+                *l
+            } else {
+                globals[*p as usize] * *l
+            };
         }
 
         let from_bones = autofit_capsules(&bones);
@@ -238,18 +294,39 @@ mod tests {
             assert_eq!(a.bone, b.bone);
             assert_eq!(a.role, b.role);
             match (a.shape, b.shape) {
-                (Shape::Capsule { a: a0, b: a1, radius: ar }, Shape::Capsule { a: b0, b: b1, radius: br }) => {
-                    assert!((a0 - b0).length() < 1e-4 && (a1 - b1).length() < 1e-4 && (ar - br).abs() < 1e-4);
+                (
+                    Shape::Capsule {
+                        a: a0,
+                        b: a1,
+                        radius: ar,
+                    },
+                    Shape::Capsule {
+                        a: b0,
+                        b: b1,
+                        radius: br,
+                    },
+                ) => {
+                    assert!(
+                        (a0 - b0).length() < 1e-4
+                            && (a1 - b1).length() < 1e-4
+                            && (ar - br).abs() < 1e-4
+                    );
                 }
                 (Shape::Sphere { radius: ar, .. }, Shape::Sphere { radius: br, .. }) => {
                     assert!((ar - br).abs() < 1e-4);
                 }
-                _ => panic!("shape kind differs between the two entry points: {:?} vs {:?}", a.shape, b.shape),
+                _ => panic!(
+                    "shape kind differs between the two entry points: {:?} vs {:?}",
+                    a.shape, b.shape
+                ),
             }
         }
         // The multi-child bone (pelvis, index 1) points at its LONGER child (leg, len ~6.7 > spine 12)
         // — sanity that both took the same farthest-child branch. (spine is longer here: 12 > 6.7.)
         let pelvis = from_globals.iter().find(|v| v.bone == 1).unwrap();
-        assert!(matches!(pelvis.shape, Shape::Capsule { .. }), "multi-child pelvis is a capsule");
+        assert!(
+            matches!(pelvis.shape, Shape::Capsule { .. }),
+            "multi-child pelvis is a capsule"
+        );
     }
 }

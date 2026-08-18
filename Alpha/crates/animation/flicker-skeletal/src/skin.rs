@@ -43,7 +43,11 @@ pub fn skin(mesh: &Mesh, palette: &[Mat4]) -> Vec<SkinnedVertex> {
 /// Morphs reshape the bind face, then skinning poses it. `&[]` weights are byte-identical to
 /// `skin`; the blend is sparse, so only verts a nonzero morph touches cost anything.
 pub fn skin_morphed(mesh: &Mesh, palette: &[Mat4], morph_weights: &[f32]) -> Vec<SkinnedVertex> {
-    let active = mesh.morphs.iter().zip(morph_weights).any(|(_, &w)| w != 0.0);
+    let active = mesh
+        .morphs
+        .iter()
+        .zip(morph_weights)
+        .any(|(_, &w)| w != 0.0);
     let morphed = active.then(|| apply_morphs(mesh, morph_weights));
     mesh.vertices
         .iter()
@@ -107,14 +111,26 @@ mod tests {
     use glam::Mat4;
 
     fn vert(p: [f32; 3]) -> Vertex {
-        Vertex { p, n: [0.0, 1.0, 0.0], uv: [0.0, 0.0], joints: [0, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0] }
+        Vertex {
+            p,
+            n: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+            joints: [0, 0, 0, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        }
     }
 
     #[test]
     fn morph_blend_displaces_only_targeted_verts_scaled_by_weight() {
         let mesh = Mesh {
             vertices: vec![vert([0.0, 0.0, 0.0]), vert([1.0, 0.0, 0.0])],
-            morphs: vec![Morph { name: "wider".into(), deltas: vec![MorphDelta { v: 1, d: [10.0, 0.0, 0.0] }] }],
+            morphs: vec![Morph {
+                name: "wider".into(),
+                deltas: vec![MorphDelta {
+                    v: 1,
+                    d: [10.0, 0.0, 0.0],
+                }],
+            }],
             ..Default::default()
         };
         // weight 0 → nothing moves; and empty weights are byte-identical to `skin`.
@@ -125,6 +141,9 @@ mod tests {
         assert_eq!(p[0], [0.0, 0.0, 0.0], "an untargeted vert is untouched");
         assert_eq!(p[1], [6.0, 0.0, 0.0], "1.0 + 0.5*10");
         // full weight, skinned through identity == the morphed position.
-        assert_eq!(skin_morphed(&mesh, &[Mat4::IDENTITY], &[1.0])[1].position, [11.0, 0.0, 0.0]);
+        assert_eq!(
+            skin_morphed(&mesh, &[Mat4::IDENTITY], &[1.0])[1].position,
+            [11.0, 0.0, 0.0]
+        );
     }
 }

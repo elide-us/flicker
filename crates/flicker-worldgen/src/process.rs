@@ -49,9 +49,19 @@ pub enum Effect {
         amount: f64,
     },
     /// Add external mass to a layer (the authored water veneer — the one non-conserved input).
-    Deliver { hex: usize, kind: LayerKind, element: ElementId, amount: f64 },
+    Deliver {
+        hex: usize,
+        kind: LayerKind,
+        element: ElementId,
+        amount: f64,
+    },
     /// Record (`+`) or release (`−`) a compound in a layer — the named-species accounting.
-    Compound { hex: usize, kind: LayerKind, compound: u16, amount: f64 },
+    Compound {
+        hex: usize,
+        kind: LayerKind,
+        compound: u16,
+        amount: f64,
+    },
     /// Set a hex's temperature (K) — the temperature-adjustment result.
     SetTemperature { hex: usize, kelvin: f32 },
 }
@@ -72,7 +82,11 @@ impl Ctx<'_> {
         &self.cells[self.hex]
     }
     fn mantle_mass(&self, el: ElementId) -> f64 {
-        self.me().column.mantle().map(|m| m.composition.amount(el)).unwrap_or(0.0)
+        self.me()
+            .column
+            .mantle()
+            .map(|m| m.composition.amount(el))
+            .unwrap_or(0.0)
     }
 }
 
@@ -117,7 +131,13 @@ pub fn run_tick(
     // Pass 1 — compute (read-only over the frozen state).
     let mut effects: Vec<Effect> = Vec::new();
     for hex in 0..cells.len() {
-        let ctx = Ctx { hex, cells, neighbors, tables, delivery: per_cell };
+        let ctx = Ctx {
+            hex,
+            cells,
+            neighbors,
+            tables,
+            delivery: per_cell,
+        };
         for p in procs {
             if p.applies(&ctx) {
                 p.compute(&ctx, &mut effects);
@@ -140,29 +160,54 @@ pub fn run_tick(
 /// Apply one effect to the state; returns any externally-delivered mass (for the ledger).
 fn apply(cells: &mut [HexState], e: Effect) -> f64 {
     match e {
-        Effect::Transfer { from_hex, from, element, to_hex, to, amount } => {
+        Effect::Transfer {
+            from_hex,
+            from,
+            element,
+            to_hex,
+            to,
+            amount,
+        } => {
             let removed = cells[from_hex]
                 .column
                 .find(from)
-                .map(|i| cells[from_hex].column.layers_mut()[i].composition.remove(element, amount))
+                .map(|i| {
+                    cells[from_hex].column.layers_mut()[i]
+                        .composition
+                        .remove(element, amount)
+                })
                 .unwrap_or(0.0);
             if removed > 0.0 {
                 let heat = cells[to_hex].temperature;
                 let ti = cells[to_hex].column.ensure(to, heat);
-                cells[to_hex].column.layers_mut()[ti].composition.add(element, removed);
+                cells[to_hex].column.layers_mut()[ti]
+                    .composition
+                    .add(element, removed);
             }
             0.0
         }
-        Effect::Deliver { hex, kind, element, amount } => {
+        Effect::Deliver {
+            hex,
+            kind,
+            element,
+            amount,
+        } => {
             if amount <= 0.0 {
                 return 0.0;
             }
             let heat = cells[hex].temperature;
             let i = cells[hex].column.ensure(kind, heat);
-            cells[hex].column.layers_mut()[i].composition.add(element, amount);
+            cells[hex].column.layers_mut()[i]
+                .composition
+                .add(element, amount);
             amount
         }
-        Effect::Compound { hex, kind, compound, amount } => {
+        Effect::Compound {
+            hex,
+            kind,
+            compound,
+            amount,
+        } => {
             let heat = cells[hex].temperature;
             let idx = if amount >= 0.0 {
                 cells[hex].column.ensure(kind, heat)
@@ -218,7 +263,10 @@ impl Process for Temperature {
         // from the conserved column is the one truth; the flat mirror is no longer read.
         let k = hex_cooling_k(&hex.column.total_composition());
         let next = hex.temperature - k * (hex.temperature - T_SPACE);
-        out.push(Effect::SetTemperature { hex: ctx.hex, kelvin: next });
+        out.push(Effect::SetTemperature {
+            hex: ctx.hex,
+            kelvin: next,
+        });
     }
 }
 
@@ -303,7 +351,10 @@ impl Process for CrustFreezing {
         if total <= 0.0 {
             return;
         }
-        let crust_mass = col.find(LayerKind::Crust).map(|i| col.layers()[i].mass()).unwrap_or(0.0);
+        let crust_mass = col
+            .find(LayerKind::Crust)
+            .map(|i| col.layers()[i].mass())
+            .unwrap_or(0.0);
         let fill = (1.0 - crust_mass / (CRUST_SAT_FRAC * total)).max(0.0);
         if fill <= 0.0 {
             return;
@@ -334,11 +385,26 @@ struct GasSpecies {
     floor: f32,
 }
 const OUTGAS_SERIES: [GasSpecies; 5] = [
-    GasSpecies { compound: "Sulfur Dioxide", floor: 1050.0 },
-    GasSpecies { compound: "Water", floor: 800.0 },
-    GasSpecies { compound: "Carbon Dioxide", floor: 670.0 },
-    GasSpecies { compound: "Hydrogen Chloride", floor: 570.0 },
-    GasSpecies { compound: "Nitrogen", floor: 100.0 },
+    GasSpecies {
+        compound: "Sulfur Dioxide",
+        floor: 1050.0,
+    },
+    GasSpecies {
+        compound: "Water",
+        floor: 800.0,
+    },
+    GasSpecies {
+        compound: "Carbon Dioxide",
+        floor: 670.0,
+    },
+    GasSpecies {
+        compound: "Hydrogen Chloride",
+        floor: 570.0,
+    },
+    GasSpecies {
+        compound: "Nitrogen",
+        floor: 100.0,
+    },
 ];
 const OUTGAS_RATE: f64 = 0.03;
 
@@ -352,7 +418,9 @@ impl Process for Outgassing {
     }
     fn applies(&self, ctx: &Ctx) -> bool {
         ctx.me().column.mantle().is_some()
-            && OUTGAS_SERIES.iter().any(|g| ctx.me().temperature >= g.floor)
+            && OUTGAS_SERIES
+                .iter()
+                .any(|g| ctx.me().temperature >= g.floor)
     }
     fn compute(&self, ctx: &Ctx, out: &mut Vec<Effect>) {
         let temp = ctx.me().temperature;
@@ -417,10 +485,29 @@ impl Process for Hydrosphere {
 
         // Newly delivered water joins whichever phase the surface supports.
         if ctx.delivery > 0.0 {
-            let kind = if temp < T_CONDENSE { LayerKind::Ocean } else { LayerKind::Atmosphere };
-            out.push(Effect::Deliver { hex: ctx.hex, kind, element: H, amount: ctx.delivery * hf });
-            out.push(Effect::Deliver { hex: ctx.hex, kind, element: O, amount: ctx.delivery * of });
-            out.push(Effect::Compound { hex: ctx.hex, kind, compound: water_id, amount: ctx.delivery });
+            let kind = if temp < T_CONDENSE {
+                LayerKind::Ocean
+            } else {
+                LayerKind::Atmosphere
+            };
+            out.push(Effect::Deliver {
+                hex: ctx.hex,
+                kind,
+                element: H,
+                amount: ctx.delivery * hf,
+            });
+            out.push(Effect::Deliver {
+                hex: ctx.hex,
+                kind,
+                element: O,
+                amount: ctx.delivery * of,
+            });
+            out.push(Effect::Compound {
+                hex: ctx.hex,
+                kind,
+                compound: water_id,
+                amount: ctx.delivery,
+            });
         }
 
         // Water already present changes phase across the condensation point.
@@ -443,8 +530,18 @@ impl Process for Hydrosphere {
                         amount: move_w * frac,
                     });
                 }
-                out.push(Effect::Compound { hex: ctx.hex, kind: from, compound: water_id, amount: -move_w });
-                out.push(Effect::Compound { hex: ctx.hex, kind: to, compound: water_id, amount: move_w });
+                out.push(Effect::Compound {
+                    hex: ctx.hex,
+                    kind: from,
+                    compound: water_id,
+                    amount: -move_w,
+                });
+                out.push(Effect::Compound {
+                    hex: ctx.hex,
+                    kind: to,
+                    compound: water_id,
+                    amount: move_w,
+                });
             }
         }
     }
@@ -522,8 +619,9 @@ mod tests {
                 h
             })
             .collect();
-        let neighbors: Vec<Vec<u32>> =
-            (0..n).map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32]).collect();
+        let neighbors: Vec<Vec<u32>> = (0..n)
+            .map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32])
+            .collect();
         (cells, neighbors)
     }
 
@@ -531,7 +629,8 @@ mod tests {
     #[test]
     fn the_tick_conserves_element_mass() {
         let t = tables();
-        let bulk = Composition::from_iter([(26u8, 3000.0), (14u8, 1500.0), (8u8, 3000.0), (6u8, 200.0)]);
+        let bulk =
+            Composition::from_iter([(26u8, 3000.0), (14u8, 1500.0), (8u8, 3000.0), (6u8, 200.0)]);
         let (mut cells, neighbors) = world(7, bulk, 1900.0);
         let procs = processes();
         let mass = |c: &[HexState]| -> f64 { c.iter().map(|h| h.column.total_mass()).sum() };
@@ -560,13 +659,23 @@ mod tests {
         let k_before = hex_cooling_k(&h.column.total_composition());
         // Drain the potassium from the column, as a cross-hex convection export would,
         // leaving the frozen flat `composition` mirror untouched.
-        let mi = h.column.find(LayerKind::Mantle).expect("primordial mantle present");
+        let mi = h
+            .column
+            .find(LayerKind::Mantle)
+            .expect("primordial mantle present");
         let removed = h.column.layers_mut()[mi].composition.remove(19u8, 200.0);
         assert_eq!(removed, 200.0, "the K actually left the column");
         let k_after = hex_cooling_k(&h.column.total_composition());
-        assert!(k_after > k_before, "losing radiogenic K must cool faster ({k_after} > {k_before})");
+        assert!(
+            k_after > k_before,
+            "losing radiogenic K must cool faster ({k_after} > {k_before})"
+        );
         // The stale flat mirror still shows the K — the OLD read would report the slow rate.
-        assert_eq!(hex_cooling_k(&h.composition), k_before, "the flat mirror never noticed the K leave");
+        assert_eq!(
+            hex_cooling_k(&h.composition),
+            k_before,
+            "the flat mirror never noticed the K leave"
+        );
     }
 
     /// Cross-hex effects actually move mass: a hot hex next to a cold one sheds mantle into it.

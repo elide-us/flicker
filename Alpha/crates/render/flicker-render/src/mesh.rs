@@ -183,7 +183,6 @@ pub fn ray_triangle(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Optio
 }
 
 impl Camera {
-
     /// Camera positioned to orbit `target` at `distance`, looking
     /// inward. `yaw` rotates around the world Y axis; `pitch` is
     /// elevation in radians (positive = looking down from above).
@@ -315,10 +314,18 @@ mod pick_tests {
     fn centre_pixel_ray_points_at_the_target() {
         let c = cam();
         let vp = Vec2::new(1920.0, 1080.0);
-        let (o, d) = c.pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp).unwrap();
+        let (o, d) = c
+            .pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp)
+            .unwrap();
         let want = (c.target - c.position).normalize();
-        assert!(d.dot(want) > 0.9999, "centre ray must aim at the target: {d:?} vs {want:?}");
-        assert!((o - c.position).length() < c.far, "ray starts near the camera, not behind it");
+        assert!(
+            d.dot(want) > 0.9999,
+            "centre ray must aim at the target: {d:?} vs {want:?}"
+        );
+        assert!(
+            (o - c.position).length() < c.far,
+            "ray starts near the camera, not behind it"
+        );
     }
 
     /// A pick ray must actually hit geometry under the cursor, and the ray/triangle pair
@@ -327,7 +334,9 @@ mod pick_tests {
     fn centre_ray_hits_a_triangle_at_the_target() {
         let c = cam();
         let vp = Vec2::new(800.0, 600.0);
-        let (o, d) = c.pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp).unwrap();
+        let (o, d) = c
+            .pick_ray(Vec2::new(vp.x * 0.5 - 0.5, vp.y * 0.5 - 0.5), vp)
+            .unwrap();
         // A big quad-ish triangle spanning the origin, facing the camera (+Z).
         let (a, b, cc) = (
             Vec3::new(-50.0, -50.0, 0.0),
@@ -336,7 +345,10 @@ mod pick_tests {
         );
         let t = ray_triangle(o, d, a, b, cc).expect("centre ray must hit a triangle at the origin");
         let hit = o + d * t;
-        assert!(hit.length() < 1.0, "hit should land at the target, got {hit:?}");
+        assert!(
+            hit.length() < 1.0,
+            "hit should land at the target, got {hit:?}"
+        );
     }
 
     /// Back faces are rejected — a pick must not select a surface facing away.
@@ -349,7 +361,10 @@ mod pick_tests {
             Vec3::new(0.0, 50.0, 0.0),
             Vec3::new(50.0, -50.0, 0.0),
         );
-        assert!(ray_triangle(o, d, a, b, c).is_none(), "back face must not be picked");
+        assert!(
+            ray_triangle(o, d, a, b, c).is_none(),
+            "back face must not be picked"
+        );
     }
 
     /// Geometry behind the cursor must never be picked.
@@ -361,6 +376,9 @@ mod pick_tests {
             Vec3::new(50.0, -50.0, 0.0),
             Vec3::new(0.0, 50.0, 0.0),
         );
-        assert!(ray_triangle(o, d, a, b, c).is_none(), "geometry behind the ray must miss");
+        assert!(
+            ray_triangle(o, d, a, b, c).is_none(),
+            "geometry behind the ray must miss"
+        );
     }
 }

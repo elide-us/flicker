@@ -32,8 +32,8 @@ use crate::context::{ContextualBindings, InputContext};
 use crate::device::GamepadButton;
 use crate::device::Key;
 use crate::resolve::{EventKind, Fired};
-use crate::snapshot::{GamepadConfig, InputState};
 use crate::signal::ActionSignal;
+use crate::snapshot::{GamepadConfig, InputState};
 
 /// Keeps the chord layer in step with the modifier that opened it.
 ///
@@ -121,21 +121,39 @@ pub fn editor_chords() -> InputMap {
     let mut m = InputMap::empty();
 
     // Shoulders: history, because a shoulder reads as "back / forward in time".
-    m.bind(ActionSignal::Undo, InputBinding::GamepadButton(GamepadButton::LeftBumper));
+    m.bind(
+        ActionSignal::Undo,
+        InputBinding::GamepadButton(GamepadButton::LeftBumper),
+    );
     m.bind(ActionSignal::Undo, InputBinding::Key(Key::Z));
-    m.bind(ActionSignal::Redo, InputBinding::GamepadButton(GamepadButton::RightBumper));
+    m.bind(
+        ActionSignal::Redo,
+        InputBinding::GamepadButton(GamepadButton::RightBumper),
+    );
     m.bind(ActionSignal::Redo, InputBinding::Key(Key::Y));
 
     // Triggers: move the thing — pick it up, put it down.
-    m.bind(ActionSignal::Cut, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+    m.bind(
+        ActionSignal::Cut,
+        InputBinding::GamepadButton(GamepadButton::LeftTrigger),
+    );
     m.bind(ActionSignal::Cut, InputBinding::Key(Key::X));
-    m.bind(ActionSignal::Paste, InputBinding::GamepadButton(GamepadButton::RightTrigger));
+    m.bind(
+        ActionSignal::Paste,
+        InputBinding::GamepadButton(GamepadButton::RightTrigger),
+    );
     m.bind(ActionSignal::Paste, InputBinding::Key(Key::V));
 
     // D-pad: the naming verbs.
-    m.bind(ActionSignal::CreateFolder, InputBinding::GamepadButton(GamepadButton::DPadUp));
+    m.bind(
+        ActionSignal::CreateFolder,
+        InputBinding::GamepadButton(GamepadButton::DPadUp),
+    );
     m.bind(ActionSignal::CreateFolder, InputBinding::Key(Key::N));
-    m.bind(ActionSignal::Rename, InputBinding::GamepadButton(GamepadButton::DPadDown));
+    m.bind(
+        ActionSignal::Rename,
+        InputBinding::GamepadButton(GamepadButton::DPadDown),
+    );
     m.bind(ActionSignal::Rename, InputBinding::Key(Key::R));
 
     m
@@ -149,8 +167,14 @@ mod tests {
     fn bindings_with_chord() -> ContextualBindings {
         let mut world = InputMap::empty();
         // Y opens the layer; L2 normally means ModePrev.
-        world.bind(ActionSignal::ChordBegin, InputBinding::GamepadButton(GamepadButton::North));
-        world.bind(ActionSignal::ModePrev, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+        world.bind(
+            ActionSignal::ChordBegin,
+            InputBinding::GamepadButton(GamepadButton::North),
+        );
+        world.bind(
+            ActionSignal::ModePrev,
+            InputBinding::GamepadButton(GamepadButton::LeftTrigger),
+        );
         ContextualBindings::new(world).with(InputContext::Chord, editor_chords())
     }
 
@@ -176,7 +200,13 @@ mod tests {
         // Baseline: L2 alone is ModePrev.
         r.resolve_frame(&b, &cfg, &InputState::new(), 0, &mut out);
         out.clear();
-        r.resolve_frame(&b, &cfg, &pad_down(&[GamepadButton::LeftTrigger]), 1, &mut out);
+        r.resolve_frame(
+            &b,
+            &cfg,
+            &pad_down(&[GamepadButton::LeftTrigger]),
+            1,
+            &mut out,
+        );
         assert!(
             out.iter().any(|f| f.signal == ActionSignal::ModePrev),
             "L2 alone is ModePrev: {out:?}"
@@ -200,7 +230,10 @@ mod tests {
         out.clear();
         r.resolve_frame(&b, &cfg, &both, 2, &mut out);
         layer.update(&mut b, &out, &both, &cfg);
-        assert!(out.iter().any(|f| f.signal == ActionSignal::Cut), "L2 is Cut in the layer: {out:?}");
+        assert!(
+            out.iter().any(|f| f.signal == ActionSignal::Cut),
+            "L2 is Cut in the layer: {out:?}"
+        );
         assert!(
             !out.iter().any(|f| f.signal == ActionSignal::ModePrev),
             "the member's normal signal is SUPPRESSED: {out:?}"
@@ -235,7 +268,10 @@ mod tests {
             !out.iter().any(|f| f.signal == ActionSignal::ChordBegin),
             "no release edge is available while the layer is active: {out:?}"
         );
-        assert!(layer.update(&mut b, &out, &idle, &cfg), "the layer closed anyway");
+        assert!(
+            layer.update(&mut b, &out, &idle, &cfg),
+            "the layer closed anyway"
+        );
         assert!(!layer.is_open(), "back to the base map");
         assert_eq!(b.active(), InputContext::World);
     }
@@ -256,11 +292,17 @@ mod tests {
 
         assert!(layer.update(&mut b, &[press], &held, &cfg));
         // Same press seen again while still held — no second push.
-        assert!(!layer.update(&mut b, &[press], &held, &cfg), "no duplicate layer");
+        assert!(
+            !layer.update(&mut b, &[press], &held, &cfg),
+            "no duplicate layer"
+        );
         assert!(layer.is_open());
 
         // The pad simply stops reporting the button; no edge is delivered.
-        assert!(layer.update(&mut b, &[], &InputState::new(), &cfg), "closed on physical state");
+        assert!(
+            layer.update(&mut b, &[], &InputState::new(), &cfg),
+            "closed on physical state"
+        );
         assert!(!layer.is_open());
         assert_eq!(b.active(), InputContext::World);
     }

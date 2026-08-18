@@ -23,13 +23,11 @@
 
 use std::time::Duration;
 
-use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker::render::{Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
-};
+use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
@@ -53,8 +51,6 @@ const URGENT: [f32; 3] = [0.95, 0.30, 0.25];
 /// The scene's PAIR SCRIPT (`SceneName.lua` — the scene's component logic).
 const CLICKTRAINER_SCRIPT: &str =
     include_str!("../../../../content/sensorium/scripts/clicktrainer.lua");
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 /// Top-left region (px) reserved for the HUD panel, so every target stays
 /// clickable (the HUD absorbs clicks in its own area). A touch larger than the
 /// panel; targets that would land inside it are re-rolled.
@@ -166,8 +162,12 @@ impl ClickTrainer {
         self.target_size = self.size_for_difficulty();
         let max_x = ((screen.x - self.target_size) as u32).max(1);
         let max_y = ((screen.y - self.target_size) as u32).max(1);
-        let roll =
-            || Vec2::new(fastrand::u32(0..max_x) as f32, fastrand::u32(0..max_y) as f32);
+        let roll = || {
+            Vec2::new(
+                fastrand::u32(0..max_x) as f32,
+                fastrand::u32(0..max_y) as f32,
+            )
+        };
         let mut pos = roll();
         // Re-roll off the top-left HUD region (bounded, so it always terminates).
         for _ in 0..12 {
@@ -256,7 +256,7 @@ impl Scene for ClickTrainer {
         // The declarative HUD: a component tree walked by the engine. Degrades to
         // no HUD (the game still plays) if the script can't load. The styles are
         // the token-resolved layout JSON (the same tree Lua reads via `UI`).
-        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles.as_ref());
+        self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles.as_ref());
         // The HUD is DATA (201F4F51): the authored tree came off the manifest's def at
         // construction; installing it here keeps re-entry (pause pop) behaviour
         // identical. Degrades to no HUD (the game still plays) if the file had none.
@@ -272,7 +272,13 @@ impl Scene for ClickTrainer {
         renderer.window().set_title("Flicker Click Trainer");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         let dt_s = dt.as_secs_f32();
         let screen = renderer.size();
 
@@ -396,7 +402,10 @@ impl Scene for ClickTrainer {
         let frac = (self.time_remaining / TARGET_LIFETIME).clamp(0.0, 1.0);
         renderer.draw_sprite(
             white,
-            Vec2::new(self.target_pos.x, self.target_pos.y + self.target_size + 4.0),
+            Vec2::new(
+                self.target_pos.x,
+                self.target_pos.y + self.target_size + 4.0,
+            ),
             Vec2::new(self.target_size * frac, 4.0),
             [0.85, 0.85, 0.90, 0.9],
         );
@@ -432,7 +441,7 @@ mod tests {
         let tree = def.tree.expect("scene defines a tree");
         // The scene's OWN style blocks ride its file (five-line split) and merge
         // over the shared root — the exact path `enter` runs.
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         (tree, styles)
     }
 
@@ -449,9 +458,19 @@ mod tests {
             panic!("clicktrainer.lua failed to load: {e}");
         }
         let ct = ClickTrainer::new(&def);
-        assert!(ct.script.is_some(), "clicktrainer.lua loads (the pair script)");
+        assert!(
+            ct.script.is_some(),
+            "clicktrainer.lua loads (the pair script)"
+        );
         let m = ct.hud_model();
-        for key in ["hits", "misses", "accuracy", "stat_last", "stat_best", "stat_avg"] {
+        for key in [
+            "hits",
+            "misses",
+            "accuracy",
+            "stat_last",
+            "stat_best",
+            "stat_avg",
+        ] {
             assert!(
                 m.text(key).is_some(),
                 "derive() must yield display TEXT for '{key}' — got {:?}",
@@ -459,8 +478,16 @@ mod tests {
             );
         }
         assert_eq!(m.text("hits"), Some("0"));
-        assert_eq!(m.text("accuracy"), Some("100%"), "no shots yet = a perfect record");
-        assert_eq!(m.text("stat_last"), Some("—"), "no hit yet reads as an em dash");
+        assert_eq!(
+            m.text("accuracy"),
+            Some("100%"),
+            "no shots yet = a perfect record"
+        );
+        assert_eq!(
+            m.text("stat_last"),
+            Some("—"),
+            "no hit yet reads as an em dash"
+        );
     }
 
     fn model() -> ValueMap {
@@ -506,7 +533,10 @@ mod tests {
         // self-gates its OWN source — every `.set`/`.with` value must be a resolved
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
         let intents = UiIntents::of(&tree);
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
     }
@@ -521,21 +551,52 @@ mod tests {
 
         // A pointer over the top-left panel is the HUD's (hud_hit), so the
         // scene must not score a click there as a game click.
-        let frame = run_ui(&tree, &model, &styles, &snap_at(30.0, 30.0, false), &mut UiState::new());
-        assert!(frame.results.is_on("hud_hit"), "a pointer on the panel must set hud_hit");
-        assert!(!frame.commands.is_empty(), "the HUD draws the panel + stats");
+        let frame = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap_at(30.0, 30.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "a pointer on the panel must set hud_hit"
+        );
+        assert!(
+            !frame.commands.is_empty(),
+            "the HUD draws the panel + stats"
+        );
 
         // A pointer out on the play-field is the GAME's, not the HUD's.
-        let frame =
-            run_ui(&tree, &model, &styles, &snap_at(900.0, 500.0, false), &mut UiState::new());
-        assert!(!frame.results.is_on("hud_hit"), "a play-field pointer is not hud_hit");
+        let frame = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap_at(900.0, 500.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            !frame.results.is_on("hud_hit"),
+            "a play-field pointer is not hud_hit"
+        );
 
         // A click on the RESET button fires its action (panel: margin 16 + pad 16,
         // below title/subtitle/divider/6 stat rows → the button row sits ~y 252..288;
         // click its centre).
-        let frame =
-            run_ui(&tree, &model, &styles, &snap_at(160.0, 270.0, true), &mut UiState::new());
-        assert!(frame.results.is_on("reset"), "a click on RESET fires the reset action");
-        assert!(frame.results.is_on("hud_hit"), "…and it is a HUD click, never a game miss");
+        let frame = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap_at(160.0, 270.0, true),
+            &mut UiState::new(),
+        );
+        assert!(
+            frame.results.is_on("reset"),
+            "a click on RESET fires the reset action"
+        );
+        assert!(
+            frame.results.is_on("hud_hit"),
+            "…and it is a HUD click, never a game miss"
+        );
     }
 }

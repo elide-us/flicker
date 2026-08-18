@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use crate::compound::CompoundDef;
-use crate::rock::RockDef;
 use crate::element::{Element, ElementId};
 use crate::material::MaterialDef;
+use crate::rock::RockDef;
 use crate::source::{MaterialError, TableSource};
 
 /// Effective element-level traits of a composition — the Σ fractionᵢ·traitᵢ
@@ -284,7 +284,8 @@ impl Tables {
             .elements
             .iter()
             .filter_map(|e| {
-                self.element(&e.symbol).map(|el| e.count as f64 * el.atomic_mass as f64)
+                self.element(&e.symbol)
+                    .map(|el| e.count as f64 * el.atomic_mass as f64)
             })
             .sum()
     }
@@ -313,7 +314,9 @@ impl Tables {
     /// The ore compounds whose extracted element is `symbol` — the minerals a
     /// player mines to obtain that element (e.g. `"Fe"` → Hematite).
     pub fn ores_of<'a>(&'a self, symbol: &'a str) -> impl Iterator<Item = &'a CompoundDef> + 'a {
-        self.compounds.iter().filter(move |c| c.extracted() == Some(symbol))
+        self.compounds
+            .iter()
+            .filter(move |c| c.extracted() == Some(symbol))
     }
 
     /// Composition-weighted blend of element base traits — `Σ fractionᵢ·traitᵢ`
@@ -415,7 +418,10 @@ mod tests {
         // Air (id 0) has an empty signature; that must not break parsing.
         assert!(t.material(0).unwrap().signature.is_empty());
         // Ores carry an extracted element; non-ores don't.
-        assert_eq!(t.material(40).unwrap().extracted_element.as_deref(), Some("Fe"));
+        assert_eq!(
+            t.material(40).unwrap().extracted_element.as_deref(),
+            Some("Fe")
+        );
         assert!(t.material(10).unwrap().extracted_element.is_none());
         assert_eq!(t.material_by_name("Granite").unwrap().id, 10);
         assert!(t.material(200).is_none());
@@ -439,9 +445,11 @@ mod tests {
         // shipped a placeholder C₁H₁O₁ until 2026-08-05, which made them
         // chemically IDENTICAL to the conserved ledger — a bed of wood and a bed
         // of sugar weighed the same and carried the same elements.
-        for (name, formula) in
-            [("Cellulose", "C6H10O5"), ("Lignin", "C9H10O2"), ("Oils", "C57H104O6")]
-        {
+        for (name, formula) in [
+            ("Cellulose", "C6H10O5"),
+            ("Lignin", "C9H10O2"),
+            ("Oils", "C57H104O6"),
+        ] {
             let c = t.compound(name).unwrap_or_else(|| panic!("{name} present"));
             assert_eq!(c.formula, formula, "{name} carries real stoichiometry");
         }
@@ -463,7 +471,12 @@ mod tests {
         // symbols like Apatite's F were dropped from the parsed element list).
         for c in t.compounds() {
             for e in &c.elements {
-                assert!(t.element(&e.symbol).is_some(), "{}: unknown element {}", c.name, e.symbol);
+                assert!(
+                    t.element(&e.symbol).is_some(),
+                    "{}: unknown element {}",
+                    c.name,
+                    e.symbol
+                );
             }
         }
     }
@@ -491,12 +504,26 @@ mod tests {
         // The merge added NO harvestable flags — the curated ore/gem set is
         // untouched (spodumene/dolomite ore status awaits its own ruling).
         let minerals = [
-            "Olivine", "Pyroxene", "Anorthite", "Albite", "Orthoclase", "Biotite",
-            "Muscovite", "Magnetite", "Pyrite", "Dolomite", "Spodumene", "Serpentine",
+            "Olivine",
+            "Pyroxene",
+            "Anorthite",
+            "Albite",
+            "Orthoclase",
+            "Biotite",
+            "Muscovite",
+            "Magnetite",
+            "Pyrite",
+            "Dolomite",
+            "Spodumene",
+            "Serpentine",
         ];
         for name in minerals {
             let c = t.compound(name).unwrap_or_else(|| panic!("{name} missing"));
-            assert!((79..=90).contains(&c.id), "{name}: id {} outside 79..=90", c.id);
+            assert!(
+                (79..=90).contains(&c.id),
+                "{name}: id {} outside 79..=90",
+                c.id
+            );
             assert!(c.sim_required, "{name} must be flagged sim_required");
             assert!(!c.harvestable, "{name} must stay unharvestable");
         }
@@ -513,9 +540,17 @@ mod tests {
             let h = h.unwrap_or_else(|| panic!("{}: hardness_mohs missing", c.name));
             let d = d.unwrap_or_else(|| panic!("{}: density_g_cm3 missing", c.name));
             let b = b.unwrap_or_else(|| panic!("{}: brittleness missing", c.name));
-            assert!((0.0..=10.0).contains(&h), "{}: Mohs {h} out of range", c.name);
+            assert!(
+                (0.0..=10.0).contains(&h),
+                "{}: Mohs {h} out of range",
+                c.name
+            );
             assert!(d > 0.0, "{}: density {d} not positive", c.name);
-            assert!((0.0..=1.0).contains(&b), "{}: brittleness {b} out of range", c.name);
+            assert!(
+                (0.0..=1.0).contains(&b),
+                "{}: brittleness {b} out of range",
+                c.name
+            );
         }
     }
 
@@ -533,7 +568,10 @@ mod tests {
         let bytes = std::fs::read(path).expect("rocks.json readable");
         let file: serde_json::Value = serde_json::from_slice(&bytes).expect("rocks.json parses");
         // R6b: ONE mineral registry — rocks.json defines no minerals of its own.
-        assert!(file.get("minerals").is_none(), "rocks.json must not define minerals (R6b)");
+        assert!(
+            file.get("minerals").is_none(),
+            "rocks.json must not define minerals (R6b)"
+        );
         let rocks = file["rocks"].as_array().expect("rocks array");
         assert!(!rocks.is_empty());
         for rock in rocks {
@@ -596,7 +634,13 @@ mod tests {
         let by_number = t.blend_traits_by_number([(26u8, 7000.0), (14u8, 8000.0)]);
         assert_eq!(by_symbol, by_number);
         // Unknown atomic numbers are skipped, like unknown symbols.
-        assert_eq!(t.blend_traits_by_number([(200u8, 5.0)]), ElementTraits::ZERO);
-        assert_eq!(t.blend_traits_by_number(std::iter::empty()), ElementTraits::ZERO);
+        assert_eq!(
+            t.blend_traits_by_number([(200u8, 5.0)]),
+            ElementTraits::ZERO
+        );
+        assert_eq!(
+            t.blend_traits_by_number(std::iter::empty()),
+            ElementTraits::ZERO
+        );
     }
 }

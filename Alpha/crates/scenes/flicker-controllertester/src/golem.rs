@@ -31,15 +31,17 @@ use flicker_skeletal::{pose, skin};
 
 /// The reference body — the ONE character the package ships (the content sweep's
 /// invariant), addressed the same way the other scenes address package content.
-const GOLEM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/package/characters/GolemBase_Low"
-);
+fn golem_dir() -> PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("characters/GolemBase_Low")
+}
 /// The shared clip library the golem plays, resolved by canonical bone name.
-const CLIPS_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/package/retarget/clips/locomotion"
-);
+fn clips_dir() -> PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("retarget/clips/locomotion")
+}
 
 /// The demo handler chain's gameplay-base slot (system 0 ▸ scene-root 1 ▸ modal 2 ▸
 /// gameplay 3) — the layer whose consumed signals become motion.
@@ -103,15 +105,18 @@ impl GolemStage {
     /// per-frame. A missing content tree records an error the stage displays.
     pub fn load(&mut self) {
         let load = || -> Result<(Model, StateMachine), String> {
-            let golem = PathBuf::from(GOLEM_DIR);
-            let clips = PathBuf::from(CLIPS_DIR);
+            let golem = golem_dir();
+            let clips = clips_dir();
             let model = format::load_dirs(&[&golem, &clips]).map_err(|e| e.to_string())?;
             let def = state::load_pack(&golem.join("GolemBase_Low.pack.json"))
                 .map_err(|e| e.to_string())?;
             let refs: Vec<state::ClipRef> = model
                 .clips
                 .iter()
-                .map(|c| state::ClipRef { name: &c.name, duration_ticks: c.duration_ticks })
+                .map(|c| state::ClipRef {
+                    name: &c.name,
+                    duration_ticks: c.duration_ticks,
+                })
                 .collect();
             let machine = StateMachine::build(&def, &refs).map_err(|e| e.to_string())?;
             Ok((model, machine))
@@ -211,7 +216,11 @@ impl GolemStage {
     pub fn caption(&self) -> Option<String> {
         let m = self.machine.as_ref()?;
         let model = self.model.as_ref()?;
-        let clip = model.clips.get(m.current_clip()).map(|c| c.name.as_str()).unwrap_or("?");
+        let clip = model
+            .clips
+            .get(m.current_clip())
+            .map(|c| c.name.as_str())
+            .unwrap_or("?");
         Some(format!(
             "{}  \u{00b7}  {}  \u{00b7}  {}/{}",
             m.current_state_name(),
@@ -241,9 +250,13 @@ impl GolemStage {
         let target = self.center + Vec3::new(frac * self.radius * 2.6, 0.0, 0.0);
         let dist = self.radius * 2.6;
         let (yaw, pitch) = (0.55_f32, 0.32_f32); // a gentle 3/4 view, slightly above
-        // Y-up engine space: orbit in the XZ plane, lift along +Y.
+                                                 // Y-up engine space: orbit in the XZ plane, lift along +Y.
         let eye = target
-            + Vec3::new(yaw.sin() * pitch.cos() * dist, pitch.sin() * dist, yaw.cos() * pitch.cos() * dist);
+            + Vec3::new(
+                yaw.sin() * pitch.cos() * dist,
+                pitch.sin() * dist,
+                yaw.cos() * pitch.cos() * dist,
+            );
         r.set_camera(&Camera {
             position: eye,
             target,
@@ -283,10 +296,21 @@ impl GolemStage {
         }
         let verts: Vec<MeshVertex> = skinned
             .iter()
-            .map(|v| MeshVertex { position: v.position, normal: v.normal, material: 0 })
+            .map(|v| MeshVertex {
+                position: v.position,
+                normal: v.normal,
+                material: 0,
+            })
             .collect();
         let handle = r.upload_mesh(&verts, MeshIndices::U32(&model.mesh.indices));
-        r.draw_mesh(handle, model.world, MeshDrawOptions { tint: CLAY, ..Default::default() });
+        r.draw_mesh(
+            handle,
+            model.world,
+            MeshDrawOptions {
+                tint: CLAY,
+                ..Default::default()
+            },
+        );
         self.mesh = Some(handle);
     }
 }
@@ -356,20 +380,69 @@ mod tests {
     fn signals_map_to_the_packs_state_vocabulary() {
         let h = Held::default();
         assert_eq!(desired_state(&inputs(h, false, false, Vec2::ZERO)), "Idle");
-        assert_eq!(desired_state(&inputs(Held { forward: true, ..h }, false, false, Vec2::ZERO)), "Walk");
         assert_eq!(
-            desired_state(&inputs(Held { forward: true, sprint: true, ..h }, false, false, Vec2::ZERO)),
+            desired_state(&inputs(
+                Held { forward: true, ..h },
+                false,
+                false,
+                Vec2::ZERO
+            )),
+            "Walk"
+        );
+        assert_eq!(
+            desired_state(&inputs(
+                Held {
+                    forward: true,
+                    sprint: true,
+                    ..h
+                },
+                false,
+                false,
+                Vec2::ZERO
+            )),
             "Run"
         );
-        assert_eq!(desired_state(&inputs(Held { back: true, ..h }, false, false, Vec2::ZERO)), "Walk_B");
-        assert_eq!(desired_state(&inputs(Held { left: true, sprint: true, ..h }, false, false, Vec2::ZERO)), "Run_L");
-        assert_eq!(desired_state(&inputs(Held { right: true, ..h }, false, false, Vec2::ZERO)), "Walk_R");
+        assert_eq!(
+            desired_state(&inputs(Held { back: true, ..h }, false, false, Vec2::ZERO)),
+            "Walk_B"
+        );
+        assert_eq!(
+            desired_state(&inputs(
+                Held {
+                    left: true,
+                    sprint: true,
+                    ..h
+                },
+                false,
+                false,
+                Vec2::ZERO
+            )),
+            "Run_L"
+        );
+        assert_eq!(
+            desired_state(&inputs(Held { right: true, ..h }, false, false, Vec2::ZERO)),
+            "Walk_R"
+        );
         // Crouch family — idle, forward, backward.
         assert_eq!(desired_state(&inputs(h, true, false, Vec2::ZERO)), "Crouch");
-        assert_eq!(desired_state(&inputs(Held { forward: true, ..h }, true, false, Vec2::ZERO)), "Crouch_Move");
-        assert_eq!(desired_state(&inputs(Held { back: true, ..h }, true, false, Vec2::ZERO)), "Crouch_Move_B");
+        assert_eq!(
+            desired_state(&inputs(
+                Held { forward: true, ..h },
+                true,
+                false,
+                Vec2::ZERO
+            )),
+            "Crouch_Move"
+        );
+        assert_eq!(
+            desired_state(&inputs(Held { back: true, ..h }, true, false, Vec2::ZERO)),
+            "Crouch_Move_B"
+        );
         // Jump outranks everything.
-        assert_eq!(desired_state(&inputs(Held { forward: true, ..h }, true, true, Vec2::ZERO)), "Jump");
+        assert_eq!(
+            desired_state(&inputs(Held { forward: true, ..h }, true, true, Vec2::ZERO)),
+            "Jump"
+        );
     }
 
     /// The analog channel: a gentle tilt walks, full tilt runs, direction follows
@@ -377,12 +450,30 @@ mod tests {
     #[test]
     fn the_stick_walks_then_runs_by_tilt() {
         let h = Held::default();
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(0.05, 0.1))), "Idle");
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(0.0, 0.45))), "Walk");
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(0.0, 0.95))), "Run");
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(-0.5, 0.1))), "Walk_L");
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(0.9, -0.1))), "Run_R");
-        assert_eq!(desired_state(&inputs(h, false, false, Vec2::new(0.0, -0.5))), "Walk_B");
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(0.05, 0.1))),
+            "Idle"
+        );
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(0.0, 0.45))),
+            "Walk"
+        );
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(0.0, 0.95))),
+            "Run"
+        );
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(-0.5, 0.1))),
+            "Walk_L"
+        );
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(0.9, -0.1))),
+            "Run_R"
+        );
+        assert_eq!(
+            desired_state(&inputs(h, false, false, Vec2::new(0.0, -0.5))),
+            "Walk_B"
+        );
     }
 
     /// The REAL content round-trip: load the reference body + shared clips + the
@@ -391,7 +482,7 @@ mod tests {
     #[test]
     fn the_golem_loads_and_signals_move_the_machine() {
         let mut stage = GolemStage::new();
-        if !std::path::Path::new(GOLEM_DIR).exists() {
+        if !golem_dir().exists() {
             eprintln!("skipping: no content tree");
             return;
         }
@@ -431,7 +522,11 @@ mod tests {
         assert_eq!(m.current_state_name(), "Idle", "the pack opens on Idle");
 
         // A held forward + run: the mapper forces Run, advance plays it.
-        let inputs = state::Inputs { move_: true, run: true, ..Default::default() };
+        let inputs = state::Inputs {
+            move_: true,
+            run: true,
+            ..Default::default()
+        };
         assert!(m.force_state_by_name(desired_state(&inputs)));
         m.advance(0.10, &inputs);
         assert_eq!(m.current_state_name(), "Run");

@@ -149,7 +149,10 @@ const SIDEROPHILES: &[(ElementId, f64)] = &[
 /// Core-partition fraction of `element` — the φ of its [`SIDEROPHILES`] row, 0
 /// for the lithophiles.
 fn partition_frac(element: ElementId) -> f64 {
-    SIDEROPHILES.iter().find(|&&(e, _)| e == element).map_or(0.0, |&(_, phi)| phi)
+    SIDEROPHILES
+        .iter()
+        .find(|&&(e, _)| e == element)
+        .map_or(0.0, |&(_, phi)| phi)
 }
 
 /// Mass of `element` in `cell` that is **dissolved in the cell's not-yet-sunk
@@ -211,7 +214,8 @@ impl Stage for CoreFormation {
             // emergent spatial pattern tied to the convection field. Every molten
             // cell still reaches d=1; only the rate varies, so conservation and the
             // partition targets are unchanged.
-            let hot = ((t - FE_SEGREGATION_K) / (MAGMA_OCEAN_K - FE_SEGREGATION_K)).clamp(0.05, 1.5);
+            let hot =
+                ((t - FE_SEGREGATION_K) / (MAGMA_OCEAN_K - FE_SEGREGATION_K)).clamp(0.05, 1.5);
             let d0 = world.mantle.differentiation[c];
             let d = (d0 + DIFFERENTIATION_RATE * hot * dt_myr).min(1.0);
             world.mantle.differentiation[c] = d;
@@ -281,7 +285,9 @@ impl MantleConvection {
             let ti = temp[i];
             let grad = tangent_gradient(
                 pi,
-                neighbors[i].iter().map(|&j| (dirs[j as usize], (temp[j as usize] - ti) as f32)),
+                neighbors[i]
+                    .iter()
+                    .map(|&j| (dirs[j as usize], (temp[j as usize] - ti) as f32)),
             );
             world.mantle.velocity[i] = -CONVECTION_GAIN * grad;
         }
@@ -332,7 +338,9 @@ impl MantleConvection {
             let ti = old[i];
             let grad = tangent_gradient(
                 pi,
-                neighbors[i].iter().map(|&j| (dirs[j as usize], (old[j as usize] - ti) as f32)),
+                neighbors[i]
+                    .iter()
+                    .map(|&j| (dirs[j as usize], (old[j as usize] - ti) as f32)),
             );
             let (mut lo, mut hi) = (ti, ti);
             let mut ring_mean = ti;
@@ -430,8 +438,14 @@ mod tests {
         // constant. Same U/K, later time → less power.
         let young = radiogenic_power_w(1e18, 1e21, 0.0);
         let old = radiogenic_power_w(1e18, 1e21, 4500.0);
-        assert!(young > old, "radiogenic power must decline as isotopes decay");
-        assert!(young > 2.0 * old, "several-fold hotter young — U-235/K-40 were abundant");
+        assert!(
+            young > old,
+            "radiogenic power must decline as isotopes decay"
+        );
+        assert!(
+            young > 2.0 * old,
+            "several-fold hotter young — U-235/K-40 were abundant"
+        );
     }
 
     #[test]
@@ -466,7 +480,10 @@ mod tests {
         // And the mantle is depleted in iron relative to the bulk seed.
         let mantle_fe_frac = w.mantle.element_mass(26) / w.mantle.total_mass();
         let bulk_fe_frac = w.budget.accreted(26) / planet;
-        assert!(mantle_fe_frac < bulk_fe_frac, "the mantle lost iron to the core");
+        assert!(
+            mantle_fe_frac < bulk_fe_frac,
+            "the mantle lost iron to the core"
+        );
     }
 
     /// **The sulfur competition (defect 7E01115B).** Run core formation and
@@ -560,7 +577,6 @@ mod tests {
         assert_ne!(run(11), run(12), "different seed → a different world");
     }
 
-
     /// Grid-ghost regression at the FIELD level (the pentagon-seam incident):
     /// evolve temperature by convection alone and compare the raw link strain
     /// `|Δv|/gap` across shard edges against interior links. The old
@@ -578,7 +594,10 @@ mod tests {
     fn convection_strain_ignores_the_shard_edges() {
         let mut w = world(48, 42);
         let mut sched = Scheduler::new(
-            vec![Box::new(RadiogenicDecay::default()), Box::new(MantleConvection)],
+            vec![
+                Box::new(RadiogenicDecay::default()),
+                Box::new(MantleConvection),
+            ],
             42,
         );
         for _ in 0..120 {
@@ -627,7 +646,9 @@ mod tests {
             let pi = dirs[i];
             let grad = tangent_gradient(
                 pi,
-                w.grid.neighbors[i].iter().map(|&j| (dirs[j as usize], k.dot(dirs[j as usize]) - k.dot(pi))),
+                w.grid.neighbors[i]
+                    .iter()
+                    .map(|&j| (dirs[j as usize], k.dot(dirs[j as usize]) - k.dot(pi))),
             );
             let analytic = k - pi * k.dot(pi);
             // Near the k-axis the tangential gradient vanishes — direction is ill-defined.
@@ -638,7 +659,10 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 100, "sampled a real spread of cells ({checked})");
-        assert!(worst > 0.9, "the gradient follows the field, not the grid (worst cos {worst:.3})");
+        assert!(
+            worst > 0.9,
+            "the gradient follows the field, not the grid (worst cos {worst:.3})"
+        );
     }
 
     /// RMS of each cell's departure from its neighbour mean — the roughness the

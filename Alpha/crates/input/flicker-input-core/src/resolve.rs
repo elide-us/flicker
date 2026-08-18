@@ -90,10 +90,7 @@ impl Resolver {
         for signal in map.bound_actions() {
             for &control in map.bindings_for(signal) {
                 let is_down = control.is_down(curr, cfg);
-                let was_down = self
-                    .prev
-                    .as_ref()
-                    .is_some_and(|p| control.is_down(p, cfg));
+                let was_down = self.prev.as_ref().is_some_and(|p| control.is_down(p, cfg));
 
                 // Walk this control's intra-frame transitions in the order the
                 // platform delivered them, so a press and release that BOTH land
@@ -137,10 +134,18 @@ impl Resolver {
     ) {
         if down {
             self.press_at.insert(control, now);
-            out.push(Fired { signal, kind: EventKind::Press, control });
+            out.push(Fired {
+                signal,
+                kind: EventKind::Press,
+                control,
+            });
         } else {
             self.press_at.remove(&control);
-            out.push(Fired { signal, kind: EventKind::Release, control });
+            out.push(Fired {
+                signal,
+                kind: EventKind::Release,
+                control,
+            });
         }
     }
 
@@ -224,8 +229,14 @@ mod tests {
         // the key UP but recorded both transitions.
         out.clear();
         let mut stalled = InputState::new();
-        stalled.push_edge(InputEdge::Key { key: Key::Space, down: true });
-        stalled.push_edge(InputEdge::Key { key: Key::Space, down: false });
+        stalled.push_edge(InputEdge::Key {
+            key: Key::Space,
+            down: true,
+        });
+        stalled.push_edge(InputEdge::Key {
+            key: Key::Space,
+            down: false,
+        });
         assert!(!stalled.key_down(Key::Space));
 
         r.resolve_frame(&cb, &cfg, &stalled, 1, &mut out);
@@ -247,8 +258,14 @@ mod tests {
 
         let mut stalled = InputState::new();
         for _ in 0..3 {
-            stalled.push_edge(InputEdge::Key { key: Key::Space, down: true });
-            stalled.push_edge(InputEdge::Key { key: Key::Space, down: false });
+            stalled.push_edge(InputEdge::Key {
+                key: Key::Space,
+                down: true,
+            });
+            stalled.push_edge(InputEdge::Key {
+                key: Key::Space,
+                down: false,
+            });
         }
         r.resolve_frame(&cb, &cfg, &stalled, 0, &mut out);
 
@@ -256,9 +273,12 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                EventKind::Press, EventKind::Release,
-                EventKind::Press, EventKind::Release,
-                EventKind::Press, EventKind::Release,
+                EventKind::Press,
+                EventKind::Release,
+                EventKind::Press,
+                EventKind::Release,
+                EventKind::Press,
+                EventKind::Release,
             ]
         );
     }
@@ -273,7 +293,10 @@ mod tests {
         let mut out = Vec::new();
 
         let mut s = InputState::new();
-        s.push_edge(InputEdge::Key { key: Key::Space, down: true });
+        s.push_edge(InputEdge::Key {
+            key: Key::Space,
+            down: true,
+        });
         s.set_key(Key::Space, true);
         r.resolve_frame(&cb, &cfg, &s, 7, &mut out);
 
@@ -294,7 +317,10 @@ mod tests {
     #[test]
     fn gamepad_controls_still_resolve_from_level_state() {
         let mut m = InputMap::empty();
-        m.bind(ActionSignal::Jump, InputBinding::GamepadButton(GamepadButton::South));
+        m.bind(
+            ActionSignal::Jump,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
         let cb = ContextualBindings::new(m);
         let cfg = GamepadConfig::default();
         let mut r = Resolver::new();
@@ -321,8 +347,14 @@ mod tests {
         let mut out = Vec::new();
 
         let mut stalled = InputState::new();
-        stalled.push_edge(InputEdge::Key { key: Key::Space, down: true });
-        stalled.push_edge(InputEdge::Key { key: Key::Space, down: false });
+        stalled.push_edge(InputEdge::Key {
+            key: Key::Space,
+            down: true,
+        });
+        stalled.push_edge(InputEdge::Key {
+            key: Key::Space,
+            down: false,
+        });
         r.resolve_frame(&cb, &cfg, &stalled, 0, &mut out);
 
         // A quiet frame afterwards fires nothing at all.

@@ -1,0 +1,19 @@
+# Dependency update automation — both ecosystems land as reviewable PRs that
+# must pass CI (including the cargo-deny gate) before merge. This is how the
+# SHA-pinned actions and the Cargo.lock pin move forward without hand-tracking.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

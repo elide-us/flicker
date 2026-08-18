@@ -17,6 +17,19 @@ use glam::Vec2;
 use crate::pipeline_mesh::DEPTH_FORMAT;
 use crate::texture::TextureHandle;
 
+/// Rotate `p` about `pivot` by `radians`, in PIXEL space (before pixel→NDC).
+/// Rotating here rather than in NDC keeps the sprite square: `to_ndc` scales x
+/// and y by different amounts (the screen aspect), so a rotation applied after
+/// it would shear. Screen y is down, so a positive angle turns CLOCKWISE on
+/// screen (the DirectXTK `SpriteBatch` convention); the `flicker-2d` `Sprite`
+/// wrapper negates if it wants counter-clockwise-positive.
+#[inline]
+fn rotate_px(p: Vec2, pivot: Vec2, radians: f32) -> Vec2 {
+    let d = p - pivot;
+    let (sin, cos) = radians.sin_cos();
+    pivot + Vec2::new(d.x * cos - d.y * sin, d.x * sin + d.y * cos)
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Vertex {
@@ -191,6 +204,14 @@ impl SpritePipeline {
     /// with the origin top-left — `[0.0, 0.0, 1.0, 1.0]` for the whole texture. This is
     /// what lets many small images share one texture (an ATLAS) and so one draw call:
     /// the quads batch by `texture`, and an atlas makes that one bind for the lot.
+    ///
+    /// `rotation` (radians) spins the quad about `pivot` (in the same top-left
+    /// screen-pixel space as `position`); `pivot = position + size * 0.5` spins
+    /// about the sprite's centre. `rotation == 0.0` is the axis-aligned fast path
+    /// (`pivot` ignored) — every non-rotated caller is byte-identical to before.
+    /// The rotation is baked into the six vertex positions here, so `prepare`,
+    /// batching, and `render_layer` are untouched: a rotated quad still coalesces
+    /// by `(layer, texture, clip)` like any other.
     #[allow(clippy::too_many_arguments)]
     pub fn push(
         &mut self,
@@ -202,6 +223,8 @@ impl SpritePipeline {
         layer: f32,
         clip: Option<[f32; 4]>,
         uv: [f32; 4],
+        rotation: f32,
+        pivot: Vec2,
     ) {
         self.screen = screen;
         let to_ndc =
@@ -211,6 +234,19 @@ impl SpritePipeline {
         let tr = position + Vec2::new(size.x, 0.0);
         let bl = position + Vec2::new(0.0, size.y);
         let br = position + size;
+
+        // Rotate the corners in pixel space before pixel→NDC. A zero angle skips
+        // the trig entirely, so the common axis-aligned case is unchanged.
+        let (tl, tr, bl, br) = if rotation == 0.0 {
+            (tl, tr, bl, br)
+        } else {
+            (
+                rotate_px(tl, pivot, rotation),
+                rotate_px(tr, pivot, rotation),
+                rotate_px(bl, pivot, rotation),
+                rotate_px(br, pivot, rotation),
+            )
+        };
 
         let [u0, v0, u1, v1] = uv;
 
@@ -329,7 +365,10 @@ impl SpritePipeline {
         let bytes = (self.upload.len() * std::mem::size_of::<Vertex>()) as u64;
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..bytes));
         for run in self.runs.iter().filter(|r| r.layer == layer) {
-            let Some(tex) = textures.get(run.texture.0 as usize).and_then(|t| t.as_ref()) else {
+            let Some(tex) = textures
+                .get(run.texture.0 as usize)
+                .and_then(|t| t.as_ref())
+            else {
                 continue;
             };
             pass.set_bind_group(0, &tex.bind_group, &[]);
@@ -338,5 +377,39 @@ impl SpritePipeline {
             let end = start + run.vertex_count;
             pass.draw(start..end, 0..1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rotate_px;
+    use glam::Vec2;
+
+    fn close(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn zero_angle_is_identity() {
+        let p = Vec2::new(7.0, 3.0);
+        // Any pivot, zero angle → the point is unmoved (matches push's fast path).
+        assert!(close(rotate_px(p, Vec2::new(100.0, 100.0), 0.0), p));
+    }
+
+    #[test]
+    fn quarter_turn_about_centre_walks_corners() {
+        // A 2×2 quad at origin, centre pivot (1,1). A +90° turn (y-down = clockwise
+        // on screen) carries each corner onto the next corner's slot.
+        let (c, quarter) = (Vec2::new(1.0, 1.0), std::f32::consts::FRAC_PI_2);
+        let tl = Vec2::new(0.0, 0.0);
+        let tr = Vec2::new(2.0, 0.0);
+        assert!(close(rotate_px(tl, c, quarter), tr)); // top-left lands where top-right was
+    }
+
+    #[test]
+    fn full_turn_returns_to_start() {
+        let p = Vec2::new(5.0, -2.0);
+        let c = Vec2::new(1.0, 1.0);
+        assert!(close(rotate_px(p, c, std::f32::consts::TAU), p));
     }
 }

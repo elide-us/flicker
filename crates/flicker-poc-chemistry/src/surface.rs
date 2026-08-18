@@ -132,7 +132,9 @@ pub fn mean_surface_temp_k(world: &World, stellar: f64) -> f64 {
     }
     let insol = stellar.max(0.0).powf(0.25);
     let greenhouse = greenhouse_k(world);
-    let sum: f64 = (0..n).map(|i| cell_surface_temp_k(world, i, insol, greenhouse)).sum();
+    let sum: f64 = (0..n)
+        .map(|i| cell_surface_temp_k(world, i, insol, greenhouse))
+        .sum();
     sum / n as f64
 }
 
@@ -344,8 +346,9 @@ impl Weather {
         // Per cell, and the distinction matters: bare ground is molten rock at
         // the mantle's own temperature, which evaporates everything and rains
         // nothing. Weather happens on the parts that have frozen.
-        let temp_k: Vec<f64> =
-            (0..n).map(|i| cell_surface_temp_k(world, i, insol, greenhouse)).collect();
+        let temp_k: Vec<f64> = (0..n)
+            .map(|i| cell_surface_temp_k(world, i, insol, greenhouse))
+            .collect();
 
         // Evaporation: only off water, and only where it is warm.
         let ocean_volume = world.reservoirs.ocean.mass_kg() / WATER_DENSITY;
@@ -397,7 +400,11 @@ impl Weather {
             })
             .collect();
 
-        WeatherField { temp_k, rain, sea_level }
+        WeatherField {
+            temp_k,
+            rain,
+            sea_level,
+        }
     }
 }
 
@@ -421,7 +428,11 @@ pub struct Erosion {
 
 impl Erosion {
     pub fn new(tables: std::sync::Arc<Tables>, rate: f64, stellar: f64) -> Self {
-        Self { tables, rate, stellar }
+        Self {
+            tables,
+            rate,
+            stellar,
+        }
     }
 
     /// How well this column's surface stands up to weather, `0`..`1` — the top
@@ -446,7 +457,11 @@ pub fn bed_resistance(tables: &Tables, bed: &crate::column::Layer) -> f32 {
         return UNKNOWN_RESISTANCE;
     }
     let named = bed.minerals.iter().filter_map(|(id, mass)| {
-        tables.compounds().iter().find(|c| c.id == id).map(|c| (c.name.clone(), mass))
+        tables
+            .compounds()
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| (c.name.clone(), mass))
     });
     tables.erosional_resistance(named, UNKNOWN_RESISTANCE)
 }
@@ -477,7 +492,9 @@ impl Stage for Erosion {
                     .map(|&j| j as usize)
                     .filter(|&j| elevation[j] < elevation[i])
                     .min_by(|&a, &b| {
-                        elevation[a].partial_cmp(&elevation[b]).unwrap_or(std::cmp::Ordering::Equal)
+                        elevation[a]
+                            .partial_cmp(&elevation[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
             })
             .collect();
@@ -487,7 +504,9 @@ impl Stage for Erosion {
         // order of the drainage graph — flow only ever moves down.
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| {
-            elevation[b].partial_cmp(&elevation[a]).unwrap_or(std::cmp::Ordering::Equal)
+            elevation[b]
+                .partial_cmp(&elevation[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut flow: Vec<f64> = weather.rain.clone();
         for &cell in &order {
@@ -526,8 +545,7 @@ impl Stage for Erosion {
                     // room to carry what it cuts.
                     if elevation[cell] > weather.sea_level {
                         let resistance = self.surface_resistance(&world.columns[cell]) as f64;
-                        let want_m =
-                            stream_cut_m(self.rate, flow[cell], slope, resistance, dt_myr);
+                        let want_m = stream_cut_m(self.rate, flow[cell], slope, resistance, dt_myr);
                         let headroom_kg = (capacity - carrying.total()).max(0.0);
                         let density = world.columns[cell]
                             .layers
@@ -553,8 +571,10 @@ impl Stage for Erosion {
                     let frac = (drop_kg / carrying.total().max(1.0)).clamp(0.0, 1.0);
                     if frac > 0.0 {
                         let mut settling = Composition::new();
-                        for (e, m) in
-                            carrying.iter().map(|(e, m)| (e, m * frac)).collect::<Vec<_>>()
+                        for (e, m) in carrying
+                            .iter()
+                            .map(|(e, m)| (e, m * frac))
+                            .collect::<Vec<_>>()
                         {
                             let got = carrying.remove(e, m);
                             settling.add(e, got);
@@ -666,7 +686,11 @@ fn strip(col: &mut Column, depth_m: f64, area: f64) -> Vec<(ElementId, f64)> {
     // Same rule as the hillslope pass: a bed worn to a film goes whole, and
     // "gone" is a mass test — an emptied ledger can still be carrying keys.
     let whole = have - want < crate::column::MIN_BED_MASS_KG;
-    let taken = top.release(if whole { 1.0 } else { (want / have).min(MAX_STRIP_FRAC) });
+    let taken = top.release(if whole {
+        1.0
+    } else {
+        (want / have).min(MAX_STRIP_FRAC)
+    });
     if col.layers.last().is_some_and(|l| l.mass_kg() <= 0.0) {
         col.layers.pop();
     }
@@ -695,7 +719,11 @@ fn strip_deep(col: &mut Column, depth_m: f64, area: f64) -> Vec<(ElementId, f64)
         let density = crate::column::density_kg_m3(top);
         let want_kg = left * density * area;
         let whole = have - want_kg < crate::column::MIN_BED_MASS_KG;
-        let got = top.release(if whole { 1.0 } else { (want_kg / have).min(1.0) });
+        let got = top.release(if whole {
+            1.0
+        } else {
+            (want_kg / have).min(1.0)
+        });
         let got_kg: f64 = got.iter().map(|&(_, m)| m).sum();
         left -= got_kg / (density * area).max(1.0);
         taken.extend(got);
@@ -740,7 +768,10 @@ mod tests {
         let t = tables();
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(
+            crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()),
+            seed,
+        );
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
@@ -756,16 +787,25 @@ mod tests {
     fn the_rock_tier_tells_hard_ground_from_soft() {
         let t = tables();
         let of = |mineral: &str| {
-            t.erosional_resistance(std::iter::once((mineral.to_string(), 1.0)), UNKNOWN_RESISTANCE)
+            t.erosional_resistance(
+                std::iter::once((mineral.to_string(), 1.0)),
+                UNKNOWN_RESISTANCE,
+            )
         };
         let quartz = of("Quartz");
         let halite = of("Halite");
-        assert!(quartz > halite, "quartz {quartz} should outlast halite {halite}");
+        assert!(
+            quartz > halite,
+            "quartz {quartz} should outlast halite {halite}"
+        );
         let unknown = t.erosional_resistance(
             std::iter::once(("Nothing The Catalog Knows".to_string(), 1.0)),
             UNKNOWN_RESISTANCE,
         );
-        assert_eq!(unknown, UNKNOWN_RESISTANCE, "unknown rock must not erode like salt");
+        assert_eq!(
+            unknown, UNKNOWN_RESISTANCE,
+            "unknown rock must not erode like salt"
+        );
     }
 
     /// Soft ground goes first. Two columns standing at the same height above the
@@ -776,8 +816,16 @@ mod tests {
     fn soft_ground_goes_first() {
         let t = tables();
         let area = 5.0e9;
-        let quartz = t.compounds().iter().find(|c| c.name == "Quartz").expect("quartz");
-        let halite = t.compounds().iter().find(|c| c.name == "Halite").expect("halite");
+        let quartz = t
+            .compounds()
+            .iter()
+            .find(|c| c.name == "Quartz")
+            .expect("quartz");
+        let halite = t
+            .compounds()
+            .iter()
+            .find(|c| c.name == "Halite")
+            .expect("halite");
 
         let make = |mineral_id: u16| {
             let mut col = Column::empty(0);
@@ -792,8 +840,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
             col
         };
@@ -842,7 +890,11 @@ mod tests {
         carried.add(8, 3.0e18);
         let before = w.columns[cell].layers.len();
         land(&mut w, cell, carried);
-        assert_eq!(w.columns[cell].layers.len(), before + 1, "the sediment became a bed");
+        assert_eq!(
+            w.columns[cell].layers.len(),
+            before + 1,
+            "the sediment became a bed"
+        );
         assert_eq!(
             w.columns[cell].layers.last().expect("a bed").formed_by,
             FormationProcess::Sediment,
@@ -857,11 +909,11 @@ mod tests {
     fn rising_ground_wrings_a_larger_share() {
         let flat = wrung_fraction(290.0, 0.0);
         let slope = wrung_fraction(290.0, 3000.0);
-        assert!(slope > flat, "rising ground wrings harder: {slope} vs {flat}");
         assert!(
-            wrung_fraction(250.0, 0.0) > flat,
-            "and so does cold air"
+            slope > flat,
+            "rising ground wrings harder: {slope} vs {flat}"
         );
+        assert!(wrung_fraction(250.0, 0.0) > flat, "and so does cold air");
         // The moisture budget: however hard the forcing, a cell cannot rain
         // more than the air above it holds. (The over-unity defect that used
         // to live here was the phantom water the old erosion rate was
@@ -889,7 +941,11 @@ mod tests {
             (trunk / small - 10.0).abs() < 1e-9,
             "and it is LINEAR in the water — ten times the flow, ten times the load"
         );
-        assert_eq!(stream_capacity_kg(0.0, area, 1.6), 0.0, "no water carries nothing");
+        assert_eq!(
+            stream_capacity_kg(0.0, area, 1.6),
+            0.0,
+            "no water carries nothing"
+        );
         // It is exactly the saturation fraction of the water's own mass.
         let water = 50.0 * 1.6 * area * WATER_DENSITY;
         assert!((small - MAX_SEDIMENT_FRAC * water).abs() < 1.0);
@@ -902,14 +958,20 @@ mod tests {
     #[test]
     fn a_stream_drops_something_in_every_cell_it_crosses() {
         let settle = (cell_spacing_m() / TRANSPORT_LENGTH_M).clamp(0.0, 1.0);
-        assert!(settle > 0.0 && settle < 1.0, "a share settles per cell: {settle}");
+        assert!(
+            settle > 0.0 && settle < 1.0,
+            "a share settles per cell: {settle}"
+        );
         // Under capacity, the drop is that share — not zero, which is what the
         // overflow-only rule gave.
         let carrying = 1.0e15f64;
         let capacity = 1.0e18f64;
         let over = (carrying - capacity).max(0.0);
         let drop = over + (carrying - over).max(0.0) * settle;
-        assert!(over == 0.0 && drop > 0.0, "well under capacity, and still deposits {drop:.3e} kg");
+        assert!(
+            over == 0.0 && drop > 0.0,
+            "well under capacity, and still deposits {drop:.3e} kg"
+        );
     }
 
     /// **It rains everywhere.** Rising ground still wrings harder — that is what
@@ -921,9 +983,15 @@ mod tests {
         let flat = wrung_fraction(300.0, 0.0);
         let flank = wrung_fraction(300.0, 3000.0);
         assert!(flat > 0.2, "flat warm ground still rains: {flat}");
-        assert!(flank > flat, "and rising ground rains harder: {flank} vs {flat}");
+        assert!(
+            flank > flat,
+            "and rising ground rains harder: {flank} vs {flat}"
+        );
         let ratio = flank / flat;
-        assert!((2.0..=5.0).contains(&ratio), "orographic enhancement {ratio:.1}x is realistic");
+        assert!(
+            (2.0..=5.0).contains(&ratio),
+            "orographic enhancement {ratio:.1}x is realistic"
+        );
     }
 
     /// **Over-steep ground sheds until it can stand.** A single-hex spike — the
@@ -960,14 +1028,15 @@ mod tests {
         let elev = |w: &World, i: usize| elevation_m(&w.columns[i], area);
         let worst = |w: &World| {
             (0..w.columns.len())
-                .flat_map(|i| {
-                    w.grid.neighbors[i].iter().map(move |&j| (i, j as usize))
-                })
+                .flat_map(|i| w.grid.neighbors[i].iter().map(move |&j| (i, j as usize)))
                 .map(|(i, j)| elev(w, i) - elev(w, j))
                 .fold(f64::MIN, f64::max)
         };
         let before = worst(&w);
-        assert!(before > 10_000.0, "the fixture is a real runaway: {before:.0} m");
+        assert!(
+            before > 10_000.0,
+            "the fixture is a real runaway: {before:.0} m"
+        );
 
         let stage = MassWasting;
         let mut rng = crate::stage::StageRng::new(4);
@@ -976,7 +1045,10 @@ mod tests {
             stage.tick(&mut w, crate::config::NOMINAL_DT_MYR, &mut rng);
             w.audit("MassWasting");
             let now = worst(&w);
-            assert!(now <= last + 1e-6, "relaxation is monotone: {last:.1} → {now:.1}");
+            assert!(
+                now <= last + 1e-6,
+                "relaxation is monotone: {last:.1} → {now:.1}"
+            );
             // The spike stays the local high: shedding may never invert the pair.
             for &j in &w.grid.neighbors[spike] {
                 assert!(
@@ -986,7 +1058,10 @@ mod tests {
             }
             last = now;
         }
-        assert!(last < before * 0.5, "the cliff relaxed: {before:.0} → {last:.0} m");
+        assert!(
+            last < before * 0.5,
+            "the cliff relaxed: {before:.0} → {last:.0} m"
+        );
         let grew = w.grid.neighbors[spike]
             .iter()
             .filter(|&&j| {
@@ -996,7 +1071,10 @@ mod tests {
                     .any(|l| l.formed_by == FormationProcess::Sediment)
             })
             .count();
-        assert!(grew >= 3, "the spike became a massif: {grew} neighbours carry its talus");
+        assert!(
+            grew >= 3,
+            "the spike became a massif: {grew} neighbours carry its talus"
+        );
     }
 
     /// **EROSION MUST WEAR THE WORLD DOWN AT A GEOLOGICAL RATE.**
@@ -1061,7 +1139,10 @@ mod tests {
                 dt,
             ));
         }
-        assert!(!cuts.is_empty(), "the fixture has land with somewhere to drain");
+        assert!(
+            !cuts.is_empty(),
+            "the fixture has land with somewhere to drain"
+        );
         cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let median_m_per_my = cuts[cuts.len() / 2] / dt;
 
@@ -1086,8 +1167,10 @@ mod tests {
             .expect("budget")
             .rescaled(&[(1, 0.15)]);
         let mut w = World::seed(icosphere(24), b, &t, 42);
-        let mut s =
-            Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::default()), 42);
+        let mut s = Scheduler::new(
+            crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::default()),
+            42,
+        );
         for _ in 0..1500 {
             s.step(&mut w, crate::config::NOMINAL_DT_MYR, None);
         }
@@ -1104,13 +1187,17 @@ mod tests {
                     .map(|&j| j as usize)
                     .filter(|&j| elevation[j] < elevation[i])
                     .min_by(|&a, &b| {
-                        elevation[a].partial_cmp(&elevation[b]).unwrap_or(std::cmp::Ordering::Equal)
+                        elevation[a]
+                            .partial_cmp(&elevation[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
             })
             .collect();
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| {
-            elevation[b].partial_cmp(&elevation[a]).unwrap_or(std::cmp::Ordering::Equal)
+            elevation[b]
+                .partial_cmp(&elevation[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut flow: Vec<f64> = weather.rain.clone();
         for &cell in &order {
@@ -1132,19 +1219,17 @@ mod tests {
         let (r50, r90, r99, rmax) = pct(land.iter().map(|&i| weather.rain[i]).collect());
         let (f50, f90, f99, fmax) = pct(land.iter().map(|&i| flow[i]).collect());
         let (s50, s90, s99, smax) = pct(land.iter().map(|&i| slope_of(i)).collect());
-        let (c50, c90, c99, cmax) = pct(
-            land.iter()
-                .map(|&i| {
-                    let res = erosion.surface_resistance(&w.columns[i]) as f64;
-                    stream_cut_m(DEFAULT_EROSION_RATE, flow[i], slope_of(i), res, dt)
-                })
-                .collect(),
-        );
-        let (k50, k90, k99, kmax) = pct(
-            land.iter()
-                .map(|&i| stream_capacity_kg(flow[i], area, dt))
-                .collect(),
-        );
+        let (c50, c90, c99, cmax) = pct(land
+            .iter()
+            .map(|&i| {
+                let res = erosion.surface_resistance(&w.columns[i]) as f64;
+                stream_cut_m(DEFAULT_EROSION_RATE, flow[i], slope_of(i), res, dt)
+            })
+            .collect());
+        let (k50, k90, k99, kmax) = pct(land
+            .iter()
+            .map(|&i| stream_capacity_kg(flow[i], area, dt))
+            .collect());
         eprintln!(
             "land {} of {n} · sea {:.0} m · spacing {:.0} m · repose {}\n\
              rain  p50 {r50:.3}  p90 {r90:.3}  p99 {r99:.3}  max {rmax:.3}  (m/tick)\n\

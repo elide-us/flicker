@@ -2,6 +2,7 @@
 name = "flicker-solarbirth"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # A cinematic PACKAGE (library only) — the Solar-Birth `Scene`, driven by the unified
@@ -15,7 +16,9 @@ name = "flicker_solarbirth"
 path = "src/lib.rs"
 
 [dependencies]
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The content-roots service (flicker-core::roots): the bundled intro flight resolves through it.
+flicker-core.workspace = true
 # The new input model (Resolver/Fired/ActionSignal) + the event bus (Router/
 # InputHandler/RouteCtx) this scene routes its pause arbitration through (spec §9).
 flicker-input-core.workspace = true

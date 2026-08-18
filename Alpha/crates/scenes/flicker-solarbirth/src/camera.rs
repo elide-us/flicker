@@ -10,8 +10,8 @@
 //! functions; it now lives as authored data in `flights/intro.flight`, played by
 //! the `flicker-flight` service.)
 
-use flicker_input_core::{InputState, MouseButton};
 use flicker::render::{Camera, Rect, Vec2, Vec3};
+use flicker_input_core::{InputState, MouseButton};
 
 /// Radians of yaw/pitch per pixel of mouse RIGHT-drag — the old raw-drag feel, kept
 /// now that the delta arrives as a resolved `LookRight/LookLeft` pointer signal.

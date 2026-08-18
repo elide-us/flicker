@@ -89,8 +89,7 @@ const PH_BAND: (f64, f64) = (0.35, 0.65);
 
 /// The five bands in display order — the single source the HUD's gauge nodes
 /// bake their green zones from ([lo, hi] pairs, same order as [`observe`]).
-pub const BANDS: [(f64, f64); 5] =
-    [INTERIOR_BAND, SURFACE_BAND, ATMO_BAND, HYDRO_BAND, PH_BAND];
+pub const BANDS: [(f64, f64); 5] = [INTERIOR_BAND, SURFACE_BAND, ATMO_BAND, HYDRO_BAND, PH_BAND];
 
 /// Cold end of the interior normalisation, K — a dead, frozen mantle.
 const INTERIOR_COLD_K: f64 = 250.0;
@@ -192,7 +191,12 @@ pub fn observe(world: &World, levers: &Levers) -> Habitability {
     let axes_live = axes.iter().filter(|a| a.signal.is_some()).count();
     let axes_in_band = axes.iter().filter(|a| a.in_band()).count();
     let life_supporting = axes.iter().all(|a| a.in_band());
-    Habitability { axes, life_supporting, axes_in_band, axes_live }
+    Habitability {
+        axes,
+        life_supporting,
+        axes_in_band,
+        axes_live,
+    }
 }
 
 #[cfg(test)]
@@ -220,7 +224,10 @@ mod tests {
         let h = observe(&w, &levers);
         assert_eq!(h.axes.len(), 5, "the five condition axes");
         assert!(!h.life_supporting, "a magma ocean is not life-supporting");
-        assert!(h.axes[0].signal.unwrap_or(0.0) > INTERIOR_BAND.1, "interior pegged hot");
+        assert!(
+            h.axes[0].signal.unwrap_or(0.0) > INTERIOR_BAND.1,
+            "interior pegged hot"
+        );
         let again = observe(&w, &levers);
         assert_eq!(h.axes[0].signal, again.axes[0].signal, "the read is pure");
     }
@@ -280,7 +287,10 @@ mod tests {
                 ax.hi
             );
         }
-        assert!(h.life_supporting, "every axis in band at once IS the verdict");
+        assert!(
+            h.life_supporting,
+            "every axis in band at once IS the verdict"
+        );
         assert_eq!(h.axes_live, 5, "every axis has a signal");
     }
 }

@@ -41,14 +41,12 @@ use std::time::Duration;
 
 use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
-};
-use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState, Key};
 use flicker_input_router::{InputHandler, Router};
-use flicker_shell::{PauseScene, Theme};
 use flicker_materials::{JsonTableSource, MaterialId, Tables};
+use flicker_shell::{PauseScene, Theme};
 use flicker_texture::{
     bake, presets, Channel, MapKind, MapSet, TextureRecipe, BAKE_DEFAULT, CHANNEL_COUNT,
     PREVIEW_SIZE,
@@ -58,12 +56,6 @@ use flicker_worker::WorkerPool;
 pub mod commit;
 pub mod lit;
 pub mod route;
-
-/// The one global UI-element definition + Prism palette every prism-alpha scene
-/// reads. This scene's OWN style blocks ride its scene file (`def.styles`) and
-/// merge over it — never a second theme file, which would fork the palette.
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
 const SW_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/sablework.lua");
@@ -119,6 +111,17 @@ pub enum CommitState {
     Failed(String),
 }
 
+/// An open in-place material rename — Rust owns the draft (Quartermaster's Pattern B), fed by
+/// raw typed/backspace while renaming and shown by a plain `text` node.
+struct MaterialRename {
+    /// The byte id being relabelled — the STRICT key the write targets (the `u8` a voxel and
+    /// the wire carry; the sim server owns the wire contract, this only edits the label).
+    id: MaterialId,
+    /// The draft name. The FIRST keystroke replaces the current name (pristine), then appends.
+    draft: String,
+    pristine: bool,
+}
+
 pub struct Sablework {
     /// The instrument's state — the thing every control edits and the only thing
     /// that gets saved.
@@ -135,6 +138,15 @@ pub struct Sablework {
     materials: Vec<(MaterialId, String)>,
     /// Which OFFERED bake rung a Commit uses, an index into the offered list.
     size_rung: usize,
+    /// The data dir the material index was read from — held so a rename writes the new name
+    /// back through the same id-keyed source seam.
+    data_dir: std::path::PathBuf,
+    /// The open material rename, if any.
+    rename: Option<MaterialRename>,
+    /// Enter/Esc edge state, read RAW while renaming (the ruled text-entry exception — the
+    /// intent bus carries no TextEntry map), so a hold does not re-fire commit/cancel.
+    enter_prev: bool,
+    esc_prev: bool,
 
     // ── preview ──
     /// Repeats per axis in the swatch. From the merged styles at `enter`.
@@ -192,6 +204,16 @@ impl Default for Sablework {
     }
 }
 
+/// Find the first descendant (or self) with `id`, mutably — the seam the bench fills the
+/// material dropdown's options through at construction (the ratified "Rust fills the static
+/// scene's container" pattern; there is no shared helper, so this is the local one).
+fn find_by_id_mut<'a>(node: &'a mut UiNode, id: &str) -> Option<&'a mut UiNode> {
+    if node.id == id {
+        return Some(node);
+    }
+    node.children.iter_mut().find_map(|c| find_by_id_mut(c, id))
+}
+
 impl Sablework {
     /// The runtime constructor — the manifest hands in the authored `SceneDef`.
     pub fn new(def: &SceneDef) -> Self {
@@ -206,7 +228,10 @@ impl Sablework {
         Self::from_parts(def.tree, def.styles)
     }
 
-    fn from_parts(authored: Option<UiNode>, scene_styles_json: Option<serde_json::Value>) -> Self {
+    fn from_parts(
+        mut authored: Option<UiNode>,
+        scene_styles_json: Option<serde_json::Value>,
+    ) -> Self {
         if authored.is_none() {
             tracing::error!("sablework: the scene def declares no `tree` — no UI will draw");
         }
@@ -226,8 +251,11 @@ impl Sablework {
         let data_dir = flicker_content::roots().data();
         let materials = match Tables::from_source(&JsonTableSource::new(&data_dir)) {
             Ok(t) => {
-                let mut rows: Vec<(MaterialId, String)> =
-                    t.materials().iter().map(|m| (m.id, m.name.clone())).collect();
+                let mut rows: Vec<(MaterialId, String)> = t
+                    .materials()
+                    .iter()
+                    .map(|m| (m.id, m.name.clone()))
+                    .collect();
                 rows.sort_by_key(|(id, _)| *id);
                 rows
             }
@@ -236,6 +264,28 @@ impl Sablework {
                 Vec::new()
             }
         };
+        // Fill the header dropdown from the material index — the ratified "Rust fills the
+        // static scene's container" pattern. Option 0 (Unbound) is authored; each material is
+        // one more option whose label BINDS its name (`mat_opt_<i>`) from the Model, so the
+        // runtime names ride the bind channel the localisation gate exempts, never a literal.
+        if let Some(sel) = authored
+            .as_mut()
+            .and_then(|t| find_by_id_mut(t, "material_select"))
+        {
+            for i in 1..=materials.len() {
+                let mut opt = UiNode {
+                    component: "option".to_string(),
+                    ..Default::default()
+                };
+                opt.props
+                    .insert("value".to_string(), Value::Number(i as f64));
+                opt.props.insert(
+                    "label_bind".to_string(),
+                    Value::Text(format!("mat_opt_{i}")),
+                );
+                sel.children.push(opt);
+            }
+        }
         // Open on the ratified baseline rung, so a Commit does what the spec says
         // without anyone touching the control.
         let size_rung = flicker_texture::size::offered()
@@ -253,6 +303,10 @@ impl Sablework {
             sel_map: 0,
             materials,
             size_rung,
+            data_dir,
+            rename: None,
+            enter_prev: false,
+            esc_prev: false,
             tiles: DEFAULT_TILES,
             tex: Vec::new(),
             latest: None,
@@ -341,9 +395,15 @@ impl Sablework {
         if !self.dirty.get(self.sel_map).copied().unwrap_or(false) {
             return;
         }
-        let Some(handle) = self.tex.get(self.sel_map).copied() else { return };
-        let Some(set) = self.latest.as_ref() else { return };
-        let Some(map) = set.get(MapKind::ALL[self.sel_map]) else { return };
+        let Some(handle) = self.tex.get(self.sel_map).copied() else {
+            return;
+        };
+        let Some(set) = self.latest.as_ref() else {
+            return;
+        };
+        let Some(map) = set.get(MapKind::ALL[self.sel_map]) else {
+            return;
+        };
         let pixels = self.tiled(map);
         if renderer.update_texture(handle, &pixels) {
             self.dirty[self.sel_map] = false;
@@ -371,7 +431,9 @@ impl Sablework {
             let (Some(handle), Some(set)) = (self.tex.get(i).copied(), self.latest.as_ref()) else {
                 continue;
             };
-            let Some(map) = set.get(MapKind::ALL[i]) else { continue };
+            let Some(map) = set.get(MapKind::ALL[i]) else {
+                continue;
+            };
             let pixels = self.tiled(map);
             if renderer.update_texture(handle, &pixels) {
                 self.dirty[i] = false;
@@ -396,8 +458,14 @@ impl Sablework {
         for (i, ch) in self.recipe.channels.iter().enumerate() {
             let n = i + 1;
             m.set(format!("ch{n}_on"), ch.enabled);
-            m.set(format!("ch{n}_source_label"), format!("$sw_src_{}", ch.source.id()));
-            m.set(format!("ch{n}_blend_label"), format!("$sw_blend_{}", ch.blend.id()));
+            m.set(
+                format!("ch{n}_source_label"),
+                format!("$sw_src_{}", ch.source.id()),
+            );
+            m.set(
+                format!("ch{n}_blend_label"),
+                format!("$sw_blend_{}", ch.blend.id()),
+            );
             m.set(format!("ch{n}_scale"), ch.scale as f64);
             m.set(format!("ch{n}_octaves"), ch.octaves as f64);
             m.set(format!("ch{n}_warp"), ch.warp);
@@ -435,7 +503,13 @@ impl Sablework {
             .material
             .map(|id| id.to_string())
             .unwrap_or_else(|| "$sw_unbound".into());
-        m.set("recipe_line", format!("{} · {} · {:#x}", self.recipe.name, material, self.recipe.seed));
+        m.set(
+            "recipe_line",
+            format!(
+                "{} · {} · {:#x}",
+                self.recipe.name, material, self.recipe.seed
+            ),
+        );
         m.set(
             "preview_info",
             format!("{}² · {}×{}", PREVIEW_SIZE, self.tiles, self.tiles),
@@ -445,13 +519,30 @@ impl Sablework {
             "bake_info",
             format!(
                 "{}² · {}×{} · {:.0} ms", // strings-gate-exempt: unit symbol, not copy
-                PREVIEW_SIZE,
-                self.tiles,
-                self.tiles,
-                self.last_bake_ms
+                PREVIEW_SIZE, self.tiles, self.tiles, self.last_bake_ms
             ),
         );
-        m.set("material_label", self.material_label());
+        // The material dropdown: each option's label BINDS its material's name (mat_opt_<i>),
+        // and the control echoes the bound option INDEX (0 = Unbound, i+1 = the i-th material;
+        // an index is a number everywhere — 1B64FF03).
+        for (i, (_, name)) in self.materials.iter().enumerate() {
+            m.set(format!("mat_opt_{}", i + 1), name.clone());
+        }
+        m.set("sel_material", self.material_option() as f64);
+        // The rename: whether one is open, the bound material's byte id made EXPLICIT
+        // (#<id>, or — when Unbound), and the draft the plain text node shows while editing.
+        m.set("renaming", self.is_renaming());
+        m.set("material_bound", self.recipe.material.is_some());
+        m.set(
+            "material_id_label",
+            self.recipe
+                .material
+                .map_or_else(|| "—".to_string(), |id| format!("#{id}")),
+        );
+        m.set(
+            "rename_draft",
+            self.rename_draft().unwrap_or_default().to_string(),
+        );
         m.set("size_label", rung.label);
         m.set(
             "commit_status",
@@ -500,39 +591,107 @@ impl Sablework {
         self.size_rung = (self.size_rung + 1) % n;
     }
 
-    /// Step the material binding: unbound → each material in index order →
-    /// unbound. Unbound is a real state, not an absence — a scratch surface you
-    /// have not decided the identity of yet.
-    pub(crate) fn step_material(&mut self) {
-        if self.materials.is_empty() {
-            return;
-        }
-        self.recipe.material = match self.recipe.material {
-            None => Some(self.materials[0].0),
-            Some(cur) => {
-                let at = self.materials.iter().position(|(id, _)| *id == cur);
-                match at {
-                    Some(i) if i + 1 < self.materials.len() => Some(self.materials[i + 1].0),
-                    // Past the end, or bound to an id the index does not carry:
-                    // both land back at unbound rather than guessing.
-                    _ => None,
-                }
-            }
-        };
-    }
-
-    /// The material's display name, or the unbound token.
-    fn material_label(&self) -> String {
+    /// The option index the material dropdown echoes and binds by: 0 = Unbound, else the
+    /// bound material's position + 1. An id the index cannot resolve reads as Unbound — the
+    /// picker's floor, since the dropdown offers no row for an id it does not carry.
+    fn material_option(&self) -> usize {
         match self.recipe.material {
+            None => 0,
             Some(id) => self
                 .materials
                 .iter()
-                .find(|(m, _)| *m == id)
-                .map(|(_, name)| name.clone())
-                // A binding the index cannot resolve must READ as broken rather
-                // than as unbound — they are different problems.
-                .unwrap_or_else(|| format!("#{id}")),
-            None => "$sw_unbound".into(),
+                .position(|(m, _)| *m == id)
+                .map_or(0, |i| i + 1),
+        }
+    }
+
+    /// Bind (or unbind) the material from a dropdown pick: option 0 = Unbound, option i+1 =
+    /// the i-th material in the index; a value past the list clamps to Unbound. Binding is
+    /// not an image edit — the swatch renders the same pixels — so the caller owes no re-bake.
+    pub(crate) fn set_material_by_option(&mut self, opt: f64) {
+        self.recipe.material = match opt.max(0.0) as usize {
+            0 => None,
+            i => self.materials.get(i - 1).map(|(id, _)| *id),
+        };
+    }
+
+    // ── the material rename (an authored-name edit) ──────────────────────────────
+
+    /// Is a material rename open?
+    pub(crate) fn is_renaming(&self) -> bool {
+        self.rename.is_some()
+    }
+
+    /// The current rename draft, while one is open.
+    pub(crate) fn rename_draft(&self) -> Option<&str> {
+        self.rename.as_ref().map(|r| r.draft.as_str())
+    }
+
+    /// Open a rename on the BOUND material — the one the dropdown has selected. A no-op when
+    /// nothing is bound: Unbound is not a material and has no byte to relabel. The first
+    /// keystroke replaces the current name (pristine).
+    pub(crate) fn begin_rename(&mut self) {
+        let Some(id) = self.recipe.material else {
+            return;
+        };
+        let name = self
+            .materials
+            .iter()
+            .find(|(m, _)| *m == id)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_default();
+        self.rename = Some(MaterialRename {
+            id,
+            draft: name,
+            pristine: true,
+        });
+    }
+
+    /// Abandon the rename, leaving the material's name alone.
+    pub(crate) fn cancel_rename(&mut self) {
+        self.rename = None;
+    }
+
+    /// Fold this frame's typed text into the draft. The first character REPLACES the name
+    /// (pristine); afterwards it appends. Backspace pops one char and ends pristine.
+    pub(crate) fn type_into_rename(&mut self, typed: &str, backspace: bool) {
+        let Some(r) = self.rename.as_mut() else {
+            return;
+        };
+        if !typed.is_empty() {
+            if r.pristine {
+                r.draft.clear();
+                r.pristine = false;
+            }
+            r.draft.push_str(typed);
+        }
+        if backspace {
+            r.pristine = false;
+            r.draft.pop();
+        }
+    }
+
+    /// Commit the rename: write the trimmed draft to `materials.json` STRICTLY by the byte id,
+    /// then reflect it in the in-memory index so the dropdown updates at once. An empty name is
+    /// refused (the field stays open, a material is never blanked); a write error is logged and
+    /// the field stays open, so the user's typing is never silently lost.
+    pub(crate) fn commit_rename(&mut self) {
+        let Some(r) = self.rename.as_ref() else {
+            return;
+        };
+        let name = r.draft.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let id = r.id;
+        match JsonTableSource::new(&self.data_dir).save_material_name(id, &name) {
+            Ok(()) => {
+                if let Some(slot) = self.materials.iter_mut().find(|(m, _)| *m == id) {
+                    slot.1 = name;
+                }
+                self.rename = None;
+            }
+            Err(e) => tracing::error!("material rename failed to write: {e}"),
         }
     }
 
@@ -599,8 +758,7 @@ impl Scene for Sablework {
         self.ui_theme = Some(Theme::build(renderer));
         // The theme, the shared satellites, and THIS scene's own style blocks
         // (`def.styles` — the five-line home for the bench's values).
-        self.ui_styles =
-            flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles_json.as_ref());
+        self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles_json.as_ref());
         self.tiles = self
             .ui_styles
             .get("sablework")
@@ -632,7 +790,13 @@ impl Scene for Sablework {
         renderer.window().set_title("Sablework Bench");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         self.collect_bakes(dt);
         while let Ok(state) = self.commit_rx.try_recv() {
             if let CommitState::Failed(ref why) = state {
@@ -641,16 +805,32 @@ impl Scene for Sablework {
             self.commit_state = state;
         }
 
-        let Some(tree) = self.authored.take() else { return Transition::None };
+        let Some(tree) = self.authored.take() else {
+            return Transition::None;
+        };
         let screen = renderer.size();
         let model = self.model();
+        // Typed characters reach the rename ONLY while one is open, so a stray keystroke can
+        // never edit a name the user is not renaming (Quartermaster's rule). The scene owns the
+        // draft and folds the same text; request_focus keeps the field lit while editing.
+        let renaming = self.is_renaming();
+        let typed = if renaming {
+            input.typed().to_string()
+        } else {
+            String::new()
+        };
+        let backspace = renaming && input.backspace();
+        if renaming {
+            self.ui_state.request_focus("rename_field");
+            self.type_into_rename(&typed, backspace);
+        }
         let snap = UiInput {
             mouse: input.mouse_position,
             clicked: input.mouse_left_pressed,
             down: input.mouse_left,
             screen,
-            typed: String::new(),
-            backspace: false,
+            typed,
+            backspace,
             wheel: input.mouse_wheel_delta,
         };
         let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
@@ -685,6 +865,21 @@ impl Scene for Sablework {
             results.set(name, true);
         }
 
+        // Enter/Esc while renaming are read RAW — the ruled text-entry exception (the intent
+        // bus carries no TextEntry map, à la Quartermaster). Edge-detected so a hold does not
+        // re-fire, and folded into results so the ONE dispatcher commits/cancels the rename.
+        let enter = input.key_down(Key::Enter);
+        let esc = input.key_down(Key::Escape);
+        if renaming {
+            if enter && !self.enter_prev {
+                results.set("rename_commit", true);
+            } else if esc && !self.esc_prev {
+                results.set("rename_cancel", true);
+            }
+        }
+        self.enter_prev = enter;
+        self.esc_prev = esc;
+
         // The dispatcher owns every edit AND decides whether one happened; a
         // re-bake is requested exactly when the recipe actually changed, so
         // hovering a slider does not queue work.
@@ -692,7 +887,7 @@ impl Scene for Sablework {
             self.request_bake();
         }
 
-        if results.is_on("pause_open") {
+        if results.is_on("pause_open") && !renaming {
             if let Some(theme) = self.ui_theme {
                 // The pause overlay shows the PROFILE's map — the pump owns
                 // bindings now (input-P3), the scene holds none.

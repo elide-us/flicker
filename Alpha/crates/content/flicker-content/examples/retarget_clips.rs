@@ -17,11 +17,17 @@ fn main() -> anyhow::Result<()> {
         eprintln!("usage: retarget_clips <bvh_dir> <skeleton.json> <out_dir>");
         std::process::exit(2);
     }
-    let (bvh_dir, skeleton, out_dir) = (Path::new(&args[1]), Path::new(&args[2]), Path::new(&args[3]));
+    let (bvh_dir, skeleton, out_dir) = (
+        Path::new(&args[1]),
+        Path::new(&args[2]),
+        Path::new(&args[3]),
+    );
     let mut ok = 0usize;
     let mut fail = 0usize;
-    let mut entries: Vec<_> =
-        std::fs::read_dir(bvh_dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|e| e == "bvh").unwrap_or(false)).collect();
+    let mut entries: Vec<_> = std::fs::read_dir(bvh_dir)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().map(|e| e == "bvh").unwrap_or(false))
+        .collect();
     entries.sort();
     for p in &entries {
         match flicker_content::retarget::emit_variants(p, skeleton, out_dir) {
@@ -32,6 +38,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    println!("retargeted {ok} clip(s) ({fail} skipped) onto {} → {}", skeleton.display(), out_dir.display());
+    println!(
+        "retargeted {ok} clip(s) ({fail} skipped) onto {} → {}",
+        skeleton.display(),
+        out_dir.display()
+    );
     Ok(())
 }

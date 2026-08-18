@@ -158,12 +158,7 @@ const DEPRESS_MAX: f32 = 2.0;
 /// rift) AND the plate on the far side of that edge (so the caller can compare
 /// buoyancies and decide who subducts). Only inter-plate edges count — subduction is
 /// between two *different* plates. Physically `(v_i − v_nb)·across > 0` ⇒ i advances.
-fn strongest_boundary(
-    i: usize,
-    ctx: &EpochCtx,
-    plate_of: &[usize],
-    flow: &[Vec3],
-) -> (f32, usize) {
+fn strongest_boundary(i: usize, ctx: &EpochCtx, plate_of: &[usize], flow: &[Vec3]) -> (f32, usize) {
     let p = plate_of[i];
     let vi = flow.get(i).copied().unwrap_or(Vec3::ZERO);
     let d = ctx.dirs[i];
@@ -230,13 +225,21 @@ pub fn run_orogeny(
         bsum[p] += buoyancy.get(i).copied().unwrap_or(0.0);
         bcnt[p] += 1;
     }
-    let plate_buoy: Vec<f32> =
-        (0..np).map(|p| if bcnt[p] > 0 { bsum[p] / bcnt[p] as f32 } else { 0.0 }).collect();
+    let plate_buoy: Vec<f32> = (0..np)
+        .map(|p| {
+            if bcnt[p] > 0 {
+                bsum[p] / bcnt[p] as f32
+            } else {
+                0.0
+            }
+        })
+        .collect();
 
     // The (time-independent) strongest boundary at each hex: signed closing + the
     // plate across it.
-    let bnd: Vec<(f32, usize)> =
-        (0..n).map(|i| strongest_boundary(i, ctx, plate_of, flow)).collect();
+    let bnd: Vec<(f32, usize)> = (0..n)
+        .map(|i| strongest_boundary(i, ctx, plate_of, flow))
+        .collect();
 
     // Two accumulating fields over deep time: arc/collision uplift (diffuses inland
     // → broad ranges) and trench/rift depression (sharp valleys, no diffusion).
@@ -270,8 +273,8 @@ pub fn run_orogeny(
                     // I'm the lighter plate → I override → a volcanic arc lifts here.
                     // (Symmetric continental collision hits neither branch: no belt —
                     // that relief is the piled crust via isostasy, not a second source.)
-                    let cont =
-                        OROGENY_OCEANIC + (1.0 - OROGENY_OCEANIC) * buoyancy.get(i).copied().unwrap_or(0.0);
+                    let cont = OROGENY_OCEANIC
+                        + (1.0 - OROGENY_OCEANIC) * buoyancy.get(i).copied().unwrap_or(0.0);
                     next[i] += OROGENY_RATE * (c - threshold) * cont;
                 }
             } else if c < -threshold {
@@ -321,11 +324,18 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors: Vec<Vec<u32>> =
-            (0..n).map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32]).collect();
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 0 };
-        let mut cells: Vec<HexState> =
-            (0..n).map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)]))).collect();
+        let neighbors: Vec<Vec<u32>> = (0..n)
+            .map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32])
+            .collect();
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 0,
+        };
+        let mut cells: Vec<HexState> = (0..n)
+            .map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)])))
+            .collect();
         // One plate; a per-cell eastward flow (Y × dir points to k+1 at each cell).
         let plate_of = vec![0usize; n];
         let flow: Vec<Vec3> = (0..n).map(|k| Vec3::Y.cross(dirs[k])).collect();
@@ -337,7 +347,10 @@ mod tests {
         assert!(peak > 0.05, "no hotspot uplift formed (peak {peak})");
         // The relief spread beyond a single cell (a trail, not a spike).
         let raised = cells.iter().filter(|c| c.elevation > 0.01).count();
-        assert!(raised >= 3, "hotspot made a spike, not a chain ({raised} cells raised)");
+        assert!(
+            raised >= 3,
+            "hotspot made a spike, not a chain ({raised} cells raised)"
+        );
     }
 
     /// The load-bearing physics check: at a subduction margin (a buoyancy contrast)
@@ -355,9 +368,15 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors: Vec<Vec<u32>> =
-            (0..n).map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32]).collect();
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 0 };
+        let neighbors: Vec<Vec<u32>> = (0..n)
+            .map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32])
+            .collect();
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 0,
+        };
         // Plate 0 = hexes 0..12, plate 1 = 12..24; motions chosen so the two close
         // on the boundary near hex 12 (both drive material into the seam).
         let plate_of: Vec<usize> = (0..n).map(|k| usize::from(k >= n / 2)).collect();
@@ -367,18 +386,35 @@ mod tests {
         // Buoyancy contrast: plate 1 (light) overrides plate 0 (heavy) → an arc lifts
         // on plate 1 (and plate 0 digs a trench).
         let buoyancy: Vec<f32> = (0..n).map(|k| if k < n / 2 { 0.1 } else { 0.9 }).collect();
-        let base: Vec<HexState> =
-            dirs.iter().map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)]))).collect();
+        let base: Vec<HexState> = dirs
+            .iter()
+            .map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)])))
+            .collect();
 
         let mut brief = base.clone();
         let mut mature = base;
-        run_orogeny(&mut brief, &ctx, &plate_of, &flow, &buoyancy, 0.6, 0.25, 0.15, 4);
-        run_orogeny(&mut mature, &ctx, &plate_of, &flow, &buoyancy, 0.6, 0.25, 0.15, 40);
+        run_orogeny(
+            &mut brief, &ctx, &plate_of, &flow, &buoyancy, 0.6, 0.25, 0.15, 4,
+        );
+        run_orogeny(
+            &mut mature,
+            &ctx,
+            &plate_of,
+            &flow,
+            &buoyancy,
+            0.6,
+            0.25,
+            0.15,
+            40,
+        );
 
         let peak = |c: &[HexState]| c.iter().map(|s| s.elevation).fold(f32::MIN, f32::max);
         let relief = |c: &[HexState]| c.iter().map(|s| s.elevation.max(0.0) as f64).sum::<f64>();
         // Compression lifted an arc where the light plate overrides.
-        assert!(peak(&brief) > 0.0, "subduction built no arc (sign inverted?)");
+        assert!(
+            peak(&brief) > 0.0,
+            "subduction built no arc (sign inverted?)"
+        );
         // Deep time accumulates more total relief (arc piles up + widens inland).
         assert!(
             relief(&mature) > relief(&brief),
@@ -401,23 +437,45 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors: Vec<Vec<u32>> =
-            (0..n).map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32]).collect();
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 0 };
+        let neighbors: Vec<Vec<u32>> = (0..n)
+            .map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32])
+            .collect();
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 0,
+        };
         let plate_of: Vec<usize> = (0..n).map(|k| usize::from(k >= n / 2)).collect();
         // Converge on the boundary near hex 12 (per-cell flow = each cell's plate motion).
         let motion = [Vec3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0)];
         let flow: Vec<Vec3> = plate_of.iter().map(|&p| motion[p]).collect();
         // Plate 0 = heavy oceanic (low buoyancy); plate 1 = light continental (high).
         let buoyancy: Vec<f32> = (0..n).map(|k| if k < n / 2 { 0.1 } else { 0.9 }).collect();
-        let mut cells: Vec<HexState> =
-            dirs.iter().map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)]))).collect();
+        let mut cells: Vec<HexState> = dirs
+            .iter()
+            .map(|_| HexState::new(Composition::from_iter([(8u8, 1.0)])))
+            .collect();
 
-        run_orogeny(&mut cells, &ctx, &plate_of, &flow, &buoyancy, 0.6, 0.4, 0.15, 30);
+        run_orogeny(
+            &mut cells, &ctx, &plate_of, &flow, &buoyancy, 0.6, 0.4, 0.15, 30,
+        );
 
-        let ocean_min = cells[..n / 2].iter().map(|s| s.elevation).fold(f32::MAX, f32::min);
-        let cont_max = cells[n / 2..].iter().map(|s| s.elevation).fold(f32::MIN, f32::max);
-        assert!(ocean_min < 0.0, "no trench opened on the subducting oceanic plate ({ocean_min})");
-        assert!(cont_max > 0.0, "no arc rose on the overriding continental plate ({cont_max})");
+        let ocean_min = cells[..n / 2]
+            .iter()
+            .map(|s| s.elevation)
+            .fold(f32::MAX, f32::min);
+        let cont_max = cells[n / 2..]
+            .iter()
+            .map(|s| s.elevation)
+            .fold(f32::MIN, f32::max);
+        assert!(
+            ocean_min < 0.0,
+            "no trench opened on the subducting oceanic plate ({ocean_min})"
+        );
+        assert!(
+            cont_max > 0.0,
+            "no arc rose on the overriding continental plate ({cont_max})"
+        );
     }
 }

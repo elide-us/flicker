@@ -748,7 +748,9 @@ impl ScriptHost {
             let mut props = HashMap::new();
             for pair in spec.pairs::<mlua::Value, mlua::Value>() {
                 let (key, value) = pair?;
-                let mlua::Value::String(key) = key else { continue };
+                let mlua::Value::String(key) = key else {
+                    continue;
+                };
                 let key = key.to_str()?.to_string();
                 if ARRANGE_STRUCTURAL_KEYS.contains(&key.as_str()) {
                     continue;
@@ -1001,9 +1003,28 @@ fn read_font(cmd: &Table) -> mlua::Result<FontRole> {
 /// table becomes a scalar entry in [`UiNode::props`]. Kept in one place so the
 /// props sweep and the structural reads cannot disagree about what is a prop.
 const UI_STRUCTURAL_KEYS: &[&str] = &[
-    "id", "component", "type", "children", "anchor", "offset", "size", "grow",
-    "width", "height", "gap", "pad", "pad_x", "pad_y", "bind", "action", "visible", "visible_bind",
-    "enabled", "enabled_bind", "nav_ordinal", "tab_group",
+    "id",
+    "component",
+    "type",
+    "children",
+    "anchor",
+    "offset",
+    "size",
+    "grow",
+    "width",
+    "height",
+    "gap",
+    "pad",
+    "pad_x",
+    "pad_y",
+    "bind",
+    "action",
+    "visible",
+    "visible_bind",
+    "enabled",
+    "enabled_bind",
+    "nav_ordinal",
+    "tab_group",
 ];
 
 impl UiAnchor {
@@ -1088,7 +1109,9 @@ fn parse_ui_node(t: &Table) -> mlua::Result<UiNode> {
     let mut props = HashMap::new();
     for pair in t.pairs::<mlua::Value, mlua::Value>() {
         let (key, value) = pair?;
-        let mlua::Value::String(key) = key else { continue };
+        let mlua::Value::String(key) = key else {
+            continue;
+        };
         let key = key.to_str()?.to_string();
         if UI_STRUCTURAL_KEYS.contains(&key.as_str()) {
             continue;
@@ -1236,7 +1259,11 @@ pub fn parse_ui_json(value: &serde_json::Value) -> Result<UiNode, String> {
         // float-authored ordinal silently 0 — the exact "an authored name fails
         // to NOTHING" defect (rule 4BB12A75), invisible because 0 is also the
         // default.
-        nav_ordinal: obj.get("nav_ordinal").and_then(J::as_f64).unwrap_or(0.0).max(0.0) as u32,
+        nav_ordinal: obj
+            .get("nav_ordinal")
+            .and_then(J::as_f64)
+            .unwrap_or(0.0)
+            .max(0.0) as u32,
         tab_group: obj
             .get("tab_group")
             .and_then(J::as_str)
@@ -1363,7 +1390,10 @@ mod tests {
             "splash-pair.lua",
         )
         .expect("a module-form pair script loads");
-        let a = host.arrange().expect("arrange runs").expect("arrange present");
+        let a = host
+            .arrange()
+            .expect("arrange runs")
+            .expect("arrange present");
         let splash = a.components.get("splash").expect("splash arranged");
         assert!(splash.on, "`on` stays structural, not a prop");
         assert!(!splash.props.contains_key("on"));
@@ -1398,7 +1428,10 @@ mod tests {
     #[test]
     fn an_empty_script_is_still_refused() {
         let err = ScriptHost::new("local x = 1", "empty.lua");
-        assert!(err.is_err(), "no module, no hooks — refused at load, not mid-frame");
+        assert!(
+            err.is_err(),
+            "no module, no hooks — refused at load, not mid-frame"
+        );
     }
 
     // Two peer modules + a main script that requires both — the per-file
@@ -1777,7 +1810,10 @@ mod tests {
     #[test]
     fn ui_tree_parses_nested_component_tree() {
         let host = ScriptHost::new(UI_TREE_SCRIPT, "ui-tree").expect("tree-only module loads");
-        let root = host.ui_tree().expect("ui_tree runs").expect("module exposes a tree");
+        let root = host
+            .ui_tree()
+            .expect("ui_tree runs")
+            .expect("module exposes a tree");
 
         assert_eq!(root.component, "screen");
         assert_eq!(root.id, "root");
@@ -1794,14 +1830,20 @@ mod tests {
         let cb = &col.children[0];
         assert_eq!(cb.component, "checkbox");
         assert_eq!(cb.bind.as_deref(), Some("show_mesh"));
-        assert_eq!(cb.props.get("label"), Some(&Value::Text("Mesh".to_string())));
+        assert_eq!(
+            cb.props.get("label"),
+            Some(&Value::Text("Mesh".to_string()))
+        );
 
         let btn = &col.children[1];
         assert_eq!(btn.component, "button");
         assert_eq!(btn.action.as_deref(), Some("attack"));
         assert_eq!(btn.visible_bind.as_deref(), Some("animate"));
         assert_eq!(btn.size, Some(24.0));
-        assert_eq!(btn.props.get("style"), Some(&Value::Text("primary".to_string())));
+        assert_eq!(
+            btn.props.get("style"),
+            Some(&Value::Text("primary".to_string()))
+        );
         // Structural keys never leak into props.
         assert!(!btn.props.contains_key("action"));
         assert!(!btn.props.contains_key("component"));
@@ -1872,13 +1914,15 @@ mod tests {
                 "component": "button", "nav_ordinal": json
             }))
             .unwrap();
-            assert_eq!(n.nav_ordinal, want, "a float-shaped ordinal is that ordinal");
+            assert_eq!(
+                n.nav_ordinal, want,
+                "a float-shaped ordinal is that ordinal"
+            );
         }
         // A nonsense ordinal floors at the group's entry point rather than
         // wrapping to u32::MAX through a negative cast.
-        let neg =
-            parse_ui_json(&serde_json::json!({ "component": "button", "nav_ordinal": -3.0 }))
-                .unwrap();
+        let neg = parse_ui_json(&serde_json::json!({ "component": "button", "nav_ordinal": -3.0 }))
+            .unwrap();
         assert_eq!(neg.nav_ordinal, 0);
     }
 
@@ -1890,12 +1934,18 @@ mod tests {
         // JSON path (scene files).
         let t = parse_ui_json(&serde_json::json!({ "template": "window" }))
             .expect_err("a template key fails loud");
-        assert!(t.contains("template tier was removed") && t.contains("window"), "{t}");
+        assert!(
+            t.contains("template tier was removed") && t.contains("window"),
+            "{t}"
+        );
         let s = parse_ui_json(&serde_json::json!({ "component": "cell", "slots": {} }))
             .expect_err("a slots key fails loud");
         assert!(s.contains("slots were removed"), "{s}");
         // A node with no component is still the "missing component" error, not a panic.
-        assert!(parse_ui_json(&serde_json::json!({ "id": "x" })).is_err(), "no component fails");
+        assert!(
+            parse_ui_json(&serde_json::json!({ "id": "x" })).is_err(),
+            "no component fails"
+        );
 
         // Lua path (behind `ui_tree()`), which several live scenes still build through.
         let host = ScriptHost::new(
@@ -1903,7 +1953,9 @@ mod tests {
             "tmpl",
         )
         .expect("host builds");
-        let e = host.ui_tree().expect_err("a template key fails the Lua path loud");
+        let e = host
+            .ui_tree()
+            .expect_err("a template key fails the Lua path loud");
         assert!(format!("{e}").contains("template tier was removed"), "{e}");
     }
 
@@ -1943,7 +1995,10 @@ mod tests {
         let host = ScriptHost::new(src, "modern").expect("arrange/react module loads");
 
         // arrange() → per-component on/off + placement + behavioural flags.
-        let a = host.arrange().expect("arrange runs").expect("arrange present");
+        let a = host
+            .arrange()
+            .expect("arrange runs")
+            .expect("arrange present");
         let menu = a.components.get("menu").expect("menu arranged");
         assert!(menu.on);
         assert_eq!(menu.anchor.as_deref(), Some("center"));
@@ -1957,16 +2012,29 @@ mod tests {
             .react(&ValueMap::new().with("settings", true))
             .expect("react runs")
             .expect("react present");
-        assert!(quiet.get("go").is_none(), "opening a panel emits no outbound intent");
+        assert!(
+            quiet.get("go").is_none(),
+            "opening a panel emits no outbound intent"
+        );
         let nav = host
             .react(&ValueMap::new().with("launch", true))
             .expect("react runs")
             .expect("react present");
-        assert_eq!(nav.text("go"), Some("populous"), "a launch signal emits the nav intent");
+        assert_eq!(
+            nav.text("go"),
+            Some("populous"),
+            "a launch signal emits the nav intent"
+        );
 
         // The state flip from the first react() is remembered on the next arrange().
-        let a2 = host.arrange().expect("arrange runs").expect("arrange present");
-        assert!(a2.components.get("settings").expect("settings").on, "settings now on");
+        let a2 = host
+            .arrange()
+            .expect("arrange runs")
+            .expect("arrange present");
+        assert!(
+            a2.components.get("settings").expect("settings").on,
+            "settings now on"
+        );
     }
 
     #[test]
@@ -1996,7 +2064,10 @@ mod tests {
         assert_eq!(model.number("menu_off_x"), Some(10.0));
         assert_eq!(model.number("menu_off_y"), Some(-4.0));
         assert_eq!(model.text("menu_anchor"), Some("center"));
-        assert!(model.text("settings_anchor").is_none(), "no anchor bind when the script sets none");
+        assert!(
+            model.text("settings_anchor").is_none(),
+            "no anchor bind when the script sets none"
+        );
         assert!(model.is_on("settings_resizable"));
         assert!(model.is_on("settings_movable"));
     }

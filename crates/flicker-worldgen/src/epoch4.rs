@@ -300,7 +300,9 @@ fn water_endowment(prev: &[HexState], tables: &Tables) -> f64 {
         }
         let (mut h_mol, mut o_mol, mut o_locked) = (0.0f64, 0.0f64, 0.0f64);
         for (el, mass) in s.composition.iter() {
-            let Some(e) = tables.element_by_number(el) else { continue };
+            let Some(e) = tables.element_by_number(el) else {
+                continue;
+            };
             let moles = mass / e.atomic_mass.max(1e-6) as f64;
             match el {
                 HYDROGEN => h_mol += moles,
@@ -374,9 +376,15 @@ mod tests {
     /// so a test can place the coastline independent of the calibration gain.
     fn epoch4_at_sea(prev: &[HexState], t: &Tables, target_sea: f32, base: Epoch4) -> Epoch4 {
         let endow = water_endowment(prev, t) as f32;
-        let volume: f32 = prev.iter().map(|s| (target_sea - s.elevation).max(0.0)).sum();
-        let hydration =
-            if endow > 0.0 { volume / (endow * WATER_FILL_GAIN * prev.len() as f32) } else { 0.0 };
+        let volume: f32 = prev
+            .iter()
+            .map(|s| (target_sea - s.elevation).max(0.0))
+            .sum();
+        let hydration = if endow > 0.0 {
+            volume / (endow * WATER_FILL_GAIN * prev.len() as f32)
+        } else {
+            0.0
+        };
         Epoch4 { hydration, ..base }
     }
 
@@ -388,7 +396,12 @@ mod tests {
             .map(|i| Vec3::new(0.0, i as f32 / n as f32, 1.0).normalize())
             .collect();
         let neighbors: Vec<Vec<u32>> = (0..n).map(|_| vec![]).collect();
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         // Elevations spread evenly from -1 (deep) to +1 (peak); every hex can form
         // water, so the endowment is uniform and only the terrain shapes the fill.
         let prev: Vec<HexState> = (0..n)
@@ -401,12 +414,18 @@ mod tests {
         // Fill to sea level 0: the lower half floods, the upper half stays land.
         let out = epoch4_at_sea(&prev, &t, 0.0, Epoch4::default()).apply(&ctx, &prev);
         let submerged = out.iter().filter(|s| s.water_depth > 0.0).count();
-        assert!((3..=7).contains(&submerged), "submerged {submerged}, expected ~half");
+        assert!(
+            (3..=7).contains(&submerged),
+            "submerged {submerged}, expected ~half"
+        );
         assert!(out[0].water_depth > 0.0, "deepest hex should be ocean");
         assert_eq!(out[n - 1].water_depth, 0.0, "highest hex should be dry");
         // Water pools low-first: depth never increases as the ground rises.
         for w in out.windows(2) {
-            assert!(w[1].water_depth <= w[0].water_depth + 1e-6, "deeper ground should hold deeper water");
+            assert!(
+                w[1].water_depth <= w[0].water_depth + 1e-6,
+                "deeper ground should hold deeper water"
+            );
         }
         assert!(out.iter().all(|s| s.temperature.is_finite()));
     }
@@ -416,10 +435,18 @@ mod tests {
         let t = tables();
         let dirs = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)]; // equator, pole
         let neighbors = [vec![], vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let flat = HexState::new(Composition::new()); // elevation 0 both
         let out = Epoch4::default().apply(&ctx, &[flat.clone(), flat]);
-        assert!(out[0].temperature > out[1].temperature, "equator should beat pole");
+        assert!(
+            out[0].temperature > out[1].temperature,
+            "equator should beat pole"
+        );
     }
 
     /// A ring of `n` hexes around the equator — a minimal connected world.
@@ -447,8 +474,16 @@ mod tests {
         use crate::epoch2::Epoch2;
         use crate::epoch3::Epoch3;
         let e1 = Epoch1::new(t, Epoch1Params::default(), 7);
-        let ctx = EpochCtx { tables: t, dirs, neighbors, seed: 7 };
-        let seed: Vec<HexState> = dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let ctx = EpochCtx {
+            tables: t,
+            dirs,
+            neighbors,
+            seed: 7,
+        };
+        let seed: Vec<HexState> = dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let e2 = Epoch2::default().apply(&ctx, &seed);
         let e3 = Epoch3::default().apply(&ctx, &e2);
         (ctx, e3)
@@ -465,15 +500,25 @@ mod tests {
         assert!(atm_total > 0.0, "no atmosphere outgassed");
         for s in &out {
             // Lattice oxygen and the silicate rock-formers stay in the crust.
-            assert_eq!(s.atmosphere.amount(8), 0.0, "free oxygen leaked into the air");
+            assert_eq!(
+                s.atmosphere.amount(8),
+                0.0,
+                "free oxygen leaked into the air"
+            );
             assert_eq!(s.atmosphere.amount(14), 0.0, "silicon leaked into the air");
             assert!(s.precipitation.is_finite() && (0.0..=1.0).contains(&s.precipitation));
             assert!(s.atmosphere.total().is_finite());
         }
         // Water vapor (H) is present — the seed of the water cycle.
-        assert!(out.iter().any(|s| s.atmosphere.amount(1) > 0.0), "no water vapor in the air");
+        assert!(
+            out.iter().any(|s| s.atmosphere.amount(1) > 0.0),
+            "no water vapor in the air"
+        );
         // Precipitation forms somewhere warm and wet.
-        assert!(out.iter().any(|s| s.precipitation > 0.0), "no precipitation anywhere");
+        assert!(
+            out.iter().any(|s| s.precipitation > 0.0),
+            "no precipitation anywhere"
+        );
     }
 
     #[test]
@@ -483,7 +528,12 @@ mod tests {
         // the sea level above both ocean floors so both are submerged.
         let dirs = [Vec3::X, Vec3::Y, Vec3::Z];
         let neighbors = [vec![], vec![], vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let mk = |elev: f32| {
             let mut s = HexState::new(wet_rock());
             s.elevation = elev;
@@ -526,7 +576,12 @@ mod tests {
         // sunlit coastal cradles and the -1.0 hex is the deep cold abyss.
         let dirs = [Vec3::X, Vec3::X, Vec3::X, Vec3::X, Vec3::X];
         let neighbors: [Vec<u32>; 5] = [vec![], vec![], vec![], vec![], vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let mk = |elev: f32| {
             let mut s = HexState::new(organic_wet_rock());
             s.elevation = elev;
@@ -535,12 +590,17 @@ mod tests {
         let prev = [mk(-1.0), mk(-0.3), mk(-0.2), mk(0.4), mk(0.5)];
         let out = epoch4_at_sea(&prev, &t, 0.0, Epoch4::default()).apply(&ctx, &prev);
 
-        assert!(out.iter().all(|s| s.prebiotic.is_finite() && (0.0..=1.0).contains(&s.prebiotic)));
+        assert!(out
+            .iter()
+            .all(|s| s.prebiotic.is_finite() && (0.0..=1.0).contains(&s.prebiotic)));
         assert!(
             out[1].prebiotic > out[0].prebiotic,
             "warm shallow organic water should out-cook the deep abyss"
         );
-        assert!(out[0].prebiotic < 1e-6, "the deep cold abyss should brew ~no precursors");
+        assert!(
+            out[0].prebiotic < 1e-6,
+            "the deep cold abyss should brew ~no precursors"
+        );
     }
 
     #[test]
@@ -548,15 +608,38 @@ mod tests {
         let t = tables();
         let dirs = [Vec3::X, Vec3::X, Vec3::X, Vec3::X, Vec3::X];
         let neighbors: [Vec<u32>; 5] = [vec![], vec![], vec![], vec![], vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let mk = |elev: f32| {
             let mut s = HexState::new(organic_wet_rock());
             s.elevation = elev;
             s
         };
         let prev = [mk(-1.0), mk(-0.3), mk(-0.2), mk(0.4), mk(0.5)];
-        let young = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { duration: 1, ..Epoch4::default() }).apply(&ctx, &prev);
-        let old = epoch4_at_sea(&prev, &t, 0.0, Epoch4 { duration: 10, ..Epoch4::default() }).apply(&ctx, &prev);
+        let young = epoch4_at_sea(
+            &prev,
+            &t,
+            0.0,
+            Epoch4 {
+                duration: 1,
+                ..Epoch4::default()
+            },
+        )
+        .apply(&ctx, &prev);
+        let old = epoch4_at_sea(
+            &prev,
+            &t,
+            0.0,
+            Epoch4 {
+                duration: 10,
+                ..Epoch4::default()
+            },
+        )
+        .apply(&ctx, &prev);
         assert!(
             old[1].prebiotic > young[1].prebiotic,
             "more chemistry time should brew more precursors in the cradle"
@@ -576,8 +659,16 @@ mod tests {
         let mut p = Epoch1Params::default();
         tweak(&mut p);
         let e1 = Epoch1::new(t, p, 7);
-        let ctx = EpochCtx { tables: t, dirs: &dirs, neighbors: &neighbors, seed: 7 };
-        let seed: Vec<HexState> = dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let ctx = EpochCtx {
+            tables: t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 7,
+        };
+        let seed: Vec<HexState> = dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let l2 = Epoch2::default().apply(&ctx, &seed);
         let l3 = Epoch3::default().apply(&ctx, &l2);
         let l4 = Epoch4::default().apply(&ctx, &l3);
@@ -593,7 +684,10 @@ mod tests {
         let wet = ocean_coverage(&t, |p| {
             p.abundance.insert("H".into(), 0.6);
         });
-        assert!(wet > dry, "more hydrogen should flood more of the world ({wet} vs {dry})");
+        assert!(
+            wet > dry,
+            "more hydrogen should flood more of the world ({wet} vs {dry})"
+        );
     }
 
     #[test]
@@ -617,13 +711,25 @@ mod tests {
         let t = tables();
         let st = |c: Composition| HexState::new(c);
         // Same hydrogen; surplus oxygen vs. oxygen all locked up by silicon.
-        let surplus = [st(Composition::from_iter([(1, 100.0), (8, 5000.0), (14, 100.0)]))];
-        let locked = [st(Composition::from_iter([(1, 100.0), (8, 1000.0), (14, 9000.0)]))];
+        let surplus = [st(Composition::from_iter([
+            (1, 100.0),
+            (8, 5000.0),
+            (14, 100.0),
+        ]))];
+        let locked = [st(Composition::from_iter([
+            (1, 100.0),
+            (8, 1000.0),
+            (14, 9000.0),
+        ]))];
         assert!(
             water_endowment(&surplus, &t) > water_endowment(&locked, &t),
             "free oxygen should make more water than oxygen bound in silica"
         );
-        assert_eq!(water_endowment(&locked, &t), 0.0, "silica should soak every oxygen → no water");
+        assert_eq!(
+            water_endowment(&locked, &t),
+            0.0,
+            "silica should soak every oxygen → no water"
+        );
     }
 
     #[test]
@@ -632,6 +738,9 @@ mod tests {
         assert_eq!(fill_to_volume(&elevs, 0.0), -1.0, "no water → dry world");
         let lvl = fill_to_volume(&elevs, 1.5);
         let held: f32 = elevs.iter().map(|&e| (lvl - e).max(0.0)).sum();
-        assert!((held - 1.5).abs() < 1e-2, "fill should hold the requested volume (held {held})");
+        assert!(
+            (held - 1.5).abs() < 1e-2,
+            "fill should hold the requested volume (held {held})"
+        );
     }
 }

@@ -21,8 +21,7 @@ use flicker_materials::{JsonTableSource, Tables};
 use flicker_worldgrid::icosphere_with_outlines;
 
 use flicker_poc_chemistry::{
-    biosphere, content_data_dir, crust_kind, enrichment, formation_stages,
-    observe_habitability,
+    biosphere, content_data_dir, crust_kind, enrichment, formation_stages, observe_habitability,
     Budget, CrustKind, Habitability, Levers, PlanetState, PlateEvent, PlateObservation,
     PlateObserver, ProcessState, Scheduler, World, NOMINAL_DT_MYR, PLANET_FREQ,
 };
@@ -85,8 +84,9 @@ pub struct SeedSpec {
 /// The Starter's knob roster: the volatiles that make sky and sea, and the
 /// rock-formers that make everything else. Symbols resolved through the
 /// periodic table at spawn; the UI shows them as data.
-const SEED_KNOBS: [&str; 12] =
-    ["H", "C", "N", "S", "O", "Si", "Fe", "Mg", "Ca", "Al", "Na", "K"];
+const SEED_KNOBS: [&str; 12] = [
+    "H", "C", "N", "S", "O", "Si", "Fe", "Mg", "Ca", "Al", "Na", "K",
+];
 
 /// A materialised tile, reduced to something a panel can show.
 #[derive(Clone)]
@@ -316,15 +316,21 @@ impl GateWatch {
     /// whether any moved. The **first** call only establishes the baseline —
     /// a world's opening conditions are not a transition.
     fn observe(&mut self, at_myr: f64, procs: &[ProcessState]) -> bool {
-        let now: Vec<(&'static str, bool, bool)> =
-            procs.iter().map(|p| (p.name, p.ready && !p.held, p.held)).collect();
+        let now: Vec<(&'static str, bool, bool)> = procs
+            .iter()
+            .map(|p| (p.name, p.ready && !p.held, p.held))
+            .collect();
         let mut moved = false;
         if !self.prev.is_empty() {
             for &(stage, opened, held) in &now {
                 let was = self.prev.iter().find(|&&(n, ..)| n == stage);
                 if let Some(&(_, was_open, was_held)) = was {
                     if held == was_held && was_open != opened {
-                        self.log.push(GateEvent { at_myr, stage, opened });
+                        self.log.push(GateEvent {
+                            at_myr,
+                            stage,
+                            opened,
+                        });
                         moved = true;
                     }
                 }
@@ -348,7 +354,10 @@ enum EroCmd {
     /// A freshly-materialised tile to work on, with each migrated bed's density
     /// and resistance (the rock tier's read, taken once — the worker itself never
     /// touches the world).
-    Tile(Box<flicker_worldtile::Tile>, Vec<flicker_worldtile::BedProps>),
+    Tile(
+        Box<flicker_worldtile::Tile>,
+        Vec<flicker_worldtile::BedProps>,
+    ),
     /// Start/stop the rain.
     Toggle,
 }
@@ -359,10 +368,7 @@ enum EroCmd {
 /// inspected tile outright (pixels are truth; the aggregate keeps its own course),
 /// paces itself at a watchable cadence, and publishes a preview into the same slot
 /// the inspector already reads.
-fn erosion_main(
-    cmd_rx: Receiver<EroCmd>,
-    tile_slot: Arc<Mutex<Option<TilePreview>>>,
-) {
+fn erosion_main(cmd_rx: Receiver<EroCmd>, tile_slot: Arc<Mutex<Option<TilePreview>>>) {
     use flicker_worldtile::{Eroder, ErosionParams};
 
     /// Between passes, so the batch stays a background hum rather than a core pinned
@@ -371,7 +377,10 @@ fn erosion_main(
 
     let mut eroder = Eroder::new();
     let params = ErosionParams::default();
-    let mut current: Option<(Box<flicker_worldtile::Tile>, Vec<flicker_worldtile::BedProps>)> = None;
+    let mut current: Option<(
+        Box<flicker_worldtile::Tile>,
+        Vec<flicker_worldtile::BedProps>,
+    )> = None;
     let mut raining = false;
     let mut passes = 0u64;
     let mut books = flicker_worldtile::PassReport::default();
@@ -451,7 +460,13 @@ impl SimHandle {
             .name("flicker-sim".into())
             .spawn(move || sim_main(seed, cmd_rx, static_tx, latest_for_thread, tile_for_thread))
             .expect("spawn sim thread");
-        Self { cmd_tx, static_rx, latest, tile, join: Some(join) }
+        Self {
+            cmd_tx,
+            static_rx,
+            latest,
+            tile,
+            join: Some(join),
+        }
     }
 
     /// Send a command (best-effort — a closed channel means the thread is gone).
@@ -502,7 +517,8 @@ fn sim_main(
     let dir = content_data_dir();
     // Shared with the stages that read the catalog (crystallization asks what a
     // mineral is made of; erosion asks how well the resulting rock lasts).
-    let tables = Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("material tables"));
+    let tables =
+        Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("material tables"));
     // The SAME set the fluid actually carries — asked of the sim crate rather
     // than re-derived here, so the view cannot come to look for a metal the
     // chemistry never moves (this was a byte-for-byte copy of the filter).
@@ -532,8 +548,11 @@ fn sim_main(
                 .compounds()
                 .iter()
                 .map(|c| {
-                    let label =
-                        if c.formula.is_empty() { c.name.clone() } else { c.formula.clone() };
+                    let label = if c.formula.is_empty() {
+                        c.name.clone()
+                    } else {
+                        c.formula.clone()
+                    };
                     (c.id, label)
                 })
                 .collect(),
@@ -569,8 +588,19 @@ fn sim_main(
         .spawn(move || erosion_main(ero_rx, ero_slot))
         .expect("spawn erosion thread");
 
-
-    observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen);
+    observe_and_publish(
+        &latest,
+        &world,
+        &sched,
+        &tables,
+        &mut observer,
+        &mut event_log,
+        &mut gates,
+        playing,
+        rate_hz,
+        &levers,
+        &mut gen,
+    );
 
     loop {
         loop {
@@ -581,10 +611,15 @@ fn sim_main(
                         // The tile span is fixed at a hex, so the planet's radius is
                         // whatever this grid frequency implies.
                         let r = flicker_worldtile::radius_for_freq(grid.freq);
-                        let tile = flicker_worldtile::materialize(&world, cell, r, &tile_outlines[cell]);
+                        let tile =
+                            flicker_worldtile::materialize(&world, cell, r, &tile_outlines[cell]);
                         let (rgba, dim) = tile.preview_rgba(4);
                         if let Ok(mut slot) = tile_slot.lock() {
-                            *slot = Some(TilePreview { rgba, dim, caption: tile.summary() });
+                            *slot = Some(TilePreview {
+                                rgba,
+                                dim,
+                                caption: tile.summary(),
+                            });
                         }
                         // Hand the ground to the rain. Each migrated bed carries the
                         // rock tier's own read of what it is — the same resistance
@@ -614,7 +649,19 @@ fn sim_main(
                     // on the hold itself (the maintainer's hand is not a world
                     // event), so this cannot pause the run on its own click —
                     // but a REAL edge that lands the same instant still counts.
-                    if observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen) {
+                    if observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    ) {
                         playing = false;
                     }
                 }
@@ -625,7 +672,19 @@ fn sim_main(
                     // and the control springs back the moment it is released
                     // (Aaron, 2026-08-06 — "slider at the start for ticks... it
                     // snaps back to where it was").
-                    observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen);
+                    observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    );
                 }
                 Ok(SimCommand::SetLevers(next)) => {
                     // Rates live in the stages, so changing one rebuilds them. The
@@ -646,7 +705,19 @@ fn sim_main(
                     for name in held {
                         sched.set_held(&name, true);
                     }
-                    if observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen) {
+                    if observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    ) {
                         playing = false;
                     }
                 }
@@ -656,16 +727,43 @@ fn sim_main(
                     // own LABEL. Pausing stops the ticks that would have
                     // published the new state, so the transport went on saying
                     // PAUSE after it had already paused.
-                    observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen);
+                    observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    );
                 }
                 Ok(SimCommand::Reset) => {
                     world = World::seed(grid.clone(), budget.clone(), &tables, seed);
-                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &world, &levers), seed);
+                    sched = Scheduler::new(
+                        formation_stages(Arc::clone(&tables), &world, &levers),
+                        seed,
+                    );
                     observer.reset();
                     event_log.clear();
                     gates.reset();
                     playing = false;
-                    observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen);
+                    observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    );
                 }
                 Ok(SimCommand::Reseed(spec)) => {
                     // A forge is a NEW PLANET: size, endowment and seed all take
@@ -684,12 +782,27 @@ fn sim_main(
                         send_static(&grid, tile_outlines.clone(), &budget, &seed_elements);
                     }
                     world = World::seed(grid.clone(), budget.clone(), &tables, seed);
-                    sched = Scheduler::new(formation_stages(Arc::clone(&tables), &world, &levers), seed);
+                    sched = Scheduler::new(
+                        formation_stages(Arc::clone(&tables), &world, &levers),
+                        seed,
+                    );
                     observer.reset();
                     event_log.clear();
                     gates.reset();
                     playing = false;
-                    observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen);
+                    observe_and_publish(
+                        &latest,
+                        &world,
+                        &sched,
+                        &tables,
+                        &mut observer,
+                        &mut event_log,
+                        &mut gates,
+                        playing,
+                        rate_hz,
+                        &levers,
+                        &mut gen,
+                    );
                 }
                 Ok(SimCommand::Shutdown) => return,
                 Err(TryRecvError::Empty) => break,
@@ -702,7 +815,19 @@ fn sim_main(
             // A gate moving is the world crossing one of its own condition
             // thresholds — the moment it changed character. Stop there and let
             // the maintainer look; Space picks the run back up.
-            if observe_and_publish(&latest, &world, &sched, &tables, &mut observer, &mut event_log, &mut gates, playing, rate_hz, &levers, &mut gen) {
+            if observe_and_publish(
+                &latest,
+                &world,
+                &sched,
+                &tables,
+                &mut observer,
+                &mut event_log,
+                &mut gates,
+                playing,
+                rate_hz,
+                &levers,
+                &mut gen,
+            ) {
                 playing = false;
             }
             thread::sleep(Duration::from_secs_f32(1.0 / rate_hz));
@@ -740,7 +865,9 @@ fn observe_and_publish(
     if event_log.len() > KEEP {
         event_log.drain(0..event_log.len() - KEEP);
     }
-    publish(latest, world, sched, tables, &obs, event_log, gates, playing, rate_hz, levers, gen)
+    publish(
+        latest, world, sched, tables, &obs, event_log, gates, playing, rate_hz, levers, gen,
+    )
 }
 
 /// Total booked mass of the named compounds across every bed on the planet —
@@ -778,7 +905,8 @@ fn publish(
     // no state and takes `&World` — it is a read, and running it here neither
     // touches the world nor double-counts the erosion stage's own call. Same dt
     // the pipeline steps at, so the rain shown is the rain that cut.
-    let weather = flicker_poc_chemistry::Weather::observe(world, NOMINAL_DT_MYR, levers.stellar_heat);
+    let weather =
+        flicker_poc_chemistry::Weather::observe(world, NOMINAL_DT_MYR, levers.stellar_heat);
     // What each ground IS against the sea. Computed in two passes because the
     // EDGE is a fact about neighbours, and the adjacency lives here.
     let sea = state.sea_level_m;
@@ -873,7 +1001,11 @@ fn publish(
         // the honest question is "how much sea did this take", and a tonne of
         // cellulose does not lock a tonne of water.
         water_sea_kg: world.reservoirs.ocean.mass_kg(),
-        water_sky_kg: world.reservoirs.atmosphere.species.amount(flicker_poc_chemistry::atmosphere::WATER_VAPOUR),
+        water_sky_kg: world
+            .reservoirs
+            .atmosphere
+            .species
+            .amount(flicker_poc_chemistry::atmosphere::WATER_VAPOUR),
         water_life_kg: world
             .columns
             .iter()
@@ -928,7 +1060,11 @@ mod tests {
     fn procs(gates: &[(&'static str, bool)]) -> Vec<ProcessState> {
         gates
             .iter()
-            .map(|&(name, ready)| ProcessState { name, held: false, ready })
+            .map(|&(name, ready)| ProcessState {
+                name,
+                held: false,
+                ready,
+            })
             .collect()
     }
 
@@ -966,7 +1102,10 @@ mod tests {
         // The interior cooled past the melt floor: it shuts, and that pauses too.
         assert!(w.observe(9.0, &procs(&[("Outgassing", false), ("Volcanism", false)])));
         assert_eq!(w.log.len(), 3, "both of this tick's edges were logged");
-        assert!(w.log.iter().rev().take(2).all(|e| !e.opened), "and both were closures");
+        assert!(
+            w.log.iter().rev().take(2).all(|e| !e.opened),
+            "and both were closures"
+        );
     }
 
     /// **The two silences.** A HELD stage says nothing — its chemistry may keep
@@ -994,7 +1133,10 @@ mod tests {
         // Still silence — a pinned gate has nothing to announce.
         assert!(!w.observe(2.0, &procs_held(&[("WaterDelivery", false, true)])));
         assert!(!w.observe(3.0, &procs_held(&[("WaterDelivery", true, true)])));
-        assert!(w.log.is_empty(), "a held stage's private chemistry is not an event");
+        assert!(
+            w.log.is_empty(),
+            "a held stage's private chemistry is not an event"
+        );
 
         // Released while its chemistry is satisfied: the release itself is the
         // maintainer's hand — silent — and only a LATER, world-caused change

@@ -233,10 +233,18 @@ fn craton_field(ctx: &EpochCtx, prev: &[HexState]) -> Vec<f32> {
 fn craton_seeds(ctx: &EpochCtx, field: &[f32], k: usize) -> Vec<usize> {
     let n = field.len();
     let mut maxima: Vec<usize> = (0..n)
-        .filter(|&i| ctx.neighbors[i].iter().all(|&nb| field[i] >= field[nb as usize]))
+        .filter(|&i| {
+            ctx.neighbors[i]
+                .iter()
+                .all(|&nb| field[i] >= field[nb as usize])
+        })
         .collect();
-    maxima
-        .sort_by(|&a, &b| field[b].partial_cmp(&field[a]).unwrap_or(Ordering::Equal).then(a.cmp(&b)));
+    maxima.sort_by(|&a, &b| {
+        field[b]
+            .partial_cmp(&field[a])
+            .unwrap_or(Ordering::Equal)
+            .then(a.cmp(&b))
+    });
     maxima.truncate(k.max(1));
     if maxima.is_empty() {
         maxima.push(0);
@@ -255,7 +263,9 @@ fn plate_drift(ctx: &EpochCtx, seed: usize, members: &[u32], field: &[f32]) -> V
         .iter()
         .copied()
         .min_by(|&a, &b| {
-            field[a as usize].partial_cmp(&field[b as usize]).unwrap_or(Ordering::Equal)
+            field[a as usize]
+                .partial_cmp(&field[b as usize])
+                .unwrap_or(Ordering::Equal)
         })
         .unwrap_or(seed as u32) as usize;
     let off = ctx.dirs[low] - d;
@@ -279,7 +289,10 @@ impl Epoch3 {
     pub fn partition(&self, ctx: &EpochCtx, prev: &[HexState]) -> Partition {
         let n = ctx.dirs.len();
         if n == 0 {
-            return Partition { plate: Vec::new(), plates: Vec::new() };
+            return Partition {
+                plate: Vec::new(),
+                plates: Vec::new(),
+            };
         }
         // Mantle convection drives it: seed plates at the upwelling cell centres,
         // then grow a Voronoi partition over the neighbour graph. Each plate's rigid
@@ -310,10 +323,19 @@ impl Epoch3 {
         // leans toward its thinnest-crust edge).
         let plates: Vec<Plate> = (0..kk)
             .map(|p| {
-                let mean_rank = if count[p] > 0 { rank_sum[p] / count[p] as f32 } else { 0.0 };
+                let mean_rank = if count[p] > 0 {
+                    rank_sum[p] / count[p] as f32
+                } else {
+                    0.0
+                };
                 let continental = mean_rank >= cont_threshold;
                 let motion = plate_drift(ctx, seeds[p], &members[p], &field);
-                Plate { id: p as u16, continental, motion, members: std::mem::take(&mut members[p]) }
+                Plate {
+                    id: p as u16,
+                    continental,
+                    motion,
+                    members: std::mem::take(&mut members[p]),
+                }
             })
             .collect();
         Partition { plate, plates }
@@ -337,7 +359,10 @@ impl Epoch3 {
     ) -> Partition {
         let n = ctx.dirs.len();
         if n == 0 {
-            return Partition { plate: Vec::new(), plates: Vec::new() };
+            return Partition {
+                plate: Vec::new(),
+                plates: Vec::new(),
+            };
         }
         // One neighbour-average pass so the maxima are clean cell centres, not the ragged
         // clusters a raw field would give (a plateau of equal cells → many tiny plates).
@@ -372,10 +397,19 @@ impl Epoch3 {
         }
         let plates: Vec<Plate> = (0..kk)
             .map(|p| {
-                let mean_rank = if count[p] > 0 { rank_sum[p] / count[p] as f32 } else { 0.0 };
+                let mean_rank = if count[p] > 0 {
+                    rank_sum[p] / count[p] as f32
+                } else {
+                    0.0
+                };
                 let continental = mean_rank >= cont_threshold;
                 let motion = flow_sum[p].normalize_or_zero();
-                Plate { id: p as u16, continental, motion, members: std::mem::take(&mut members[p]) }
+                Plate {
+                    id: p as u16,
+                    continental,
+                    motion,
+                    members: std::mem::take(&mut members[p]),
+                }
             })
             .collect();
         Partition { plate, plates }
@@ -521,8 +555,9 @@ impl EpochTransform for Epoch3 {
         // with its plate's single motion vector) — reproducing the pre-heat straight-seam
         // behaviour. The redesign engine passes the real per-cell convection flow.
         let part = self.partition(ctx, prev);
-        let flow: Vec<Vec3> =
-            (0..prev.len()).map(|i| part.plates[part.plate[i]].motion).collect();
+        let flow: Vec<Vec3> = (0..prev.len())
+            .map(|i| part.plates[part.plate[i]].motion)
+            .collect();
         self.apply_with(ctx, prev, &part, &flow)
     }
 }
@@ -658,7 +693,11 @@ impl Epoch3 {
                         let along = off.dot(m_t);
                         let cross = (off - along * m_t).length();
                         // Long tail downstream (+motion), short falloff upstream.
-                        let an = if along >= 0.0 { along / trail } else { -along / HOTSPOT_WIDTH };
+                        let an = if along >= 0.0 {
+                            along / trail
+                        } else {
+                            -along / HOTSPOT_WIDTH
+                        };
                         let cn = cross / HOTSPOT_WIDTH;
                         lift += (-(an * an + cn * cn)).exp();
                     }
@@ -676,7 +715,12 @@ impl Epoch3 {
         //    distance away from them (toward the subducting margins); continental
         //    crust is old, stable craton. BFS the hop distance from every ridge.
         let dist = ridge_distance(n, &out, ctx.neighbors);
-        let max_d = dist.iter().copied().filter(|&d| d != u32::MAX).max().unwrap_or(0);
+        let max_d = dist
+            .iter()
+            .copied()
+            .filter(|&d| d != u32::MAX)
+            .max()
+            .unwrap_or(0);
         for (i, s) in out.iter_mut().enumerate() {
             let d_norm = if max_d == 0 {
                 1.0
@@ -817,7 +861,11 @@ pub fn convection_flow(ctx: &EpochCtx, heat: &[f32]) -> Vec<Vec3> {
 fn heat_maxima(ctx: &EpochCtx, heat: &[f32]) -> Vec<usize> {
     let n = heat.len();
     let mut seeds: Vec<usize> = (0..n)
-        .filter(|&i| ctx.neighbors[i].iter().all(|&nb| heat[i] >= heat[nb as usize]))
+        .filter(|&i| {
+            ctx.neighbors[i]
+                .iter()
+                .all(|&nb| heat[i] >= heat[nb as usize])
+        })
         .collect();
     if seeds.is_empty() {
         seeds.push(0);
@@ -910,7 +958,12 @@ fn advance_plates(cells: &mut [HexState], plate_of: &mut [usize], ctx: &EpochCtx
     for d in 0..n {
         if pushers[d].is_empty() {
             // Spreading ridge: differentiate thin fresh crust from the local mantle.
-            produce_fresh_crust(&cells[d].composition, ctx.tables, &mut new_crust[d], &mut new_cf[d]);
+            produce_fresh_crust(
+                &cells[d].composition,
+                ctx.tables,
+                &mut new_crust[d],
+                &mut new_cf[d],
+            );
             continue;
         }
         // The overrider = thickest-crust arrival (ties → lowest index for determinism).
@@ -935,8 +988,11 @@ fn advance_plates(cells: &mut [HexState], plate_of: &mut [usize], ctx: &EpochCtx
                 continue;
             }
             let contrast = cells[over].crust_fraction - cells[i].crust_fraction;
-            let factor =
-                if contrast > SUBDUCT_CONTRAST { SUBDUCT_ACCRETE } else { 1.0 }; // subduct vs collide
+            let factor = if contrast > SUBDUCT_CONTRAST {
+                SUBDUCT_ACCRETE
+            } else {
+                1.0
+            }; // subduct vs collide
             for (el, amt) in cells[i].crust.iter() {
                 new_crust[d].add(el, amt * factor);
             }
@@ -957,7 +1013,12 @@ fn advance_plates(cells: &mut [HexState], plate_of: &mut [usize], ctx: &EpochCtx
 /// calls this each time its phase accumulator crosses a whole cell (between advances the
 /// crust sits still — the coherent-hop cadence), the single-step form of what the batch
 /// [`Epoch3::drift_plates`] loops internally.
-pub fn advance_conveyor(cells: &mut [HexState], part: &mut Partition, ctx: &EpochCtx, flow: &[Vec3]) {
+pub fn advance_conveyor(
+    cells: &mut [HexState],
+    part: &mut Partition,
+    ctx: &EpochCtx,
+    flow: &[Vec3],
+) {
     let n = cells.len();
     if n == 0 {
         return;
@@ -1000,7 +1061,12 @@ mod tests {
     fn ctx_for<'a>(dirs: &'a [Vec3], neighbors: &'a [Vec<u32>]) -> EpochCtx<'a> {
         // Epoch 3 never reads the tables, so a throwaway empty one is fine — but
         // the field requires a reference, so load the real one.
-        EpochCtx { tables: tables_leak(), dirs, neighbors, seed: 2024 }
+        EpochCtx {
+            tables: tables_leak(),
+            dirs,
+            neighbors,
+            seed: 2024,
+        }
     }
 
     fn tables_leak() -> &'static flicker_materials::Tables {
@@ -1022,14 +1088,23 @@ mod tests {
         let out = Epoch3::default().apply(&ctx, &prev);
         assert_eq!(out.len(), n);
         for s in &out {
-            assert!((s.plate as usize) < Epoch3::default().plates, "plate id out of range");
+            assert!(
+                (s.plate as usize) < Epoch3::default().plates,
+                "plate id out of range"
+            );
             assert!(s.elevation.is_finite() && (-1.0..=1.0).contains(&s.elevation));
         }
         // Multiple plates on a ring ⇒ real boundaries and a spread of elevations.
         let mut elevations: Vec<f32> = out.iter().map(|s| s.elevation).collect();
         elevations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert!(elevations.last().unwrap() - elevations[0] > 0.1, "elevation is flat — no tectonics");
-        assert!(out.iter().any(|s| s.boundary != Boundary::Interior), "no plate boundaries formed");
+        assert!(
+            elevations.last().unwrap() - elevations[0] > 0.1,
+            "elevation is flat — no tectonics"
+        );
+        assert!(
+            out.iter().any(|s| s.boundary != Boundary::Interior),
+            "no plate boundaries formed"
+        );
     }
 
     #[test]
@@ -1075,11 +1150,20 @@ mod tests {
         let comp_before: f64 = cells.iter().map(|c| c.composition.total()).sum();
         smooth_crust_thickness(&mut cells, &ctx, 2);
         // The spike spread into a broad bump: the peak dropped, its neighbours rose.
-        assert!(cells[n / 2].crust_fraction < 2.0, "the spike wasn't spread down");
-        assert!(cells[n / 2 - 1].crust_fraction > 0.5, "the pile didn't spread to a neighbour");
+        assert!(
+            cells[n / 2].crust_fraction < 2.0,
+            "the spike wasn't spread down"
+        );
+        assert!(
+            cells[n / 2 - 1].crust_fraction > 0.5,
+            "the pile didn't spread to a neighbour"
+        );
         // Only the derived thickness moved — the conserved element ledger is untouched.
         let comp_after: f64 = cells.iter().map(|c| c.composition.total()).sum();
-        assert_eq!(comp_before, comp_after, "de-scatter must not touch the element ledger");
+        assert_eq!(
+            comp_before, comp_after,
+            "de-scatter must not touch the element ledger"
+        );
         // A uniform thickness field has nothing to spread → unchanged.
         let mut flat: Vec<HexState> = (0..n)
             .map(|_| {
@@ -1106,22 +1190,34 @@ mod tests {
         // The plate count is now EMERGENT (up to `plates` upwelling cells the mantle
         // convection actually produced) rather than a fixed number of random seeds.
         assert!(!part.plates.is_empty(), "no plates formed");
-        assert!(part.plates.len() <= Epoch3::default().plates, "more plates than seeds");
+        assert!(
+            part.plates.len() <= Epoch3::default().plates,
+            "more plates than seeds"
+        );
         let mut seen = 0usize;
         for (p, plate) in part.plates.iter().enumerate() {
             assert_eq!(plate.id as usize, p, "plate id matches its index");
-            assert!((plate.motion.length() - 1.0).abs() < 1e-3, "plate drift isn't a unit vector");
+            assert!(
+                (plate.motion.length() - 1.0).abs() < 1e-3,
+                "plate drift isn't a unit vector"
+            );
             seen += plate.members.len();
         }
         // Membership partitions the hexes: every hex in exactly one plate.
         assert_eq!(seen, n, "plate membership doesn't cover every hex once");
         for (i, &p) in part.plate.iter().enumerate() {
-            assert!(part.plates[p].members.contains(&(i as u32)), "hex missing from its plate");
+            assert!(
+                part.plates[p].members.contains(&(i as u32)),
+                "hex missing from its plate"
+            );
         }
         // The per-hex layer agrees with the cross-hex record it was built from.
         let out = Epoch3::default().apply(&ctx, &prev);
         for (i, s) in out.iter().enumerate() {
-            assert_eq!(s.plate as usize, part.plate[i], "layer disagrees with the partition");
+            assert_eq!(
+                s.plate as usize, part.plate[i],
+                "layer disagrees with the partition"
+            );
         }
     }
 
@@ -1133,8 +1229,9 @@ mod tests {
         let n = 60;
         let (dirs, neighbors) = ring(n);
         let ctx = ctx_for(&dirs, &neighbors);
-        let prev: Vec<HexState> =
-            (0..n).map(|_| HexState::new(Composition::from_iter([(14u8, 1000.0)]))).collect();
+        let prev: Vec<HexState> = (0..n)
+            .map(|_| HexState::new(Composition::from_iter([(14u8, 1000.0)])))
+            .collect();
         let count_for = |blooms: f32| {
             let heat: Vec<f32> = (0..n)
                 .map(|i| {
@@ -1143,11 +1240,17 @@ mod tests {
                 })
                 .collect();
             let flow = convection_flow(&ctx, &heat);
-            Epoch3::default().partition_heat(&ctx, &prev, &heat, &flow).plates.len()
+            Epoch3::default()
+                .partition_heat(&ctx, &prev, &heat, &flow)
+                .plates
+                .len()
         };
         // More convection blooms → more plates; the count follows the heat, not `plates`.
         let (few, many) = (count_for(2.0), count_for(5.0));
-        assert!(many > few, "plate count should track the convection cells ({many} vs {few})");
+        assert!(
+            many > few,
+            "plate count should track the convection cells ({many} vs {few})"
+        );
         // And it is NOT the hard-coded default of 8.
         assert_ne!(few, 8, "plate count must be emergent, not the old fixed 8");
     }
@@ -1168,14 +1271,30 @@ mod tests {
                 s
             })
             .collect();
-        let ctx_a = EpochCtx { tables: tables_leak(), dirs: &dirs, neighbors: &neighbors, seed: 1 };
-        let ctx_b =
-            EpochCtx { tables: tables_leak(), dirs: &dirs, neighbors: &neighbors, seed: 987_654 };
+        let ctx_a = EpochCtx {
+            tables: tables_leak(),
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
+        let ctx_b = EpochCtx {
+            tables: tables_leak(),
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 987_654,
+        };
         let pa = Epoch3::default().partition(&ctx_a, &prev);
         let pb = Epoch3::default().partition(&ctx_b, &prev);
-        assert_eq!(pa.plate, pb.plate, "plate layout must derive from the material, not the seed");
+        assert_eq!(
+            pa.plate, pb.plate,
+            "plate layout must derive from the material, not the seed"
+        );
         let distinct: std::collections::BTreeSet<usize> = pa.plate.iter().copied().collect();
-        assert!(distinct.len() >= 2, "expected multiple plates from the cratons, got {}", distinct.len());
+        assert!(
+            distinct.len() >= 2,
+            "expected multiple plates from the cratons, got {}",
+            distinct.len()
+        );
     }
 
     /// The core coherence property: one whole-cell advance moves a plate's crust as a
@@ -1207,13 +1326,22 @@ mod tests {
 
         // Crust conserved (pure transfer, empty mantle → no production).
         let mass1 = cells.iter().map(|s| s.crust.total()).sum::<f64>();
-        assert!((mass1 - mass0).abs() < 1e-6, "advance didn't conserve crust ({mass0} → {mass1})");
+        assert!(
+            (mass1 - mass0).abs() < 1e-6,
+            "advance didn't conserve crust ({mass0} → {mass1})"
+        );
         // The Fe rode as ONE lump to ONE new cell — not diffused across many.
         let fe_total: f64 = cells.iter().map(|s| s.crust.amount(26)).sum();
         assert!((fe_total - 500.0).abs() < 1e-6, "Fe marker not conserved");
         let carriers = cells.iter().filter(|s| s.crust.amount(26) > 1.0).count();
-        assert_eq!(carriers, 1, "the Fe marker smeared instead of moving as a lump");
-        assert!(cells[0].crust.amount(26) < 1.0, "the plate didn't carry its material off cell 0");
+        assert_eq!(
+            carriers, 1,
+            "the Fe marker smeared instead of moving as a lump"
+        );
+        assert!(
+            cells[0].crust.amount(26) < 1.0,
+            "the plate didn't carry its material off cell 0"
+        );
     }
 
     /// Slice 2 — realistic subduction: at a convergence with a buoyancy contrast, the
@@ -1255,10 +1383,16 @@ mod tests {
             "the heavy slab didn't subduct (crust Fe {crust_fe0} → {crust_fe1})"
         );
         // The buoyant plate (cell 2, plate 2) overrides the trench cell.
-        assert_eq!(plate_of[1], 2, "the buoyant plate should override at the trench");
+        assert_eq!(
+            plate_of[1], 2,
+            "the buoyant plate should override at the trench"
+        );
         // The conserved mantle ledger is untouched.
         for (i, s) in cells.iter().enumerate() {
-            assert_eq!(s.composition, comp0[i], "subduction disturbed the mantle ledger");
+            assert_eq!(
+                s.composition, comp0[i],
+                "subduction disturbed the mantle ledger"
+            );
         }
     }
 
@@ -1293,7 +1427,10 @@ mod tests {
         // The conserved element ledger (the mantle `composition`) is never moved by the
         // conveyor — only the crust veneer travels.
         for (i, s) in cells.iter().enumerate() {
-            assert_eq!(s.composition, prev[i].composition, "the conveyor disturbed the mantle ledger");
+            assert_eq!(
+                s.composition, prev[i].composition,
+                "the conveyor disturbed the mantle ledger"
+            );
         }
         // The partition rode with the plates: every cell labelled, ids intact, motion is
         // a unit-or-zero summary vector, membership partitions the hexes.
@@ -1301,10 +1438,16 @@ mod tests {
         let mut seen = 0usize;
         for (p, pl) in part_out.plates.iter().enumerate() {
             assert_eq!(pl.id as usize, p, "plate id must match its index");
-            assert!(pl.motion.length() < 1.001, "plate motion summary should be unit-or-zero");
+            assert!(
+                pl.motion.length() < 1.001,
+                "plate motion summary should be unit-or-zero"
+            );
             seen += pl.members.len();
         }
-        assert_eq!(seen, n, "tracked membership must still cover every hex once");
+        assert_eq!(
+            seen, n,
+            "tracked membership must still cover every hex once"
+        );
         // Deterministic.
         let (again, _) = Epoch3::default().drift_plates(&ctx, &prev, part, &flow, 12);
         assert_eq!(cells, again, "the conveyor must be deterministic");
@@ -1335,7 +1478,10 @@ mod tests {
         // Continental crust is old (cratonic) — at least 0.6 of the max age.
         for s in &out {
             if s.continental {
-                assert!(s.plate_age >= 0.6 * e3.max_age - 1.0, "continental crust read too young");
+                assert!(
+                    s.plate_age >= 0.6 * e3.max_age - 1.0,
+                    "continental crust read too young"
+                );
             }
         }
         // Where an oceanic spreading ridge formed, the crust on it is the youngest
@@ -1348,7 +1494,10 @@ mod tests {
         if !oceanic_ridge.is_empty() {
             let ridge_age = oceanic_ridge.iter().copied().fold(f32::MAX, f32::min);
             let oldest = out.iter().map(|s| s.plate_age).fold(f32::MIN, f32::max);
-            assert!(oldest > ridge_age, "no crust-age gradient away from the ridge");
+            assert!(
+                oldest > ridge_age,
+                "no crust-age gradient away from the ridge"
+            );
         }
     }
 
@@ -1371,7 +1520,12 @@ mod tests {
                 s
             })
             .collect();
-        let e3 = Epoch3 { mountain_uplift: 0.0, rift_drop: 0.0, hotspots: 0, ..Epoch3::default() };
+        let e3 = Epoch3 {
+            mountain_uplift: 0.0,
+            rift_drop: 0.0,
+            hotspots: 0,
+            ..Epoch3::default()
+        };
         let out = e3.apply(&ctx, &prev);
 
         // Elevation is monotone non-decreasing in crust buoyancy (fed ascending).
@@ -1385,13 +1539,19 @@ mod tests {
         }
         // The least-buoyant hex bottoms out at the ocean base, the most-buoyant tops
         // out at the continental base — a full continent↔ocean spread.
-        assert!((out[0].elevation - e3.oceanic_base).abs() < 1e-5, "least-buoyant hex isn't ocean floor");
+        assert!(
+            (out[0].elevation - e3.oceanic_base).abs() < 1e-5,
+            "least-buoyant hex isn't ocean floor"
+        );
         assert!(
             (out[n - 1].elevation - e3.continental_base).abs() < 1e-5,
             "most-buoyant hex isn't continental high"
         );
         // And the buoyant end reads continental, the dense end oceanic.
-        assert!(out[n - 1].continental, "most-buoyant hex should read continental");
+        assert!(
+            out[n - 1].continental,
+            "most-buoyant hex should read continental"
+        );
         assert!(!out[0].continental, "least-buoyant hex should read oceanic");
     }
 
@@ -1412,13 +1572,25 @@ mod tests {
             })
             .collect();
         let land = |frac: f32| {
-            let e3 = Epoch3 { continental_fraction: frac, ..Epoch3::default() };
-            e3.apply(&ctx, &prev).iter().filter(|s| s.continental).count()
+            let e3 = Epoch3 {
+                continental_fraction: frac,
+                ..Epoch3::default()
+            };
+            e3.apply(&ctx, &prev)
+                .iter()
+                .filter(|s| s.continental)
+                .count()
         };
         // More balance → more land, and the share tracks the knob (±a hex of rounding).
-        assert!(land(0.2) < land(0.5) && land(0.5) < land(0.8), "land share should track the knob");
+        assert!(
+            land(0.2) < land(0.5) && land(0.5) < land(0.8),
+            "land share should track the knob"
+        );
         let quarter = land(0.25);
-        assert!((quarter as i32 - n as i32 / 4).abs() <= 2, "≈a quarter should read continental, got {quarter}");
+        assert!(
+            (quarter as i32 - n as i32 / 4).abs() <= 2,
+            "≈a quarter should read continental, got {quarter}"
+        );
     }
 
     /// Fix #2 (the "thin ridge spine" driver): with `isostasy_abs > 0`, a
@@ -1449,9 +1621,17 @@ mod tests {
             }
             hi - lo
         };
-        let base = Epoch3 { mountain_uplift: 0.0, rift_drop: 0.0, hotspots: 0, ..Epoch3::default() };
+        let base = Epoch3 {
+            mountain_uplift: 0.0,
+            rift_drop: 0.0,
+            hotspots: 0,
+            ..Epoch3::default()
+        };
         let rank_span = span(&base); // isostasy_abs = 0 → pure rank → full range
-        let abs_span = span(&Epoch3 { isostasy_abs: 0.8, ..base });
+        let abs_span = span(&Epoch3 {
+            isostasy_abs: 0.8,
+            ..base
+        });
         // The pure-rank mapping stretches the tiny crust spread across the whole ramp;
         // the absolute blend collapses it toward datum.
         assert!(
@@ -1479,9 +1659,18 @@ mod tests {
             })
             .collect();
         // Isolate the pile term: no boundary orogeny, no absolute-blend, no rift.
-        let base = Epoch3 { mountain_uplift: 0.0, rift_drop: 0.0, hotspots: 0, ..Epoch3::default() };
+        let base = Epoch3 {
+            mountain_uplift: 0.0,
+            rift_drop: 0.0,
+            hotspots: 0,
+            ..Epoch3::default()
+        };
         let flat = base.apply(&ctx, &prev);
-        let piled = Epoch3 { crust_pile: 0.6, ..base }.apply(&ctx, &prev);
+        let piled = Epoch3 {
+            crust_pile: 0.6,
+            ..base
+        }
+        .apply(&ctx, &prev);
         // The piled ridge rises with the crust-pile term engaged; the baseline crust
         // (below the mean) gets no pile uplift.
         assert!(

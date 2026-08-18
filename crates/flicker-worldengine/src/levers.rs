@@ -59,9 +59,15 @@ pub struct AbundanceDef {
 #[derive(Debug, thiserror::Error)]
 pub enum GeneratorError {
     #[error("reading generator data {path}: {source}")]
-    Io { path: String, source: std::io::Error },
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("parsing generator data {path}: {source}")]
-    Parse { path: String, source: serde_json::Error },
+    Parse {
+        path: String,
+        source: serde_json::Error,
+    },
 }
 
 /// The swappable data-source seam for generator levers — implement this for a new
@@ -176,7 +182,10 @@ impl GeneratorParams {
 /// The content dir path used by [`GeneratorParams::from_repo`] and the material
 /// tables alike — exposed so consumers needn't re-spell the `/../../` prefix.
 pub fn repo_content_dir() -> &'static Path {
-    Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data"))
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../Alpha/content/data"
+    ))
 }
 
 #[cfg(test)]
@@ -191,7 +200,9 @@ mod tests {
         // The canonical Epoch-1 mix leads with oxygen.
         assert!(p.abundance().iter().any(|a| a.symbol == "O"));
         // A known lever resolves with a sane band.
-        let l = p.lever("e3_mountain_uplift").expect("e3_mountain_uplift defined");
+        let l = p
+            .lever("e3_mountain_uplift")
+            .expect("e3_mountain_uplift defined");
         assert!(l.min <= l.default && l.default <= l.max);
         assert_eq!(l.epoch, 3);
     }

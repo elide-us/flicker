@@ -126,9 +126,7 @@ pub fn fbm3(x: f64, y: f64, z: f64, octaves: u32, salt: u64, seed: u64) -> f64 {
 pub fn value2_tiled(x: f64, y: f64, period: i64, salt: u64, seed: u64) -> f64 {
     let (ix, ux) = split(x);
     let (iy, uy) = split(y);
-    let c = |dx: i64, dy: i64| {
-        hash3(wrap(ix + dx, period), wrap(iy + dy, period), 0, salt, seed)
-    };
+    let c = |dx: i64, dy: i64| hash3(wrap(ix + dx, period), wrap(iy + dy, period), 0, salt, seed);
     let x0 = lerp(c(0, 0), c(1, 0), ux);
     let x1 = lerp(c(0, 1), c(1, 1), ux);
     lerp(x0, x1, uy)
@@ -161,14 +159,22 @@ pub struct Fbm {
 impl Default for Fbm {
     /// The classic untiled fBm: 4 octaves, doubling frequency, halving amplitude.
     fn default() -> Self {
-        Self { octaves: 4, lacunarity: 2.0, gain: 0.5, period: 0 }
+        Self {
+            octaves: 4,
+            lacunarity: 2.0,
+            gain: 0.5,
+            period: 0,
+        }
     }
 }
 
 impl Fbm {
     /// The classic fBm, tiled on `period` cells.
     pub fn tiled(period: i64) -> Self {
-        Self { period, ..Self::default() }
+        Self {
+            period,
+            ..Self::default()
+        }
     }
 }
 
@@ -180,8 +186,16 @@ impl Fbm {
 /// tearing the seam.
 pub fn fbm2(x: f64, y: f64, f: Fbm, salt: u64, seed: u64) -> f64 {
     let (mut freq, mut amp, mut sum, mut norm) = (1.0f64, 1.0f64, 0.0f64, 0.0f64);
-    let lac = if f.lacunarity.is_finite() { f.lacunarity.max(1.0) } else { 2.0 };
-    let gain = if f.gain.is_finite() { f.gain.clamp(0.0, 1.0) } else { 0.5 };
+    let lac = if f.lacunarity.is_finite() {
+        f.lacunarity.max(1.0)
+    } else {
+        2.0
+    };
+    let gain = if f.gain.is_finite() {
+        f.gain.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
     for o in 0..f.octaves.max(1) {
         let step = freq.round().max(1.0);
         let osalt = salt ^ (o as u64).wrapping_mul(GOLDEN);
@@ -317,8 +331,28 @@ mod tests {
             );
             for octaves in 1..=5 {
                 assert_eq!(
-                    fbm2(x, y, Fbm { octaves, ..Fbm::tiled(period) }, 3, 11).to_bits(),
-                    fbm2(x + p, y + p, Fbm { octaves, ..Fbm::tiled(period) }, 3, 11).to_bits(),
+                    fbm2(
+                        x,
+                        y,
+                        Fbm {
+                            octaves,
+                            ..Fbm::tiled(period)
+                        },
+                        3,
+                        11
+                    )
+                    .to_bits(),
+                    fbm2(
+                        x + p,
+                        y + p,
+                        Fbm {
+                            octaves,
+                            ..Fbm::tiled(period)
+                        },
+                        3,
+                        11
+                    )
+                    .to_bits(),
                     "fbm2 seam at {octaves} octaves, cell {k}"
                 );
             }
@@ -373,8 +407,26 @@ mod tests {
         let period = 4i64;
         let p = period as f64;
         let warped = |x: f64, y: f64| {
-            let wx = fbm2(x, y, Fbm { octaves: 3, ..Fbm::tiled(period) }, 99, 5) - 0.5;
-            fbm2(x + wx, y + wx, Fbm { octaves: 3, ..Fbm::tiled(period) }, 1, 5)
+            let wx = fbm2(
+                x,
+                y,
+                Fbm {
+                    octaves: 3,
+                    ..Fbm::tiled(period)
+                },
+                99,
+                5,
+            ) - 0.5;
+            fbm2(
+                x + wx,
+                y + wx,
+                Fbm {
+                    octaves: 3,
+                    ..Fbm::tiled(period)
+                },
+                1,
+                5,
+            )
         };
         for k in 0..period {
             let (x, y) = (k as f64, k as f64);

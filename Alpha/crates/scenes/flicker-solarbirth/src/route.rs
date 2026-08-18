@@ -86,8 +86,12 @@ mod tests {
     fn dispatch_fires_the_declared_pause_intent() {
         let raw = InputState::new();
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
-        let mut tree = UiNode { component: "screen".into(), ..Default::default() };
-        tree.props.insert("on_menu".into(), Value::Text("pause_open".into()));
+        let mut tree = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
+        tree.props
+            .insert("on_menu".into(), Value::Text("pause_open".into()));
         let intents = UiIntents::of(&tree);
 
         let mut root = RootHandler;
@@ -98,8 +102,14 @@ mod tests {
             let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
             Router::dispatch(&events, &mut chain, &mut rc)
         };
-        assert!(report.consumed_by(1, ActionSignal::Menu), "the walker layer consumed it");
-        assert!(!report.consumed_by(ROOT, ActionSignal::Menu), "the root has no Menu arm");
+        assert!(
+            report.consumed_by(1, ActionSignal::Menu),
+            "the walker layer consumed it"
+        );
+        assert!(
+            !report.consumed_by(ROOT, ActionSignal::Menu),
+            "the root has no Menu arm"
+        );
         assert_eq!(walker.take_fired(), vec!["pause_open".to_string()]);
     }
 }

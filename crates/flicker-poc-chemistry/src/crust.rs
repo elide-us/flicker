@@ -106,7 +106,9 @@ pub struct CrustGeneration {
 impl Default for CrustGeneration {
     /// The physics as written.
     fn default() -> Self {
-        Self { rate: DEFAULT_CRUST_GEN_RATE }
+        Self {
+            rate: DEFAULT_CRUST_GEN_RATE,
+        }
     }
 }
 
@@ -127,7 +129,8 @@ impl Stage for CrustGeneration {
             }
             // Negative feedback: growth slows to zero as the sea floor reaches its
             // saturation thickness — a basalt rind, not an ever-thickening slab.
-            let fill = (1.0 - world.columns[cell].mass_kg() / (OCEANIC_SAT_FRAC * m0_per_cell)).max(0.0);
+            let fill =
+                (1.0 - world.columns[cell].mass_kg() / (OCEANIC_SAT_FRAC * m0_per_cell)).max(0.0);
             if fill <= 0.0 {
                 continue;
             }
@@ -205,7 +208,10 @@ pub struct Volcanism {
 impl Volcanism {
     /// Resolve the gas vocabulary an eruption vents through.
     pub fn new(tables: &flicker_materials::Tables, rate: f64) -> Self {
-        Self { rate, gases: crate::atmosphere::GasVocabulary::load(tables) }
+        Self {
+            rate,
+            gases: crate::atmosphere::GasVocabulary::load(tables),
+        }
     }
 }
 
@@ -375,7 +381,11 @@ impl Stage for Crystallization {
                     if make <= 0.0 {
                         break;
                     }
-                    let fracs = &recipes.iter().find(|(rid, _)| *rid == id).expect("just chosen").1;
+                    let fracs = &recipes
+                        .iter()
+                        .find(|(rid, _)| *rid == id)
+                        .expect("just chosen")
+                        .1;
                     for &(e, f) in fracs {
                         if let Some(slot) = free.iter_mut().find(|(fe, _)| *fe == e) {
                             slot.1 = (slot.1 - make * f).max(0.0);
@@ -686,7 +696,11 @@ impl Stage for Delamination {
                 for (e, m) in taken {
                     world.mantle.add(cell, e, m);
                 }
-                if world.columns[cell].layers.first().is_some_and(|l| l.elements.is_empty()) {
+                if world.columns[cell]
+                    .layers
+                    .first()
+                    .is_some_and(|l| l.elements.is_empty())
+                {
                     world.columns[cell].layers.remove(0);
                 }
                 budget -= moved;
@@ -747,11 +761,19 @@ impl Metamorphism {
     pub fn new(tables: &flicker_materials::Tables) -> Self {
         let mut reactions = Vec::new();
         for c in tables.compounds() {
-            let Some(rule) = c.metamorphic.as_ref() else { continue };
+            let Some(rule) = c.metamorphic.as_ref() else {
+                continue;
+            };
             let to = tables.compound(&rule.to).unwrap_or_else(|| {
-                panic!("{} metamorphoses to '{}', absent from the catalog", c.name, rule.to)
+                panic!(
+                    "{} metamorphoses to '{}', absent from the catalog",
+                    c.name, rule.to
+                )
             });
-            let (a, b) = (tables.compound_mass_fractions(c), tables.compound_mass_fractions(to));
+            let (a, b) = (
+                tables.compound_mass_fractions(c),
+                tables.compound_mass_fractions(to),
+            );
             let neutral = a.len() == b.len()
                 && a.iter()
                     .all(|&(e, f)| b.iter().any(|&(e2, f2)| e2 == e && (f - f2).abs() < 1e-9));
@@ -955,9 +977,13 @@ mod tests {
             .filter(|&(_, m)| m > 0.0)
             .filter_map(|(id, _)| t.compound_by_id(id).map(|c| c.name.clone()))
             .collect();
-        assert!(made.iter().any(|n| n == "Quartz"), "quartz must be formable: {made:?}");
         assert!(
-            made.iter().any(|n| t.compound(n).is_some_and(|c| c.harvestable)),
+            made.iter().any(|n| n == "Quartz"),
+            "quartz must be formable: {made:?}"
+        );
+        assert!(
+            made.iter()
+                .any(|n| t.compound(n).is_some_and(|c| c.harvestable)),
             "an ore mineral must be formable: {made:?}"
         );
     }
@@ -980,12 +1006,24 @@ mod tests {
         let t = Tables::from_source(&JsonTableSource::new(&dir)).expect("tables");
         let coal = t.compound("Coal").expect("coal").id;
         let graphite = t.compound("Graphite").expect("graphite").id;
-        let rule = t.compound("Coal").unwrap().metamorphic.clone().expect("coal has a limit");
+        let rule = t
+            .compound("Coal")
+            .unwrap()
+            .metamorphic
+            .clone()
+            .expect("coal has a limit");
 
         // The geotherm itself: warms downward, never past the mantle, and the
         // surface is the surface.
-        assert_eq!(geotherm_k(290.0, 1800.0, 0.0), 290.0, "the top is the surface");
-        assert!(geotherm_k(290.0, 1800.0, 10_000.0) > 290.0, "it warms downward");
+        assert_eq!(
+            geotherm_k(290.0, 1800.0, 0.0),
+            290.0,
+            "the top is the surface"
+        );
+        assert!(
+            geotherm_k(290.0, 1800.0, 10_000.0) > 290.0,
+            "it warms downward"
+        );
         assert!(
             geotherm_k(290.0, 1800.0, 1.0e9) <= 1800.0,
             "nothing in the crust is hotter than what it sits on"
@@ -1027,7 +1065,10 @@ mod tests {
 
         let deep_bed = &w.columns[0].layers[0];
         let shallow_bed = &w.columns[0].layers[1];
-        assert!(deep_bed.minerals.amount(graphite) > 0.0, "the deep bed ordered into graphite");
+        assert!(
+            deep_bed.minerals.amount(graphite) > 0.0,
+            "the deep bed ordered into graphite"
+        );
         assert!(
             deep_bed.minerals.amount(coal) < 1.0e16,
             "and most of its coal is gone: {}",
@@ -1039,7 +1080,10 @@ mod tests {
             "shallow carbon stays coal however long it sits"
         );
         // Element-neutral: carbon in, carbon out, the ledger untouched.
-        assert!((deep_bed.elements.amount(6) - 1.0e17).abs() < 1.0, "no element moved");
+        assert!(
+            (deep_bed.elements.amount(6) - 1.0e17).abs() < 1.0,
+            "no element moved"
+        );
     }
 
     /// The catalog's own statement of what crystallises — a phase with another
@@ -1054,26 +1098,37 @@ mod tests {
             ("Native Gold", true),
             ("Hematite", true),
             ("Olivine", true),
-            ("Halite", false),   // evaporite — needs standing water to dry out
-            ("Coal", false),     // Maturation makes it from buried tissue
-            ("Bauxite", false),  // a tropical weathering residue
+            ("Halite", false),  // evaporite — needs standing water to dry out
+            ("Coal", false),    // Maturation makes it from buried tissue
+            ("Bauxite", false), // a tropical weathering residue
         ] {
             let c = t.compound(name).unwrap_or_else(|| panic!("{name} missing"));
-            assert_eq!(c.crystallizes, want, "{name}: crystallizes should be {want}");
+            assert_eq!(
+                c.crystallizes, want,
+                "{name}: crystallizes should be {want}"
+            );
         }
         // And nothing outside the mineral category may crystallise out of rock.
         for c in t.compounds().iter().filter(|c| c.crystallizes) {
-            assert_eq!(c.category, "mineral", "{} crystallises but is not a mineral", c.name);
+            assert_eq!(
+                c.category, "mineral",
+                "{} crystallises but is not a mineral",
+                c.name
+            );
         }
     }
 
     /// A world run through the full formation pipeline for `ticks` Myr.
     fn run(freq: u32, seed: u64, ticks: usize) -> World {
         let dir = content_data_dir();
-        let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
+        let t =
+            std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(
+            crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()),
+            seed,
+        );
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None); // conservation audited every tick
         }
@@ -1106,8 +1161,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
         }
 
@@ -1129,16 +1184,30 @@ mod tests {
         }
 
         assert!(
-            w.columns[0].layers.iter().any(|l| l.formed_by == FormationProcess::Volcanic),
+            w.columns[0]
+                .layers
+                .iter()
+                .any(|l| l.formed_by == FormationProcess::Volcanic),
             "the plume built a volcanic bed"
         );
-        assert!(w.reservoirs.atmosphere.mass_kg() > 0.0, "and vented gas doing it");
+        assert!(
+            w.reservoirs.atmosphere.mass_kg() > 0.0,
+            "and vented gas doing it"
+        );
         // The vent is decompression-driven, so it works at a temperature far
         // below every bulk-degassing floor — this is the mechanism that keeps a
         // cooled planet's sky topped up.
         assert!(
-            w.reservoirs.atmosphere.species.amount(crate::atmosphere::WATER_VAPOUR) > 0.0
-                || w.reservoirs.atmosphere.species.amount(crate::atmosphere::CARBON_DIOXIDE) > 0.0,
+            w.reservoirs
+                .atmosphere
+                .species
+                .amount(crate::atmosphere::WATER_VAPOUR)
+                > 0.0
+                || w.reservoirs
+                    .atmosphere
+                    .species
+                    .amount(crate::atmosphere::CARBON_DIOXIDE)
+                    > 0.0,
             "the vented gas is real species, not loose atoms"
         );
     }
@@ -1164,8 +1233,8 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
         }
         let stage = super::Volcanism::new(&t, super::DEFAULT_ERUPTION_RATE);
@@ -1174,7 +1243,11 @@ mod tests {
             stage.tick(&mut w, 1.0, &mut rng);
             w.audit("Volcanism");
         }
-        assert_eq!(w.reservoirs.atmosphere.mass_kg(), 0.0, "no anomaly, no vent");
+        assert_eq!(
+            w.reservoirs.atmosphere.mass_kg(),
+            0.0,
+            "no anomaly, no vent"
+        );
         assert!(
             !w.columns.iter().any(|c| c
                 .layers
@@ -1201,12 +1274,18 @@ mod tests {
 
         let molten = PlanetState::sample(&w);
         assert_eq!(molten.lid_frac, 0.0, "a magma ball has no lid");
-        assert!(!crate::process_file::gate_of("Volcanism").holds(&molten, &crate::Levers::default()), "so volcanism has not woken up yet");
+        assert!(
+            !crate::process_file::gate_of("Volcanism").holds(&molten, &crate::Levers::default()),
+            "so volcanism has not woken up yet"
+        );
 
         let mut lidded = molten.clone();
         lidded.lid_frac = 0.01;
         lidded.max_mantle_temp_k = 2000.0;
-        assert!(crate::process_file::gate_of("Volcanism").holds(&lidded, &crate::Levers::default()), "a lid over hot mantle: the gate opens");
+        assert!(
+            crate::process_file::gate_of("Volcanism").holds(&lidded, &crate::Levers::default()),
+            "a lid over hot mantle: the gate opens"
+        );
 
         // The HOTTEST cell shuts it, not the average — and this is the case
         // that matters: a world whose mean has fallen below the melt floor can
@@ -1215,13 +1294,17 @@ mod tests {
         let mut mean_is_cold = lidded.clone();
         mean_is_cold.mean_mantle_temp_k = super::ERUPTION_FLOOR_K - 500.0;
         assert!(
-            crate::process_file::gate_of("Volcanism").holds(&mean_is_cold, &crate::Levers::default()),
+            crate::process_file::gate_of("Volcanism")
+                .holds(&mean_is_cold, &crate::Levers::default()),
             "a cold AVERAGE over a live plume must not switch volcanism off"
         );
 
         let mut cold = lidded.clone();
         cold.max_mantle_temp_k = super::ERUPTION_FLOOR_K - 1.0;
-        assert!(!crate::process_file::gate_of("Volcanism").holds(&cold, &crate::Levers::default()), "no melt ANYWHERE: shut for good");
+        assert!(
+            !crate::process_file::gate_of("Volcanism").holds(&cold, &crate::Levers::default()),
+            "no melt ANYWHERE: shut for good"
+        );
     }
 
     /// **THE BASIN MECHANISM.** Fresh sea floor floats; the same rock, cold,
@@ -1258,15 +1341,29 @@ mod tests {
             });
         };
         // Cell 0: mafic sea floor. Cell 1: a refined felsic pile.
-        bed(&mut w, 0, &[(8, 4.5e18), (14, 2.4e18), (12, 1.9e18), (26, 1.2e18)]);
-        bed(&mut w, 1, &[(8, 4.7e18), (14, 3.4e18), (13, 1.5e18), (19, 0.4e18)]);
+        bed(
+            &mut w,
+            0,
+            &[(8, 4.5e18), (14, 2.4e18), (12, 1.9e18), (26, 1.2e18)],
+        );
+        bed(
+            &mut w,
+            1,
+            &[(8, 4.7e18), (14, 3.4e18), (13, 1.5e18), (19, 0.4e18)],
+        );
         w.audit("fixture");
 
         let fresh_floor = density_kg_m3(&w.columns[0].layers[0]);
         let fresh_high = elevation_m(&w.columns[0], area);
         let cont_before = elevation_m(&w.columns[1], area);
-        assert!(fresh_floor < MANTLE_DENSITY, "young floor floats: {fresh_floor:.0}");
-        assert!(fresh_high > 0.0, "…so it rides above the datum: {fresh_high:.0} m");
+        assert!(
+            fresh_floor < MANTLE_DENSITY,
+            "young floor floats: {fresh_floor:.0}"
+        );
+        assert!(
+            fresh_high > 0.0,
+            "…so it rides above the datum: {fresh_high:.0} m"
+        );
 
         // Age it. 600 My is many e-folds — an old abyssal plain.
         let stage = super::ThermalSubsidence;
@@ -1278,7 +1375,10 @@ mod tests {
 
         let old_floor = density_kg_m3(&w.columns[0].layers[0]);
         let old_low = elevation_m(&w.columns[0], area);
-        assert!(old_floor > MANTLE_DENSITY, "old floor outweighs the mantle: {old_floor:.0}");
+        assert!(
+            old_floor > MANTLE_DENSITY,
+            "old floor outweighs the mantle: {old_floor:.0}"
+        );
         assert!(
             old_low < 0.0,
             "…so it rides BELOW the datum — the basin: {old_low:.0} m (was {fresh_high:.0})"
@@ -1330,7 +1430,14 @@ mod tests {
         // (5.5e14 kg in a cell, measured), so asking for them yields a bed of a
         // quite different rock than the one this test means to make.
         const MIXED: &[(u8, f64)] = &[(8, 0.55), (14, 0.30), (12, 0.09), (26, 0.06)];
-        push_bed(&mut w, 0, 0, MIXED, 1.2e18, FormationProcess::ContinentalArc);
+        push_bed(
+            &mut w,
+            0,
+            0,
+            MIXED,
+            1.2e18,
+            FormationProcess::ContinentalArc,
+        );
         w.audit("fixture");
 
         // The fixture is the claim, so check it IS the rock described above
@@ -1341,7 +1448,10 @@ mod tests {
             let si = bed.elements.amount(14) / m;
             let mafic = (bed.elements.amount(12) + bed.elements.amount(26)) / m;
             assert!((si - 0.30).abs() < 0.01, "felsic silica: {si:.3}");
-            assert!((mafic - 0.15).abs() < 0.01, "contaminated, not clean: {mafic:.3}");
+            assert!(
+                (mafic - 0.15).abs() < 0.01,
+                "contaminated, not clean: {mafic:.3}"
+            );
         }
 
         // Age it far past every e-fold there is — cooling saturates.
@@ -1352,7 +1462,11 @@ mod tests {
         }
 
         let bed = &w.columns[0].layers[0];
-        assert!(bed.cooled > 0.99, "the fixture really did saturate: {:.3}", bed.cooled);
+        assert!(
+            bed.cooled > 0.99,
+            "the fixture really did saturate: {:.3}",
+            bed.cooled
+        );
 
         // THE HALF THAT IS FIXED. A surface bed carries nothing above it, so the
         // phase change cannot touch it however long the world runs. This is the
@@ -1407,7 +1521,14 @@ mod tests {
         push_bed(&mut w, 0, 0, BASALT, BED_KG, FormationProcess::OceanicCrust);
         // Cell 1: a root, each bed drawn from a different cell's mantle.
         for from in 1..18 {
-            push_bed(&mut w, 1, from, BASALT, BED_KG, FormationProcess::OceanicCrust);
+            push_bed(
+                &mut w,
+                1,
+                from,
+                BASALT,
+                BED_KG,
+                FormationProcess::OceanicCrust,
+            );
         }
         w.audit("fixture");
 
@@ -1496,18 +1617,33 @@ mod tests {
         };
         // A dense mafic floor wearing a light sediment drape.
         let mut loser = Column::empty(0);
-        loser.layers.push(mk(&mut w, &[(12, 3.0e17), (26, 3.0e17)], FormationProcess::OceanicCrust));
-        loser.layers.push(mk(&mut w, &[(14, 2.0e17), (8, 1.5e17)], FormationProcess::Sediment));
+        loser.layers.push(mk(
+            &mut w,
+            &[(12, 3.0e17), (26, 3.0e17)],
+            FormationProcess::OceanicCrust,
+        ));
+        loser.layers.push(mk(
+            &mut w,
+            &[(14, 2.0e17), (8, 1.5e17)],
+            FormationProcess::Sediment,
+        ));
         // A buoyant felsic winner.
         let mut winner = Column::empty(0);
-        winner.layers.push(mk(&mut w, &[(14, 5.0e17), (19, 2.0e17)], FormationProcess::ContinentalArc));
+        winner.layers.push(mk(
+            &mut w,
+            &[(14, 5.0e17), (19, 2.0e17)],
+            FormationProcess::ContinentalArc,
+        ));
 
         let area = w.cell_area_m2();
         crate::tectonics::collide_for_test(&mut w, 0, vec![winner, loser], 0.3, -1.0e9, area);
 
         let survived = &w.columns[0];
         assert!(
-            !survived.layers.iter().any(|l| l.formed_by == FormationProcess::Sediment),
+            !survived
+                .layers
+                .iter()
+                .any(|l| l.formed_by == FormationProcess::Sediment),
             "the drape followed its basement down instead of being scraped off"
         );
         w.audit("collide");
@@ -1577,8 +1713,10 @@ mod tests {
             basal_pressure_pa(&w.columns[1], gravity, area) < super::delamination_pa(&w),
             "…and the ordinary range is not"
         );
-        let (tall_before, modest_before) =
-            (elevation_m(&w.columns[0], area), elevation_m(&w.columns[1], area));
+        let (tall_before, modest_before) = (
+            elevation_m(&w.columns[0], area),
+            elevation_m(&w.columns[1], area),
+        );
 
         let stage = super::Delamination;
         let mut rng = StageRng::new(2);
@@ -1607,7 +1745,11 @@ mod tests {
         let w = run(6, 7, 260);
         let covered = w.columns.iter().filter(|c| !c.layers.is_empty()).count();
         let frac = covered as f64 / w.columns.len() as f64;
-        assert!(frac > 0.6, "crust should cover most of the surface, got {:.0}%", frac * 100.0);
+        assert!(
+            frac > 0.6,
+            "crust should cover most of the surface, got {:.0}%",
+            frac * 100.0
+        );
     }
 
     #[test]
@@ -1617,7 +1759,10 @@ mod tests {
         let w = run(6, 7, 200);
         let crust: f64 = w.columns.iter().map(|c| c.mass_kg()).sum();
         assert!(crust > 0.0, "crust grew from mantle melt");
-        assert!(crust < 0.05 * w.budget.total(), "crust is a thin skin, not the planet");
+        assert!(
+            crust < 0.05 * w.budget.total(),
+            "crust is a thin skin, not the planet"
+        );
     }
 
     #[test]
@@ -1675,7 +1820,9 @@ mod tests {
         // investigations to learn that the first time).
         {
             let sedimented = |c: &crate::column::Column| {
-                c.layers.iter().any(|l| l.formed_by == crate::column::FormationProcess::Sediment)
+                c.layers
+                    .iter()
+                    .any(|l| l.formed_by == crate::column::FormationProcess::Sediment)
             };
             let mut oc = (0usize, Vec::new());
             let mut os = (0usize, Vec::new());
@@ -1684,25 +1831,49 @@ mod tests {
             for col in &w.columns {
                 let e = elevation_m(col, area);
                 match (crust_kind(col), sedimented(col)) {
-                    (CrustKind::Oceanic, false) => { oc.0 += 1; oc.1.push(e); }
-                    (CrustKind::Oceanic, true) => { os.0 += 1; os.1.push(e); }
-                    (CrustKind::Continental, false) => { cc.0 += 1; cc.1.push(e); }
-                    (CrustKind::Continental, true) => { cs.0 += 1; cs.1.push(e); }
+                    (CrustKind::Oceanic, false) => {
+                        oc.0 += 1;
+                        oc.1.push(e);
+                    }
+                    (CrustKind::Oceanic, true) => {
+                        os.0 += 1;
+                        os.1.push(e);
+                    }
+                    (CrustKind::Continental, false) => {
+                        cc.0 += 1;
+                        cc.1.push(e);
+                    }
+                    (CrustKind::Continental, true) => {
+                        cs.0 += 1;
+                        cs.1.push(e);
+                    }
                     _ => {}
                 }
             }
-            let m = |v: &Vec<f64>| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+            let m = |v: &Vec<f64>| {
+                if v.is_empty() {
+                    0.0
+                } else {
+                    v.iter().sum::<f64>() / v.len() as f64
+                }
+            };
             eprintln!(
                 "  ocean pure n {} mean {:.0} · ocean+sed n {} mean {:.0} · cont pure n {} mean {:.0} · cont+sed n {} mean {:.0}",
                 oc.0, m(&oc.1), os.0, m(&os.1), cc.0, m(&cc.1), cs.0, m(&cs.1)
             );
             let strata: f64 = w.columns.iter().map(|c| c.layers.len() as f64).sum::<f64>()
                 / w.columns.len() as f64;
-            eprintln!("  mean strata {strata:.1} · sea {:.0} m", crate::planet::sea_level_m(&w));
+            eprintln!(
+                "  mean strata {strata:.1} · sea {:.0} m",
+                crate::planet::sea_level_m(&w)
+            );
         }
         // Buoyant crust rides higher — Archimedes, through absolute Airy isostasy.
         // That direction is forced by the mechanism, so it is fair to require it.
-        assert!(cm > om, "continents ride higher than ocean floor ({cm:.0} m vs {om:.0} m)");
+        assert!(
+            cm > om,
+            "continents ride higher than ocean floor ({cm:.0} m vs {om:.0} m)"
+        );
         // There used to be a second clause here requiring the gap to reach 1.5×.
         // That was a **required outcome** — the one thing the standing law forbids —
         // and it duly broke when the distillation work shifted crustal densities a
@@ -1724,7 +1895,11 @@ mod tests {
         let mut cd = Vec::new();
         for col in &w.columns {
             let (mut mass, mut volume) = (0.0, 0.0);
-            for bed in col.layers.iter().filter(|l| l.formed_by != FormationProcess::Sediment) {
+            for bed in col
+                .layers
+                .iter()
+                .filter(|l| l.formed_by != FormationProcess::Sediment)
+            {
                 let m = bed.mass_kg();
                 mass += m;
                 volume += m / density_kg_m3(bed);
@@ -1741,7 +1916,10 @@ mod tests {
         }
         if !od.is_empty() && !cd.is_empty() {
             let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
-            assert!(mean(&od) > mean(&cd), "oceanic (mafic) crust is denser than continental (felsic)");
+            assert!(
+                mean(&od) > mean(&cd),
+                "oceanic (mafic) crust is denser than continental (felsic)"
+            );
         }
     }
 
@@ -1755,7 +1933,8 @@ mod tests {
             let w = run(freq, seed, 240);
             let shard = &w.grid.shard;
             let neigh = &w.grid.neighbors;
-            let (mut seam_cont, mut seam_n, mut int_cont, mut int_n) = (0usize, 0usize, 0usize, 0usize);
+            let (mut seam_cont, mut seam_n, mut int_cont, mut int_n) =
+                (0usize, 0usize, 0usize, 0usize);
             for (i, col) in w.columns.iter().enumerate() {
                 let cont = (crust_kind(col) == CrustKind::Continental) as usize;
                 if neigh[i].iter().any(|&j| shard[j as usize] != shard[i]) {
@@ -1839,4 +2018,3 @@ mod tests {
         // 7E01115B history turned on.
     }
 }
-

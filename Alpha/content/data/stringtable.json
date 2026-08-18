@@ -128,6 +128,30 @@
   "cat_nav_paged_menu": {
     "en-us": "Paged Menu"
   },
+  "cat_nav_nav_footer": {
+    "en-us": "Nav Footer"
+  },
+  "cat_ft_select": {
+    "en-us": "Select"
+  },
+  "cat_ft_back": {
+    "en-us": "Back"
+  },
+  "cat_ft_copy": {
+    "en-us": "Copy"
+  },
+  "cat_ft_paste": {
+    "en-us": "Paste"
+  },
+  "cat_ft_menu": {
+    "en-us": "Menu"
+  },
+  "cat_ft_next": {
+    "en-us": "Next"
+  },
+  "cat_ft_note": {
+    "en-us": "Back / Next fire the Paged Menu card's page-rail step names — one signal name, every trigger."
+  },
   "cat_lbl_button": {
     "en-us": "Sample Button"
   },
@@ -2201,6 +2225,15 @@
   "sw_contrast": {
     "en-us": "Contrast"
   },
+  "sw_ft_menu": {
+    "en-us": "Menu"
+  },
+  "sw_ft_next": {
+    "en-us": "Next"
+  },
+  "sw_ft_prev": {
+    "en-us": "Prev"
+  },
   "sw_gain": {
     "en-us": "Gain"
   },
@@ -2263,6 +2296,9 @@
   },
   "sw_relief": {
     "en-us": "Relief"
+  },
+  "sw_rename": {
+    "en-us": "Rename"
   },
   "sw_reseed": {
     "en-us": "Reseed"
@@ -2506,6 +2542,9 @@
   },
   "sig_counter_perilous": {
     "en-us": "Perilous Counter"
+  },
+  "sig_grapple": {
+    "en-us": "Grapple"
   },
   "sig_confirm": {
     "en-us": "Confirm"
@@ -3052,5 +3091,26 @@
   },
   "bind_hold": {
     "en-us": "hold"
+  },
+  "load_eyebrow": {
+    "en-us": "PRISM ALPHA"
+  },
+  "load_title": {
+    "en-us": "Do not close the game while the sigil is spinning"
+  },
+  "load_body_1": {
+    "en-us": "While it turns, Clay Engine is reading or writing data — shaders compiling, assets caching, or a connection to the realm in progress."
+  },
+  "load_body_2": {
+    "en-us": "Interrupting this may corrupt your local cache or authentication session, requiring a fresh sync on next launch."
+  },
+  "load_phase_shaders": {
+    "en-us": "compiling shaders"
+  },
+  "load_footer_legal": {
+    "en-us": "Prism Alpha — Pre-Alpha Tech Demo. No warranty, express or implied."
+  },
+  "load_footer_contact": {
+    "en-us": "Discord @elideus · aaron@elideus.net"
   }
 }

@@ -18,12 +18,13 @@ tracing.workspace = true
 # Gamepads: gilrs everywhere EXCEPT macOS, where its raw-IOKit-HID path enumerates
 # Xbox pads but gets no input from them. macOS reads controllers through Apple's
 # GameController framework instead (the path Unreal etc. use), via objc2. This
-# cfg split is load-bearing (spec §6.2, ruling A9599BF3). Versions match
-# `flicker-app/Cargo.toml` exactly.
+# cfg split is load-bearing (spec §6.2, ruling A9599BF3). This is the ONLY crate
+# declaring these platform deps (they moved here from flicker-app with the gamepad
+# code). Floors = versions reviewed 2026-08-17; the exact pin is Cargo.lock.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-gilrs = "0.11"
+gilrs = "0.11.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-foundation = "0.3"
-objc2-game-controller = "0.3"
+objc2 = "0.6.4"
+objc2-foundation = "0.3.2"
+objc2-game-controller = "0.3.2"

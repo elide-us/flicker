@@ -32,7 +32,13 @@ impl System {
         let ejecta = Ejecta::from_tables(&load_tables());
         let cloud = CloudField::new(ejecta.elements.len(), config.seed, config.clump);
         let cloud_mass = CloudMass::derive(&ejecta, &config.mass);
-        Self { ejecta, config, cloud, cloud_mass, sim: None }
+        Self {
+            ejecta,
+            config,
+            cloud,
+            cloud_mass,
+            sim: None,
+        }
     }
 
     // ── read access (for the viewer / consumers) ──────────────────────────────────
@@ -114,7 +120,13 @@ impl System {
 
     /// Phase-1 **hot spots** (overdensity seed sites, world-space) at sim-clock `time`.
     pub fn hot_spots(&self, time: f32) -> Vec<HotSpot> {
-        detect::detect(&self.ejecta, &self.config.cast, &self.cloud, time, self.anchor_au())
+        detect::detect(
+            &self.ejecta,
+            &self.config.cast,
+            &self.cloud,
+            time,
+            self.anchor_au(),
+        )
     }
 
     /// A read-model snapshot of the live collapse — the output contract for status / UI / search.

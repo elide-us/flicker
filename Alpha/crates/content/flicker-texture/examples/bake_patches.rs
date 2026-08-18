@@ -14,7 +14,10 @@ use flicker_texture::{bake, presets, BAKE_DEFAULT};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let dir = std::path::PathBuf::from(args.next().unwrap_or_else(|| ".".into()));
-    let size: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(BAKE_DEFAULT);
+    let size: u32 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(BAKE_DEFAULT);
     std::fs::create_dir_all(&dir)?;
 
     for recipe in presets::all() {
@@ -28,14 +31,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &map.pixels[i..i + 3]
             };
             let step = |a: &[u8], b: &[u8]| -> i32 {
-                a.iter().zip(b).map(|(p, q)| (*p as i32 - *q as i32).abs()).max().unwrap_or(0)
+                a.iter()
+                    .zip(b)
+                    .map(|(p, q)| (*p as i32 - *q as i32).abs())
+                    .max()
+                    .unwrap_or(0)
             };
             let interior = (0..size)
                 .flat_map(|y| (0..size - 1).map(move |x| (x, y)))
                 .map(|(x, y)| step(px(x, y), px(x + 1, y)))
                 .max()
                 .unwrap_or(0);
-            let seam = (0..size).map(|y| step(px(size - 1, y), px(0, y))).max().unwrap_or(0);
+            let seam = (0..size)
+                .map(|y| step(px(size - 1, y), px(0, y)))
+                .max()
+                .unwrap_or(0);
             if seam > interior {
                 worst = Some(format!("{:?} seam {seam} > interior {interior}", map.kind));
             }

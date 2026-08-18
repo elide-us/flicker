@@ -32,9 +32,11 @@ fn load_reference_skeleton(path: &Path) -> Result<Vec<RefBone>> {
     // Gz-transparent read: the reference rig ships gz-at-rest in the package.
     let text = crate::package::read_text(path)
         .with_context(|| format!("reading reference {}", path.display()))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&text).with_context(|| format!("parsing reference {}", path.display()))?;
-    let bones = v["skeleton"]["bones"].as_array().context("reference has no skeleton.bones")?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("parsing reference {}", path.display()))?;
+    let bones = v["skeleton"]["bones"]
+        .as_array()
+        .context("reference has no skeleton.bones")?;
     let mut out = Vec::with_capacity(bones.len());
     for b in bones {
         let name = b["name"].as_str().context("bone.name")?.to_string();
@@ -44,7 +46,11 @@ fn load_reference_skeleton(path: &Path) -> Result<Vec<RefBone>> {
         for (i, f) in local.iter().enumerate().take(16) {
             m[i] = f.as_f64().unwrap_or(0.0) as f32;
         }
-        out.push(RefBone { name, parent, local: Mat4::from_cols_array(&m) });
+        out.push(RefBone {
+            name,
+            parent,
+            local: Mat4::from_cols_array(&m),
+        });
     }
     Ok(out)
 }
@@ -53,7 +59,11 @@ fn load_reference_skeleton(path: &Path) -> Result<Vec<RefBone>> {
 fn fk(locals: &[Mat4], parents: &[i32]) -> Vec<Mat4> {
     let mut g = vec![Mat4::IDENTITY; locals.len()];
     for i in 0..locals.len() {
-        g[i] = if parents[i] < 0 { locals[i] } else { g[parents[i] as usize] * locals[i] };
+        g[i] = if parents[i] < 0 {
+            locals[i]
+        } else {
+            g[parents[i] as usize] * locals[i]
+        };
     }
     g
 }
@@ -123,7 +133,11 @@ fn model_world_frames(model: &RawModel) -> Vec<Mat4> {
 fn write_world_frames(bones: &mut [RawBone], w: &[Mat4]) {
     for i in 0..bones.len() {
         let p = bones[i].parent;
-        let local = if p < 0 { w[i] } else { w[p as usize].inverse() * w[i] };
+        let local = if p < 0 {
+            w[i]
+        } else {
+            w[p as usize].inverse() * w[i]
+        };
         let (s, r, t) = local.to_scale_rotation_translation();
         bones[i].scale = s.to_array();
         bones[i].rotation = r.to_array();
@@ -150,8 +164,12 @@ pub struct HipReport {
 /// **WIDTH ONLY** — Meshy's bone LENGTHS are trusted (memory 03BBF8F4); only joint widths are not, so
 /// y/z and every other bone keep their position and just the thigh x moves.
 pub fn derive_hip_placement(model: &mut RawModel) -> HipReport {
-    let idx: HashMap<String, usize> =
-        model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
     let (Some(&pelvis), Some(&thigh_l), Some(&thigh_r)) =
         (idx.get("pelvis"), idx.get("thigh_l"), idx.get("thigh_r"))
     else {
@@ -168,17 +186,22 @@ pub fn derive_hip_placement(model: &mut RawModel) -> HipReport {
             .iter()
             .filter(|v| {
                 (0..4).any(|k| {
-                    (v.joints[k] as usize == pelvis || v.joints[k] as usize == thigh) && v.weights[k] >= 0.5
+                    (v.joints[k] as usize == pelvis || v.joints[k] as usize == thigh)
+                        && v.weights[k] >= 0.5
                 })
             })
             .map(|v| sign * (v.p[0] - mid))
             .filter(|d| *d > 0.0)
-            .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.max(d))))
+            .fold(None, |acc: Option<f32>, d| {
+                Some(acc.map_or(d, |a| a.max(d)))
+            })
     };
 
     let mut report = HipReport::default();
     for (thigh, sign, is_left) in [(thigh_l, 1.0f32, true), (thigh_r, -1.0f32, false)] {
-        let Some(width) = widest(thigh, sign) else { continue };
+        let Some(width) = widest(thigh, sign) else {
+            continue;
+        };
         let cur = pos_of(w[thigh]).x;
         let tgt = mid + sign * 0.5 * width;
         // WIDTH only: x moves, y/z (and every other bone) untouched.
@@ -186,7 +209,11 @@ pub fn derive_hip_placement(model: &mut RawModel) -> HipReport {
         col.x = tgt;
         w[thigh].w_axis = col;
         let entry = Some((cur, tgt, width));
-        if is_left { report.left = entry } else { report.right = entry }
+        if is_left {
+            report.left = entry
+        } else {
+            report.right = entry
+        }
     }
 
     write_world_frames(&mut model.bones, &w);
@@ -224,8 +251,12 @@ pub fn derive_shoulder_placement(model: &mut RawModel) -> ShoulderReport {
 /// [`derive_shoulder_placement`] with an explicit fraction — the tuning seam (the idle-pose harness
 /// sweeps this to pick `SHOULDER_FRACTION` against measured hip clearance).
 fn derive_shoulder_placement_frac(model: &mut RawModel, fraction: f32) -> ShoulderReport {
-    let idx: HashMap<String, usize> =
-        model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
     let (Some(&spine), Some(&ua_l), Some(&ua_r), Some(&cl_l), Some(&cl_r)) = (
         idx.get("spine_03"),
         idx.get("upperarm_l"),
@@ -247,17 +278,22 @@ fn derive_shoulder_placement_frac(model: &mut RawModel, fraction: f32) -> Should
             .iter()
             .filter(|v| {
                 (0..4).any(|k| {
-                    (v.joints[k] as usize == uarm || v.joints[k] as usize == clav) && v.weights[k] >= 0.5
+                    (v.joints[k] as usize == uarm || v.joints[k] as usize == clav)
+                        && v.weights[k] >= 0.5
                 })
             })
             .map(|v| sign * (v.p[0] - mid))
             .filter(|d| *d > 0.0)
-            .fold(None, |acc: Option<f32>, d| Some(acc.map_or(d, |a| a.max(d))))
+            .fold(None, |acc: Option<f32>, d| {
+                Some(acc.map_or(d, |a| a.max(d)))
+            })
     };
 
     let mut report = ShoulderReport::default();
     for (uarm, clav, sign, is_left) in [(ua_l, cl_l, 1.0f32, true), (ua_r, cl_r, -1.0f32, false)] {
-        let Some(width) = widest(uarm, clav, sign) else { continue };
+        let Some(width) = widest(uarm, clav, sign) else {
+            continue;
+        };
         let cur = pos_of(w[uarm]).x;
         let tgt = mid + sign * fraction * width;
         // WIDTH only: x moves, y/z (and every other bone) untouched.
@@ -296,12 +332,18 @@ const ANKLE_FRACTION: f32 = 0.45;
 /// bone (incl. `ball_l`) keeps its world position, so the child locals absorb the shift and the foot
 /// bone flattens toward horizontal. Runs BEFORE reorient (which consumes rest positions).
 pub fn derive_ankle_placement(model: &mut RawModel) -> AnkleReport {
-    let idx: HashMap<String, usize> =
-        model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
     let mut w = model_world_frames(model);
     let mut report = AnkleReport::default();
     for (foot_n, ball_n, is_left) in [("foot_l", "ball_l", true), ("foot_r", "ball_r", false)] {
-        let (Some(&foot), Some(&ball)) = (idx.get(foot_n), idx.get(ball_n)) else { continue };
+        let (Some(&foot), Some(&ball)) = (idx.get(foot_n), idx.get(ball_n)) else {
+            continue;
+        };
         let old_z = pos_of(w[foot]).z;
         let ball_z = pos_of(w[ball]).z;
         // Lower the ankle to a fraction up from the ball toward Meshy's (too-high) ankle.
@@ -313,7 +355,11 @@ pub fn derive_ankle_placement(model: &mut RawModel) -> AnkleReport {
         col.z = new_z; // HEIGHT only: z moves, x/y untouched
         w[foot].w_axis = col;
         let entry = Some((old_z, new_z));
-        if is_left { report.left = entry } else { report.right = entry }
+        if is_left {
+            report.left = entry
+        } else {
+            report.right = entry
+        }
     }
     write_world_frames(&mut model.bones, &w);
     report
@@ -330,16 +376,23 @@ pub struct ConformReport {
 pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<ConformReport> {
     // This body's world frames (built from the parsed local TRS).
     let fg = model_world_frames(model);
-    let idx: HashMap<String, usize> =
-        model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
 
     // The reference's world frames.
     let refs = load_reference_skeleton(reference)?;
     let ref_locals: Vec<Mat4> = refs.iter().map(|b| b.local).collect();
     let ref_parents: Vec<i32> = refs.iter().map(|b| b.parent).collect();
     let cg = fk(&ref_locals, &ref_parents);
-    let cidx: HashMap<String, usize> =
-        refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let cidx: HashMap<String, usize> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
 
     // 1. base frames: reference world ORIENTATION + THIS body's positions (else this body's own).
     let mut g0 = vec![Mat4::IDENTITY; model.bones.len()];
@@ -355,7 +408,9 @@ pub fn reorient_to_canonical(model: &mut RawModel, reference: &Path) -> Result<C
     let mut t = g0.clone();
     let mut report = ConformReport::default();
     for (i, b) in model.bones.iter().enumerate() {
-        let Some(ch) = limb_child(&b.name) else { continue };
+        let Some(ch) = limb_child(&b.name) else {
+            continue;
+        };
         let (Some(&this_ch), Some(&ref_bone), Some(&ref_ch)) =
             (idx.get(ch), cidx.get(&b.name), cidx.get(ch))
         else {
@@ -384,7 +439,9 @@ fn limb_length_ratio(
     cidx: &HashMap<String, usize>,
     cg: &[Mat4],
 ) -> f32 {
-    let Some(ch) = limb_child(limb) else { return 1.0 };
+    let Some(ch) = limb_child(limb) else {
+        return 1.0;
+    };
     let (Some(&li), Some(&ci), Some(&rli), Some(&rci)) =
         (idx.get(limb), idx.get(ch), cidx.get(limb), cidx.get(ch))
     else {
@@ -425,13 +482,20 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
         &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
     );
-    let cidx: HashMap<String, usize> =
-        refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let cidx: HashMap<String, usize> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
 
     // Initial (post-reorient) canonical frames + name→index; both grow as bones are appended.
     let g0 = model_world_frames(model);
-    let idx0: HashMap<String, usize> =
-        model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+    let idx0: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
 
     // Fingers + weapon sockets hang off the hand; Meshy has no hand length, so size them by the
     // forearm (lowerarm→hand is that limb).
@@ -470,7 +534,11 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
     // Append each inferred bone: parent frame is already canonical, so W = parent_global · scaled_local.
     let mut g = g0;
     let mut idx = idx0;
-    let mut report = InferReport { added: Vec::new(), hand_scale_l, hand_scale_r };
+    let mut report = InferReport {
+        added: Vec::new(),
+        hand_scale_l,
+        hand_scale_r,
+    };
     for &gi in &gap {
         let b = &refs[gi];
         let pnm = refs[b.parent as usize].name.as_str();
@@ -516,7 +584,13 @@ pub fn conform_to_canonical(model: &mut RawModel, reference: &Path) -> Result<Co
     let ankle = derive_ankle_placement(model);
     let reorient = reorient_to_canonical(model, reference)?;
     let infer = infer_canonical_bones(model, reference)?;
-    Ok(ConformOutput { hip, shoulder, ankle, reorient, infer })
+    Ok(ConformOutput {
+        hip,
+        shoulder,
+        ankle,
+        reorient,
+        infer,
+    })
 }
 
 /// The canonical reference rig — **GolemBaseSkeleton**, the AUTHORED baseline
@@ -545,19 +619,31 @@ mod tests {
             &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
             &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
         );
-        let oidx: HashMap<String, usize> = refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let oidx: HashMap<String, usize> = refs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let g = model_world_frames(model);
         let (mut wp, mut wd, mut wpn, mut wdn) = (0.0f32, 0.0f32, String::new(), String::new());
         for (i, b) in model.bones.iter().enumerate() {
-            let Some(&oi) = oidx.get(&b.name) else { continue };
+            let Some(&oi) = oidx.get(&b.name) else {
+                continue;
+            };
             // The lower-leg + shoulder chains are now intentionally mesh-derived — `derive_ankle_placement`
             // lowers the ankle (re-aligning the calf + shifting the inferred calf-twist), and
             // `derive_shoulder_placement` widens the glenohumeral joint (moving `upperarm` + its inferred
             // twist) — so they deviate from the Blender oracle BY DESIGN. Exclude from the reproduction check.
             if matches!(
                 b.name.as_str(),
-                "foot_l" | "foot_r" | "calf_twist_01_l" | "calf_twist_01_r"
-                    | "upperarm_l" | "upperarm_r" | "upperarm_twist_01_l" | "upperarm_twist_01_r"
+                "foot_l"
+                    | "foot_r"
+                    | "calf_twist_01_l"
+                    | "calf_twist_01_r"
+                    | "upperarm_l"
+                    | "upperarm_r"
+                    | "upperarm_twist_01_l"
+                    | "upperarm_twist_01_r"
             ) {
                 continue;
             }
@@ -578,13 +664,18 @@ mod tests {
     }
 
     fn find_character() -> Option<std::path::PathBuf> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
         if !dir.exists() {
             return None;
         }
-        std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-            p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-        })
+        std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| {
+                p.to_string_lossy().contains("Character_output")
+                    && p.extension().map(|e| e == "fbx").unwrap_or(false)
+            })
     }
 
     /// Convention check (non-circular): FK the reference `PrismHumanBaseA.json` and confirm it reads
@@ -602,14 +693,34 @@ mod tests {
             &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
             &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
         );
-        let cidx: HashMap<String, usize> = refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let cidx: HashMap<String, usize> = refs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let z = |n: &str| cidx.get(n).map(|&i| pos_of(cg[i]).z);
-        let (pelvis, head, foot) = (z("pelvis").unwrap(), z("head").unwrap(), z("foot_l").unwrap());
+        let (pelvis, head, foot) = (
+            z("pelvis").unwrap(),
+            z("head").unwrap(),
+            z("foot_l").unwrap(),
+        );
         eprintln!("reference Z-up cm: pelvis {pelvis:.1}, head {head:.1}, foot_l {foot:.1}");
-        assert!((60.0..120.0).contains(&pelvis), "pelvis at hip height, got {pelvis}");
-        assert!(head > pelvis + 40.0, "head well above the pelvis, got {head}");
-        assert!(foot < pelvis - 40.0 && foot < 25.0, "feet near the ground, got {foot}");
-        assert!(cg.iter().all(|m| m.w_axis.truncate().is_finite()), "no NaN in the FK");
+        assert!(
+            (60.0..120.0).contains(&pelvis),
+            "pelvis at hip height, got {pelvis}"
+        );
+        assert!(
+            head > pelvis + 40.0,
+            "head well above the pelvis, got {head}"
+        );
+        assert!(
+            foot < pelvis - 40.0 && foot < 25.0,
+            "feet near the ground, got {foot}"
+        );
+        assert!(
+            cg.iter().all(|m| m.w_axis.truncate().is_finite()),
+            "no NaN in the FK"
+        );
     }
 
     /// Hip-width derivation reproduces the oracle's femoral-head placement. Raw Meshy plants the
@@ -623,8 +734,12 @@ mod tests {
         };
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        let idx: HashMap<String, usize> =
-            model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let idx: HashMap<String, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let (tl, tr) = (idx["thigh_l"], idx["thigh_r"]);
 
         let before = model_world_frames(&model);
@@ -632,16 +747,33 @@ mod tests {
         let report = derive_hip_placement(&mut model);
         let after = model_world_frames(&model);
         let (al, ar) = (pos_of(after[tl]), pos_of(after[tr]));
-        eprintln!("thigh_l x {:.2}->{:.2} (oracle 8.67), thigh_r x {:.2}->{:.2} (oracle -8.44)", bl.x, al.x, br.x, ar.x);
+        eprintln!(
+            "thigh_l x {:.2}->{:.2} (oracle 8.67), thigh_r x {:.2}->{:.2} (oracle -8.44)",
+            bl.x, al.x, br.x, ar.x
+        );
         eprintln!("hip report: {report:?}");
 
         // Reproduces the oracle femoral-head width within a small tolerance (mesh not decimated here).
         assert!((al.x - 8.67).abs() < 1.5, "thigh_l x → ~8.67, got {}", al.x);
-        assert!((ar.x + 8.44).abs() < 1.5, "thigh_r x → ~-8.44, got {}", ar.x);
-        assert!(al.x - ar.x > 15.0, "femoral heads widen to ~17 cm sep, got {}", al.x - ar.x);
+        assert!(
+            (ar.x + 8.44).abs() < 1.5,
+            "thigh_r x → ~-8.44, got {}",
+            ar.x
+        );
+        assert!(
+            al.x - ar.x > 15.0,
+            "femoral heads widen to ~17 cm sep, got {}",
+            al.x - ar.x
+        );
         // WIDTH only: y and z of the thighs are unchanged.
-        assert!((al.y - bl.y).abs() < 1e-3 && (al.z - bl.z).abs() < 1e-3, "thigh_l y/z untouched");
-        assert!((ar.y - br.y).abs() < 1e-3 && (ar.z - br.z).abs() < 1e-3, "thigh_r y/z untouched");
+        assert!(
+            (al.y - bl.y).abs() < 1e-3 && (al.z - bl.z).abs() < 1e-3,
+            "thigh_l y/z untouched"
+        );
+        assert!(
+            (ar.y - br.y).abs() < 1e-3 && (ar.z - br.z).abs() < 1e-3,
+            "thigh_r y/z untouched"
+        );
     }
 
     /// Shoulder-width derivation moves the glenohumeral joint (`upperarm_l/r`) to `SHOULDER_FRACTION`
@@ -656,8 +788,12 @@ mod tests {
         };
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        let idx: HashMap<String, usize> =
-            model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let idx: HashMap<String, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let (ul, ur) = (idx["upperarm_l"], idx["upperarm_r"]);
 
         let before = model_world_frames(&model);
@@ -673,13 +809,25 @@ mod tests {
         // The joint lands at SHOULDER_FRACTION of the measured widest flesh, per side.
         if let Some((_, tgt, width)) = report.left {
             assert!((al.x - tgt).abs() < 1e-3, "upperarm_l lands on its target");
-            assert!((tgt - (0.28 + SHOULDER_FRACTION * width)).abs() < 0.5, "target = fraction·widest from ~mid");
+            assert!(
+                (tgt - (0.28 + SHOULDER_FRACTION * width)).abs() < 0.5,
+                "target = fraction·widest from ~mid"
+            );
         }
         // WIDTH only: the y and z of both shoulders are unchanged.
-        assert!((al.y - bl.y).abs() < 1e-3 && (al.z - bl.z).abs() < 1e-3, "upperarm_l y/z untouched");
-        assert!((ar.y - br.y).abs() < 1e-3 && (ar.z - br.z).abs() < 1e-3, "upperarm_r y/z untouched");
+        assert!(
+            (al.y - bl.y).abs() < 1e-3 && (al.z - bl.z).abs() < 1e-3,
+            "upperarm_l y/z untouched"
+        );
+        assert!(
+            (ar.y - br.y).abs() < 1e-3 && (ar.z - br.z).abs() < 1e-3,
+            "upperarm_r y/z untouched"
+        );
         // Shoulders end roughly symmetric and human-width (~13–19 cm half-span).
-        assert!((6.0..22.0).contains(&al.x.abs()) && (6.0..22.0).contains(&ar.x.abs()), "sane shoulder half-width");
+        assert!(
+            (6.0..22.0).contains(&al.x.abs()) && (6.0..22.0).contains(&ar.x.abs()),
+            "sane shoulder half-width"
+        );
     }
 
     /// Infer adds the reference's missing bones: 24→65 (fingers/twists/sockets/face; `root` is a bake
@@ -687,7 +835,9 @@ mod tests {
     /// inferred bone's world position reproduces the oracle within a small tolerance.
     #[test]
     fn infer_adds_canonical_bones_matching_oracle() {
-        let (Some(fbx), reference) = (find_character(), default_reference()) else { return };
+        let (Some(fbx), reference) = (find_character(), default_reference()) else {
+            return;
+        };
         if !reference.exists() {
             eprintln!("skipping: reference not present");
             return;
@@ -699,31 +849,76 @@ mod tests {
         let report = infer_canonical_bones(&mut model, &reference).unwrap();
         eprintln!(
             "added {} bones, total {}; hand_scale l={:.3} r={:.3}",
-            report.added.len(), model.bones.len(), report.hand_scale_l, report.hand_scale_r
+            report.added.len(),
+            model.bones.len(),
+            report.hand_scale_l,
+            report.hand_scale_r
         );
 
-        assert_eq!(model.bones.len(), 66, "22 canonical + 44 inferred (root added at bake → 67)");
+        assert_eq!(
+            model.bones.len(),
+            66,
+            "22 canonical + 44 inferred (root added at bake → 67)"
+        );
         let names: HashSet<&str> = model.bones.iter().map(|b| b.name.as_str()).collect();
-        for n in ["index_01_l", "thumb_03_r", "pinky_02_l", "Weapon_L", "Weapon_R",
-                  "upperarm_twist_01_l", "calf_twist_01_r", "jaw", "eye_l", "eye_r"] {
+        for n in [
+            "index_01_l",
+            "thumb_03_r",
+            "pinky_02_l",
+            "Weapon_L",
+            "Weapon_R",
+            "upperarm_twist_01_l",
+            "calf_twist_01_r",
+            "jaw",
+            "eye_l",
+            "eye_r",
+        ] {
             assert!(names.contains(n), "inferred bone '{n}' present");
         }
         // Hand scale is the forearm ratio; this body IS the oracle's source, so it is ~1.
-        assert!((0.9..1.1).contains(&report.hand_scale_l), "hand_scale_l ~1, got {}", report.hand_scale_l);
+        assert!(
+            (0.9..1.1).contains(&report.hand_scale_l),
+            "hand_scale_l ~1, got {}",
+            report.hand_scale_l
+        );
 
         // Inferred bone world positions reproduce the oracle (scale≈1 inferring from the oracle).
         let refs = load_reference_skeleton(&reference).unwrap();
-        let og = fk(&refs.iter().map(|b| b.local).collect::<Vec<_>>(), &refs.iter().map(|b| b.parent).collect::<Vec<_>>());
-        let oidx: HashMap<String, usize> = refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let og = fk(
+            &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
+            &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
+        );
+        let oidx: HashMap<String, usize> = refs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let g = model_world_frames(&model);
-        let midx: HashMap<String, usize> = model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let midx: HashMap<String, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let mut worst = 0.0f32;
-        for n in ["index_01_l", "index_03_l", "thumb_03_r", "pinky_03_l", "Weapon_L", "upperarm_twist_01_l", "jaw", "eye_r"] {
+        for n in [
+            "index_01_l",
+            "index_03_l",
+            "thumb_03_r",
+            "pinky_03_l",
+            "Weapon_L",
+            "upperarm_twist_01_l",
+            "jaw",
+            "eye_r",
+        ] {
             let d = (pos_of(g[midx[n]]) - pos_of(og[oidx[n]])).length();
             eprintln!("  {n}: {:.3} cm from oracle", d);
             worst = worst.max(d);
         }
-        assert!(worst < 1.0, "inferred bones within ~1 cm of the oracle, worst {worst:.3}");
+        assert!(
+            worst < 1.0,
+            "inferred bones within ~1 cm of the oracle, worst {worst:.3}"
+        );
     }
 
     /// THE correctness test (handoff step 4): the full in-app conform of the female FBX reproduces
@@ -732,7 +927,9 @@ mod tests {
     /// external tools. (`root` is oracle-only until bake, so it is excluded.)
     #[test]
     fn full_conform_reproduces_the_oracle() {
-        let (Some(fbx), reference) = (find_character(), default_reference()) else { return };
+        let (Some(fbx), reference) = (find_character(), default_reference()) else {
+            return;
+        };
         if !reference.exists() {
             eprintln!("skipping: reference not present");
             return;
@@ -746,15 +943,26 @@ mod tests {
         let mine: HashSet<&str> = model.bones.iter().map(|b| b.name.as_str()).collect();
         for b in &refs {
             if b.name != "root" {
-                assert!(mine.contains(b.name.as_str()), "conform is missing oracle bone '{}'", b.name);
+                assert!(
+                    mine.contains(b.name.as_str()),
+                    "conform is missing oracle bone '{}'",
+                    b.name
+                );
             }
         }
 
         // Compare each shared bone's world position + orientation.
-        let (worst_pos, worst_pos_name, worst_deg, worst_deg_name) = oracle_worst_delta(&model, &reference);
+        let (worst_pos, worst_pos_name, worst_deg, worst_deg_name) =
+            oracle_worst_delta(&model, &reference);
         eprintln!("oracle match: worst position {worst_pos:.4} cm ({worst_pos_name}), worst orientation {worst_deg:.4}° ({worst_deg_name}); {} shared bones", model.bones.len());
-        assert!(worst_pos < 0.1, "every bone within 0.1 cm of the oracle (worst {worst_pos:.4} at {worst_pos_name})");
-        assert!(worst_deg < 0.5, "every bone within 0.5° of the oracle (worst {worst_deg:.4} at {worst_deg_name})");
+        assert!(
+            worst_pos < 0.1,
+            "every bone within 0.1 cm of the oracle (worst {worst_pos:.4} at {worst_pos_name})"
+        );
+        assert!(
+            worst_deg < 0.5,
+            "every bone within 0.5° of the oracle (worst {worst_deg:.4} at {worst_deg_name})"
+        );
     }
 
     /// The game-ready low-res re-export of the human base (`PrismRaces/HumanBaseA_Low`, ~4k tris)
@@ -775,7 +983,10 @@ mod tests {
         let fbx = std::fs::read_dir(&low)
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .find(|p| p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false))
+            .find(|p| {
+                p.to_string_lossy().contains("Character_output")
+                    && p.extension().map(|e| e == "fbx").unwrap_or(false)
+            })
             .expect("HumanBaseA_Low Character_output.fbx");
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
@@ -783,7 +994,12 @@ mod tests {
         // RAW landmark heights (pre-conform) — is this the same body as the oracle? (pelvis 95.6,
         // head 153.2, foot_l 9.9 in the oracle.) A different height ⇒ a different body, not a bug.
         let raw = model_world_frames(&model);
-        let ridx: HashMap<String, usize> = model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let ridx: HashMap<String, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let rz = |n: &str| ridx.get(n).map(|&i| pos_of(raw[i]).z).unwrap_or(f32::NAN);
         eprintln!("low-res human RAW z: pelvis {:.1}, head {:.1}, foot_l {:.1}  (oracle 95.6 / 153.2 / 9.9)", rz("pelvis"), rz("head"), rz("foot_l"));
 
@@ -791,26 +1007,59 @@ mod tests {
 
         // Per-bone distance to the oracle — top few, to characterise the difference.
         let refs = load_reference_skeleton(&reference).unwrap();
-        let og = fk(&refs.iter().map(|b| b.local).collect::<Vec<_>>(), &refs.iter().map(|b| b.parent).collect::<Vec<_>>());
-        let oidx: HashMap<String, usize> = refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let og = fk(
+            &refs.iter().map(|b| b.local).collect::<Vec<_>>(),
+            &refs.iter().map(|b| b.parent).collect::<Vec<_>>(),
+        );
+        let oidx: HashMap<String, usize> = refs
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let g = model_world_frames(&model);
-        let mut deltas: Vec<(f32, &str)> = model.bones.iter().enumerate()
-            .filter_map(|(i, b)| oidx.get(&b.name).map(|&oi| ((pos_of(g[i]) - pos_of(og[oi])).length(), b.name.as_str())))
+        let mut deltas: Vec<(f32, &str)> = model
+            .bones
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| {
+                oidx.get(&b.name)
+                    .map(|&oi| ((pos_of(g[i]) - pos_of(og[oi])).length(), b.name.as_str()))
+            })
             .collect();
         deltas.sort_by(|a, b| b.0.total_cmp(&a.0));
-        eprintln!("top bone deltas vs oracle ({} tris):", model.indices.len() / 3);
+        eprintln!(
+            "top bone deltas vs oracle ({} tris):",
+            model.indices.len() / 3
+        );
         for (d, n) in deltas.iter().take(6) {
             eprintln!("  {n:<20} {d:.2} cm");
         }
 
         // A NEW body need not match the old oracle; it must conform to a SANE upright canonical rig.
-        assert_eq!(model.bones.len(), 66, "conforms to the 66-bone canonical set (+root at bake → 67)");
-        let gz = |n: &str| ridx.get(n).map(|_| pos_of(g[model.bones.iter().position(|b| b.name == n).unwrap()]).z);
-        let (pelvis, head, foot) = (gz("pelvis").unwrap(), gz("head").unwrap(), gz("foot_l").unwrap());
-        assert!((60.0..120.0).contains(&pelvis), "pelvis at hip height, got {pelvis}");
+        assert_eq!(
+            model.bones.len(),
+            66,
+            "conforms to the 66-bone canonical set (+root at bake → 67)"
+        );
+        let gz = |n: &str| {
+            ridx.get(n)
+                .map(|_| pos_of(g[model.bones.iter().position(|b| b.name == n).unwrap()]).z)
+        };
+        let (pelvis, head, foot) = (
+            gz("pelvis").unwrap(),
+            gz("head").unwrap(),
+            gz("foot_l").unwrap(),
+        );
+        assert!(
+            (60.0..120.0).contains(&pelvis),
+            "pelvis at hip height, got {pelvis}"
+        );
         assert!(head > pelvis + 40.0, "head well above pelvis, got {head}");
         assert!(foot < 25.0, "feet near the ground, got {foot}");
-        assert!(g.iter().all(|m| m.w_axis.truncate().is_finite()), "finite conform");
+        assert!(
+            g.iter().all(|m| m.w_axis.truncate().is_finite()),
+            "finite conform"
+        );
     }
 
     /// DIAGNOSTIC: is `HumanBaseA_Low`'s higher pelvis a genuine build (bone sits inside its mesh
@@ -826,27 +1075,45 @@ mod tests {
             ("PrismHumanBaseA (old)", "PrismHumanBaseA"),
         ];
         for (label, rel) in bodies {
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source").join(rel);
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../content/source")
+                .join(rel);
             let Some(fbx) = dir.exists().then_some(()).and_then(|_| {
-                std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-                    p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-                })
+                std::fs::read_dir(&dir)
+                    .ok()?
+                    .filter_map(|e| e.ok().map(|e| e.path()))
+                    .find(|p| {
+                        p.to_string_lossy().contains("Character_output")
+                            && p.extension().map(|e| e == "fbx").unwrap_or(false)
+                    })
             }) else {
                 eprintln!("-- {label}: not present, skipping");
                 continue;
             };
             let mut model = parse_fbx(&fbx).unwrap();
             rename_to_canonical(&mut model);
-            let bidx: HashMap<String, usize> = model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+            let bidx: HashMap<String, usize> = model
+                .bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (b.name.clone(), i))
+                .collect();
             // z-extent of the flesh a bone actually weights (≥0.5), the region the bone should sit in.
             let flesh_z = |name: &str, m: &RawModel| -> (f32, f32, usize) {
                 let bi = bidx[name] as u32;
-                let zs: Vec<f32> = m.vertices.iter()
+                let zs: Vec<f32> = m
+                    .vertices
+                    .iter()
                     .filter(|v| (0..4).any(|k| v.joints[k] == bi && v.weights[k] >= 0.5))
-                    .map(|v| v.p[2]).collect();
+                    .map(|v| v.p[2])
+                    .collect();
                 match zs.len() {
                     0 => (f32::NAN, f32::NAN, 0),
-                    n => (zs.iter().cloned().fold(f32::MAX, f32::min), zs.iter().cloned().fold(f32::MIN, f32::max), n),
+                    n => (
+                        zs.iter().cloned().fold(f32::MAX, f32::min),
+                        zs.iter().cloned().fold(f32::MIN, f32::max),
+                        n,
+                    ),
                 }
             };
             let raw = model_world_frames(&model);
@@ -863,7 +1130,10 @@ mod tests {
             if reference.exists() {
                 reorient_to_canonical(&mut model, &reference).unwrap();
                 let g = model_world_frames(&model);
-                eprintln!("  after conform: thigh_l x {:.2} (femoral-head width)", pos_of(g[bidx["thigh_l"]]).x);
+                eprintln!(
+                    "  after conform: thigh_l x {:.2} (femoral-head width)",
+                    pos_of(g[bidx["thigh_l"]]).x
+                );
             }
         }
     }
@@ -876,27 +1146,42 @@ mod tests {
     #[test]
     #[ignore]
     fn diagnose_shoulder_geometry() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismRaces/HumanBaseA_Low");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/source/PrismRaces/HumanBaseA_Low");
         let Some(fbx) = dir.exists().then_some(()).and_then(|_| {
-            std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-                p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-            })
+            std::fs::read_dir(&dir)
+                .ok()?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .find(|p| {
+                    p.to_string_lossy().contains("Character_output")
+                        && p.extension().map(|e| e == "fbx").unwrap_or(false)
+                })
         }) else {
             eprintln!("skipping: no HumanBaseA_Low");
             return;
         };
         let mut model = parse_fbx(&fbx).unwrap();
         rename_to_canonical(&mut model);
-        let bidx: HashMap<String, usize> = model.bones.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+        let bidx: HashMap<String, usize> = model
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.clone(), i))
+            .collect();
         let w = model_world_frames(&model);
 
         // Flesh a bone weights (≥0.5): count, centroid, and per-axis min/max.
         let flesh = |name: &str| -> Option<(usize, Vec3, Vec3, Vec3)> {
             let bi = *bidx.get(name)? as u32;
-            let ps: Vec<Vec3> = model.vertices.iter()
+            let ps: Vec<Vec3> = model
+                .vertices
+                .iter()
                 .filter(|v| (0..4).any(|k| v.joints[k] == bi && v.weights[k] >= 0.5))
-                .map(|v| Vec3::from(v.p)).collect();
-            if ps.is_empty() { return Some((0, Vec3::NAN, Vec3::NAN, Vec3::NAN)); }
+                .map(|v| Vec3::from(v.p))
+                .collect();
+            if ps.is_empty() {
+                return Some((0, Vec3::NAN, Vec3::NAN, Vec3::NAN));
+            }
             let c = ps.iter().copied().sum::<Vec3>() / ps.len() as f32;
             let lo = ps.iter().copied().reduce(|a, b| a.min(b)).unwrap();
             let hi = ps.iter().copied().reduce(|a, b| a.max(b)).unwrap();
@@ -916,12 +1201,22 @@ mod tests {
         // Shoulder JOINT candidate: the widest shoulder flesh (upperarm+clavicle) per side, like the
         // hip's "widest hip flesh". mid = spine_03 x.
         let mid = pos_of(w[bidx["spine_03"]]).x;
-        for (uarm, clav, sign, side) in [("upperarm_l", "clavicle_l", 1.0f32, "l"), ("upperarm_r", "clavicle_r", -1.0f32, "r")] {
-            let (Some(&ui), Some(&ci)) = (bidx.get(uarm), bidx.get(clav)) else { continue };
+        for (uarm, clav, sign, side) in [
+            ("upperarm_l", "clavicle_l", 1.0f32, "l"),
+            ("upperarm_r", "clavicle_r", -1.0f32, "r"),
+        ] {
+            let (Some(&ui), Some(&ci)) = (bidx.get(uarm), bidx.get(clav)) else {
+                continue;
+            };
             let (ui, ci) = (ui as u32, ci as u32);
-            let widest = model.vertices.iter()
-                .filter(|v| (0..4).any(|k| (v.joints[k] == ui || v.joints[k] == ci) && v.weights[k] >= 0.5))
-                .map(|v| sign * (v.p[0] - mid)).filter(|d| *d > 0.0)
+            let widest = model
+                .vertices
+                .iter()
+                .filter(|v| {
+                    (0..4).any(|k| (v.joints[k] == ui || v.joints[k] == ci) && v.weights[k] >= 0.5)
+                })
+                .map(|v| sign * (v.p[0] - mid))
+                .filter(|d| *d > 0.0)
                 .fold(0.0f32, f32::max);
             eprintln!("  {side}: mid(spine_03.x)={mid:.2}, widest shoulder flesh {widest:.2} cm from midline; upperarm now at {:.2}", pos_of(w[bidx[uarm]]).x);
         }
@@ -937,16 +1232,22 @@ mod tests {
     fn idle_pose_shoulder_effect() {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let src = base.join("Alpha/content/source/PrismRaces/HumanBaseA_Low");
-        let idle_bvh =
-            base.join("Alpha/content/source/Motifect/Motifect_locomotion_complete_v1_0/BVH/idle_neutral.bvh");
+        let idle_bvh = base.join(
+            "Alpha/content/source/Motifect/Motifect_locomotion_complete_v1_0/BVH/idle_neutral.bvh",
+        );
         let reference = default_reference();
         if !src.exists() || !idle_bvh.exists() || !reference.exists() {
             eprintln!("skipping: content not present");
             return;
         }
-        let Some(fbx) = std::fs::read_dir(&src).unwrap().filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-            p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-        }) else {
+        let Some(fbx) = std::fs::read_dir(&src)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| {
+                p.to_string_lossy().contains("Character_output")
+                    && p.extension().map(|e| e == "fbx").unwrap_or(false)
+            })
+        else {
             return;
         };
         let tmp = std::env::temp_dir().join("flicker_idle_probe");
@@ -955,13 +1256,18 @@ mod tests {
         // Pose frame 0 of a retargeted clip file and return world positions by bone name.
         let posed_world = |clip: &Path| -> (Vec<Mat4>, HashMap<String, usize>) {
             let refs = load_reference_skeleton(clip).unwrap();
-            let idx: HashMap<String, usize> =
-                refs.iter().enumerate().map(|(i, b)| (b.name.clone(), i)).collect();
+            let idx: HashMap<String, usize> = refs
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (b.name.clone(), i))
+                .collect();
             let v: serde_json::Value =
                 serde_json::from_str(&crate::package::read_text(clip).unwrap()).unwrap();
             let mut posed: Vec<Mat4> = refs.iter().map(|b| b.local).collect();
             for t in v["clips"][0]["tracks"].as_array().unwrap() {
-                let Some(&bi) = idx.get(t["bone"].as_str().unwrap()) else { continue };
+                let Some(&bi) = idx.get(t["bone"].as_str().unwrap()) else {
+                    continue;
+                };
                 let k = &t["keys"][0];
                 let a = |key: &str, n: usize| k[key][n].as_f64().unwrap() as f32;
                 posed[bi] = Mat4::from_scale_rotation_translation(
@@ -989,13 +1295,18 @@ mod tests {
             infer_canonical_bones(&mut model, &reference).unwrap();
             let ua_rest = {
                 let w = model_world_frames(&model);
-                let i = model.bones.iter().position(|b| b.name == "upperarm_l").unwrap();
+                let i = model
+                    .bones
+                    .iter()
+                    .position(|b| b.name == "upperarm_l")
+                    .unwrap();
                 pos_of(w[i]).x
             };
             let tag = frac.map_or("baseline".to_string(), |f| format!("frac {f:.2}"));
             let skel = tmp.join("skel.json");
             crate::bake::write_rig(&model, &fbx, "HumanBaseA", &skel, &[]).unwrap();
-            let (inplace, _) = crate::retarget::emit_variants(&idle_bvh, &skel, &tmp.join("c")).unwrap();
+            let (inplace, _) =
+                crate::retarget::emit_variants(&idle_bvh, &skel, &tmp.join("c")).unwrap();
             let (g, idx) = posed_world(&inplace);
             let p = |n: &str| pos_of(g[idx[n]]);
             let (h, _th) = (p("hand_l"), p("thigh_l"));
@@ -1027,7 +1338,11 @@ mod tests {
         rename_to_canonical(&mut model);
         let report = reorient_to_canonical(&mut model, &reference).unwrap();
         eprintln!("reoriented {} limbs", report.limbs_aligned);
-        assert!(report.limbs_aligned >= 8, "the arm+leg+foot chains aligned, got {}", report.limbs_aligned);
+        assert!(
+            report.limbs_aligned >= 8,
+            "the arm+leg+foot chains aligned, got {}",
+            report.limbs_aligned
+        );
         assert!(
             model.bones.iter().all(|b| {
                 b.translation.iter().all(|f| f.is_finite())

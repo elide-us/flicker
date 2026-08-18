@@ -84,6 +84,10 @@ mod scale_chain {
     #[test]
     fn the_tile_span_is_the_world_span() {
         let ours = super::TILE_DIM as f64 * super::FEET_PER_PIXEL * super::METRES_PER_FOOT;
-        assert_eq!(ours, flicker_poc_chemistry::TILE_SPAN_M, "one span, one canon");
+        assert_eq!(
+            ours,
+            flicker_poc_chemistry::TILE_SPAN_M,
+            "one span, one canon"
+        );
     }
 }

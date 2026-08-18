@@ -1,0 +1,98 @@
+# CI — lint, test (3 OS), and the supply-chain gate.
+#
+# Actions are pinned to full commit SHAs (version in the trailing comment);
+# Dependabot (.github/dependabot.yml) proposes pin bumps as reviewable PRs.
+# All cargo invocations run --locked: the committed Cargo.lock is the
+# dependency pin, and CI must never silently re-resolve it.
+
+name: ci
+
+on:
+  push:
+    branches: [main, macbook]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build deps
+        timeout-minutes: 10
+        run: |
+          # The runners' internal Azure apt mirror flakes; its default timeouts
+          # can hang a job for hours. Fail over fast and retry; a total update
+          # failure still lets install try the image's cached indexes, and a
+          # missing package then fails the step loudly.
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
+      - name: Warm toolchain (rust-toolchain.toml drives the version)
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # 90 covers a COLD run: full workspace compile (vendored Luau + ufbx C
+    # builds, uncached) plus the sim-heavy world crates' tests on few-core
+    # runners. Cached runs land far under this; revisit after the test cleanup.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          # Same azure-mirror hardening as the lint job (keep the three copies identical).
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
+      - name: Warm toolchain (rust-toolchain.toml drives the version)
+        run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: test
+        run: cargo test --workspace --locked
+
+  deny:
+    name: cargo-deny (advisories, bans, licenses, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --locked

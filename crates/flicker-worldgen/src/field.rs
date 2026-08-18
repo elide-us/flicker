@@ -233,7 +233,12 @@ impl<'a> FieldSampler<'a> {
             let field = if is_vein {
                 self.vein_low + (self.vein_gain - self.vein_low) * fil
             } else {
-                let n = fbm(p * self.composition_freq, self.octaves, el as u64 ^ 0x00C0_FFEE, self.seed);
+                let n = fbm(
+                    p * self.composition_freq,
+                    self.octaves,
+                    el as u64 ^ 0x00C0_FFEE,
+                    self.seed,
+                );
                 self.floor + (1.0 - self.floor) * n
             };
             let local = amount * field;
@@ -249,7 +254,11 @@ impl<'a> FieldSampler<'a> {
                 best = (Some(el), local);
             }
         }
-        let mut hardness = if w_sum > 0.0 { (h_sum / w_sum) as f32 } else { 0.0 };
+        let mut hardness = if w_sum > 0.0 {
+            (h_sum / w_sum) as f32
+        } else {
+            0.0
+        };
 
         // Foliation: once the crust has crystallized, fine strata band the
         // hardness up and down across the layering — the seam structure erosion
@@ -272,7 +281,12 @@ impl<'a> FieldSampler<'a> {
         // lifts the belt higher — mountain ranges along the convergent boundary.
         let mut amp = self.relief_amp;
         if orogeny > 0.0 {
-            let f = fbm(p * self.relief_freq * self.fold_freq_mult, self.octaves, 0x000F_01D5, self.seed);
+            let f = fbm(
+                p * self.relief_freq * self.fold_freq_mult,
+                self.octaves,
+                0x000F_01D5,
+                self.seed,
+            );
             let fold = ((1.0 - 2.0 * (f - 0.5).abs()) * 2.0 - 1.0) as f32;
             ridge += orogeny * 0.6 * fold;
             amp *= 1.0 + orogeny * self.orogeny_lift;
@@ -280,7 +294,12 @@ impl<'a> FieldSampler<'a> {
         let hard_norm = (hardness / 10.0).clamp(0.0, 1.0);
         let elev_world = elevation * self.tectonic_scale + amp * ridge * (0.3 + 0.7 * hard_norm);
 
-        CellSample { hardness, elevation: elev_world, dominant: best.0, vein: fil as f32 }
+        CellSample {
+            hardness,
+            elevation: elev_world,
+            dominant: best.0,
+            vein: fil as f32,
+        }
     }
 }
 
@@ -308,7 +327,10 @@ mod tests {
         let b = s.sample(&state, Vec2::new(4000.0, -2500.0));
         assert!((0.0..=10.0).contains(&a.hardness));
         assert!((0.0..=10.0).contains(&b.hardness));
-        assert!((a.hardness - b.hardness).abs() > 1e-3, "hardness field is flat");
+        assert!(
+            (a.hardness - b.hardness).abs() > 1e-3,
+            "hardness field is flat"
+        );
         assert!(a.elevation.is_finite() && b.elevation.is_finite());
     }
 
@@ -326,7 +348,10 @@ mod tests {
                 (still.sample(&state, w).hardness - flowed.sample(&state, w).hardness).abs() > 1e-3
             })
             .count();
-        assert!(differ > 5, "convection didn't change the field ({differ}/50)");
+        assert!(
+            differ > 5,
+            "convection didn't change the field ({differ}/50)"
+        );
     }
 
     #[test]
@@ -343,7 +368,10 @@ mod tests {
                 (s.sample(&molten, w).elevation - s.sample(&crust, w).elevation).abs() > 1e-3
             })
             .count();
-        assert!(differ > 5, "crystallization didn't reshape the relief ({differ}/50)");
+        assert!(
+            differ > 5,
+            "crystallization didn't reshape the relief ({differ}/50)"
+        );
     }
 
     #[test]
@@ -356,17 +384,22 @@ mod tests {
         let mut belt = HexState::new(comp.clone());
         belt.crust = comp;
         belt.orogeny = 1.0; // full fold belt
-        // The belt's relief should swing markedly higher than the un-folded crust.
+                            // The belt's relief should swing markedly higher than the un-folded crust.
         let span = |st: &HexState| {
             let (mut lo, mut hi) = (f32::MAX, f32::MIN);
             for k in 0..60 {
-                let e = s.sample(st, Vec2::new(k as f32 * 60.0, k as f32 * 80.0)).elevation;
+                let e = s
+                    .sample(st, Vec2::new(k as f32 * 60.0, k as f32 * 80.0))
+                    .elevation;
                 lo = lo.min(e);
                 hi = hi.max(e);
             }
             hi - lo
         };
-        assert!(span(&belt) > span(&flat) * 1.3, "orogeny didn't amplify the relief");
+        assert!(
+            span(&belt) > span(&flat) * 1.3,
+            "orogeny didn't amplify the relief"
+        );
     }
 
     #[test]
@@ -375,7 +408,12 @@ mod tests {
         let s = FieldSampler::new(&t, 7);
         let state = HexState::new(Composition::from_iter([(SI, 6000.0), (FE, 4000.0)]));
         let a = s.sample(&state, Vec2::new(1234.0, -567.0));
-        let b = s.sample_blended_at(&state, Vec3::new(1234.0, 0.0, -567.0), state.elevation, state.orogeny);
+        let b = s.sample_blended_at(
+            &state,
+            Vec3::new(1234.0, 0.0, -567.0),
+            state.elevation,
+            state.orogeny,
+        );
         assert_eq!(a.hardness.to_bits(), b.hardness.to_bits());
         assert_eq!(a.elevation.to_bits(), b.elevation.to_bits());
         assert_eq!(a.vein.to_bits(), b.vein.to_bits());
@@ -422,9 +460,18 @@ mod tests {
                 hard_off_vein = true; // host silica between the bands
             }
         }
-        assert!(max_vein - min_vein > 0.3, "vein didn't band (flat {min_vein}..{max_vein})");
-        assert!(soft_on_vein, "vein cells didn't take on the metal's hardness");
-        assert!(hard_off_vein, "host rock between the bands didn't stay hard");
+        assert!(
+            max_vein - min_vein > 0.3,
+            "vein didn't band (flat {min_vein}..{max_vein})"
+        );
+        assert!(
+            soft_on_vein,
+            "vein cells didn't take on the metal's hardness"
+        );
+        assert!(
+            hard_off_vein,
+            "host rock between the bands didn't stay hard"
+        );
     }
 
     #[test]
@@ -466,8 +513,14 @@ mod tests {
             flo = flo.min(f);
             fhi = fhi.max(f);
         }
-        assert!((fhi - flo) < 1e-3, "no-foliation hardness should be flat ({flo}..{fhi})");
-        assert!((bhi - blo) > 0.5, "foliation didn't band the hardness ({blo}..{bhi})");
+        assert!(
+            (fhi - flo) < 1e-3,
+            "no-foliation hardness should be flat ({flo}..{fhi})"
+        );
+        assert!(
+            (bhi - blo) > 0.5,
+            "foliation didn't band the hardness ({blo}..{bhi})"
+        );
     }
 
     #[test]
@@ -494,6 +547,9 @@ mod tests {
         let at = Vec2::new(200.0, 200.0);
         let low = s.sample_blended(&state, at, -0.5, 0.0);
         let high = s.sample_blended(&state, at, 0.5, 0.0);
-        assert!(high.elevation > low.elevation, "blended elevation didn't drive the cell");
+        assert!(
+            high.elevation > low.elevation,
+            "blended elevation didn't drive the cell"
+        );
     }
 }

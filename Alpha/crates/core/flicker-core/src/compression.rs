@@ -85,15 +85,20 @@ pub fn is_gzipped(bytes: &[u8]) -> bool {
 // File-level helpers — the gz-at-rest seam for package content.
 //
 // Package content (`Alpha/content/package/`) keeps every text file
-// individually gzip-compressed at rest as `<name>.<ext>.gz`, so the future
-// package format is a store-only filesystem wrapper (index + concatenation,
-// no container compression, full random access). Loaders address content by
-// its LOGICAL path (`…/intro.flight`) and go through [`read_bytes`] /
-// [`read_text`], which try the `.gz` twin first and fall back to the raw
-// path — so dev-loose files and test fixtures keep working. Writers of
-// processed content go through [`write_bytes`] / [`write_text`], which EMIT
-// the gz form (the raw fallback in the reader is a dev convenience, not a
-// second shipping format).
+// individually gzip-compressed at rest as `<name>.<ext>.gz`, so the package
+// file is a store-only filesystem wrapper (index + concatenation, no
+// container compression, full random access — `package.flk`, see
+// [`crate::mount`]). Loaders address content by its LOGICAL path
+// (`…/intro.flight`) and go through [`read_bytes`] / [`read_text`]. The
+// resolution order is one precedence rule applied twice: the SHIPPED form
+// wins, looser forms are the dev fallback —
+//
+//   mounted package entry (gz name first, then raw)  — installed builds
+//   → filesystem `.gz` twin                          — the at-rest dev tree
+//   → filesystem raw path                            — dev-loose files, fixtures
+//
+// Writers go through [`write_bytes`] / [`write_text`], which EMIT the gz
+// form; the mount is never written (packing is an offline content-tool pass).
 // ---------------------------------------------------------------------------
 
 /// The at-rest twin of a logical content path: `<path>.gz` (the whole `.gz`
@@ -110,30 +115,38 @@ pub fn gz_sibling(path: &Path) -> PathBuf {
 /// A naming test only — see [`is_gzipped`] for the content sniff.
 #[must_use]
 pub fn names_gz(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gz"))
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gz"))
 }
 
 /// Gz-transparent existence check for a logical content path: true when the
-/// `.gz` twin or the raw file is present. The read-side companion of
-/// [`read_bytes`] — call this wherever a loader used to call `path.exists()`.
+/// mounted package serves it, or the `.gz` twin or raw file is present. The
+/// read-side companion of [`read_bytes`] — call this wherever a loader used
+/// to call `path.exists()`.
 #[must_use]
 pub fn file_exists(path: &Path) -> bool {
-    (!names_gz(path) && gz_sibling(path).is_file()) || path.is_file()
+    crate::mount::exists(path) || (!names_gz(path) && gz_sibling(path).is_file()) || path.is_file()
 }
 
 /// Read a content file by its LOGICAL path, transparently decompressing the
 /// gz-at-rest form. Resolution order:
 ///
-/// 1. `path` already names a `.gz` file → read it, decompress (sniffed).
-/// 2. `<path>.gz` exists → read + decompress it (gz-FIRST: the at-rest form
+/// 1. The mounted package serves the path ([`crate::mount`], installed
+///    builds) → its entry bytes, decoded by the same sniff as file bytes.
+///    A present-but-unreadable entry is a loud error, never a fallback.
+/// 2. `path` already names a `.gz` file → read it, decompress (sniffed).
+/// 3. `<path>.gz` exists → read + decompress it (gz-FIRST: the at-rest form
 ///    always wins, so a stale raw twin can't shadow shipped content).
-/// 3. Fall back to the raw `path` (dev-loose files, test fixtures). Raw
+/// 4. Fall back to the raw `path` (dev-loose files, test fixtures). Raw
 ///    bytes that sniff as gzip are still decompressed, so a hand-renamed
 ///    file round-trips instead of parsing as garbage.
 ///
 /// Errors are plain `io::Error`; a missing file surfaces as `NotFound` for
 /// `path` itself (the logical name), matching what callers report.
 pub fn read_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    if let Some(raw) = crate::mount::read_raw(path)? {
+        return decode_read(raw);
+    }
     if names_gz(path) {
         return decode_read(std::fs::read(path)?);
     }
@@ -161,7 +174,9 @@ pub fn read_text(path: &Path) -> io::Result<String> {
 /// The result may end mid-token — it is a byte prefix, not a valid document.
 /// Callers scan it; they must not parse it as complete.
 pub fn read_bytes_prefix(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
-    let raw = if names_gz(path) {
+    let raw = if let Some(raw) = crate::mount::read_raw(path)? {
+        raw // at-rest bytes from the mounted package — same sniff below
+    } else if names_gz(path) {
         std::fs::read(path)?
     } else {
         match std::fs::read(gz_sibling(path)) {
@@ -230,6 +245,54 @@ pub fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
 /// [`write_bytes`] for text — the writer twin of [`read_text`].
 pub fn write_text(path: &Path, text: &str) -> io::Result<PathBuf> {
     write_bytes(path, text.as_bytes())
+}
+
+/// One child of a listed content directory — see [`list_dir`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    /// The child's full path (parent joined with its name). File names are the
+    /// AT-REST names (`x.json.gz`) — exactly what a filesystem listing of the
+    /// package tree shows, so existing name filters keep working.
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+/// List a content directory's children — the enumeration companion of
+/// [`read_bytes`]: the union of the mounted package's children and the
+/// filesystem's, mount first, each name once (a mounted entry shadows a loose
+/// twin). Call this wherever a content loader used to call `fs::read_dir`.
+/// `NotFound` only when NEITHER side knows the directory; sorted by name.
+pub fn list_dir(path: &Path) -> io::Result<Vec<DirEntry>> {
+    let mut seen: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
+    let mounted = crate::mount::list(path);
+    if let Some(children) = &mounted {
+        for (name, is_dir) in children {
+            seen.insert(name.clone(), *is_dir);
+        }
+    }
+    match std::fs::read_dir(path) {
+        Ok(rd) => {
+            for entry in rd {
+                let entry = entry?;
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                let is_dir = entry.file_type()?.is_dir();
+                seen.entry(name).or_insert(is_dir);
+            }
+        }
+        // The mount knowing the directory is enough — an installed build has
+        // no loose package tree on disk at all.
+        Err(_) if mounted.is_some() => {}
+        Err(e) => return Err(e),
+    }
+    Ok(seen
+        .into_iter()
+        .map(|(name, is_dir)| DirEntry {
+            path: path.join(name),
+            is_dir,
+        })
+        .collect())
 }
 
 /// Errors surfaced from this module. Currently just wraps `io::Error`
@@ -326,8 +389,8 @@ mod tests {
         // Bytes that pass `is_gzipped`'s magic check but aren't a
         // real gzip stream — the decoder should error rather than
         // hang or return garbage.
-        let err = decompress_gzip(&[0x1F, 0x8B, 0x08, 0xFF])
-            .expect_err("must reject truncated gzip");
+        let err =
+            decompress_gzip(&[0x1F, 0x8B, 0x08, 0xFF]).expect_err("must reject truncated gzip");
         assert!(matches!(err, CompressionError::Io(_)));
 
         // Definitely-not-gzip plain text — the decoder rejects on
@@ -365,16 +428,26 @@ mod tests {
         let written = write_text(&logical, r#"{"who":"gz"}"#).expect("write emits gz");
         assert_eq!(written, gz_sibling(&logical), "writer emits the .gz twin");
         assert!(!logical.exists(), "no raw twin left behind");
-        assert!(file_exists(&logical), "logical path exists through the seam");
+        assert!(
+            file_exists(&logical),
+            "logical path exists through the seam"
+        );
         assert!(
             is_gzipped(&std::fs::read(&written).unwrap()),
             "at-rest bytes are really gzip"
         );
-        assert_eq!(read_text(&logical).expect("gz-transparent read"), r#"{"who":"gz"}"#);
+        assert_eq!(
+            read_text(&logical).expect("gz-transparent read"),
+            r#"{"who":"gz"}"#
+        );
 
         // gz-FIRST: a raw twin planted beside the gz must NOT shadow it.
         std::fs::write(&logical, r#"{"who":"stale-raw"}"#).unwrap();
-        assert_eq!(read_text(&logical).unwrap(), r#"{"who":"gz"}"#, "the .gz twin wins");
+        assert_eq!(
+            read_text(&logical).unwrap(),
+            r#"{"who":"gz"}"#,
+            "the .gz twin wins"
+        );
 
         // Raw fallback: with no gz twin, a dev-loose raw file still reads.
         std::fs::remove_file(&written).unwrap();
@@ -382,7 +455,10 @@ mod tests {
 
         // A literal .gz path reads directly too (directory-listing callers).
         write_text(&logical, r#"{"who":"gz2"}"#).unwrap();
-        assert_eq!(read_text(&gz_sibling(&logical)).unwrap(), r#"{"who":"gz2"}"#);
+        assert_eq!(
+            read_text(&gz_sibling(&logical)).unwrap(),
+            r#"{"who":"gz2"}"#
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

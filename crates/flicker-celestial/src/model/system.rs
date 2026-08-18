@@ -72,7 +72,12 @@ pub fn cleared_neighborhood(parent_mass: f64, siblings: &[&Body], idx: usize) ->
 /// Classify `siblings[idx]` given its parent context: `parent_mass` (M☉) and
 /// whether the parent is the star. Bodies bound to a planet are moons; bodies
 /// orbiting the star are giants / comets / planets / dwarfs.
-pub fn classify(parent_mass: f64, parent_is_star: bool, siblings: &[&Body], idx: usize) -> Classification {
+pub fn classify(
+    parent_mass: f64,
+    parent_is_star: bool,
+    siblings: &[&Body],
+    idx: usize,
+) -> Classification {
     use super::body::BodyKind;
     let body = siblings[idx];
     match body.kind {
@@ -135,7 +140,12 @@ impl System {
     /// is what the orbital methods need, so a consumer can compute orbits for the
     /// whole tree in one walk.
     pub fn for_each_body(&self, mut f: impl FnMut(&Body, f64, usize)) {
-        fn walk<F: FnMut(&Body, f64, usize)>(body: &Body, parent_mass: f64, depth: usize, f: &mut F) {
+        fn walk<F: FnMut(&Body, f64, usize)>(
+            body: &Body,
+            parent_mass: f64,
+            depth: usize,
+            f: &mut F,
+        ) {
             f(body, parent_mass, depth);
             let m = body.mass();
             for sat in &body.satellites {
@@ -190,7 +200,12 @@ mod tests {
         let mut classes = ClassComposition::of(CondensationClass::Silicate, 0.68 * m);
         classes.add_class(CondensationClass::Metal, 0.32 * m);
         let v = (G * (1.0 + m) / a_au).sqrt();
-        Body::from_classes(DVec3::new(a_au, 0.0, 0.0), DVec3::new(0.0, 0.0, v), kind, classes)
+        Body::from_classes(
+            DVec3::new(a_au, 0.0, 0.0),
+            DVec3::new(0.0, 0.0, v),
+            kind,
+            classes,
+        )
     }
 
     fn sun() -> Body {
@@ -225,34 +240,53 @@ mod tests {
         let mut seen = Vec::new();
         sys.for_each_body(|b, parent_mass, depth| seen.push((b.kind, parent_mass, depth)));
         assert_eq!(seen[0].2, 0, "star at depth 0");
-        assert!((seen[1].1 - star_m).abs() < 1e-12, "planet's parent mass is the star");
+        assert!(
+            (seen[1].1 - star_m).abs() < 1e-12,
+            "planet's parent mass is the star"
+        );
         assert_eq!(seen[2].2, 2, "moon at depth 2");
-        assert!((seen[2].1 - M_EARTH).abs() < 1e-6, "moon's parent mass is ~Earth");
+        assert!(
+            (seen[2].1 - M_EARTH).abs() < 1e-6,
+            "moon's parent mass is ~Earth"
+        );
     }
 
     #[test]
     fn lone_planet_clears_its_lane_but_a_crowd_does_not() {
         // One Earth alone at 1 AU → cleared → planet.
         let mut star = sun();
-        star.satellites.push(Satellite::Body(body_at(1.0, M_EARTH, BodyKind::Protoplanet)));
+        star.satellites.push(Satellite::Body(body_at(
+            1.0,
+            M_EARTH,
+            BodyKind::Protoplanet,
+        )));
         let lone = System::new(star);
         assert_eq!(lone.classify_solar_body(0), Some(Classification::Planet));
 
         // Three equal masses crammed in one band → none clears → all dwarfs.
         let mut star = sun();
         for a in [0.98, 1.0, 1.02] {
-            star.satellites.push(Satellite::Body(body_at(a, M_EARTH, BodyKind::Protoplanet)));
+            star.satellites
+                .push(Satellite::Body(body_at(a, M_EARTH, BodyKind::Protoplanet)));
         }
         let crowd = System::new(star);
         for i in 0..3 {
-            assert_eq!(crowd.classify_solar_body(i), Some(Classification::DwarfPlanet), "body {i}");
+            assert_eq!(
+                crowd.classify_solar_body(i),
+                Some(Classification::DwarfPlanet),
+                "body {i}"
+            );
         }
     }
 
     #[test]
     fn giant_classifies_as_a_giant_and_clears_by_definition() {
         let mut star = sun();
-        star.satellites.push(Satellite::Body(body_at(5.0, 300.0 * M_EARTH, BodyKind::Giant)));
+        star.satellites.push(Satellite::Body(body_at(
+            5.0,
+            300.0 * M_EARTH,
+            BodyKind::Giant,
+        )));
         let sys = System::new(star);
         assert_eq!(sys.classify_solar_body(0), Some(Classification::GasGiant));
     }
@@ -272,7 +306,10 @@ mod tests {
             ClassComposition::of(CondensationClass::Ice, m),
         );
         let (_, e) = comet.orbital_elements(1.0);
-        assert!(e >= COMET_MIN_ECCENTRICITY, "set up a high-e orbit, got e={e}");
+        assert!(
+            e >= COMET_MIN_ECCENTRICITY,
+            "set up a high-e orbit, got e={e}"
+        );
         star.satellites.push(Satellite::Body(comet));
         let sys = System::new(star);
         assert_eq!(sys.classify_solar_body(0), Some(Classification::Comet));
@@ -289,7 +326,14 @@ mod tests {
         );
         earth.satellites.push(Satellite::Body(moon));
         // Classify the moon directly via the helper (parent is not the star).
-        let siblings: Vec<&Body> = earth.satellites.iter().filter_map(Satellite::as_body).collect();
-        assert_eq!(classify(earth.mass(), false, &siblings, 0), Classification::Moon);
+        let siblings: Vec<&Body> = earth
+            .satellites
+            .iter()
+            .filter_map(Satellite::as_body)
+            .collect();
+        assert_eq!(
+            classify(earth.mass(), false, &siblings, 0),
+            Classification::Moon
+        );
     }
 }

@@ -96,9 +96,44 @@ fn higher_layer_covers_lower_across_pipelines() {
     //   - GREEN full-screen sprite at layer 0
     //   - BLACK text at layer 0                 (the "menu text" the bug leaked)
     //   - RED triangle at layer 2 over the corner (cross-pipeline, on top of all)
-    sprite.push(screen, tex, Vec2::ZERO, screen, [0.0, 0.0, 1.0, 1.0], 1.0, None, crate::FULL_TEXTURE);
-    sprite.push(screen, tex, Vec2::ZERO, screen, [0.0, 1.0, 0.0, 1.0], 0.0, None, crate::FULL_TEXTURE);
-    text.push("WWWWWW", 2.0, 26.0, 24.0, [0.0, 0.0, 0.0, 1.0], 0.0, crate::FontRole::Body, false, false, -1.0, None, None);
+    sprite.push(
+        screen,
+        tex,
+        Vec2::ZERO,
+        screen,
+        [0.0, 0.0, 1.0, 1.0],
+        1.0,
+        None,
+        crate::FULL_TEXTURE,
+        0.0,
+        Vec2::ZERO,
+    );
+    sprite.push(
+        screen,
+        tex,
+        Vec2::ZERO,
+        screen,
+        [0.0, 1.0, 0.0, 1.0],
+        0.0,
+        None,
+        crate::FULL_TEXTURE,
+        0.0,
+        Vec2::ZERO,
+    );
+    text.push(
+        "WWWWWW",
+        2.0,
+        26.0,
+        24.0,
+        [0.0, 0.0, 0.0, 1.0],
+        0.0,
+        crate::FontRole::Body,
+        false,
+        false,
+        -1.0,
+        None,
+        None,
+    );
     triangle.push(
         screen,
         Vec2::new(0.0, 0.0),

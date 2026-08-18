@@ -266,11 +266,7 @@ mod tests {
             } else {
                 VoxelState::Empty
             };
-            assert_eq!(
-                f.get(coord(x, 0, 0)),
-                expected,
-                "voxel ({x}, 0, 0) drifted"
-            );
+            assert_eq!(f.get(coord(x, 0, 0)), expected, "voxel ({x}, 0, 0) drifted");
         }
     }
 

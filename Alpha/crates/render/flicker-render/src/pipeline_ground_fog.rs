@@ -105,7 +105,12 @@ impl GroundFogUniform {
             color: [p.color.x, p.color.y, p.color.z, p.density],
             band: [p.bottom, p.top, p.noise_scale, p.coverage],
             wind: [p.wind.x, p.wind.y, p.time, p.height_power],
-            bounds: [p.bounds_min.x, p.bounds_min.y, p.bounds_max.x, p.bounds_max.y],
+            bounds: [
+                p.bounds_min.x,
+                p.bounds_min.y,
+                p.bounds_max.x,
+                p.bounds_max.y,
+            ],
             spill: [p.fall_depth, p.flow, 0.0, 0.0],
         }
     }

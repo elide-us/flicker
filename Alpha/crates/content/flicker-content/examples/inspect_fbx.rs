@@ -12,12 +12,24 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     });
     let path = PathBuf::from(&arg);
-    let fbx = if path.is_dir() { first_fbx(&path)? } else { path };
+    let fbx = if path.is_dir() {
+        first_fbx(&path)?
+    } else {
+        path
+    };
 
     let m = flicker_content::parse_fbx(&fbx)?;
-    let skinned = m.vertices.iter().filter(|v| v.weights.iter().any(|w| *w > 0.0)).count();
+    let skinned = m
+        .vertices
+        .iter()
+        .filter(|v| v.weights.iter().any(|w| *w > 0.0))
+        .count();
     println!("file      {}", fbx.display());
-    println!("vertices  {}  ({} tris)", m.vertices.len(), m.vertices.len() / 3);
+    println!(
+        "vertices  {}  ({} tris)",
+        m.vertices.len(),
+        m.vertices.len() / 3
+    );
     println!("skinned   {skinned} vertices carry a non-zero weight");
     println!("bones     {}", m.bones.len());
     for (i, b) in m.bones.iter().enumerate() {
@@ -29,6 +41,10 @@ fn main() -> anyhow::Result<()> {
 fn first_fbx(dir: &Path) -> anyhow::Result<PathBuf> {
     std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.extension().map(|e| e.eq_ignore_ascii_case("fbx")).unwrap_or(false))
+        .find(|p| {
+            p.extension()
+                .map(|e| e.eq_ignore_ascii_case("fbx"))
+                .unwrap_or(false)
+        })
         .ok_or_else(|| anyhow::anyhow!("no .fbx in {}", dir.display()))
 }

@@ -9,8 +9,8 @@
 use std::path::Path;
 
 fn main() -> anyhow::Result<()> {
-    let characters = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../content/package/characters");
+    let characters =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/package/characters");
     let out = flicker_content::baseline::emit(&characters)?;
     let rig = flicker_content::baseline::golem_base_skeleton();
     println!(

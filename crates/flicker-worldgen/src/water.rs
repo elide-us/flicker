@@ -249,7 +249,12 @@ mod tests {
     fn water_is_conserved_across_the_sweep() {
         let t = tables();
         let (dirs, neighbors, mut cells) = ring_world(24);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         // Seeding sets surface_water = water_depth, so measure the post-seed total.
         let seeded_total: f64 = cells.iter().map(|c| c.water_depth.max(0.0) as f64).sum();
         run_water_cycle(&mut cells, &ctx, 30);
@@ -268,14 +273,28 @@ mod tests {
     fn rain_reaches_land_and_varies() {
         let t = tables();
         let (dirs, neighbors, mut cells) = ring_world(24);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         run_water_cycle(&mut cells, &ctx, 30);
         // Some land cell received rain, and the precipitation field is not uniform
         // (a rain shadow / gradient emerged).
         let land_rain = (12..24).any(|i| cells[i].precipitation > 0.0);
         assert!(land_rain, "no rain reached land");
-        let lo = cells.iter().map(|c| c.precipitation).fold(f32::MAX, f32::min);
-        let hi = cells.iter().map(|c| c.precipitation).fold(f32::MIN, f32::max);
-        assert!(hi - lo > 0.05, "precipitation field is nearly uniform ({lo}..{hi})");
+        let lo = cells
+            .iter()
+            .map(|c| c.precipitation)
+            .fold(f32::MAX, f32::min);
+        let hi = cells
+            .iter()
+            .map(|c| c.precipitation)
+            .fold(f32::MIN, f32::max);
+        assert!(
+            hi - lo > 0.05,
+            "precipitation field is nearly uniform ({lo}..{hi})"
+        );
     }
 }

@@ -34,8 +34,14 @@ mod tests {
         let p = Vec3::new(0.3, -1.7, 2.1);
         assert_eq!(
             value_noise(p, 7, 42).to_bits(),
-            flicker_primitive::noise::value3(0.3_f32 as f64, -1.7_f32 as f64, 2.1_f32 as f64, 7, 42)
-                .to_bits()
+            flicker_primitive::noise::value3(
+                0.3_f32 as f64,
+                -1.7_f32 as f64,
+                2.1_f32 as f64,
+                7,
+                42
+            )
+            .to_bits()
         );
     }
 
@@ -52,7 +58,10 @@ mod tests {
     #[test]
     fn varies_across_space_salt_and_seed() {
         let p = Vec3::new(0.3, -1.7, 2.1);
-        assert_ne!(value_noise(p, 1, 1), value_noise(p + Vec3::splat(1.3), 1, 1));
+        assert_ne!(
+            value_noise(p, 1, 1),
+            value_noise(p + Vec3::splat(1.3), 1, 1)
+        );
         assert_ne!(value_noise(p, 1, 1), value_noise(p, 2, 1));
         assert_ne!(value_noise(p, 1, 1), value_noise(p, 1, 2));
     }

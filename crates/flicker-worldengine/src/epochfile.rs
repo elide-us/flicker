@@ -37,9 +37,15 @@ pub const EPOCH_VERSION: u32 = 1;
 #[derive(Debug, thiserror::Error)]
 pub enum EpochFileError {
     #[error("reading .epoch {path}: {source}")]
-    Io { path: String, source: std::io::Error },
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("parsing .epoch {path}: {source}")]
-    Parse { path: String, source: serde_json::Error },
+    Parse {
+        path: String,
+        source: serde_json::Error,
+    },
     #[error("serialising .epoch: {0}")]
     Serialize(serde_json::Error),
     #[error("invalid .epoch: {0}")]
@@ -64,7 +70,11 @@ pub struct EpochFile {
 
 impl EpochFile {
     /// Wrap a recipe + snapshots with the current header.
-    pub fn new(config: WorldConfig, snapshots: Vec<EpochSnapshot>, comment: impl Into<String>) -> Self {
+    pub fn new(
+        config: WorldConfig,
+        snapshots: Vec<EpochSnapshot>,
+        comment: impl Into<String>,
+    ) -> Self {
         Self {
             format: EPOCH_FORMAT.to_string(),
             version: EPOCH_VERSION,
@@ -76,10 +86,11 @@ impl EpochFile {
 
     /// Parse and validate a `.epoch` from JSON text.
     pub fn from_json(json: &str) -> Result<Self, EpochFileError> {
-        let file: EpochFile = serde_json::from_str(json).map_err(|source| EpochFileError::Parse {
-            path: "<memory>".to_string(),
-            source,
-        })?;
+        let file: EpochFile =
+            serde_json::from_str(json).map_err(|source| EpochFileError::Parse {
+                path: "<memory>".to_string(),
+                source,
+            })?;
         file.validate()?;
         Ok(file)
     }
@@ -107,10 +118,11 @@ impl EpochFile {
             path: path.display().to_string(),
             source,
         })?;
-        let file: EpochFile = serde_json::from_str(&text).map_err(|source| EpochFileError::Parse {
-            path: path.display().to_string(),
-            source,
-        })?;
+        let file: EpochFile =
+            serde_json::from_str(&text).map_err(|source| EpochFileError::Parse {
+                path: path.display().to_string(),
+                source,
+            })?;
         file.validate()?;
         Ok(file)
     }
@@ -147,7 +159,10 @@ impl EpochFile {
         let mut last = 0u8;
         for s in &self.snapshots {
             if s.epoch < 1 || s.epoch as usize > WORLD_EPOCHS {
-                return Err(EpochFileError::Invalid(format!("epoch {} out of range", s.epoch)));
+                return Err(EpochFileError::Invalid(format!(
+                    "epoch {} out of range",
+                    s.epoch
+                )));
             }
             if s.len() != cells {
                 return Err(EpochFileError::Invalid(format!(
@@ -157,7 +172,9 @@ impl EpochFile {
                 )));
             }
             if s.epoch <= last {
-                return Err(EpochFileError::Invalid("snapshots out of epoch order".into()));
+                return Err(EpochFileError::Invalid(
+                    "snapshots out of epoch order".into(),
+                ));
             }
             last = s.epoch;
         }
@@ -177,7 +194,11 @@ mod tests {
         engine.set_freq(6);
         let file = engine.capture("test world");
         assert_eq!(file.format, EPOCH_FORMAT);
-        assert_eq!(file.snapshots.len(), WORLD_EPOCHS, "all nine epochs captured");
+        assert_eq!(
+            file.snapshots.len(),
+            WORLD_EPOCHS,
+            "all nine epochs captured"
+        );
 
         // JSON round-trip preserves the recipe and per-cell state.
         let json = file.to_json().unwrap();
@@ -205,12 +226,18 @@ mod tests {
             std::fs::metadata(&plain).unwrap().len(),
             std::fs::metadata(&gz).unwrap().len(),
         );
-        assert!(sz_gz < sz_plain, "gzip ({sz_gz}) should be smaller than plain ({sz_plain})");
+        assert!(
+            sz_gz < sz_plain,
+            "gzip ({sz_gz}) should be smaller than plain ({sz_plain})"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn rejects_empty_and_out_of_range() {
-        assert!(EpochFile::from_json(r#"{ "config": { "values": {}, "freq": 6, "seed": 1 }, "snapshots": [] }"#).is_err());
+        assert!(EpochFile::from_json(
+            r#"{ "config": { "values": {}, "freq": 6, "seed": 1 }, "snapshots": [] }"#
+        )
+        .is_err());
     }
 }

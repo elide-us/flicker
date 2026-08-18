@@ -24,7 +24,8 @@ const MATERIALS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/co
 
 /// Load the Prism vocabulary (periodic table + materials) from `Alpha/content/data`.
 pub fn load_tables() -> Tables {
-    Tables::from_source(&JsonTableSource::new(MATERIALS_DIR)).expect("repo Alpha/content/data loads")
+    Tables::from_source(&JsonTableSource::new(MATERIALS_DIR))
+        .expect("repo Alpha/content/data loads")
 }
 
 /// Reference mass that anchors the **outer** edge of the cloud: the lightest element
@@ -177,8 +178,14 @@ mod tests {
 
     #[test]
     fn explosion_size_scales_every_distance() {
-        let small = CastParams { explosion: 0.0, ..Default::default() };
-        let big = CastParams { explosion: 1.0, ..Default::default() };
+        let small = CastParams {
+            explosion: 0.0,
+            ..Default::default()
+        };
+        let big = CastParams {
+            explosion: 1.0,
+            ..Default::default()
+        };
         // Same falloff → the ratio between two elements is invariant; only the scale grows.
         let r_small = small.distance_au(55.85) / small.distance_au(1.008);
         let r_big = big.distance_au(55.85) / big.distance_au(1.008);

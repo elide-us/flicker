@@ -31,7 +31,10 @@ static TOKENS: LazyLock<HashMap<String, [f32; 4]>> = LazyLock::new(|| {
         tracing::error!("theme: embedded ui_theme.json did not parse — token palette empty");
         return fallback;
     };
-    let Some(tokens) = root.get("theme").and_then(|t| t.get("tokens")).and_then(|t| t.as_object())
+    let Some(tokens) = root
+        .get("theme")
+        .and_then(|t| t.get("tokens"))
+        .and_then(|t| t.as_object())
     else {
         tracing::error!("theme: embedded ui_theme.json has no theme.tokens");
         return fallback;
@@ -77,7 +80,8 @@ const MUSE_IMAGE: &[u8] = include_bytes!("../../../../content/package/sensorium/
 /// The Prism pointer — the knotwork cursor, embedded so every shell app
 /// inherits it (source ico: `content/source/prism_ui_icons/`, un-tracked; this
 /// PNG is the checked-in game copy). Grayscale art, tinted at load by a token.
-const CURSOR_IMAGE: &[u8] = include_bytes!("../../../../content/package/sensorium/assets/cursor.png");
+const CURSOR_IMAGE: &[u8] =
+    include_bytes!("../../../../content/package/sensorium/assets/cursor.png");
 
 /// The `theme.tokens` name the cursor's grayscale art is multiplied by.
 const CURSOR_TINT: &str = "gold_ring";
@@ -225,7 +229,11 @@ impl Theme {
         let white = renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1);
         let muse = load_muse(renderer);
         let pad_glyphs = load_pad_glyphs(renderer);
-        Self { white, muse, pad_glyphs }
+        Self {
+            white,
+            muse,
+            pad_glyphs,
+        }
     }
 
     /// The engine textures this theme exposes to a Lua screen, as
@@ -235,7 +243,11 @@ impl Theme {
     ///
     /// [`ScriptHost::set_texture_ids`]: flicker::script::ScriptHost::set_texture_ids
     pub fn lua_textures(&self) -> [(&'static str, TextureHandle); 3] {
-        [("white", self.white), ("muse", self.muse), ("pad_glyphs", self.pad_glyphs)]
+        [
+            ("white", self.white),
+            ("muse", self.muse),
+            ("pad_glyphs", self.pad_glyphs),
+        ]
     }
 
     /// Draw the loading screen: opaque backdrop, the flat Prism panel titled
@@ -256,7 +268,17 @@ impl Theme {
         let shadow = tok("shadow");
         // Flat Prism chrome (vector): backdrop, soft drop shadow, then the panel —
         // drawn as ui-panels so they sort behind the sprite bar + text that follow.
-        r.draw_ui_panel(Vec2::ZERO, screen, backdrop, backdrop, 0.0, 0.0, 0.0, [0.0; 4], 0.0);
+        r.draw_ui_panel(
+            Vec2::ZERO,
+            screen,
+            backdrop,
+            backdrop,
+            0.0,
+            0.0,
+            0.0,
+            [0.0; 4],
+            0.0,
+        );
         r.draw_ui_panel(
             Vec2::new(panel.x - 4.0, panel.y + 16.0),
             Vec2::new(panel.w + 8.0, panel.h + 8.0),
@@ -333,7 +355,17 @@ fn centered_text(
     let role = flicker::render::FontRole::Display;
     let w = r.measure_text_role(text, size, role, false, bold, -1.0).x;
     let x = (container.x + (container.w - w) * 0.5).max(container.x);
-    r.draw_text_role(text, Vec2::new(x, y), size, color, role, false, bold, -1.0, None);
+    r.draw_text_role(
+        text,
+        Vec2::new(x, y),
+        size,
+        color,
+        role,
+        false,
+        bold,
+        -1.0,
+        None,
+    );
 }
 
 #[cfg(test)]
@@ -345,12 +377,28 @@ mod tests {
     /// this makes it a build failure instead).
     #[test]
     fn every_loading_token_resolves() {
-        for name in ["stone0", "stone1", "stone3", "edge2", "sap_base", "ink_bright", "bronze", "shadow"] {
-            assert!(TOKENS.contains_key(name), "theme.tokens is missing '{name}'");
+        for name in [
+            "stone0",
+            "stone1",
+            "stone3",
+            "edge2",
+            "sap_base",
+            "ink_bright",
+            "bronze",
+            "shadow",
+        ] {
+            assert!(
+                TOKENS.contains_key(name),
+                "theme.tokens is missing '{name}'"
+            );
         }
         // And the bronze rim keeps its authored alpha override.
         assert_eq!(tok_a("bronze", 0.95)[3], 0.95);
-        assert_eq!(tok("stone0"), [0.031, 0.035, 0.047, 1.0], "tokens parse to their rgba");
+        assert_eq!(
+            tok("stone0"),
+            [0.031, 0.035, 0.047, 1.0],
+            "tokens parse to their rgba"
+        );
     }
 
     /// The Prism cursor decodes, keeps its shape, and takes the palette tint:
@@ -363,11 +411,19 @@ mod tests {
         assert_eq!(c.rgba.len(), 32 * 32 * 4);
         assert_eq!(c.hotspot, (0, 0), "the art's tip is the corner pixel");
         assert!(c.rgba[3] > 64, "hotspot pixel must be opaque art");
-        let bright = c.rgba.chunks_exact(4).filter(|p| p[3] > 200).max_by_key(|p| p[0]).unwrap();
+        let bright = c
+            .rgba
+            .chunks_exact(4)
+            .filter(|p| p[3] > 200)
+            .max_by_key(|p| p[0])
+            .unwrap();
         assert!(
             bright[0] > bright[1] && bright[1] > bright[2],
             "gold tint ordering r>g>b, got {bright:?}"
         );
-        assert!(c.rgba.chunks_exact(4).any(|p| p[3] == 0), "a pointer keeps transparent surround");
+        assert!(
+            c.rgba.chunks_exact(4).any(|p| p[3] == 0),
+            "a pointer keeps transparent surround"
+        );
     }
 }

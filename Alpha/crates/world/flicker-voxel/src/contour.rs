@@ -136,7 +136,8 @@ const EDGES: [(usize, usize); 12] = [
 #[must_use]
 pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> Cluster {
     let mut cluster = Cluster::empty();
-    let lod = Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 8] for intra-cluster contour");
+    let lod =
+        Lod::new(id.lod()).expect("ClusterId LOD must be in [0, 8] for intra-cluster contour");
     let stride = lod.stride() as i32;
     let stride_us = stride as usize;
     let sample_dim = lod.sample_dim() as usize;
@@ -152,9 +153,7 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
     // and (b) sample the 8 LOD-aligned corners of each cell (the +-seam
     // shell row of cells reaches one stride past the cluster — those
     // OOB corners go through the primitive directly).
-    let v_idx = |x: usize, y: usize, z: usize| -> usize {
-        (z * voxel_dim + y) * voxel_dim + x
-    };
+    let v_idx = |x: usize, y: usize, z: usize| -> usize { (z * voxel_dim + y) * voxel_dim + x };
     let mut solid_voxel = vec![false; voxel_dim * voxel_dim * voxel_dim];
     for z in 0..voxel_dim {
         let wz = off_z + z as i32;
@@ -237,8 +236,7 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
         for vy in 0..voxel_dim {
             for vx in 0..voxel_dim {
                 if solid_voxel[v_idx(vx, vy, vz)] {
-                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
-                        .expect("in range");
+                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32).expect("in range");
                     cluster.set_state(coord, VoxelState::Solid);
                 }
             }
@@ -276,8 +274,7 @@ pub fn contour(primitive: &dyn Primitive, material: Material, id: ClusterId) -> 
                     if vx >= voxel_dim {
                         break;
                     }
-                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32)
-                        .expect("in range");
+                    let coord = LocalCoord::new(vx as u32, vy as u32, vz as u32).expect("in range");
                     let existing = cluster.get(coord);
                     cluster.set(
                         coord,
@@ -344,11 +341,7 @@ fn cell_qef_corner(
     let vx = v[0].clamp(fx, fx + fs);
     let vy = v[1].clamp(fy, fy + fs);
     let vz = v[2].clamp(fz, fz + fs);
-    CornerVector::from_components(
-        (vx - fx) / fs,
-        (vy - fy) / fs,
-        (vz - fz) / fs,
-    )
+    CornerVector::from_components((vx - fx) / fs, (vy - fy) / fs, (vz - fz) / fs)
 }
 
 #[cfg(test)]
@@ -442,7 +435,11 @@ mod tests {
             for y in 0..3 {
                 for z in 0..3 {
                     let v = c.get(LocalCoord::new(x, y, z).unwrap());
-                    assert_eq!(v.state(), VoxelState::Solid, "({x},{y},{z}) should be solid");
+                    assert_eq!(
+                        v.state(),
+                        VoxelState::Solid,
+                        "({x},{y},{z}) should be solid"
+                    );
                     assert_ne!(v.material(), Material::EMPTY);
                 }
             }
@@ -485,11 +482,8 @@ mod tests {
         }
         assert_eq!(active, 4, "only the 4 Y-edges of this cell should cross");
         let v = qef.solve(QEF_LAMBDA);
-        let cv = CornerVector::from_components(
-            v[0] - cx as f32,
-            v[1] - cy as f32,
-            v[2] - cz as f32,
-        );
+        let cv =
+            CornerVector::from_components(v[0] - cx as f32, v[1] - cy as f32, v[2] - cz as f32);
         let [dx, dy, dz] = cv.to_components();
         assert!((dx - 0.5).abs() < 0.01, "dx={dx}");
         assert!((dy - 1.0).abs() < 0.01, "dy={dy}");
@@ -506,11 +500,7 @@ mod tests {
         // /spike along this face.
         let c = contour(&CornerSolid, grey(), origin_id());
         let v = c.get(LocalCoord::new(0, 0, 0).unwrap());
-        assert_eq!(
-            v.material(),
-            Material::EMPTY,
-            "min-corner voxel is empty"
-        );
+        assert_eq!(v.material(), Material::EMPTY, "min-corner voxel is empty");
         assert_ne!(
             v.corner(),
             CornerVector::DEFAULT,
@@ -585,7 +575,9 @@ mod tests {
                         v.corner(),
                         min_voxel.corner(),
                         "footprint voxel ({}, {}, {}) corner drift",
-                        vx, vy, vz
+                        vx,
+                        vy,
+                        vz
                     );
                 }
             }
@@ -629,7 +621,8 @@ mod tests {
         // The pre-§2 path encoded this cell as (0.5, 1.0, 0.5) →
         // bytes [128, 191, 128]. (encode_axis(0.5)=128, encode_axis(1.0)=191.)
         assert_eq!(
-            bytes, [128, 191, 128],
+            bytes,
+            [128, 191, 128],
             "LOD-0 cell corner bytes drifted: {bytes:?}"
         );
     }

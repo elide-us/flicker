@@ -5,24 +5,23 @@
 
 use std::time::Duration;
 
-use flicker_input_core::{
-    AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
-    MouseButton,
-};
 use flicker::render::{
     CompositeTarget, FrameGraph, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Rect,
     RenderTargetHandle, Renderer, SceneLighting, TextureHandle, Vec3, VolumetricDisk,
     MAX_VOLUMETRIC_BODIES,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, Value, ValueMap, ScriptHost};
+use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
-    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents,
-    UiState, WalkerHandler,
+    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
+};
+use flicker_flight::{Flight, FlightPlayer};
+use flicker_input_core::{
+    AbstractControls, ActionSignal, EventKind, GamepadConfig, InputContext, InputMap, InputState,
+    MouseButton,
 };
 use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
-use flicker_flight::{Flight, FlightPlayer};
 
 use crate::camera::{LookDelta, OrbitCam};
 use crate::route::RootHandler;
@@ -30,7 +29,11 @@ use crate::system::{self, BodyKind, Planet, SYSTEM_INNER, SYSTEM_OUTER};
 
 /// The bundled intro cinematic (an authored `.flight`), loaded at runtime so it
 /// can be retuned in the file without recompiling.
-const INTRO_FLIGHT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/flights/intro.flight");
+fn intro_flight_path() -> std::path::PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("flights/intro.flight")
+}
 
 /// Radians per second of camera yaw/pitch at full right-stick deflection — the stick
 /// look RATE (the scene multiplies by `dt`). Mouse look is a per-pixel delta instead
@@ -45,8 +48,6 @@ const ZOOM_STICK_RATE: f32 = 1.5;
 /// The scene's PAIR SCRIPT (`SceneName.lua` — the scene's component logic).
 const SOLARBIRTH_SCRIPT: &str =
     include_str!("../../../../content/sensorium/scripts/solarbirth.lua");
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// The moon orbits Home at this multiple of Home's radius, at this angular speed.
 const MOON_ORBIT_MULT: f32 = 2.6;
@@ -121,8 +122,9 @@ pub struct Sim {
 
 impl Sim {
     pub fn new(def: &SceneDef) -> Self {
-        let flight = Flight::load(INTRO_FLIGHT)
-            .unwrap_or_else(|e| panic!("loading bundled intro flight {INTRO_FLIGHT}: {e:#}"));
+        let path = intro_flight_path();
+        let flight = Flight::load(&path)
+            .unwrap_or_else(|e| panic!("loading bundled intro flight {}: {e:#}", path.display()));
         Self {
             cam: OrbitCam::new(SYSTEM_OUTER),
             planets: system::roster(),
@@ -194,7 +196,10 @@ impl Sim {
             .with("segment", self.flight.segment_name().to_string())
             .with("progress_pct", f64::from(self.flight.progress() * 100.0))
             .with("sys", strings::resolve("$sb_the_prism_system").into_owned())
-            .with("approaching", strings::resolve("$sb_approaching").into_owned())
+            .with(
+                "approaching",
+                strings::resolve("$sb_approaching").into_owned(),
+            )
             .with("settled", strings::resolve("$sb_settled").into_owned());
         let mut m = raw.clone();
         if let Some(script) = &self.script {
@@ -239,14 +244,14 @@ impl Sim {
         gaps.truncate(MAX_VOLUMETRIC_BODIES);
         VolumetricDisk {
             inner: SYSTEM_INNER,
-            outer: DUST_OUTER, // engulf the system with a halo margin
-            snow_line: 4.6,    // a visual density feature (the Earth→Light gap), not a physics boundary here
+            outer: DUST_OUTER,  // engulf the system with a halo margin
+            snow_line: 4.6, // a visual density feature (the Earth→Light gap), not a physics boundary here
             scale_height: 0.10, // taller billows — a cloud, not a pancake
-            density: 3.5,       // denser → darker, more occluding, stronger god-rays
+            density: 3.5,   // denser → darker, more occluding, stronger god-rays
             formation: self.flight.progress(),
             time: self.flight.progress() * 10.0, // a few inner-disk rotations of swirl over the fly-in
             tint: Vec3::new(0.038, 0.033, 0.052), // dark dust
-            glow: Vec3::new(0.85, 0.44, 0.22),    // warm heart, seen through the denser dust
+            glow: Vec3::new(0.85, 0.44, 0.22),   // warm heart, seen through the denser dust
             gaps,
         }
     }
@@ -286,12 +291,22 @@ fn legend_rows(planets: &[Planet]) -> Vec<UiNode> {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let indent =
-                UiNode { component: "stack".to_string(), size: Some(8.0), ..Default::default() };
-            let mut text =
-                UiNode { component: "text".to_string(), grow: Some(1.0), ..Default::default() };
-            text.props.insert("text_bind".to_string(), Value::Text(format!("roster_{}", i + 1)));
-            text.props.insert("text_size".to_string(), Value::Number(13.0));
+            let indent = UiNode {
+                component: "stack".to_string(),
+                size: Some(8.0),
+                ..Default::default()
+            };
+            let mut text = UiNode {
+                component: "text".to_string(),
+                grow: Some(1.0),
+                ..Default::default()
+            };
+            text.props.insert(
+                "text_bind".to_string(),
+                Value::Text(format!("roster_{}", i + 1)),
+            );
+            text.props
+                .insert("text_size".to_string(), Value::Number(13.0));
             text.props.insert(
                 "color".to_string(),
                 Value::Text(format!("solarbirth.roster.{}", p.name.to_lowercase())),
@@ -345,7 +360,7 @@ impl Scene for Sim {
         // The HUD is DATA now (201F4F51): styles + the bench's template-free scene-def
         // (`solarbirth.scene.json`), built once. The 3D fills the `solarbirth_view` rtt
         // viewport; the roster legend is emitted per planet into `roster_legend`.
-        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles.as_ref());
+        self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles.as_ref());
         self.ui_tree = hud_tree(self.authored.as_ref(), &self.planets);
         self.ui_intents = self.ui_tree.as_ref().map(UiIntents::of).unwrap_or_default();
     }
@@ -355,10 +370,20 @@ impl Scene for Sim {
     /// throttle), `Flying` off it (left-stick zoom, look pans). Read by the runner
     /// BEFORE `update`, so a mode flip inside `update` takes effect next frame.
     fn input_context(&self) -> Option<InputContext> {
-        Some(if self.cinematic { InputContext::FlightPath } else { InputContext::Flying })
+        Some(if self.cinematic {
+            InputContext::FlightPath
+        } else {
+            InputContext::Flying
+        })
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, r: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        r: &Renderer,
+    ) -> Transition {
         // Walk the cached HUD tree: layout + hit-test + draw in one pass. `over_hud`
         // is the readout PANEL claiming the pointer — it gates the camera so a drag on
         // the readout doesn't orbit; the open sky (the rtt viewport) never claims.
@@ -406,7 +431,11 @@ impl Scene for Sim {
             let theme = self.theme.expect("theme built in enter");
             // The scene owns no bindings; take the active context's map from the shared
             // profile for the pause overlay (both flight maps bind Menu, so Esc resumes).
-            let ctx_name = if self.cinematic { "FlightPath" } else { "Flying" };
+            let ctx_name = if self.cinematic {
+                "FlightPath"
+            } else {
+                "Flying"
+            };
             let pause_map = flicker_shell::input_profile()
                 .context_map(ctx_name)
                 .cloned()
@@ -453,7 +482,12 @@ impl Scene for Sim {
             - signals.pointer_delta(ActionSignal::LookLeft, input);
         let mouse_dy = signals.pointer_delta(ActionSignal::LookDown, input)
             - signals.pointer_delta(ActionSignal::LookUp, input);
-        let look = LookDelta { stick_yaw, stick_pitch, mouse_dx, mouse_dy };
+        let look = LookDelta {
+            stick_yaw,
+            stick_pitch,
+            mouse_dx,
+            mouse_dy,
+        };
         let zoom = (signals.axis(ActionSignal::ZoomIn, input)
             - signals.axis(ActionSignal::ZoomOut, input))
             * ZOOM_STICK_RATE
@@ -461,7 +495,8 @@ impl Scene for Sim {
         // Pan/zoom apply only OFF the rail (`active = !cinematic`); on the rail this is a
         // no-op and the flight drives the pose below. Gated to the rtt viewport (and
         // blocked over the readout panel) now that the 3D is a viewport, not the window.
-        self.cam.update(input, look, zoom, self.viewport, over_hud, !self.cinematic);
+        self.cam
+            .update(input, look, zoom, self.viewport, over_hud, !self.cinematic);
         if self.cinematic {
             // A LOOK gesture on the OPEN SKY drops out of the cinematic to the free
             // camera: an RMB-drag begun inside the viewport (not over a panel), or a
@@ -469,7 +504,10 @@ impl Scene for Sim {
             // select-target.
             let m = input.mouse_position;
             let in_view = self.viewport.is_some_and(|r| {
-                m.x >= r.pos.x && m.x <= r.pos.x + r.size.x && m.y >= r.pos.y && m.y <= r.pos.y + r.size.y
+                m.x >= r.pos.x
+                    && m.x <= r.pos.x + r.size.x
+                    && m.y >= r.pos.y
+                    && m.y <= r.pos.y + r.size.y
             });
             let grabbed = (input.mouse_pressed(MouseButton::Right) && !over_hud && in_view)
                 || stick_yaw != 0.0
@@ -533,8 +571,11 @@ impl Scene for Sim {
                 };
                 let disk = self.dust();
                 let anim = self.anim_time;
-                let orbits: Vec<Vec<(Vec3, Vec3)>> =
-                    self.planets.iter().map(|p| system::orbit_ellipse(p, 128)).collect();
+                let orbits: Vec<Vec<(Vec3, Vec3)>> = self
+                    .planets
+                    .iter()
+                    .map(|p| system::orbit_ellipse(p, 128))
+                    .collect();
                 // Planets (+ Air's ring) and Home's moon, flattened to (mesh, model, opts).
                 let mut draws: Vec<(MeshHandle, Mat4, MeshDrawOptions)> = Vec::new();
                 for (p, &mesh) in self.planets.iter().zip(self.planet_meshes.iter()) {
@@ -552,7 +593,10 @@ impl Scene for Sim {
                                 Mat4::from_translation(pos)
                                     * ring_tilt()
                                     * Mat4::from_scale(Vec3::splat(p.radius)),
-                                MeshDrawOptions { tint, ..Default::default() },
+                                MeshDrawOptions {
+                                    tint,
+                                    ..Default::default()
+                                },
                             ));
                         }
                     }
@@ -589,7 +633,15 @@ impl Scene for Sim {
                         r.draw_mesh(*mesh, *model, *opts);
                     }
                 });
-                fg.composite_panel(target, CompositeTarget::Screen, rect, layer, [1.0; 4], None, None);
+                fg.composite_panel(
+                    target,
+                    CompositeTarget::Screen,
+                    rect,
+                    layer,
+                    [1.0; 4],
+                    None,
+                    None,
+                );
                 fg.execute(renderer);
             }
         }
@@ -618,7 +670,7 @@ mod tests {
     /// typo doesn't surface only as a runtime panic when the scene starts.
     #[test]
     fn bundled_intro_flight_loads() {
-        let f = flicker_flight::Flight::load(INTRO_FLIGHT).expect("intro.flight parses");
+        let f = flicker_flight::Flight::load(intro_flight_path()).expect("intro.flight parses");
         assert_eq!(f.segments.len(), 2, "glide + coast");
         assert!(f.loops(), "the coast tail loops");
     }
@@ -640,10 +692,18 @@ mod tests {
         )
         .expect("solarbirth.scene.json loads");
         let sim = Sim::new(&def);
-        assert!(sim.script.is_some(), "solarbirth.lua loads (the pair script)");
+        assert!(
+            sim.script.is_some(),
+            "solarbirth.lua loads (the pair script)"
+        );
         let m = sim.hud_model();
-        let phase = m.text("phase").expect("derive() yields the composed phase TEXT");
-        assert!(phase.contains('·'), "the phase line is composed ('{phase}')");
+        let phase = m
+            .text("phase")
+            .expect("derive() yields the composed phase TEXT");
+        assert!(
+            phase.contains('·'),
+            "the phase line is composed ('{phase}')"
+        );
     }
 
     #[test]
@@ -676,13 +736,16 @@ mod tests {
         // self-gates its OWN source — every `.set`/`.with` value must be a resolved
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
         let intents = UiIntents::of(&tree);
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
 
         // The scene's OWN style blocks ride its file (five-line split) — the
         // exact merge `enter` runs.
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         // The phase line, composed around its tokens exactly as `hud_model` does
         // ("glide" stands in for the data-driven segment name).
         let mut model = ValueMap::new().with(
@@ -724,7 +787,9 @@ mod tests {
         // The full-screen 3D viewport must reserve a slot — a source-LESS `rtt` is
         // skipped by the walker (`rtt_rect` → None → the scene draws nothing), which
         // is exactly the blank-viewport bug this guards against at build time.
-        let vp = frame.rtt_rect("solarbirth_view").expect("the rtt viewport reserved a slot");
+        let vp = frame
+            .rtt_rect("solarbirth_view")
+            .expect("the rtt viewport reserved a slot");
         assert!(
             vp.size.x > 100.0 && vp.size.y > 100.0,
             "the viewport has real extent: {:?}",

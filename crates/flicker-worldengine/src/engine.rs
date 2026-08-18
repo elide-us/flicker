@@ -175,7 +175,9 @@ impl WorldEngine {
     /// An already-computed epoch snapshot, or `None` if it hasn't been generated
     /// since the last invalidation (no work done). `epoch` is 1-indexed.
     pub fn peek(&self, epoch: usize) -> Option<&EpochSnapshot> {
-        self.cache.get(epoch.wrapping_sub(1)).and_then(|c| c.as_ref())
+        self.cache
+            .get(epoch.wrapping_sub(1))
+            .and_then(|c| c.as_ref())
     }
 
     // ── the forward-regenerative core ─────────────────────────────────────────
@@ -186,7 +188,9 @@ impl WorldEngine {
     pub fn snapshot(&mut self, epoch: usize) -> &EpochSnapshot {
         let epoch = epoch.clamp(1, WORLD_EPOCHS);
         self.ensure(epoch);
-        self.cache[epoch - 1].as_ref().expect("ensure filled the slot")
+        self.cache[epoch - 1]
+            .as_ref()
+            .expect("ensure filled the slot")
     }
 
     /// Fill `cache[..=epoch-1]` forward from the lowest cached epoch. `cache[0]` is
@@ -199,7 +203,9 @@ impl WorldEngine {
             // Borrow the previous epoch out, run this one against it, put both back.
             // `run_epoch` reads only `self` (tables/sphere/seeds/config), never the
             // cache, so pulling `prev` out is safe and avoids a clone.
-            let prev = self.cache[e - 2].take().expect("previous epoch present in order");
+            let prev = self.cache[e - 2]
+                .take()
+                .expect("previous epoch present in order");
             let next = self.run_epoch(e, &prev);
             self.cache[e - 2] = Some(prev);
             self.cache[e - 1] = Some(next);
@@ -307,7 +313,11 @@ impl WorldEngine {
                 // spreads them into broad ranges/basins; the sharp seams (run_orogeny,
                 // below) are added from the flow afterward, so they stay crisp.
                 if drift_steps > 0 {
-                    flicker_worldgen::smooth_crust_thickness(&mut drifted, &ctx, CRUST_DESCATTER_PASSES);
+                    flicker_worldgen::smooth_crust_thickness(
+                        &mut drifted,
+                        &ctx,
+                        CRUST_DESCATTER_PASSES,
+                    );
                 }
                 let buoyancy = flicker_worldgen::buoyancy_ranks(&drifted);
                 let mut base3 = e3;
@@ -458,7 +468,12 @@ impl WorldEngine {
             plates,
             watersheds,
             temperature,
-            provenance: Provenance { epoch: epoch as u8, seed, steps, conserved_mass },
+            provenance: Provenance {
+                epoch: epoch as u8,
+                seed,
+                steps,
+                conserved_mass,
+            },
         }
     }
 
@@ -467,8 +482,12 @@ impl WorldEngine {
     fn build_seed_layer(&self) -> EpochSnapshot {
         let e1p = build_epoch1(&self.config, &self.params);
         let e1 = Epoch1::new(&self.tables, e1p, self.seeds[0]);
-        let cells: Vec<HexState> =
-            self.sphere.dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let cells: Vec<HexState> = self
+            .sphere
+            .dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let conserved_mass = cells.iter().map(|c| c.composition.total()).sum();
         EpochSnapshot {
             epoch: 1,
@@ -477,7 +496,12 @@ impl WorldEngine {
             watersheds: Vec::new(),
             // The planet is born molten — the master clock starts at its hot end.
             temperature: cooling::T_MOLTEN,
-            provenance: Provenance { epoch: 1, seed: self.seeds[0], steps: 1, conserved_mass },
+            provenance: Provenance {
+                epoch: 1,
+                seed: self.seeds[0],
+                steps: 1,
+                conserved_mass,
+            },
         }
     }
 
@@ -648,8 +672,11 @@ impl WorldEngine {
     /// snapshots into an [`EpochFile`] ready to `save` to a `.epoch`.
     pub fn capture(&mut self, comment: impl Into<String>) -> crate::epochfile::EpochFile {
         self.realize_all();
-        let snapshots =
-            self.cache.iter().filter_map(|c| c.clone()).collect::<Vec<_>>();
+        let snapshots = self
+            .cache
+            .iter()
+            .filter_map(|c| c.clone())
+            .collect::<Vec<_>>();
         crate::epochfile::EpochFile::new(self.config.clone(), snapshots, comment)
     }
 

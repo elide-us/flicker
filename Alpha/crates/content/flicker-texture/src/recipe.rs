@@ -39,7 +39,10 @@ impl Default for TextureRecipe {
     /// rather than a black square the moment the bench opens.
     fn default() -> Self {
         let mut channels = [Channel::default(); CHANNEL_COUNT];
-        channels[0] = Channel { enabled: true, ..Channel::default() };
+        channels[0] = Channel {
+            enabled: true,
+            ..Channel::default()
+        };
         Self {
             id: "untitled".into(),
             name: "Untitled".into(),
@@ -68,7 +71,11 @@ mod tests {
     /// next time it was opened.
     #[test]
     fn round_trips_through_json() {
-        let mut r = TextureRecipe { id: "granite".into(), name: "Granite".into(), ..Default::default() };
+        let mut r = TextureRecipe {
+            id: "granite".into(),
+            name: "Granite".into(),
+            ..Default::default()
+        };
         r.material = Some(12);
         r.seed = 0xDEAD_BEEF;
         r.channels[1] = Channel {
@@ -87,7 +94,10 @@ mod tests {
     /// `material` is `#[serde(default)]`, so an older unbound recipe still loads.
     #[test]
     fn an_unbound_recipe_loads_without_the_material_field() {
-        let r = TextureRecipe { material: None, ..TextureRecipe::default() };
+        let r = TextureRecipe {
+            material: None,
+            ..TextureRecipe::default()
+        };
         let mut v: serde_json::Value = serde_json::to_value(&r).unwrap();
         v.as_object_mut().unwrap().remove("material");
         let back: TextureRecipe = serde_json::from_value(v).expect("loads without material");

@@ -229,8 +229,10 @@ impl TexturedMeshPipeline {
         surface_format: wgpu::TextureFormat,
         min_uniform_offset_alignment: u32,
     ) -> Self {
-        let per_draw_stride =
-            round_up_to_alignment(PER_DRAW_RAW_SIZE as u32, min_uniform_offset_alignment.max(1));
+        let per_draw_stride = round_up_to_alignment(
+            PER_DRAW_RAW_SIZE as u32,
+            min_uniform_offset_alignment.max(1),
+        );
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flicker.mesh_textured.shader"),
@@ -861,6 +863,9 @@ mod tests {
         pipeline.set_scene_uniform(&queue, SceneUniform::default());
         device.poll(wgpu::Maintain::Wait);
         let err = pollster::block_on(device.pop_error_scope());
-        assert!(err.is_none(), "mesh_textured.wgsl failed validation: {err:?}");
+        assert!(
+            err.is_none(),
+            "mesh_textured.wgsl failed validation: {err:?}"
+        );
     }
 }

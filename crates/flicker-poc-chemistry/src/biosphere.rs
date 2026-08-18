@@ -182,7 +182,11 @@ impl Biosphere {
             let def = tables
                 .compound(name)
                 .unwrap_or_else(|| panic!("the biosphere needs '{name}' in compounds.json"));
-            assert_eq!(def.id, id, "'{name}' moved in the catalog: {} != {id}", def.id);
+            assert_eq!(
+                def.id, id,
+                "'{name}' moved in the catalog: {} != {id}",
+                def.id
+            );
             tables.compound_mass_fractions(def)
         };
         Self {
@@ -198,7 +202,10 @@ impl Biosphere {
 
     /// Mass fraction of `element` in a resolved compound.
     fn frac(fracs: &[(ElementId, f64)], element: ElementId) -> f64 {
-        fracs.iter().find(|&&(e, _)| e == element).map_or(0.0, |&(_, f)| f)
+        fracs
+            .iter()
+            .find(|&&(e, _)| e == element)
+            .map_or(0.0, |&(_, f)| f)
     }
 
     /// **What the world will support right now**, given where life already got.
@@ -249,8 +256,11 @@ impl Biosphere {
         tissue: CompoundId,
         organic: &[(ElementId, f64)],
     ) {
-        let (f_c, f_h, f_o) =
-            (Self::frac(organic, C), Self::frac(organic, H), Self::frac(organic, O));
+        let (f_c, f_h, f_o) = (
+            Self::frac(organic, C),
+            Self::frac(organic, H),
+            Self::frac(organic, O),
+        );
         if f_c <= 0.0 || make <= 0.0 {
             return;
         }
@@ -265,7 +275,9 @@ impl Biosphere {
         // actually standing in the sea.
         let c_avail = air.species.amount(CARBON_DIOXIDE) * co2_c;
         let h_avail = world.reservoirs.ocean.contents.amount(H);
-        let make = make.min(c_avail / f_c).min(if f_h > 0.0 { h_avail / f_h } else { f64::MAX });
+        let make = make
+            .min(c_avail / f_c)
+            .min(if f_h > 0.0 { h_avail / f_h } else { f64::MAX });
         if make <= 0.0 {
             return;
         }
@@ -290,8 +302,7 @@ impl Biosphere {
             world.reservoirs.atmosphere.contents.add(O, spare);
             world.reservoirs.atmosphere.species.add(OXYGEN, spare);
         }
-        let add: Vec<(ElementId, f64)> =
-            deposit.into_iter().filter(|&(_, m)| m > 0.0).collect();
+        let add: Vec<(ElementId, f64)> = deposit.into_iter().filter(|&(_, m)| m > 0.0).collect();
         if add.is_empty() {
             return;
         }
@@ -340,14 +351,12 @@ impl Stage for Biosphere {
         let sea = sea_level_m(world);
         let land: Vec<usize> = (0..world.columns.len())
             .filter(|&i| {
-                !world.columns[i].layers.is_empty()
-                    && elevation_m(&world.columns[i], area) >= sea
+                !world.columns[i].layers.is_empty() && elevation_m(&world.columns[i], area) >= sea
             })
             .collect();
         let marine: Vec<usize> = (0..world.columns.len())
             .filter(|&i| {
-                !world.columns[i].layers.is_empty()
-                    && elevation_m(&world.columns[i], area) < sea
+                !world.columns[i].layers.is_empty() && elevation_m(&world.columns[i], area) < sea
             })
             .collect();
 
@@ -358,7 +367,8 @@ impl Stage for Biosphere {
         let (marine_share, land_share) = if woody { (0.5, 0.5) } else { (1.0, 0.0) };
 
         if !marine.is_empty() && marine_share > 0.0 {
-            let each = budget * marine_share / marine.len() as f64
+            let each = budget * marine_share
+                / marine.len() as f64
                 / Self::frac(&self.cellulose, C).max(f64::MIN_POSITIVE);
             let cellulose = self.cellulose.clone();
             for &i in &marine {
@@ -367,7 +377,8 @@ impl Stage for Biosphere {
         }
         if woody && land_share > 0.0 {
             // **Lignin** — the molecule the coal window is made of.
-            let each = budget * land_share / land.len() as f64
+            let each = budget * land_share
+                / land.len() as f64
                 / Self::frac(&self.lignin, C).max(f64::MIN_POSITIVE);
             let lignin = self.lignin.clone();
             for &i in &land {
@@ -418,7 +429,11 @@ impl Biosphere {
                 continue;
             }
             let cellulose = bed.minerals.amount(CELLULOSE) * bite;
-            let lignin = if eats_lignin { bed.minerals.amount(LIGNIN) * bite } else { 0.0 };
+            let lignin = if eats_lignin {
+                bed.minerals.amount(LIGNIN) * bite
+            } else {
+                0.0
+            };
             bed.minerals.remove(CELLULOSE, cellulose);
             if lignin > 0.0 {
                 bed.minerals.remove(LIGNIN, lignin);
@@ -448,8 +463,14 @@ impl Biosphere {
                 // Respiration: the carbon burns back to CO₂ on the air's own
                 // oxygen, which is what stops O₂ running away for ever.
                 let need_o = Self::frac(&self.co2, O) / Self::frac(&self.co2, C).max(1e-12)
-                    * freed.iter().find(|&&(e, _)| e == C).map_or(0.0, |&(_, m)| m);
-                let have_o = freed.iter().find(|&&(e, _)| e == O).map_or(0.0, |&(_, m)| m);
+                    * freed
+                        .iter()
+                        .find(|&&(e, _)| e == C)
+                        .map_or(0.0, |&(_, m)| m);
+                let have_o = freed
+                    .iter()
+                    .find(|&&(e, _)| e == O)
+                    .map_or(0.0, |&(_, m)| m);
                 if need_o > have_o {
                     let short = (need_o - have_o).min(air.species.amount(OXYGEN));
                     let got = air.species.remove(OXYGEN, short);
@@ -515,7 +536,11 @@ impl Maturation {
             let def = tables
                 .compound(name)
                 .unwrap_or_else(|| panic!("maturation needs '{name}' in compounds.json"));
-            assert_eq!(def.id, id, "'{name}' moved in the catalog: {} != {id}", def.id);
+            assert_eq!(
+                def.id, id,
+                "'{name}' moved in the catalog: {} != {id}",
+                def.id
+            );
             tables.compound_mass_fractions(def)
         };
         Self {
@@ -575,12 +600,22 @@ impl Stage for Maturation {
                 }
 
                 // The mature product takes what it can; the rest is expelled.
-                let (id, fracs) = if marine { (OILS, &self.oils) } else { (COAL, &self.coal) };
+                let (id, fracs) = if marine {
+                    (OILS, &self.oils)
+                } else {
+                    (COAL, &self.coal)
+                };
                 let made = fracs
                     .iter()
                     .filter(|&&(_, f)| f > 0.0)
                     .fold(f64::MAX, |g, &(e, f)| {
-                        g.min(freed.iter().find(|&&(a, _)| a == e).map_or(0.0, |&(_, m)| m) / f)
+                        g.min(
+                            freed
+                                .iter()
+                                .find(|&&(a, _)| a == e)
+                                .map_or(0.0, |&(_, m)| m)
+                                / f,
+                        )
                     });
                 if made.is_finite() && made > 0.0 {
                     for &(e, f) in fracs {
@@ -596,7 +631,13 @@ impl Stage for Maturation {
                 // What coalification drives off: water first, then the methane
                 // that outlasting hydrogen makes, then any carbon dioxide.
                 let air = &mut world.reservoirs.atmosphere;
-                fly_as(air, &mut freed, crate::atmosphere::WATER_VAPOUR, &self.water, f64::INFINITY);
+                fly_as(
+                    air,
+                    &mut freed,
+                    crate::atmosphere::WATER_VAPOUR,
+                    &self.water,
+                    f64::INFINITY,
+                );
                 fly_as(air, &mut freed, METHANE, &self.ch4, f64::INFINITY);
                 fly_as(air, &mut freed, CARBON_DIOXIDE, &self.co2, f64::INFINITY);
                 // Anything still unaccounted for stays in the rock as free
@@ -668,7 +709,10 @@ mod tests {
             w.audit("Biosphere");
             w.audit_compound_bound("Biosphere");
         }
-        assert!(w.life >= LifeStage::Microbial, "a temperate wet world came alive");
+        assert!(
+            w.life >= LifeStage::Microbial,
+            "a temperate wet world came alive"
+        );
         assert!(
             w.reservoirs.atmosphere.species.amount(CARBON_DIOXIDE) < sky_before,
             "carbon left the sky"
@@ -702,7 +746,12 @@ mod tests {
             w.reservoirs.delivered.add(e, lignin_mass * f);
         }
         w.columns[cell].deposit(FormationProcess::Organic, 0.0, &add);
-        w.columns[cell].layers.last_mut().expect("bed").minerals.add(LIGNIN, lignin_mass);
+        w.columns[cell]
+            .layers
+            .last_mut()
+            .expect("bed")
+            .minerals
+            .add(LIGNIN, lignin_mass);
         w.audit_compound_bound("seeded lignin");
 
         // Forests, but nothing that can eat wood.
@@ -730,7 +779,10 @@ mod tests {
             .iter()
             .map(|l| l.minerals.amount(LIGNIN))
             .sum();
-        assert!(after < survived, "and now it rots: {after:.3e} < {survived:.3e}");
+        assert!(
+            after < survived,
+            "and now it rots: {after:.3e} < {survived:.3e}"
+        );
         let _ = &mut rng;
     }
 
@@ -748,7 +800,12 @@ mod tests {
                 w.reservoirs.delivered.add(e, mass * f);
             }
             w.columns[0].deposit(FormationProcess::Organic, 0.0, &add);
-            w.columns[0].layers.last_mut().expect("bed").minerals.add(CELLULOSE, mass);
+            w.columns[0]
+                .layers
+                .last_mut()
+                .expect("bed")
+                .minerals
+                .add(CELLULOSE, mass);
         };
 
         // No oxygen in the sky: the swamp breathes methane.
@@ -844,14 +901,27 @@ mod tests {
             w.reservoirs.delivered.add(e, mass * f);
         }
         w.columns[0].deposit(FormationProcess::Organic, 0.0, &add);
-        w.columns[0].layers.last_mut().expect("bed").minerals.add(CELLULOSE, mass);
+        w.columns[0]
+            .layers
+            .last_mut()
+            .expect("bed")
+            .minerals
+            .add(CELLULOSE, mass);
         // peak_pt left at zero: never buried.
         let mut rng = StageRng::new(4);
         mat.tick(&mut w, 1.0, &mut rng);
         w.audit("Maturation");
-        let coal: f64 = w.columns[0].layers.iter().map(|l| l.minerals.amount(COAL)).sum();
+        let coal: f64 = w.columns[0]
+            .layers
+            .iter()
+            .map(|l| l.minerals.amount(COAL))
+            .sum();
         assert_eq!(coal, 0.0, "unburied tissue is not coal");
-        let raw: f64 = w.columns[0].layers.iter().map(|l| l.minerals.amount(CELLULOSE)).sum();
+        let raw: f64 = w.columns[0]
+            .layers
+            .iter()
+            .map(|l| l.minerals.amount(CELLULOSE))
+            .sum();
         assert!(raw > 0.0, "it is still tissue");
     }
 
@@ -870,10 +940,18 @@ mod tests {
         // `reachable` never reports below where life already got — the floor IS
         // the current stage, which is what advance-only means in one line.
         let reach = bio.reachable(&w, &state, 100.0);
-        assert_eq!(reach, LifeStage::Decomposers, "a dead world offers no ADVANCE");
+        assert_eq!(
+            reach,
+            LifeStage::Decomposers,
+            "a dead world offers no ADVANCE"
+        );
         let mut rng = StageRng::new(5);
         bio.tick(&mut w, 1.0, &mut rng);
-        assert_eq!(w.life, LifeStage::Decomposers, "and the books do not un-learn");
+        assert_eq!(
+            w.life,
+            LifeStage::Decomposers,
+            "and the books do not un-learn"
+        );
     }
 }
 
@@ -914,7 +992,10 @@ mod molten_world_is_not_alive {
         w.reservoirs.ocean.contents.add(8, 8.0e19);
         w.reservoirs.delivered.add(1, 1.0e19);
         w.reservoirs.delivered.add(8, 8.0e19);
-        assert!(w.columns.iter().all(|c| c.layers.is_empty()), "no crust anywhere");
+        assert!(
+            w.columns.iter().all(|c| c.layers.is_empty()),
+            "no crust anywhere"
+        );
 
         // 1. The surface reads MOLTEN, not temperate. Under the old law this
         //    came out near 290 K — a spring day on an ocean of lava.
@@ -924,7 +1005,10 @@ mod molten_world_is_not_alive {
             surface > 3000.0,
             "bare ground radiates the interior: surface {surface:.0} K vs mantle {mantle:.0} K"
         );
-        assert!((surface - mantle).abs() < 1.0, "with no lid at all, the surface IS the mantle");
+        assert!(
+            (surface - mantle).abs() < 1.0,
+            "with no lid at all, the surface IS the mantle"
+        );
 
         // 2. And the life gate is shut, however much water and air there is.
         let state = PlanetState::sample(&w);
@@ -939,13 +1023,21 @@ mod molten_world_is_not_alive {
         //    balance — the gate is the WORLD's to open, and now it can.
         let at = w.tick_myr;
         for i in 0..w.columns.len() {
-            w.columns[i].deposit(crate::column::FormationProcess::OceanicCrust, at, &[(14, 4.0e18), (8, 5.0e18)]);
+            w.columns[i].deposit(
+                crate::column::FormationProcess::OceanicCrust,
+                at,
+                &[(14, 4.0e18), (8, 5.0e18)],
+            );
         }
         let lidded = crate::surface::mean_surface_temp_k(&w, 1.0);
         assert!(
             lidded < 400.0,
             "once the lid is on, the star and the air decide: {lidded:.0} K"
         );
-        assert_eq!(PlanetState::sample(&w).lid_frac, 1.0, "the world is covered");
+        assert_eq!(
+            PlanetState::sample(&w).lid_frac,
+            1.0,
+            "the world is covered"
+        );
     }
 }

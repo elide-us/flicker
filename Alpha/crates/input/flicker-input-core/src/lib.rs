@@ -50,12 +50,8 @@ pub mod snapshot;
 pub use analog::{AbstractControls, AnalogCache, AnalogFrame};
 pub use binding::{Activation, BindingDescriptor, InputBinding, InputMap, MouseAxis};
 pub use chord::{editor_chords, ChordLayer};
-pub use context::{
-    ContextBindings, ContextualBindings, InputContext, InputProfile, SignalBinding,
-};
-pub use device::{
-    AxisDirection, DeadzoneShape, GamepadAxis, GamepadButton, Key, MouseButton,
-};
+pub use context::{ContextBindings, ContextualBindings, InputContext, InputProfile, SignalBinding};
+pub use device::{AxisDirection, DeadzoneShape, GamepadAxis, GamepadButton, Key, MouseButton};
 pub use rebind::{capture_input, RebindCapture};
 pub use resolve::{EventKind, Fired, Resolver, TickTime};
 pub use signal::{ActionSignal, RebindScope, SignalGroup};

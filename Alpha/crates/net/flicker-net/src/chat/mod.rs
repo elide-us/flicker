@@ -104,7 +104,9 @@ async fn driver(
     let stream = match TcpStream::connect(SERVER_ADDR).await {
         Ok(s) => s,
         Err(e) => {
-            let _ = in_tx.send(ChatEvent::Disconnected(Some(format!("connect {SERVER_ADDR}: {e}"))));
+            let _ = in_tx.send(ChatEvent::Disconnected(Some(format!(
+                "connect {SERVER_ADDR}: {e}"
+            ))));
             return;
         }
     };

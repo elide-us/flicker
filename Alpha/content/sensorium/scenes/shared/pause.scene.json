@@ -1,0 +1,37 @@
+{
+  "_comment": "SHARED pause overlay (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0: pop-up modals become shared modal TREES, one definition, no per-scene copy). Extracted from the retired Rust `menu_tree` builder: a full-bleed `screen` with a `screens.pause` backdrop under a centered `popup_panel` whose four buttons (Resume / Settings / Main Menu / Quit) fire their own id as the action name — the shell's PauseScene reads them off `results`. Esc / pad-B fold to `resume` via the root `on_cancel` (S9). The pair script `scripts/shared/pause.lua` is the AUTHORING EXAMPLE: its `arrange()` lights the `show_settings` / `show_main_menu` / `show_quit` slices this tree gates its optional buttons on (`visible_bind`), so a human copies the pair and flips one off to vary the menu. Resume stays ungated — the always-present way out. NO `behaviour` key: the manifest skips scenes/shared/; PauseScene loads this via include_str! + parse_ui_json AND holds `pause.lua` through MenuView's pair-script slot (folded each frame via set_model ▸ arrange ▸ to_model, like settings/menu), and its chrome styles (`screens.pause`, `modal.*`) ride Main.scene.json's carrier through `main_scene_styles()`, exactly as when the tree was Rust-built.",
+  "tree": {
+    "component": "screen",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "on_cancel": "resume",
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.pause",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "title": "$pause_sanctum",
+        "title_size": 46,
+        "subtitle": "$pause_gather_yourself_the_world_runs_on",
+        "footer": "$pause_esc_to_return",
+        "children": [
+          { "component": "button", "id": "resume", "action": "resume", "label": "$menu_resume", "label_size": 15, "size": 48, "variant": "primary", "tab_group": "pause", "nav_ordinal": 0 },
+          { "component": "button", "id": "settings", "action": "settings", "visible_bind": "show_settings", "label": "$menu_settings", "label_size": 15, "size": 48, "variant": "secondary", "tab_group": "pause", "nav_ordinal": 1 },
+          { "component": "button", "id": "main_menu", "action": "main_menu", "visible_bind": "show_main_menu", "label": "$menu_main_menu", "label_size": 15, "size": 48, "variant": "secondary", "tab_group": "pause", "nav_ordinal": 2 },
+          { "component": "button", "id": "quit", "action": "quit", "visible_bind": "show_quit", "label": "$menu_quit", "label_size": 15, "size": 48, "variant": "danger", "tab_group": "pause", "nav_ordinal": 3 }
+        ]
+      }
+    ]
+  }
+}

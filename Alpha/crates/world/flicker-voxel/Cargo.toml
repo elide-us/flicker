@@ -15,8 +15,8 @@ license.workspace = true
 # standard-library only.
 [dependencies]
 clayengine.workspace = true
-flicker-primitive = { path = "../../content/flicker-primitive" }
+flicker-primitive = { version = "0.1.0", path = "../../content/flicker-primitive" }
 bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-flicker-core = { path = "../../core/flicker-core" }
+flicker-core = { version = "0.1.0", path = "../../core/flicker-core" }

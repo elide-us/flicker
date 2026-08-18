@@ -68,8 +68,14 @@ pub static PAGES: &[Page] = &[Page {
     id: "world",
     label: "$pop_page_world",
     tabs: &[
-        Tab { id: "map", label: "$pop_tab_map" },
-        Tab { id: "seams", label: "$pop_tab_seams" },
+        Tab {
+            id: "map",
+            label: "$pop_tab_map",
+        },
+        Tab {
+            id: "seams",
+            label: "$pop_tab_seams",
+        },
     ],
 }];
 

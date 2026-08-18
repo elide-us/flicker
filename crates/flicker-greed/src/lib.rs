@@ -73,7 +73,9 @@ pub struct Color(u8);
 impl Color {
     /// Construct a colour, validating the `1..=NUM_COLORS` range.
     pub fn new(value: u8) -> Option<Self> {
-        (1..=NUM_COLORS as u8).contains(&value).then_some(Self(value))
+        (1..=NUM_COLORS as u8)
+            .contains(&value)
+            .then_some(Self(value))
     }
 
     /// The underlying `1..=NUM_COLORS` value.
@@ -117,7 +119,11 @@ pub struct GemCollection {
 impl GemCollection {
     /// An empty, unshielded collection.
     pub const fn new() -> Self {
-        Self { color: None, count: 0, shield: 0 }
+        Self {
+            color: None,
+            count: 0,
+            shield: 0,
+        }
     }
 
     /// The collection's colour, or `None` while empty.
@@ -196,7 +202,9 @@ pub struct Player {
 
 impl Default for Player {
     fn default() -> Self {
-        Self { collections: [GemCollection::new(); COLLECTIONS_PER_PLAYER] }
+        Self {
+            collections: [GemCollection::new(); COLLECTIONS_PER_PLAYER],
+        }
     }
 }
 
@@ -217,7 +225,9 @@ impl Player {
     }
 
     fn slot_mut(&mut self, index: usize) -> Result<&mut GemCollection, GreedError> {
-        self.collections.get_mut(index).ok_or(GreedError::BadCollection(index))
+        self.collections
+            .get_mut(index)
+            .ok_or(GreedError::BadCollection(index))
     }
 
     /// Add a gem to the given slot; see [`GemCollection::add_gem`].
@@ -362,7 +372,12 @@ impl Game {
             return Err(GreedError::NoPlayers);
         }
         let ring = TargetRing::random(&mut rng);
-        Ok(Self { players: vec![Player::new(); num_players], ring, active: 0, rng })
+        Ok(Self {
+            players: vec![Player::new(); num_players],
+            ring,
+            active: 0,
+            rng,
+        })
     }
 
     /// Read-only view of all players.
@@ -407,7 +422,9 @@ impl Game {
             Move::Gem { collection, color } => {
                 let fired = self.players[self.active].add_gem(collection, color)?;
                 if fired {
-                    TurnOutcome { arrow: Some(self.fire_arrow(color)) }
+                    TurnOutcome {
+                        arrow: Some(self.fire_arrow(color)),
+                    }
                 } else {
                     TurnOutcome::default()
                 }
@@ -423,10 +440,18 @@ impl Game {
         let mut hits = Vec::new();
         for (player, board) in self.players.iter_mut().enumerate() {
             for (collection, effect) in board.resolve_arrow(target) {
-                hits.push(Hit { player, collection, effect });
+                hits.push(Hit {
+                    player,
+                    collection,
+                    effect,
+                });
             }
         }
-        Arrow { color, target, hits }
+        Arrow {
+            color,
+            target,
+            hits,
+        }
     }
 }
 
@@ -544,10 +569,29 @@ mod tests {
         // same slot.
         let mut g = Game::with_seed(1, 3).unwrap();
         let color = c(1);
-        assert_eq!(g.play(Move::Gem { collection: 0, color }).unwrap().arrow, None);
-        assert_eq!(g.play(Move::Gem { collection: 0, color }).unwrap().arrow, None);
+        assert_eq!(
+            g.play(Move::Gem {
+                collection: 0,
+                color
+            })
+            .unwrap()
+            .arrow,
+            None
+        );
+        assert_eq!(
+            g.play(Move::Gem {
+                collection: 0,
+                color
+            })
+            .unwrap()
+            .arrow,
+            None
+        );
         let arrow = g
-            .play(Move::Gem { collection: 0, color })
+            .play(Move::Gem {
+                collection: 0,
+                color,
+            })
             .unwrap()
             .arrow
             .expect("the third gem fires an arrow");

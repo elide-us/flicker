@@ -33,7 +33,11 @@ pub enum Shape {
     /// Swept sphere: `radius` about every point of the segment `a`..`b`.
     Capsule { a: Vec3, b: Vec3, radius: f32 },
     /// Oriented box: `half_extents` about `center`, turned by `rotation`.
-    Obb { center: Vec3, half_extents: Vec3, rotation: Quat },
+    Obb {
+        center: Vec3,
+        half_extents: Vec3,
+        rotation: Quat,
+    },
 }
 
 impl Shape {
@@ -63,7 +67,11 @@ impl Shape {
                 b: m.transform_point3(b),
                 radius: radius * s,
             },
-            Shape::Obb { center, half_extents, rotation } => {
+            Shape::Obb {
+                center,
+                half_extents,
+                rotation,
+            } => {
                 // Extract the pose's rotation (columns normalised) and compose it with the box's own.
                 let rot = Mat3::from_cols(
                     m.x_axis.truncate() / sx.max(1e-6),
@@ -82,11 +90,24 @@ impl Shape {
     /// This shape translated by `v` (no rotation/scale) — used to settle a falling item onto ground.
     pub fn translated(&self, v: Vec3) -> Shape {
         match *self {
-            Shape::Sphere { center, radius } => Shape::Sphere { center: center + v, radius },
-            Shape::Capsule { a, b, radius } => Shape::Capsule { a: a + v, b: b + v, radius },
-            Shape::Obb { center, half_extents, rotation } => {
-                Shape::Obb { center: center + v, half_extents, rotation }
-            }
+            Shape::Sphere { center, radius } => Shape::Sphere {
+                center: center + v,
+                radius,
+            },
+            Shape::Capsule { a, b, radius } => Shape::Capsule {
+                a: a + v,
+                b: b + v,
+                radius,
+            },
+            Shape::Obb {
+                center,
+                half_extents,
+                rotation,
+            } => Shape::Obb {
+                center: center + v,
+                half_extents,
+                rotation,
+            },
         }
     }
 
@@ -114,7 +135,11 @@ impl Shape {
         match *self {
             Shape::Sphere { center, radius } => center.z - radius,
             Shape::Capsule { a, b, radius } => a.z.min(b.z) - radius,
-            Shape::Obb { center, half_extents, rotation } => {
+            Shape::Obb {
+                center,
+                half_extents,
+                rotation,
+            } => {
                 let (ax, ay, az) = obb_axes(rotation);
                 let extent_z = half_extents.x * ax.z.abs()
                     + half_extents.y * ay.z.abs()
@@ -159,7 +184,10 @@ pub struct Contact {
 impl Contact {
     /// The same contact from the other shape's point of view (normal reversed).
     fn flipped(self) -> Contact {
-        Contact { normal: -self.normal, ..self }
+        Contact {
+            normal: -self.normal,
+            ..self
+        }
     }
 }
 
@@ -197,7 +225,10 @@ pub fn fit_capsule(points: impl IntoIterator<Item = Vec3>) -> Shape {
         max = max.max(p);
     }
     if !min.is_finite() || !max.is_finite() {
-        return Shape::Sphere { center: Vec3::ZERO, radius: 0.0 };
+        return Shape::Sphere {
+            center: Vec3::ZERO,
+            radius: 0.0,
+        };
     }
     let center = (min + max) * 0.5;
     let half = (max - min) * 0.5; // AABB half-extents (each ≥ 0)
@@ -212,10 +243,17 @@ pub fn fit_capsule(points: impl IntoIterator<Item = Vec3>) -> Shape {
     let radius = (half - axis * half_len).max_element().max(1e-4);
     if half_len <= radius {
         // Not elongated → a sphere bounding the box.
-        return Shape::Sphere { center, radius: half.length().max(radius) };
+        return Shape::Sphere {
+            center,
+            radius: half.length().max(radius),
+        };
     }
     let d = axis * (half_len - radius); // inset the caps so the capsule bounds the box ends
-    Shape::Capsule { a: center - d, b: center + d, radius }
+    Shape::Capsule {
+        a: center - d,
+        b: center + d,
+        radius,
+    }
 }
 
 /// An UPRIGHT (world-Z) capsule bounding a point cloud — feet (z-min) to head (z-max) at the cloud's
@@ -231,7 +269,10 @@ pub fn upright_capsule(points: impl IntoIterator<Item = Vec3>, radius_frac: f32)
         max = max.max(p);
     }
     if !min.is_finite() || !max.is_finite() {
-        return Shape::Sphere { center: Vec3::ZERO, radius: 0.0 };
+        return Shape::Sphere {
+            center: Vec3::ZERO,
+            radius: 0.0,
+        };
     }
     let height = (max.z - min.z).max(1e-4);
     let radius = (height * radius_frac).max(1e-4);
@@ -240,9 +281,16 @@ pub fn upright_capsule(points: impl IntoIterator<Item = Vec3>, radius_frac: f32)
     let (lo, hi) = (min.z + radius, max.z - radius);
     if hi <= lo {
         let center = Vec3::new(cx, cy, (min.z + max.z) * 0.5);
-        return Shape::Sphere { center, radius: (height * 0.5).max(radius) };
+        return Shape::Sphere {
+            center,
+            radius: (height * 0.5).max(radius),
+        };
     }
-    Shape::Capsule { a: Vec3::new(cx, cy, lo), b: Vec3::new(cx, cy, hi), radius }
+    Shape::Capsule {
+        a: Vec3::new(cx, cy, lo),
+        b: Vec3::new(cx, cy, hi),
+        radius,
+    }
 }
 
 /// Closest points between a RAY (origin `o`, direction `d`, parameter t ≥ 0) and a SEGMENT `a`..`b`
@@ -260,7 +308,11 @@ pub fn closest_point_ray_segment(o: Vec3, d: Vec3, a: Vec3, b: Vec3) -> (Vec3, V
 
     if dd <= EPS {
         // Ray has no direction → treat it as the point `o`.
-        let s = if ee > EPS { (f / ee).clamp(0.0, 1.0) } else { 0.0 };
+        let s = if ee > EPS {
+            (f / ee).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         return (o, a + ab * s);
     }
     if ee <= EPS {
@@ -271,7 +323,11 @@ pub fn closest_point_ray_segment(o: Vec3, d: Vec3, a: Vec3, b: Vec3) -> (Vec3, V
 
     let bnd = d.dot(ab);
     let denom = dd * ee - bnd * bnd; // ≥ 0
-    let mut t = if denom > EPS { (bnd * f - c * ee) / denom } else { 0.0 };
+    let mut t = if denom > EPS {
+        (bnd * f - c * ee) / denom
+    } else {
+        0.0
+    };
     let mut s = (bnd * t + f) / ee;
 
     // Clamp s to the segment and re-solve t; then clamp t to the ray and re-solve s.
@@ -298,7 +354,11 @@ fn contact_between(pa: Vec3, ra: f32, pb: Vec3, rb: f32) -> Option<Contact> {
         return None;
     }
     let normal = if dist > 1e-6 { delta / dist } else { Vec3::Z };
-    Some(Contact { depth: sep - dist, normal, point: pb + normal * rb })
+    Some(Contact {
+        depth: sep - dist,
+        normal,
+        point: pb + normal * rb,
+    })
 }
 
 /// Capsule/sphere (as a segment + radius) vs a box. Returns the contact with the normal pointing
@@ -367,8 +427,16 @@ fn obb_vs_obb(a: &Shape, b: &Shape) -> Option<Contact> {
     }
 
     // Overlap on every axis → collision. Normal points from B toward A (push A off B).
-    let normal = if best_axis.dot(t) > 0.0 { -best_axis } else { best_axis };
-    Some(Contact { depth: best_depth, normal, point: (ca + cb) * 0.5 })
+    let normal = if best_axis.dot(t) > 0.0 {
+        -best_axis
+    } else {
+        best_axis
+    };
+    Some(Contact {
+        depth: best_depth,
+        normal,
+        point: (ca + cb) * 0.5,
+    })
 }
 
 /// Closest point on the box to `p`: project into the box's local frame, clamp to the half-extents,
@@ -393,7 +461,11 @@ fn closest_point_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
 
 fn obb_parts(s: &Shape) -> (Vec3, Vec3, Quat) {
     match *s {
-        Shape::Obb { center, half_extents, rotation } => (center, half_extents, rotation),
+        Shape::Obb {
+            center,
+            half_extents,
+            rotation,
+        } => (center, half_extents, rotation),
         _ => unreachable!("obb_parts called on a non-box shape"),
     }
 }
@@ -457,71 +529,143 @@ mod tests {
     use super::*;
 
     fn sphere(c: [f32; 3], r: f32) -> Shape {
-        Shape::Sphere { center: Vec3::from(c), radius: r }
+        Shape::Sphere {
+            center: Vec3::from(c),
+            radius: r,
+        }
     }
     fn capsule(a: [f32; 3], b: [f32; 3], r: f32) -> Shape {
-        Shape::Capsule { a: Vec3::from(a), b: Vec3::from(b), radius: r }
+        Shape::Capsule {
+            a: Vec3::from(a),
+            b: Vec3::from(b),
+            radius: r,
+        }
     }
     fn obb(c: [f32; 3], h: [f32; 3], rot: Quat) -> Shape {
-        Shape::Obb { center: Vec3::from(c), half_extents: Vec3::from(h), rotation: rot }
+        Shape::Obb {
+            center: Vec3::from(c),
+            half_extents: Vec3::from(h),
+            rotation: rot,
+        }
     }
 
     #[test]
     fn sphere_sphere_overlap_and_gap() {
-        assert!(!overlap(&sphere([0.0, 0.0, 0.0], 2.0), &sphere([5.0, 0.0, 0.0], 2.0)));
+        assert!(!overlap(
+            &sphere([0.0, 0.0, 0.0], 2.0),
+            &sphere([5.0, 0.0, 0.0], 2.0)
+        ));
         let c = penetration(&sphere([0.0, 0.0, 0.0], 3.0), &sphere([5.0, 0.0, 0.0], 3.0)).unwrap();
         assert!((c.depth - 1.0).abs() < 1e-5, "depth {}", c.depth);
-        assert!((c.normal - Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-5, "normal {:?}", c.normal);
+        assert!(
+            (c.normal - Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-5,
+            "normal {:?}",
+            c.normal
+        );
     }
 
     #[test]
     fn sphere_vs_capsule_uses_nearest_point_on_segment() {
         let cap = capsule([0.0, 0.0, 0.0], [10.0, 0.0, 0.0], 1.0);
-        assert!(!overlap(&cap, &sphere([5.0, 2.5, 0.0], 1.0)), "centre dist 2.5 > 2 → miss");
-        assert!(overlap(&cap, &sphere([5.0, 1.5, 0.0], 1.0)), "centre dist 1.5 < 2 → overlap");
-        assert!(!overlap(&cap, &sphere([12.5, 0.0, 0.0], 1.0)), "past the end cap → miss");
-        assert!(overlap(&cap, &sphere([11.5, 0.0, 0.0], 1.0)), "within the end cap → overlap");
+        assert!(
+            !overlap(&cap, &sphere([5.0, 2.5, 0.0], 1.0)),
+            "centre dist 2.5 > 2 → miss"
+        );
+        assert!(
+            overlap(&cap, &sphere([5.0, 1.5, 0.0], 1.0)),
+            "centre dist 1.5 < 2 → overlap"
+        );
+        assert!(
+            !overlap(&cap, &sphere([12.5, 0.0, 0.0], 1.0)),
+            "past the end cap → miss"
+        );
+        assert!(
+            overlap(&cap, &sphere([11.5, 0.0, 0.0], 1.0)),
+            "within the end cap → overlap"
+        );
     }
 
     #[test]
     fn capsule_capsule_crossing_and_parallel() {
         let x = capsule([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 0.5);
-        assert!(!overlap(&x, &capsule([0.0, -5.0, 1.5], [0.0, 5.0, 1.5], 0.5)), "z gap 1.5 > 1");
-        assert!(overlap(&x, &capsule([0.0, -5.0, 0.8], [0.0, 5.0, 0.8], 0.5)), "z gap 0.8 < 1");
+        assert!(
+            !overlap(&x, &capsule([0.0, -5.0, 1.5], [0.0, 5.0, 1.5], 0.5)),
+            "z gap 1.5 > 1"
+        );
+        assert!(
+            overlap(&x, &capsule([0.0, -5.0, 0.8], [0.0, 5.0, 0.8], 0.5)),
+            "z gap 0.8 < 1"
+        );
         let p1 = capsule([0.0, 0.0, 0.0], [10.0, 0.0, 0.0], 1.0);
-        assert!(!overlap(&p1, &capsule([0.0, 3.0, 0.0], [10.0, 3.0, 0.0], 1.0)));
-        assert!(overlap(&p1, &capsule([0.0, 1.5, 0.0], [10.0, 1.5, 0.0], 1.0)));
+        assert!(!overlap(
+            &p1,
+            &capsule([0.0, 3.0, 0.0], [10.0, 3.0, 0.0], 1.0)
+        ));
+        assert!(overlap(
+            &p1,
+            &capsule([0.0, 1.5, 0.0], [10.0, 1.5, 0.0], 1.0)
+        ));
     }
 
     #[test]
     fn sphere_vs_box() {
         // Axis-aligned box, half 2 about origin. Sphere outside a face at x=3.5 r=1 → gap 0.5 miss.
         let b = obb([0.0, 0.0, 0.0], [2.0, 2.0, 2.0], Quat::IDENTITY);
-        assert!(!overlap(&sphere([3.5, 0.0, 0.0], 1.0), &b), "face gap 0.5 → miss");
-        assert!(overlap(&sphere([2.5, 0.0, 0.0], 1.0), &b), "face gap −0.5 → overlap");
+        assert!(
+            !overlap(&sphere([3.5, 0.0, 0.0], 1.0), &b),
+            "face gap 0.5 → miss"
+        );
+        assert!(
+            overlap(&sphere([2.5, 0.0, 0.0], 1.0), &b),
+            "face gap −0.5 → overlap"
+        );
         // Near a corner: closest point is the corner (2,2,2); sphere at (3,3,3) dist √3≈1.73 > 1 miss.
-        assert!(!overlap(&sphere([3.0, 3.0, 3.0], 1.0), &b), "corner dist 1.73 > 1 → miss");
-        assert!(overlap(&sphere([2.8, 2.8, 2.8], 1.5), &b), "corner within 1.5 → overlap");
+        assert!(
+            !overlap(&sphere([3.0, 3.0, 3.0], 1.0), &b),
+            "corner dist 1.73 > 1 → miss"
+        );
+        assert!(
+            overlap(&sphere([2.8, 2.8, 2.8], 1.5), &b),
+            "corner within 1.5 → overlap"
+        );
     }
 
     #[test]
     fn box_vs_box_sat_axis_and_edge() {
         let a = obb([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], Quat::IDENTITY);
         // Face-axis separation: 3 apart on x, half 1 + 1 = 2 < 3 → disjoint; 1.5 apart → overlap.
-        assert!(!overlap(&a, &obb([3.0, 0.0, 0.0], [1.0, 1.0, 1.0], Quat::IDENTITY)));
-        assert!(overlap(&a, &obb([1.5, 0.0, 0.0], [1.0, 1.0, 1.0], Quat::IDENTITY)));
+        assert!(!overlap(
+            &a,
+            &obb([3.0, 0.0, 0.0], [1.0, 1.0, 1.0], Quat::IDENTITY)
+        ));
+        assert!(overlap(
+            &a,
+            &obb([1.5, 0.0, 0.0], [1.0, 1.0, 1.0], Quat::IDENTITY)
+        ));
         // A 45°-about-Z box needs the EDGE cross-axes to separate correctly (its corner reaches √2).
         let spun = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
-        assert!(overlap(&a, &obb([2.2, 0.0, 0.0], [1.0, 1.0, 1.0], spun)), "corner √2≈1.41 reaches in");
-        assert!(!overlap(&a, &obb([2.6, 0.0, 0.0], [1.0, 1.0, 1.0], spun)), "past the corner → disjoint");
+        assert!(
+            overlap(&a, &obb([2.2, 0.0, 0.0], [1.0, 1.0, 1.0], spun)),
+            "corner √2≈1.41 reaches in"
+        );
+        assert!(
+            !overlap(&a, &obb([2.6, 0.0, 0.0], [1.0, 1.0, 1.0], spun)),
+            "past the corner → disjoint"
+        );
     }
 
     #[test]
     fn capsule_vs_box() {
         let b = obb([0.0, 0.0, 0.0], [2.0, 2.0, 2.0], Quat::IDENTITY);
         // Capsule running along x well above the box (z=4) r=1 → 2 gap → miss; z=2.5 r=1 → overlap.
-        assert!(!overlap(&capsule([-5.0, 0.0, 4.0], [5.0, 0.0, 4.0], 1.0), &b), "z gap 2 → miss");
-        assert!(overlap(&capsule([-5.0, 0.0, 2.5], [5.0, 0.0, 2.5], 1.0), &b), "z gap 0.5 → overlap");
+        assert!(
+            !overlap(&capsule([-5.0, 0.0, 4.0], [5.0, 0.0, 4.0], 1.0), &b),
+            "z gap 2 → miss"
+        );
+        assert!(
+            overlap(&capsule([-5.0, 0.0, 2.5], [5.0, 0.0, 2.5], 1.0), &b),
+            "z gap 0.5 → overlap"
+        );
     }
 
     #[test]
@@ -538,11 +682,21 @@ mod tests {
         assert!((sphere([0.0, 0.0, 5.0], 1.0).lowest_z() - 4.0).abs() < 1e-6);
         assert!((capsule([0.0, 0.0, 3.0], [0.0, 0.0, 7.0], 1.0).lowest_z() - 2.0).abs() < 1e-6);
         // Axis-aligned box centre z=10, half-z 2 → lowest 8.
-        assert!((obb([0.0, 0.0, 10.0], [2.0, 2.0, 2.0], Quat::IDENTITY).lowest_z() - 8.0).abs() < 1e-6);
+        assert!(
+            (obb([0.0, 0.0, 10.0], [2.0, 2.0, 2.0], Quat::IDENTITY).lowest_z() - 8.0).abs() < 1e-6
+        );
         // Box spun 45° about X: its z-extent grows to (2+2)/√2·… — the projected half-extent is
         // hy·|Yz| + hz·|Zz| = 2·sin45 + 2·cos45 = 2√2 ≈ 2.828, so lowest = 10 − 2.828.
-        let spun = obb([0.0, 0.0, 10.0], [2.0, 2.0, 2.0], Quat::from_rotation_x(std::f32::consts::FRAC_PI_4));
-        assert!((spun.lowest_z() - (10.0 - 2.0 * std::f32::consts::SQRT_2)).abs() < 1e-4, "{}", spun.lowest_z());
+        let spun = obb(
+            [0.0, 0.0, 10.0],
+            [2.0, 2.0, 2.0],
+            Quat::from_rotation_x(std::f32::consts::FRAC_PI_4),
+        );
+        assert!(
+            (spun.lowest_z() - (10.0 - 2.0 * std::f32::consts::SQRT_2)).abs() < 1e-4,
+            "{}",
+            spun.lowest_z()
+        );
     }
 
     #[test]
@@ -557,8 +711,14 @@ mod tests {
         match fit_capsule(pts) {
             Shape::Capsule { a, b, radius } => {
                 assert!((radius - 1.0).abs() < 1e-4, "radius {radius}");
-                assert!((a.x + 9.0).abs() < 1e-4 && (b.x - 9.0).abs() < 1e-4, "caps inset: a {a:?} b {b:?}");
-                assert!(a.y.abs() < 1e-4 && a.z.abs() < 1e-4, "centred on the cross-section");
+                assert!(
+                    (a.x + 9.0).abs() < 1e-4 && (b.x - 9.0).abs() < 1e-4,
+                    "caps inset: a {a:?} b {b:?}"
+                );
+                assert!(
+                    a.y.abs() < 1e-4 && a.z.abs() < 1e-4,
+                    "centred on the cross-section"
+                );
             }
             _ => panic!("elongated cloud → capsule"),
         }
@@ -566,8 +726,13 @@ mod tests {
 
     #[test]
     fn fit_capsule_squat_or_empty_is_a_sphere() {
-        assert!(matches!(fit_capsule([Vec3::splat(-2.0), Vec3::splat(2.0)]), Shape::Sphere { .. }));
-        assert!(matches!(fit_capsule(std::iter::empty()), Shape::Sphere { radius, .. } if radius == 0.0));
+        assert!(matches!(
+            fit_capsule([Vec3::splat(-2.0), Vec3::splat(2.0)]),
+            Shape::Sphere { .. }
+        ));
+        assert!(
+            matches!(fit_capsule(std::iter::empty()), Shape::Sphere { radius, .. } if radius == 0.0)
+        );
     }
 
     #[test]
@@ -577,9 +742,18 @@ mod tests {
         let pts = [Vec3::new(-30.0, -10.0, 0.0), Vec3::new(30.0, 10.0, 170.0)];
         match upright_capsule(pts, 0.14) {
             Shape::Capsule { a, b, radius } => {
-                assert!((radius - 170.0 * 0.14).abs() < 1e-3, "radius {radius} from height, not arms");
-                assert!(a.x.abs() < 1e-4 && a.y.abs() < 1e-4 && b.x.abs() < 1e-4, "centred horizontally");
-                assert!((a.z - radius).abs() < 1e-3 && (b.z - (170.0 - radius)).abs() < 1e-3, "caps inset");
+                assert!(
+                    (radius - 170.0 * 0.14).abs() < 1e-3,
+                    "radius {radius} from height, not arms"
+                );
+                assert!(
+                    a.x.abs() < 1e-4 && a.y.abs() < 1e-4 && b.x.abs() < 1e-4,
+                    "centred horizontally"
+                );
+                assert!(
+                    (a.z - radius).abs() < 1e-3 && (b.z - (170.0 - radius)).abs() < 1e-3,
+                    "caps inset"
+                );
                 assert!(b.z > a.z, "runs feet → head");
             }
             _ => panic!("tall cloud → vertical capsule"),
@@ -596,7 +770,10 @@ mod tests {
             Vec3::new(-5.0, 0.0, 0.0),
             Vec3::new(5.0, 0.0, 0.0),
         );
-        assert!((pr - Vec3::new(0.0, 3.0, 0.0)).length() < 1e-3, "ray pt {pr:?}");
+        assert!(
+            (pr - Vec3::new(0.0, 3.0, 0.0)).length() < 1e-3,
+            "ray pt {pr:?}"
+        );
         assert!((ps - Vec3::ZERO).length() < 1e-3, "seg pt {ps:?}");
         assert!(((pr - ps).length() - 3.0).abs() < 1e-3, "miss dist");
     }
@@ -611,7 +788,10 @@ mod tests {
             Vec3::new(-5.0, 0.0, 0.0),
             Vec3::new(5.0, 0.0, 0.0),
         );
-        assert!((pr - Vec3::new(0.0, 0.0, -10.0)).length() < 1e-3, "clamped to ray origin, got {pr:?}");
+        assert!(
+            (pr - Vec3::new(0.0, 0.0, -10.0)).length() < 1e-3,
+            "clamped to ray origin, got {pr:?}"
+        );
     }
 
     #[test]
@@ -623,6 +803,9 @@ mod tests {
             Vec3::new(-5.0, 0.0, 0.0),
             Vec3::new(5.0, 0.0, 0.0),
         );
-        assert!((ps - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-3, "clamped to endpoint, got {ps:?}");
+        assert!(
+            (ps - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-3,
+            "clamped to endpoint, got {ps:?}"
+        );
     }
 }

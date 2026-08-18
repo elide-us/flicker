@@ -127,7 +127,11 @@ fn parse_star(rest: &str) -> ChatEvent {
 /// `#a(2) #b(3)` → `["#a", "#b"]` (drop the `(count)` suffix).
 fn parse_channel_list(list: &str) -> Vec<String> {
     list.split_whitespace()
-        .map(|tok| tok.split_once('(').map_or(tok, |(name, _)| name).to_string())
+        .map(|tok| {
+            tok.split_once('(')
+                .map_or(tok, |(name, _)| name)
+                .to_string()
+        })
         .collect()
 }
 
@@ -183,7 +187,10 @@ mod tests {
         assert_eq!(encode(&ChatCommand::Nick("Foo#1".into())), "NICK Foo1\r\n");
         assert_eq!(encode(&ChatCommand::Nick("  a b ".into())), "NICK ab\r\n");
         let long = "a".repeat(40);
-        assert_eq!(encode(&ChatCommand::Nick(long)), format!("NICK {}\r\n", "a".repeat(24)));
+        assert_eq!(
+            encode(&ChatCommand::Nick(long)),
+            format!("NICK {}\r\n", "a".repeat(24))
+        );
     }
 
     #[test]
@@ -212,15 +219,24 @@ mod tests {
     fn decode_system_lines_most_specific_first() {
         assert_eq!(
             decode("* ann joined #dev"),
-            ChatEvent::Joined { nick: "ann".into(), channel: "#dev".into() }
+            ChatEvent::Joined {
+                nick: "ann".into(),
+                channel: "#dev".into()
+            }
         );
         assert_eq!(
             decode("* ann left #dev"),
-            ChatEvent::Parted { nick: "ann".into(), channel: "#dev".into() }
+            ChatEvent::Parted {
+                nick: "ann".into(),
+                channel: "#dev".into()
+            }
         );
         assert_eq!(
             decode("* ann is now known as bob"),
-            ChatEvent::Renamed { old: "ann".into(), new: "bob".into() }
+            ChatEvent::Renamed {
+                old: "ann".into(),
+                new: "bob".into()
+            }
         );
         assert_eq!(
             decode("* #dev names: ann bob cid"),
@@ -234,10 +250,16 @@ mod tests {
             ChatEvent::Channels(vec!["#dev".into(), "#general".into()])
         );
         assert_eq!(decode("* channels: "), ChatEvent::Channels(vec![]));
-        assert_eq!(decode("* you are now 'bob'"), ChatEvent::NickAck("bob".into()));
+        assert_eq!(
+            decode("* you are now 'bob'"),
+            ChatEvent::NickAck("bob".into())
+        );
         assert_eq!(decode("PONG"), ChatEvent::Pong(None));
         assert_eq!(decode("PONG 42"), ChatEvent::Pong(Some("42".into())));
-        assert_eq!(decode("! you are not in #dev"), ChatEvent::Error("you are not in #dev".into()));
+        assert_eq!(
+            decode("! you are not in #dev"),
+            ChatEvent::Error("you are not in #dev".into())
+        );
     }
 
     #[test]
@@ -261,11 +283,18 @@ mod tests {
     #[test]
     fn decode_round_trips_a_sent_message_echo() {
         // What we send as MSG comes back as a Chat echo from the server.
-        let sent = encode(&ChatCommand::Msg { channel: "#dev".into(), text: "hi".into() });
+        let sent = encode(&ChatCommand::Msg {
+            channel: "#dev".into(),
+            text: "hi".into(),
+        });
         assert_eq!(sent, "MSG #dev hi\r\n");
         assert_eq!(
             decode("#dev <me> hi"),
-            ChatEvent::Chat { channel: "#dev".into(), from: "me".into(), text: "hi".into() }
+            ChatEvent::Chat {
+                channel: "#dev".into(),
+                from: "me".into(),
+                text: "hi".into()
+            }
         );
     }
 }

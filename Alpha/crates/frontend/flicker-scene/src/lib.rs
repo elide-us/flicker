@@ -47,8 +47,8 @@
 use std::time::Duration;
 
 use flicker_app::{App, CursorImage};
-use flicker_input_core::{InputContext, InputState};
 pub use flicker_app::{FrameInput, InputEvent, RouteCtx};
+use flicker_input_core::{InputContext, InputState};
 
 /// The resolved discrete input a scene receives each frame — the central event pump's
 /// [`FrameInput`], surfaced under the scene vocabulary.
@@ -513,9 +513,17 @@ mod tests {
             }
             fn render(&mut self, _: &mut flicker_render::Renderer) {}
         }
-        let img = CursorImage { rgba: vec![0xff; 4], width: 1, height: 1, hotspot: (0, 0) };
+        let img = CursorImage {
+            rgba: vec![0xff; 4],
+            width: 1,
+            height: 1,
+            hotspot: (0, 0),
+        };
         let with = super::SceneManager::new(Box::new(Stub)).with_cursor(Some(img));
-        assert_eq!(with.cursor().map(|c| (c.width, c.height, c.hotspot)), Some((1, 1, (0, 0))));
+        assert_eq!(
+            with.cursor().map(|c| (c.width, c.height, c.hotspot)),
+            Some((1, 1, (0, 0)))
+        );
         assert!(super::SceneManager::new(Box::new(Stub)).cursor().is_none());
     }
 
@@ -581,7 +589,10 @@ mod tests {
             }
             fn render(&mut self, _: &mut flicker_render::Renderer) {}
             fn route(&self, _result: &str) -> Option<Transition> {
-                Some(Transition::Goto { id: "next".into(), mode: GotoMode::Replace })
+                Some(Transition::Goto {
+                    id: "next".into(),
+                    mode: GotoMode::Replace,
+                })
             }
         }
         /// Routes nothing (the default [`Scene::route`]).

@@ -53,11 +53,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputContext, InputMap, InputState,
-};
-use flicker_input_core::{apply_deadzone, ActionSignal, Fired, Resolver};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker::net::chat::{ChatClient, ChatCommand, ChatEvent};
 use flicker::render::{
     Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, Renderer, TextureHandle,
@@ -66,10 +61,14 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
-    chat_panel, render_hud, run_ui, strings, ChatLineKind,
-    ChatLineView, ChatView, RosterEntry, Surface, Surfaces, UiInput, UiIntents, UiState,
-    WalkerHandler,
+    chat_panel, render_hud, run_ui, strings, ChatLineKind, ChatLineView, ChatView, RosterEntry,
+    Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
 };
+use flicker_input_core::{apply_deadzone, ActionSignal, Fired, Resolver};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputContext, InputMap, InputState,
+};
+use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -412,22 +411,15 @@ impl Default for GameScene {
     }
 }
 
-/// Path to the HUD component-tree script (behaviour), resolved against this crate's
-/// source dir so the scene finds it regardless of the working directory. Lives in
-/// the shared content tree alongside the other clients' HUD scripts.
-const HUD_SCRIPT_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/scripts/shared/hud_pocclusters.lua"
-);
-
-/// The scene's HUD layout + `$token` styles live in the shared `ui_theme.json` —
-/// the ONE global UI-element definition + Prism palette every prism-alpha scene reads —
-/// under the `pocclusters` key. NOT a per-scene copy: a second file would need its own
-/// `theme.tokens`, forking the palette, which the one-colour-source rule forbids.
-const HUD_UI_THEME: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/sensorium/resources/ui_theme.json"
-);
+/// Path to the HUD component-tree script (behaviour), resolved through the
+/// content-roots service so the scene finds it regardless of the working
+/// directory. Lives in the shared content tree alongside the other clients'
+/// HUD scripts.
+fn hud_script_path() -> std::path::PathBuf {
+    flicker_core::roots::roots()
+        .sensorium()
+        .join("scripts/shared/hud_pocclusters.lua")
+}
 
 impl GameScene {
     /// Build the game scene, parsing the HUD component tree best-effort (the scene
@@ -436,17 +428,18 @@ impl GameScene {
     /// takes its placeholder values from [`Default`]; the world + camera come up in
     /// [`Scene::enter`].
     fn new() -> Self {
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let mut ui_tree = None;
-        match ScriptHost::from_file(HUD_SCRIPT_PATH) {
+        let script_path = hud_script_path();
+        match ScriptHost::from_file(&script_path) {
             Ok(s) => {
-                flicker::ui::load_ui_json_for(&s, HUD_UI_THEME, Some(&crate::scene_styles())); // HUD layout constants (`UI.pocclusters`)
+                flicker::ui::load_shared_ui_json(&s, Some(&crate::scene_styles())); // HUD layout constants (`UI.pocclusters`)
                 match s.ui_tree() {
                     Ok(Some(tree)) => ui_tree = Some(tree),
                     Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
                     Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
                 }
-                tracing::info!("loaded HUD script from {HUD_SCRIPT_PATH}");
+                tracing::info!("loaded HUD script from {}", script_path.display());
             }
             Err(e) => tracing::error!("HUD script load failed (continuing without it): {e}"),
         }
@@ -701,7 +694,10 @@ impl VirtualVoxel {
             ];
             let world = cluster_origin
                 + Vec3::new(m[0] as f32 + v[0], m[1] as f32 + v[1], m[2] as f32 + v[2]);
-            *corner = VirtualVoxelCorner { self_relative, world };
+            *corner = VirtualVoxelCorner {
+                self_relative,
+                world,
+            };
         }
         Self {
             cluster: cluster_id,
@@ -1317,16 +1313,28 @@ impl GameScene {
         // summed so a player can use either (spec §9 / RT-13).
         let cfg = &self.gamepad_config;
         let mut horizontal = Vec3::ZERO;
-        if self.bindings.signal_held(ActionSignal::MoveForward, input, cfg) {
+        if self
+            .bindings
+            .signal_held(ActionSignal::MoveForward, input, cfg)
+        {
             horizontal += self.move_forward();
         }
-        if self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg) {
+        if self
+            .bindings
+            .signal_held(ActionSignal::MoveBackward, input, cfg)
+        {
             horizontal -= self.move_forward();
         }
-        if self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg) {
+        if self
+            .bindings
+            .signal_held(ActionSignal::StrafeRight, input, cfg)
+        {
             horizontal += self.move_right();
         }
-        if self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg) {
+        if self
+            .bindings
+            .signal_held(ActionSignal::StrafeLeft, input, cfg)
+        {
             horizontal -= self.move_right();
         }
         if let Some(latch) = input.analog_latch() {
@@ -1415,7 +1423,11 @@ impl GameScene {
                     }
                 }
                 "part" | "leave" => {
-                    let channel = if arg.is_empty() { self.chat_active.clone() } else { arg };
+                    let channel = if arg.is_empty() {
+                        self.chat_active.clone()
+                    } else {
+                        arg
+                    };
                     client.send(ChatCommand::Part(channel));
                 }
                 "nick" => {
@@ -1485,7 +1497,11 @@ impl GameScene {
                 };
                 self.push_chat_line(&active, ChatLineKind::Left, msg);
             }
-            ChatEvent::Chat { channel, from, text } => {
+            ChatEvent::Chat {
+                channel,
+                from,
+                text,
+            } => {
                 let (kind, line) = if let Some(rest) = text.strip_prefix("/me ") {
                     (ChatLineKind::Emote, format!("✦ {from} {rest}"))
                 } else if from == my_nick {
@@ -1544,7 +1560,11 @@ impl GameScene {
                     }
                 }
                 for channel in touched {
-                    self.push_chat_line(&channel, ChatLineKind::Renamed, format!("ᛥ {old} is now {new}"));
+                    self.push_chat_line(
+                        &channel,
+                        ChatLineKind::Renamed,
+                        format!("ᛥ {old} is now {new}"),
+                    );
                 }
             }
             ChatEvent::Names { channel, names } => {
@@ -1561,7 +1581,11 @@ impl GameScene {
             ChatEvent::NickAck(nick) => {
                 self.chat_nick = nick.clone();
                 let active = self.chat_active.clone();
-                self.push_chat_line(&active, ChatLineKind::Joined, format!("· you are now '{nick}'"));
+                self.push_chat_line(
+                    &active,
+                    ChatLineKind::Joined,
+                    format!("· you are now '{nick}'"),
+                );
             }
             ChatEvent::Notice(text) => {
                 let active = self.chat_active.clone();
@@ -1577,8 +1601,12 @@ impl GameScene {
 
     fn hud_model(&self) -> ValueMap {
         let walk_mode = self.locomotion_walk;
-        let mode_tag =
-            strings::resolve(if walk_mode { "$pc_walk_mode" } else { "$pc_fly_mode" }).into_owned();
+        let mode_tag = strings::resolve(if walk_mode {
+            "$pc_walk_mode"
+        } else {
+            "$pc_fly_mode"
+        })
+        .into_owned();
 
         // Left-panel readout rows (label -> value), pre-formatted here (the walker has
         // no printf) and bound by `text_bind` in hud_pocclusters.lua. Every English
@@ -1586,24 +1614,36 @@ impl GameScene {
         // unit glyphs compose around the resolved text.
         let cam_val = format!(
             "({:.1}, {:.1}, {:.1}) \u{00B7} {} {:.0}\u{00B0} {} {:.0}\u{00B0}",
-            self.position.x, self.position.y, self.position.z,
-            strings::resolve("$pc_yaw"), self.yaw.to_degrees(),
-            strings::resolve("$pc_pitch"), self.pitch.to_degrees(),
+            self.position.x,
+            self.position.y,
+            self.position.z,
+            strings::resolve("$pc_yaw"),
+            self.yaw.to_degrees(),
+            strings::resolve("$pc_pitch"),
+            self.pitch.to_degrees(),
         );
         let grid_val = format!(
             "{} {} \u{00B7} {}\u{00B3} {}",
-            self.meshes.len(), strings::resolve("$pc_clusters"),
-            CLUSTER_DIM, strings::resolve("$pc_voxels"),
+            self.meshes.len(),
+            strings::resolve("$pc_clusters"),
+            CLUSTER_DIM,
+            strings::resolve("$pc_voxels"),
         );
         let move_val = format!(
             "{} \u{00B7} {:.0} u/s",
-            strings::resolve(if walk_mode { "$pc_mode_walk" } else { "$pc_mode_fly" }),
+            strings::resolve(if walk_mode {
+                "$pc_mode_walk"
+            } else {
+                "$pc_mode_fly"
+            }),
             self.controls.move_speed,
         );
         let diag_val = format!(
             "{} {} \u{00B7} {} {}",
-            strings::resolve("$pc_arrows"), self.corner_arrows.len(),
-            strings::resolve("$pc_nav"), self.navs.len(),
+            strings::resolve("$pc_arrows"),
+            self.corner_arrows.len(),
+            strings::resolve("$pc_nav"),
+            self.navs.len(),
         );
 
         // Pick: shown blue when a face is selected (the `inspector` / `pick_none`
@@ -1612,9 +1652,16 @@ impl GameScene {
         let pick_val = match self.selection {
             Some((id, p)) => format!(
                 "{} ({}, {}, {}) {} {} \u{00B7} {} ({}, {}, {})",
-                strings::resolve("$pc_cluster"), id.x(), id.y(), id.z(),
-                strings::resolve("$pc_lod"), id.lod(),
-                strings::resolve("$pc_voxel"), p[0], p[1], p[2],
+                strings::resolve("$pc_cluster"),
+                id.x(),
+                id.y(),
+                id.z(),
+                strings::resolve("$pc_lod"),
+                id.lod(),
+                strings::resolve("$pc_voxel"),
+                p[0],
+                p[1],
+                p[2],
             ),
             None => String::new(),
         };
@@ -1627,8 +1674,14 @@ impl GameScene {
             };
             format!(
                 "{} \u{00B7} {} {} \u{00B7} vy {:+.1}",
-                strings::resolve(if self.grounded { "$pc_grounded" } else { "$pc_airborne" }),
-                strings::resolve("$pc_ground_y"), ground, self.vy,
+                strings::resolve(if self.grounded {
+                    "$pc_grounded"
+                } else {
+                    "$pc_airborne"
+                }),
+                strings::resolve("$pc_ground_y"),
+                ground,
+                self.vy,
             )
         } else {
             String::new()
@@ -1665,13 +1718,25 @@ impl GameScene {
             // their pre-formatted readouts + three view toggles. Formatting lives in
             // `celestial` (the walker has no printf).
             .with("cc_sun", self.celestial.time_of_day)
-            .with("cc_sun_val", celestial::fmt_clock(self.celestial.time_of_day))
+            .with(
+                "cc_sun_val",
+                celestial::fmt_clock(self.celestial.time_of_day),
+            )
             .with("cc_moon", self.celestial.moon_phase)
-            .with("cc_moon_val", celestial::fmt_moon(self.celestial.moon_phase))
+            .with(
+                "cc_moon_val",
+                celestial::fmt_moon(self.celestial.moon_phase),
+            )
             .with("cc_year", self.celestial.year_month)
-            .with("cc_year_val", celestial::fmt_month(self.celestial.year_month))
+            .with(
+                "cc_year_val",
+                celestial::fmt_month(self.celestial.year_month),
+            )
             .with("cc_speed", self.celestial.sim_speed)
-            .with("cc_speed_val", celestial::fmt_speed(self.celestial.sim_speed))
+            .with(
+                "cc_speed_val",
+                celestial::fmt_speed(self.celestial.sim_speed),
+            )
             .with("cc_fog", self.celestial.fog)
             .with("cc_fog_val", celestial::fmt_fog(self.celestial.fog))
             .with("cc_lat", self.celestial.latitude)
@@ -1696,7 +1761,9 @@ impl GameScene {
                 format!(
                     "{} ({}, {}, {})",
                     strings::resolve("$pc_cell"),
-                    vv.center_local[0], vv.center_local[1], vv.center_local[2],
+                    vv.center_local[0],
+                    vv.center_local[1],
+                    vv.center_local[2],
                 ),
             );
             m.set(
@@ -1704,17 +1771,32 @@ impl GameScene {
                 format!(
                     "{} ({}, {}, {}) {} {} \u{00B7} 8 {}",
                     strings::resolve("$pc_cluster"),
-                    vv.cluster.x(), vv.cluster.y(), vv.cluster.z(),
-                    strings::resolve("$pc_lod"), vv.cluster.lod(),
+                    vv.cluster.x(),
+                    vv.cluster.y(),
+                    vv.cluster.z(),
+                    strings::resolve("$pc_lod"),
+                    vv.cluster.lod(),
                     strings::resolve("$pc_corners"),
                 ),
             );
             for (i, c) in vv.corners.iter().enumerate() {
                 let sign = |bit: usize| if (i >> bit) & 1 == 1 { '+' } else { '-' };
-                m.set(format!("insp_c{i}_name"), format!("c{i} {}{}{}", sign(0), sign(1), sign(2)));
-                m.set(format!("insp_c{i}_lx"), format!("{:.2}", c.self_relative[0]));
-                m.set(format!("insp_c{i}_ly"), format!("{:.2}", c.self_relative[1]));
-                m.set(format!("insp_c{i}_lz"), format!("{:.2}", c.self_relative[2]));
+                m.set(
+                    format!("insp_c{i}_name"),
+                    format!("c{i} {}{}{}", sign(0), sign(1), sign(2)),
+                );
+                m.set(
+                    format!("insp_c{i}_lx"),
+                    format!("{:.2}", c.self_relative[0]),
+                );
+                m.set(
+                    format!("insp_c{i}_ly"),
+                    format!("{:.2}", c.self_relative[1]),
+                );
+                m.set(
+                    format!("insp_c{i}_lz"),
+                    format!("{:.2}", c.self_relative[2]),
+                );
                 m.set(format!("insp_c{i}_wx"), format!("{:.2}", c.world.x));
                 m.set(format!("insp_c{i}_wy"), format!("{:.2}", c.world.y));
                 m.set(format!("insp_c{i}_wz"), format!("{:.2}", c.world.z));
@@ -1819,7 +1901,13 @@ impl Scene for GameScene {
         self.chat_rect = (x, y, w, h);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         let dt_s = dt.as_secs_f32();
 
         // Booting: the world is still cooking — ignore input and just poll for
@@ -1873,11 +1961,19 @@ impl Scene for GameScene {
             let (mut cx, mut cy, mut cw, mut ch) = self.chat_rect;
             let m = input.mouse_position;
             if input.mouse_left_pressed {
-                if in_rect(m, cx + cw - CHAT_CORNER, cy + ch - CHAT_CORNER, CHAT_CORNER, CHAT_CORNER) {
+                if in_rect(
+                    m,
+                    cx + cw - CHAT_CORNER,
+                    cy + ch - CHAT_CORNER,
+                    CHAT_CORNER,
+                    CHAT_CORNER,
+                ) {
                     self.chat_drag = ChatDrag::Resize;
                     click_focus = true;
                 } else if in_rect(m, cx, cy, cw, CHAT_GRIP_H) {
-                    self.chat_drag = ChatDrag::Move { grab: Vec2::new(m.x - cx, m.y - cy) };
+                    self.chat_drag = ChatDrag::Move {
+                        grab: Vec2::new(m.x - cx, m.y - cy),
+                    };
                     click_focus = true;
                 } else if in_rect(m, cx, cy, cw, ch) {
                     click_focus = true;
@@ -1907,7 +2003,9 @@ impl Scene for GameScene {
         // typed(); its TextEntry-context + focus intents go into the reused RouteCtx and
         // are reconciled after dispatch.
         self.route.requests.clear();
-        let text = self.command.drive(input, focused, click_focus, &mut self.route);
+        let text = self
+            .command
+            .drive(input, focused, click_focus, &mut self.route);
         let guard = self.command.guard();
 
         // The in-scene HUD is a DECLARATIVE component tree walked by the Rust
@@ -2047,8 +2145,14 @@ impl Scene for GameScene {
             let (cx, cy, cw, ch) = self.chat_rect;
             let empty_lines: Vec<ChatLineView> = Vec::new();
             let empty_roster: Vec<RosterEntry> = Vec::new();
-            let lines = self.chat_logs.get(&self.chat_active).unwrap_or(&empty_lines);
-            let roster = self.chat_rosters.get(&self.chat_active).unwrap_or(&empty_roster);
+            let lines = self
+                .chat_logs
+                .get(&self.chat_active)
+                .unwrap_or(&empty_lines);
+            let roster = self
+                .chat_rosters
+                .get(&self.chat_active)
+                .unwrap_or(&empty_roster);
             let mut tree = chat_panel(
                 cx,
                 cy,
@@ -2072,8 +2176,11 @@ impl Scene for GameScene {
             self.surfaces.publish(&mut cmodel);
             // The tab strip selects by INDEX (an index is a number, everywhere), so the
             // scene publishes the active channel's position in `chat_channels`.
-            let active_idx =
-                self.chat_channels.iter().position(|c| c == &self.chat_active).unwrap_or(0);
+            let active_idx = self
+                .chat_channels
+                .iter()
+                .position(|c| c == &self.chat_active)
+                .unwrap_or(0);
             cmodel.set("chat_tab", active_idx as f64);
             cmodel.set("chat_scroll", self.chat_scroll as f64);
             cmodel.set("chat_input", self.chat_input.as_str());
@@ -2096,8 +2203,13 @@ impl Scene for GameScene {
                 backspace: focused && !guard && input.backspace(),
                 wheel: input.mouse_wheel_delta,
             };
-            let cframe =
-                run_ui(&tree, &cmodel, &self.ui_styles, &cin, &mut self.chat_ui_state);
+            let cframe = run_ui(
+                &tree,
+                &cmodel,
+                &self.ui_styles,
+                &cin,
+                &mut self.chat_ui_state,
+            );
             let chat_hit = cframe.results.is_on("hud_hit");
             self.chat_commands = cframe.commands;
 
@@ -2240,7 +2352,8 @@ impl Scene for GameScene {
         if self.bindings.active() == InputContext::World {
             if input.mouse_right {
                 if let Some(prev) = self.last_look_cursor {
-                    let (dyaw, dpitch) = self.controls.look_delta_mouse(input.mouse_position - prev);
+                    let (dyaw, dpitch) =
+                        self.controls.look_delta_mouse(input.mouse_position - prev);
                     self.yaw -= dyaw;
                     self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
                 }
@@ -2269,22 +2382,37 @@ impl Scene for GameScene {
             } else {
                 let cfg = &self.gamepad_config;
                 let mut motion = Vec3::ZERO;
-                if self.bindings.signal_held(ActionSignal::MoveForward, input, cfg) {
+                if self
+                    .bindings
+                    .signal_held(ActionSignal::MoveForward, input, cfg)
+                {
                     motion += self.move_forward();
                 }
-                if self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg) {
+                if self
+                    .bindings
+                    .signal_held(ActionSignal::MoveBackward, input, cfg)
+                {
                     motion -= self.move_forward();
                 }
-                if self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg) {
+                if self
+                    .bindings
+                    .signal_held(ActionSignal::StrafeRight, input, cfg)
+                {
                     motion += self.move_right();
                 }
-                if self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg) {
+                if self
+                    .bindings
+                    .signal_held(ActionSignal::StrafeLeft, input, cfg)
+                {
                     motion -= self.move_right();
                 }
                 if self.bindings.signal_held(ActionSignal::MoveUp, input, cfg) {
                     motion += Vec3::Y;
                 }
-                if self.bindings.signal_held(ActionSignal::MoveDown, input, cfg) {
+                if self
+                    .bindings
+                    .signal_held(ActionSignal::MoveDown, input, cfg)
+                {
                     motion -= Vec3::Y;
                 }
                 // Left-stick fly (analog channel, Option-aware; deadzoned like digital).
@@ -2340,7 +2468,8 @@ impl Scene for GameScene {
         renderer.draw_sky();
         // The seven worlds on the ecliptic (geocentric, from the shared roster), the
         // ecliptic track, and the night constellations (the Chalice + placeholders).
-        self.celestial.draw(renderer, self.position, self.planet_disc, self.star_tex);
+        self.celestial
+            .draw(renderer, self.position, self.planet_disc, self.star_tex);
 
         // Draw each cluster's extent as a white wireframe box. The extent is
         // LOD-independent, so iterate the grid positions directly.
@@ -2455,8 +2584,6 @@ impl Scene for GameScene {
 // `render_hud` now lives in `flicker-widgets` (the reusable UI surface) and is
 // imported above; the call sites below are unchanged.
 
-
-
 /// Point-in-rect test in device px (top-left origin).
 fn in_rect(p: Vec2, x: f32, y: f32, w: f32, h: f32) -> bool {
     p.x >= x && p.x < x + w && p.y >= y && p.y < y + h
@@ -2473,13 +2600,11 @@ fn default_chat_nick() -> String {
 }
 
 /// Directory the scene reads baked clusters from on startup (contour-from-primitive
-/// is the fallback when a bake is absent). Resolved against this crate's source dir
-/// so it works from any working directory; the bakes live in the shared content tree.
+/// is the fallback when a bake is absent). Resolved through the content-roots
+/// service so it works from any working directory; the bakes live in the shared
+/// content tree.
 fn bake_dir_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../content/package/bakes"
-    ))
+    flicker_core::roots::roots().package().join("bakes")
 }
 
 /// LOGICAL filename for a cluster bake — how loaders address it. The
@@ -2538,8 +2663,7 @@ fn try_load_bake_field(
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }
 
 #[cfg(test)]
@@ -2568,17 +2692,56 @@ mod script_smoke {
             .with("move_speed", 60.0_f32)
             .with("speed_val", "60 u/s")
             .with("mode_tag", r("$pc_walk_mode"))
-            .with("title_line", format!("{} 3×3 — {}", r("$pc_cluster_field"), r("$pc_walk_mode")))
-            .with("cam_val", format!("(1.0, 2.0, 3.0) · {} 29° {} -14°", r("$pc_yaw"), r("$pc_pitch")))
-            .with("grid_val", format!("9 {} · 256³ {}", r("$pc_clusters"), r("$pc_voxels")))
+            .with(
+                "title_line",
+                format!("{} 3×3 — {}", r("$pc_cluster_field"), r("$pc_walk_mode")),
+            )
+            .with(
+                "cam_val",
+                format!(
+                    "(1.0, 2.0, 3.0) · {} 29° {} -14°",
+                    r("$pc_yaw"),
+                    r("$pc_pitch")
+                ),
+            )
+            .with(
+                "grid_val",
+                format!("9 {} · 256³ {}", r("$pc_clusters"), r("$pc_voxels")),
+            )
             .with("move_val", format!("{} · 60 u/s", r("$pc_mode_walk")))
-            .with("diag_val", format!("{} 12 · {} 5", r("$pc_arrows"), r("$pc_nav")))
+            .with(
+                "diag_val",
+                format!("{} 12 · {} 5", r("$pc_arrows"), r("$pc_nav")),
+            )
             .with("has_pick", true)
             .with("no_pick", false)
-            .with("pick_val", format!("{} (1, 0, 2) {} 0 · {} (10, 20, 30)", r("$pc_cluster"), r("$pc_lod"), r("$pc_voxel")))
-            .with("walk_val", format!("{} · {} 128 · vy -1.5", r("$pc_grounded"), r("$pc_ground_y")))
+            .with(
+                "pick_val",
+                format!(
+                    "{} (1, 0, 2) {} 0 · {} (10, 20, 30)",
+                    r("$pc_cluster"),
+                    r("$pc_lod"),
+                    r("$pc_voxel")
+                ),
+            )
+            .with(
+                "walk_val",
+                format!(
+                    "{} · {} 128 · vy -1.5",
+                    r("$pc_grounded"),
+                    r("$pc_ground_y")
+                ),
+            )
             .with("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")))
-            .with("insp_sub", format!("{} (1, 0, 2) {} 0 · 8 {}", r("$pc_cluster"), r("$pc_lod"), r("$pc_corners")));
+            .with(
+                "insp_sub",
+                format!(
+                    "{} (1, 0, 2) {} 0 · 8 {}",
+                    r("$pc_cluster"),
+                    r("$pc_lod"),
+                    r("$pc_corners")
+                ),
+            );
         for i in 0..8 {
             m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
             for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
@@ -2598,14 +2761,13 @@ mod script_smoke {
         ))
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
-        let host = ScriptHost::from_file(HUD_SCRIPT_PATH)
-            .expect("load hud_pocclusters.lua");
-        flicker::ui::load_ui_json_for(&host, HUD_UI_THEME, Some(&crate::scene_styles())); // HUD layout (`UI.pocclusters`)
+        let host = ScriptHost::from_file(hud_script_path()).expect("load hud_pocclusters.lua");
+        flicker::ui::load_shared_ui_json(&host, Some(&crate::scene_styles())); // HUD layout (`UI.pocclusters`)
         let tree = host
             .ui_tree()
             .expect("tree parses")
             .expect("hud_pocclusters.lua exposes tree()");
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
 
         // Vocabulary gate: an unknown kind renders NOTHING (anchor-overlaid children, no
         // draw arm), so a name left behind by a rename would be invisible until someone
@@ -2626,7 +2788,10 @@ mod script_smoke {
         // self-gates its OWN source — every `.set`/`.with` value must be a resolved
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
 
         // A static frame (no hover): the panel draws its stats + checkboxes + sliders.
         let snap = UiInput {
@@ -2639,7 +2804,10 @@ mod script_smoke {
             wheel: 0.0,
         };
         let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
-        assert!(!frame.commands.is_empty(), "the HUD draws its panel + controls");
+        assert!(
+            !frame.commands.is_empty(),
+            "the HUD draws its panel + controls"
+        );
         let has_text = |needle: &str| {
             frame
                 .commands

@@ -84,7 +84,11 @@ impl<C> CommandHistory<C> {
     /// means).
     #[must_use]
     pub fn with_depth(depth: usize) -> Self {
-        Self { done: Vec::new(), undone: Vec::new(), depth: depth.max(1) }
+        Self {
+            done: Vec::new(),
+            undone: Vec::new(),
+            depth: depth.max(1),
+        }
     }
 
     /// Is there anything to take back?
@@ -290,7 +294,11 @@ mod tests {
 
         let log = Rc::new(RefCell::new(Vec::new()));
         let mut h = CommandHistory::new();
-        h.apply(Batch { items: (1..=40).collect(), log: Rc::clone(&log) }).unwrap();
+        h.apply(Batch {
+            items: (1..=40).collect(),
+            log: Rc::clone(&log),
+        })
+        .unwrap();
         assert_eq!(h.len(), 1, "forty operations, ONE history entry");
         assert_eq!(sum(&log), 820);
 
@@ -337,7 +345,11 @@ mod tests {
         let log = Rc::new(RefCell::new(Vec::new()));
         let mut h = CommandHistory::with_depth(0);
         h.apply(Add::new(1, &log)).unwrap();
-        assert_eq!(h.len(), 1, "a history that drops everything is never what a caller meant");
+        assert_eq!(
+            h.len(),
+            1,
+            "a history that drops everything is never what a caller meant"
+        );
     }
 
     /// A failed revert must not pretend it worked: the command stays undoable.
@@ -351,7 +363,11 @@ mod tests {
 
         let err = h.undo().unwrap().unwrap_err();
         assert_eq!(err, "revert refused");
-        assert_eq!(h.len(), 1, "still on the undo stack — the user can see and retry it");
+        assert_eq!(
+            h.len(),
+            1,
+            "still on the undo stack — the user can see and retry it"
+        );
         assert!(!h.can_redo(), "and it did NOT move to redo");
     }
 
@@ -363,6 +379,9 @@ mod tests {
         let mut cmd = Add::new(2, &log);
         cmd.fail_apply = true;
         assert!(h.apply(cmd).is_err());
-        assert!(h.is_empty(), "nothing happened, so there is nothing to undo");
+        assert!(
+            h.is_empty(),
+            "nothing happened, so there is nothing to undo"
+        );
     }
 }

@@ -88,8 +88,7 @@
                             "component": "panel",
                             "id": "pop_left",
                             "style": "panel",
-                            "tab_group": "pop_left",
-                            "nav_ordinal": 0,
+                            "nav_ordinal": 1,
                             "pad": 10,
                             "grow": 0.7,
                             "children": [
@@ -139,8 +138,8 @@
                             "component": "panel",
                             "id": "pop_view",
                             "style": "panel",
-                            "tab_group": "pop_view",
-                            "nav_ordinal": 0,
+                            "pane": true,
+                            "nav_ordinal": 2,
                             "pad": 10,
                             "aspect": 1.0,
                             "children": [
@@ -157,8 +156,8 @@
                             "component": "panel",
                             "id": "pop_right",
                             "style": "panel",
-                            "tab_group": "pop_right",
-                            "nav_ordinal": 0,
+                            "pane": true,
+                            "nav_ordinal": 3,
                             "pad": 10,
                             "grow": 0.7,
                             "children": [

@@ -113,7 +113,9 @@ pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
         if v.contains('.') && !v.contains(' ') {
             return false;
         }
-        if v.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') {
+        if v.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        {
             return false;
         }
         // Strip format placeholders so "{}/{} pts" judges only its words.
@@ -175,9 +177,10 @@ pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
                 // heuristic: exotic key expressions fall out as un-parsed, never as a
                 // false flag).
                 let value = match first_literal(after) {
-                    Some((_, key_end)) if after[..key_end].find(',').is_none() => {
-                        after[key_end + 1..].trim_start_matches([',', ' ']).trim_start()
-                    }
+                    Some((_, key_end)) if after[..key_end].find(',').is_none() => after
+                        [key_end + 1..]
+                        .trim_start_matches([',', ' '])
+                        .trim_start(),
                     _ => match after.find(',') {
                         Some(c) => after[c + 1..].trim_start(),
                         None => "",
@@ -206,7 +209,8 @@ pub fn raw_model_publish_literals(rust_src: &str) -> Vec<String> {
 #[cfg(test)]
 pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -235,8 +239,14 @@ mod tests {
         let flags = raw_model_publish_literals(src);
         let all = flags.join("\n");
         assert!(all.contains("BONE MAP"), "all-caps copy is flagged: {all}");
-        assert!(all.contains("Blocked: "), "English inside format! is flagged");
-        assert!(all.contains("Reference body"), "spaced Titlecase copy is flagged");
+        assert!(
+            all.contains("Blocked: "),
+            "English inside format! is flagged"
+        );
+        assert!(
+            all.contains("Reference body"),
+            "spaced Titlecase copy is flagged"
+        );
         assert!(all.contains("SETTINGS APPLIED"), ".with copy is flagged");
         assert_eq!(flags.len(), 4, "…and nothing else: {all}");
     }
@@ -254,7 +264,11 @@ mod tests {
         // flatten: exact locale, then per-token en-us fallback.
         let es = flatten(json, "es-sp").unwrap();
         assert_eq!(es.get("t_hello").map(String::as_str), Some("HOLA"));
-        assert_eq!(es.get("t_only_en").map(String::as_str), Some("ONLY"), "falls back to en-us");
+        assert_eq!(
+            es.get("t_only_en").map(String::as_str),
+            Some("ONLY"),
+            "falls back to en-us"
+        );
 
         // load + resolve through the global.
         let g0 = generation();
@@ -263,11 +277,19 @@ mod tests {
         assert_eq!(resolve("$t_hello"), "HELLO");
         assert_eq!(resolve("plain"), "plain", "non-sigil text passes through");
         assert_eq!(resolve("$$5.00"), "$5.00", "$$ escapes a literal $");
-        assert_eq!(resolve("$t_missing"), "$t_missing", "a miss renders raw (the visible gate)");
+        assert_eq!(
+            resolve("$t_missing"),
+            "$t_missing",
+            "a miss renders raw (the visible gate)"
+        );
 
         // Malformed reload keeps the previous table.
         load_str("{ not json", "en-us");
-        assert_eq!(resolve("$t_hello"), "HELLO", "bad JSON never blanks the table");
+        assert_eq!(
+            resolve("$t_hello"),
+            "HELLO",
+            "bad JSON never blanks the table"
+        );
 
         // The shipped seed parses and carries the shell slice.
         let shipped = include_str!("../../../../content/data/stringtable.json");

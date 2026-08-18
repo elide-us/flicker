@@ -63,7 +63,11 @@ pub struct HydrothermalParams {
 
 impl Default for HydrothermalParams {
     fn default() -> Self {
-        Self { vein_threshold: 0.35, metal_density_min: 3.5, max_sources: 64 }
+        Self {
+            vein_threshold: 0.35,
+            metal_density_min: 3.5,
+            max_sources: 64,
+        }
     }
 }
 
@@ -91,14 +95,18 @@ fn source_metal(
     let mut metals: Vec<(ElementId, f64)> = comp
         .iter()
         .filter(|&(el, _)| {
-            tables.element_by_number(el).is_some_and(|e| e.density_g_cm3 as f64 >= density_min)
+            tables
+                .element_by_number(el)
+                .is_some_and(|e| e.density_g_cm3 as f64 >= density_min)
         })
         .collect();
     if metals.is_empty() {
         return None;
     }
     metals.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0))
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
     });
     let r = rand01(seed ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15));
     let rank = (r * r * metals.len() as f64) as usize; // bias toward the abundant top
@@ -125,16 +133,27 @@ pub fn run_hydrothermal_veins(
 
     // Sources: the hottest hexes, strongest first (deterministic), capped. Each is
     // assigned the metal it leaches, drawn from its own bulk column.
-    let mut sources: Vec<usize> = (0..n).filter(|&i| hydro[i] >= params.vein_threshold).collect();
+    let mut sources: Vec<usize> = (0..n)
+        .filter(|&i| hydro[i] >= params.vein_threshold)
+        .collect();
     sources.sort_by(|&a, &b| {
-        hydro[b].partial_cmp(&hydro[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+        hydro[b]
+            .partial_cmp(&hydro[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
     });
     sources.truncate(params.max_sources);
     let sourced: Vec<(usize, ElementId)> = sources
         .iter()
         .filter_map(|&s| {
-            source_metal(&cells[s].composition, ctx.tables, params.metal_density_min, ctx.seed, s as u64)
-                .map(|m| (s, m))
+            source_metal(
+                &cells[s].composition,
+                ctx.tables,
+                params.metal_density_min,
+                ctx.seed,
+                s as u64,
+            )
+            .map(|m| (s, m))
         })
         .collect();
     if sourced.is_empty() {
@@ -161,7 +180,10 @@ pub fn run_hydrothermal_veins(
             if fluid[i] <= 0.0 {
                 continue;
             }
-            let wsum: f32 = nbr[i].iter().map(|&nb| hydro[nb as usize].max(PERM_FLOOR)).sum();
+            let wsum: f32 = nbr[i]
+                .iter()
+                .map(|&nb| hydro[nb as usize].max(PERM_FLOOR))
+                .sum();
             if wsum <= 0.0 {
                 continue;
             }
@@ -257,8 +279,9 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors =
-            (0..n).map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32]).collect();
+        let neighbors = (0..n)
+            .map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32])
+            .collect();
         (dirs, neighbors)
     }
 
@@ -271,11 +294,23 @@ mod tests {
         neighbors: &'a [Vec<u32>],
     ) -> (EpochCtx<'a>, Vec<HexState>) {
         let e1 = Epoch1::new(t, Epoch1Params::default(), 7);
-        let ctx = EpochCtx { tables: t, dirs, neighbors, seed: 7 };
-        let seed: Vec<HexState> = dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let ctx = EpochCtx {
+            tables: t,
+            dirs,
+            neighbors,
+            seed: 7,
+        };
+        let seed: Vec<HexState> = dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let e2 = Epoch2::default().apply(&ctx, &seed);
         let e3 = Epoch3::default().apply(&ctx, &e2);
-        let base = Epoch5 { max_veins: 0, ..Epoch5::default() }.apply(&ctx, &e3);
+        let base = Epoch5 {
+            max_veins: 0,
+            ..Epoch5::default()
+        }
+        .apply(&ctx, &e3);
         (ctx, base)
     }
 
@@ -285,27 +320,43 @@ mod tests {
         let (dirs, neighbors) = ring(30);
         let (ctx, base) = hydro_base(&t, &dirs, &neighbors);
         // Precondition: the base has a hydrothermal field but no veins yet.
-        assert!(base.iter().any(|s| s.hydrothermal > 0.0), "no hydrothermal field to run on");
-        assert!(base.iter().all(|s| s.vein_element.is_none()), "greedy veins should be off");
+        assert!(
+            base.iter().any(|s| s.hydrothermal > 0.0),
+            "no hydrothermal field to run on"
+        );
+        assert!(
+            base.iter().all(|s| s.vein_element.is_none()),
+            "greedy veins should be off"
+        );
 
         let mut cells = base.clone();
         run_hydrothermal_veins(&mut cells, &ctx, &HydrothermalParams::default(), 24);
 
-        let vein_hexes: Vec<&HexState> = cells.iter().filter(|s| s.vein_element.is_some()).collect();
+        let vein_hexes: Vec<&HexState> =
+            cells.iter().filter(|s| s.vein_element.is_some()).collect();
         assert!(!vein_hexes.is_empty(), "no veins precipitated");
         // Selective, not a global wash — the faint halo is excluded.
-        assert!(vein_hexes.len() < cells.len(), "every cell became a vein (not selective)");
+        assert!(
+            vein_hexes.len() < cells.len(),
+            "every cell became a vein (not selective)"
+        );
         for s in &vein_hexes {
             assert!((0.0..=1.0).contains(&s.vein_strength) && s.vein_strength > 0.0);
             // The concentration field marks a dense ore metal (its province).
             let metal = s.vein_element.unwrap();
             let dense = t.element_by_number(metal).unwrap().density_g_cm3 as f64;
-            assert!(dense >= HydrothermalParams::default().metal_density_min, "vein metal is light");
+            assert!(
+                dense >= HydrothermalParams::default().metal_density_min,
+                "vein metal is light"
+            );
         }
         // Conserved: percolation fabricates no crust mass (the former does the ore).
         let crust_before: f64 = base.iter().map(|s| s.crust.total()).sum();
         let crust_after: f64 = cells.iter().map(|s| s.crust.total()).sum();
-        assert!((crust_after - crust_before).abs() < 1e-6, "percolation must not fabricate crust");
+        assert!(
+            (crust_after - crust_before).abs() < 1e-6,
+            "percolation must not fabricate crust"
+        );
     }
 
     #[test]
@@ -318,7 +369,10 @@ mod tests {
         let cores = cells.iter().filter(|s| s.vein_strength >= 0.999).count();
         let members = cells.iter().filter(|s| s.vein_strength > 0.0).count();
         assert!(cores >= 1, "no vein core precipitated");
-        assert!(members > cores, "the vein never spread past its source (no chain emerged)");
+        assert!(
+            members > cores,
+            "the vein never spread past its source (no chain emerged)"
+        );
     }
 
     #[test]
@@ -330,7 +384,10 @@ mod tests {
         let mut cells = base;
         run_hydrothermal_veins(&mut cells, &ctx, &HydrothermalParams::default(), 24);
         let after: f64 = cells.iter().map(|s| s.composition.total()).sum();
-        assert!((after - before).abs() < 1e-6, "percolation must not touch the bulk ledger");
+        assert!(
+            (after - before).abs() < 1e-6,
+            "percolation must not touch the bulk ledger"
+        );
     }
 
     #[test]

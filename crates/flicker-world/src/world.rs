@@ -343,7 +343,12 @@ pub fn generate_with_seeds(
     // re-vary). `seeds[k]` drives epoch k.
     let dirs = &sphere.dirs;
     let nbr = &sphere.neighbors;
-    let ctx = |s: u64| EpochCtx { tables, dirs, neighbors: nbr, seed: s };
+    let ctx = |s: u64| EpochCtx {
+        tables,
+        dirs,
+        neighbors: nbr,
+        seed: s,
+    };
     let l2 = e2.apply(&ctx(seeds[1]), &seed_layer);
     let l3 = e3.apply(&ctx(seeds[2]), &l2);
     let l4 = e4.apply(&ctx(seeds[3]), &l3);
@@ -390,7 +395,9 @@ pub fn ranges_for(states: &[HexState]) -> Ranges {
         let cf = s.crust_fraction as f32;
         r.crust_min = r.crust_min.min(cf);
         r.crust_max = r.crust_max.max(cf);
-        r.dep_max = r.dep_max.max((s.deposits.amount(CARBON) + s.deposits.amount(CALCIUM)) as f32);
+        r.dep_max = r
+            .dep_max
+            .max((s.deposits.amount(CARBON) + s.deposits.amount(CALCIUM)) as f32);
         r.flow_max = r.flow_max.max(s.flow);
         r.sediment_max = r.sediment_max.max(s.sediment);
     }
@@ -443,7 +450,8 @@ pub fn mutate_epoch_params(params: &mut WorldParams, epoch: usize, seed: u64) {
     if epoch == 0 {
         let ab_seed = next_seed(seed);
         for (i, (sym, def)) in ABUNDANCE_DEFS.iter().enumerate() {
-            let factor = (1.0 + centered_rand(ab_seed, i as u64 + 1) * ABUNDANCE_MUTATION).max(0.05);
+            let factor =
+                (1.0 + centered_rand(ab_seed, i as u64 + 1) * ABUNDANCE_MUTATION).max(0.05);
             params.set(&format!("ab_{sym}"), def * factor);
         }
     }
@@ -491,9 +499,18 @@ mod tests {
         let dry_h = submerged_fraction(&tables, |p| p.set("ab_H", 0.04));
         let wet_h = submerged_fraction(&tables, |p| p.set("ab_H", 0.5));
         let dry_o = submerged_fraction(&tables, |p| p.set("ab_O", 18.0));
-        assert!(dry_h < earthlike, "less hydrogen should drain the ocean ({dry_h} vs {earthlike})");
-        assert!(wet_h > earthlike, "more hydrogen should flood the world ({wet_h} vs {earthlike})");
-        assert!(dry_o < earthlike, "less oxygen should drain the ocean ({dry_o} vs {earthlike})");
+        assert!(
+            dry_h < earthlike,
+            "less hydrogen should drain the ocean ({dry_h} vs {earthlike})"
+        );
+        assert!(
+            wet_h > earthlike,
+            "more hydrogen should flood the world ({wet_h} vs {earthlike})"
+        );
+        assert!(
+            dry_o < earthlike,
+            "less oxygen should drain the ocean ({dry_o} vs {earthlike})"
+        );
     }
 
     #[test]
@@ -534,7 +551,10 @@ mod tests {
             .iter()
             .zip(&other.layers[2])
             .any(|(a, b)| a.plate != b.plate || a.elevation != b.elevation);
-        assert!(changed, "changing e3_plates should change the tectonics layer");
+        assert!(
+            changed,
+            "changing e3_plates should change the tectonics layer"
+        );
     }
 
     #[test]
@@ -683,10 +703,17 @@ mod tests {
             if *ep == 2 {
                 assert_eq!(a.get(id), b.get(id), "{id} not deterministic");
                 let v = a.get(id);
-                assert!(v >= *min - 1e-9 && v <= *max + 1e-9, "{id} = {v} out of band");
+                assert!(
+                    v >= *min - 1e-9 && v <= *max + 1e-9,
+                    "{id} = {v} out of band"
+                );
                 let _ = def;
             } else {
-                assert_eq!(a.get(id), baseline.get(id), "{id} (not epoch 2) was mutated");
+                assert_eq!(
+                    a.get(id),
+                    baseline.get(id),
+                    "{id} (not epoch 2) was mutated"
+                );
             }
         }
         assert!(
@@ -698,7 +725,11 @@ mod tests {
         // The element mix belongs to Epoch 1 — an Epoch-3 reseed leaves it alone.
         for (sym, _) in ABUNDANCE_DEFS {
             let id = format!("ab_{sym}");
-            assert_eq!(a.get(&id), baseline.get(&id), "{id} changed on an epoch-2 reseed");
+            assert_eq!(
+                a.get(&id),
+                baseline.get(&id),
+                "{id} changed on an epoch-2 reseed"
+            );
         }
     }
 
@@ -723,9 +754,18 @@ mod tests {
         let reseeded = generate_with_seeds(&tables, &params2, 8, &seeds2);
 
         // Upstream layers are byte-identical; the reseeded layer changes.
-        assert_eq!(world.layers[0], reseeded.layers[0], "Epoch 1 changed on a layer-3 reseed");
-        assert_eq!(world.layers[1], reseeded.layers[1], "Epoch 2 changed on a layer-3 reseed");
-        assert_ne!(world.layers[2], reseeded.layers[2], "the reseeded layer didn't change");
+        assert_eq!(
+            world.layers[0], reseeded.layers[0],
+            "Epoch 1 changed on a layer-3 reseed"
+        );
+        assert_eq!(
+            world.layers[1], reseeded.layers[1],
+            "Epoch 2 changed on a layer-3 reseed"
+        );
+        assert_ne!(
+            world.layers[2], reseeded.layers[2],
+            "the reseeded layer didn't change"
+        );
 
         // Isostasy: the gross land/ocean pattern follows the (unchanged) crust
         // buoyancy, so reseeding Epoch 3 moves the plate boundaries / mountain belts
@@ -733,10 +773,15 @@ mod tests {
         let mean_elev_of_top_third_buoyancy = |layer: &[flicker_worldgen::HexState]| {
             let mut idx: Vec<usize> = (0..layer.len()).collect();
             idx.sort_by(|&a, &b| {
-                layer[a].crust_fraction.partial_cmp(&layer[b].crust_fraction).unwrap()
+                layer[a]
+                    .crust_fraction
+                    .partial_cmp(&layer[b].crust_fraction)
+                    .unwrap()
             });
             let third = layer.len() / 3;
-            let mean = |sl: &[usize]| sl.iter().map(|&i| layer[i].elevation).sum::<f32>() / sl.len() as f32;
+            let mean = |sl: &[usize]| {
+                sl.iter().map(|&i| layer[i].elevation).sum::<f32>() / sl.len() as f32
+            };
             (mean(&idx[..third]), mean(&idx[idx.len() - third..]))
         };
         for layer in [&world.layers[2], &reseeded.layers[2]] {
@@ -745,8 +790,14 @@ mod tests {
             // averages an ocean basin (below the epoch's sea level, 0), buoyant crust
             // averages continental land (above it). This is what makes the Elevation
             // view read as the inherited Crust view rather than random mountains.
-            assert!(low_buoy < 0.0, "dense-crust basins should average ocean ({low_buoy})");
-            assert!(high_buoy > 0.0, "buoyant-crust provinces should average land ({high_buoy})");
+            assert!(
+                low_buoy < 0.0,
+                "dense-crust basins should average ocean ({low_buoy})"
+            );
+            assert!(
+                high_buoy > 0.0,
+                "buoyant-crust provinces should average land ({high_buoy})"
+            );
         }
         // But the tectonic detail did move (boundaries re-rolled with the new seed).
         let boundaries = |layer: &[flicker_worldgen::HexState]| {

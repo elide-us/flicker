@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Prism Alpha MSI (WiX v5). Built by .github/workflows/release.yml:
+    wix build packaging/windows/prism-alpha.wxs -d Version=X.Y.Z -d StageDir=<staged layout> -o out.msi
+
+  The `Files` wildcard harvests the ENTIRE staged tree (exe + content.json +
+  content\package.flk + loose sensorium/data files) at build time — adding a
+  scene file can never drift the installer, because the installer never lists
+  files by hand.
+
+  UpgradeCode is FOREVER FIXED — it is this product's upgrade identity; change
+  it and installed copies stop upgrading. MajorUpgrade gives replace-on-install.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Prism Alpha"
+           Manufacturer="Elideus"
+           Version="$(var.Version)"
+           UpgradeCode="126FE1E4-AF03-4D9F-B515-B91D6EDEFAA7"
+           Language="1033"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <!-- The payload is one already-compressed 200+ MB blob — recompressing it
+         into the cab costs minutes for ~nothing. -->
+    <MediaTemplate EmbedCab="yes" CompressionLevel="none" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="PrismAlpha">
+        <Files Include="$(var.StageDir)\**" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="DBB3F440-AC42-40B0-A083-6C2F560A0B19">
+        <Shortcut Id="PrismAlphaShortcut"
+                  Name="Prism Alpha"
+                  Target="[INSTALLFOLDER]prism-alpha.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\Elideus\PrismAlpha"
+                       Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Package>
+</Wix>

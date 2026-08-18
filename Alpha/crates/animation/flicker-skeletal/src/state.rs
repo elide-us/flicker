@@ -67,7 +67,10 @@ pub struct StateMachineDef {
     /// `duration_ticks` are baked to. Defaults to 60 (the legacy Katanami export rate).
     /// The Motifect retarget bakes at 30, so the Prism pack sets `tick_rate_hz: 30`;
     /// otherwise the machine advances a 30 fps clip at 60 Hz and plays it double-speed.
-    #[serde(default = "default_tick_rate_hz", skip_serializing_if = "is_default_tick_rate")]
+    #[serde(
+        default = "default_tick_rate_hz",
+        skip_serializing_if = "is_default_tick_rate"
+    )]
     pub tick_rate_hz: u32,
     /// Transitions evaluated from **every** state, before the per-state ones — the
     /// "from any state" edges (hit reaction, death). Highest-precedence.
@@ -361,8 +364,13 @@ pub enum Response {
 }
 
 impl Response {
-    pub const ALL: [Response; 5] =
-        [Response::Block, Response::Parry, Response::Dodge, Response::Jump, Response::Counter];
+    pub const ALL: [Response; 5] = [
+        Response::Block,
+        Response::Parry,
+        Response::Dodge,
+        Response::Jump,
+        Response::Counter,
+    ];
 
     fn bit(self) -> u8 {
         match self {
@@ -890,12 +898,14 @@ impl StateMachine {
     /// fallback on clip completion (blended by the machine default).
     fn pick_transition(&self, inputs: &Inputs, clip_done: bool) -> Option<(usize, u32)> {
         for t in &self.any {
-            if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick)) {
+            if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick))
+            {
                 return Some((t.to, t.blend_ticks));
             }
         }
         for t in &self.states[self.current].transitions {
-            if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick)) {
+            if satisfied(t.on, inputs, clip_done) && t.window.is_none_or(|w| w.contains(self.tick))
+            {
                 return Some((t.to, t.blend_ticks));
             }
         }
@@ -999,7 +1009,9 @@ mod tests {
             return out;
         };
         for d in dirs.flatten() {
-            let Ok(files) = std::fs::read_dir(d.path()) else { continue };
+            let Ok(files) = std::fs::read_dir(d.path()) else {
+                continue;
+            };
             for f in files.flatten() {
                 let p = f.path();
                 if p.to_str()
@@ -1094,7 +1106,11 @@ mod tests {
         let json = r#"{"to":"LeapSweep","on":"jump","on_incoming":"sweep"}"#;
         let t: TransitionDef = serde_json::from_str(json).unwrap();
         assert_eq!(t.on_incoming, Some(HitType::Sweep));
-        assert_eq!(serde_json::to_string(&t).unwrap(), json, "no default noise added");
+        assert_eq!(
+            serde_json::to_string(&t).unwrap(),
+            json,
+            "no default noise added"
+        );
         // The taxonomy the mask discriminates on.
         for (h, name) in [(HitType::Sweep, "\"sweep\""), (HitType::Grab, "\"grab\"")] {
             assert_eq!(serde_json::to_string(&h).unwrap(), name);
@@ -1130,18 +1146,37 @@ mod tests {
 
     fn clips() -> Vec<ClipRef<'static>> {
         vec![
-            ClipRef { name: "idle", duration_ticks: 200 },
-            ClipRef { name: "walk", duration_ticks: 10 },
-            ClipRef { name: "jump", duration_ticks: 5 },
-            ClipRef { name: "attack", duration_ticks: 10 },
-            ClipRef { name: "dame", duration_ticks: 8 },
+            ClipRef {
+                name: "idle",
+                duration_ticks: 200,
+            },
+            ClipRef {
+                name: "walk",
+                duration_ticks: 10,
+            },
+            ClipRef {
+                name: "jump",
+                duration_ticks: 5,
+            },
+            ClipRef {
+                name: "attack",
+                duration_ticks: 10,
+            },
+            ClipRef {
+                name: "dame",
+                duration_ticks: 8,
+            },
         ]
     }
 
     fn build() -> StateMachine {
         let def: PackFile = serde_json::from_str(GRAPH).unwrap();
         let sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
-        assert!(sm.warnings().is_empty(), "unexpected warnings: {:?}", sm.warnings());
+        assert!(
+            sm.warnings().is_empty(),
+            "unexpected warnings: {:?}",
+            sm.warnings()
+        );
         sm
     }
 
@@ -1187,17 +1222,34 @@ mod tests {
         assert_eq!(out1, out2, "save must round-trip stably");
 
         // Skips keep the output clean: no `null` Options, no default scalars, no `[]`.
-        assert!(!out1.contains("null"), "None Options are omitted, not written as null");
-        assert!(!out1.contains("\"priority\""), "default priority 0 is omitted");
-        assert!(out1.contains("\"looping\": false"), "non-default looping is kept");
+        assert!(
+            !out1.contains("null"),
+            "None Options are omitted, not written as null"
+        );
+        assert!(
+            !out1.contains("\"priority\""),
+            "default priority 0 is omitted"
+        );
+        assert!(
+            out1.contains("\"looping\": false"),
+            "non-default looping is kept"
+        );
     }
 
     #[test]
     fn combat_metadata_is_optional_and_round_trips() {
         // A legacy pack (no `combat` key anywhere) still deserializes untouched.
         let legacy: PackFile = serde_json::from_str(GRAPH).unwrap();
-        let walk = legacy.state_machine.states.iter().find(|s| s.name == "Walk").unwrap();
-        assert!(walk.events[0].combat.is_none(), "legacy events carry no combat metadata");
+        let walk = legacy
+            .state_machine
+            .states
+            .iter()
+            .find(|s| s.name == "Walk")
+            .unwrap();
+        assert!(
+            walk.events[0].combat.is_none(),
+            "legacy events carry no combat metadata"
+        );
 
         // An authored hitbox window with the full TAE-inspector payload round-trips.
         let src = r#"{
@@ -1216,14 +1268,20 @@ mod tests {
           }
         }"#;
         let pack: PackFile = serde_json::from_str(src).unwrap();
-        let combat = pack.state_machine.states[0].events[0].combat.clone().unwrap();
+        let combat = pack.state_machine.states[0].events[0]
+            .combat
+            .clone()
+            .unwrap();
         assert_eq!(combat.attach_bone.as_deref(), Some("R_Weapon_Tip"));
         assert_eq!(combat.hit_type, Some(HitType::Thrust));
         assert_eq!(combat.damage, Some([42.0, 58.0]));
 
         let out = serde_json::to_string_pretty(&pack).unwrap();
         let reparsed: PackFile = serde_json::from_str(&out).unwrap();
-        assert_eq!(reparsed.state_machine.states[0].events[0].combat, Some(combat));
+        assert_eq!(
+            reparsed.state_machine.states[0].events[0].combat,
+            Some(combat)
+        );
     }
 
     #[test]
@@ -1249,7 +1307,10 @@ mod tests {
     #[test]
     fn move_and_stop_locomotion() {
         let mut sm = build();
-        let moving = Inputs { move_: true, ..Default::default() };
+        let moving = Inputs {
+            move_: true,
+            ..Default::default()
+        };
         sm.tick(&moving);
         assert_eq!(sm.current_state_name(), "Walk");
         // Releasing move returns to Idle.
@@ -1262,62 +1323,112 @@ mod tests {
     fn clip_done_auto_advances_via_next() {
         let mut sm = build();
         // Jump on the first tick, then hold until the 5-tick clip completes.
-        sm.tick(&Inputs { jump: true, ..Default::default() });
+        sm.tick(&Inputs {
+            jump: true,
+            ..Default::default()
+        });
         assert_eq!(sm.current_state_name(), "Jump");
         run(&mut sm, 5, &Inputs::default());
-        assert_eq!(sm.current_state_name(), "Idle", "Jump should fall through to Idle on clip_done");
+        assert_eq!(
+            sm.current_state_name(),
+            "Idle",
+            "Jump should fall through to Idle on clip_done"
+        );
     }
 
     #[test]
     fn timeline_event_fires_once() {
         let mut sm = build();
-        sm.tick(&Inputs { move_: true, ..Default::default() }); // → Walk, tick 0
+        sm.tick(&Inputs {
+            move_: true,
+            ..Default::default()
+        }); // → Walk, tick 0
         let mut footsteps = 0;
         // Walk's footstep is authored at tick 3.
         for _ in 0..10 {
-            let r = sm.tick(&Inputs { move_: true, ..Default::default() });
-            footsteps += r.fired.iter().filter(|e| e.kind == EventKind::Footstep).count();
+            let r = sm.tick(&Inputs {
+                move_: true,
+                ..Default::default()
+            });
+            footsteps += r
+                .fired
+                .iter()
+                .filter(|e| e.kind == EventKind::Footstep)
+                .count();
         }
-        assert_eq!(footsteps, 1, "footstep at tick 3 should fire exactly once per loop");
+        assert_eq!(
+            footsteps, 1,
+            "footstep at tick 3 should fire exactly once per loop"
+        );
     }
 
     #[test]
     fn hitbox_window_reports_active() {
         let mut sm = build();
-        sm.tick(&Inputs { attack: true, ..Default::default() }); // → Attack, tick 0
-        // Window is ticks [2,4]; advance to tick 3 and check it's reported active.
+        sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        }); // → Attack, tick 0
+            // Window is ticks [2,4]; advance to tick 3 and check it's reported active.
         let r = run(&mut sm, 3, &Inputs::default());
         assert_eq!(sm.current_tick(), 3);
         assert!(
-            r.active.iter().any(|w| w.kind == EventKind::HitboxActive && w.label == "Weapon_R"),
-            "hitbox window should be active at tick 3, got {:?}", r.active
+            r.active
+                .iter()
+                .any(|w| w.kind == EventKind::HitboxActive && w.label == "Weapon_R"),
+            "hitbox window should be active at tick 3, got {:?}",
+            r.active
         );
     }
 
     #[test]
     fn cancel_window_gates_the_combo() {
         let mut sm = build();
-        sm.tick(&Inputs { attack: true, ..Default::default() }); // → Attack tick 0
-        // Pressing attack at tick 1 (outside the [6,8] cancel window) must NOT combo.
-        let r = sm.tick(&Inputs { attack: true, ..Default::default() });
+        sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        }); // → Attack tick 0
+            // Pressing attack at tick 1 (outside the [6,8] cancel window) must NOT combo.
+        let r = sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        });
         assert!(!r.transitioned);
         assert_eq!(sm.current_state_name(), "Attack");
         // Advance into the window and press attack → re-enters Attack (combo).
         run(&mut sm, 5, &Inputs::default()); // now at tick 6, inside the [6,8] window
         assert_eq!(sm.current_tick(), 6);
-        let r = sm.tick(&Inputs { attack: true, ..Default::default() });
+        let r = sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        });
         assert!(r.transitioned);
         assert_eq!(sm.current_state_name(), "Attack");
-        assert_eq!(sm.current_tick(), 0, "combo hard-cuts back to the start of Attack");
+        assert_eq!(
+            sm.current_tick(),
+            0,
+            "combo hard-cuts back to the start of Attack"
+        );
     }
 
     #[test]
     fn any_state_hit_interrupts() {
         let mut sm = build();
-        sm.tick(&Inputs { move_: true, ..Default::default() }); // → Walk
-        let r = sm.tick(&Inputs { hit: true, move_: true, ..Default::default() });
+        sm.tick(&Inputs {
+            move_: true,
+            ..Default::default()
+        }); // → Walk
+        let r = sm.tick(&Inputs {
+            hit: true,
+            move_: true,
+            ..Default::default()
+        });
         assert!(r.transitioned);
-        assert_eq!(sm.current_state_name(), "Dame", "a hit interrupts from any state");
+        assert_eq!(
+            sm.current_state_name(),
+            "Dame",
+            "a hit interrupts from any state"
+        );
     }
 
     #[test]
@@ -1351,14 +1462,24 @@ mod tests {
         let mut sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
         assert!(sm.warnings().is_empty(), "{:?}", sm.warnings());
         // move + left → the left strafe (a held direction beats plain `move`).
-        sm.tick(&Inputs { move_: true, left: true, ..Default::default() });
+        sm.tick(&Inputs {
+            move_: true,
+            left: true,
+            ..Default::default()
+        });
         assert_eq!(sm.current_state_name(), "Walk_L");
         // release the direction while still moving → forward walk (`move_forward`).
-        sm.tick(&Inputs { move_: true, ..Default::default() });
+        sm.tick(&Inputs {
+            move_: true,
+            ..Default::default()
+        });
         assert_eq!(sm.current_state_name(), "Walk");
         // plain forward move from Idle picks the forward walk, never a strafe.
         let mut sm2 = StateMachine::build(&def.state_machine, &clips()).unwrap();
-        sm2.tick(&Inputs { move_: true, ..Default::default() });
+        sm2.tick(&Inputs {
+            move_: true,
+            ..Default::default()
+        });
         assert_eq!(sm2.current_state_name(), "Walk");
     }
 
@@ -1383,7 +1504,11 @@ mod tests {
     fn build_blended() -> StateMachine {
         let def: PackFile = serde_json::from_str(BLEND_GRAPH).unwrap();
         let sm = StateMachine::build(&def.state_machine, &clips()).unwrap();
-        assert!(sm.warnings().is_empty(), "unexpected warnings: {:?}", sm.warnings());
+        assert!(
+            sm.warnings().is_empty(),
+            "unexpected warnings: {:?}",
+            sm.warnings()
+        );
         sm
     }
 
@@ -1391,16 +1516,27 @@ mod tests {
     fn blend_starts_ramps_and_clears() {
         let mut sm = build_blended();
         // Idle → Walk uses the machine default (4-tick) crossfade.
-        sm.tick(&Inputs { move_: true, ..Default::default() });
+        sm.tick(&Inputs {
+            move_: true,
+            ..Default::default()
+        });
         assert_eq!(sm.current_state_name(), "Walk");
-        let b0 = sm.blend().expect("blend active right after a blended transition");
+        let b0 = sm
+            .blend()
+            .expect("blend active right after a blended transition");
         assert_eq!(b0.from_clip, 0, "outgoing pose is Idle's clip (index 0)");
-        assert!(b0.weight.abs() < 1e-6, "weight starts at 0.0 = fully outgoing");
+        assert!(
+            b0.weight.abs() < 1e-6,
+            "weight starts at 0.0 = fully outgoing"
+        );
 
         // Sample the weight after the transition tick and each following tick.
         let mut samples = vec![sm.blend().map(|b| b.weight)];
         for _ in 0..5 {
-            sm.tick(&Inputs { move_: true, ..Default::default() });
+            sm.tick(&Inputs {
+                move_: true,
+                ..Default::default()
+            });
             samples.push(sm.blend().map(|b| b.weight));
         }
         let weights: Vec<f32> = samples.iter().filter_map(|w| *w).collect();
@@ -1410,29 +1546,46 @@ mod tests {
             "weight reaches 1.0 at the end of the crossfade: {weights:?}"
         );
         for pair in weights.windows(2) {
-            assert!(pair[1] >= pair[0] - 1e-6, "weight is monotonic non-decreasing: {weights:?}");
+            assert!(
+                pair[1] >= pair[0] - 1e-6,
+                "weight is monotonic non-decreasing: {weights:?}"
+            );
         }
-        assert!(samples.last().unwrap().is_none(), "blend clears once past its duration");
+        assert!(
+            samples.last().unwrap().is_none(),
+            "blend clears once past its duration"
+        );
     }
 
     #[test]
     fn zero_blend_ticks_is_a_hard_cut() {
         let mut sm = build_blended();
         // Attack overrides the 4-tick default with blend_ticks: 0.
-        sm.tick(&Inputs { attack: true, ..Default::default() });
+        sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        });
         assert_eq!(sm.current_state_name(), "Attack");
-        assert!(sm.blend().is_none(), "a 0-tick transition hard-cuts — no crossfade");
+        assert!(
+            sm.blend().is_none(),
+            "a 0-tick transition hard-cuts — no crossfade"
+        );
     }
 
     #[test]
     fn next_autoadvance_blends_by_default() {
         let mut sm = build_blended();
-        sm.tick(&Inputs { attack: true, ..Default::default() }); // → Attack (hard cut)
+        sm.tick(&Inputs {
+            attack: true,
+            ..Default::default()
+        }); // → Attack (hard cut)
         assert!(sm.blend().is_none());
         // Attack is 10 ticks; run it to completion → `next` Idle with the 4-tick default.
         run(&mut sm, 10, &Inputs::default());
         assert_eq!(sm.current_state_name(), "Idle");
-        let b = sm.blend().expect("clip-done auto-advance crossfades by the machine default");
+        let b = sm
+            .blend()
+            .expect("clip-done auto-advance crossfades by the machine default");
         assert_eq!(b.from_clip, 3, "outgoing pose is Attack's clip (index 3)");
         assert!(b.weight.abs() < 1e-6, "fresh blend starts at weight 0.0");
     }

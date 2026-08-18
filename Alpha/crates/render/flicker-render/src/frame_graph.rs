@@ -310,9 +310,23 @@ fn emit_composite(r: &mut Renderer, c: &Composite) {
                 return;
             };
             if *additive {
-                r.draw_billboard_additive(tex, *world_position, *world_size, Vec2::ZERO, Vec2::ONE, *tint);
+                r.draw_billboard_additive(
+                    tex,
+                    *world_position,
+                    *world_size,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    *tint,
+                );
             } else {
-                r.draw_billboard(tex, *world_position, *world_size, Vec2::ZERO, Vec2::ONE, *tint);
+                r.draw_billboard(
+                    tex,
+                    *world_position,
+                    *world_size,
+                    Vec2::ZERO,
+                    Vec2::ONE,
+                    *tint,
+                );
             }
         }
     }

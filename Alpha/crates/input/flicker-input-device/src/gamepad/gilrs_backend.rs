@@ -32,7 +32,10 @@ impl PlatformGamepad {
                 None
             }
         };
-        Self { gilrs, active: None }
+        Self {
+            gilrs,
+            active: None,
+        }
     }
 
     /// Drain gilrs's queue once into the maintained slot-0 snapshot.
@@ -68,25 +71,23 @@ impl PlatformGamepad {
                         snap.caps = DeviceCaps::default();
                     }
                 }
-                gilrs::EventType::ButtonPressed(b, _) => {
-                    if self.adopt(id, snap) {
-                        if let Some(btn) = translate_button(b) {
-                            snap.buttons.insert(btn);
-                        }
+                // Guards keep slot-0 filtering in the arm head; a pad that fails
+                // the guard falls through to `_` exactly as the nested-if did.
+                // (`adopt` mutating in a guard is deliberate: adoption must
+                // happen even when the translate below yields nothing.)
+                gilrs::EventType::ButtonPressed(b, _) if self.adopt(id, snap) => {
+                    if let Some(btn) = translate_button(b) {
+                        snap.buttons.insert(btn);
                     }
                 }
-                gilrs::EventType::ButtonReleased(b, _) => {
-                    if self.active == Some(id) {
-                        if let Some(btn) = translate_button(b) {
-                            snap.buttons.remove(&btn);
-                        }
+                gilrs::EventType::ButtonReleased(b, _) if self.active == Some(id) => {
+                    if let Some(btn) = translate_button(b) {
+                        snap.buttons.remove(&btn);
                     }
                 }
-                gilrs::EventType::AxisChanged(a, v, _) => {
-                    if self.adopt(id, snap) {
-                        if let Some(axis) = translate_axis(a) {
-                            snap.axes.insert(axis, v);
-                        }
+                gilrs::EventType::AxisChanged(a, v, _) if self.adopt(id, snap) => {
+                    if let Some(axis) = translate_axis(a) {
+                        snap.axes.insert(axis, v);
                     }
                 }
                 _ => {}

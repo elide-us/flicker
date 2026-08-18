@@ -130,7 +130,10 @@ fn authored_positions() -> HashMap<String, Vec3> {
     p.insert("head".to_string(), Vec3::new(0.0, 0.0, 0.870 * h));
     // The face rides the head: jaw and eyes sit forward (the character faces -Y).
     p.insert("jaw".to_string(), Vec3::new(0.0, -0.026 * h, 0.885 * h));
-    p.insert("eye_l".to_string(), Vec3::new(0.019 * h, -0.047 * h, 0.936 * h));
+    p.insert(
+        "eye_l".to_string(),
+        Vec3::new(0.019 * h, -0.047 * h, 0.936 * h),
+    );
 
     // ── left leg: vertical column, ankle slightly back, sole flat on the ground ──
     let hip_x = 0.051 * h; // femoral head offset from the midline
@@ -138,10 +141,16 @@ fn authored_positions() -> HashMap<String, Vec3> {
     p.insert("calf_l".to_string(), Vec3::new(hip_x, 0.0, 0.285 * h));
     p.insert("foot_l".to_string(), Vec3::new(hip_x, 0.015 * h, 0.039 * h));
     // Ball of the foot: forward along -Y, riding just above the sole.
-    p.insert("ball_l".to_string(), Vec3::new(hip_x, -0.071 * h, 0.012 * h));
+    p.insert(
+        "ball_l".to_string(),
+        Vec3::new(hip_x, -0.071 * h, 0.012 * h),
+    );
 
     // ── left arm: clavicle from the upper chest, then a straight A-pose line ──
-    p.insert("clavicle_l".to_string(), Vec3::new(0.015 * h, 0.0, 0.818 * h));
+    p.insert(
+        "clavicle_l".to_string(),
+        Vec3::new(0.015 * h, 0.0, 0.818 * h),
+    );
     let shoulder = Vec3::new(0.129 * h, 0.0, 0.818 * h);
     let (s, c) = A_POSE_DEG.to_radians().sin_cos();
     let dir = Vec3::new(c, 0.0, -s); // down-and-out in the XZ plane
@@ -216,8 +225,11 @@ pub fn world_positions() -> HashMap<String, Vec3> {
 /// mesh/clips — the reference is nobody's body.
 pub fn golem_base_skeleton() -> RigFile {
     let pos = world_positions();
-    let index: HashMap<&str, usize> =
-        TOPOLOGY.iter().enumerate().map(|(i, (n, _))| (*n, i)).collect();
+    let index: HashMap<&str, usize> = TOPOLOGY
+        .iter()
+        .enumerate()
+        .map(|(i, (n, _))| (*n, i))
+        .collect();
     let bones: Vec<BoneRaw> = TOPOLOGY
         .iter()
         .map(|(name, parent)| {
@@ -228,7 +240,11 @@ pub fn golem_base_skeleton() -> RigFile {
             };
             BoneRaw {
                 name: name.to_string(),
-                parent: if *parent == "-" { -1 } else { index[parent] as i32 },
+                parent: if *parent == "-" {
+                    -1
+                } else {
+                    index[parent] as i32
+                },
                 local: Mat4::from_translation(local_t).to_cols_array(),
                 inverse_bind: Mat4::from_translation(-w).to_cols_array(),
             }
@@ -276,16 +292,28 @@ mod tests {
     #[test]
     fn the_baseline_is_symmetric_level_flat_and_at_stature() {
         let rig = golem_base_skeleton();
-        assert_eq!(rig.skeleton.bones.len(), CANON_BONES, "the canon count holds");
+        assert_eq!(
+            rig.skeleton.bones.len(),
+            CANON_BONES,
+            "the canon count holds"
+        );
 
         // Hierarchy order: every parent precedes its child (loaders assume it).
         for (i, b) in rig.skeleton.bones.iter().enumerate() {
-            assert!(b.parent < i as i32, "bone {i} `{}` precedes its parent", b.name);
+            assert!(
+                b.parent < i as i32,
+                "bone {i} `{}` precedes its parent",
+                b.name
+            );
         }
         // Topology matches the canon table verbatim.
         for ((name, parent), b) in TOPOLOGY.iter().zip(&rig.skeleton.bones) {
             assert_eq!(b.name, *name);
-            let p = if b.parent < 0 { "-" } else { TOPOLOGY[b.parent as usize].0 };
+            let p = if b.parent < 0 {
+                "-"
+            } else {
+                TOPOLOGY[b.parent as usize].0
+            };
             assert_eq!(p, *parent, "`{name}` parents `{p}`, canon says `{parent}`");
         }
 
@@ -307,33 +335,57 @@ mod tests {
             );
             pairs += 1;
         }
-        assert_eq!(pairs, 29, "every one of the 29 left/right pairs was checked");
+        assert_eq!(
+            pairs, 29,
+            "every one of the 29 left/right pairs was checked"
+        );
 
         // Level shoulders — the defect that started this. And a plumb spine.
         assert!((pos["upperarm_l"].z - pos["upperarm_r"].z).abs() < 1e-4);
-        assert!((pos["upperarm_l"].z - 0.818 * STATURE).abs() < 1e-3, "shoulders at 0.818·H");
-        for n in ["root", "pelvis", "spine_01", "spine_02", "spine_03", "neck_01", "neck_02", "head"] {
-            assert!(pos[n].x.abs() < 1e-4 && pos[n].y.abs() < 1e-4, "`{n}` off the plumb line");
+        assert!(
+            (pos["upperarm_l"].z - 0.818 * STATURE).abs() < 1e-3,
+            "shoulders at 0.818·H"
+        );
+        for n in [
+            "root", "pelvis", "spine_01", "spine_02", "spine_03", "neck_01", "neck_02", "head",
+        ] {
+            assert!(
+                pos[n].x.abs() < 1e-4 && pos[n].y.abs() < 1e-4,
+                "`{n}` off the plumb line"
+            );
         }
 
         // Flat soles: root on the ground, balls riding just above it, ankles low.
         assert_eq!(pos["root"], Vec3::ZERO);
         for n in ["ball_l", "ball_r"] {
-            assert!(pos[n].z > 0.0 && pos[n].z < 0.02 * STATURE, "`{n}` sole not flat: {:?}", pos[n]);
+            assert!(
+                pos[n].z > 0.0 && pos[n].z < 0.02 * STATURE,
+                "`{n}` sole not flat: {:?}",
+                pos[n]
+            );
         }
         assert!(pos["foot_l"].z < 0.05 * STATURE, "ankle rides low");
 
         // The ruled stature: the eyes (the highest joints) sit just under H.
         let top = pos.values().map(|v| v.z).fold(f32::MIN, f32::max);
-        assert!((pos["eye_l"].z - top).abs() < 1e-4, "eyes are the highest joints");
-        assert!(top < STATURE && top > 0.90 * STATURE, "stature respected: top {top} vs {STATURE}");
+        assert!(
+            (pos["eye_l"].z - top).abs() < 1e-4,
+            "eyes are the highest joints"
+        );
+        assert!(
+            top < STATURE && top > 0.90 * STATURE,
+            "stature respected: top {top} vs {STATURE}"
+        );
 
         // The A-pose: the whole arm line droops A_POSE_DEG below horizontal.
         let (s, e, w) = (pos["upperarm_l"], pos["lowerarm_l"], pos["hand_l"]);
         for (a, b) in [(s, e), (e, w)] {
             let d = b - a;
             let ang = (-d.z).atan2(d.x).to_degrees();
-            assert!((ang - A_POSE_DEG).abs() < 0.1, "arm segment at {ang}°, authored {A_POSE_DEG}°");
+            assert!(
+                (ang - A_POSE_DEG).abs() < 0.1,
+                "arm segment at {ang}°, authored {A_POSE_DEG}°"
+            );
         }
         // Twists sit exactly mid-segment.
         assert!((pos["upperarm_twist_01_l"] - (s + e) * 0.5).length() < 1e-4);
@@ -360,7 +412,10 @@ mod tests {
         let model = flicker_skeletal::format::load_dir(out.parent().unwrap())
             .expect("engine loads the baseline");
         assert_eq!(model.bones.len(), CANON_BONES);
-        assert!(model.mesh.vertices.is_empty(), "skeleton-only — the reference is nobody's body");
+        assert!(
+            model.mesh.vertices.is_empty(),
+            "skeleton-only — the reference is nobody's body"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -31,7 +31,12 @@ impl<'a> InputEvent<'a> {
         context: InputContext,
         raw: &'a InputState,
     ) -> Self {
-        Self { signal, kind, context, raw }
+        Self {
+            signal,
+            kind,
+            context,
+            raw,
+        }
     }
 
     /// Wrap a core [`Fired`] with the active `context` and a borrow of the raw
@@ -39,7 +44,12 @@ impl<'a> InputEvent<'a> {
     /// (spec R3 / §5). Copies `signal` + `kind` from the `Fired`; the physical
     /// `control` stays in the resolver's domain and is not carried onto the bus.
     pub fn from_fired(fired: &Fired, context: InputContext, raw: &'a InputState) -> Self {
-        Self { signal: fired.signal, kind: fired.kind, context, raw }
+        Self {
+            signal: fired.signal,
+            kind: fired.kind,
+            context,
+            raw,
+        }
     }
 }
 

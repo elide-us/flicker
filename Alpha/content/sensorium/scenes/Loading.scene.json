@@ -1,0 +1,232 @@
+{
+  "_comment": "SCENE FILE — the PRE-LOAD screen, page 3 of the intro chain (TegLogo → CeLogo → Loading → Main). Unlike the two logo splashes (single full-bleed sprites on the `splash` behaviour), this is a NATIVE component tree on the `loading` behaviour: a dark backdrop, the sigil zone (reserved — the runtime spinner lands there later), the Septisigil rule, the do-not-close notice, and a `resource_gauge` progress bar. The `loading` behaviour runs the shader-compile phase as a SIMULATED timer for now (`params.seconds`), publishing `loading_progress` (0..1) into the Model each frame; the bar binds it and the pair script (scripts/Loading.lua) derives the percent readout. When the timeline completes the behaviour fires `next` and the `exits` map routes it — that completion is what will ultimately gate the real pre-load. `params.seconds` is the sim duration (the 'longer pause'); a Cancel/Esc backs out via `exit`.",
+  "behaviour": "loading",
+  "params": {
+    "seconds": 6.0
+  },
+  "exits": {
+    "next": {
+      "to": "Main",
+      "mode": "replace"
+    },
+    "exit": {
+      "to": "Main",
+      "mode": "replace"
+    }
+  },
+  "styles": {
+    "load": {
+      "bg": {
+        "fill_top": "$well_top",
+        "fill_bot": "$stone0",
+        "radius": 0
+      },
+      "eyebrow": "$dim",
+      "title": "$ink_bright",
+      "body": "$muted",
+      "phase": "$dim",
+      "pct": "$ink",
+      "footer": "$faint",
+      "gauge": {
+        "track": "$well",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 1,
+        "pad": 0,
+        "mana_top": "$mana_hi",
+        "mana_bot": "$mana_lo",
+        "sheen": "$sheen"
+      },
+      "sep": {
+        "s1": { "color": "$sig_red" },
+        "s2": { "color": "$sig_orange" },
+        "s3": { "color": "$sig_yellow" },
+        "s4": { "color": "$sig_green" },
+        "s5": { "color": "$sig_blue" },
+        "s6": { "color": "$sap_border" },
+        "s7": { "color": "$ghost_ring" }
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "children": [
+      {
+        "component": "panel",
+        "id": "bg",
+        "anchor": "top_left",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "style": "load.bg"
+      },
+      {
+        "component": "cell",
+        "id": "column",
+        "anchor": "center",
+        "width": 640,
+        "height": 500,
+        "gap": 22,
+        "align": "center",
+        "children": [
+          {
+            "component": "text",
+            "text": "$load_eyebrow",
+            "text_size": 12,
+            "tracking": 4,
+            "font": "label",
+            "color": "load.eyebrow",
+            "align": "center",
+            "width": 640,
+            "height": 16
+          },
+          {
+            "component": "cell",
+            "id": "sigil",
+            "width": 120,
+            "height": 120
+          },
+          {
+            "component": "row",
+            "id": "septline",
+            "width": 217,
+            "height": 2,
+            "gap": 0,
+            "children": [
+              { "component": "panel", "style": "load.sep.s1", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s2", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s3", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s4", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s5", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s6", "width": 31, "height": 2 },
+              { "component": "panel", "style": "load.sep.s7", "width": 31, "height": 2 }
+            ]
+          },
+          {
+            "component": "text",
+            "text": "$load_title",
+            "text_size": 21,
+            "font": "display",
+            "color": "load.title",
+            "align": "center",
+            "width": 640,
+            "height": 30
+          },
+          {
+            "component": "cell",
+            "id": "body",
+            "width": 560,
+            "gap": 6,
+            "align": "center",
+            "children": [
+              {
+                "component": "text",
+                "text": "$load_body_1",
+                "text_size": 14,
+                "font": "body",
+                "color": "load.body",
+                "align": "center",
+                "wrap": true,
+                "width": 560,
+                "height": 48
+              },
+              {
+                "component": "text",
+                "text": "$load_body_2",
+                "text_size": 14,
+                "font": "body",
+                "color": "load.body",
+                "align": "center",
+                "wrap": true,
+                "width": 560,
+                "height": 48
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "id": "progress",
+            "width": 360,
+            "gap": 10,
+            "align": "center",
+            "children": [
+              {
+                "component": "resource_gauge",
+                "id": "load_bar",
+                "bind": "loading_progress",
+                "tone": "mana",
+                "style": "load.gauge",
+                "width": 360,
+                "height": 5
+              },
+              {
+                "component": "row",
+                "id": "progress_labels",
+                "width": 360,
+                "height": 14,
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$load_phase_shaders",
+                    "text_size": 11,
+                    "tracking": 1,
+                    "font": "label",
+                    "color": "load.phase",
+                    "align": "left",
+                    "width": 200,
+                    "height": 14
+                  },
+                  {
+                    "component": "text",
+                    "text_bind": "progress_pct",
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "load.pct",
+                    "align": "right",
+                    "width": 160,
+                    "height": 14
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "footer",
+        "anchor": "bottom",
+        "offset": [0, -26],
+        "width": 640,
+        "height": 32,
+        "gap": 4,
+        "align": "center",
+        "children": [
+          {
+            "component": "text",
+            "text": "$load_footer_legal",
+            "text_size": 10,
+            "font": "label",
+            "color": "load.footer",
+            "align": "center",
+            "width": 640,
+            "height": 13
+          },
+          {
+            "component": "text",
+            "text": "$load_footer_contact",
+            "text_size": 10,
+            "font": "label",
+            "color": "load.footer",
+            "align": "center",
+            "width": 640,
+            "height": 13
+          }
+        ]
+      }
+    ]
+  }
+}

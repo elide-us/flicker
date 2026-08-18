@@ -467,7 +467,14 @@ impl MeshPipeline {
     }
 
     /// Queue a mesh for rendering this frame.
-    pub fn push(&mut self, handle: MeshHandle, model: Mat4, tint: [f32; 4], wireframe: bool, gloss: f32) {
+    pub fn push(
+        &mut self,
+        handle: MeshHandle,
+        model: Mat4,
+        tint: [f32; 4],
+        wireframe: bool,
+        gloss: f32,
+    ) {
         self.queued.push(MeshDraw {
             handle,
             per_draw: PerDraw {

@@ -72,7 +72,10 @@ fn mean_density(comp: &Composition, tables: &Tables) -> f32 {
 /// planet: **lightest → 1 (hot, wants to rise), densest → 0 (cold, wants to sink)**.
 /// Empty cells read neutral (`0.5`). A flat planet (no density spread) is all neutral.
 fn buoyancy_field(cells: &[HexState], tables: &Tables) -> Vec<f32> {
-    let dens: Vec<f32> = cells.iter().map(|c| mean_density(&c.composition, tables)).collect();
+    let dens: Vec<f32> = cells
+        .iter()
+        .map(|c| mean_density(&c.composition, tables))
+        .collect();
     let (mut lo, mut hi) = (f32::MAX, f32::MIN);
     for &d in &dens {
         if d > 0.0 {
@@ -84,7 +87,13 @@ fn buoyancy_field(cells: &[HexState], tables: &Tables) -> Vec<f32> {
         return vec![0.5; cells.len()];
     }
     dens.iter()
-        .map(|&d| if d <= 0.0 { 0.5 } else { 1.0 - (d - lo) / (hi - lo) })
+        .map(|&d| {
+            if d <= 0.0 {
+                0.5
+            } else {
+                1.0 - (d - lo) / (hi - lo)
+            }
+        })
         .collect()
 }
 
@@ -95,7 +104,10 @@ fn buoyancy_field(cells: &[HexState], tables: &Tables) -> Vec<f32> {
 /// lightest. With no radiogenic material anywhere, this is exactly [`buoyancy_field`].
 fn heat_source_field(cells: &[HexState], tables: &Tables) -> Vec<f32> {
     let buoy = buoyancy_field(cells, tables);
-    let radio: Vec<f32> = cells.iter().map(|c| cell_radiogenic_heat(&c.composition)).collect();
+    let radio: Vec<f32> = cells
+        .iter()
+        .map(|c| cell_radiogenic_heat(&c.composition))
+        .collect();
     let hi = radio.iter().copied().fold(0.0f32, f32::max);
     if hi <= 0.0 {
         return buoy; // no K/U anywhere → pure buoyancy, unchanged
@@ -335,8 +347,9 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors =
-            (0..n).map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32]).collect();
+        let neighbors = (0..n)
+            .map(|k| vec![((k + n - 1) % n) as u32, ((k + 1) % n) as u32])
+            .collect();
         (dirs, neighbors)
     }
 
@@ -344,7 +357,12 @@ mod tests {
     fn convection_conserves_mass_and_moves_material() {
         let t = tables();
         let (dirs, neighbors) = ring(8);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let mut cells: Vec<HexState> = (0..8).map(|_| HexState::new(Composition::new())).collect();
         cells[0].composition.add(O, 100.0);
         cells[3].composition.add(FE, 40.0);
@@ -353,9 +371,15 @@ mod tests {
         run_molten_convection(&mut cells, &ctx, 40);
 
         let after: f64 = cells.iter().map(|c| c.composition.total()).sum();
-        assert!((after - before).abs() < 1e-9, "molten convection conserves mass: {after} vs {before}");
+        assert!(
+            (after - before).abs() < 1e-9,
+            "molten convection conserves mass: {after} vs {before}"
+        );
         // The melt actually flowed — the light oxygen source no longer holds all of it.
-        assert!(cells[0].composition.amount(O) < 100.0, "material didn't convect off its source cell");
+        assert!(
+            cells[0].composition.amount(O) < 100.0,
+            "material didn't convect off its source cell"
+        );
     }
 
     #[test]
@@ -363,7 +387,12 @@ mod tests {
         let t = tables();
         let n = 16;
         let (dirs, neighbors) = ring(n);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 7 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 7,
+        };
         // Half the ring dense (iron), half light (silica) — a clear buoyancy contrast.
         let mut cells: Vec<HexState> = (0..n)
             .map(|i| {
@@ -390,9 +419,19 @@ mod tests {
     fn deterministic_for_a_seed() {
         let t = tables();
         let (dirs, neighbors) = ring(12);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 3 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 3,
+        };
         let base: Vec<HexState> = (0..12)
-            .map(|i| HexState::new(Composition::from_iter([(if i % 2 == 0 { FE } else { O }, 500.0)])))
+            .map(|i| {
+                HexState::new(Composition::from_iter([(
+                    if i % 2 == 0 { FE } else { O },
+                    500.0,
+                )]))
+            })
             .collect();
         let mut a = base.clone();
         let mut b = base;
@@ -422,7 +461,10 @@ mod tests {
         let src = heat_source_field(&cells, &t);
         assert_ne!(buoy, src, "radiogenics must change the heat source field");
         for i in 0..3 {
-            assert!(src[i] >= buoy[i], "radiogenic cell {i} must be ≥ its buoyancy-only heat");
+            assert!(
+                src[i] >= buoy[i],
+                "radiogenic cell {i} must be ≥ its buoyancy-only heat"
+            );
         }
     }
 
@@ -430,7 +472,12 @@ mod tests {
     fn convection_stirs_the_column_mantle_and_leaves_the_flat_field_frozen() {
         let t = tables();
         let (dirs, neighbors) = ring(8);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         // Seed the mantle via HexState::new (it builds the primordial column from the comp):
         // a dense-iron half and a light-silica half — the buoyancy contrast convection organizes.
         let mut cells: Vec<HexState> = (0..8)
@@ -440,8 +487,10 @@ mod tests {
             })
             .collect();
         let flat_before: Vec<Composition> = cells.iter().map(|c| c.composition.clone()).collect();
-        let mantle_before: Vec<f64> =
-            cells.iter().map(|c| c.column.mantle().unwrap().mass()).collect();
+        let mantle_before: Vec<f64> = cells
+            .iter()
+            .map(|c| c.column.mantle().unwrap().mass())
+            .collect();
 
         seed_convection_heat(&mut cells, &ctx);
         for _ in 0..20 {
@@ -449,17 +498,31 @@ mod tests {
         }
 
         // The MANTLE layer was stirred — material moved between cells' mantles…
-        let mantle_after: Vec<f64> =
-            cells.iter().map(|c| c.column.mantle().unwrap().mass()).collect();
-        assert_ne!(mantle_before, mantle_after, "convection must move material between the mantles");
+        let mantle_after: Vec<f64> = cells
+            .iter()
+            .map(|c| c.column.mantle().unwrap().mass())
+            .collect();
+        assert_ne!(
+            mantle_before, mantle_after,
+            "convection must move material between the mantles"
+        );
         // …conserved across the column mantles…
         let (m0, m1): (f64, f64) = (mantle_before.iter().sum(), mantle_after.iter().sum());
-        assert!((m0 - m1).abs() < 1e-6, "mantle convection conserves mass ({m0} vs {m1})");
+        assert!(
+            (m0 - m1).abs() < 1e-6,
+            "mantle convection conserves mass ({m0} vs {m1})"
+        );
         // …while the flat legacy field is left frozen (the column is the truth)…
         for (c, before) in cells.iter().zip(&flat_before) {
-            assert_eq!(&c.composition, before, "the flat composition must be untouched");
+            assert_eq!(
+                &c.composition, before,
+                "the flat composition must be untouched"
+            );
         }
         // …and the convection heat was mirrored into the mantle layer.
-        assert!(cells.iter().any(|c| c.column.mantle().unwrap().heat > 0.0), "mantle heat was set");
+        assert!(
+            cells.iter().any(|c| c.column.mantle().unwrap().heat > 0.0),
+            "mantle heat was set"
+        );
     }
 }

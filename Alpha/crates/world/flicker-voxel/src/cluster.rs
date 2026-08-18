@@ -268,7 +268,11 @@ mod tests {
     }
 
     fn solid_grey() -> Voxel {
-        Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, nonempty_material())
+        Voxel::new(
+            VoxelState::Solid,
+            CornerVector::DEFAULT,
+            nonempty_material(),
+        )
     }
 
     #[test]
@@ -333,7 +337,11 @@ mod tests {
         // should remove any existing entry — set-then-unset stays
         // sparse.
         let mut c = Cluster::empty();
-        let v = Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, nonempty_material());
+        let v = Voxel::new(
+            VoxelState::Solid,
+            CornerVector::DEFAULT,
+            nonempty_material(),
+        );
         let where_ = coord(10, 20, 30);
         c.set(where_, v);
         // Even though state changed (Empty → Solid), there's no
@@ -366,7 +374,11 @@ mod tests {
         // default material should never create a sparse entry —
         // there's no surface info to store.
         let mut c = Cluster::uniform(solid_grey());
-        let v = Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, nonempty_material());
+        let v = Voxel::new(
+            VoxelState::Solid,
+            CornerVector::DEFAULT,
+            nonempty_material(),
+        );
         for &(x, y, z) in &[(0u32, 0u32, 0u32), (42, 42, 42), (255, 255, 255)] {
             c.set(coord(x, y, z), v);
         }
@@ -447,7 +459,11 @@ mod tests {
         // flip. Old HashMap design would have allocated ~1.1 M
         // entries here.
         let mut c = Cluster::uniform(solid_grey());
-        let v = Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, nonempty_material());
+        let v = Voxel::new(
+            VoxelState::Solid,
+            CornerVector::DEFAULT,
+            nonempty_material(),
+        );
         let centre = 128i32;
         let r2 = 64i32 * 64i32;
         let mut count = 0;

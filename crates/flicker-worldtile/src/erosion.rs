@@ -86,7 +86,10 @@ impl Default for ErosionParams {
             rain: 1.0,
             talus_slope: 0.9,
             talus_rate: 0.25,
-            sediment: BedProps { density_kg_m3: 2200.0, resistance: 0.08 },
+            sediment: BedProps {
+                density_kg_m3: 2200.0,
+                resistance: 0.08,
+            },
         }
     }
 }
@@ -148,7 +151,12 @@ impl Eroder {
     /// **One pass of rain over the tile.** Route, gather, cut, carry, settle —
     /// then let over-steep ground slump. Deterministic: same tile, same props, same
     /// params → the same tile after, every time.
-    pub fn pass(&mut self, tile: &mut Tile, props: &[BedProps], params: &ErosionParams) -> PassReport {
+    pub fn pass(
+        &mut self,
+        tile: &mut Tile,
+        props: &[BedProps],
+        params: &ErosionParams,
+    ) -> PassReport {
         let dim = TILE_DIM as usize;
         let px_m = tile.frame.pixel_span_m();
         let px_area = tile.frame.pixel_area_m2();
@@ -176,7 +184,11 @@ impl Eroder {
                     continue;
                 }
                 let (nx, ny) = (nx as u32, ny as u32);
-                let dist = if dx != 0 && dy != 0 { std::f32::consts::SQRT_2 } else { 1.0 };
+                let dist = if dx != 0 && dy != 0 {
+                    std::f32::consts::SQRT_2
+                } else {
+                    1.0
+                };
                 let there = if tile.mask.contains(nx, ny) {
                     Some(self.height[idx(nx, ny)])
                 } else {
@@ -186,7 +198,11 @@ impl Eroder {
                 let drop = (here - there) / dist;
                 if drop > best_drop {
                     best_drop = drop;
-                    best = if tile.mask.contains(nx, ny) { Drain::Into(idx(nx, ny) as u32) } else { Drain::Out };
+                    best = if tile.mask.contains(nx, ny) {
+                        Drain::Into(idx(nx, ny) as u32)
+                    } else {
+                        Drain::Out
+                    };
                 }
             }
             self.downhill[i] = best;
@@ -195,7 +211,8 @@ impl Eroder {
 
         // ── Draining order: highest first, so a trunk carries its whole catchment. ──
         self.order.clear();
-        self.order.extend(tile.mask.iter().map(|(x, y)| idx(x, y) as u32));
+        self.order
+            .extend(tile.mask.iter().map(|(x, y)| idx(x, y) as u32));
         let height = &self.height;
         self.order.sort_unstable_by(|&a, &b| {
             height[b as usize]
@@ -242,14 +259,25 @@ impl Eroder {
                 // Room to cut. Stream power does the cutting; the exposed bed's
                 // resistance decides how much of it lands — soft ground first.
                 let want_m = params.rate * flow.sqrt() * slope;
-                let cut = strip(tile, props, params, i, want_m, (capacity - carrying) / px_area);
+                let cut = strip(
+                    tile,
+                    props,
+                    params,
+                    i,
+                    want_m,
+                    (capacity - carrying) / px_area,
+                );
                 report.eroded_kg += cut;
                 carrying += cut;
             } else {
                 // Overloaded: the excess settles here as new ground.
                 let drop = carrying - capacity;
-                let laid = deposit(tile, params, i, drop / (params.sediment.density_kg_m3 * px_area))
-                    * params.sediment.density_kg_m3
+                let laid = deposit(
+                    tile,
+                    params,
+                    i,
+                    drop / (params.sediment.density_kg_m3 * px_area),
+                ) * params.sediment.density_kg_m3
                     * px_area;
                 report.deposited_kg += laid;
                 carrying -= laid;
@@ -260,10 +288,13 @@ impl Eroder {
                 Drain::Out => report.exported_kg += carrying,
                 Drain::Sink => {
                     // The water stops; everything it carried is this basin's floor.
-                    let laid =
-                        deposit(tile, params, i, carrying / (params.sediment.density_kg_m3 * px_area))
-                            * params.sediment.density_kg_m3
-                            * px_area;
+                    let laid = deposit(
+                        tile,
+                        params,
+                        i,
+                        carrying / (params.sediment.density_kg_m3 * px_area),
+                    ) * params.sediment.density_kg_m3
+                        * px_area;
                     report.deposited_kg += laid;
                     // What the f32 floor could not absorb leaves with the books
                     // balanced rather than vanishing into rounding.
@@ -286,10 +317,13 @@ impl Eroder {
                 if excess > 0.0 {
                     let slump_m = excess * params.talus_rate;
                     let moved = strip(tile, props, params, i, slump_m, f64::MAX);
-                    let laid =
-                        deposit(tile, params, to, moved / (params.sediment.density_kg_m3 * px_area))
-                            * params.sediment.density_kg_m3
-                            * px_area;
+                    let laid = deposit(
+                        tile,
+                        params,
+                        to,
+                        moved / (params.sediment.density_kg_m3 * px_area),
+                    ) * params.sediment.density_kg_m3
+                        * px_area;
                     // Slumped ground is moved ground, not lost ground: it shows in
                     // the report's churn but nets to (almost) zero — the f32
                     // shortfall is booked as export so the ledger stays exact.
@@ -369,7 +403,8 @@ fn deposit(tile: &mut Tile, _params: &ErosionParams, i: usize, add_m: f64) -> f6
         return 0.0;
     }
     if tile.pixel_born == 0 {
-        tile.strata.push(vec![0.0; TILE_DIM as usize * TILE_DIM as usize]);
+        tile.strata
+            .push(vec![0.0; TILE_DIM as usize * TILE_DIM as usize]);
         tile.pixel_born = 1;
     }
     let top = tile.strata.len() - 1;
@@ -485,10 +520,23 @@ pub mod demo {
             // The sediment is whatever fills the rest of the way up.
             soft[i] = surface - dike[i];
         }
-        let tile = Tile { cell: 0, frame, mask, strata: vec![dike, soft], skirt, pixel_born: 0 };
+        let tile = Tile {
+            cell: 0,
+            frame,
+            mask,
+            strata: vec![dike, soft],
+            skirt,
+            pixel_born: 0,
+        };
         let props = vec![
-            BedProps { density_kg_m3: 2900.0, resistance: 0.95 }, // the dike stands
-            BedProps { density_kg_m3: 2300.0, resistance: 0.10 }, // the plain goes
+            BedProps {
+                density_kg_m3: 2900.0,
+                resistance: 0.95,
+            }, // the dike stands
+            BedProps {
+                density_kg_m3: 2300.0,
+                resistance: 0.10,
+            }, // the plain goes
         ];
         (tile, props)
     }
@@ -520,7 +568,14 @@ pub mod demo {
                 resistance: if hard { 0.85 } else { 0.12 },
             });
         }
-        let tile = Tile { cell: 0, frame, mask, strata, skirt, pixel_born: 0 };
+        let tile = Tile {
+            cell: 0,
+            frame,
+            mask,
+            strata,
+            skirt,
+            pixel_born: 0,
+        };
         (tile, props)
     }
 }
@@ -596,15 +651,27 @@ mod tests {
 
         let mut soft_tile = tile.clone();
         let soft_props = vec![
-            BedProps { density_kg_m3: 2900.0, resistance: 0.95 },
-            BedProps { density_kg_m3: 2300.0, resistance: 0.10 },
+            BedProps {
+                density_kg_m3: 2900.0,
+                resistance: 0.95,
+            },
+            BedProps {
+                density_kg_m3: 2300.0,
+                resistance: 0.10,
+            },
         ];
         let soft_kg = strip(&mut soft_tile, &soft_props, &params, i, want_m, f64::MAX);
 
         let mut hard_tile = tile.clone();
         let hard_props = vec![
-            BedProps { density_kg_m3: 2900.0, resistance: 0.95 },
-            BedProps { density_kg_m3: 2300.0, resistance: 0.90 },
+            BedProps {
+                density_kg_m3: 2900.0,
+                resistance: 0.95,
+            },
+            BedProps {
+                density_kg_m3: 2300.0,
+                resistance: 0.90,
+            },
         ];
         let hard_kg = strip(&mut hard_tile, &hard_props, &params, i, want_m, f64::MAX);
 
@@ -620,16 +687,25 @@ mod tests {
     #[test]
     fn cutting_through_a_bed_exposes_the_one_beneath() {
         let (mut tile, props) = demo::canyon(r(), 4);
-        let params = ErosionParams { rate: 0.4, ..Default::default() };
+        let params = ErosionParams {
+            rate: 0.4,
+            ..Default::default()
+        };
         let top = tile.strata.len() - 1;
-        let exposed_before: usize =
-            tile.mask.iter().filter(|&(x, y)| tile.exposed_bed(x, y) == Some(top)).count();
+        let exposed_before: usize = tile
+            .mask
+            .iter()
+            .filter(|&(x, y)| tile.exposed_bed(x, y) == Some(top))
+            .count();
         let mut eroder = Eroder::new();
         for _ in 0..30 {
             eroder.pass(&mut tile, &props, &params);
         }
-        let exposed_after: usize =
-            tile.mask.iter().filter(|&(x, y)| tile.exposed_bed(x, y) == Some(top)).count();
+        let exposed_after: usize = tile
+            .mask
+            .iter()
+            .filter(|&(x, y)| tile.exposed_bed(x, y) == Some(top))
+            .count();
         assert!(
             exposed_after < exposed_before,
             "thirty passes of hard rain exposed nothing beneath the top bed"
@@ -648,7 +724,10 @@ mod tests {
         for _ in 0..4 {
             exported += eroder.pass(&mut tile, &props, &params).exported_kg;
         }
-        assert!(exported > 0.0, "a sloped tile with a low skirt exported nothing");
+        assert!(
+            exported > 0.0,
+            "a sloped tile with a low skirt exported nothing"
+        );
     }
 
     /// Deposition grows a pixel-born bed — the stratum lifecycle at pixel scale.
@@ -665,7 +744,11 @@ mod tests {
             deposited += eroder.pass(&mut tile, &props, &params).deposited_kg;
         }
         assert!(deposited > 0.0, "nothing settled anywhere in six passes");
-        assert_eq!(tile.strata.len(), migrated + 1, "pixel-born sediment is its own bed");
+        assert_eq!(
+            tile.strata.len(),
+            migrated + 1,
+            "pixel-born sediment is its own bed"
+        );
         assert_eq!(tile.pixel_born, 1);
     }
 
@@ -679,7 +762,10 @@ mod tests {
         let (mut tile, props) = demo::ridge(r());
         // Hard rain, so the emergence shows within a test's patience; the same
         // physics at the restrained default is what the inspector watches.
-        let params = ErosionParams { rate: 2.0, ..Default::default() };
+        let params = ErosionParams {
+            rate: 2.0,
+            ..Default::default()
+        };
 
         // Pixels over the dike, and plain pixels JUST beside the band — the same
         // latitudes, so the same catchment and the same slope regime.
@@ -693,9 +779,15 @@ mod tests {
                 beside.push((x, y));
             }
         }
-        assert!(over_dike.len() > 1000 && beside.len() > 1000, "the fixture has its bands");
+        assert!(
+            over_dike.len() > 1000 && beside.len() > 1000,
+            "the fixture has its bands"
+        );
         let mean = |px: &[(u32, u32)], t: &Tile| {
-            px.iter().map(|&(x, y)| t.composite_m(x, y) as f64).sum::<f64>() / px.len() as f64
+            px.iter()
+                .map(|&(x, y)| t.composite_m(x, y) as f64)
+                .sum::<f64>()
+                / px.len() as f64
         };
         let gap_before = mean(&over_dike, &tile) - mean(&beside, &tile);
 
@@ -710,8 +802,6 @@ mod tests {
         );
     }
 }
-
-
 
 #[cfg(test)]
 mod real_world {
@@ -738,8 +828,7 @@ mod real_world {
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let (grid, outlines) = icosphere_with_outlines(6);
         let mut w = World::seed(grid, b, &t, 5);
-        let mut s =
-            Scheduler::new(formation_stages(Arc::clone(&t), &w, &Default::default()), 5);
+        let mut s = Scheduler::new(formation_stages(Arc::clone(&t), &w, &Default::default()), 5);
         for _ in 0..150 {
             s.step(&mut w, 1.0, None);
         }
@@ -774,6 +863,9 @@ mod real_world {
             (after + exported - before).abs() <= 1e-9 * before,
             "the books: {before:.6e} → {after:.6e} + {exported:.6e} out"
         );
-        assert!(churned > 0.0, "six passes of rain on a real tile moved nothing at all");
+        assert!(
+            churned > 0.0,
+            "six passes of rain on a real tile moved nothing at all"
+        );
     }
 }

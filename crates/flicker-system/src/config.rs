@@ -108,8 +108,8 @@ impl Default for Tuning {
             rho_rock_gcc: 4.0,
             hill_frac: 0.5,
             tidal_frac: 0.1,
-            star_mass: 0.08,    // ~hydrogen-fusion limit
-            giant_mass: 9.0e-5, // ≈ 30 M⊕
+            star_mass: 0.08,     // ~hydrogen-fusion limit
+            giant_mass: 9.0e-5,  // ≈ 30 M⊕
             planet_mass: 1.5e-7, // ≈ 0.05 M⊕
             playable_mass_min: 0.3 * EARTH_MASS,
             playable_mass_max: 5.0 * EARTH_MASS,

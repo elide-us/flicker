@@ -132,8 +132,8 @@ impl OrbitCam {
     /// moment of travel feels equal near the surface and far from it. Same
     /// clamps as the wheel.
     pub fn zoom(&mut self, dz: f32, dt: f32) {
-        self.distance =
-            (self.distance * (1.0 - dz * ZOOM_RATE * dt)).clamp(self.min_distance, self.max_distance);
+        self.distance = (self.distance * (1.0 - dz * ZOOM_RATE * dt))
+            .clamp(self.min_distance, self.max_distance);
     }
 
     pub fn camera(&self) -> Camera {
@@ -198,9 +198,14 @@ mod tests {
             stick_sensitivity: AbstractControls::default().stick_sensitivity * 2.0,
             ..AbstractControls::default()
         });
-        assert!((fast - base * 2.0).abs() < 1e-5, "sensitivity scales the orbit: {base} → {fast}");
-        let inverted =
-            turn(AbstractControls { invert_stick_yaw: true, ..AbstractControls::default() });
+        assert!(
+            (fast - base * 2.0).abs() < 1e-5,
+            "sensitivity scales the orbit: {base} → {fast}"
+        );
+        let inverted = turn(AbstractControls {
+            invert_stick_yaw: true,
+            ..AbstractControls::default()
+        });
         assert!((inverted + base).abs() < 1e-5, "invert turns the other way");
 
         // …and the pitch flag likewise, on the axis it owns.
@@ -215,7 +220,10 @@ mod tests {
             cam.pitch - p0
         };
         assert!(rise(false) > 0.0, "stick up rises above the body");
-        assert!((rise(true) + rise(false)).abs() < 1e-5, "inverted, it drops");
+        assert!(
+            (rise(true) + rise(false)).abs() < 1e-5,
+            "inverted, it drops"
+        );
     }
 
     /// `with_fill` frames the opening shot from the default FOV: at 85% of a
@@ -227,7 +235,10 @@ mod tests {
         let cam = OrbitCam::new(r).with_fill(0.85);
         let fov = Camera::default().fov_y_radians;
         let want = r / (0.85 * fov * 0.5).sin();
-        assert!((cam.distance - want).abs() < 1e-3, "D = R / sin(fill · fov/2)");
+        assert!(
+            (cam.distance - want).abs() < 1e-3,
+            "D = R / sin(fill · fov/2)"
+        );
         assert!(cam.distance < r * 3.0, "nearer than the unframed start");
         assert!(cam.distance >= cam.min_distance);
         // An absurd ask still lands inside the clamps.
@@ -248,7 +259,10 @@ mod tests {
         for _ in 0..200 {
             cam.zoom(1.0, 0.5);
         }
-        assert_eq!(cam.distance, cam.min_distance, "held zoom parks at the near clamp");
+        assert_eq!(
+            cam.distance, cam.min_distance,
+            "held zoom parks at the near clamp"
+        );
         for _ in 0..400 {
             cam.zoom(-1.0, 0.5);
         }

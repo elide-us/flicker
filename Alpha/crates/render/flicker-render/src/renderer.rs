@@ -23,8 +23,8 @@ use glam::Vec3;
 
 use crate::mesh::{Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting};
 use crate::pipeline_billboard::BillboardPipeline;
-use crate::pipeline_lines::LinesPipeline;
 use crate::pipeline_ground_fog::{GroundFog, GroundFogPipeline, GroundFogUniform};
+use crate::pipeline_lines::LinesPipeline;
 use crate::pipeline_mesh::{create_depth_view, LoadedMesh, MeshPipeline, SceneUniform};
 use crate::pipeline_mesh_textured::{
     PbrMaps, TexturedMeshHandle, TexturedMeshPipeline, TexturedVertex,
@@ -255,8 +255,12 @@ impl Renderer {
         let text = TextPipeline::new(&device, &queue, surface_format);
         let min_uniform_offset_alignment = device.limits().min_uniform_buffer_offset_alignment;
         let mesh = MeshPipeline::new(&device, surface_format, min_uniform_offset_alignment);
-        let mesh_textured =
-            TexturedMeshPipeline::new(&device, &queue, surface_format, min_uniform_offset_alignment);
+        let mesh_textured = TexturedMeshPipeline::new(
+            &device,
+            &queue,
+            surface_format,
+            min_uniform_offset_alignment,
+        );
         let skinned = SkinnedMeshPipeline::new(&device, &queue, surface_format);
         let lines = LinesPipeline::new(
             &device,
@@ -715,6 +719,28 @@ impl Renderer {
         color: [f32; 4],
         uv: [f32; 4],
     ) {
+        // Pivot is ignored when rotation is 0.0; ZERO keeps the axis-aligned path.
+        self.draw_sprite_ex(texture, position, size, color, uv, 0.0, Vec2::ZERO);
+    }
+
+    /// Submit a **rotated** atlas quad. `rotation` is radians; `pivot` is the
+    /// centre of rotation in the same top-left screen-pixel space as `position`.
+    /// Pass `position + size * 0.5` to spin about the sprite's centre (the common
+    /// case — a wheel, a tank track), or an arbitrary point for an off-centre
+    /// pivot (a turret turning about its hull mount). Screen y is down, so a
+    /// positive angle turns clockwise. Every other sprite entry point delegates
+    /// here with `rotation = 0.0`, which is the unchanged axis-aligned fast path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_sprite_ex(
+        &mut self,
+        texture: TextureHandle,
+        position: Vec2,
+        size: Vec2,
+        color: [f32; 4],
+        uv: [f32; 4],
+        rotation: f32,
+        pivot: Vec2,
+    ) {
         self.note_draw();
         self.sprite.push(
             self.screen,
@@ -725,6 +751,8 @@ impl Renderer {
             self.current_layer,
             self.current_clip,
             uv,
+            rotation,
+            pivot,
         );
     }
 
@@ -779,7 +807,17 @@ impl Renderer {
     /// top-left baseline in pixels; `size` is the font size in pixels; `color`
     /// is RGBA in 0..1.
     pub fn draw_text(&mut self, text: &str, position: Vec2, size: f32, color: [f32; 4]) {
-        self.draw_text_role(text, position, size, color, crate::FontRole::Body, false, false, -1.0, None);
+        self.draw_text_role(
+            text,
+            position,
+            size,
+            color,
+            crate::FontRole::Body,
+            false,
+            false,
+            -1.0,
+            None,
+        );
     }
 
     /// Submit a string of text in the face selected by `role`
@@ -895,7 +933,8 @@ impl Renderer {
     /// `options` controls fill vs wireframe and the tint.
     pub fn draw_mesh(&mut self, mesh: MeshHandle, model: Mat4, options: MeshDrawOptions) {
         self.note_draw();
-        self.mesh.push(mesh, model, options.tint, options.wireframe, options.gloss);
+        self.mesh
+            .push(mesh, model, options.tint, options.wireframe, options.gloss);
     }
 
     /// Upload a textured 3D mesh (position + normal + UV) and return a handle. Persists
@@ -981,8 +1020,15 @@ impl Renderer {
         options: MeshDrawOptions,
     ) {
         self.note_draw();
-        self.mesh_textured
-            .push(mesh, texture, maps, model, options.tint, options.gloss, false);
+        self.mesh_textured.push(
+            mesh,
+            texture,
+            maps,
+            model,
+            options.tint,
+            options.gloss,
+            false,
+        );
     }
 
     /// Upload a **bind-pose skinned mesh** (position/normal/uv + 4-influence
@@ -1024,8 +1070,14 @@ impl Renderer {
         bone_count: u32,
     ) {
         self.note_draw();
-        self.skinned
-            .draw_instanced(&self.device, &self.queue, mesh, models, palettes, bone_count);
+        self.skinned.draw_instanced(
+            &self.device,
+            &self.queue,
+            mesh,
+            models,
+            palettes,
+            bone_count,
+        );
     }
 
     /// Draw a wireframe axis-aligned bounding box this frame. Lives in
@@ -1182,8 +1234,11 @@ impl Renderer {
     /// Afterwards the handle and any [`TextureHandle`] from [`Self::target_texture`]
     /// are stale — do not reuse them.
     pub fn free_render_target(&mut self, target: RenderTargetHandle) {
-        if let Some(rt) = pool_free(&mut self.render_targets, &mut self.free_target_slots, target.0)
-        {
+        if let Some(rt) = pool_free(
+            &mut self.render_targets,
+            &mut self.free_target_slots,
+            target.0,
+        ) {
             self.free_texture(rt.color);
         }
     }
@@ -1301,8 +1356,10 @@ impl Renderer {
                 .set_camera(&self.queue, cam.view(), view_projection);
             let inv_vp = view_projection.inverse();
             if self.sky_this_frame {
-                self.sky
-                    .set_uniform(&self.queue, scene_to_sky_uniform(&self.scene, inv_vp, camera_pos));
+                self.sky.set_uniform(
+                    &self.queue,
+                    scene_to_sky_uniform(&self.scene, inv_vp, camera_pos),
+                );
             }
             if let Some(params) = &self.volumetric_params {
                 self.volumetric.set_uniform(
@@ -1311,8 +1368,10 @@ impl Renderer {
                 );
             }
             if let Some(fog) = &self.ground_fog_params {
-                self.ground_fog
-                    .set_uniform(&self.queue, GroundFogUniform::from_params(fog, inv_vp, camera_pos));
+                self.ground_fog.set_uniform(
+                    &self.queue,
+                    GroundFogUniform::from_params(fog, inv_vp, camera_pos),
+                );
             }
         }
         self.mesh

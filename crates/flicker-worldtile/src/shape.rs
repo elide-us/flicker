@@ -88,7 +88,10 @@ impl Neighbourhood {
         gathered.dedup();
 
         Self {
-            dirs: gathered.iter().map(|&i| world.grid.dirs[i].as_dvec3().normalize()).collect(),
+            dirs: gathered
+                .iter()
+                .map(|&i| world.grid.dirs[i].as_dvec3().normalize())
+                .collect(),
             thickness: gathered
                 .iter()
                 .map(|&i| crust_thickness_m(&world.columns[i], area))
@@ -130,7 +133,9 @@ impl Neighbourhood {
     /// The range of thickness the columns in reach actually span — what a blend
     /// over them is bounded by.
     pub fn range(&self) -> (f64, f64) {
-        self.thickness.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &t| (lo.min(t), hi.max(t)))
+        self.thickness
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(lo, hi), &t| (lo.min(t), hi.max(t)))
     }
 }
 
@@ -143,10 +148,10 @@ pub fn relief_at(world: &World, cell: usize, p: DVec3) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicker_materials::{JsonTableSource, Tables};
     use flicker_poc_chemistry::{
         budget::Budget, config::content_data_dir, formation_stages, scheduler::Scheduler, World,
     };
-    use flicker_materials::{JsonTableSource, Tables};
     use flicker_worldgrid::icosphere;
     use std::sync::Arc;
 

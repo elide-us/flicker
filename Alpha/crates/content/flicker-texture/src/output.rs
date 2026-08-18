@@ -37,9 +37,18 @@ impl Default for ColorRamp {
     fn default() -> Self {
         Self {
             stops: vec![
-                RampStop { at: 0.0, color: [0.09, 0.09, 0.10] },
-                RampStop { at: 0.5, color: [0.36, 0.34, 0.32] },
-                RampStop { at: 1.0, color: [0.78, 0.76, 0.72] },
+                RampStop {
+                    at: 0.0,
+                    color: [0.09, 0.09, 0.10],
+                },
+                RampStop {
+                    at: 0.5,
+                    color: [0.36, 0.34, 0.32],
+                },
+                RampStop {
+                    at: 1.0,
+                    color: [0.78, 0.76, 0.72],
+                },
             ],
         }
     }
@@ -73,7 +82,11 @@ impl ColorRamp {
             if t >= a.at && t <= b.at {
                 let span = b.at - a.at;
                 // Coincident stops are a hard colour step, not a divide by zero.
-                let k = if span > f32::EPSILON { (t - a.at) / span } else { 0.0 };
+                let k = if span > f32::EPSILON {
+                    (t - a.at) / span
+                } else {
+                    0.0
+                };
                 return [
                     a.color[0] + (b.color[0] - a.color[0]) * k,
                     a.color[1] + (b.color[1] - a.color[1]) * k,
@@ -116,10 +129,12 @@ pub struct OutputStage {
     /// then adds nothing — so an ordinary material costs emission nothing.
     #[serde(default)]
     pub emissive_strength: f32,
-    /// WHERE it glows: the field value above which emission starts. `0.75` lights
-    /// only the crests; `0` lights everything above the midpoint. This is what
-    /// makes emission follow the STRUCTURE — lava in the cracks between plates
-    /// rather than a uniform wash over the whole surface.
+    /// WHERE it glows, as a FRACTION of the field's own range: `bake` seats it into
+    /// the field's real `[min, max]`. It is NOT an absolute field value — the field
+    /// rarely spans a full 0..1, so a raw threshold would sit above it and bake black
+    /// (the bug that made hand-set emit controls do nothing). `0.75` lights only the
+    /// crests; `0` lights everything above the floor. This is what makes emission
+    /// follow the STRUCTURE — lava in the cracks between plates, not a uniform wash.
     #[serde(default)]
     pub emissive_band: f32,
 }
@@ -179,8 +194,14 @@ mod tests {
     fn ramp_clamps_at_the_ends_and_interpolates_between() {
         let ramp = ColorRamp {
             stops: vec![
-                RampStop { at: 0.0, color: [0.0, 0.0, 0.0] },
-                RampStop { at: 1.0, color: [1.0, 1.0, 1.0] },
+                RampStop {
+                    at: 0.0,
+                    color: [0.0, 0.0, 0.0],
+                },
+                RampStop {
+                    at: 1.0,
+                    color: [1.0, 1.0, 1.0],
+                },
             ],
         };
         assert_eq!(ramp.sample(-1.0), [0.0, 0.0, 0.0]);
@@ -195,11 +216,19 @@ mod tests {
     fn ramp_tolerates_unsorted_stops() {
         let sorted = ColorRamp {
             stops: vec![
-                RampStop { at: 0.0, color: [0.0, 0.0, 0.0] },
-                RampStop { at: 1.0, color: [1.0, 1.0, 1.0] },
+                RampStop {
+                    at: 0.0,
+                    color: [0.0, 0.0, 0.0],
+                },
+                RampStop {
+                    at: 1.0,
+                    color: [1.0, 1.0, 1.0],
+                },
             ],
         };
-        let jumbled = ColorRamp { stops: sorted.stops.iter().rev().copied().collect() };
+        let jumbled = ColorRamp {
+            stops: sorted.stops.iter().rev().copied().collect(),
+        };
         for i in 0..=10 {
             let t = i as f32 / 10.0;
             assert_eq!(sorted.sample(t), jumbled.sample(t), "at {t}");
@@ -213,8 +242,14 @@ mod tests {
         assert_eq!(ColorRamp { stops: vec![] }.sample(0.5), [0.5, 0.5, 0.5]);
         let coincident = ColorRamp {
             stops: vec![
-                RampStop { at: 0.5, color: [1.0, 0.0, 0.0] },
-                RampStop { at: 0.5, color: [0.0, 0.0, 1.0] },
+                RampStop {
+                    at: 0.5,
+                    color: [1.0, 0.0, 0.0],
+                },
+                RampStop {
+                    at: 0.5,
+                    color: [0.0, 0.0, 1.0],
+                },
             ],
         };
         let v = coincident.sample(0.5);
@@ -225,14 +260,25 @@ mod tests {
     /// `roughness_mod` must make the crests shinier, not merely different.
     #[test]
     fn modulation_pivots_on_the_midpoint_and_clamps() {
-        let out = OutputStage { roughness: 0.5, roughness_mod: 0.25, ..OutputStage::default() };
+        let out = OutputStage {
+            roughness: 0.5,
+            roughness_mod: 0.25,
+            ..OutputStage::default()
+        };
         assert!((out.roughness_at(0.5) - 0.5).abs() < 1e-6);
         assert!(out.roughness_at(1.0) > out.roughness_at(0.0));
 
-        let polished = OutputStage { roughness_mod: -0.25, ..out.clone() };
+        let polished = OutputStage {
+            roughness_mod: -0.25,
+            ..out.clone()
+        };
         assert!(polished.roughness_at(1.0) < polished.roughness_at(0.0));
 
-        let extreme = OutputStage { roughness: 0.9, roughness_mod: 5.0, ..OutputStage::default() };
+        let extreme = OutputStage {
+            roughness: 0.9,
+            roughness_mod: 5.0,
+            ..OutputStage::default()
+        };
         assert_eq!(extreme.roughness_at(1.0), 1.0);
         assert_eq!(extreme.roughness_at(0.0), 0.0);
     }
@@ -257,11 +303,25 @@ mod emissive_tests {
     /// edge reads as a decal stuck on the surface, not as light coming out of it.
     #[test]
     fn the_band_ramps_from_its_edge_upward() {
-        let out = OutputStage { emissive_strength: 1.0, emissive_band: 0.6, ..Default::default() };
+        let out = OutputStage {
+            emissive_strength: 1.0,
+            emissive_band: 0.6,
+            ..Default::default()
+        };
         assert_eq!(out.emissive_at(0.0), 0.0, "below the band must be dark");
-        assert_eq!(out.emissive_at(0.6), 0.0, "the band edge is where it starts");
-        assert!(out.emissive_at(0.8) > 0.0 && out.emissive_at(0.8) < 1.0, "mid-band ramps");
-        assert!((out.emissive_at(1.0) - 1.0).abs() < 1e-6, "the crest is full strength");
+        assert_eq!(
+            out.emissive_at(0.6),
+            0.0,
+            "the band edge is where it starts"
+        );
+        assert!(
+            out.emissive_at(0.8) > 0.0 && out.emissive_at(0.8) < 1.0,
+            "mid-band ramps"
+        );
+        assert!(
+            (out.emissive_at(1.0) - 1.0).abs() < 1e-6,
+            "the crest is full strength"
+        );
         // Monotonic: brighter as the field rises.
         assert!(out.emissive_at(0.9) > out.emissive_at(0.7));
     }
@@ -270,9 +330,17 @@ mod emissive_tests {
     /// recipe.
     #[test]
     fn a_degenerate_band_is_survivable() {
-        let out = OutputStage { emissive_strength: 1.0, emissive_band: 1.0, ..Default::default() };
+        let out = OutputStage {
+            emissive_strength: 1.0,
+            emissive_band: 1.0,
+            ..Default::default()
+        };
         assert!(out.emissive_at(1.0).is_finite());
-        let wild = OutputStage { emissive_strength: 9.0, emissive_band: -3.0, ..Default::default() };
+        let wild = OutputStage {
+            emissive_strength: 9.0,
+            emissive_band: -3.0,
+            ..Default::default()
+        };
         assert!((0.0..=1.0).contains(&wild.emissive_at(0.5)));
     }
 }

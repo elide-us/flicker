@@ -93,7 +93,10 @@ mod tests {
             Flow::Pass
         );
         assert_eq!(
-            root.handle(&ev(ActionSignal::PrimaryAction, EventKind::Press, &raw), &mut rc),
+            root.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Pass
         );
     }
@@ -105,15 +108,24 @@ mod tests {
         let mut g = GameplayBase::default();
         // A release edge, or a non-pointer signal, is not a game click.
         assert_eq!(
-            g.handle(&ev(ActionSignal::PrimaryAction, EventKind::Release, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Release, &raw),
+                &mut rc
+            ),
             Flow::Pass
         );
         assert!(!g.click);
         assert_eq!(
-            g.handle(&ev(ActionSignal::PrimaryAction, EventKind::Press, &raw), &mut rc),
+            g.handle(
+                &ev(ActionSignal::PrimaryAction, EventKind::Press, &raw),
+                &mut rc
+            ),
             Flow::Consumed
         );
-        assert!(g.click, "a PrimaryAction press that reached the base is a game click");
+        assert!(
+            g.click,
+            "a PrimaryAction press that reached the base is a game click"
+        );
     }
 
     /// The scene's defining behaviour: a click over the HUD is swallowed by the
@@ -132,11 +144,13 @@ mod tests {
             let mut gameplay = GameplayBase::default();
             let mut rc = RouteCtx::new();
             let report = {
-                let mut chain: [&mut dyn InputHandler; 3] =
-                    [&mut root, &mut walker, &mut gameplay];
+                let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
-            assert!(gameplay.click, "a play-field click reaches the gameplay base");
+            assert!(
+                gameplay.click,
+                "a play-field click reaches the gameplay base"
+            );
             assert!(report.consumed_by(2, ActionSignal::PrimaryAction));
         }
 
@@ -148,12 +162,17 @@ mod tests {
             let mut gameplay = GameplayBase::default();
             let mut rc = RouteCtx::new();
             let report = {
-                let mut chain: [&mut dyn InputHandler; 3] =
-                    [&mut root, &mut walker, &mut gameplay];
+                let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
                 Router::dispatch(&events, &mut chain, &mut rc)
             };
-            assert!(!gameplay.click, "a HUD click never reaches the gameplay base");
-            assert!(report.consumed_by(1, ActionSignal::PrimaryAction), "the walker consumed it");
+            assert!(
+                !gameplay.click,
+                "a HUD click never reaches the gameplay base"
+            );
+            assert!(
+                report.consumed_by(1, ActionSignal::PrimaryAction),
+                "the walker consumed it"
+            );
         }
     }
 
@@ -167,8 +186,12 @@ mod tests {
 
         let raw = InputState::new();
         let events = [ev(ActionSignal::Menu, EventKind::Press, &raw)];
-        let mut tree = UiNode { component: "screen".into(), ..Default::default() };
-        tree.props.insert("on_menu".into(), Value::Text("pause_open".into()));
+        let mut tree = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
+        tree.props
+            .insert("on_menu".into(), Value::Text("pause_open".into()));
         let intents = UiIntents::of(&tree);
 
         let mut root = RootHandler;
@@ -180,8 +203,14 @@ mod tests {
             let mut chain: [&mut dyn InputHandler; 3] = [&mut root, &mut walker, &mut gameplay];
             Router::dispatch(&events, &mut chain, &mut rc)
         };
-        assert!(report.consumed_by(1, ActionSignal::Menu), "the walker layer consumed it");
-        assert!(!report.consumed_by(ROOT, ActionSignal::Menu), "the root has no Menu arm");
+        assert!(
+            report.consumed_by(1, ActionSignal::Menu),
+            "the walker layer consumed it"
+        );
+        assert!(
+            !report.consumed_by(ROOT, ActionSignal::Menu),
+            "the root has no Menu arm"
+        );
         assert_eq!(walker.take_fired(), vec!["pause_open".to_string()]);
         assert!(!gameplay.click);
     }

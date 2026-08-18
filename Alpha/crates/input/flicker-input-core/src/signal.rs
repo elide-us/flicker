@@ -84,6 +84,11 @@ pub enum ActionSignal {
     /// player's). The intent only: what the counter resolves to stays a
     /// loadout/state-machine concern.
     CounterPerilous,
+    /// Grapple — hook / grab intent (pad default: the chord layer, hold
+    /// North + RT — a trigger FIRE, Aaron's ruling; Y+RB stays open; keyboard
+    /// binding is the player's). The intent only: what the grapple resolves
+    /// to stays a loadout/state-machine concern.
+    Grapple,
 
     // ── UI ──
     Confirm,
@@ -207,6 +212,7 @@ impl ActionSignal {
         ActionSignal::UseItem,
         ActionSignal::Kick,
         ActionSignal::CounterPerilous,
+        ActionSignal::Grapple,
         ActionSignal::Confirm,
         ActionSignal::Cancel,
         ActionSignal::Menu,
@@ -283,6 +289,7 @@ impl ActionSignal {
             Self::UseItem => "UseItem",
             Self::Kick => "Kick",
             Self::CounterPerilous => "CounterPerilous",
+            Self::Grapple => "Grapple",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel",
             Self::Menu => "Menu",
@@ -359,6 +366,7 @@ impl ActionSignal {
             Self::UseItem => "Use Item",
             Self::Kick => "Kick",
             Self::CounterPerilous => "Mikiri",
+            Self::Grapple => "Grapple",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel / back",
             Self::Menu => "Menu",
@@ -409,9 +417,7 @@ impl ActionSignal {
             | Self::StrafeRight
             | Self::MoveUp
             | Self::MoveDown => SignalGroup::Movement,
-            Self::LookUp | Self::LookDown | Self::LookLeft | Self::LookRight => {
-                SignalGroup::Camera
-            }
+            Self::LookUp | Self::LookDown | Self::LookLeft | Self::LookRight => SignalGroup::Camera,
             Self::PrimaryAction
             | Self::SecondaryAction
             | Self::Jump
@@ -427,7 +433,8 @@ impl ActionSignal {
             | Self::LockOn
             | Self::UseItem
             | Self::Kick
-            | Self::CounterPerilous => SignalGroup::Souls,
+            | Self::CounterPerilous
+            | Self::Grapple => SignalGroup::Souls,
             Self::Confirm | Self::Cancel | Self::Menu | Self::Inventory | Self::Map => {
                 SignalGroup::Ui
             }
@@ -492,6 +499,7 @@ impl ActionSignal {
             | Self::UseItem
             | Self::Kick
             | Self::CounterPerilous
+            | Self::Grapple
             | Self::Confirm
             | Self::Cancel
             | Self::Menu
@@ -592,6 +600,7 @@ impl fmt::Display for ActionSignal {
             Self::UseItem => "Use Item",
             Self::Kick => "Kick",
             Self::CounterPerilous => "Perilous Counter",
+            Self::Grapple => "Grapple",
             Self::Confirm => "Confirm",
             Self::Cancel => "Cancel",
             Self::Menu => "Menu",
@@ -741,7 +750,10 @@ mod tests {
         // duplicated entry, and exercises both label paths.
         let mut seen = HashSet::new();
         for &s in ActionSignal::ALL {
-            assert!(seen.insert(s), "duplicate entry in ActionSignal::ALL: {s:?}");
+            assert!(
+                seen.insert(s),
+                "duplicate entry in ActionSignal::ALL: {s:?}"
+            );
             assert!(!s.label().is_empty(), "empty label for {s:?}");
             assert!(!s.to_string().is_empty(), "empty Display for {s:?}");
         }
@@ -777,7 +789,11 @@ mod tests {
     #[test]
     fn name_round_trips_all_and_matches_serde() {
         for &s in ActionSignal::ALL {
-            assert_eq!(ActionSignal::from_name(s.name()), Some(s), "{s:?} round-trips");
+            assert_eq!(
+                ActionSignal::from_name(s.name()),
+                Some(s),
+                "{s:?} round-trips"
+            );
             // The ONE naming: serde's variant string (what profiles persist).
             let serde_name = serde_json::to_value(s).expect("signal serializes");
             assert_eq!(
@@ -788,7 +804,11 @@ mod tests {
         }
         assert_eq!(ActionSignal::from_name("Nonsense"), None);
         assert_eq!(ActionSignal::from_name(""), None);
-        assert_eq!(ActionSignal::from_name("menu"), None, "names are exact — no case folding here");
+        assert_eq!(
+            ActionSignal::from_name("menu"),
+            None,
+            "names are exact — no case folding here"
+        );
     }
 
     #[test]
@@ -821,21 +841,23 @@ mod tests {
         }
     }
 
-    /// The settings page's row source, pinned: 28 Player signals (Aaron's
+    /// The settings page's row source, pinned: 29 Player signals (Aaron's
     /// 2026-08-14 rulings fold the Souls tier onto the page and add
-    /// `Kick` / `CounterPerilous` as chord-reached souls INTENTS), the analog
-    /// Look channel and the walker-owned nav family stay off it, and the whole
-    /// vocabulary is classified (Player + Locked + Reserved == ALL).
+    /// `Kick` / `CounterPerilous` as chord-reached souls INTENTS; `Grapple`
+    /// joined 2026-08-15), the analog Look channel and the walker-owned nav
+    /// family stay off it, and the whole vocabulary is classified
+    /// (Player + Locked + Reserved == ALL).
     #[test]
-    fn rebindable_set_is_the_ruled_28() {
+    fn rebindable_set_is_the_ruled_29() {
         let rows: Vec<ActionSignal> = ActionSignal::rebindable().collect();
-        assert_eq!(rows.len(), 28);
+        assert_eq!(rows.len(), 29);
         for s in [
             ActionSignal::AttackLight,
             ActionSignal::Dodge,
             ActionSignal::UseItem,
             ActionSignal::Kick,
             ActionSignal::CounterPerilous,
+            ActionSignal::Grapple,
         ] {
             assert!(rows.contains(&s), "souls tier is Player-rebindable: {s:?}");
         }
@@ -855,7 +877,7 @@ mod tests {
                 RebindScope::Reserved => reserved += 1,
             }
         }
-        assert_eq!((player, locked, reserved), (28, 26, 6));
+        assert_eq!((player, locked, reserved), (29, 26, 6));
         assert_eq!(player + locked + reserved, ActionSignal::ALL.len());
     }
 

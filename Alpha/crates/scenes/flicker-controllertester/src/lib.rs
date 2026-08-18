@@ -31,7 +31,6 @@ use std::time::{Duration, Instant};
 
 use flicker::render::{Rect, Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
-use golem::GolemStage;
 use flicker_input_core::{
     AbstractControls, ActionSignal, AnalogFrame, ContextualBindings, EventKind, Fired, GamepadAxis,
     GamepadButton, GamepadConfig, InputBinding, InputContext, InputMap, InputState, Key, Resolver,
@@ -39,6 +38,7 @@ use flicker_input_core::{
 };
 use flicker_input_router::{DispatchReport, Flow, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
+use golem::GolemStage;
 
 // ── palette ─────────────────────────────────────────────────────────
 const BG: [f32; 4] = [0.055, 0.065, 0.085, 1.0];
@@ -81,9 +81,26 @@ const SCENE_ROOT: usize = 1;
 
 /// Keyboard keys shown in the readout row (each lights while held).
 const KEYS: [Key; 20] = [
-    Key::W, Key::A, Key::S, Key::D, Key::Q, Key::E, Key::R, Key::F, Key::C, Key::Tab,
-    Key::Space, Key::LeftShift, Key::LeftControl, Key::LeftAlt, Key::Escape,
-    Key::Up, Key::Down, Key::Left, Key::Right, Key::Enter,
+    Key::W,
+    Key::A,
+    Key::S,
+    Key::D,
+    Key::Q,
+    Key::E,
+    Key::R,
+    Key::F,
+    Key::C,
+    Key::Tab,
+    Key::Space,
+    Key::LeftShift,
+    Key::LeftControl,
+    Key::LeftAlt,
+    Key::Escape,
+    Key::Up,
+    Key::Down,
+    Key::Left,
+    Key::Right,
+    Key::Enter,
 ];
 
 // ── the demo maps (physical → signal, per context) ──────────────────
@@ -114,7 +131,7 @@ fn world_map() -> InputMap {
     m.bind(A::Crouch, gb(B::LeftStick));
     m.bind(A::Menu, gb(B::Start));
     m.bind(A::Quit, gb(B::Guide)); // demo: the System layer captures Quit
-    // Gamepad d-pad → digital movement (keyboard/d-pad path).
+                                   // Gamepad d-pad → digital movement (keyboard/d-pad path).
     m.bind(A::MoveForward, gb(B::DPadUp));
     m.bind(A::MoveBackward, gb(B::DPadDown));
     m.bind(A::StrafeLeft, gb(B::DPadLeft));
@@ -209,14 +226,16 @@ fn demo_bindings() -> ContextualBindings {
 fn is_ui_signal(s: ActionSignal) -> bool {
     use ActionSignal::*;
     match s {
-        Confirm | Cancel | NavUp | NavDown | NavLeft | NavRight | TabNext | TabPrev | ItemSelect
-        | Yes | No | Activate | SubmitText | CancelText => true,
+        Confirm | Cancel | NavUp | NavDown | NavLeft | NavRight | TabNext | TabPrev
+        | ItemSelect | Yes | No | Activate | SubmitText | CancelText => true,
         MoveForward | MoveBackward | StrafeLeft | StrafeRight | MoveUp | MoveDown | LookUp
         | LookDown | LookLeft | LookRight | PrimaryAction | SecondaryAction | Jump | Sprint
         | Crouch | Interact | Reload | AttackLight | AttackHeavy | Defend | Special | Dodge
-        | LockOn | UseItem | Kick | CounterPerilous | Menu | Inventory | Map | Quit | ChordBegin
-        | PageNext | PagePrev | PanelNext | PanelPrev | ModeNext | ModePrev | ZoomIn | ZoomOut
-        | Undo | Redo | Cut | Paste | Rename | CreateFolder | ContextMenu => false,
+        | LockOn | UseItem | Kick | CounterPerilous | Grapple | Menu | Inventory | Map | Quit
+        | ChordBegin | PageNext | PagePrev | PanelNext | PanelPrev | ModeNext | ModePrev
+        | ZoomIn | ZoomOut | Undo | Redo | Cut | Paste | Rename | CreateFolder | ContextMenu => {
+            false
+        }
     }
 }
 
@@ -368,7 +387,11 @@ fn build_bus_frame(active: InputContext, fired: &[Fired], report: &DispatchRepor
             let consumer = (0..LAYER_NAMES.len())
                 .find(|&i| report.consumed_by(i, f.signal))
                 .map(|i| LAYER_NAMES[i]);
-            ConsumedRow { label: f.signal.label(), kind: f.kind, consumer }
+            ConsumedRow {
+                label: f.signal.label(),
+                kind: f.kind,
+                consumer,
+            }
         })
         .collect();
     BusFrame { layers, consumed }
@@ -480,7 +503,17 @@ fn cell(r: &mut Renderer, center: Vec2, side: f32, label: &str, on: bool) {
     } else {
         (IDLE_FILL, IDLE_BORDER, TXT)
     };
-    r.draw_ui_panel(tl, Vec2::splat(side), fill, fill, 0.0, side * 0.18, if on { 2.0 } else { 1.5 }, border, 0.0);
+    r.draw_ui_panel(
+        tl,
+        Vec2::splat(side),
+        fill,
+        fill,
+        0.0,
+        side * 0.18,
+        if on { 2.0 } else { 1.5 },
+        border,
+        0.0,
+    );
     text_centered(r, center.x, center.y, label, (side * 0.34).max(9.0), txt);
 }
 
@@ -488,32 +521,123 @@ fn cell(r: &mut Renderer, center: Vec2, side: f32, label: &str, on: bool) {
 fn trigger(r: &mut Renderer, center: Vec2, w: f32, h: f32, frac: f32, label: &str) {
     let frac = frac.clamp(0.0, 1.0);
     let tl = center - Vec2::new(w * 0.5, h * 0.5);
-    r.draw_ui_panel(tl, Vec2::new(w, h), IDLE_FILL, IDLE_FILL, 0.0, 5.0, 1.5, IDLE_BORDER, 0.0);
+    r.draw_ui_panel(
+        tl,
+        Vec2::new(w, h),
+        IDLE_FILL,
+        IDLE_FILL,
+        0.0,
+        5.0,
+        1.5,
+        IDLE_BORDER,
+        0.0,
+    );
     let fh = h * frac;
     if fh > 0.5 {
-        r.draw_ui_panel(Vec2::new(tl.x, tl.y + (h - fh)), Vec2::new(w, fh), AMBER, AMBER, 0.0, 5.0, 0.0, AMBER, 0.0);
+        r.draw_ui_panel(
+            Vec2::new(tl.x, tl.y + (h - fh)),
+            Vec2::new(w, fh),
+            AMBER,
+            AMBER,
+            0.0,
+            5.0,
+            0.0,
+            AMBER,
+            0.0,
+        );
     }
-    text_centered(r, center.x, tl.y - h * 0.18, label, (w * 0.3).clamp(9.0, 12.0), DIM);
-    text_centered(r, center.x, center.y, &format!("{:.0}%", frac * 100.0), (w * 0.28).clamp(8.0, 11.0), if frac > 0.02 { TXT } else { DIM });
+    text_centered(
+        r,
+        center.x,
+        tl.y - h * 0.18,
+        label,
+        (w * 0.3).clamp(9.0, 12.0),
+        DIM,
+    );
+    text_centered(
+        r,
+        center.x,
+        center.y,
+        &format!("{:.0}%", frac * 100.0),
+        (w * 0.28).clamp(8.0, 11.0),
+        if frac > 0.02 { TXT } else { DIM },
+    );
 }
 
 /// A stick box with a live dot at `(x, y)` (Y inverted), border lit when pressed (L3/R3).
 fn stick(r: &mut Renderer, center: Vec2, half: f32, x: f32, y: f32, pressed: bool, label: &str) {
     let tl = center - Vec2::splat(half);
     let border = if pressed { ON_BORDER } else { IDLE_BORDER };
-    r.draw_ui_panel(tl, Vec2::splat(half * 2.0), IDLE_FILL, IDLE_FILL, 0.0, half * 0.24, if pressed { 2.5 } else { 1.5 }, border, 0.0);
-    r.draw_ui_panel(center - Vec2::splat(2.0), Vec2::splat(4.0), IDLE_BORDER, IDLE_BORDER, 0.0, 2.0, 0.0, IDLE_BORDER, 0.0);
+    r.draw_ui_panel(
+        tl,
+        Vec2::splat(half * 2.0),
+        IDLE_FILL,
+        IDLE_FILL,
+        0.0,
+        half * 0.24,
+        if pressed { 2.5 } else { 1.5 },
+        border,
+        0.0,
+    );
+    r.draw_ui_panel(
+        center - Vec2::splat(2.0),
+        Vec2::splat(4.0),
+        IDLE_BORDER,
+        IDLE_BORDER,
+        0.0,
+        2.0,
+        0.0,
+        IDLE_BORDER,
+        0.0,
+    );
     let dot = half * 0.16;
     let range = half - dot - 3.0;
-    let p = Vec2::new(center.x + x.clamp(-1.0, 1.0) * range, center.y - y.clamp(-1.0, 1.0) * range);
-    r.draw_ui_panel(p - Vec2::splat(dot), Vec2::splat(dot * 2.0), CYAN, CYAN, 0.0, dot, 0.0, CYAN, 0.0);
-    text_centered(r, center.x, tl.y - half * 0.22, label, (half * 0.24).clamp(9.0, 12.0), DIM);
-    text_centered(r, center.x, center.y + half + half * 0.22, &format!("{x:+.2}, {y:+.2}"), (half * 0.22).clamp(8.0, 11.0), DIM);
+    let p = Vec2::new(
+        center.x + x.clamp(-1.0, 1.0) * range,
+        center.y - y.clamp(-1.0, 1.0) * range,
+    );
+    r.draw_ui_panel(
+        p - Vec2::splat(dot),
+        Vec2::splat(dot * 2.0),
+        CYAN,
+        CYAN,
+        0.0,
+        dot,
+        0.0,
+        CYAN,
+        0.0,
+    );
+    text_centered(
+        r,
+        center.x,
+        tl.y - half * 0.22,
+        label,
+        (half * 0.24).clamp(9.0, 12.0),
+        DIM,
+    );
+    text_centered(
+        r,
+        center.x,
+        center.y + half + half * 0.22,
+        &format!("{x:+.2}, {y:+.2}"),
+        (half * 0.22).clamp(8.0, 11.0),
+        DIM,
+    );
 }
 
 /// Draw a titled panel box and return the y at which content rows start.
 fn panel(r: &mut Renderer, x: f32, y: f32, w: f32, h: f32, title: &str) -> f32 {
-    r.draw_ui_panel(Vec2::new(x, y), Vec2::new(w, h), PANEL_BG, PANEL_BG, 0.0, 8.0, 1.5, PANEL_BORDER, 0.0);
+    r.draw_ui_panel(
+        Vec2::new(x, y),
+        Vec2::new(w, h),
+        PANEL_BG,
+        PANEL_BG,
+        0.0,
+        8.0,
+        1.5,
+        PANEL_BORDER,
+        0.0,
+    );
     r.draw_text(title, Vec2::new(x + 12.0, y + 8.0), 12.0, ACCENT);
     y + 30.0
 }
@@ -522,10 +646,18 @@ impl Scene for ControllerTester {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.ui_theme = Some(Theme::build(renderer));
         self.stage.load();
-        renderer.window().set_title("Flicker Controller Tester \u{00b7} Bus Inspector");
+        renderer
+            .window()
+            .set_title("Flicker Controller Tester \u{00b7} Bus Inspector");
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         self.tick = self.tick.wrapping_add(1);
         self.snap = Some(input.clone());
         // Remember last frame's latch so render can show the current-vs-previous delta.
@@ -544,7 +676,9 @@ impl Scene for ControllerTester {
             }
         }
         let cycle = input.key_down(Key::Tab)
-            || input.gamepad(0).is_some_and(|g| g.button_down(GamepadButton::Select));
+            || input
+                .gamepad(0)
+                .is_some_and(|g| g.button_down(GamepadButton::Select));
         if cycle && !self.cycle_prev {
             let cur = self.bindings.active();
             let i = CONTEXTS.iter().position(|c| *c == cur).unwrap_or(0);
@@ -616,7 +750,9 @@ impl Scene for ControllerTester {
         let content_bottom = size.y - 34.0;
         let content_h = (content_bottom - content_top).max(140.0);
         let left_x0 = margin;
-        let left_w = (size.x * 0.27).clamp(250.0, 380.0).min((panel_x - margin - 120.0).max(220.0));
+        let left_w = (size.x * 0.27)
+            .clamp(250.0, 380.0)
+            .min((panel_x - margin - 120.0).max(220.0));
         let view_x0 = left_x0 + left_w + 10.0;
         let view_x1 = panel_x - 10.0;
         let view = Rect {
@@ -632,7 +768,17 @@ impl Scene for ControllerTester {
         // old full-screen backdrop would sit OVER the 3D and hide the golem).
         let mut band = |x0: f32, y0: f32, x1: f32, y1: f32| {
             if x1 > x0 && y1 > y0 {
-                renderer.draw_ui_panel(Vec2::new(x0, y0), Vec2::new(x1 - x0, y1 - y0), BG, BG, 0.0, 0.0, 0.0, BG, 0.0);
+                renderer.draw_ui_panel(
+                    Vec2::new(x0, y0),
+                    Vec2::new(x1 - x0, y1 - y0),
+                    BG,
+                    BG,
+                    0.0,
+                    0.0,
+                    0.0,
+                    BG,
+                    0.0,
+                );
             }
         };
         band(0.0, 0.0, size.x, content_top);
@@ -641,7 +787,17 @@ impl Scene for ControllerTester {
         band(view_x1, content_top, size.x, content_bottom);
 
         // The stage's frame + live caption (state · clip · tick), or the load error.
-        renderer.draw_ui_panel(view.pos, view.size, [0.0; 4], [0.0; 4], 0.0, 8.0, 1.5, PANEL_BORDER, 0.0);
+        renderer.draw_ui_panel(
+            view.pos,
+            view.size,
+            [0.0; 4],
+            [0.0; 4],
+            0.0,
+            8.0,
+            1.5,
+            PANEL_BORDER,
+            0.0,
+        );
         renderer.draw_text(
             "GOLEM STAGE  \u{00b7}  signals \u{2192} motion",
             Vec2::new(view.pos.x + 12.0, view.pos.y + 8.0),
@@ -650,11 +806,26 @@ impl Scene for ControllerTester {
         );
         match (self.stage.error.clone(), self.stage.caption()) {
             (Some(e), _) => {
-                renderer.draw_text("reference body failed to load:", Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0), 12.0, AMBER);
-                renderer.draw_text(&e, Vec2::new(view.pos.x + 12.0, view.pos.y + 48.0), 11.0, AMBER);
+                renderer.draw_text(
+                    "reference body failed to load:",
+                    Vec2::new(view.pos.x + 12.0, view.pos.y + 30.0),
+                    12.0,
+                    AMBER,
+                );
+                renderer.draw_text(
+                    &e,
+                    Vec2::new(view.pos.x + 12.0, view.pos.y + 48.0),
+                    11.0,
+                    AMBER,
+                );
             }
             (None, Some(c)) => {
-                renderer.draw_text(&c, Vec2::new(view.pos.x + 12.0, view.pos.y + view.size.y - 22.0), 12.0, GREENV);
+                renderer.draw_text(
+                    &c,
+                    Vec2::new(view.pos.x + 12.0, view.pos.y + view.size.y - 22.0),
+                    12.0,
+                    GREENV,
+                );
             }
             _ => {}
         }
@@ -662,7 +833,12 @@ impl Scene for ControllerTester {
         let snap = self.snap.as_ref();
 
         // ── header ──
-        renderer.draw_text("CONTROLLER TESTER \u{00b7} LIVE BUS INSPECTOR", Vec2::new(margin, 16.0), 20.0, ACCENT);
+        renderer.draw_text(
+            "CONTROLLER TESTER \u{00b7} LIVE BUS INSPECTOR",
+            Vec2::new(margin, 16.0),
+            20.0,
+            ACCENT,
+        );
         renderer.draw_text(
             "WASD / left stick move the golem \u{00b7} Shift run \u{00b7} Ctrl crouch \u{00b7} Space jump \u{00b7} Tab / Back cycles context \u{00b7} Esc / Start = menu",
             Vec2::new(margin, 44.0),
@@ -674,7 +850,11 @@ impl Scene for ControllerTester {
         renderer.draw_text(
             &format!(
                 "gamepad 0: {}   \u{00b7}   {slots} slot(s)   \u{00b7}   tick {}",
-                if connected { "CONNECTED" } else { "not detected" },
+                if connected {
+                    "CONNECTED"
+                } else {
+                    "not detected"
+                },
                 self.tick
             ),
             Vec2::new(margin, 64.0),
@@ -682,10 +862,20 @@ impl Scene for ControllerTester {
             if connected { ON_BORDER } else { DIM },
         );
         let (mpos, ml, mr, mm) = snap
-            .map(|s| (s.mouse_position, s.mouse_left, s.mouse_right, s.mouse_middle))
+            .map(|s| {
+                (
+                    s.mouse_position,
+                    s.mouse_left,
+                    s.mouse_right,
+                    s.mouse_middle,
+                )
+            })
             .unwrap_or((Vec2::ZERO, false, false, false));
         renderer.draw_text(
-            &format!("mouse {:.0},{:.0}  L{} R{} M{}", mpos.x, mpos.y, ml as u8, mr as u8, mm as u8),
+            &format!(
+                "mouse {:.0},{:.0}  L{} R{} M{}",
+                mpos.x, mpos.y, ml as u8, mr as u8, mm as u8
+            ),
             Vec2::new(size.x - 230.0, 20.0),
             12.0,
             DIM,
@@ -697,8 +887,10 @@ impl Scene for ControllerTester {
         for (i, ctx) in CONTEXTS.iter().enumerate() {
             let (x, w) = tab_geom(size.x, i);
             let is_active = *ctx == active_ctx;
-            let hovered =
-                cursor.x >= x && cursor.x <= x + w && cursor.y >= TAB_Y && cursor.y <= TAB_Y + TAB_H;
+            let hovered = cursor.x >= x
+                && cursor.x <= x + w
+                && cursor.y >= TAB_Y
+                && cursor.y <= TAB_Y + TAB_H;
             let bg = if is_active {
                 TAB_ACTIVE_BG
             } else if hovered {
@@ -706,16 +898,43 @@ impl Scene for ControllerTester {
             } else {
                 [0.0; 4]
             };
-            renderer.draw_ui_panel(Vec2::new(x, TAB_Y), Vec2::new(w, TAB_H), bg, bg, 0.0, 4.0, 0.0, bg, 0.0);
+            renderer.draw_ui_panel(
+                Vec2::new(x, TAB_Y),
+                Vec2::new(w, TAB_H),
+                bg,
+                bg,
+                0.0,
+                4.0,
+                0.0,
+                bg,
+                0.0,
+            );
             if is_active {
                 renderer.draw_ui_panel(
                     Vec2::new(x, TAB_Y + TAB_H - 3.0),
                     Vec2::new(w, 3.0),
-                    BRONZE, BRONZE, 0.0, 0.0, 0.0, BRONZE, 0.0,
+                    BRONZE,
+                    BRONZE,
+                    0.0,
+                    0.0,
+                    0.0,
+                    BRONZE,
+                    0.0,
                 );
             }
-            let col = if is_active { TAB_LABEL_ON } else { TAB_LABEL_OFF };
-            text_centered(renderer, x + w * 0.5, TAB_Y + TAB_H * 0.5, ctx_label(*ctx), 14.0, col);
+            let col = if is_active {
+                TAB_LABEL_ON
+            } else {
+                TAB_LABEL_OFF
+            };
+            text_centered(
+                renderer,
+                x + w * 0.5,
+                TAB_Y + TAB_H * 0.5,
+                ctx_label(*ctx),
+                14.0,
+                col,
+            );
         }
 
         // (Columns were laid out above — the stage owns the centre.) The diagram
@@ -731,54 +950,152 @@ impl Scene for ControllerTester {
         let dcy = content_top + diagram_h * 0.5;
 
         // ── the controller diagram (discrete snapshot) ──
-        let bd = |b: GamepadButton| snap.and_then(|s| s.gamepad(0)).is_some_and(|gp| gp.button_down(b));
-        let av = |a: GamepadAxis| snap.and_then(|s| s.gamepad(0)).map_or(0.0, |gp| gp.axis_value(a));
+        let bd = |b: GamepadButton| {
+            snap.and_then(|s| s.gamepad(0))
+                .is_some_and(|gp| gp.button_down(b))
+        };
+        let av = |a: GamepadAxis| {
+            snap.and_then(|s| s.gamepad(0))
+                .map_or(0.0, |gp| gp.axis_value(a))
+        };
         let at = |dx: f32, dy: f32| Vec2::new(dcx + dx * s, dcy + dy * s);
         let u = 44.0 * s;
         let meta_side = 32.0 * s;
 
         // shoulders + triggers
-        trigger(renderer, at(-300.0, -112.0), 38.0 * s, 60.0 * s, av(GamepadAxis::LeftTrigger), "LT");
-        cell(renderer, at(-220.0, -104.0), u, "LB", bd(GamepadButton::LeftBumper));
-        cell(renderer, at(220.0, -104.0), u, "RB", bd(GamepadButton::RightBumper));
-        trigger(renderer, at(300.0, -112.0), 38.0 * s, 60.0 * s, av(GamepadAxis::RightTrigger), "RT");
+        trigger(
+            renderer,
+            at(-300.0, -112.0),
+            38.0 * s,
+            60.0 * s,
+            av(GamepadAxis::LeftTrigger),
+            "LT",
+        );
+        cell(
+            renderer,
+            at(-220.0, -104.0),
+            u,
+            "LB",
+            bd(GamepadButton::LeftBumper),
+        );
+        cell(
+            renderer,
+            at(220.0, -104.0),
+            u,
+            "RB",
+            bd(GamepadButton::RightBumper),
+        );
+        trigger(
+            renderer,
+            at(300.0, -112.0),
+            38.0 * s,
+            60.0 * s,
+            av(GamepadAxis::RightTrigger),
+            "RT",
+        );
         // d-pad (centred at -250, 6; spacing 56)
-        cell(renderer, at(-250.0, -50.0), u, "Up", bd(GamepadButton::DPadUp));
-        cell(renderer, at(-250.0, 62.0), u, "Dn", bd(GamepadButton::DPadDown));
-        cell(renderer, at(-306.0, 6.0), u, "Lt", bd(GamepadButton::DPadLeft));
-        cell(renderer, at(-194.0, 6.0), u, "Rt", bd(GamepadButton::DPadRight));
+        cell(
+            renderer,
+            at(-250.0, -50.0),
+            u,
+            "Up",
+            bd(GamepadButton::DPadUp),
+        );
+        cell(
+            renderer,
+            at(-250.0, 62.0),
+            u,
+            "Dn",
+            bd(GamepadButton::DPadDown),
+        );
+        cell(
+            renderer,
+            at(-306.0, 6.0),
+            u,
+            "Lt",
+            bd(GamepadButton::DPadLeft),
+        );
+        cell(
+            renderer,
+            at(-194.0, 6.0),
+            u,
+            "Rt",
+            bd(GamepadButton::DPadRight),
+        );
         // face buttons (A=South, B=East, X=West, Y=North)
         cell(renderer, at(250.0, -50.0), u, "Y", bd(GamepadButton::North));
         cell(renderer, at(250.0, 62.0), u, "A", bd(GamepadButton::South));
         cell(renderer, at(194.0, 6.0), u, "X", bd(GamepadButton::West));
         cell(renderer, at(306.0, 6.0), u, "B", bd(GamepadButton::East));
         // meta
-        cell(renderer, at(-44.0, -10.0), meta_side, "Bk", bd(GamepadButton::Select));
-        cell(renderer, at(0.0, -10.0), meta_side, "Xb", bd(GamepadButton::Guide));
-        cell(renderer, at(44.0, -10.0), meta_side, "St", bd(GamepadButton::Start));
+        cell(
+            renderer,
+            at(-44.0, -10.0),
+            meta_side,
+            "Bk",
+            bd(GamepadButton::Select),
+        );
+        cell(
+            renderer,
+            at(0.0, -10.0),
+            meta_side,
+            "Xb",
+            bd(GamepadButton::Guide),
+        );
+        cell(
+            renderer,
+            at(44.0, -10.0),
+            meta_side,
+            "St",
+            bd(GamepadButton::Start),
+        );
         // sticks
         stick(
-            renderer, at(-108.0, 104.0), 50.0 * s,
-            av(GamepadAxis::LeftStickX), av(GamepadAxis::LeftStickY),
-            bd(GamepadButton::LeftStick), "L3",
+            renderer,
+            at(-108.0, 104.0),
+            50.0 * s,
+            av(GamepadAxis::LeftStickX),
+            av(GamepadAxis::LeftStickY),
+            bd(GamepadButton::LeftStick),
+            "L3",
         );
         stick(
-            renderer, at(108.0, 104.0), 50.0 * s,
-            av(GamepadAxis::RightStickX), av(GamepadAxis::RightStickY),
-            bd(GamepadButton::RightStick), "R3",
+            renderer,
+            at(108.0, 104.0),
+            50.0 * s,
+            av(GamepadAxis::RightStickX),
+            av(GamepadAxis::RightStickY),
+            bd(GamepadButton::RightStick),
+            "R3",
         );
 
         // ── analog channel panel (the volatile latch, alongside the discrete bus) ──
         let analog_top = content_top + diagram_h + 8.0;
         let analog_h = content_bottom - analog_top;
-        let mut ay = panel(renderer, left_x0, analog_top, left_w, analog_h, "ANALOG LATCH  \u{00b7}  input.analog_latch() (volatile cache)");
+        let mut ay = panel(
+            renderer,
+            left_x0,
+            analog_top,
+            left_w,
+            analog_h,
+            "ANALOG LATCH  \u{00b7}  input.analog_latch() (volatile cache)",
+        );
         match self.latch {
             Some(f) => {
-                let age_ms = Instant::now().saturating_duration_since(f.captured).as_secs_f32() * 1000.0;
+                let age_ms = Instant::now()
+                    .saturating_duration_since(f.captured)
+                    .as_secs_f32()
+                    * 1000.0;
                 let stale = age_ms > 100.0;
                 let dseq = self.prev_latch.map_or(0, |p| f.seq.saturating_sub(p.seq));
                 renderer.draw_text(
-                    &format!("seq {}  (\u{0394}+{})    age {:.1} ms    {}", f.seq, dseq, age_ms, if stale { "STALE" } else { "LIVE" }),
+                    &format!(
+                        "seq {}  (\u{0394}+{})    age {:.1} ms    {}",
+                        f.seq,
+                        dseq,
+                        age_ms,
+                        if stale { "STALE" } else { "LIVE" }
+                    ),
                     Vec2::new(left_x0 + 14.0, ay),
                     12.0,
                     if stale { AMBER } else { GREENV },
@@ -788,18 +1105,62 @@ impl Scene for ControllerTester {
                 let p = self.prev_latch.unwrap_or(f);
                 let dl = f.left_stick - p.left_stick;
                 let dr = f.right_stick - p.right_stick;
-                renderer.draw_text(&format!("L stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})", f.left_stick.x, f.left_stick.y, dl.x, dl.y), Vec2::new(left_x0 + 14.0, ay), 12.0, TXT);
+                renderer.draw_text(
+                    &format!(
+                        "L stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
+                        f.left_stick.x, f.left_stick.y, dl.x, dl.y
+                    ),
+                    Vec2::new(left_x0 + 14.0, ay),
+                    12.0,
+                    TXT,
+                );
                 ay += 18.0;
-                renderer.draw_text(&format!("R stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})", f.right_stick.x, f.right_stick.y, dr.x, dr.y), Vec2::new(left_x0 + 14.0, ay), 12.0, TXT);
+                renderer.draw_text(
+                    &format!(
+                        "R stick  ({:+.2}, {:+.2})    \u{0394}({:+.2}, {:+.2})",
+                        f.right_stick.x, f.right_stick.y, dr.x, dr.y
+                    ),
+                    Vec2::new(left_x0 + 14.0, ay),
+                    12.0,
+                    TXT,
+                );
                 ay += 18.0;
-                renderer.draw_text(&format!("L trig   {:.2}         \u{0394}{:+.2}", f.left_trigger, f.left_trigger - p.left_trigger), Vec2::new(left_x0 + 14.0, ay), 12.0, TXT);
+                renderer.draw_text(
+                    &format!(
+                        "L trig   {:.2}         \u{0394}{:+.2}",
+                        f.left_trigger,
+                        f.left_trigger - p.left_trigger
+                    ),
+                    Vec2::new(left_x0 + 14.0, ay),
+                    12.0,
+                    TXT,
+                );
                 ay += 18.0;
-                renderer.draw_text(&format!("R trig   {:.2}         \u{0394}{:+.2}", f.right_trigger, f.right_trigger - p.right_trigger), Vec2::new(left_x0 + 14.0, ay), 12.0, TXT);
+                renderer.draw_text(
+                    &format!(
+                        "R trig   {:.2}         \u{0394}{:+.2}",
+                        f.right_trigger,
+                        f.right_trigger - p.right_trigger
+                    ),
+                    Vec2::new(left_x0 + 14.0, ay),
+                    12.0,
+                    TXT,
+                );
                 ay += 18.0;
-                renderer.draw_text("120 Hz cache sampled off the discrete bus; seq climbs while live", Vec2::new(left_x0 + 14.0, ay), 10.0, DIM);
+                renderer.draw_text(
+                    "120 Hz cache sampled off the discrete bus; seq climbs while live",
+                    Vec2::new(left_x0 + 14.0, ay),
+                    10.0,
+                    DIM,
+                );
             }
             None => {
-                renderer.draw_text("no analog latch this frame (device not sampling)", Vec2::new(left_x0 + 14.0, ay), 12.0, DIM);
+                renderer.draw_text(
+                    "no analog latch this frame (device not sampling)",
+                    Vec2::new(left_x0 + 14.0, ay),
+                    12.0,
+                    DIM,
+                );
             }
         }
 
@@ -815,30 +1176,72 @@ impl Scene for ControllerTester {
         let depth = self.stack.len();
         for (i, ctx) in self.stack.iter().enumerate().rev() {
             let is_top = i == depth - 1;
-            let (marker, col) = if is_top { ("\u{25b8} ", ACCENT) } else { ("  ", TXT) };
-            renderer.draw_text(&format!("{marker}{}", ctx_label(*ctx)), Vec2::new(panel_x + 14.0, cy), 14.0, col);
-            let tag = if is_top { "active" } else if i == 0 { "base" } else { "" };
+            let (marker, col) = if is_top {
+                ("\u{25b8} ", ACCENT)
+            } else {
+                ("  ", TXT)
+            };
+            renderer.draw_text(
+                &format!("{marker}{}", ctx_label(*ctx)),
+                Vec2::new(panel_x + 14.0, cy),
+                14.0,
+                col,
+            );
+            let tag = if is_top {
+                "active"
+            } else if i == 0 {
+                "base"
+            } else {
+                ""
+            };
             if !tag.is_empty() {
                 let tw = renderer.measure_text(tag, 11.0).x;
-                renderer.draw_text(tag, Vec2::new(panel_x + panel_w - 14.0 - tw, cy + 2.0), 11.0, DIM);
+                renderer.draw_text(
+                    tag,
+                    Vec2::new(panel_x + panel_w - 14.0 - tw, cy + 2.0),
+                    11.0,
+                    DIM,
+                );
             }
             cy += 22.0;
         }
 
         // (2) the focus chain — which layer owns input (declares the active context).
-        let mut cy = panel(renderer, panel_x, p2_y, panel_w, ph, "FOCUS CHAIN  (owner = top of chain)");
+        let mut cy = panel(
+            renderer,
+            panel_x,
+            p2_y,
+            panel_w,
+            ph,
+            "FOCUS CHAIN  (owner = top of chain)",
+        );
         for (i, layer) in self.bus.layers.iter().enumerate() {
             let col = if layer.owns { GREENV } else { TXT };
-            renderer.draw_text(&format!("{i} {}", layer.name), Vec2::new(panel_x + 14.0, cy), 13.0, col);
+            renderer.draw_text(
+                &format!("{i} {}", layer.name),
+                Vec2::new(panel_x + 14.0, cy),
+                13.0,
+                col,
+            );
             let mid = match layer.declares {
                 Some(c) => format!("ctx {}", ctx_label(c)),
                 None => layer.note.to_string(),
             };
-            renderer.draw_text(&mid, Vec2::new(panel_x + panel_w * 0.40, cy), 11.0, if layer.owns { GREENV } else { DIM });
+            renderer.draw_text(
+                &mid,
+                Vec2::new(panel_x + panel_w * 0.40, cy),
+                11.0,
+                if layer.owns { GREENV } else { DIM },
+            );
             if layer.owns {
                 let tag = "\u{25c0} OWNS";
                 let tw = renderer.measure_text(tag, 11.0).x;
-                renderer.draw_text(tag, Vec2::new(panel_x + panel_w - 12.0 - tw, cy), 11.0, GREENV);
+                renderer.draw_text(
+                    tag,
+                    Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
+                    11.0,
+                    GREENV,
+                );
             }
             cy += 20.0;
         }
@@ -846,7 +1249,12 @@ impl Scene for ControllerTester {
         // (3) which handler consumed each fired signal this frame (DispatchReport).
         let mut cy = panel(renderer, panel_x, p3_y, panel_w, ph, "CONSUMED THIS FRAME");
         if self.bus.consumed.is_empty() {
-            renderer.draw_text("\u{2014} no signals this frame \u{2014}", Vec2::new(panel_x + 14.0, cy), 12.0, DIM);
+            renderer.draw_text(
+                "\u{2014} no signals this frame \u{2014}",
+                Vec2::new(panel_x + 14.0, cy),
+                12.0,
+                DIM,
+            );
         } else {
             let max_rows = (((ph - 34.0) / 20.0).max(1.0)) as usize;
             for row in self.bus.consumed.iter().take(max_rows) {
@@ -856,13 +1264,23 @@ impl Scene for ControllerTester {
                     EventKind::Hold => "hold",
                     EventKind::Chord => "chord",
                 };
-                renderer.draw_text(&format!("{kindc:<5} {}", row.label), Vec2::new(panel_x + 14.0, cy), 12.0, TXT);
+                renderer.draw_text(
+                    &format!("{kindc:<5} {}", row.label),
+                    Vec2::new(panel_x + 14.0, cy),
+                    12.0,
+                    TXT,
+                );
                 let (dest, col) = match row.consumer {
                     Some(name) => (format!("\u{2192} {name}"), GREENV),
                     None => ("\u{2192} passed".to_string(), AMBER),
                 };
                 let tw = renderer.measure_text(&dest, 12.0).x;
-                renderer.draw_text(&dest, Vec2::new(panel_x + panel_w - 12.0 - tw, cy), 12.0, col);
+                renderer.draw_text(
+                    &dest,
+                    Vec2::new(panel_x + panel_w - 12.0 - tw, cy),
+                    12.0,
+                    col,
+                );
                 cy += 20.0;
             }
         }
@@ -875,8 +1293,22 @@ impl Scene for ControllerTester {
             let on = snap.is_some_and(|s| s.key_down(k));
             let lbl = format!("{k}");
             let w = renderer.measure_text(&lbl, 11.0).x + 12.0;
-            let (fill, border, txt) = if on { (ON_FILL, ON_BORDER, ON_CELL_TXT) } else { (IDLE_FILL, IDLE_BORDER, DIM) };
-            renderer.draw_ui_panel(Vec2::new(x, ky - 3.0), Vec2::new(w, 18.0), fill, fill, 0.0, 5.0, 1.0, border, 0.0);
+            let (fill, border, txt) = if on {
+                (ON_FILL, ON_BORDER, ON_CELL_TXT)
+            } else {
+                (IDLE_FILL, IDLE_BORDER, DIM)
+            };
+            renderer.draw_ui_panel(
+                Vec2::new(x, ky - 3.0),
+                Vec2::new(w, 18.0),
+                fill,
+                fill,
+                0.0,
+                5.0,
+                1.0,
+                border,
+                0.0,
+            );
             renderer.draw_text(&lbl, Vec2::new(x + 6.0, ky), 11.0, txt);
             x += w + 5.0;
             if x > size.x - 56.0 {
@@ -918,27 +1350,52 @@ mod tests {
             mk(ActionSignal::Dodge, EventKind::Press),
         ];
         let report = run(active, &events);
-        assert!(report.consumed_by(0, ActionSignal::Quit), "System captures Quit");
-        assert!(report.consumed_by(SCENE_ROOT, ActionSignal::Menu), "Scene root consumes Menu");
-        assert!(report.consumed_by(3, ActionSignal::Dodge), "Gameplay base consumes Dodge");
+        assert!(
+            report.consumed_by(0, ActionSignal::Quit),
+            "System captures Quit"
+        );
+        assert!(
+            report.consumed_by(SCENE_ROOT, ActionSignal::Menu),
+            "Scene root consumes Menu"
+        );
+        assert!(
+            report.consumed_by(3, ActionSignal::Dodge),
+            "Gameplay base consumes Dodge"
+        );
     }
 
     #[test]
     fn menu_context_routes_ui_to_modal() {
         let raw = InputState::new();
         let active = InputContext::Menu;
-        let events = [InputEvent::new(ActionSignal::Confirm, EventKind::Press, active, &raw)];
+        let events = [InputEvent::new(
+            ActionSignal::Confirm,
+            EventKind::Press,
+            active,
+            &raw,
+        )];
         let report = run(active, &events);
-        assert!(report.consumed_by(2, ActionSignal::Confirm), "Modal consumes UI signals when active");
+        assert!(
+            report.consumed_by(2, ActionSignal::Confirm),
+            "Modal consumes UI signals when active"
+        );
     }
 
     #[test]
     fn textentry_owner_captures_everything() {
         let raw = InputState::new();
         let active = InputContext::TextEntry;
-        let events = [InputEvent::new(ActionSignal::SubmitText, EventKind::Press, active, &raw)];
+        let events = [InputEvent::new(
+            ActionSignal::SubmitText,
+            EventKind::Press,
+            active,
+            &raw,
+        )];
         let report = run(active, &events);
-        assert!(report.consumed_by(2, ActionSignal::SubmitText), "exclusive owner captures in TextEntry");
+        assert!(
+            report.consumed_by(2, ActionSignal::SubmitText),
+            "exclusive owner captures in TextEntry"
+        );
     }
 
     #[test]
@@ -954,13 +1411,15 @@ mod tests {
         // The same physical button resolves to a different signal per context.
         let cb = demo_bindings();
         assert_eq!(
-            cb.active_map().action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            cb.active_map()
+                .action_for(InputBinding::GamepadButton(GamepadButton::East)),
             Some(ActionSignal::Dodge),
         );
         let mut cb = demo_bindings();
         cb.push(InputContext::Menu);
         assert_eq!(
-            cb.active_map().action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            cb.active_map()
+                .action_for(InputBinding::GamepadButton(GamepadButton::East)),
             Some(ActionSignal::Cancel),
         );
     }

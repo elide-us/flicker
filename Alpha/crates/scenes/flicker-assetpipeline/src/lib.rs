@@ -43,9 +43,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
-};
 use flicker::render::{
     build_textured_verts, grid_segments_xy, Camera, Mat4, MeshDrawOptions, MeshHandle, MeshIndices,
     MeshVertex, PbrMaps, QuadGrid, QuadView, Rect, Renderer, SceneLighting, TextureHandle,
@@ -53,17 +50,17 @@ use flicker::render::{
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, UiNode, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler,
+use flicker::ui::{render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
 };
 use flicker_shell::{PauseScene, Theme};
 
 use flicker_content::{
-    attach_world, classify_asset, conform_to_canonical, default_reference,
-    fitting_base, garment_socket, parse_fbx, rename_to_canonical, scan_folder,
-    bake_skin, source_maps, write_garment, write_prop, write_rig, AssetClass, AssetReport,
-    ConformOutput, Fit,
-    Kind, PropKind, RawModel, RenameReport, Scan, SourceMaps,
+    attach_world, bake_skin, classify_asset, conform_to_canonical, default_reference, fitting_base,
+    garment_socket, parse_fbx, rename_to_canonical, scan_folder, source_maps, write_garment,
+    write_prop, write_rig, AssetClass, AssetReport, ConformOutput, Fit, Kind, PropKind, RawModel,
+    RenameReport, Scan, SourceMaps,
 };
 use flicker_mechanics::{
     autofit_capsules_from, closest_point_ray_segment, debug, drag_plane, gizmo_segments, GizmoMode,
@@ -88,13 +85,6 @@ use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, Rou
 /// (Aaron 2026-08-12); dies with this bench's migration to the scene-def system.
 mod workflow;
 use workflow::{workflows_from_json, Workflow, WorkflowDef};
-
-/// Layout + `$token` styles live in the shared `ui_theme.json` — the ONE global
-/// UI-element definition + Prism palette every prism-alpha scene reads — under the
-/// `assetpipeline` key. NOT a per-scene copy: a second file would need its own
-/// `theme.tokens`, forking the palette, which the one-colour-source rule forbids.
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// Skeleton overlay colours, matching the paperdoll's rig view so the two tools read alike.
 /// JOINTS (the selectable balls) stay cyan; BONES (the octahedral diamonds between them) read
@@ -177,8 +167,16 @@ const WF_ANIMATION: &str = "import_animation";
 /// honest (the ruled Clip-role UX: pick one, the other, or both). Corner labels ride
 /// the same composite path as [`EDITOR_QUADS`]' PERSP/TOP/… tags.
 const CLIP_VIEWS: [QuadView; 2] = [
-    QuadView { label: "ROOT MOTION", label_flipped: "ROOT MOTION", ortho: None },
-    QuadView { label: "IN PLACE", label_flipped: "IN PLACE", ortho: None },
+    QuadView {
+        label: "ROOT MOTION",
+        label_flipped: "ROOT MOTION",
+        ortho: None,
+    },
+    QuadView {
+        label: "IN PLACE",
+        label_flipped: "IN PLACE",
+        ortho: None,
+    },
 ];
 
 /// The workflow DEFINITIONS — quarantined beside the vendored runtime (no longer
@@ -455,13 +453,22 @@ struct PropFit {
 
 impl Default for PropFit {
     fn default() -> Self {
-        Self { socket: 0, offset: [0.0; 3], rot: [0.0; 3], scale: [1.0; 3], uniform: 1.0 }
+        Self {
+            socket: 0,
+            offset: [0.0; 3],
+            rot: [0.0; 3],
+            scale: [1.0; 3],
+            uniform: 1.0,
+        }
     }
 }
 
 impl PropFit {
     fn socket_name(&self) -> &'static str {
-        SOCKETS.get(self.socket).map(|(id, _)| *id).unwrap_or("pelvis")
+        SOCKETS
+            .get(self.socket)
+            .map(|(id, _)| *id)
+            .unwrap_or("pelvis")
     }
 }
 
@@ -596,7 +603,10 @@ struct Source {
 impl Source {
     /// The asset name the pipeline would bake under — the source folder's own name.
     fn asset_name(&self) -> &str {
-        self.dir.file_name().and_then(|s| s.to_str()).unwrap_or("asset")
+        self.dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("asset")
     }
 
     fn file_name(&self) -> &str {
@@ -620,7 +630,9 @@ impl Source {
     /// Bind every attach point to its parent bone. Called when the working model's names change
     /// — i.e. once, after conform.
     fn resolve_attach(&mut self) {
-        let Some(parsed) = self.parsed.as_ref() else { return };
+        let Some(parsed) = self.parsed.as_ref() else {
+            return;
+        };
         for p in &mut self.attach {
             p.bone = parsed.bone_index(p.parent);
         }
@@ -652,7 +664,13 @@ impl Default for Orbit {
         // Start FACE-ON-ish: the eye orbits the XY plane as `(cos yaw, sin yaw, sin pitch)`, and a
         // character faces +Y, so yaw ≈ π/2 looks at its front. Backed off a little (1.25) for a
         // three-quarter view, which reads the silhouette better than dead-on, and lifted slightly.
-        Self { yaw: 1.25, pitch: 0.22, dist_scale: 2.4, zoom: 1.0, pan: Vec3::ZERO }
+        Self {
+            yaw: 1.25,
+            pitch: 0.22,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        }
     }
 }
 
@@ -864,7 +882,11 @@ type PreviewKey = (PathBuf, usize);
 /// vendor's actual maps — which is the whole point of previewing them.
 #[derive(Clone, Copy)]
 enum Uploaded {
-    Textured { mesh: TexturedMeshHandle, albedo: TextureHandle, maps: PbrMaps },
+    Textured {
+        mesh: TexturedMeshHandle,
+        albedo: TextureHandle,
+        maps: PbrMaps,
+    },
     Flat(MeshHandle),
 }
 
@@ -875,9 +897,14 @@ impl Uploaded {
             Uploaded::Textured { mesh, albedo, maps } => {
                 r.draw_textured_mesh_pbr(mesh, albedo, maps, world, MeshDrawOptions::default())
             }
-            Uploaded::Flat(h) => {
-                r.draw_mesh(h, world, MeshDrawOptions { tint: flat_tint, ..Default::default() })
-            }
+            Uploaded::Flat(h) => r.draw_mesh(
+                h,
+                world,
+                MeshDrawOptions {
+                    tint: flat_tint,
+                    ..Default::default()
+                },
+            ),
         }
     }
 
@@ -959,7 +986,11 @@ fn upload_preview(
         return Uploaded::Flat(r.upload_mesh(verts, MeshIndices::U32(idx)));
     };
 
-    let flat: Vec<usize> = idx.iter().map(|&i| i as usize).filter(|&i| i < verts.len()).collect();
+    let flat: Vec<usize> = idx
+        .iter()
+        .map(|&i| i as usize)
+        .filter(|&i| i < verts.len())
+        .collect();
     let tv = build_textured_verts(
         0..flat.len(),
         |k| verts[flat[k]].position,
@@ -968,9 +999,18 @@ fn upload_preview(
     );
     let li: Vec<u32> = (0..tv.len() as u32).collect();
     let mesh = r.upload_textured_mesh(&tv, MeshIndices::U32(&li));
-    let normal = maps.normal.as_deref().and_then(|p| load_map(r, cache, p, false));
-    let roughness = maps.roughness.as_deref().and_then(|p| load_map(r, cache, p, false));
-    let metalness = maps.metalness.as_deref().and_then(|p| load_map(r, cache, p, false));
+    let normal = maps
+        .normal
+        .as_deref()
+        .and_then(|p| load_map(r, cache, p, false));
+    let roughness = maps
+        .roughness
+        .as_deref()
+        .and_then(|p| load_map(r, cache, p, false));
+    let metalness = maps
+        .metalness
+        .as_deref()
+        .and_then(|p| load_map(r, cache, p, false));
     Uploaded::Textured {
         mesh,
         albedo,
@@ -979,7 +1019,13 @@ fn upload_preview(
         // `flicker_skeletal::format::Material` already carries an `emit` field and
         // the content standard mandates the map. TRACKED GAP, not an omission:
         // closing it means teaching `source_maps` the `_Emit` suffix.
-        maps: PbrMaps { normal, roughness, metalness, ao: None, emit: None },
+        maps: PbrMaps {
+            normal,
+            roughness,
+            metalness,
+            ao: None,
+            emit: None,
+        },
     }
 }
 
@@ -1036,7 +1082,10 @@ impl BasePreview {
         let names: Vec<String> = rig.skeleton.bones.iter().map(|b| b.name.clone()).collect();
         let parents: Vec<i32> = rig.skeleton.bones.iter().map(|b| b.parent).collect();
         let ibind: Vec<[f32; 16]> = rig.skeleton.bones.iter().map(|b| b.inverse_bind).collect();
-        let globals: Vec<Mat4> = ibind.iter().map(|m| Mat4::from_cols_array(m).inverse()).collect();
+        let globals: Vec<Mat4> = ibind
+            .iter()
+            .map(|m| Mat4::from_cols_array(m).inverse())
+            .collect();
 
         // Over budget → fall back to the skeleton rather than stall `enter` on a 50 MB upload. The
         // reference body is a nicety; the bone frames are the contract.
@@ -1055,7 +1104,11 @@ impl BasePreview {
                 .mesh
                 .vertices
                 .iter()
-                .map(|x| MeshVertex { position: x.p, normal: x.n, material: 0 })
+                .map(|x| MeshVertex {
+                    position: x.p,
+                    normal: x.n,
+                    material: 0,
+                })
                 .collect();
             let uv: Vec<[f32; 2]> = rig.mesh.vertices.iter().map(|x| x.uv).collect();
             // The converter emits no index list when the vertices are already sequential.
@@ -1070,7 +1123,10 @@ impl BasePreview {
         // The body's maps are BASENAMES in its material, written beside the rig by the same
         // `wire_textures` that bakes every asset — so resolving them against the rig's own folder
         // is all it takes to preview the reference body with its real skin.
-        let dir = base_path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let dir = base_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
         let mat = rig.mesh.materials.first();
         let named = |s: &str| (!s.is_empty()).then(|| dir.join(s));
         let maps = SourceMaps {
@@ -1101,7 +1157,19 @@ impl BasePreview {
         let radius = ((hi - lo).max_element() * 0.5).max(50.0);
         // Recentred, exactly as `model_bounds` reports it — the sole of the foot.
         let floor = lo.z - centre.z;
-        Some(Self { names, parents, globals, ibind, centre, radius, floor, verts, uvs, indices, maps })
+        Some(Self {
+            names,
+            parents,
+            globals,
+            ibind,
+            centre,
+            radius,
+            floor,
+            verts,
+            uvs,
+            indices,
+            maps,
+        })
     }
 
     fn socket_index(&self, name: &str) -> Option<usize> {
@@ -1136,7 +1204,7 @@ impl AssetPipeline {
     /// DATA (`clayworks_bench` in `ui_templates.json`) and [`Self::build_tree`] emits
     /// one instance of it every frame.
     pub fn new() -> Self {
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         // The workflow spine. The definitions are EMBEDDED content, so a parse failure is
         // a build bug the suite catches, not a runtime state — expect() over limping on
         // with no wizard. The character definition is also the pre-dispatch default:
@@ -1213,7 +1281,9 @@ impl AssetPipeline {
     /// (no riggable mesh, several of them) are surfaced, never guessed around: the scan's
     /// own disambiguation guard decides.
     fn load_folder(&mut self) {
-        let Some(dir) = rfd::FileDialog::new().set_title("Open asset source folder").pick_folder()
+        let Some(dir) = rfd::FileDialog::new()
+            .set_title("Open asset source folder")
+            .pick_folder()
         else {
             return; // cancelled — stay put
         };
@@ -1253,18 +1323,21 @@ impl AssetPipeline {
                 // the choice (the Load picker) instead of refusing the folder. The first is
                 // pre-selected so the wizard is never stuck. The ANIMATION workflow's candidates
                 // are the folder's BVH clips instead — same picker, different kind.
-                let (candidates, error): (Vec<PathBuf>, Option<String>) =
-                    if self.pending_class == Some(AssetClass::Animation) {
-                        let c: Vec<PathBuf> =
-                            scan.of_kind(Kind::Bvh).map(|e| e.path.clone()).collect();
-                        let e = c.is_empty().then(|| format!("No BVH clips in {}", dir.display()));
-                        (c, e)
-                    } else {
-                        let c: Vec<PathBuf> = scan.candidates().map(|e| e.path.clone()).collect();
-                        let e =
-                            c.is_empty().then(|| format!("No riggable mesh in {}", dir.display()));
-                        (c, e)
-                    };
+                let (candidates, error): (Vec<PathBuf>, Option<String>) = if self.pending_class
+                    == Some(AssetClass::Animation)
+                {
+                    let c: Vec<PathBuf> = scan.of_kind(Kind::Bvh).map(|e| e.path.clone()).collect();
+                    let e = c
+                        .is_empty()
+                        .then(|| format!("No BVH clips in {}", dir.display()));
+                    (c, e)
+                } else {
+                    let c: Vec<PathBuf> = scan.candidates().map(|e| e.path.clone()).collect();
+                    let e = c
+                        .is_empty()
+                        .then(|| format!("No riggable mesh in {}", dir.display()));
+                    (c, e)
+                };
                 let fbx = candidates.first().cloned().unwrap_or_default();
                 tracing::info!(
                     "scanned {}: {} entries, {} riggable, {textures} textures",
@@ -1325,7 +1398,9 @@ impl AssetPipeline {
     /// source hitches one frame; folding the stages onto `flicker-worker::WorkerPool` is
     /// FDD Layer B and deliberately not started here.
     fn analyze(&mut self) {
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         // An Animation source's candidates are BVH files, not FBX meshes — its stage
         // runner is `prepare_clip`, the sibling of this one, so there is nothing to parse.
         if src.class() == Some(AssetClass::Animation) {
@@ -1349,7 +1424,12 @@ impl AssetPipeline {
                 // Seed the fit's STARTING socket from what was detected, so the Attach stage opens
                 // on a sensible mount the user then confirms or moves — a weapon at the hand, a
                 // garment at its body region, an accessory at the chest.
-                let name = src.dir.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                let name = src
+                    .dir
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
                 let start = match report.class {
                     AssetClass::Prop if report.prop == PropKind::Clothing => garment_socket(&name),
                     AssetClass::Prop if report.prop == PropKind::Weapon => "hand_r",
@@ -1369,7 +1449,9 @@ impl AssetPipeline {
     /// and read the per-bone provenance straight out of the reports. Runs once when the stage is
     /// reached; the sliders then author on top of its result.
     fn conform(&mut self) {
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         if src.rig.is_some() {
             return;
         }
@@ -1382,7 +1464,9 @@ impl AssetPipeline {
         if matches!(src.class(), Some(AssetClass::Prop | AssetClass::Animation)) {
             return;
         }
-        let Some(parsed) = src.parsed.as_mut() else { return };
+        let Some(parsed) = src.parsed.as_mut() else {
+            return;
+        };
         let rename = rename_to_canonical(&mut parsed.model);
         match conform_to_canonical(&mut parsed.model, &default_reference()) {
             Ok(out) => {
@@ -1419,7 +1503,9 @@ impl AssetPipeline {
     /// variants for playback. Nothing touches disk until Commit. Idempotent (a pick
     /// clears `clip` to re-run); a failure surfaces in the inspector, never invents.
     fn prepare_clip(&mut self) {
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         if src.clip.is_some()
             || src.class() != Some(AssetClass::Animation)
             || src.fbx.as_os_str().is_empty()
@@ -1488,7 +1574,9 @@ impl AssetPipeline {
         // nothing parsed there is nothing to bake, and the refusal lands where every
         // other stage failure does, in the inspector.
         {
-            let Some(src) = self.source.as_mut() else { return };
+            let Some(src) = self.source.as_mut() else {
+                return;
+            };
             if src.parsed.is_none() {
                 src.error = Some(
                     "Nothing is parsed — the source never loaded, so there is nothing to commit."
@@ -1500,8 +1588,12 @@ impl AssetPipeline {
         // Read everything under a shared borrow, then drop it before the write + the mutable
         // outcome record (so the borrow checker stays happy across the class dispatch).
         let (class, prop, name, model, has_rig, fit, fbx, mounts) = {
-            let Some(src) = self.source.as_ref() else { return };
-            let Some(parsed) = src.parsed.as_ref() else { return };
+            let Some(src) = self.source.as_ref() else {
+                return;
+            };
+            let Some(parsed) = src.parsed.as_ref() else {
+                return;
+            };
             let mut model = parsed.model.clone();
             // Only the character path has authored offsets to bake in; a prop/garment has none.
             if matches!(src.class(), Some(AssetClass::Skin) | None) {
@@ -1531,7 +1623,16 @@ impl AssetPipeline {
                 .collect();
             // The mesh file this came from — the prop/garment bakes read its FOLDER for the vendor's
             // texture maps, and its NAME tells one set piece's maps from another's.
-            (src.class(), src.prop, src.asset_name().to_string(), model, src.rig.is_some(), fit, src.fbx.clone(), mounts)
+            (
+                src.class(),
+                src.prop,
+                src.asset_name().to_string(),
+                model,
+                src.rig.is_some(),
+                fit,
+                src.fbx.clone(),
+                mounts,
+            )
         };
 
         let dir = root.join(&name);
@@ -1559,7 +1660,9 @@ impl AssetPipeline {
                 }
             });
 
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         match result {
             Ok(()) => {
                 tracing::info!("committed {}", out.display());
@@ -1577,7 +1680,9 @@ impl AssetPipeline {
     fn commit_clip_to(&mut self, root: &Path) {
         let (ip, rm) = (self.variant_ip, self.variant_rm);
         let outcome = {
-            let Some(src) = self.source.as_ref() else { return };
+            let Some(src) = self.source.as_ref() else {
+                return;
+            };
             match src.clip.as_ref() {
                 None => Err("Clip retarget has not run — nothing to commit.".to_string()),
                 Some(_) if !ip && !rm => {
@@ -1592,7 +1697,9 @@ impl AssetPipeline {
                 .map_err(|e| e.to_string()),
             }
         };
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         match outcome {
             Ok(paths) => {
                 tracing::info!(
@@ -1612,8 +1719,12 @@ impl AssetPipeline {
     /// at rest framing. Same conventions as the 2×2 (recentre to origin, violet bones
     /// under cyan joint balls, depth-tested ground lattice).
     fn render_clip(&mut self, renderer: &mut Renderer, base_layer: f32) {
-        let Some(grid) = self.clip_grid.as_ref() else { return };
-        let Some(cp) = self.source.as_ref().and_then(|s| s.clip.as_ref()) else { return };
+        let Some(grid) = self.clip_grid.as_ref() else {
+            return;
+        };
+        let Some(cp) = self.source.as_ref().and_then(|s| s.clip.as_ref()) else {
+            return;
+        };
         let tick = (self.clip_tick as u32).min(cp.duration.saturating_sub(1));
         let pose = |clip: &ResolvedClip| {
             let locals = sample_local_poses(&cp.bones, clip, tick, false);
@@ -1630,7 +1741,10 @@ impl AssetPipeline {
             let mut balls = Segments::new();
             for (i, g) in globals.iter().enumerate() {
                 let c = recentre.transform_point3(g.w_axis.truncate());
-                balls.extend(debug::wireframe(&Shape::Sphere { center: c, radius: radii[i] }));
+                balls.extend(debug::wireframe(&Shape::Sphere {
+                    center: c,
+                    radius: radii[i],
+                }));
             }
             let ground = grid_segments_xy(extent * 0.25, extent * 2.5, cp.floor - centre.z);
             (bones, balls, ground)
@@ -1643,7 +1757,11 @@ impl AssetPipeline {
             .into_iter()
             .enumerate()
             .map(|(i, r)| {
-                grid.camera(i, self.clip_orbits[i].ortho_radius(r), &self.clip_orbits[i].camera(r))
+                grid.camera(
+                    i,
+                    self.clip_orbits[i].ortho_radius(r),
+                    &self.clip_orbits[i].camera(r),
+                )
             })
             .collect();
         grid.render_with(renderer, base_layer + 2.0, &cameras, |r, view| {
@@ -1664,7 +1782,9 @@ impl AssetPipeline {
     /// The engine-requirement checks the Review stage reports — each computed from real state, so
     /// a red line is a real blocker and not a placeholder.
     fn requirements(&self) -> Vec<(bool, String)> {
-        let Some(src) = self.source.as_ref() else { return Vec::new() };
+        let Some(src) = self.source.as_ref() else {
+            return Vec::new();
+        };
         let verts = src.parsed.as_ref().map(|p| p.verts).unwrap_or(0);
         // Prop / garment / animation carry their OWN requirement set — the character skeleton/attach
         // checks below do not apply to them.
@@ -1676,7 +1796,11 @@ impl AssetPipeline {
                 return vec![
                     (
                         verts > 0,
-                        format!("{} ({verts} {})", r("$ap_req_garment_mesh_present"), r("$ap_verts")),
+                        format!(
+                            "{} ({verts} {})",
+                            r("$ap_req_garment_mesh_present"),
+                            r("$ap_verts")
+                        ),
                     ),
                     (true, r("$ap_req_skins_onto_the_canonical_base")),
                 ];
@@ -1685,14 +1809,21 @@ impl AssetPipeline {
                 return vec![
                     (
                         verts > 0,
-                        format!("{} ({verts} {})", r("$ap_req_prop_mesh_present"), r("$ap_verts")),
+                        format!(
+                            "{} ({verts} {})",
+                            r("$ap_req_prop_mesh_present"),
+                            r("$ap_verts")
+                        ),
                     ),
                     (true, r("$ap_req_socket_fit_authored_in_the_paperdoll")),
                 ];
             }
             Some(AssetClass::Animation) => {
                 return vec![
-                    (src.clip.is_some(), r("$ap_req_clip_retargets_onto_the_reference")),
+                    (
+                        src.clip.is_some(),
+                        r("$ap_req_clip_retargets_onto_the_reference"),
+                    ),
                     (
                         self.variant_ip || self.variant_rm,
                         r("$ap_req_at_least_one_variant_selected"),
@@ -1707,7 +1838,11 @@ impl AssetPipeline {
         let baked = if conformed == 0 { 0 } else { conformed + 1 };
         let mut out = vec![(
             conformed == CONFORMED_BONES,
-            format!("{} ({baked} / {REFERENCE_BONES} {})", r("$ap_req_skeleton_conforms"), r("$ap_bones")),
+            format!(
+                "{} ({baked} / {REFERENCE_BONES} {})",
+                r("$ap_req_skeleton_conforms"),
+                r("$ap_bones")
+            ),
         )];
         match src.rig.as_ref() {
             None => out.push((false, r("$ap_req_conform_has_not_run"))),
@@ -1722,19 +1857,34 @@ impl AssetPipeline {
                             r("$ap_flagged")
                         )
                     } else {
-                        format!("{} {}", rig.rename.unmapped.len(), r("$ap_req_source_bones_unmapped"))
+                        format!(
+                            "{} {}",
+                            rig.rename.unmapped.len(),
+                            r("$ap_req_source_bones_unmapped")
+                        )
                     },
                 ));
             }
         }
-        let resolved = (0..src.attach.len()).filter(|i| self.attach_resolved(*i)).count();
+        let resolved = (0..src.attach.len())
+            .filter(|i| self.attach_resolved(*i))
+            .count();
         out.push((
             resolved == src.attach.len(),
-            format!("{} ({resolved} / {})", r("$ap_req_attach_points_on_valid_parents"), src.attach.len()),
+            format!(
+                "{} ({resolved} / {})",
+                r("$ap_req_attach_points_on_valid_parents"),
+                src.attach.len()
+            ),
         ));
         out.push((
             src.textures > 0,
-            format!("{} ({} {})", r("$ap_req_textures_masks_resolved"), src.textures, r("$ap_found")),
+            format!(
+                "{} ({} {})",
+                r("$ap_req_textures_masks_resolved"),
+                src.textures,
+                r("$ap_found")
+            ),
         ));
         out
     }
@@ -1757,7 +1907,11 @@ impl AssetPipeline {
     fn ensure_source_mesh(&mut self, r: &mut Renderer) -> Option<Uploaded> {
         let (key, has_mesh) = {
             let src = self.source.as_ref()?;
-            let has_mesh = src.parsed.as_ref().map(|p| !p.model.vertices.is_empty()).unwrap_or(false);
+            let has_mesh = src
+                .parsed
+                .as_ref()
+                .map(|p| !p.model.vertices.is_empty())
+                .unwrap_or(false);
             let key: PreviewKey = (src.dir.clone(), src.candidate_sel);
             (key, has_mesh)
         };
@@ -1781,7 +1935,11 @@ impl AssetPipeline {
                     .model
                     .vertices
                     .iter()
-                    .map(|v| MeshVertex { position: v.p, normal: v.n, material: 0 })
+                    .map(|v| MeshVertex {
+                        position: v.p,
+                        normal: v.n,
+                        material: 0,
+                    })
                     .collect();
                 let uvs: Vec<[f32; 2]> = parsed.model.vertices.iter().map(|v| v.uv).collect();
                 // The SAME classifier the BAKE uses (`wire_textures` calls it too), so the mesh
@@ -1848,7 +2006,11 @@ impl AssetPipeline {
         let local = grid.local_cursor(cell, cursor, screen)?;
         let vp = grid.cell(cell, screen).size;
         let o = &self.orbits[cell];
-        let cam = grid.camera(cell, o.ortho_radius(self.view_radius), &o.camera(self.view_radius));
+        let cam = grid.camera(
+            cell,
+            o.ortho_radius(self.view_radius),
+            &o.camera(self.view_radius),
+        );
         cam.pick_ray(local, vp).map(|ray| (cell, ray))
     }
 
@@ -1857,15 +2019,27 @@ impl AssetPipeline {
     fn set_gizmo_modes(&self, m: &mut ValueMap) {
         m.set(
             "mode_translate",
-            format!("{} {}", radio(self.gizmo_mode == GizmoMode::Translate), strings::resolve("$ap_translate")),
+            format!(
+                "{} {}",
+                radio(self.gizmo_mode == GizmoMode::Translate),
+                strings::resolve("$ap_translate")
+            ),
         );
         m.set(
             "mode_rotate",
-            format!("{} {}", radio(self.gizmo_mode == GizmoMode::Rotate), strings::resolve("$ap_rotate")),
+            format!(
+                "{} {}",
+                radio(self.gizmo_mode == GizmoMode::Rotate),
+                strings::resolve("$ap_rotate")
+            ),
         );
         m.set(
             "mode_scale",
-            format!("{} {}", radio(self.gizmo_mode == GizmoMode::Scale), strings::resolve("$ap_scale_gizmo")),
+            format!(
+                "{} {}",
+                radio(self.gizmo_mode == GizmoMode::Scale),
+                strings::resolve("$ap_scale_gizmo")
+            ),
         );
     }
 
@@ -1914,8 +2088,12 @@ impl AssetPipeline {
         };
         let recentre = Mat4::from_translation(-centre);
         let joint_tol = (radius * GIZMO_ARROW_FRAC).max(1.0) * 0.35;
-        let origin =
-            recentre.transform_point3(globals.get(sel).map(|g| g.w_axis.truncate()).unwrap_or(Vec3::ZERO));
+        let origin = recentre.transform_point3(
+            globals
+                .get(sel)
+                .map(|g| g.w_axis.truncate())
+                .unwrap_or(Vec3::ZERO),
+        );
         // Bespoke raw key, per the new input system's "non-ActionSignal keys read raw per scene".
         let ctrl = input.key_down(Key::LeftControl) || input.key_down(Key::RightControl);
 
@@ -1978,8 +2156,13 @@ impl AssetPipeline {
                         .and_then(|r| r.offsets.get(i).copied())
                         .unwrap_or_default();
                     self.set_focus(Some(i));
-                    self.gizmo_drag =
-                        Some((DragMode::Deform { normal: d.normalize_or_zero(), restore }, (o, d)));
+                    self.gizmo_drag = Some((
+                        DragMode::Deform {
+                            normal: d.normalize_or_zero(),
+                            restore,
+                        },
+                        (o, d),
+                    ));
                     true
                 }
                 None => {
@@ -1999,7 +2182,12 @@ impl AssetPipeline {
         } else if focused {
             // ORTHO, no modifier — the click belongs to the FOCUSED joint: begin a Reposition drag in
             // this view's plane (normal = the view direction `d`), moving it in the two on-screen axes.
-            self.gizmo_drag = Some((DragMode::Reposition { normal: d.normalize_or_zero() }, (o, d)));
+            self.gizmo_drag = Some((
+                DragMode::Reposition {
+                    normal: d.normalize_or_zero(),
+                },
+                (o, d),
+            ));
             true
         } else {
             false
@@ -2026,12 +2214,20 @@ impl AssetPipeline {
         if !dt.is_finite() {
             return;
         }
-        let Some(src) = self.source.as_mut() else { return };
-        let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
+        let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) else {
+            return;
+        };
         slot.t[0] += dt.x;
         slot.t[1] += dt.y;
         slot.t[2] += dt.z;
-        let offsets = src.rig.as_ref().map(|r| r.offsets.clone()).unwrap_or_default();
+        let offsets = src
+            .rig
+            .as_ref()
+            .map(|r| r.offsets.clone())
+            .unwrap_or_default();
         if let Some(parsed) = src.parsed.as_mut() {
             parsed.rebuild(&offsets);
         }
@@ -2113,11 +2309,17 @@ impl AssetPipeline {
     /// Restore the focused joint's [`BoneOffset`] to `offset` (its pre-drag value) — the spring-back
     /// that ends a Perspective deform TEST, snapping the joint back to its rest position.
     fn restore_offset(&mut self, sel: usize, offset: BoneOffset) {
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         if let Some(slot) = src.rig.as_mut().and_then(|r| r.offsets.get_mut(sel)) {
             *slot = offset;
         }
-        let offsets = src.rig.as_ref().map(|r| r.offsets.clone()).unwrap_or_default();
+        let offsets = src
+            .rig
+            .as_ref()
+            .map(|r| r.offsets.clone())
+            .unwrap_or_default();
         if let Some(p) = src.parsed.as_mut() {
             p.rebuild(&offsets);
         }
@@ -2131,7 +2333,10 @@ impl AssetPipeline {
     fn ensure_preview(&mut self, r: &mut Renderer) -> Option<PreviewDraw> {
         let (fit, is_char) = {
             let src = self.source.as_ref()?;
-            (src.fit, matches!(src.class(), Some(AssetClass::Skin) | None))
+            (
+                src.fit,
+                matches!(src.class(), Some(AssetClass::Skin) | None),
+            )
         };
         if is_char {
             return None;
@@ -2142,7 +2347,10 @@ impl AssetPipeline {
         }
 
         let base = self.base.as_ref()?;
-        let socket_name = SOCKETS.get(fit.socket).map(|(id, _)| *id).unwrap_or("pelvis");
+        let socket_name = SOCKETS
+            .get(fit.socket)
+            .map(|(id, _)| *id)
+            .unwrap_or("pelvis");
         // Place the mesh at the socket's rest frame · the authored fit — identical math to the bake.
         let world = base
             .socket_index(socket_name)
@@ -2160,7 +2368,8 @@ impl AssetPipeline {
         // Centre the body — and the piece with it — because the quad cameras target the ORIGIN,
         // which in Z-up ground reckoning is the body's feet.
         let recentre = Mat4::from_translation(-base.centre);
-        let base_joints = debug::bone_diamonds(recentre, &base.parents, &base.globals, BONE_WAIST_FRAC);
+        let base_joints =
+            debug::bone_diamonds(recentre, &base.parents, &base.globals, BONE_WAIST_FRAC);
         Some(PreviewDraw {
             mesh,
             world: recentre * world,
@@ -2181,7 +2390,11 @@ impl AssetPipeline {
     /// `build_tree` returns an empty `screen` placeholder rather than rebuilding a
     /// UI ad-hoc.
     pub fn build_tree(&self, _screen: Vec2) -> UiNode {
-        UiNode { component: "screen".to_string(), id: "assetpipeline".to_string(), ..Default::default() }
+        UiNode {
+            component: "screen".to_string(),
+            id: "assetpipeline".to_string(),
+            ..Default::default()
+        }
     }
 
     /// The gizmo-mode toggle's dispatcher — POINTER and PAD reaching one piece of
@@ -2228,10 +2441,19 @@ impl AssetPipeline {
         let role = self.conform_role();
         let (title, hint) = match step.as_str() {
             "conform" => (role.title(), role.hint()),
-            "attach" => ("$ap_attach_points", "$ap_position_hold_holster_and_belt_attach_po"),
-            "review" => ("$ap_review_export", "$ap_verify_engine_requirements_then_export"),
+            "attach" => (
+                "$ap_attach_points",
+                "$ap_position_hold_holster_and_belt_attach_po",
+            ),
+            "review" => (
+                "$ap_review_export",
+                "$ap_verify_engine_requirements_then_export",
+            ),
             // "task" — and the unreachable arm a bad definition would land in.
-            _ => ("$ap_select_workflow", "$ap_choose_the_kind_of_asset_you_are_importi"),
+            _ => (
+                "$ap_select_workflow",
+                "$ap_choose_the_kind_of_asset_you_are_importi",
+            ),
         };
         m.set("step_title", strings::resolve(title).into_owned());
         m.set("step_hint", strings::resolve(hint).into_owned());
@@ -2254,7 +2476,10 @@ impl AssetPipeline {
         m.set("has_asset", has);
         match self.source.as_ref() {
             None => {
-                m.set("asset_name", strings::resolve("$ap_no_asset_loaded").into_owned());
+                m.set(
+                    "asset_name",
+                    strings::resolve("$ap_no_asset_loaded").into_owned(),
+                );
                 m.set("asset_file", "");
             }
             Some(src) => {
@@ -2266,7 +2491,10 @@ impl AssetPipeline {
         // Inspector body: up to 8 pre-formatted lines, whatever this step genuinely knows.
         let lines = self.inspector_lines();
         for i in 0..INSPECTOR_LINES {
-            m.set(format!("insp_{i}"), lines.get(i).cloned().unwrap_or_default());
+            m.set(
+                format!("insp_{i}"),
+                lines.get(i).cloned().unwrap_or_default(),
+            );
         }
         m.set("insp_title", self.inspector_title());
         m.set("insp_badge", self.inspector_badge());
@@ -2283,11 +2511,20 @@ impl AssetPipeline {
         // through the stringtable so no raw English enters the Model.
         m.set(
             "next_label",
-            strings::resolve(if step == "review" { "$wf_restart" } else { "$wf_next" }).into_owned(),
+            strings::resolve(if step == "review" {
+                "$wf_restart"
+            } else {
+                "$wf_next"
+            })
+            .into_owned(),
         );
         // The piece picker rides on the rig stage, and only when the folder holds a choice of meshes
         // (a weapon set, an outfit) — a single-mesh folder never shows it.
-        let several = self.source.as_ref().map(|s| s.candidates.len() > 1).unwrap_or(false);
+        let several = self
+            .source
+            .as_ref()
+            .map(|s| s.candidates.len() > 1)
+            .unwrap_or(false);
         m.set("on_pick", step == "conform" && several);
         // The picker's header names what it lists — meshes for the rig path, BVH
         // clips for the animation path (the rows themselves are class-agnostic).
@@ -2310,7 +2547,10 @@ impl AssetPipeline {
         // binding); an animation gets an honest "not wired" instead of controls
         // addressing nothing.
         let at_conform = step == "conform";
-        m.set("on_conform_skeleton", at_conform && role == ConformRole::Skeleton);
+        m.set(
+            "on_conform_skeleton",
+            at_conform && role == ConformRole::Skeleton,
+        );
         m.set("on_conform_mount", at_conform && role == ConformRole::Mount);
         m.set("on_conform_clip", at_conform && role == ConformRole::Clip);
         self.conform_model(&mut m);
@@ -2341,9 +2581,15 @@ impl AssetPipeline {
                 m.set(format!("bone_{i}_color"), MapState::Ok.color());
                 m.set(format!("bone_{i}_on"), false);
             }
-            m.set("rig_headline", strings::resolve("$ap_conform_has_not_run").into_owned());
+            m.set(
+                "rig_headline",
+                strings::resolve("$ap_conform_has_not_run").into_owned(),
+            );
             m.set("rig_legend", "");
-            m.set("rig_sel", strings::resolve("$ap_no_bone_selected").into_owned());
+            m.set(
+                "rig_sel",
+                strings::resolve("$ap_no_bone_selected").into_owned(),
+            );
             m.set("rig_progress", 0.0);
             for (k, _) in OFFSET_AXES {
                 m.set(k, 0.0);
@@ -2357,7 +2603,10 @@ impl AssetPipeline {
         let total = rig.map.len();
         m.set(
             "rig_headline",
-            format!("{}      {ok} / {total}", strings::resolve("$ap_source_internal_rig")),
+            format!(
+                "{}      {ok} / {total}",
+                strings::resolve("$ap_source_internal_rig")
+            ),
         );
         m.set(
             "rig_legend",
@@ -2367,7 +2616,14 @@ impl AssetPipeline {
                 strings::resolve("$ap_auto_inferred")
             ),
         );
-        m.set("rig_progress", if total > 0 { ok as f64 / total as f64 } else { 0.0 });
+        m.set(
+            "rig_progress",
+            if total > 0 {
+                ok as f64 / total as f64
+            } else {
+                0.0
+            },
+        );
 
         // The visible window of the bone map — six rows of the full canon list.
         for i in 0..BONE_ROWS {
@@ -2407,8 +2663,16 @@ impl AssetPipeline {
         m.set("bone_prev_enabled", rig.sel > 0);
         m.set("bone_next_enabled", rig.sel + 1 < total);
 
-        let name = parsed.model.bones.get(rig.sel).map(|b| b.name.as_str()).unwrap_or("—");
-        m.set("rig_sel", format!("{name} \u{2192} {}", strings::resolve("$ap_offset")));
+        let name = parsed
+            .model
+            .bones
+            .get(rig.sel)
+            .map(|b| b.name.as_str())
+            .unwrap_or("—");
+        m.set(
+            "rig_sel",
+            format!("{name} \u{2192} {}", strings::resolve("$ap_offset")),
+        );
         let o = rig.offsets.get(rig.sel).copied().unwrap_or_default();
         for (i, (key, _)) in OFFSET_AXES.into_iter().enumerate() {
             m.set(key, if i < 3 { o.t[i] as f64 } else { o.roll as f64 });
@@ -2423,7 +2687,10 @@ impl AssetPipeline {
                 m.set(format!("att_{i}"), "");
                 m.set(format!("att_{i}_on"), false);
             }
-            m.set("att_sel", strings::resolve("$ap_no_point_selected").into_owned());
+            m.set(
+                "att_sel",
+                strings::resolve("$ap_no_point_selected").into_owned(),
+            );
             for (k, _) in ATTACH_AXES {
                 m.set(k, 0.0);
             }
@@ -2435,7 +2702,11 @@ impl AssetPipeline {
                 format!("att_{i}"),
                 format!(
                     "{} {:<18}{} {}{}",
-                    if i == src.attach_sel { "\u{25c6}" } else { "\u{25c7}" },
+                    if i == src.attach_sel {
+                        "\u{25c6}"
+                    } else {
+                        "\u{25c7}"
+                    },
                     strings::resolve(p.label),
                     strings::resolve("$ap_parent"),
                     p.parent,
@@ -2530,7 +2801,13 @@ impl AssetPipeline {
         let last = (window + SOCKET_ROWS).min(SOCKETS.len());
         m.set(
             "sock_page",
-            format!("{}\u{2013}{} {} {}", window + 1, last, strings::resolve("$ap_of"), SOCKETS.len()),
+            format!(
+                "{}\u{2013}{} {} {}",
+                window + 1,
+                last,
+                strings::resolve("$ap_of"),
+                SOCKETS.len()
+            ),
         );
         m.set("sock_prev_enabled", window > 0);
         m.set("sock_next_enabled", window + SOCKET_ROWS < SOCKETS.len());
@@ -2540,10 +2817,22 @@ impl AssetPipeline {
             format!(
                 "{}: {}",
                 strings::resolve("$wf_step_mount"),
-                strings::resolve(SOCKETS.get(fit.socket).map(|(_, l)| *l).unwrap_or("\u{2014}"))
+                strings::resolve(
+                    SOCKETS
+                        .get(fit.socket)
+                        .map(|(_, l)| *l)
+                        .unwrap_or("\u{2014}")
+                )
             ),
         );
-        let vals = [fit.offset[0], fit.offset[1], fit.offset[2], fit.rot[0], fit.rot[1], fit.rot[2]];
+        let vals = [
+            fit.offset[0],
+            fit.offset[1],
+            fit.offset[2],
+            fit.rot[0],
+            fit.rot[1],
+            fit.rot[2],
+        ];
         for (i, (key, _)) in FIT_AXES.into_iter().enumerate() {
             m.set(key, vals[i] as f64);
         }
@@ -2561,10 +2850,17 @@ impl AssetPipeline {
         for i in 0..REQUIREMENT_ROWS {
             match reqs.get(i) {
                 Some((ok, text)) => {
-                    m.set(format!("req_{i}"), format!("{}  {text}", if *ok { "\u{2713}" } else { "\u{2717}" }));
+                    m.set(
+                        format!("req_{i}"),
+                        format!("{}  {text}", if *ok { "\u{2713}" } else { "\u{2717}" }),
+                    );
                     m.set(
                         format!("req_{i}_color"),
-                        if *ok { "assetpipeline.map.ok" } else { "assetpipeline.map.fail" },
+                        if *ok {
+                            "assetpipeline.map.ok"
+                        } else {
+                            "assetpipeline.map.fail"
+                        },
                     );
                 }
                 None => {
@@ -2576,14 +2872,22 @@ impl AssetPipeline {
         let committed = self.source.as_ref().and_then(|s| s.committed.as_ref());
         m.set(
             "commit_label",
-            strings::resolve(if committed.is_some() { "$ap_exported" } else { "$ap_export_to_staging" })
-                .into_owned(),
+            strings::resolve(if committed.is_some() {
+                "$ap_exported"
+            } else {
+                "$ap_export_to_staging"
+            })
+            .into_owned(),
         );
         m.set("commit_enabled", reqs.iter().all(|(ok, _)| *ok));
         // Once a piece is baked, offer the loop straight back to the folder's picker — a weapon set
         // or an outfit is imported one piece at a time, and walking Back five stages to reach the
         // list again is not a workflow.
-        let more = self.source.as_ref().map(|s| s.candidates.len() > 1).unwrap_or(false);
+        let more = self
+            .source
+            .as_ref()
+            .map(|s| s.candidates.len() > 1)
+            .unwrap_or(false);
         m.set("has_committed", committed.is_some() && more);
     }
 
@@ -2606,7 +2910,10 @@ impl AssetPipeline {
         // Every static line is a `$token`; live values compose around the resolved text.
         let r = |t: &str| strings::resolve(t).into_owned();
         let Some(src) = self.source.as_ref() else {
-            return vec![r("$ap_no_source_folder_open"), r("$ap_load_an_asset_folder_to_begin")];
+            return vec![
+                r("$ap_no_source_folder_open"),
+                r("$ap_load_an_asset_folder_to_begin"),
+            ];
         };
         if let Some(err) = src.error.as_ref() {
             return vec![r("$ap_blocked"), err.clone()];
@@ -2670,17 +2977,31 @@ impl AssetPipeline {
                     // the resolved words (en-us widths; other locales just realign).
                     out.push(format!("{:<10}{}", r("$ap_renamed"), rig.rename.renamed));
                     out.push(format!("{:<10}{}", r("$ap_dropped"), rig.rename.dropped));
-                    out.push(format!("{:<10}{}", r("$ap_inferred"), rig.out.infer.added.len()));
-                    out.push(format!("{:<15}{}", r("$ap_limbs_aligned"), rig.out.reorient.limbs_aligned));
+                    out.push(format!(
+                        "{:<10}{}",
+                        r("$ap_inferred"),
+                        rig.out.infer.added.len()
+                    ));
+                    out.push(format!(
+                        "{:<15}{}",
+                        r("$ap_limbs_aligned"),
+                        rig.out.reorient.limbs_aligned
+                    ));
                     let edited = rig.offsets.iter().filter(|o| !o.is_zero()).count();
                     out.push(format!("{:<15}{edited}", r("$ap_bones_edited")));
                     if !rig.rename.unmapped.is_empty() {
-                        out.push(format!("{} {}", r("$ap_unmapped"), rig.rename.unmapped.join(", ")));
+                        out.push(format!(
+                            "{} {}",
+                            r("$ap_unmapped"),
+                            rig.rename.unmapped.join(", ")
+                        ));
                     }
                 }
             },
             "attach" => {
-                let resolved = (0..src.attach.len()).filter(|i| self.attach_resolved(*i)).count();
+                let resolved = (0..src.attach.len())
+                    .filter(|i| self.attach_resolved(*i))
+                    .count();
                 out.push(format!(
                     "{resolved} {} {} {}",
                     r("$ap_of"),
@@ -2711,10 +3032,19 @@ impl AssetPipeline {
             }
             "review" => {
                 out.push(format!("{:<11}{}", r("$ap_asset"), src.asset_name()));
-                out.push(format!("{:<11}{}", r("$ap_class_word"), class_label(src.class())));
+                out.push(format!(
+                    "{:<11}{}",
+                    r("$ap_class_word"),
+                    class_label(src.class())
+                ));
                 match src.parsed.as_ref() {
                     Some(p) => {
-                        out.push(format!("{:<11}{} {}", r("$ap_skeleton"), p.bones(), r("$ap_bones")));
+                        out.push(format!(
+                            "{:<11}{} {}",
+                            r("$ap_skeleton"),
+                            p.bones(),
+                            r("$ap_bones")
+                        ));
                         // The mesh-budget readout lives here now that Analyze is gone: game-ready is
                         // the input contract (decimation was dropped), so an over-budget source is
                         // REPORTED, never silently reduced.
@@ -2728,7 +3058,11 @@ impl AssetPipeline {
                                 r("$ap_target")
                             )
                         } else {
-                            format!("{} {TRI_BUDGET}{}", r("$ap_within_the"), r("$ap_tri_budget"))
+                            format!(
+                                "{} {TRI_BUDGET}{}",
+                                r("$ap_within_the"),
+                                r("$ap_tri_budget")
+                            )
                         });
                     }
                     None => out.push(format!("{:<11}0 {}", r("$ap_skeleton"), r("$ap_bones"))),
@@ -2750,7 +3084,9 @@ impl AssetPipeline {
     /// body reports.
     fn inspector_badge(&self) -> String {
         let r = |t: &str| strings::resolve(t).into_owned();
-        let Some(src) = self.source.as_ref() else { return String::new() };
+        let Some(src) = self.source.as_ref() else {
+            return String::new();
+        };
         if src.error.is_some() {
             return r("$ap_badge_blocked");
         }
@@ -2787,7 +3123,9 @@ impl AssetPipeline {
     /// inheriting the last one's rig or fit. The inline piece picker (`on_pick`) is right there on
     /// the rig stage for choosing which mesh comes next.
     fn start_next_piece(&mut self) {
-        let Some(src) = self.source.as_mut() else { return };
+        let Some(src) = self.source.as_mut() else {
+            return;
+        };
         src.parsed = None;
         src.report = None;
         // Keep the DECLARED workflow: the next piece in a set is the same class the user chose on
@@ -2827,7 +3165,9 @@ impl AssetPipeline {
             }
             // `new()` proved the file loads, so this is a definition NAME drifting from the
             // content — warn and keep the running wizard rather than losing the user's place.
-            None => tracing::warn!("workflow: no `{name}` in ui_workflows.json — keeping the current one"),
+            None => tracing::warn!(
+                "workflow: no `{name}` in ui_workflows.json — keeping the current one"
+            ),
         }
     }
 
@@ -2836,7 +3176,9 @@ impl AssetPipeline {
     /// state it names exists; values are incidental (the runtime only probes presence).
     fn wf_doc(&self) -> ValueMap {
         let mut d = ValueMap::new();
-        let Some(src) = self.source.as_ref() else { return d };
+        let Some(src) = self.source.as_ref() else {
+            return d;
+        };
         d.set("source", true);
         if src.class().is_some() {
             d.set("class", true);
@@ -2910,7 +3252,9 @@ impl AssetPipeline {
     /// the workflow's Back discard guard from it (selection and paging are navigation, not
     /// edits, so they never set it; picking a different piece RESETS rather than edits).
     fn apply_stage_results(&mut self, results: &ValueMap) -> bool {
-        let Some(src) = self.source.as_mut() else { return false };
+        let Some(src) = self.source.as_mut() else {
+            return false;
+        };
         let mut edited = false;
 
         // The inline piece picker (rig stage). Choosing a DIFFERENT piece invalidates everything
@@ -2986,7 +3330,11 @@ impl AssetPipeline {
         for (i, (key, _)) in FIT_AXES.into_iter().enumerate() {
             if let Some(v) = results.number(key) {
                 let v = v as f32;
-                let slot = if i < 3 { &mut src.fit.offset[i] } else { &mut src.fit.rot[i - 3] };
+                let slot = if i < 3 {
+                    &mut src.fit.offset[i]
+                } else {
+                    &mut src.fit.rot[i - 3]
+                };
                 if *slot != v {
                     *slot = v;
                     edited = true;
@@ -3011,7 +3359,9 @@ impl AssetPipeline {
         }
 
         // Conform — bone selection, paging, the four offset sliders, and Reset.
-        let Some(rig) = src.rig.as_mut() else { return edited };
+        let Some(rig) = src.rig.as_mut() else {
+            return edited;
+        };
         let total = rig.map.len();
         for i in 0..BONE_ROWS {
             if results.is_on(&format!("bone_sel_{i}")) && rig.window + i < total {
@@ -3068,7 +3418,9 @@ impl AssetPipeline {
     /// A marker is a three-axis cross rather than a ring: the content is Z-up and the views are
     /// axis-aligned, so a cross is the one shape that reads in all four of them.
     fn attach_markers(&self, radius: f32) -> (Segments, Segments) {
-        let Some(src) = self.source.as_ref() else { return (Vec::new(), Vec::new()) };
+        let Some(src) = self.source.as_ref() else {
+            return (Vec::new(), Vec::new());
+        };
         let step = self.wf.step();
         if step != "attach" && step != "review" {
             return (Vec::new(), Vec::new());
@@ -3076,7 +3428,9 @@ impl AssetPipeline {
         let r = radius * 0.04;
         let (mut plain, mut sel) = (Vec::new(), Vec::new());
         for i in 0..src.attach.len() {
-            let Some(c) = self.attach_world(i) else { continue };
+            let Some(c) = self.attach_world(i) else {
+                continue;
+            };
             let scale = if i == src.attach_sel { r * 1.6 } else { r };
             let cross = [
                 (c - Vec3::X * scale, c + Vec3::X * scale),
@@ -3138,8 +3492,12 @@ const REQUIREMENT_ROWS: usize = 4;
 
 /// The Conform stage's four offset sliders: their Model key and their label. Slider range is
 /// symmetric about zero, so the conform result sits at the centre of every track.
-const OFFSET_AXES: [(&str, &str); 4] =
-    [("off_x", "Translate X"), ("off_y", "Translate Y"), ("off_z", "Translate Z"), ("off_roll", "Roll")];
+const OFFSET_AXES: [(&str, &str); 4] = [
+    ("off_x", "Translate X"),
+    ("off_y", "Translate Y"),
+    ("off_z", "Translate Z"),
+    ("off_roll", "Roll"),
+];
 
 /// The Attach stage's three offset sliders.
 const ATTACH_AXES: [(&str, &str); 3] = [("att_x", "Off X"), ("att_y", "Off Y"), ("att_z", "Off Z")];
@@ -3165,8 +3523,11 @@ const FIT_AXES: [(&str, &str); 6] = [
 
 /// The fit stage's PER-AXIS scale sliders, in `PropFit::scale` index order. The scale-ALL slider is
 /// separate and keeps the `fit_scale` binding (so it reshapes nothing on its own).
-const FIT_SCALE_AXES: [(&str, &str); 3] =
-    [("fit_sx", "Scale X"), ("fit_sy", "Scale Y"), ("fit_sz", "Scale Z")];
+const FIT_SCALE_AXES: [(&str, &str); 3] = [
+    ("fit_sx", "Scale X"),
+    ("fit_sy", "Scale Y"),
+    ("fit_sz", "Scale Z"),
+];
 
 /// A batch of world-space line segments, in the shape `Renderer::draw_lines_overlay` takes.
 type Segments = Vec<(Vec3, Vec3)>;
@@ -3206,7 +3567,8 @@ fn skin_source_verts(model: &RawModel, globals: &[Mat4]) -> Vec<MeshVertex> {
         .iter()
         .enumerate()
         .map(|(b, bone)| {
-            globals.get(b).copied().unwrap_or(Mat4::IDENTITY) * Mat4::from_cols_array(&bone.inverse_bind)
+            globals.get(b).copied().unwrap_or(Mat4::IDENTITY)
+                * Mat4::from_cols_array(&bone.inverse_bind)
         })
         .collect();
     model
@@ -3224,13 +3586,24 @@ fn skin_source_verts(model: &RawModel, globals: &[Mat4]) -> Vec<MeshVertex> {
                     continue;
                 }
                 any = true;
-                let m = palette.get(v.joints[k] as usize).copied().unwrap_or(Mat4::IDENTITY);
+                let m = palette
+                    .get(v.joints[k] as usize)
+                    .copied()
+                    .unwrap_or(Mat4::IDENTITY);
                 pos += w * (m * p).truncate();
                 nrm += w * (glam::Mat3::from_mat4(m) * n);
             }
             let position = if any { pos.to_array() } else { v.p };
-            let normal = if nrm.length_squared() > 1e-12 { nrm.normalize().to_array() } else { v.n };
-            MeshVertex { position, normal, material: 0 }
+            let normal = if nrm.length_squared() > 1e-12 {
+                nrm.normalize().to_array()
+            } else {
+                v.n
+            };
+            MeshVertex {
+                position,
+                normal,
+                material: 0,
+            }
         })
         .collect()
 }
@@ -3286,8 +3659,8 @@ fn apply_offsets(model: &mut RawModel, offsets: &[BoneOffset]) {
         for k in 0..3 {
             b.translation[k] += o.t[k];
         }
-        let q = glam::Quat::from_array(b.rotation)
-            * glam::Quat::from_rotation_x(o.roll.to_radians());
+        let q =
+            glam::Quat::from_array(b.rotation) * glam::Quat::from_rotation_x(o.roll.to_radians());
         b.rotation = q.to_array();
     }
 }
@@ -3308,8 +3681,14 @@ fn parent_local_delta(globals: &[Mat4], model: &RawModel, sel: usize, world_delt
 
 /// The symmetric bone NAME for a left/right bone (`thigh_l`↔`thigh_r`), or `None` for a centre bone.
 fn mirror_name(name: &str) -> Option<String> {
-    const PAIRS: [(&str, &str); 6] =
-        [("_l", "_r"), ("_r", "_l"), ("_L", "_R"), ("_R", "_L"), (".L", ".R"), (".R", ".L")];
+    const PAIRS: [(&str, &str); 6] = [
+        ("_l", "_r"),
+        ("_r", "_l"),
+        ("_L", "_R"),
+        ("_R", "_L"),
+        (".L", ".R"),
+        (".R", ".L"),
+    ];
     for (a, b) in PAIRS {
         if let Some(stem) = name.strip_suffix(a) {
             return Some(format!("{stem}{b}"));
@@ -3371,7 +3750,10 @@ fn characters_dir() -> PathBuf {
 /// mirroring the package layout the paperdoll reads (`retarget/clips/<set>/…`), reached
 /// by promotion exactly like [`characters_dir`]'s rigs.
 fn clips_dir() -> PathBuf {
-    flicker_content::roots().staging().join("retarget").join("clips")
+    flicker_content::roots()
+        .staging()
+        .join("retarget")
+        .join("clips")
 }
 
 /// Where committed ENVIRONMENT props land — their own staging tier (`staging/props/`):
@@ -3411,7 +3793,11 @@ fn model_bounds(model: &RawModel, globals: &[Mat4]) -> (Vec3, f32, f32) {
     // The floor is reported ALREADY RECENTRED (`lo.z - centre.z`, so it is negative), because
     // every caller draws through the same `-centre` offset — handing back the raw `lo.z` would
     // make each one re-derive the shift and eventually one of them would forget.
-    (centre, ((hi - lo).max_element() * 0.5).max(1.0), lo.z - centre.z)
+    (
+        centre,
+        ((hi - lo).max_element() * 0.5).max(1.0),
+        lo.z - centre.z,
+    )
 }
 
 /// Build the Clayworks Bench editor as a boxed [`Scene`] for the `prism-alpha` launcher.
@@ -3433,7 +3819,12 @@ impl Scene for AssetPipeline {
         // the reference body on for a prop or an outfit is instant instead of a first-fit hitch.
         self.base = BasePreview::load();
         // Split the borrows: the loaded body is READ while the texture cache is filled.
-        let Self { base, textures, base_upload, .. } = self;
+        let Self {
+            base,
+            textures,
+            base_upload,
+            ..
+        } = self;
         if let Some(b) = base.as_ref() {
             if !b.verts.is_empty() {
                 let up = upload_preview(renderer, textures, &b.maps, &b.verts, &b.uvs, &b.indices);
@@ -3447,7 +3838,13 @@ impl Scene for AssetPipeline {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         // The HUD walks first: it lays out the framed holder, and the rect it reserves for the 2×2 is
         // what the viewport controls below pick against — a cursor outside the holder (over the editor
         // rail or a bar) lands on no view, so the chrome no longer has to "claim" the pointer. Its
@@ -3571,8 +3968,13 @@ impl Scene for AssetPipeline {
         // signal — the bespoke per-panel picking the group note says to keep. ──
         self.tick = self.tick.wrapping_add(1);
         self.ev.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
         let ctx = self.bindings.active();
         let events: Vec<InputEvent> = self
             .ev
@@ -3668,13 +4070,18 @@ impl Scene for AssetPipeline {
         let delta = input.mouse_position - self.last_mouse;
         self.last_mouse = input.mouse_position;
         if self.ui_state.drag().is_none() {
-            if let Some(i) = self.grid.as_ref().and_then(|g| g.cell_at(input.mouse_position, screen)) {
+            if let Some(i) = self
+                .grid
+                .as_ref()
+                .and_then(|g| g.cell_at(input.mouse_position, screen))
+            {
                 // Orbit (left-drag) is a PERSPECTIVE notion — only the PERSP panel (view 0) rotates;
                 // the ortho views are fixed axes. A flip-label click is not an orbit, and neither is
                 // a gizmo pick/drag.
                 if input.mouse_left && flip_target.is_none() && i == 0 && !gizmo {
                     self.orbits[0].yaw -= delta.x * 0.006;
-                    self.orbits[0].pitch = (self.orbits[0].pitch + delta.y * 0.006).clamp(-1.4, 1.4);
+                    self.orbits[0].pitch =
+                        (self.orbits[0].pitch + delta.y * 0.006).clamp(-1.4, 1.4);
                 }
                 // PAN (right-drag; a two-finger trackpad drag arrives as one) slides THIS view's
                 // look-at in its own plane — TOP across XY, FRONT across XZ. Each quad is half the
@@ -3700,7 +4107,11 @@ impl Scene for AssetPipeline {
         // reset the per-frame draw queues, so both running would discard each other.
         let clip_active = self.wf.step() == "conform"
             && self.conform_role() == ConformRole::Clip
-            && self.source.as_ref().map(|s| s.clip.is_some()).unwrap_or(false);
+            && self
+                .source
+                .as_ref()
+                .map(|s| s.clip.is_some())
+                .unwrap_or(false);
         if clip_active {
             self.render_clip(renderer, base_layer);
         }
@@ -3712,7 +4123,11 @@ impl Scene for AssetPipeline {
         // The skeleton is drawn as an overlay so it reads through anything in front of it.
         // Prop/garment fit preview (the base rig + the imported mesh at socket·fit). Built FIRST —
         // its mesh upload needs `&mut Renderer` before grid.render borrows it for the RTT passes.
-        let preview = if clip_active { None } else { self.ensure_preview(renderer) };
+        let preview = if clip_active {
+            None
+        } else {
+            self.ensure_preview(renderer)
+        };
         // A CHARACTER is its OWN subject: `ensure_preview` returned `None` for it, so its own mesh is
         // uploaded here and drawn at the same recentre as its skeleton. Same upload path as the prop
         // piece — the class only decides placement, so any conformable folder shows its mesh, with
@@ -3764,7 +4179,13 @@ impl Scene for AssetPipeline {
             // One camera PER VIEW, each from its own `Orbit` (independent pan + zoom); the ortho
             // views frame at `radius · zoom`, the perspective view at `radius · dist_scale · zoom`.
             let cameras: Vec<Camera> = (0..grid.views().len())
-                .map(|i| grid.camera(i, self.orbits[i].ortho_radius(radius), &self.orbits[i].camera(radius)))
+                .map(|i| {
+                    grid.camera(
+                        i,
+                        self.orbits[i].ortho_radius(radius),
+                        &self.orbits[i].camera(radius),
+                    )
+                })
                 .collect();
             // Skeleton rig-view: octahedral "diamond" bones + per-joint scaled balls (replaces the old
             // flat joint lines + orange frame-axis lines). The SELECTED joint (Conform stage) draws
@@ -3790,34 +4211,59 @@ impl Scene for AssetPipeline {
                 (true, Some(p)) => {
                     let min_r = (radius * BALL_MIN_FRAC).max(0.2);
                     let max_r = (radius * BALL_MAX_FRAC).max(min_r);
-                    let radii = debug::joint_ball_radii(&p.parents, &p.globals, BALL_LEN_FRAC, min_r, max_r);
-                    let bones = debug::bone_diamonds(recentre, &p.parents, &p.globals, BONE_WAIST_FRAC);
+                    let radii = debug::joint_ball_radii(
+                        &p.parents,
+                        &p.globals,
+                        BALL_LEN_FRAC,
+                        min_r,
+                        max_r,
+                    );
+                    let bones =
+                        debug::bone_diamonds(recentre, &p.parents, &p.globals, BONE_WAIST_FRAC);
                     let mut balls = Segments::new();
                     for (i, g) in p.globals.iter().enumerate() {
                         if Some(i) == sel {
                             continue; // the focused joint draws amber below
                         }
                         let c = recentre.transform_point3(g.w_axis.truncate());
-                        balls.extend(debug::wireframe(&Shape::Sphere { center: c, radius: radii[i] }));
+                        balls.extend(debug::wireframe(&Shape::Sphere {
+                            center: c,
+                            radius: radii[i],
+                        }));
                     }
                     // The FOCUSED joint: a larger amber ball (the grab handle) + the PAN gizmo. The
                     // gizmo is drawn ONLY in the ortho panels (see the draw loop) — Perspective grabs
                     // the ball for the spring-back deform test. The GIZMO MODE toggle picks the handle
                     // shape (translate now; rotate/scale are the seam for later pipeline stages).
-                    let (sel_ball, gizmo_groups) = match sel.and_then(|s| p.globals.get(s).map(|g| (s, g))) {
-                        Some((s, g)) => {
-                            let c = recentre.transform_point3(g.w_axis.truncate());
-                            let r = radii.get(s).copied().unwrap_or(0.5) * 1.4;
-                            let ball = debug::wireframe(&Shape::Sphere { center: c, radius: r });
-                            let size = (radius * GIZMO_ARROW_FRAC).max(1.0);
-                            let lines = gizmo_segments(c, glam::Mat3::IDENTITY, self.gizmo_mode, size, None);
-                            (ball, group_by_color(lines))
-                        }
-                        None => (Segments::new(), Vec::new()),
-                    };
+                    let (sel_ball, gizmo_groups) =
+                        match sel.and_then(|s| p.globals.get(s).map(|g| (s, g))) {
+                            Some((s, g)) => {
+                                let c = recentre.transform_point3(g.w_axis.truncate());
+                                let r = radii.get(s).copied().unwrap_or(0.5) * 1.4;
+                                let ball = debug::wireframe(&Shape::Sphere {
+                                    center: c,
+                                    radius: r,
+                                });
+                                let size = (radius * GIZMO_ARROW_FRAC).max(1.0);
+                                let lines = gizmo_segments(
+                                    c,
+                                    glam::Mat3::IDENTITY,
+                                    self.gizmo_mode,
+                                    size,
+                                    None,
+                                );
+                                (ball, group_by_color(lines))
+                            }
+                            None => (Segments::new(), Vec::new()),
+                        };
                     (bones, balls, sel_ball, gizmo_groups)
                 }
-                _ => (Segments::new(), Segments::new(), Segments::new(), Vec::new()),
+                _ => (
+                    Segments::new(),
+                    Segments::new(),
+                    Segments::new(),
+                    Vec::new(),
+                ),
             };
             // Collision overlay: the auto-fit capsules + leaf "joint ball" spheres wireframed over
             // the CHARACTER's posed rig, recentred exactly like its skeleton. Only in the character
@@ -3845,7 +4291,9 @@ impl Scene for AssetPipeline {
             // skeleton they annotate, or they would float off it.
             let (marks, sel_marks) = self.attach_markers(radius);
             let shift = |s: Vec<(Vec3, Vec3)>| -> Vec<(Vec3, Vec3)> {
-                s.into_iter().map(|(a, b)| (a - centre, b - centre)).collect()
+                s.into_iter()
+                    .map(|(a, b)| (a - centre, b - centre))
+                    .collect()
             };
             let (marks, sel_marks) = (shift(marks), shift(sel_marks));
             grid.render_with(renderer, base_layer + 2.0, &cameras, |r, view| {
@@ -3945,8 +4393,7 @@ impl Scene for AssetPipeline {
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }
 
 #[cfg(test)]
@@ -3998,7 +4445,11 @@ mod tests {
             }
             ed.wf.handle(&fired("wf_next"), &doc);
         }
-        assert_eq!(ed.wf.step(), step, "`{step}` is ahead of here in the active workflow");
+        assert_eq!(
+            ed.wf.step(),
+            step,
+            "`{step}` is ahead of here in the active workflow"
+        );
     }
 
     /// An editor with the real CHARACTER asset loaded, parsed and conformed — parked
@@ -4033,13 +4484,33 @@ mod tests {
         use flicker_mechanics::collision::Shape;
         let Some(ed) = parsed() else { return };
         let parsed = ed.source.as_ref().unwrap().parsed.as_ref().unwrap();
-        assert!(!parsed.collision.is_empty(), "auto-fit produced collision volumes for the character");
-        let capsules = parsed.collision.iter().filter(|v| matches!(v.shape, Shape::Capsule { .. })).count();
-        let spheres = parsed.collision.iter().filter(|v| matches!(v.shape, Shape::Sphere { .. })).count();
-        assert!(capsules > 0, "bones with children fit capsules (the collision boxes)");
-        assert!(spheres > 0, "leaf bones (fingertips/toes/head end) fit spheres (the joint balls)");
         assert!(
-            parsed.collision.iter().all(|v| v.bone < parsed.globals.len()),
+            !parsed.collision.is_empty(),
+            "auto-fit produced collision volumes for the character"
+        );
+        let capsules = parsed
+            .collision
+            .iter()
+            .filter(|v| matches!(v.shape, Shape::Capsule { .. }))
+            .count();
+        let spheres = parsed
+            .collision
+            .iter()
+            .filter(|v| matches!(v.shape, Shape::Sphere { .. }))
+            .count();
+        assert!(
+            capsules > 0,
+            "bones with children fit capsules (the collision boxes)"
+        );
+        assert!(
+            spheres > 0,
+            "leaf bones (fingertips/toes/head end) fit spheres (the joint balls)"
+        );
+        assert!(
+            parsed
+                .collision
+                .iter()
+                .all(|v| v.bone < parsed.globals.len()),
             "every volume indexes a real bone, so `globals[v.bone]` places it"
         );
     }
@@ -4056,7 +4527,10 @@ mod tests {
         }
         let raw = flicker_content::package::read_text(&path).expect("read the reference rig");
         let json: serde_json::Value = serde_json::from_str(&raw).expect("parse the reference rig");
-        let bones = json["skeleton"]["bones"].as_array().expect("skeleton.bones").len();
+        let bones = json["skeleton"]["bones"]
+            .as_array()
+            .expect("skeleton.bones")
+            .len();
         assert_eq!(
             bones, REFERENCE_BONES,
             "the reference rig moved to {bones} bones — update REFERENCE_BONES and sweep the canon"
@@ -4077,16 +4551,31 @@ mod tests {
         let parsed = src.parsed.as_ref().unwrap();
 
         // 65, not 66: `root` is synthesized by the bake, not by conform.
-        assert_eq!(parsed.bones(), CONFORMED_BONES, "conform reaches the canonical bone count");
-        assert_eq!(rig.map.len(), parsed.bones(), "one provenance per bone, no gaps");
+        assert_eq!(
+            parsed.bones(),
+            CONFORMED_BONES,
+            "conform reaches the canonical bone count"
+        );
+        assert_eq!(
+            rig.map.len(),
+            parsed.bones(),
+            "one provenance per bone, no gaps"
+        );
         let (ok, review, auto) = rig.counts();
-        assert_eq!(ok + review + auto, parsed.bones(), "the buckets partition the skeleton");
+        assert_eq!(
+            ok + review + auto,
+            parsed.bones(),
+            "the buckets partition the skeleton"
+        );
         assert_eq!(
             auto,
             rig.out.infer.added.len(),
             "auto is exactly what infer added — not a recount"
         );
-        assert!(review > 0, "the hip/shoulder/ankle derives flagged joints for review");
+        assert!(
+            review > 0,
+            "the hip/shoulder/ankle derives flagged joints for review"
+        );
         assert!(ok > 0, "source bones survived the rename");
 
         // The reports are the ONE source: a bone infer added must not also read as review.
@@ -4117,7 +4606,10 @@ mod tests {
         let sel = rig.sel;
         let before = src.parsed.as_ref().unwrap().globals.clone();
 
-        rig.offsets[sel] = BoneOffset { t: [0.0, 0.0, 7.0], roll: 0.0 };
+        rig.offsets[sel] = BoneOffset {
+            t: [0.0, 0.0, 7.0],
+            roll: 0.0,
+        };
         let offsets = rig.offsets.clone();
         src.parsed.as_mut().unwrap().rebuild(&offsets);
         let after = src.parsed.as_ref().unwrap().globals.clone();
@@ -4127,7 +4619,10 @@ mod tests {
             "the edited bone moved"
         );
         let head = src.parsed.as_ref().unwrap().bone_index("head").unwrap();
-        assert_ne!(before[head].w_axis, after[head].w_axis, "the offset propagated to children");
+        assert_ne!(
+            before[head].w_axis, after[head].w_axis,
+            "the offset propagated to children"
+        );
 
         // Reset → identical frames, bit for bit.
         let src = ed.source.as_mut().unwrap();
@@ -4135,7 +4630,8 @@ mod tests {
         let offsets = src.rig.as_ref().unwrap().offsets.clone();
         src.parsed.as_mut().unwrap().rebuild(&offsets);
         assert_eq!(
-            src.parsed.as_ref().unwrap().globals, before,
+            src.parsed.as_ref().unwrap().globals,
+            before,
             "zeroing the offset restores the conform result exactly"
         );
     }
@@ -4157,26 +4653,39 @@ mod tests {
             ed.apply_stage_results(&ValueMap::new().with("bone_next", true));
             let rig = ed.source.as_ref().unwrap().rig.as_ref().unwrap();
             seen = seen.max(rig.window + BONE_ROWS);
-            assert!(rig.sel >= rig.window && rig.sel < rig.window + BONE_ROWS, "cursor stays visible");
+            assert!(
+                rig.sel >= rig.window && rig.sel < rig.window + BONE_ROWS,
+                "cursor stays visible"
+            );
             if rig.sel + 1 >= total {
                 break;
             }
         }
-        assert!(seen >= total, "paging reached the last bone ({seen} of {total})");
+        assert!(
+            seen >= total,
+            "paging reached the last bone ({seen} of {total})"
+        );
 
         // And back again, without overshooting the top.
         for _ in 0..total {
             ed.apply_stage_results(&ValueMap::new().with("bone_prev", true));
         }
         let rig = ed.source.as_ref().unwrap().rig.as_ref().unwrap();
-        assert_eq!((rig.sel, rig.window), (0, 0), "paging back lands on the first bone");
+        assert_eq!(
+            (rig.sel, rig.window),
+            (0, 0),
+            "paging back lands on the first bone"
+        );
 
         // Selecting a row off-window scrolls it into view.
         let rig = ed.source.as_mut().unwrap().rig.as_mut().unwrap();
         rig.sel = total - 1;
         rig.window = 0;
         AssetPipeline::scroll_to_selection(rig);
-        assert!(rig.sel >= rig.window && rig.sel < rig.window + BONE_ROWS, "selection is visible");
+        assert!(
+            rig.sel >= rig.window && rig.sel < rig.window + BONE_ROWS,
+            "selection is visible"
+        );
     }
 
     /// ATTACH: a point sits at its parent bone's conformed frame plus the authored offset, and
@@ -4202,16 +4711,29 @@ mod tests {
         let before = ed.attach_world(2).expect("resolves");
         ed.apply_stage_results(&ValueMap::new().with("att_x", 5.0));
         let after = ed.attach_world(2).expect("still resolves");
-        assert!((after.x - before.x - 5.0).abs() < 1e-4, "{before} → {after}");
-        assert_eq!(ed.attach_world(3).unwrap(), ed.attach_world(3).unwrap(), "others unmoved");
+        assert!(
+            (after.x - before.x - 5.0).abs() < 1e-4,
+            "{before} → {after}"
+        );
+        assert_eq!(
+            ed.attach_world(3).unwrap(),
+            ed.attach_world(3).unwrap(),
+            "others unmoved"
+        );
 
         // Markers only exist on the stages that authored them. Back is clean here — the
         // direct `apply_stage_results` call above bypassed `update`, so nothing armed the
         // discard guard and the runtime steps straight back.
-        assert!(!ed.attach_markers(100.0).0.is_empty(), "markers drawn on the Attach stage");
+        assert!(
+            !ed.attach_markers(100.0).0.is_empty(),
+            "markers drawn on the Attach stage"
+        );
         ed.apply_workflow_results(&fired("wf_back"));
         assert_eq!(ed.wf.step(), "conform");
-        assert!(ed.attach_markers(100.0).0.is_empty(), "and not on the rig stage before it");
+        assert!(
+            ed.attach_markers(100.0).0.is_empty(),
+            "and not on the rig stage before it"
+        );
     }
 
     /// REVIEW: every requirement is computed from real state. With the real asset conformed they
@@ -4227,7 +4749,11 @@ mod tests {
         };
         park(&mut ed, "review");
         let reqs = ed.requirements();
-        assert_eq!(reqs.len(), REQUIREMENT_ROWS, "the tree declares this many rows");
+        assert_eq!(
+            reqs.len(),
+            REQUIREMENT_ROWS,
+            "the tree declares this many rows"
+        );
         for (ok, text) in &reqs {
             assert!(ok, "requirement failed on the reference asset: {text}");
         }
@@ -4236,7 +4762,10 @@ mod tests {
         let m = ed.hud_model();
         assert!(m.is_on("commit_enabled"));
         ed.source.as_mut().unwrap().textures = 0;
-        assert!(!ed.hud_model().is_on("commit_enabled"), "a failed check blocks commit");
+        assert!(
+            !ed.hud_model().is_on("commit_enabled"),
+            "a failed check blocks commit"
+        );
     }
 
     /// The wizard cannot be walked past a stage whose declared needs are missing: the
@@ -4248,9 +4777,16 @@ mod tests {
             eprintln!("skipping: no content tree");
             return;
         };
-        assert!(!ed.wf.can_next(&ed.wf_doc()), "Conform has not produced a rig yet");
+        assert!(
+            !ed.wf.can_next(&ed.wf_doc()),
+            "Conform has not produced a rig yet"
+        );
         ed.apply_workflow_results(&fired("wf_next"));
-        assert_eq!(ed.wf.step(), "conform", "the refused advance holds the page");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "the refused advance holds the page"
+        );
         ed.conform();
         assert!(ed.wf.can_next(&ed.wf_doc()), "with a rig it can");
     }
@@ -4272,19 +4808,36 @@ mod tests {
         ed.open(dir);
         assert_eq!(ed.wf.step(), "conform", "a prop lands on its Mount page");
         let src = ed.source.as_ref().unwrap();
-        assert!(src.rig.is_none(), "the character conform path must not run on a prop");
-        assert!(src.error.is_none(), "and it must NOT invent a skeleton failure");
+        assert!(
+            src.rig.is_none(),
+            "the character conform path must not run on a prop"
+        );
+        assert!(
+            src.error.is_none(),
+            "and it must NOT invent a skeleton failure"
+        );
         // A prop SKIPS the character-only pages and walks on to commit its mesh directly —
         // its definition's next stop is Review, whose `fit` need the mount binding meets.
-        assert!(ed.wf.can_next(&ed.wf_doc()), "a prop walks past the character-only conform");
-        assert_eq!(ed.inspector_badge(), "STATIC", "a non-clothing prop bakes as a static mesh");
+        assert!(
+            ed.wf.can_next(&ed.wf_doc()),
+            "a prop walks past the character-only conform"
+        );
+        assert_eq!(
+            ed.inspector_badge(),
+            "STATIC",
+            "a non-clothing prop bakes as a static mesh"
+        );
         let lines = ed.inspector_lines();
         assert!(
-            lines.iter().any(|l| l.to_ascii_lowercase().contains("prop")),
+            lines
+                .iter()
+                .any(|l| l.to_ascii_lowercase().contains("prop")),
             "the stage names the detected class: {lines:?}"
         );
         assert!(
-            lines.iter().any(|l| l.to_ascii_lowercase().contains("paperdoll")),
+            lines
+                .iter()
+                .any(|l| l.to_ascii_lowercase().contains("paperdoll")),
             "and says the socket/fit are authored in the paperdoll: {lines:?}"
         );
     }
@@ -4309,11 +4862,21 @@ mod tests {
         ed.commit_to(&scratch);
 
         let src = ed.source.as_ref().unwrap();
-        assert!(src.error.is_none(), "the prop commit succeeds: {:?}", src.error);
+        assert!(
+            src.error.is_none(),
+            "the prop commit succeeds: {:?}",
+            src.error
+        );
         let out = src.committed.clone().expect("a committed path is recorded");
         let text = flicker_content::package::read_text(&out).expect("the prop rig was written");
-        assert!(text.contains("\"bones\":[]"), "a prop bakes an EMPTY skeleton: {out:?}");
-        assert!(text.contains("\"retarget\":false"), "a prop is retarget:false");
+        assert!(
+            text.contains("\"bones\":[]"),
+            "a prop bakes an EMPTY skeleton: {out:?}"
+        );
+        assert!(
+            text.contains("\"retarget\":false"),
+            "a prop is retarget:false"
+        );
 
         // And it SHIPS ITS TEXTURES: the wizard hands the bake the source mesh, so the vendor's maps
         // are copied beside the rig under the content standard's names and referenced by the
@@ -4323,10 +4886,20 @@ mod tests {
         let rig: flicker_skeletal::format::RigFile =
             serde_json::from_str(&text).expect("the prop rig parses");
         let m = rig.mesh.materials.first().expect("the prop has a material");
-        assert_eq!(m.base_color, format!("{name}_BaseColor.png"), "albedo wired into the material");
-        assert!(dir.join(&m.base_color).exists(), "and copied beside the rig");
+        assert_eq!(
+            m.base_color,
+            format!("{name}_BaseColor.png"),
+            "albedo wired into the material"
+        );
+        assert!(
+            dir.join(&m.base_color).exists(),
+            "and copied beside the rig"
+        );
         for map in [&m.normal, &m.roughness, &m.metalness] {
-            assert!(!map.is_empty(), "every source map the standard has a slot for is wired");
+            assert!(
+                !map.is_empty(),
+                "every source map the standard has a slot for is wired"
+            );
             assert!(dir.join(map).exists(), "{map} copied beside the rig");
         }
         let _ = std::fs::remove_dir_all(&scratch);
@@ -4349,21 +4922,50 @@ mod tests {
         ed.open(dir);
         {
             let src = ed.source.as_ref().expect("the folder opened");
-            assert!(src.candidates.len() > 1, "a weapon set holds several meshes");
-            assert!(src.error.is_none(), "several meshes is a CHOICE, not an error: {:?}", src.error);
-            assert_eq!(src.fbx, src.candidates[0], "the first is pre-selected — never stuck");
+            assert!(
+                src.candidates.len() > 1,
+                "a weapon set holds several meshes"
+            );
+            assert!(
+                src.error.is_none(),
+                "several meshes is a CHOICE, not an error: {:?}",
+                src.error
+            );
+            assert_eq!(
+                src.fbx, src.candidates[0],
+                "the first is pre-selected — never stuck"
+            );
         }
-        assert_eq!(ed.wf.step(), "conform", "lands on the rig view, first piece ready");
-        assert!(ed.hud_model().is_on("on_pick"), "the inline picker is shown for a choice");
-        assert!(ed.source.as_ref().unwrap().parsed.is_some(), "the first pick is parsed on open");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "lands on the rig view, first piece ready"
+        );
+        assert!(
+            ed.hud_model().is_on("on_pick"),
+            "the inline picker is shown for a choice"
+        );
+        assert!(
+            ed.source.as_ref().unwrap().parsed.is_some(),
+            "the first pick is parsed on open"
+        );
 
         // Choose the second — the stale parse must be dropped so nothing derived carries forward.
         ed.apply_stage_results(&ValueMap::new().with("pick_sel_1", true));
         let src = ed.source.as_ref().unwrap();
         assert_eq!(src.candidate_sel, 1);
-        assert_eq!(src.fbx, src.candidates[1], "the import now points at the second mesh");
-        assert!(src.parsed.is_none(), "the previous mesh's parse was dropped");
-        assert!(src.report.is_none() && src.rig.is_none(), "and everything derived from it");
+        assert_eq!(
+            src.fbx, src.candidates[1],
+            "the import now points at the second mesh"
+        );
+        assert!(
+            src.parsed.is_none(),
+            "the previous mesh's parse was dropped"
+        );
+        assert!(
+            src.report.is_none() && src.rig.is_none(),
+            "and everything derived from it"
+        );
     }
 
     /// THE multi-piece LOOP: once a piece is committed, "import next piece" returns to the rig view
@@ -4392,18 +4994,32 @@ mod tests {
             "the piece baked: {:?}",
             ed.source.as_ref().unwrap().error
         );
-        assert!(ed.hud_model().is_on("has_committed"), "the loop-back is offered");
+        assert!(
+            ed.hud_model().is_on("has_committed"),
+            "the loop-back is offered"
+        );
 
         let n = ed.source.as_ref().unwrap().candidates.len();
         ed.start_next_piece();
-        assert_eq!(ed.wf.step(), "conform", "back on the rig view for the next piece");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "back on the rig view for the next piece"
+        );
         let src = ed.source.as_ref().unwrap();
-        assert_eq!(src.candidates.len(), n, "the folder and its piece list are kept");
+        assert_eq!(
+            src.candidates.len(),
+            n,
+            "the folder and its piece list are kept"
+        );
         assert!(
             src.parsed.is_none() && src.rig.is_none() && src.committed.is_none(),
             "the finished piece's state is dropped so the next starts clean"
         );
-        assert!(ed.hud_model().is_on("on_pick"), "the inline picker is showing again");
+        assert!(
+            ed.hud_model().is_on("on_pick"),
+            "the inline picker is showing again"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -4417,14 +5033,27 @@ mod tests {
         };
         // From the rig view, Back returns to the Workflow page with the folder still open.
         ed.apply_workflow_results(&fired("wf_back"));
-        assert_eq!(ed.wf.step(), "task", "Back from the rig view returns to the workflow page");
+        assert_eq!(
+            ed.wf.step(),
+            "task",
+            "Back from the rig view returns to the workflow page"
+        );
         assert!(ed.source.is_some(), "which leaves the folder open");
-        assert!(ed.hud_model().is_on("back_enabled"), "Back stays LIVE with a folder open — it clears it");
+        assert!(
+            ed.hud_model().is_on("back_enabled"),
+            "Back stays LIVE with a folder open — it clears it"
+        );
 
         // Back again on the Workflow page (the first, with no earlier stop) clears the open folder.
         ed.apply_workflow_results(&fired("wf_back"));
-        assert!(ed.source.is_none(), "Back on the workflow page clears the open folder");
-        assert!(!ed.hud_model().is_on("back_enabled"), "and then there is nothing to go back from");
+        assert!(
+            ed.source.is_none(),
+            "Back on the workflow page clears the open folder"
+        );
+        assert!(
+            !ed.hud_model().is_on("back_enabled"),
+            "and then there is nothing to go back from"
+        );
     }
 
     /// The FIT stage is the prop/garment's human-in-the-loop mount authoring: for a non-character
@@ -4448,10 +5077,23 @@ mod tests {
         // Conform DISPATCHES: a prop gets the mount panel, and NOT the character bone map that
         // used to leave this page empty for it.
         let m = ed.hud_model();
-        assert_eq!(ed.conform_role(), ConformRole::Mount, "a prop conforms by mounting");
-        assert!(m.is_on("on_conform_mount"), "a prop authors its mount ON the conform page");
-        assert!(!m.is_on("on_conform_skeleton"), "and NOT the character bone map");
-        assert!(!m.is_on("on_conform_clip"), "and NOT the animation placeholder");
+        assert_eq!(
+            ed.conform_role(),
+            ConformRole::Mount,
+            "a prop conforms by mounting"
+        );
+        assert!(
+            m.is_on("on_conform_mount"),
+            "a prop authors its mount ON the conform page"
+        );
+        assert!(
+            !m.is_on("on_conform_skeleton"),
+            "and NOT the character bone map"
+        );
+        assert!(
+            !m.is_on("on_conform_clip"),
+            "and NOT the animation placeholder"
+        );
         // The page names itself for the role, so the rail/footer never say "Conform Rig" here.
         assert_eq!(m.text("step_title"), Some("Mount"));
 
@@ -4466,16 +5108,32 @@ mod tests {
                 .with("fit_scale", 1.5),
         );
         let fit = ed.source.as_ref().unwrap().fit;
-        assert_eq!(fit.socket, window + 2, "the picked socket row is now the mount");
-        assert!((fit.offset[0] - 3.5).abs() < 1e-4, "the offset slider authored the fit");
-        assert!((fit.rot[2] - 45.0).abs() < 1e-4, "the rotation slider authored the fit");
+        assert_eq!(
+            fit.socket,
+            window + 2,
+            "the picked socket row is now the mount"
+        );
+        assert!(
+            (fit.offset[0] - 3.5).abs() < 1e-4,
+            "the offset slider authored the fit"
+        );
+        assert!(
+            (fit.rot[2] - 45.0).abs() < 1e-4,
+            "the rotation slider authored the fit"
+        );
         // Per-axis scale RESHAPES (only the dragged axis moves) and scale-all is a SEPARATE
         // multiplier — the paperdoll gadget's pair. Conflating them would silently rescale the
         // other two axes the moment the user touched one.
-        assert!((fit.scale[1] - 2.0).abs() < 1e-4, "the Y scale slider authored that axis");
+        assert!(
+            (fit.scale[1] - 2.0).abs() < 1e-4,
+            "the Y scale slider authored that axis"
+        );
         assert!((fit.scale[0] - 1.0).abs() < 1e-4, "and left X alone");
         assert!((fit.scale[2] - 1.0).abs() < 1e-4, "and left Z alone");
-        assert!((fit.uniform - 1.5).abs() < 1e-4, "scale-all rides `fit_scale`");
+        assert!(
+            (fit.uniform - 1.5).abs() < 1e-4,
+            "scale-all rides `fit_scale`"
+        );
 
         // The whole point of widening: both reach the BAKED rig, because the format already
         // carried `scale` × `uniform` and `attach_world` already applied it.
@@ -4487,8 +5145,14 @@ mod tests {
             uniform: fit.uniform,
         }
         .to_attach();
-        assert!((baked.scale[1] - 2.0).abs() < 1e-4, "per-axis scale survives to the format");
-        assert!((baked.uniform - 1.5).abs() < 1e-4, "scale-all survives to the format");
+        assert!(
+            (baked.scale[1] - 2.0).abs() < 1e-4,
+            "per-axis scale survives to the format"
+        );
+        assert!(
+            (baked.uniform - 1.5).abs() < 1e-4,
+            "scale-all survives to the format"
+        );
 
         // And that authored socket is a REAL bone name the bake can resolve against the base.
         assert!(
@@ -4512,10 +5176,21 @@ mod tests {
             let i = src.parsed.as_ref().unwrap().bone_index("head").unwrap();
             let rig = src.rig.as_mut().unwrap();
             rig.sel = i;
-            rig.offsets[i] = BoneOffset { t: [0.0, 0.0, 3.5], roll: 0.0 };
+            rig.offsets[i] = BoneOffset {
+                t: [0.0, 0.0, 3.5],
+                roll: 0.0,
+            };
             i
         };
-        let baseline = ed.source.as_ref().unwrap().parsed.as_ref().unwrap().model.bones[sel]
+        let baseline = ed
+            .source
+            .as_ref()
+            .unwrap()
+            .parsed
+            .as_ref()
+            .unwrap()
+            .model
+            .bones[sel]
             .translation[2];
 
         let out_root = std::env::temp_dir().join("flicker_assetpipeline_commit");
@@ -4525,21 +5200,38 @@ mod tests {
 
         let src = ed.source.as_ref().unwrap();
         assert!(src.error.is_none(), "commit reported: {:?}", src.error);
-        let written = src.committed.as_ref().expect("commit recorded where it wrote");
-        assert!(flicker_content::package::file_exists(written), "{} was written", written.display());
+        let written = src
+            .committed
+            .as_ref()
+            .expect("commit recorded where it wrote");
+        assert!(
+            flicker_content::package::file_exists(written),
+            "{} was written",
+            written.display()
+        );
 
         // Round-trip through the ENGINE's loader, not a bespoke parse — if the bake drifted from
         // what the runtime accepts, this is where it shows.
         let raw = flicker_content::package::read_text(written).unwrap();
         let json: serde_json::Value = serde_json::from_str(&raw).expect("valid rig json");
-        let bones = json["skeleton"]["bones"].as_array().expect("skeleton.bones");
-        assert_eq!(bones.len(), REFERENCE_BONES, "the bake synthesized the root");
+        let bones = json["skeleton"]["bones"]
+            .as_array()
+            .expect("skeleton.bones");
+        assert_eq!(
+            bones.len(),
+            REFERENCE_BONES,
+            "the bake synthesized the root"
+        );
         assert_eq!(bones[0]["name"], "root", "root is bone 0");
 
         // The Attach stage's six authored points SHIP (the audited third-step gap: they
         // used to be discarded at export). Each carries its id and canonical parent bone.
         let points = json["attach_points"].as_array().expect("attach_points");
-        assert_eq!(points.len(), ATTACH_POINTS.len(), "all six authored points ship");
+        assert_eq!(
+            points.len(),
+            ATTACH_POINTS.len(),
+            "all six authored points ship"
+        );
         for ((id, _, parent), p) in ATTACH_POINTS.iter().zip(points) {
             assert_eq!(p["id"], *id, "point id ships");
             assert_eq!(p["bone"], *parent, "and rides its canonical bone");
@@ -4547,7 +5239,15 @@ mod tests {
 
         // The authored offset is IN the file: the working model is untouched, the bake carries it.
         assert_eq!(
-            ed.source.as_ref().unwrap().parsed.as_ref().unwrap().model.bones[sel].translation[2],
+            ed.source
+                .as_ref()
+                .unwrap()
+                .parsed
+                .as_ref()
+                .unwrap()
+                .model
+                .bones[sel]
+                .translation[2],
             baseline,
             "the working model stays the conform baseline — offsets remain reversible"
         );
@@ -4571,14 +5271,17 @@ mod tests {
     /// deleted `assetpipeline.map.*` key would otherwise show as default ink and read as fine.
     #[test]
     fn bone_map_colours_resolve_against_the_shared_palette() {
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         for state in [MapState::Ok, MapState::Review, MapState::Auto] {
             let mut node = &styles;
             for part in state.color().split('.') {
                 node = &node[part];
             }
             let rgba = node.as_array().unwrap_or_else(|| {
-                panic!("{} did not resolve to an rgba array: {node:?}", state.color())
+                panic!(
+                    "{} did not resolve to an rgba array: {node:?}",
+                    state.color()
+                )
             });
             assert_eq!(rgba.len(), 4, "{} is rgba", state.color());
         }
@@ -4591,7 +5294,13 @@ mod tests {
     #[test]
     fn right_drag_pan_tracks_the_cursor_without_rotating_the_view() {
         // Look down +X at the origin (yaw 0, pitch 0): screen-right is +Y, screen-up is +Z.
-        let mut o = Orbit { yaw: 0.0, pitch: 0.0, dist_scale: 2.4, zoom: 1.0, pan: Vec3::ZERO };
+        let mut o = Orbit {
+            yaw: 0.0,
+            pitch: 0.0,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        };
         let (radius, vh) = (100.0_f32, 800.0_f32);
         let before = o.camera(radius);
         let persp = o.camera(radius);
@@ -4599,23 +5308,41 @@ mod tests {
         // Cursor RIGHT: the content follows it, so the target slides the OTHER way along
         // screen-right (+Y). Getting this backwards is the classic inverted-pan bug.
         o.pan_by_view(Vec2::new(10.0, 0.0), &persp, vh);
-        assert!(o.pan.y < 0.0, "dragging right slides the target left, got {:?}", o.pan);
-        assert!(o.pan.x.abs() < 1e-4, "and stays in the view plane, got {:?}", o.pan);
+        assert!(
+            o.pan.y < 0.0,
+            "dragging right slides the target left, got {:?}",
+            o.pan
+        );
+        assert!(
+            o.pan.x.abs() < 1e-4,
+            "and stays in the view plane, got {:?}",
+            o.pan
+        );
 
         // Cursor DOWN (screen Y grows downward): the target rises, so the asset slides down.
         o.pan = Vec3::ZERO;
         o.pan_by_view(Vec2::new(0.0, 10.0), &persp, vh);
-        assert!(o.pan.z > 0.0, "dragging down raises the target, got {:?}", o.pan);
+        assert!(
+            o.pan.z > 0.0,
+            "dragging down raises the target, got {:?}",
+            o.pan
+        );
 
         // A pan TRANSLATES the camera rigidly — eye and target move together. If only the target
         // moved this would silently become an orbit.
         let after = o.camera(radius);
         let d_eye = after.position - before.position;
         let d_tgt = after.target - before.target;
-        assert!((d_eye - d_tgt).length() < 1e-4, "eye and target must move together");
+        assert!(
+            (d_eye - d_tgt).length() < 1e-4,
+            "eye and target must move together"
+        );
         let dir_before = (before.position - before.target).normalize();
         let dir_after = (after.position - after.target).normalize();
-        assert!((dir_before - dir_after).length() < 1e-5, "a pan must not rotate the view");
+        assert!(
+            (dir_before - dir_after).length() < 1e-5,
+            "a pan must not rotate the view"
+        );
 
         // 1:1 at the look-at depth: dragging a full viewport height moves exactly the height
         // visible there, so the pan neither crawls on a large asset nor bolts on a small one.
@@ -4629,10 +5356,19 @@ mod tests {
         );
 
         // Scale follows the framing: the same drag on a 10× larger asset pans 10× further.
-        let mut big = Orbit { yaw: 0.0, pitch: 0.0, dist_scale: 2.4, zoom: 1.0, pan: Vec3::ZERO };
+        let mut big = Orbit {
+            yaw: 0.0,
+            pitch: 0.0,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        };
         let big_cam = big.camera(radius * 10.0);
         big.pan_by_view(Vec2::new(0.0, vh), &big_cam, vh);
-        assert!((big.pan.length() / o.pan.length() - 10.0).abs() < 1e-3, "pan scales with framing");
+        assert!(
+            (big.pan.length() / o.pan.length() - 10.0).abs() < 1e-3,
+            "pan scales with framing"
+        );
 
         // An ORTHOGRAPHIC quad pans in ITS OWN plane, not the perspective one — that is the whole
         // reason `pan_by_view` takes a camera. TOP looks down +Z with +Y up the panel (the Z-up
@@ -4646,15 +5382,32 @@ mod tests {
             far: 1200.0,
             ortho_height: Some(220.0),
         };
-        let mut t = Orbit { yaw: 0.0, pitch: 0.0, dist_scale: 2.4, zoom: 1.0, pan: Vec3::ZERO };
+        let mut t = Orbit {
+            yaw: 0.0,
+            pitch: 0.0,
+            dist_scale: 2.4,
+            zoom: 1.0,
+            pan: Vec3::ZERO,
+        };
         t.pan_by_view(Vec2::new(10.0, 0.0), &top, vh);
-        assert!(t.pan.x < 0.0, "dragging right in TOP slides the target along -X, got {:?}", t.pan);
-        assert!(t.pan.z.abs() < 1e-4, "and never along the view's OWN axis, got {:?}", t.pan);
+        assert!(
+            t.pan.x < 0.0,
+            "dragging right in TOP slides the target along -X, got {:?}",
+            t.pan
+        );
+        assert!(
+            t.pan.z.abs() < 1e-4,
+            "and never along the view's OWN axis, got {:?}",
+            t.pan
+        );
         // An ortho camera states its visible height, so the scale is that height over the viewport
         // — using the perspective formula here would pan at the wrong rate entirely.
         t.pan = Vec3::ZERO;
         t.pan_by_view(Vec2::new(0.0, vh), &top, vh);
-        assert!((t.pan.length() - 220.0).abs() < 1e-2, "1:1 against the ortho height");
+        assert!(
+            (t.pan.length() - 220.0).abs() < 1e-2,
+            "1:1 against the ortho height"
+        );
     }
 
     /// The wheel zooms MULTIPLICATIVELY and moves every panel together — a perspective view that
@@ -4667,18 +5420,30 @@ mod tests {
 
         o.zoom_by(1.0); // one notch in
         assert!(o.dist(radius) < d0, "scrolling up moves the eye closer");
-        assert!(o.ortho_radius(radius) < r0, "and tightens the ortho framing with it");
+        assert!(
+            o.ortho_radius(radius) < r0,
+            "and tightens the ortho framing with it"
+        );
         let (fd, fr) = (o.dist(radius) / d0, o.ortho_radius(radius) / r0);
-        assert!((fd - fr).abs() < 1e-5, "perspective and ortho must zoom by the SAME factor");
+        assert!(
+            (fd - fr).abs() < 1e-5,
+            "perspective and ortho must zoom by the SAME factor"
+        );
 
         o.zoom_by(-1.0); // and back out
-        assert!((o.dist(radius) - d0).abs() / d0 < 0.02, "a notch out ~undoes a notch in");
+        assert!(
+            (o.dist(radius) - d0).abs() / d0 < 0.02,
+            "a notch out ~undoes a notch in"
+        );
 
         // Clamped at both ends: the wheel can never invert the camera or run away to nothing.
         for _ in 0..500 {
             o.zoom_by(1.0);
         }
-        assert!(o.zoom >= 0.05 && o.dist(radius) > 0.0, "zoom floors, never inverts");
+        assert!(
+            o.zoom >= 0.05 && o.dist(radius) > 0.0,
+            "zoom floors, never inverts"
+        );
         for _ in 0..500 {
             o.zoom_by(-1.0);
         }
@@ -4706,19 +5471,36 @@ mod tests {
             "the fitting body must carry a MESH — `fitting_base` prefers the ~3.3k-tri \
              GolemBase_Low, which is far under the budget"
         );
-        assert!(base.verts.len() <= BASE_MESH_BUDGET, "and it fits the upload budget");
+        assert!(
+            base.verts.len() <= BASE_MESH_BUDGET,
+            "and it fits the upload budget"
+        );
         // A well-formed triangle list that indexes only real vertices — a bad one would fault the
         // draw rather than merely look wrong.
-        assert!(!base.indices.is_empty() && base.indices.len() % 3 == 0, "a triangle list");
+        assert!(
+            !base.indices.is_empty() && base.indices.len() % 3 == 0,
+            "a triangle list"
+        );
         let n = base.verts.len() as u32;
-        assert!(base.indices.iter().all(|i| *i < n), "every index is inside the vertex list");
+        assert!(
+            base.indices.iter().all(|i| *i < n),
+            "every index is inside the vertex list"
+        );
 
         // Framing now comes from the MESH when there is one, so the stage floor is the SOLE of the
         // foot rather than the lowest JOINT (the ankle sits well above the sole — `ANKLE_FRACTION`).
         // Getting this wrong floats the body above its own grid.
         assert!(base.floor < 0.0, "the recentred floor is below the origin");
-        let lowest_vert = base.verts.iter().map(|v| v.position[2]).fold(f32::MAX, f32::min);
-        let lowest_joint = base.globals.iter().map(|g| g.w_axis.z).fold(f32::MAX, f32::min);
+        let lowest_vert = base
+            .verts
+            .iter()
+            .map(|v| v.position[2])
+            .fold(f32::MAX, f32::min);
+        let lowest_joint = base
+            .globals
+            .iter()
+            .map(|g| g.w_axis.z)
+            .fold(f32::MAX, f32::min);
         assert!(
             lowest_vert <= lowest_joint + 1e-3,
             "the mesh must reach at or below the lowest joint (sole {lowest_vert}, joint {lowest_joint})"
@@ -4754,7 +5536,11 @@ mod tests {
         // footer buttons and A/B/bumpers all land on these two names.
         park(&mut ed, "conform");
         ed.apply_workflow_results(&fired("wf_back"));
-        assert_eq!(ed.wf.step(), "task", "wf_back — the declared Cancel/TabPrev result — steps the rail");
+        assert_eq!(
+            ed.wf.step(),
+            "task",
+            "wf_back — the declared Cancel/TabPrev result — steps the rail"
+        );
     }
 
     /// The rail SKIPS what a class does not use — BY DEFINITION now: the prop workflow
@@ -4775,7 +5561,11 @@ mod tests {
         // Back from Review lands on Mount — there is no attach between to strand the user on.
         park(&mut ed, "review");
         ed.apply_workflow_results(&fired("wf_back"));
-        assert_eq!(ed.wf.step(), "conform", "Back hops straight to the rig (Mount) view");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "Back hops straight to the rig (Mount) view"
+        );
 
         // The rail: three chips, the conform chip named for its definition's role.
         let m = ed.hud_model();
@@ -4786,7 +5576,11 @@ mod tests {
         );
         assert!(!m.is_on("wf_attach_show"), "no character-only Attach chip");
         assert!(m.is_on("wf_task_show") && m.is_on("wf_conform_show") && m.is_on("wf_review_show"));
-        assert_eq!(m.number("wf_step_n"), Some(3.0), "the footer counts three stops");
+        assert_eq!(
+            m.number("wf_step_n"),
+            Some(3.0),
+            "the footer counts three stops"
+        );
     }
 
     /// The rail chips ride the workflow RUNTIME's published binds: the current step lights
@@ -4802,7 +5596,11 @@ mod tests {
         // Load / Analyze / Classify are gone (the workflow selector + inline parse/conform
         // replaced them), so the character rail reads Workflow · Rig · Attach · Review.
         assert_eq!(m.text("wf_task_title"), Some("Workflow"));
-        assert_eq!(m.text("wf_conform_title"), Some("Rig"), "the character definition's conform stop");
+        assert_eq!(
+            m.text("wf_conform_title"),
+            Some("Rig"),
+            "the character definition's conform stop"
+        );
         assert_eq!(m.text("wf_attach_title"), Some("Attach"));
         assert_eq!(m.text("wf_review_title"), Some("Review"));
         // The current step lights via the runtime's style path; behind reads visited, ahead todo.
@@ -4816,7 +5614,10 @@ mod tests {
         assert_eq!(m.number("wf_step_n"), Some(4.0));
         // The step SURFACES (namespaced `wf_step_<id>`) gate the content subtrees,
         // exclusively on the current step.
-        assert!(m.is_on("wf_step_conform"), "the current step's surface is on");
+        assert!(
+            m.is_on("wf_step_conform"),
+            "the current step's surface is on"
+        );
         assert!(
             !m.is_on("wf_step_task") && !m.is_on("wf_step_attach") && !m.is_on("wf_step_review"),
             "the rest are off"
@@ -4829,12 +5630,18 @@ mod tests {
     #[test]
     fn the_gate_refuses_without_a_source() {
         let mut ed = AssetPipeline::new();
-        assert!(!ed.wf.can_next(&ed.wf_doc()), "no source open — `conform` needs one");
+        assert!(
+            !ed.wf.can_next(&ed.wf_doc()),
+            "no source open — `conform` needs one"
+        );
         ed.apply_workflow_results(&fired("wf_next"));
         assert_eq!(ed.wf.step(), "task", "the refused advance holds the page");
         park(&mut ed, "review");
         assert!(!ed.wf.can_next(&ed.wf_doc()), "Review is the last step");
-        assert!(ed.hud_model().is_on("next_enabled"), "…whose button stays live as Restart");
+        assert!(
+            ed.hud_model().is_on("next_enabled"),
+            "…whose button stays live as Restart"
+        );
     }
 
     /// "Restart" on the last page is SCENE policy over the runtime: it drops the finished
@@ -4854,8 +5661,15 @@ mod tests {
         park(&mut ed, "review");
         ed.apply_workflow_results(&fired("wf_next"));
         assert_eq!(ed.wf.step(), "task", "the wizard is back on the entry page");
-        assert!(ed.source.is_none() && ed.pending_class.is_none(), "the per-asset state dropped");
-        assert_eq!(ed.wf_def.steps.len(), 4, "…and the default (character) definition is restored");
+        assert!(
+            ed.source.is_none() && ed.pending_class.is_none(),
+            "the per-asset state dropped"
+        );
+        assert_eq!(
+            ed.wf_def.steps.len(),
+            4,
+            "…and the default (character) definition is restored"
+        );
     }
 
     /// The real Motifect BVH library — the animation workflow's genuine input. Skips
@@ -4884,15 +5698,28 @@ mod tests {
         let mut ed = AssetPipeline::new();
         ed.pending_class = Some(AssetClass::Animation);
         ed.open(dir);
-        assert_eq!(ed.wf.step(), "conform", "an animation lands on its Clip page");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "an animation lands on its Clip page"
+        );
         {
             let src = ed.source.as_ref().unwrap();
-            assert!(src.candidates.len() > 1, "the combat library offers a clip choice");
             assert!(
-                src.candidates.iter().all(|p| p.extension().is_some_and(|e| e == "bvh")),
+                src.candidates.len() > 1,
+                "the combat library offers a clip choice"
+            );
+            assert!(
+                src.candidates
+                    .iter()
+                    .all(|p| p.extension().is_some_and(|e| e == "bvh")),
                 "candidates are the folder's BVH clips"
             );
-            assert!(src.error.is_none(), "no invented 'no riggable mesh': {:?}", src.error);
+            assert!(
+                src.error.is_none(),
+                "no invented 'no riggable mesh': {:?}",
+                src.error
+            );
             assert!(src.clip.is_none(), "retarget waits for the stage runner");
         }
 
@@ -4901,11 +5728,20 @@ mod tests {
         let doc = ed.wf_doc();
         {
             let src = ed.source.as_ref().unwrap();
-            let cp = src.clip.as_ref().unwrap_or_else(|| panic!("retarget: {:?}", src.error));
+            let cp = src
+                .clip
+                .as_ref()
+                .unwrap_or_else(|| panic!("retarget: {:?}", src.error));
             assert!(cp.duration > 0, "a real clip has length");
-            assert!(!cp.ip.tracks.is_empty() && !cp.rm.tracks.is_empty(), "both variants resolve");
+            assert!(
+                !cp.ip.tracks.is_empty() && !cp.rm.tracks.is_empty(),
+                "both variants resolve"
+            );
             assert_eq!(cp.bones.len(), cp.parents.len());
-            assert!(cp.rm_radius >= cp.radius, "the RootMotion frame is never tighter than rest");
+            assert!(
+                cp.rm_radius >= cp.radius,
+                "the RootMotion frame is never tighter than rest"
+            );
         }
         assert!(doc.is_on("clip"), "the doc gate opens on the built preview");
         assert!(ed.wf.can_next(&doc), "Next reaches Review");
@@ -4919,7 +5755,10 @@ mod tests {
         {
             let src = ed.source.as_ref().unwrap();
             assert!(
-                src.error.as_deref().unwrap_or("").contains("at least one variant"),
+                src.error
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("at least one variant"),
                 "an empty pick refuses: {:?}",
                 src.error
             );
@@ -4930,13 +5769,23 @@ mod tests {
         ed.variant_rm = true;
         ed.commit_to(&scratch);
         let src = ed.source.as_ref().unwrap();
-        assert!(src.error.is_none(), "the picked commit succeeds: {:?}", src.error);
+        assert!(
+            src.error.is_none(),
+            "the picked commit succeeds: {:?}",
+            src.error
+        );
         let set = scratch.join(src.asset_name());
-        assert!(set.join("RootMotion").is_dir(), "the picked variant is written");
+        assert!(
+            set.join("RootMotion").is_dir(),
+            "the picked variant is written"
+        );
         assert!(!set.join("In-Place").exists(), "the unpicked one is NOT");
         let out = src.committed.clone().expect("a committed path is recorded");
         let text = flicker_content::package::read_text(&out).expect("the emitted clip reads back");
-        assert!(text.contains("\"retarget\":true"), "a clip ships retarget:true");
+        assert!(
+            text.contains("\"retarget\":true"),
+            "a clip ships retarget:true"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -4954,22 +5803,38 @@ mod tests {
         ed.pending_class = Some(AssetClass::Prop);
         ed.pending_prop = Some(PropKind::Environment);
         ed.open(scratch.clone());
-        assert_eq!(ed.wf.step(), "conform", "the empty folder still lands on the Mount page");
+        assert_eq!(
+            ed.wf.step(),
+            "conform",
+            "the empty folder still lands on the Mount page"
+        );
 
         let doc = ed.wf_doc();
-        assert!(!doc.is_on("fit"), "no parse → no mount binding → no fit key");
-        assert!(!ed.wf.can_next(&doc), "Review is gated off — nothing walks to a dead Export");
+        assert!(
+            !doc.is_on("fit"),
+            "no parse → no mount binding → no fit key"
+        );
+        assert!(
+            !ed.wf.can_next(&doc),
+            "Review is gated off — nothing walks to a dead Export"
+        );
 
         let out = std::env::temp_dir().join("flicker_assetpipeline_unparsed_prop_out");
         let _ = std::fs::remove_dir_all(&out);
         ed.commit_to(&out);
         let src = ed.source.as_ref().unwrap();
         assert!(
-            src.error.as_deref().unwrap_or("").contains("nothing to commit"),
+            src.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("nothing to commit"),
             "the refusal is SAID, not silent: {:?}",
             src.error
         );
-        assert!(src.committed.is_none() && !out.exists(), "and nothing was written");
+        assert!(
+            src.committed.is_none() && !out.exists(),
+            "and nothing was written"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -4997,15 +5862,24 @@ mod tests {
                 root.display()
             );
             assert!(
-                root.strip_prefix(flicker_content::roots().staging()).is_ok(),
+                root.strip_prefix(flicker_content::roots().staging())
+                    .is_ok(),
                 "every commit root is inside staging/: {}",
                 root.display()
             );
             let _ = std::fs::remove_dir_all(&scratch);
         };
         case(Some(AssetClass::Animation), None, "staging/retarget/clips");
-        case(Some(AssetClass::Prop), Some(PropKind::Environment), "staging/props");
-        case(Some(AssetClass::Prop), Some(PropKind::Clothing), "staging/characters");
+        case(
+            Some(AssetClass::Prop),
+            Some(PropKind::Environment),
+            "staging/props",
+        );
+        case(
+            Some(AssetClass::Prop),
+            Some(PropKind::Clothing),
+            "staging/characters",
+        );
         case(Some(AssetClass::Skin), None, "staging/characters");
     }
 
@@ -5086,7 +5960,11 @@ mod tests {
         // The views frame about the asset's CENTRE, not the origin — in Z-up ground reckoning the
         // origin is its feet, so framing there put the body out of shot.
         let (centre, radius, floor) = model_bounds(&model, &globals);
-        assert_eq!(centre, Vec3::new(0.0, 0.0, 13.5), "midway between the root and the tip");
+        assert_eq!(
+            centre,
+            Vec3::new(0.0, 0.0, 13.5),
+            "midway between the root and the tip"
+        );
         assert_eq!(radius, 3.5, "half the 10 → 17 span");
         // The floor is the feet plane AFTER the same `-centre` shift the viewport draws through,
         // so it is negative and lands exactly on the lowest bone — draw the stage grid at the

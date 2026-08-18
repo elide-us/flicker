@@ -71,12 +71,28 @@ impl BakeSize {
 pub const BAKE_SIZES: [BakeSize; 4] = [
     // Below baseline. Kept because it is the fast rung for iterating on a recipe,
     // not because anything ships at it.
-    BakeSize { px: 1024, label: "1K", enabled: true },
+    BakeSize {
+        px: 1024,
+        label: "1K",
+        enabled: true,
+    },
     // THE BASELINE — the default commit size and the minimum system spec.
-    BakeSize { px: 2048, label: "2K", enabled: true },
+    BakeSize {
+        px: 2048,
+        label: "2K",
+        enabled: true,
+    },
     // Supported and correct; off until the memory budget is settled.
-    BakeSize { px: 4096, label: "4K", enabled: false },
-    BakeSize { px: 8192, label: "8K", enabled: false },
+    BakeSize {
+        px: 4096,
+        label: "4K",
+        enabled: false,
+    },
+    BakeSize {
+        px: 8192,
+        label: "8K",
+        enabled: false,
+    },
 ];
 
 /// The size a commit bakes at unless told otherwise, and the minimum spec the
