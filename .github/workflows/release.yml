@@ -48,6 +48,7 @@ jobs:
   gate:
     name: version gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.v.outputs.version }}
       prerelease: ${{ steps.v.outputs.prerelease }}
@@ -72,6 +73,7 @@ jobs:
     name: pack content
     needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Warm toolchain
@@ -93,6 +95,7 @@ jobs:
     name: windows msi
     needs: [gate, pack]
     runs-on: windows-latest
+    timeout-minutes: 90
     env:
       VERSION: ${{ needs.gate.outputs.version }}
       WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
@@ -175,6 +178,7 @@ jobs:
     name: macos pkg (apple silicon)
     needs: [gate, pack]
     runs-on: macos-latest
+    timeout-minutes: 90
     env:
       VERSION: ${{ needs.gate.outputs.version }}
       MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
@@ -262,13 +266,21 @@ jobs:
     name: linux deb (glibc 2.35 floor)
     needs: [gate, pack]
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     env:
       VERSION: ${{ needs.gate.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install build deps
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
+          # Same azure-mirror hardening as ci.yml (keep the copies identical).
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
           sudo apt-get install -y --no-install-recommends \
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain
@@ -321,6 +333,7 @@ jobs:
 
   release:
     name: publish github release
+    timeout-minutes: 15
     needs: [gate, windows, macos, linux]
     if: >-
       github.ref_type == 'tag' &&

@@ -28,11 +28,22 @@ jobs:
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux build deps
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
+          # The runners' internal Azure apt mirror flakes; its default timeouts
+          # can hang a job for hours. Fail over fast and retry; a total update
+          # failure still lets install try the image's cached indexes, and a
+          # missing package then fails the step loudly.
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
           sudo apt-get install -y --no-install-recommends \
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain (rust-toolchain.toml drives the version)
@@ -50,12 +61,20 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux build deps
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
+          # Same azure-mirror hardening as the lint job (keep the three copies identical).
+          for i in 1 2 3; do
+            sudo timeout 180 apt-get update \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+              && break
+            echo "apt-get update flaked (attempt $i/3)"; sleep 10
+          done
           sudo apt-get install -y --no-install-recommends \
             libudev-dev pkg-config libwayland-dev libxkbcommon-dev libx11-dev
       - name: Warm toolchain (rust-toolchain.toml drives the version)
@@ -67,6 +86,7 @@ jobs:
   deny:
     name: cargo-deny (advisories, bans, licenses, sources)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1

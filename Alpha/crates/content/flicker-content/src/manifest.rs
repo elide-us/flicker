@@ -59,10 +59,24 @@ fn write(path: &Path, entries: Vec<ManifestEntry>) -> Result<()> {
     Ok(())
 }
 
-/// Append one promotion row. Creates the manifest on first promote.
+/// LOGICAL paths are forward-slash on every platform (the manifest survives the
+/// tree moving hosts). Callers build rows from `PathBuf`s, which spell `\` on
+/// Windows — normalize at THIS seam, so a backslashed row can neither be
+/// written by [`append`] nor missed by [`remove`], whoever constructed it.
+fn normalized(entry: &ManifestEntry) -> ManifestEntry {
+    ManifestEntry {
+        name: entry.name.clone(),
+        class: entry.class.clone(),
+        path: entry.path.replace('\\', "/"),
+        promoted_from: entry.promoted_from.replace('\\', "/"),
+    }
+}
+
+/// Append one promotion row (logical paths normalized to forward slashes).
+/// Creates the manifest on first promote.
 pub fn append(path: &Path, entry: ManifestEntry) -> Result<()> {
     let mut entries = read(path)?;
-    entries.push(entry);
+    entries.push(normalized(&entry));
     write(path, entries)
 }
 
@@ -70,8 +84,9 @@ pub fn append(path: &Path, entry: ManifestEntry) -> Result<()> {
 /// that is not there is an error, never a silent no-op: an undo that cannot find
 /// what it recorded is a corrupted ledger, and the caller must hear about it.
 pub fn remove(path: &Path, entry: &ManifestEntry) -> Result<()> {
+    let entry = normalized(entry);
     let mut entries = read(path)?;
-    let Some(i) = entries.iter().rposition(|e| e == entry) else {
+    let Some(i) = entries.iter().rposition(|e| *e == entry) else {
         anyhow::bail!(
             "manifest {} has no row for `{}`",
             path.display(),
@@ -122,6 +137,34 @@ mod tests {
 
         // Removing a row that is not recorded is a LOUD error.
         assert!(remove(&m, &entry("Nope")).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// LOGICAL paths are forward-slash on EVERY platform. A row built from
+    /// `PathBuf` strings (backslashed on Windows) must land normalized, and an
+    /// undo must find its row by either spelling — this seam is the gate, so
+    /// the guarantee is tested with literal backslashes on all platforms.
+    #[test]
+    fn rows_normalize_to_forward_slash_logical_paths() {
+        let d = std::env::temp_dir().join("flicker_manifest_seps_test");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let m = d.join("manifest.json");
+
+        let backslashed = ManifestEntry {
+            name: "NewThing".into(),
+            class: "Rig".into(),
+            path: r"package\characters\NewThing".into(),
+            promoted_from: r"staging\characters\NewThing".into(),
+        };
+        append(&m, backslashed.clone()).unwrap();
+        let rows = read(&m).unwrap();
+        assert_eq!(rows[0].path, "package/characters/NewThing");
+        assert_eq!(rows[0].promoted_from, "staging/characters/NewThing");
+
+        // The undo finds the row through the same normalization.
+        remove(&m, &backslashed).unwrap();
+        assert!(read(&m).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 }
