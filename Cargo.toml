@@ -78,7 +78,7 @@ winit = "0.30.13"
 pollster = "0.4.0"
 
 # Math
-glam = { version = "0.29.3", features = ["bytemuck", "serde"] }
+glam = { version = "0.33.3", features = ["bytemuck", "serde"] }
 bytemuck = { version = "1.25.0", features = ["derive"] }
 
 # Scripting
