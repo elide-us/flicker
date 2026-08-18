@@ -61,7 +61,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # 90 covers a COLD run: full workspace compile (vendored Luau + ufbx C
+    # builds, uncached) plus the sim-heavy world crates' tests on few-core
+    # runners. Cached runs land far under this; revisit after the test cleanup.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Linux build deps
