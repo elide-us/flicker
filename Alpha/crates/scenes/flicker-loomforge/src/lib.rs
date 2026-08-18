@@ -23,47 +23,50 @@ mod tae;
 pub use doc::{EditorDoc, Tab, Tool};
 
 use doc::{next_trigger, trigger_label, EdgeRef};
-use route::RootHandler;
 use flicker_skeletal::state::{EventKind, Response, Trigger};
+use route::RootHandler;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use canvas::{CanvasArea, CardRect};
-use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState};
 use flicker::render::{FrameGraph, Rect as StageRect, Renderer, TextureHandle, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{
-    HudCommand, UiAnchor, UiNode, Value, ValueMap,
-};
-use flicker::ui::{
-    render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler,
+use flicker::script::{HudCommand, UiAnchor, UiNode, Value, ValueMap};
+use flicker::ui::{render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 use stage::{StageReq, StageRig};
 
-/// THE single global UI-element + Prism-palette file.
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
-
 /// The pack the bench opens with — the GOLEM baseline pack (seeded 2026-08-04 from the
 /// retired PrismHumanBaseA exemplar): locomotion states over the shared retarget clips.
-const PACK_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../content/package/characters/GolemBase_Low/GolemBase_Low.pack.json"
-);
+fn pack_path() -> PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("characters/GolemBase_Low/GolemBase_Low.pack.json")
+}
 /// The base body rig, and the clip library the pack's state clips resolve against —
 /// THE REFERENCE (GolemBase_Low) since the 2026-08-04 content sweep.
-const BASE_DIR: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters/GolemBase_Low");
+fn base_dir() -> PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("characters/GolemBase_Low")
+}
 // The shared retarget library — the katanami-era per-character clip bundle was deleted
 // with the example content (2026-08-04 audit); clips resolve by canonical bone name.
-const CLIPS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/retarget/clips/locomotion");
+fn clips_dir() -> PathBuf {
+    flicker_core::roots::roots()
+        .package()
+        .join("retarget/clips/locomotion")
+}
 /// Root the Pack Browser scans for `*.pack.json` — the character tree.
-const CONTENT_CHARACTERS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/package/characters");
+fn content_characters() -> PathBuf {
+    flicker_core::roots::roots().package().join("characters")
+}
 
 const TOP_BAR_H: f32 = 56.0;
 const TAB_BAR_H: f32 = 40.0;
@@ -281,7 +284,10 @@ impl LoomforgeBench {
             route: RouteCtx::new(),
             tick: 0,
             cards: Vec::new(),
-            canvas_area: CanvasArea { pos: Vec2::ZERO, size: Vec2::ZERO },
+            canvas_area: CanvasArea {
+                pos: Vec2::ZERO,
+                size: Vec2::ZERO,
+            },
             edges: Vec::new(),
             selected_edge: None,
             tool: Tool::default(),
@@ -386,7 +392,12 @@ impl LoomforgeBench {
         bar.gap = 12.0;
         bar = prop(bar, "style", text_val("loomforge.top_bar"));
 
-        let title = label_node("Loomforge Bench", 21.0, "loomforge.title.color", Some(210.0));
+        let title = label_node(
+            "Loomforge Bench",
+            21.0,
+            "loomforge.title.color",
+            Some(210.0),
+        );
         let rig = label_node(self.rig_badge(), 11.0, "loomforge.badge.color", Some(240.0));
 
         // Spacer soaks the middle so the actions sit hard right.
@@ -404,7 +415,11 @@ impl LoomforgeBench {
         save.id = "save".into();
         save.action = Some("save".into());
         save.size = Some(80.0);
-        save = prop(save, "label", text_val(if self.is_dirty() { "Save *" } else { "Save" }));
+        save = prop(
+            save,
+            "label",
+            text_val(if self.is_dirty() { "Save *" } else { "Save" }),
+        );
         save = prop(save, "style", text_val("loomforge.button_primary"));
 
         bar.children = vec![title, rig, spacer, validate, save];
@@ -431,8 +446,11 @@ impl LoomforgeBench {
                 b.size = Some(170.0);
                 b = prop(b, "label", text_val(t.label()));
                 // The active tab uses the lit style — the design's underline/emphasis.
-                let style =
-                    if *t == self.tab { "loomforge.tab_active" } else { "loomforge.tab_idle" };
+                let style = if *t == self.tab {
+                    "loomforge.tab_active"
+                } else {
+                    "loomforge.tab_idle"
+                };
                 prop(b, "style", text_val(style))
             })
             .collect();
@@ -515,8 +533,11 @@ impl LoomforgeBench {
         root.anchor = Some(UiAnchor::TopLeft);
         root.width = Some(screen.x);
         root.height = Some(screen.y);
-        root.children =
-            vec![self.tae_track_list(&r), self.tae_preview(&r), self.tae_inspector(&r)];
+        root.children = vec![
+            self.tae_track_list(&r),
+            self.tae_preview(&r),
+            self.tae_inspector(&r),
+        ];
         root
     }
 
@@ -532,11 +553,20 @@ impl LoomforgeBench {
         col.gap = 3.0;
         col = prop(col, "style", text_val("loomforge.rail"));
 
-        let mut kids =
-            vec![label_node("EDITING CLIP", 11.0, "loomforge.rail_title.color", Some(18.0))];
+        let mut kids = vec![label_node(
+            "EDITING CLIP",
+            11.0,
+            "loomforge.rail_title.color",
+            Some(18.0),
+        )];
         match self.tae_axis() {
             Some((_, clip, frames, rate)) => {
-                kids.push(label_node(clip, 16.0, "loomforge.pack_kind.locomotion.color", Some(22.0)));
+                kids.push(label_node(
+                    clip,
+                    16.0,
+                    "loomforge.pack_kind.locomotion.color",
+                    Some(22.0),
+                ));
                 kids.push(label_node(
                     format!("{frames} frames · {rate} Hz"),
                     11.0,
@@ -552,7 +582,12 @@ impl LoomforgeBench {
             )),
         }
 
-        kids.push(label_node("EVENT TRACKS", 11.0, "loomforge.rail_title.color", Some(20.0)));
+        kids.push(label_node(
+            "EVENT TRACKS",
+            11.0,
+            "loomforge.rail_title.color",
+            Some(20.0),
+        ));
         let counts = self.tae_lane_counts();
         for (i, lane) in tae::Lane::ALL.iter().enumerate() {
             kids.push(label_node(
@@ -567,7 +602,12 @@ impl LoomforgeBench {
         // would otherwise surface only as bad feel months later — untraceable back to the
         // authoring choice that caused them.
         for (title, line, verdict) in self.tae_budget_rows() {
-            kids.push(label_node(title, 11.0, "loomforge.rail_title.color", Some(20.0)));
+            kids.push(label_node(
+                title,
+                11.0,
+                "loomforge.rail_title.color",
+                Some(20.0),
+            ));
             kids.push(label_node(
                 line,
                 12.0,
@@ -688,7 +728,9 @@ impl LoomforgeBench {
         )];
 
         // The doll, sized to whatever the preview box allows (the design's 300px cap).
-        let side = (r.preview_h - 90.0).min(r.preview_w - 24.0).clamp(64.0, TAE_STAGE_MAX);
+        let side = (r.preview_h - 90.0)
+            .min(r.preview_w - 24.0)
+            .clamp(64.0, TAE_STAGE_MAX);
         let mut doll = node("rtt");
         doll.id = TAE_STAGE_ID.into();
         doll.width = Some(side);
@@ -704,10 +746,17 @@ impl LoomforgeBench {
         bar.gap = 6.0;
         bar.children = vec![
             self.rail_button("tae_prev", "|<".into(), 30.0),
-            self.rail_button("tae_play", if self.tae_playing { "||" } else { ">" }.into(), 30.0),
+            self.rail_button(
+                "tae_play",
+                if self.tae_playing { "||" } else { ">" }.into(),
+                30.0,
+            ),
             self.rail_button("tae_next", ">|".into(), 30.0),
             label_node(
-                format!("{:.2}s", self.time % ((frames.max(1) as f32) / rate.max(1) as f32)),
+                format!(
+                    "{:.2}s",
+                    self.time % ((frames.max(1) as f32) / rate.max(1) as f32)
+                ),
                 12.0,
                 "loomforge.rail_text.color",
                 Some(60.0),
@@ -753,14 +802,22 @@ impl LoomforgeBench {
                 Some(24.0),
             ),
             label_node(
-                if ev.label.is_empty() { "—".into() } else { ev.label.clone() },
+                if ev.label.is_empty() {
+                    "—".into()
+                } else {
+                    ev.label.clone()
+                },
                 11.0,
                 "loomforge.rail_text.color",
                 Some(16.0),
             ),
             // TIMING
             label_node("TIMING", 11.0, "loomforge.rail_title.color", Some(20.0)),
-            self.stepper(format!("Start   {}", ev.tick), "tae_start_dec", "tae_start_inc"),
+            self.stepper(
+                format!("Start   {}", ev.tick),
+                "tae_start_dec",
+                "tae_start_inc",
+            ),
             self.stepper(
                 match ev.end {
                     Some(e) => format!("End   {e}"),
@@ -773,7 +830,12 @@ impl LoomforgeBench {
 
         let c = ev.combat.as_ref();
         // SHAPE
-        kids.push(label_node("SHAPE", 11.0, "loomforge.rail_title.color", Some(20.0)));
+        kids.push(label_node(
+            "SHAPE",
+            11.0,
+            "loomforge.rail_title.color",
+            Some(20.0),
+        ));
         kids.push(label_node(
             format!(
                 "Attach Bone   {}",
@@ -792,7 +854,12 @@ impl LoomforgeBench {
             "tae_cap_inc",
         ));
         // DAMAGE
-        kids.push(label_node("DAMAGE", 11.0, "loomforge.rail_title.color", Some(20.0)));
+        kids.push(label_node(
+            "DAMAGE",
+            11.0,
+            "loomforge.rail_title.color",
+            Some(20.0),
+        ));
         kids.push(label_node(
             match c.and_then(|c| c.damage) {
                 Some([lo, hi]) => format!("Damage   {lo:.0}–{hi:.0}"),
@@ -822,7 +889,9 @@ impl LoomforgeBench {
             "label",
             text_val(format!(
                 "Hit Type: {}",
-                c.and_then(|c| c.hit_type).map(hit_type_label).unwrap_or("—")
+                c.and_then(|c| c.hit_type)
+                    .map(hit_type_label)
+                    .unwrap_or("—")
             )),
         );
         kids.push(prop(hit, "style", text_val("loomforge.button_secondary")));
@@ -830,7 +899,11 @@ impl LoomforgeBench {
         // makes an attack perilous, so the heading says which it currently is.
         let mask = c.map(|c| c.response_mask).unwrap_or_default();
         kids.push(label_node(
-            if mask.is_perilous() { "RESPONSE — PERILOUS" } else { "RESPONSE" },
+            if mask.is_perilous() {
+                "RESPONSE — PERILOUS"
+            } else {
+                "RESPONSE"
+            },
             11.0,
             if mask.is_perilous() {
                 "loomforge.tae_lane.budget_over"
@@ -857,7 +930,12 @@ impl LoomforgeBench {
         ));
 
         // FEEDBACK
-        kids.push(label_node("FEEDBACK", 11.0, "loomforge.rail_title.color", Some(20.0)));
+        kids.push(label_node(
+            "FEEDBACK",
+            11.0,
+            "loomforge.rail_title.color",
+            Some(20.0),
+        ));
         for (k, v) in [
             ("SFX", c.and_then(|c| c.sfx_cue.as_deref()).unwrap_or("—")),
             ("VFX", c.and_then(|c| c.vfx_cue.as_deref()).unwrap_or("—")),
@@ -922,24 +1000,45 @@ impl LoomforgeBench {
         rail = prop(rail, "style", text_val("loomforge.rail"));
 
         let counts = packs::kind_counts(&self.packs);
-        let mut kids =
-            vec![label_node("FILTER PACKS", 12.0, "loomforge.rail_title.color", Some(20.0))];
+        let mut kids = vec![label_node(
+            "FILTER PACKS",
+            12.0,
+            "loomforge.rail_title.color",
+            Some(20.0),
+        )];
         for (i, k) in packs::PackKind::ALL.iter().enumerate() {
             let mut b = node("button");
             b.id = format!("packkind_{i}");
             b.action = Some(format!("packkind_{i}"));
             b.height = Some(24.0);
-            b = prop(b, "label", text_val(format!("{}  {}", k.label(), counts[i])));
-            kids.push(prop(b, "style", text_val(active_style(self.pack_kinds.contains(k)))));
+            b = prop(
+                b,
+                "label",
+                text_val(format!("{}  {}", k.label(), counts[i])),
+            );
+            kids.push(prop(
+                b,
+                "style",
+                text_val(active_style(self.pack_kinds.contains(k))),
+            ));
         }
-        kids.push(label_node("SKELETON", 12.0, "loomforge.rail_title.color", Some(22.0)));
+        kids.push(label_node(
+            "SKELETON",
+            12.0,
+            "loomforge.rail_title.color",
+            Some(22.0),
+        ));
         for (i, s) in packs::skeletons(&self.packs).iter().enumerate() {
             let mut b = node("button");
             b.id = format!("packskel_{i}");
             b.action = Some(format!("packskel_{i}"));
             b.height = Some(24.0);
             b = prop(b, "label", text_val(s.clone()));
-            kids.push(prop(b, "style", text_val(active_style(self.pack_skels.contains(s)))));
+            kids.push(prop(
+                b,
+                "style",
+                text_val(active_style(self.pack_skels.contains(s))),
+            ));
         }
         rail.children = kids;
         rail
@@ -962,7 +1061,11 @@ impl LoomforgeBench {
         let count = if filtered {
             format!("{} of {} packs", vis.len(), self.packs.len())
         } else {
-            format!("{} pack{}", vis.len(), if vis.len() == 1 { "" } else { "s" })
+            format!(
+                "{} pack{}",
+                vis.len(),
+                if vis.len() == 1 { "" } else { "s" }
+            )
         };
         let mut kids = vec![
             label_node("Pack Library", 22.0, "loomforge.title.color", Some(28.0)),
@@ -1042,8 +1145,12 @@ impl LoomforgeBench {
         col = prop(col, "style", text_val("loomforge.rail"));
 
         let Some(e) = self.selected_pack() else {
-            col.children =
-                vec![label_node("No packs found.", 14.0, "loomforge.rail_text.color", None)];
+            col.children = vec![label_node(
+                "No packs found.",
+                14.0,
+                "loomforge.rail_text.color",
+                None,
+            )];
             return col;
         };
         let open = self.doc.as_ref().is_some_and(|d| d.path() == e.path);
@@ -1054,12 +1161,22 @@ impl LoomforgeBench {
             label_node("MANIFEST", 11.0, "loomforge.rail_title.color", Some(20.0)),
         ];
         for (k, v) in [
-            ("Format", if e.format.is_empty() { "—".into() } else { e.format.clone() }),
+            (
+                "Format",
+                if e.format.is_empty() {
+                    "—".into()
+                } else {
+                    e.format.clone()
+                },
+            ),
             ("Version", e.version.to_string()),
             ("Skeleton", e.skeleton.clone()),
             ("States", e.states.to_string()),
             ("Transitions", e.transitions.to_string()),
-            ("TAE events", format!("{} in {} states", e.events, e.event_states)),
+            (
+                "TAE events",
+                format!("{} in {} states", e.events, e.event_states),
+            ),
             ("Combat windows", e.combat_events.to_string()),
         ] {
             kids.push(label_node(
@@ -1070,9 +1187,22 @@ impl LoomforgeBench {
             ));
         }
         if !e.note.is_empty() {
-            kids.push(label_node("NOTE", 11.0, "loomforge.rail_title.color", Some(20.0)));
-            for line in wrap_text(&e.note, NOTE_WRAP).into_iter().take(NOTE_MAX_LINES) {
-                kids.push(label_node(line, 12.0, "loomforge.rail_text.color", Some(15.0)));
+            kids.push(label_node(
+                "NOTE",
+                11.0,
+                "loomforge.rail_title.color",
+                Some(20.0),
+            ));
+            for line in wrap_text(&e.note, NOTE_WRAP)
+                .into_iter()
+                .take(NOTE_MAX_LINES)
+            {
+                kids.push(label_node(
+                    line,
+                    12.0,
+                    "loomforge.rail_text.color",
+                    Some(15.0),
+                ));
             }
         }
 
@@ -1080,11 +1210,19 @@ impl LoomforgeBench {
         load.id = "pack_load".into();
         load.action = Some("pack_load".into());
         load.height = Some(30.0);
-        load = prop(load, "label", text_val(if open { "Loaded" } else { "Load Pack" }));
+        load = prop(
+            load,
+            "label",
+            text_val(if open { "Loaded" } else { "Load Pack" }),
+        );
         kids.push(prop(
             load,
             "style",
-            text_val(if open { "loomforge.button_secondary" } else { "loomforge.button_primary" }),
+            text_val(if open {
+                "loomforge.button_secondary"
+            } else {
+                "loomforge.button_primary"
+            }),
         ));
         col.children = kids;
         col
@@ -1143,8 +1281,18 @@ impl LoomforgeBench {
         }
 
         let mut kids = vec![
-            label_node("PACK MANAGER", 12.0, "loomforge.rail_title.color", Some(20.0)),
-            label_node(self.pack_summary(), 13.0, "loomforge.rail_text.color", Some(18.0)),
+            label_node(
+                "PACK MANAGER",
+                12.0,
+                "loomforge.rail_title.color",
+                Some(20.0),
+            ),
+            label_node(
+                self.pack_summary(),
+                13.0,
+                "loomforge.rail_text.color",
+                Some(18.0),
+            ),
             label_node(
                 "Drag a clip onto a state to bind it.",
                 13.0,
@@ -1211,7 +1359,11 @@ impl LoomforgeBench {
 
         if results.is_on("edge_delete") {
             let ok = self.doc.as_mut().is_some_and(|d| d.remove_transition(e));
-            self.status = if ok { "Transition removed.".into() } else { "That transition is gone.".into() };
+            self.status = if ok {
+                "Transition removed.".into()
+            } else {
+                "That transition is gone.".into()
+            };
             self.selected_edge = None;
             return;
         }
@@ -1251,18 +1403,29 @@ impl LoomforgeBench {
 
     /// This frame's transition geometry. One pass, consumed by both picking and drawing.
     fn build_edges(&self) -> Vec<Edge> {
-        let Some(doc) = &self.doc else { return Vec::new() };
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for (i, st) in doc.states().iter().enumerate() {
-            let Some(&from) = self.cards.get(i) else { continue };
+            let Some(&from) = self.cards.get(i) else {
+                continue;
+            };
             for (index, t) in st.transitions.iter().enumerate() {
-                let Some(j) = doc.state_index(&t.to) else { continue };
-                let Some(&to) = self.cards.get(j) else { continue };
+                let Some(j) = doc.state_index(&t.to) else {
+                    continue;
+                };
+                let Some(&to) = self.cards.get(j) else {
+                    continue;
+                };
                 let id = EdgeRef { from: i, index };
                 if i == j {
                     // Self-transition: a loop arc over the card's top edge.
                     let lift = SELF_LOOP_LIFT * self.view.zoom;
-                    let (x0, x1) = (from.pos.x + from.size.x * 0.35, from.pos.x + from.size.x * 0.65);
+                    let (x0, x1) = (
+                        from.pos.x + from.size.x * 0.35,
+                        from.pos.x + from.size.x * 0.65,
+                    );
                     let (y0, y1) = (from.pos.y, from.pos.y - lift);
                     out.push(Edge {
                         id,
@@ -1276,7 +1439,11 @@ impl LoomforgeBench {
                 } else {
                     let (p, q) = canvas::edge_points(from, to);
                     let zero = (Vec2::ZERO, Vec2::ZERO);
-                    out.push(Edge { id, segs: [(p, q), zero, zero], n: 1 });
+                    out.push(Edge {
+                        id,
+                        segs: [(p, q), zero, zero],
+                        n: 1,
+                    });
                 }
             }
         }
@@ -1299,13 +1466,18 @@ impl LoomforgeBench {
     fn clip_page(&self, r: &Regions) -> usize {
         // Header labels + the trigger cycler + the position line, plus the rail padding.
         let used = 60.0 + 28.0 + 16.0 + 14.0 * 2.0;
-        ((((r.tae_y - r.top) - used) / (CLIP_ROW_H + 6.0)).floor().max(0.0) as usize).max(1)
+        ((((r.tae_y - r.top) - used) / (CLIP_ROW_H + 6.0))
+            .floor()
+            .max(0.0) as usize)
+            .max(1)
     }
 
     /// The selected transition's inspector: where it goes, what fires it, and the two
     /// dials that decide how it competes and how it blends.
     fn transition_rows(&self, e: EdgeRef) -> Vec<UiNode> {
-        let Some(doc) = &self.doc else { return Vec::new() };
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
         let Some(t) = doc::transition(doc.def(), e) else {
             return vec![label_node(
                 "That transition is gone.",
@@ -1318,10 +1490,16 @@ impl LoomforgeBench {
 
         let mut rows = vec![
             label_node("TRANSITION", 12.0, "loomforge.rail_title.color", Some(20.0)),
-            label_node(format!("{from}  →  {}", t.to), 15.0, "loomforge.title.color", Some(24.0)),
+            label_node(
+                format!("{from}  →  {}", t.to),
+                15.0,
+                "loomforge.title.color",
+                Some(24.0),
+            ),
         ];
 
-        let mut trig = self.rail_button("edge_trigger", format!("on: {}", trigger_label(t.on)), 28.0);
+        let mut trig =
+            self.rail_button("edge_trigger", format!("on: {}", trigger_label(t.on)), 28.0);
         trig = prop(trig, "style", text_val("loomforge.button_secondary"));
         rows.push(trig);
 
@@ -1420,17 +1598,28 @@ impl LoomforgeBench {
     /// One-line description of the loaded pack for the rail header.
     fn pack_summary(&self) -> String {
         match &self.doc {
-            Some(d) => format!("{} · {} clips", short_path(d.path()), d.clip_names().count()),
+            Some(d) => format!(
+                "{} · {} clips",
+                short_path(d.path()),
+                d.clip_names().count()
+            ),
             None => "no pack loaded".into(),
         }
     }
 
     /// What the TAE strip reports for the current selection.
     fn tae_summary(&self) -> String {
-        let Some(doc) = &self.doc else { return "no pack".into() };
+        let Some(doc) = &self.doc else {
+            return "no pack".into();
+        };
         match doc.selected().and_then(|i| doc.states().get(i)) {
             Some(s) => {
-                format!("{} · clip \"{}\" · {} event(s)", s.name, s.clip, s.events.len())
+                format!(
+                    "{} · clip \"{}\" · {} event(s)",
+                    s.name,
+                    s.clip,
+                    s.events.len()
+                )
             }
             None => "select a state to see its event windows".into(),
         }
@@ -1456,15 +1645,22 @@ impl LoomforgeBench {
             let d = doc.def();
             match self.tab {
                 Tab::StateMachine => {
-                    let transitions: usize =
-                        doc.states().iter().map(|s| s.transitions.len()).sum::<usize>() + d.any.len();
+                    let transitions: usize = doc
+                        .states()
+                        .iter()
+                        .map(|s| s.transitions.len())
+                        .sum::<usize>()
+                        + d.any.len();
                     lines.push(format!(
                         "{} states · {} transitions · initial \"{}\"",
                         doc.states().len(),
                         transitions,
                         d.initial
                     ));
-                    lines.push(format!("tick rate {} Hz · default blend {} ticks", d.tick_rate_hz, d.default_blend_ticks));
+                    lines.push(format!(
+                        "tick rate {} Hz · default blend {} ticks",
+                        d.tick_rate_hz, d.default_blend_ticks
+                    ));
                 }
                 Tab::PackBrowser => {
                     lines.push(format!("{} clips in the library", doc.clip_names().count()));
@@ -1475,7 +1671,10 @@ impl LoomforgeBench {
                 }
                 Tab::TaeEditor => {
                     let events: usize = doc.states().iter().map(|s| s.events.len()).sum();
-                    lines.push(format!("{events} TAE events across {} states", doc.states().len()));
+                    lines.push(format!(
+                        "{events} TAE events across {} states",
+                        doc.states().len()
+                    ));
                 }
             }
             if !doc.warnings().is_empty() {
@@ -1527,7 +1726,9 @@ impl LoomforgeBench {
     }
 
     fn build_stage_reqs(&self, slots: Vec<flicker::ui::RttSlot>) -> Vec<StageReq> {
-        let Some(doc) = &self.doc else { return Vec::new() };
+        let Some(doc) = &self.doc else {
+            return Vec::new();
+        };
         if !self.stage_rig.has_source(DOLL_SOURCE) {
             return Vec::new();
         }
@@ -1575,13 +1776,18 @@ impl LoomforgeBench {
         // and a graph page carries one card per state.
         if self.tab == Tab::StateMachine {
             for (i, st) in doc.states().iter().enumerate() {
-                let Some(&c) = self.cards.get(i) else { continue };
+                let Some(&c) = self.cards.get(i) else {
+                    continue;
+                };
                 let sel = self.selected_is(i);
                 let doll = canvas::card_stage_rect(c, self.view.zoom);
                 reqs.push(StageReq {
                     id: format!("card_{}#{}", st.name, st.clip),
                     source: DOLL_SOURCE.to_string(),
-                    rect: StageRect { pos: doll.pos, size: doll.size },
+                    rect: StageRect {
+                        pos: doll.pos,
+                        size: doll.size,
+                    },
                     layer: 0.0,
                     tint: [1.0; 4],
                     live: sel,
@@ -1624,7 +1830,10 @@ impl LoomforgeBench {
                 doc.nudge_event_end(e, delta);
             }
         }
-        for (action, delta) in [("tae_cap_dec", -CAPSULE_STEP_M), ("tae_cap_inc", CAPSULE_STEP_M)] {
+        for (action, delta) in [
+            ("tae_cap_dec", -CAPSULE_STEP_M),
+            ("tae_cap_inc", CAPSULE_STEP_M),
+        ] {
             if results.is_on(action) {
                 doc.nudge_event_capsule(e, delta);
             }
@@ -1637,9 +1846,10 @@ impl LoomforgeBench {
                 doc.toggle_event_response(e, *r);
             }
         }
-        for (action, delta) in
-            [("tae_pscale_dec", -PARRY_SCALE_STEP), ("tae_pscale_inc", PARRY_SCALE_STEP)]
-        {
+        for (action, delta) in [
+            ("tae_pscale_dec", -PARRY_SCALE_STEP),
+            ("tae_pscale_inc", PARRY_SCALE_STEP),
+        ] {
             if results.is_on(action) {
                 doc.nudge_event_parry_scale(e, delta);
             }
@@ -1692,7 +1902,8 @@ impl LoomforgeBench {
             return; // already open — Load is a no-op, not a reload that would drop edits
         }
         let dir = entry.path.parent().map(Path::to_path_buf);
-        let mut roots: Vec<&Path> = vec![Path::new(BASE_DIR)];
+        let base = base_dir();
+        let mut roots: Vec<&Path> = vec![&base];
         if let Some(d) = dir.as_deref() {
             roots.push(d);
         }
@@ -1755,14 +1966,14 @@ impl Scene for LoomforgeBench {
     fn enter(&mut self, renderer: &mut Renderer) {
         self.theme = Some(Theme::build(renderer));
         self.hud_white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
-        self.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        self.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
 
         // The Pack Browser's library: every real `*.pack.json` under the content tree.
         // Scanned once — the browser reads files, it does not watch them.
-        self.packs = packs::scan_packs(Path::new(CONTENT_CHARACTERS));
+        self.packs = packs::scan_packs(&content_characters());
         tracing::info!(packs = self.packs.len(), "loomforge: pack library scanned");
 
-        match EditorDoc::load(Path::new(PACK_PATH), &[Path::new(BASE_DIR), Path::new(CLIPS_DIR)]) {
+        match EditorDoc::load(&pack_path(), &[&base_dir(), &clips_dir()]) {
             Ok(doc) => {
                 tracing::info!(
                     states = doc.states().len(),
@@ -1781,7 +1992,13 @@ impl Scene for LoomforgeBench {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         // Input arbitration (Esc → pause + the HUD pointer-consume) now runs through the
         // ONE event bus in the resolve → dispatch block below, once this frame's walker
         // pass has produced `over_hud`. The node-graph / TAE-timeline tools keep their
@@ -1815,7 +2032,11 @@ impl Scene for LoomforgeBench {
         // from last frame's rects, so hover costs no extra layout pass — and a frame of
         // lag on "start dancing" is imperceptible.
         let mut model = ValueMap::new();
-        if let Some(clip) = self.hot_stage.as_deref().and_then(|h| h.strip_prefix(STAGE_PREFIX)) {
+        if let Some(clip) = self
+            .hot_stage
+            .as_deref()
+            .and_then(|h| h.strip_prefix(STAGE_PREFIX))
+        {
             model.set(live_key(clip), true);
         }
         // The transient `sig_<name>` mirror (S9): intent names fired last frame
@@ -1970,7 +2191,11 @@ impl Scene for LoomforgeBench {
                         None => {
                             self.selected_edge = self.hit_edge(self.cursor);
                             if let Some(e) = self.selected_edge {
-                                self.status = match self.doc.as_ref().and_then(|d| doc::transition(d.def(), e)) {
+                                self.status = match self
+                                    .doc
+                                    .as_ref()
+                                    .and_then(|d| doc::transition(d.def(), e))
+                                {
                                     Some(t) => format!("Editing the {} edge.", trigger_label(t.on)),
                                     None => String::new(),
                                 };
@@ -2029,7 +2254,11 @@ impl Scene for LoomforgeBench {
                     let on = self.link_trigger;
                     self.status = if from == to {
                         "A state cannot transition to itself here.".into()
-                    } else if self.doc.as_mut().is_some_and(|d| d.add_transition(from, to, on)) {
+                    } else if self
+                        .doc
+                        .as_mut()
+                        .is_some_and(|d| d.add_transition(from, to, on))
+                    {
                         format!("Linked on {}", trigger_label(on))
                     } else {
                         format!("That {} edge already exists.", trigger_label(on))
@@ -2067,7 +2296,10 @@ impl Scene for LoomforgeBench {
         if self.tab == Tab::TaeEditor && input.mouse_left_pressed && !over_hud {
             let strip = self.tae_page_strip(screen);
             if rect_contains(
-                &StageRect { pos: strip.pos, size: strip.size },
+                &StageRect {
+                    pos: strip.pos,
+                    size: strip.size,
+                },
                 input.mouse_position,
             ) {
                 self.tae_event = self.tae_pick_event(input.mouse_position, screen);
@@ -2087,7 +2319,8 @@ impl Scene for LoomforgeBench {
         if !self.stage_reqs.is_empty() {
             if let Some(doc) = &self.doc {
                 let mut fg = FrameGraph::new();
-                self.stage_rig.stage(renderer, &mut fg, doc.model(), base, &self.stage_reqs);
+                self.stage_rig
+                    .stage(renderer, &mut fg, doc.model(), base, &self.stage_reqs);
                 fg.execute(renderer);
             }
         }
@@ -2095,7 +2328,8 @@ impl Scene for LoomforgeBench {
         // steady page never trips this, so the common frame does no bookkeeping at all.
         if self.stage_rig.slot_count() > self.stage_reqs.len() + STALE_SLOT_SLACK {
             let shown: Vec<&str> = self.stage_reqs.iter().map(|r| r.id.as_str()).collect();
-            self.stage_rig.retain_slots(renderer, &|id| shown.contains(&id));
+            self.stage_rig
+                .retain_slots(renderer, &|id| shown.contains(&id));
         }
 
         // The scene-owned canvas paints on the base layer, UNDER the walker chrome —
@@ -2141,7 +2375,13 @@ impl LoomforgeBench {
                     .and_then(|t| doc.state_index(&t.to))
                     .is_some_and(|j| self.selected_is(j));
             let c = if lit { edge_sel } else { edge_c };
-            let w = if picked { 3.0 } else if lit { 2.4 } else { 1.4 };
+            let w = if picked {
+                3.0
+            } else if lit {
+                2.4
+            } else {
+                1.4
+            };
             for (a, b) in &e.segs[..e.n] {
                 draw_line(r, *a, *b, w, c);
             }
@@ -2174,7 +2414,9 @@ impl LoomforgeBench {
         let text_x = canvas::card_text_x(z);
 
         for (i, st) in doc.states().iter().enumerate() {
-            let Some(&c) = self.cards.get(i) else { continue };
+            let Some(&c) = self.cards.get(i) else {
+                continue;
+            };
             let sel = self.selected_is(i);
             r.draw_ui_panel(
                 c.pos,
@@ -2188,7 +2430,17 @@ impl LoomforgeBench {
                 0.0,
             );
             let doll = canvas::card_stage_rect(c, z);
-            r.draw_ui_panel(doll.pos, doll.size, stage_top, stage_bot, 1.0, 4.0 * z, 1.0, stage_border, 0.0);
+            r.draw_ui_panel(
+                doll.pos,
+                doll.size,
+                stage_top,
+                stage_bot,
+                1.0,
+                4.0 * z,
+                1.0,
+                stage_border,
+                0.0,
+            );
             r.draw_text(
                 &st.name,
                 c.pos + Vec2::new(text_x, 12.0 * z),
@@ -2197,7 +2449,12 @@ impl LoomforgeBench {
             );
             let io = format!("IN {} · OUT {}", in_deg[i], st.transitions.len());
             r.draw_text(&io, c.pos + Vec2::new(text_x, 38.0 * z), 11.0 * z, meta);
-            r.draw_text(&st.clip, c.pos + Vec2::new(text_x, 56.0 * z), 12.0 * z, meta);
+            r.draw_text(
+                &st.clip,
+                c.pos + Vec2::new(text_x, 56.0 * z),
+                12.0 * z,
+                meta,
+            );
         }
 
         // Rubber-band for an in-flight Link drag, drawn last so it rides over the cards.
@@ -2231,8 +2488,18 @@ impl LoomforgeBench {
 
         let title_c = self.color("loomforge.rail_title.color", [0.722, 0.592, 0.353, 1.0]);
         let text_c = self.color("loomforge.rail_text.color", [0.871, 0.847, 0.788, 1.0]);
-        r.draw_text("TAE TIMELINE", Vec2::new(12.0, region.tae_y + 4.0), 12.0, title_c);
-        r.draw_text(&self.tae_summary(), Vec2::new(tae::GUTTER_W + 12.0, region.tae_y + 4.0), 12.0, text_c);
+        r.draw_text(
+            "TAE TIMELINE",
+            Vec2::new(12.0, region.tae_y + 4.0),
+            12.0,
+            title_c,
+        );
+        r.draw_text(
+            &self.tae_summary(),
+            Vec2::new(tae::GUTTER_W + 12.0, region.tae_y + 4.0),
+            12.0,
+            text_c,
+        );
 
         let strip = tae::Strip {
             pos: Vec2::new(0.0, region.tae_y + TAE_HEADER_H),
@@ -2258,10 +2525,18 @@ impl LoomforgeBench {
 
         // Ruler.
         let ruler_c = self.color("loomforge.tae_lane.ruler", [0.561, 0.541, 0.49, 1.0]);
-        let track_border = self.color("loomforge.tae_lane.track_border", [0.149, 0.169, 0.208, 1.0]);
+        let track_border = self.color(
+            "loomforge.tae_lane.track_border",
+            [0.149, 0.169, 0.208, 1.0],
+        );
         for f in tae::ruler_ticks(frames) {
             let x = strip.frame_x(f, frames);
-            r.draw_text(&f.to_string(), Vec2::new(x + 3.0, strip.pos.y), 10.0, ruler_c);
+            r.draw_text(
+                &f.to_string(),
+                Vec2::new(x + 3.0, strip.pos.y),
+                10.0,
+                ruler_c,
+            );
             draw_line(
                 r,
                 Vec2::new(x, strip.pos.y + tae::RULER_H - 4.0),
@@ -2277,12 +2552,29 @@ impl LoomforgeBench {
             let row = self.lane_color(*lane, "row", [0.078, 0.09, 0.122, 1.0]);
             let row_border = self.lane_color(*lane, "row_border", [0.169, 0.188, 0.235, 1.0]);
             let swatch = self.lane_color(*lane, "swatch", [0.561, 0.541, 0.49, 1.0]);
-            r.draw_ui_panel(rect.pos, rect.size, row, row, 0.0, 3.0, 1.0, row_border, 0.0);
+            r.draw_ui_panel(
+                rect.pos, rect.size, row, row, 0.0, 3.0, 1.0, row_border, 0.0,
+            );
             // The design's 9px lane chip, then the label beside it.
             let chip = (rect.size.y * 0.4).clamp(4.0, 9.0);
             let cy = rect.pos.y + (rect.size.y - chip) * 0.5;
-            r.draw_ui_panel(Vec2::new(8.0, cy), Vec2::splat(chip), swatch, swatch, 0.0, 1.0, 0.0, [0.0; 4], 0.0);
-            r.draw_text(lane.label(), Vec2::new(8.0 + chip + 6.0, cy - 1.0), 10.0, swatch);
+            r.draw_ui_panel(
+                Vec2::new(8.0, cy),
+                Vec2::splat(chip),
+                swatch,
+                swatch,
+                0.0,
+                1.0,
+                0.0,
+                [0.0; 4],
+                0.0,
+            );
+            r.draw_text(
+                lane.label(),
+                Vec2::new(8.0 + chip + 6.0, cy - 1.0),
+                10.0,
+                swatch,
+            );
         }
 
         // Events of the selected state, each on its mapped lane.
@@ -2298,7 +2590,10 @@ impl LoomforgeBench {
             r.draw_ui_panel(bar.pos, bar.size, fill, fill, 0.0, 2.0, 0.0, [0.0; 4], 0.0);
             // The selected event gets the design's rune-blue outline.
             let is_sel = self.tae_event
-                == sel_state.map(|s| doc::EventRef { state: s, index: idx });
+                == sel_state.map(|s| doc::EventRef {
+                    state: s,
+                    index: idx,
+                });
             if is_sel {
                 draw_rect_outline(r, bar.pos, bar.size, 1.0, border_c);
             }
@@ -2342,7 +2637,12 @@ impl LoomforgeBench {
             0.0,
         );
         let title_c = self.color("loomforge.rail_title.color", [0.722, 0.592, 0.353, 1.0]);
-        r.draw_text("TIMELINE", Vec2::new(reg.track_w + 12.0, reg.strip_y + 4.0), 12.0, title_c);
+        r.draw_text(
+            "TIMELINE",
+            Vec2::new(reg.track_w + 12.0, reg.strip_y + 4.0),
+            12.0,
+            title_c,
+        );
         self.draw_tae_strip(
             r,
             tae::Strip {
@@ -2360,7 +2660,10 @@ impl LoomforgeBench {
         let reg = Self::tae_regions(screen);
         tae::Strip {
             pos: Vec2::new(reg.track_w, reg.strip_y + TAE_HEADER_H),
-            size: Vec2::new(reg.screen.x - reg.track_w, (reg.strip_h - TAE_HEADER_H).max(1.0)),
+            size: Vec2::new(
+                reg.screen.x - reg.track_w,
+                (reg.strip_h - TAE_HEADER_H).max(1.0),
+            ),
         }
     }
 
@@ -2471,7 +2774,10 @@ pub fn scene() -> Box<dyn Scene> {
 // ── small UiNode builders ────────────────────────────────────────────────────
 
 fn node(component: &str) -> UiNode {
-    UiNode { component: component.to_string(), ..Default::default() }
+    UiNode {
+        component: component.to_string(),
+        ..Default::default()
+    }
 }
 
 fn prop(mut n: UiNode, key: &str, value: Value) -> UiNode {
@@ -2576,7 +2882,10 @@ fn label_node(text: impl Into<String>, size: f32, color_path: &str, width: Optio
 
 /// Last two path components — enough to identify a pack without the full path.
 fn short_path(p: &Path) -> String {
-    let file = p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let file = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     match p.parent().and_then(|d| d.file_name()) {
         Some(dir) => format!("{}/{}", dir.to_string_lossy(), file),
         None => file,
@@ -2588,8 +2897,7 @@ fn short_path(p: &Path) -> String {
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }
 
 #[cfg(test)]
@@ -2604,7 +2912,10 @@ mod tests {
     #[test]
     fn no_raw_display_copy_published_into_the_model() {
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
     }
 
     /// The tab set + their ids/labels are what the chrome and the action router agree
@@ -2616,7 +2927,11 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), Tab::ALL.len(), "tab ids must be unique");
         assert!(Tab::ALL.iter().all(|t| !t.label().is_empty()));
-        assert_eq!(Tab::default(), Tab::StateMachine, "the bench opens on the graph");
+        assert_eq!(
+            Tab::default(),
+            Tab::StateMachine,
+            "the bench opens on the graph"
+        );
     }
 
     /// The chrome builds without a document (the pre-load / load-failure frame) and
@@ -2667,25 +2982,31 @@ mod tests {
         r.set(Tool::Select.id(), true);
         bench.apply_actions(&r);
         assert_eq!(bench.tool, Tool::Select);
-        assert!(bench.link_from.is_none(), "switching tools abandons the pending edge");
+        assert!(
+            bench.link_from.is_none(),
+            "switching tools abandons the pending edge"
+        );
     }
 
     /// The Phase-3 deliverable end to end, against the REAL pack: load → bind a clip
     /// (the drag-drop edit) → save → reload, with the `_note` header surviving.
     #[test]
     fn load_bind_save_round_trips_to_disk() {
-        let pack_path = Path::new(PACK_PATH);
-        if !flicker_core::compression::file_exists(pack_path) {
+        let pack_path = pack_path();
+        if !flicker_core::compression::file_exists(&pack_path) {
             return; // content not present in this checkout — nothing to assert
         }
-        let mut doc = EditorDoc::load(pack_path, &[Path::new(BASE_DIR), Path::new(CLIPS_DIR)])
+        let mut doc = EditorDoc::load(&pack_path, &[&base_dir(), &clips_dir()])
             .expect("the shipped pack + clip library must load");
         assert!(!doc.states().is_empty(), "pack has states");
 
         // A bad drop is rejected and must NOT dirty the document.
         assert!(!doc.bind_clip(0, "definitely_not_a_real_clip"));
         assert!(!doc.dirty(), "a rejected drop must not dirty the document");
-        assert!(!doc.bind_clip(usize::MAX, "whatever"), "unknown state rejected too");
+        assert!(
+            !doc.bind_clip(usize::MAX, "whatever"),
+            "unknown state rejected too"
+        );
 
         // Bind a clip the first state is not already using.
         let current = doc.states()[0].clip.clone();
@@ -2703,8 +3024,14 @@ mod tests {
         let note = doc.pack().note.clone();
         flicker_skeletal::state::write_pack(&tmp, doc.pack()).expect("write");
         let reloaded = flicker_skeletal::state::read_pack(&tmp).expect("read back");
-        assert_eq!(reloaded.state_machine.states[0].clip, clip, "the edit persisted");
-        assert_eq!(reloaded.note, note, "the hand-authored _note survived the save");
+        assert_eq!(
+            reloaded.state_machine.states[0].clip, clip,
+            "the edit persisted"
+        );
+        assert_eq!(
+            reloaded.note, note,
+            "the hand-authored _note survived the save"
+        );
         assert_eq!(
             reloaded.state_machine.states.len(),
             doc.states().len(),
@@ -2738,14 +3065,17 @@ mod tests {
             Some(&text_val(live_key("walk_forward"))),
             "liveness must bind to the key the scene publishes"
         );
-        assert!(doll.props.contains_key("style"), "the doll has a backdrop frame");
+        assert!(
+            doll.props.contains_key("style"),
+            "the doll has a backdrop frame"
+        );
 
         // The id is the stage cache key; the scene reads the clip name back off it.
         assert_eq!(doll.id, stage_id("walk_forward"));
         assert_eq!(doll.id.strip_prefix(STAGE_PREFIX), Some("walk_forward"));
 
         // And the source it names must be one the shared JSON actually defines.
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         assert!(
             stage::parse_sources(&styles).contains_key(DOLL_SOURCE),
             "`{DOLL_SOURCE}` must exist in the shared `stages` block"
@@ -2768,7 +3098,7 @@ mod tests {
     #[test]
     fn every_pack_kind_colour_resolves_in_the_shared_json() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for k in packs::PackKind::ALL {
             let c = bench.color(k.color_path(), miss);
@@ -2783,8 +3113,8 @@ mod tests {
     #[test]
     fn pack_browser_tree_is_well_formed_over_the_real_library() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
-        bench.packs = packs::scan_packs(Path::new(CONTENT_CHARACTERS));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
+        bench.packs = packs::scan_packs(&content_characters());
         if bench.packs.is_empty() {
             return; // content tree absent in this checkout
         }
@@ -2796,7 +3126,11 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), ids.len(), "duplicate node id in the pack page");
+        assert_eq!(
+            sorted.len(),
+            ids.len(),
+            "duplicate node id in the pack page"
+        );
 
         // One card per visible pack, and a filter row per kind.
         let vis = bench.visible_packs().len();
@@ -2810,18 +3144,22 @@ mod tests {
             packs::PackKind::ALL.len()
         );
         // Every card carries a Stage doll the scene can resolve back to its pack.
-        assert_eq!(ids.iter().filter(|i| i.starts_with(PACK_STAGE_PREFIX)).count(), vis);
+        assert_eq!(
+            ids.iter()
+                .filter(|i| i.starts_with(PACK_STAGE_PREFIX))
+                .count(),
+            vis
+        );
     }
 
     /// The TAE Editor page must build a well-formed tree over the real Katanami pack:
     /// unique ids, seven lane rows in the track list, and the transport buttons present.
     #[test]
     fn tae_page_tree_is_well_formed() {
-        let doc =
-            EditorDoc::load(Path::new(PACK_PATH), &[Path::new(BASE_DIR), Path::new(CLIPS_DIR)]);
+        let doc = EditorDoc::load(&pack_path(), &[&base_dir(), &clips_dir()]);
         let Ok(doc) = doc else { return }; // content tree absent
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         bench.doc = Some(doc);
         bench.tab = Tab::TaeEditor;
         // Select a state so the axis + track counts resolve.
@@ -2836,7 +3174,10 @@ mod tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), ids.len(), "duplicate node id in the TAE page");
-        assert!(ids.iter().any(|i| i == TAE_STAGE_ID), "the preview doll must be present");
+        assert!(
+            ids.iter().any(|i| i == TAE_STAGE_ID),
+            "the preview doll must be present"
+        );
         for b in ["tae_play", "tae_prev", "tae_next"] {
             assert!(ids.iter().any(|i| i == b), "{b} transport button missing");
         }
@@ -2847,7 +3188,7 @@ mod tests {
     #[test]
     fn every_tae_lane_swatch_resolves() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for lane in tae::Lane::ALL {
             let path = format!("loomforge.tae_lane.{}.swatch", lane.id());
@@ -2859,7 +3200,7 @@ mod tests {
     #[test]
     fn filtering_reclamps_the_selection() {
         let mut bench = LoomforgeBench::new();
-        bench.packs = packs::scan_packs(Path::new(CONTENT_CHARACTERS));
+        bench.packs = packs::scan_packs(&content_characters());
         if bench.packs.len() < 2 {
             return;
         }
@@ -2867,13 +3208,19 @@ mod tests {
         // Filter down to the first pack's kind only.
         let kind = bench.packs[0].kind;
         let mut results = ValueMap::default();
-        let idx = packs::PackKind::ALL.iter().position(|k| *k == kind).unwrap();
+        let idx = packs::PackKind::ALL
+            .iter()
+            .position(|k| *k == kind)
+            .unwrap();
         results.set(format!("packkind_{idx}"), true);
         bench.apply_pack_actions(&results);
 
         let vis = bench.visible_packs();
         assert!(!vis.is_empty());
-        assert!(bench.pack_sel < vis.len(), "selection must address a visible card");
+        assert!(
+            bench.pack_sel < vis.len(),
+            "selection must address a visible card"
+        );
         assert!(vis.iter().all(|e| e.kind == kind));
         // The selected entry is one of the visible ones.
         assert!(bench.selected_pack().is_some());
@@ -2885,7 +3232,7 @@ mod tests {
     #[test]
     fn card_stage_colours_resolve_in_the_shared_json() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for path in [
             "loomforge.canvas.stage_top",
@@ -2896,7 +3243,10 @@ mod tests {
         ] {
             let c = bench.color(path, miss);
             assert_ne!(c, miss, "{path} is missing from ui_theme.json");
-            assert!(c.iter().all(|v| v.is_finite()), "{path} resolved to a non-colour");
+            assert!(
+                c.iter().all(|v| v.is_finite()),
+                "{path} resolved to a non-colour"
+            );
         }
         // The clip-row doll's frame is a walker `style`, so it must be a real block.
         assert!(
@@ -2911,7 +3261,7 @@ mod tests {
     #[test]
     fn every_tae_lane_resolves_all_four_colours() {
         let mut bench = LoomforgeBench::new();
-        bench.ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        bench.ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let miss = [-1.0, -1.0, -1.0, -1.0];
         for lane in tae::Lane::ALL {
             for key in ["swatch", "row", "row_border", "event"] {

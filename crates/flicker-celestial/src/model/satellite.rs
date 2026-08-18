@@ -190,17 +190,34 @@ mod tests {
     fn class_follows_the_density_threshold() {
         let d = disc(0.001, 0.0015, CondensationClass::Ice, 1.0e-12);
         let sd = d.surface_density();
-        assert_eq!(d.class_with(sd * 0.5), DiscClass::Ring, "above threshold → ring");
-        assert_eq!(d.class_with(sd * 2.0), DiscClass::Belt, "below threshold → belt");
+        assert_eq!(
+            d.class_with(sd * 0.5),
+            DiscClass::Ring,
+            "above threshold → ring"
+        );
+        assert_eq!(
+            d.class_with(sd * 2.0),
+            DiscClass::Belt,
+            "below threshold → belt"
+        );
     }
 
     #[test]
     fn gaps_reduce_area_and_raise_surface_density() {
         let mut d = disc(1.0, 2.0, CondensationClass::Silicate, 1.0e-12);
         let dense_before = d.surface_density();
-        d.gaps.push(DiscGap { inner: 1.4, outer: 1.6 });
-        assert!(d.area_au2() < std::f64::consts::PI * (4.0 - 1.0), "gap removed some area");
-        assert!(d.surface_density() > dense_before, "less area, same mass → denser");
+        d.gaps.push(DiscGap {
+            inner: 1.4,
+            outer: 1.6,
+        });
+        assert!(
+            d.area_au2() < std::f64::consts::PI * (4.0 - 1.0),
+            "gap removed some area"
+        );
+        assert!(
+            d.surface_density() > dense_before,
+            "less area, same mass → denser"
+        );
     }
 
     #[test]

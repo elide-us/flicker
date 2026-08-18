@@ -60,14 +60,30 @@ impl QuadView {
 /// (y = −1.92) and concluded "+Y" — but the ankle sits BEHIND the toes, so that inverted it and
 /// put FRONT at the model's back. Compare the ANKLE to the BALL, never a foot bone to the spine.
 pub const EDITOR_QUADS: [QuadView; 4] = [
-    QuadView { label: "PERSP", label_flipped: "PERSP", ortho: None },
+    QuadView {
+        label: "PERSP",
+        label_flipped: "PERSP",
+        ortho: None,
+    },
     // Looking straight down, with the facing direction (−Y) up the panel; flipped looks up.
-    QuadView { label: "TOP", label_flipped: "BOTTOM", ortho: Some((Vec3::Z, Vec3::NEG_Y)) },
+    QuadView {
+        label: "TOP",
+        label_flipped: "BOTTOM",
+        ortho: Some((Vec3::Z, Vec3::NEG_Y)),
+    },
     // From the character's left (+X); flipped views from the right. Named for the SIDE shown, not
     // "SIDE", so the corner text reports which one — the only way a flip reads as a flip.
-    QuadView { label: "LEFT", label_flipped: "RIGHT", ortho: Some((Vec3::X, Vec3::Z)) },
+    QuadView {
+        label: "LEFT",
+        label_flipped: "RIGHT",
+        ortho: Some((Vec3::X, Vec3::Z)),
+    },
     // Face-on from the front (−Y, where the toes point); flipped views from behind.
-    QuadView { label: "FRONT", label_flipped: "BACK", ortho: Some((Vec3::NEG_Y, Vec3::Z)) },
+    QuadView {
+        label: "FRONT",
+        label_flipped: "BACK",
+        ortho: Some((Vec3::NEG_Y, Vec3::Z)),
+    },
 ];
 
 /// Frame, label and clear styling for the composited panels.
@@ -139,7 +155,10 @@ impl QuadGrid {
         );
         Self {
             views,
-            targets: views.iter().map(|_| renderer.create_render_target(w, h)).collect(),
+            targets: views
+                .iter()
+                .map(|_| renderer.create_render_target(w, h))
+                .collect(),
             cols,
             flipped: vec![false; views.len()],
             style: QuadStyle::default(),
@@ -167,7 +186,10 @@ impl QuadGrid {
 
     /// The tiling area: the confined viewport when one is set, else the whole screen.
     fn area(&self, screen: Vec2) -> Rect {
-        self.viewport.unwrap_or(Rect { pos: Vec2::ZERO, size: screen })
+        self.viewport.unwrap_or(Rect {
+            pos: Vec2::ZERO,
+            size: screen,
+        })
     }
 
     /// The camera for view `i`: the caller's `persp` camera for a perspective view, else an
@@ -240,7 +262,10 @@ impl QuadGrid {
         Rect {
             pos: cell.pos + self.style.label_offset - pad,
             // Wide enough for the longest label ("BOTTOM") at `label_size`, tall enough for the line.
-            size: Vec2::new(self.style.label_size * 5.2, self.style.label_size + pad.y * 2.0),
+            size: Vec2::new(
+                self.style.label_size * 5.2,
+                self.style.label_size + pad.y * 2.0,
+            ),
         }
     }
 
@@ -270,8 +295,9 @@ impl QuadGrid {
     where
         F: Fn(&mut Renderer, usize) + Copy,
     {
-        let cameras: Vec<Camera> =
-            (0..self.targets.len()).map(|i| self.camera(i, radius, persp)).collect();
+        let cameras: Vec<Camera> = (0..self.targets.len())
+            .map(|i| self.camera(i, radius, persp))
+            .collect();
         self.render_with(r, layer, &cameras, draw);
     }
 
@@ -321,9 +347,16 @@ mod tests {
     fn editor_cells_are_screen_quadrants_in_tl_tr_bl_br_order() {
         let grid = bare_grid();
         let screen = Vec2::new(1000.0, 800.0);
-        let corners: Vec<(f32, f32)> =
-            (0..4).map(|i| { let c = grid.cell(i, screen); (c.pos.x, c.pos.y) }).collect();
-        assert_eq!(corners, vec![(2.0, 2.0), (502.0, 2.0), (2.0, 402.0), (502.0, 402.0)]);
+        let corners: Vec<(f32, f32)> = (0..4)
+            .map(|i| {
+                let c = grid.cell(i, screen);
+                (c.pos.x, c.pos.y)
+            })
+            .collect();
+        assert_eq!(
+            corners,
+            vec![(2.0, 2.0), (502.0, 2.0), (2.0, 402.0), (502.0, 402.0)]
+        );
         // Each panel is its quadrant inset by the margin on both sides.
         let c = grid.cell(0, screen);
         assert_eq!((c.size.x, c.size.y), (496.0, 396.0));
@@ -351,7 +384,10 @@ mod tests {
         let mut grid = bare_grid();
         let screen = Vec2::new(1000.0, 800.0);
         // A 600×400 holder at (200,100).
-        grid.set_viewport(Some(Rect { pos: Vec2::new(200.0, 100.0), size: Vec2::new(600.0, 400.0) }));
+        grid.set_viewport(Some(Rect {
+            pos: Vec2::new(200.0, 100.0),
+            size: Vec2::new(600.0, 400.0),
+        }));
         // Top-left cell sits at the holder origin + margin and is a quadrant of the HOLDER (300×200).
         let c = grid.cell(0, screen);
         assert_eq!((c.pos.x, c.pos.y), (202.0, 102.0));
@@ -369,7 +405,10 @@ mod tests {
         let grid = bare_grid();
         let screen = Vec2::new(1000.0, 800.0);
         // Top-right view: 502 px from the left, so a cursor at 512 sits 10 px into it.
-        assert_eq!(grid.local_cursor(1, Vec2::new(512.0, 12.0), screen), Some(Vec2::new(10.0, 10.0)));
+        assert_eq!(
+            grid.local_cursor(1, Vec2::new(512.0, 12.0), screen),
+            Some(Vec2::new(10.0, 10.0))
+        );
         // The same cursor is not inside the top-LEFT view.
         assert_eq!(grid.local_cursor(0, Vec2::new(512.0, 12.0), screen), None);
     }
@@ -379,7 +418,10 @@ mod tests {
     #[test]
     fn cameras_are_perspective_at_zero_and_flippable_ortho_elsewhere() {
         let mut grid = bare_grid();
-        let persp = Camera { position: Vec3::new(1.0, 2.0, 3.0), ..default_camera() };
+        let persp = Camera {
+            position: Vec3::new(1.0, 2.0, 3.0),
+            ..default_camera()
+        };
         assert_eq!(grid.camera(0, 10.0, &persp).position, persp.position);
         assert!(grid.camera(0, 10.0, &persp).ortho_height.is_none());
 
@@ -387,22 +429,38 @@ mod tests {
         // toward −Y), so FRONT stands at −Y to look the model in the face. At +Y it would be
         // BEHIND it, which is exactly the bug this pins.
         let front = grid.camera(3, 10.0, &persp);
-        assert_eq!(front.position, Vec3::NEG_Y * 40.0, "FRONT must be in front, not behind");
+        assert_eq!(
+            front.position,
+            Vec3::NEG_Y * 40.0,
+            "FRONT must be in front, not behind"
+        );
         assert_eq!(front.up, Vec3::Z);
         assert_eq!(front.ortho_height, Some(22.0));
         grid.flipped[3] = true;
-        assert_eq!(grid.camera(3, 10.0, &persp).position, Vec3::Y * 40.0, "flip shows the back");
+        assert_eq!(
+            grid.camera(3, 10.0, &persp).position,
+            Vec3::Y * 40.0,
+            "flip shows the back"
+        );
 
         // TOP looks straight down with the FACING direction up the panel — so its up is −Y, the
         // way the model faces. A +Y up would draw every character upside-down in that panel.
         let top = grid.camera(1, 10.0, &persp);
         assert_eq!(top.position, Vec3::Z * 40.0);
-        assert_eq!(top.up, Vec3::NEG_Y, "the facing direction reads up the TOP panel");
+        assert_eq!(
+            top.up,
+            Vec3::NEG_Y,
+            "the facing direction reads up the TOP panel"
+        );
 
         // Every ORTHO view stands the model up along +Z — the one world reckoning (ground = XY).
         // TOP is the exception: looking straight down, its panel-vertical is the facing axis.
         assert_eq!(grid.camera(2, 10.0, &persp).up, Vec3::Z, "SIDE is Z-up");
-        assert_eq!(grid.camera(1, 10.0, &persp).position, Vec3::Z * 40.0, "TOP looks down from +Z");
+        assert_eq!(
+            grid.camera(1, 10.0, &persp).position,
+            Vec3::Z * 40.0,
+            "TOP looks down from +Z"
+        );
     }
 
     /// Every view shares ONE look-at point, so a caller that pans its perspective camera drags the
@@ -412,18 +470,40 @@ mod tests {
     fn ortho_views_follow_the_perspective_look_at_point() {
         let grid = bare_grid();
         let pan = Vec3::new(3.0, -4.0, 12.0);
-        let at_origin = Camera { position: Vec3::X * 50.0, ..default_camera() };
-        let panned = Camera { position: pan + Vec3::X * 50.0, target: pan, ..default_camera() };
+        let at_origin = Camera {
+            position: Vec3::X * 50.0,
+            ..default_camera()
+        };
+        let panned = Camera {
+            position: pan + Vec3::X * 50.0,
+            target: pan,
+            ..default_camera()
+        };
 
         for i in 1..4 {
             let a = grid.camera(i, 10.0, &at_origin);
             let b = grid.camera(i, 10.0, &panned);
-            assert_eq!(a.target, Vec3::ZERO, "an unpanned caller keeps exactly the old framing");
+            assert_eq!(
+                a.target,
+                Vec3::ZERO,
+                "an unpanned caller keeps exactly the old framing"
+            );
             assert_eq!(b.target, pan, "view {i} looks at the shared point");
             // The panel TRANSLATED with the point — same direction, same zoom, shifted position.
-            assert_eq!(b.position - a.position, pan, "view {i} translated by the pan");
-            assert_eq!(b.position - b.target, a.position - a.target, "view direction unchanged");
-            assert_eq!(b.ortho_height, a.ortho_height, "and the framing height is untouched");
+            assert_eq!(
+                b.position - a.position,
+                pan,
+                "view {i} translated by the pan"
+            );
+            assert_eq!(
+                b.position - b.target,
+                a.position - a.target,
+                "view direction unchanged"
+            );
+            assert_eq!(
+                b.ortho_height, a.ortho_height,
+                "and the framing height is untouched"
+            );
         }
         // The perspective view is still passed through verbatim, pan and all.
         assert_eq!(grid.camera(0, 10.0, &panned).target, pan);

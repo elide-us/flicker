@@ -60,7 +60,11 @@ mod tests {
     #[test]
     fn the_stage_declares_the_simulated_shells() {
         let s = GlobeStage::from_styles(&styles(), STAGE_SOURCE);
-        assert_eq!(s.layers, vec![StageLayer::Shells], "the sim publishes this world");
+        assert_eq!(
+            s.layers,
+            vec![StageLayer::Shells],
+            "the sim publishes this world"
+        );
     }
 
     #[test]

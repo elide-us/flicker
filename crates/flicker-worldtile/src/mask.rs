@@ -49,14 +49,29 @@ impl TileFrame {
         // Toward the first corner, projected into the tangent plane. A cell with no
         // outline (it should not happen) still gets a stable, arbitrary frame rather
         // than a NaN one.
-        let toward = outline
-            .first()
-            .map(|c| c.as_dvec3().normalize())
-            .unwrap_or(if centre.x.abs() < 0.9 { DVec3::X } else { DVec3::Y });
+        let toward =
+            outline
+                .first()
+                .map(|c| c.as_dvec3().normalize())
+                .unwrap_or(if centre.x.abs() < 0.9 {
+                    DVec3::X
+                } else {
+                    DVec3::Y
+                });
         let east = (toward - centre * centre.dot(toward)).normalize_or_zero();
-        let east = if east.length_squared() > 0.5 { east } else { centre.any_orthonormal_vector() };
+        let east = if east.length_squared() > 0.5 {
+            east
+        } else {
+            centre.any_orthonormal_vector()
+        };
         let north = centre.cross(east);
-        Self { cell, centre, east, north, radius_m }
+        Self {
+            cell,
+            centre,
+            east,
+            north,
+            radius_m,
+        }
     }
 
     /// In-plane metres of a pixel's centre, measured from the middle of the tile.
@@ -210,7 +225,10 @@ mod tests {
         let mid = frame.direction(TILE_DIM / 2, TILE_DIM / 2);
         let off_m = mid.distance(frame.centre) * frame.radius_m;
         let per_px = TILE_SPAN_M / TILE_DIM as f64;
-        assert!(off_m < per_px, "the middle pixel is within a pixel of the cell centre");
+        assert!(
+            off_m < per_px,
+            "the middle pixel is within a pixel of the cell centre"
+        );
         let edge = frame.direction(TILE_DIM - 1, TILE_DIM / 2);
         let moved = edge.distance(frame.centre) * frame.radius_m;
         assert!(
@@ -225,7 +243,9 @@ mod tests {
     #[test]
     fn a_pentagon_masks_like_any_other_cell() {
         let (sphere, outlines) = icosphere_with_outlines(16);
-        let pent = (0..sphere.len()).find(|&i| sphere.is_pentagon[i]).expect("twelve of them");
+        let pent = (0..sphere.len())
+            .find(|&i| sphere.is_pentagon[i])
+            .expect("twelve of them");
         assert_eq!(outlines[pent].len(), 5);
         let r = crate::radius_for_freq(16);
         let frame = TileFrame::new(pent as u32, sphere.dirs[pent], &outlines[pent], r);

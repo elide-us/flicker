@@ -103,7 +103,9 @@ impl Composition {
 
     /// Iterate `(element, amount)` in ascending atomic-number order.
     pub fn iter(&self) -> impl Iterator<Item = (ElementId, f64)> + '_ {
-        self.amounts.iter().map(|(&element, &amount)| (element, amount))
+        self.amounts
+            .iter()
+            .map(|(&element, &amount)| (element, amount))
     }
 }
 

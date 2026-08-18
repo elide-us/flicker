@@ -82,7 +82,10 @@ mod tests {
         let materialised = cloud.total_mass();
         assert!(materialised > 0.0, "a non-empty cloud");
         let rel = (materialised - analytic).abs() / analytic;
-        assert!(rel < 0.01, "materialised {materialised} vs analytic {analytic} (rel {rel})");
+        assert!(
+            rel < 0.01,
+            "materialised {materialised} vs analytic {analytic} (rel {rel})"
+        );
         // total_composition is just the sum of the rings.
         assert!((cloud.total_composition().total() - materialised).abs() < 1e-12);
     }
@@ -90,10 +93,25 @@ mod tests {
     #[test]
     fn the_inner_cloud_is_dry_and_the_outer_cloud_is_icy() {
         let cloud = materialize_cloud(&Nebula::new(7, 0.7), 64);
-        let inner = cloud.rings.iter().find(|r| r.outer <= 1.0).expect("an inner ring");
-        let outer = cloud.rings.iter().find(|r| r.inner >= SNOW_LINE + 1.0).expect("an outer ring");
-        assert!(inner.material.get(CondensationClass::Ice) < 1e-9, "inner ring is dry");
-        assert_eq!(outer.material.dominant(), Some(CondensationClass::Ice), "outer ring is icy");
+        let inner = cloud
+            .rings
+            .iter()
+            .find(|r| r.outer <= 1.0)
+            .expect("an inner ring");
+        let outer = cloud
+            .rings
+            .iter()
+            .find(|r| r.inner >= SNOW_LINE + 1.0)
+            .expect("an outer ring");
+        assert!(
+            inner.material.get(CondensationClass::Ice) < 1e-9,
+            "inner ring is dry"
+        );
+        assert_eq!(
+            outer.material.dominant(),
+            Some(CondensationClass::Ice),
+            "outer ring is icy"
+        );
     }
 
     #[test]
@@ -104,16 +122,26 @@ mod tests {
 
         // A body in the terrestrial band sweeps up half of the material *in that band*
         // (drawing relative to the band, so the request is genuinely available).
-        let mut body = Body::new(DVec3::new(1.0, 0.0, 0.0), DVec3::ZERO, BodyKind::Protoplanet);
+        let mut body = Body::new(
+            DVec3::new(1.0, 0.0, 0.0),
+            DVec3::ZERO,
+            BodyKind::Protoplanet,
+        );
         let want = cloud.mass_in_band(0.7, 1.3) * 0.5;
         assert!(want > 0.0, "the terrestrial band holds material");
         body.absorb(&cloud.draw_band(0.7, 1.3, want));
 
         assert!((body.mass() - want).abs() < 1e-12, "body got what it drew");
-        assert!((cloud.total_mass() + body.mass() - before).abs() < 1e-12, "mass conserved");
+        assert!(
+            (cloud.total_mass() + body.mass() - before).abs() < 1e-12,
+            "mass conserved"
+        );
         // The inner band is rock+metal, so the body is rocky; only the trace hydration
         // floor (hydrated silicates) inside the snow line, far from an icy world.
         assert_eq!(body.dominant_class(), Some(CondensationClass::Silicate));
-        assert!(body.classes.water_fraction() < 0.02, "only trace water inside the snow line");
+        assert!(
+            body.classes.water_fraction() < 0.02,
+            "only trace water inside the snow line"
+        );
     }
 }

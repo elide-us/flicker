@@ -148,10 +148,17 @@ impl Flight {
         let last = self.segments.len() - 1;
         for (i, s) in self.segments.iter().enumerate() {
             if s.duration <= 0.0 {
-                bail!("segment {i} ('{}') has non-positive duration {}", s.name, s.duration);
+                bail!(
+                    "segment {i} ('{}') has non-positive duration {}",
+                    s.name,
+                    s.duration
+                );
             }
             if s.looping && i != last {
-                bail!("segment {i} ('{}') loops, but only the final segment may loop", s.name);
+                bail!(
+                    "segment {i} ('{}') loops, but only the final segment may loop",
+                    s.name
+                );
             }
         }
         Ok(())
@@ -171,7 +178,11 @@ impl Flight {
     /// tail (i.e. the whole one-shot run). A scene's reveal/dust clock tracks this
     /// so it stays in step with the fly-in.
     pub fn lead_in(&self) -> f32 {
-        self.segments.iter().take_while(|s| !s.looping).map(|s| s.duration).sum()
+        self.segments
+            .iter()
+            .take_while(|s| !s.looping)
+            .map(|s| s.duration)
+            .sum()
     }
 
     /// Total run length, or `None` if the flight loops forever.
@@ -227,7 +238,11 @@ pub struct FlightPlayer {
 
 impl FlightPlayer {
     pub fn new(flight: Flight) -> Self {
-        Self { flight, time: 0.0, finished: false }
+        Self {
+            flight,
+            time: 0.0,
+            finished: false,
+        }
     }
 
     /// Restart from the opening pose.

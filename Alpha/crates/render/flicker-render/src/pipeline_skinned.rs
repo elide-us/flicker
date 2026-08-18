@@ -237,8 +237,7 @@ impl SkinnedMeshPipeline {
             mapped_at_creation: false,
         });
 
-        let uniform_bind_group =
-            make_uniform_bg(device, &uniform_bgl, &camera_buf, &scene_buf);
+        let uniform_bind_group = make_uniform_bg(device, &uniform_bgl, &camera_buf, &scene_buf);
         let skin_bind_group = make_skin_bg(device, &skin_bgl, &palette_buf, &instance_buf);
 
         Self {
@@ -378,8 +377,12 @@ impl SkinnedMeshPipeline {
             rebuild = true;
         }
         if rebuild {
-            self.skin_bind_group =
-                make_skin_bg(device, &self.skin_bgl, &self.palette_buf, &self.instance_buf);
+            self.skin_bind_group = make_skin_bg(
+                device,
+                &self.skin_bgl,
+                &self.palette_buf,
+                &self.instance_buf,
+            );
         }
 
         queue.write_buffer(&self.palette_buf, 0, bytemuck::cast_slice(palettes));
@@ -508,7 +511,11 @@ mod tests {
             joints: [0, 0, 0, 0],
             weights: [1.0, 0.0, 0.0, 0.0],
         };
-        let verts = [v([-0.5, -0.5, 0.0]), v([0.5, -0.5, 0.0]), v([0.0, 0.5, 0.0])];
+        let verts = [
+            v([-0.5, -0.5, 0.0]),
+            v([0.5, -0.5, 0.0]),
+            v([0.0, 0.5, 0.0]),
+        ];
         let mesh = pipeline.upload(&device, &verts, MeshIndices::U32(&[0, 1, 2]));
 
         // Two instances, one bone each (identity palette), offset in the field.
@@ -568,6 +575,9 @@ mod tests {
         queue.submit([enc.finish()]);
         device.poll(wgpu::Maintain::Wait);
         let err = pollster::block_on(device.pop_error_scope());
-        assert!(err.is_none(), "skinned.wgsl / instanced draw failed validation: {err:?}");
+        assert!(
+            err.is_none(),
+            "skinned.wgsl / instanced draw failed validation: {err:?}"
+        );
     }
 }

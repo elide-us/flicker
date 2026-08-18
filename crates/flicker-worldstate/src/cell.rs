@@ -124,7 +124,11 @@ mod tests {
 
     #[test]
     fn dominant_element_reads_the_composition() {
-        let cell = Cell::from_surface(Composition::from_iter([(SI, 900.0), (O, 600.0), (FE, 50.0)]));
+        let cell = Cell::from_surface(Composition::from_iter([
+            (SI, 900.0),
+            (O, 600.0),
+            (FE, 50.0),
+        ]));
         assert_eq!(cell.dominant_element(), Some(SI));
         assert_eq!(Cell::default().dominant_element(), None);
     }

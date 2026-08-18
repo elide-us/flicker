@@ -14,9 +14,8 @@ use flicker::render::{Renderer, TextureHandle};
 use flicker::scene::{GotoMode, Scene, SceneInput, SceneManager, Transition};
 use flicker::script::{parse_ui_json, HudCommand, ScriptHost, UiAnchor, UiNode, Value, ValueMap};
 use flicker::ui::{
-    focusables_of, render_hud,
-    run_ui, SceneDef, SceneManifest, Surface, Surfaces, UiInput, UiIntents, UiState,
-    WalkerHandler,
+    focusables_of, render_hud, run_ui, SceneDef, SceneManifest, Surface, Surfaces, UiInput,
+    UiIntents, UiState, WalkerHandler,
 };
 use flicker_input_core::{
     AbstractControls, ActionSignal, ContextualBindings, GamepadConfig, InputBinding, InputContext,
@@ -175,7 +174,9 @@ impl ShellConfig {
         // A single-scene client has no scene file; its factory ignores the
         // synthetic def the resolver hands file-less entries.
         Self {
-            scenes: vec![SceneEntry::new("start", label, "primary", move |_| factory())],
+            scenes: vec![SceneEntry::new("start", label, "primary", move |_| {
+                factory()
+            })],
             settings_dir,
             scene_select: false,
         }
@@ -208,12 +209,19 @@ fn scenes() -> Rc<[SceneEntry]> {
 pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     display::set_settings_dir(config.settings_dir.clone());
     GameSettings::load(); // unified settings.json → GAME_SETTINGS + seeds display::CURRENT
-    // Load the UI stringtable for the persisted language (text ruling 2026-07-31):
-    // shell display strings are `$token`s; `en-us` is the seed locale, and an unset
-    // language means exactly that.
+                          // Load the UI stringtable for the persisted language (text ruling 2026-07-31):
+                          // shell display strings are `$token`s; `en-us` is the seed locale, and an unset
+                          // language means exactly that.
     {
-        let lang = GAME_SETTINGS.lock().map(|s| s.language.clone()).unwrap_or_default();
-        let lang = if lang.is_empty() { "en-us".to_string() } else { lang };
+        let lang = GAME_SETTINGS
+            .lock()
+            .map(|s| s.language.clone())
+            .unwrap_or_default();
+        let lang = if lang.is_empty() {
+            "en-us".to_string()
+        } else {
+            lang
+        };
         flicker::ui::strings::load_str(SHELL_STRINGS_JSON, &lang);
     }
     SCENE_SELECT.with(|s| s.set(config.scene_select));
@@ -227,7 +235,9 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     // transition uses. The whole chain is authored data the shell can show you.
     let boot = manifest().boot().to_string();
     let manager = SceneManager::from_roster(&boot, Box::new(resolve_shell_scene))
-        .unwrap_or_else(|| panic!("boot scene '{boot}' did not resolve — its behaviour is unregistered"))
+        .unwrap_or_else(|| {
+            panic!("boot scene '{boot}' did not resolve — its behaviour is unregistered")
+        })
         .with_cursor(crate::theme::cursor_image());
     // Wire the central event pump: the runner resolves the device snapshot into signal
     // events for the active scene's context, from the player's profile bindings. Scenes
@@ -238,8 +248,9 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     // committed World map from the profile, so a key rebound in settings takes effect
     // without any scene owning a resolver. Non-draining, so un-migrated scenes still pick
     // up their own rebind via `take_pending_input`.
-    let result =
-        run_with_input(manager, bindings, GamepadConfig::default(), || Some(current_world_map()));
+    let result = run_with_input(manager, bindings, GamepadConfig::default(), || {
+        Some(current_world_map())
+    });
     // The window is gone now; persist its final windowed size + position so the next
     // launch reopens the same way.
     persist_window_geometry();
@@ -259,7 +270,10 @@ fn persist_window_geometry() {
     }
     let snapshot = {
         let mut gs = GAME_SETTINGS.lock().expect("settings lock");
-        gs.display.res = display::Resolution { w: geom.width, h: geom.height };
+        gs.display.res = display::Resolution {
+            w: geom.width,
+            h: geom.height,
+        };
         gs.display.pos = Some([geom.x, geom.y]);
         gs.clone()
     };
@@ -316,7 +330,12 @@ struct AudioSettings {
 
 impl Default for AudioSettings {
     fn default() -> Self {
-        Self { master: 0.8, music: 0.6, sfx: 0.7, voice: 0.9 }
+        Self {
+            master: 0.8,
+            music: 0.6,
+            sfx: 0.7,
+            voice: 0.9,
+        }
     }
 }
 
@@ -332,7 +351,11 @@ impl Default for VideoSettings {
         // Display mode + resolution are NOT here: they belong to the single
         // `DisplaySetting` (`GameSettings.display`), which the Video-tab dropdowns
         // read/write directly via the `display` module — one source of truth.
-        Self { quality: 3, vsync: true, fps_limit: 2 }
+        Self {
+            quality: 3,
+            vsync: true,
+            fps_limit: 2,
+        }
     }
 }
 
@@ -475,7 +498,11 @@ pub fn input_controls() -> AbstractControls {
 /// made last session is live from the first frame (spec §7.2). Live in-session changes
 /// still flow through [`take_pending_input`].
 pub fn input_profile() -> InputProfile {
-    GAME_SETTINGS.lock().expect("settings lock").input_profile.clone()
+    GAME_SETTINGS
+        .lock()
+        .expect("settings lock")
+        .input_profile
+        .clone()
 }
 
 /// The current committed `World` map, cloned on its own (cheaper than [`input_profile`],
@@ -498,10 +525,15 @@ pub fn current_world_map() -> InputMap {
 /// pair script: `arrange()` configures the `splash` node's props (image + fade
 /// timeline); `react()` turns the fired signals into the `next`/`exit` intents
 /// the scene FILE routes.
-const TEG_LOGO_SCRIPT: &str =
-    include_str!("../../../../content/sensorium/scripts/TegLogo.lua");
-const CE_LOGO_SCRIPT: &str =
-    include_str!("../../../../content/sensorium/scripts/CeLogo.lua");
+const TEG_LOGO_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/TegLogo.lua");
+const CE_LOGO_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/CeLogo.lua");
+
+/// The pre-load screen's pair script (`Loading.lua`) — the `loading` behaviour's
+/// module. `derive()` turns the engine-published `loading_progress` into the
+/// percent readout; `react()` maps `done`→`next` / `cancel`→`exit`. Embedded like
+/// every shell-scene script (the intro chain is compiled in; only benches load
+/// their Lua off disk).
+const LOADING_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/Loading.lua");
 
 /// The splash scene's OWN script, by its id — the pair is by NAME.
 fn splash_script(id: &str) -> (&'static str, &'static str) {
@@ -572,8 +604,11 @@ type BehaviourBuilder = fn(&SceneDef) -> Option<Box<dyn Scene>>;
 /// adding a scene — a third splash, a second menu page, another bench front — is
 /// dropping a file into `content/sensorium/scenes/`, and only a genuinely new KIND
 /// of scene costs Rust: one entry in this table.
-const BEHAVIOURS: &[(&str, BehaviourBuilder)] =
-    &[("splash", build_splash), ("menu", build_menu)];
+const BEHAVIOURS: &[(&str, BehaviourBuilder)] = &[
+    ("splash", build_splash),
+    ("menu", build_menu),
+    ("loading", build_loading),
+];
 
 /// The `splash` behaviour: play ONE image on a fade/hold timeline, then fire
 /// `next` (or `exit`, when backed out of) and let the file route it.
@@ -588,6 +623,13 @@ fn build_splash(def: &SceneDef) -> Option<Box<dyn Scene>> {
 /// client's registered [`SceneEntry`] set and launch BY ID.
 fn build_menu(_def: &SceneDef) -> Option<Box<dyn Scene>> {
     Some(Box::new(MainMenuScene::new()))
+}
+
+/// The `loading` behaviour: the pre-load screen (page 3 of the intro chain). A
+/// native component tree driven by a SIMULATED progress timer for now — see
+/// [`LoadingScene`].
+fn build_loading(def: &SceneDef) -> Option<Box<dyn Scene>> {
+    Some(Box::new(LoadingScene::new(def.clone())))
 }
 
 /// The MAIN MENU's per-realm scene rows: every registered scene that carries `SceneInfo`
@@ -615,7 +657,10 @@ fn scene_rows_for(scenes: &[SceneEntry], realm: &str) -> Vec<SceneRow> {
 /// components now, 201F4F51), then fill each realm's `scene_list_<n>` with that realm's
 /// scene rows. `menu.lua`'s arrange() lights the page.
 fn main_menu_tree(scenes: &[SceneEntry], muse_id: Option<usize>) -> UiNode {
-    let empty = || UiNode { component: "screen".to_string(), ..Default::default() };
+    let empty = || UiNode {
+        component: "screen".to_string(),
+        ..Default::default()
+    };
     let def: serde_json::Value = match serde_json::from_str(MAIN_SCENE_JSON) {
         Ok(v) => v,
         Err(e) => {
@@ -671,7 +716,12 @@ struct MainMenuScene {
 
 impl MainMenuScene {
     fn new() -> Self {
-        Self { theme: None, view: None, pending_input: None, scenes: scenes() }
+        Self {
+            theme: None,
+            view: None,
+            pending_input: None,
+            scenes: scenes(),
+        }
     }
 
     /// Map this frame's fired result names to a transition. A `mode_<realm>` result is NOT
@@ -680,7 +730,10 @@ impl MainMenuScene {
     fn route(&mut self, results: &ValueMap, renderer: &Renderer) -> Transition {
         for entry in self.scenes.iter() {
             if results.is_on(&entry.id) {
-                return Transition::Goto { id: entry.id.clone(), mode: GotoMode::Replace };
+                return Transition::Goto {
+                    id: entry.id.clone(),
+                    mode: GotoMode::Replace,
+                };
             }
         }
         if results.is_on("settings") {
@@ -691,7 +744,9 @@ impl MainMenuScene {
                     .cloned()
                     .unwrap_or_else(InputMap::wasd_and_mouse)
             });
-            return Transition::Push(Box::new(UnifiedSettingsScene::new(theme, &input_map, renderer)));
+            return Transition::Push(Box::new(UnifiedSettingsScene::new(
+                theme, &input_map, renderer,
+            )));
         }
         if results.is_on("quit") {
             return Transition::Quit;
@@ -703,10 +758,13 @@ impl MainMenuScene {
 impl Scene for MainMenuScene {
     fn enter(&mut self, renderer: &mut Renderer) {
         let theme = Theme::build(renderer);
-        let muse_id = theme.lua_textures().iter().position(|(name, _)| *name == "muse");
+        let muse_id = theme
+            .lua_textures()
+            .iter()
+            .position(|(name, _)| *name == "muse");
         let tree = main_menu_tree(&self.scenes, muse_id);
         match ScriptHost::new(MENU_SCRIPT, "Main.lua") {
-            Ok(script) => self.view = Some(MenuView::orchestrated(&theme, tree, script)),
+            Ok(script) => self.view = Some(MenuView::from_tree(&theme, tree, Some(script))),
             Err(e) => tracing::error!("Main.lua failed to load — the menu will not page: {e}"),
         }
         self.theme = Some(theme);
@@ -748,10 +806,15 @@ impl Scene for MainMenuScene {
 /// loud rather than merely survivable.
 fn splash_image(id: &str, rel: &str) -> Vec<u8> {
     let path = flicker_content::roots().root().join(rel);
-    match std::fs::read(&path) {
+    // Through the seam, not fs::read: an installed build serves this from the
+    // mounted package.flk; a loose dev PNG reads identically (raw fallback).
+    match flicker_content::package::read_bytes(&path) {
         Ok(bytes) => bytes,
         Err(e) => {
-            tracing::error!("scene '{id}': image {} could not be read: {e}", path.display());
+            tracing::error!(
+                "scene '{id}': image {} could not be read: {e}",
+                path.display()
+            );
             Vec::new()
         }
     }
@@ -930,7 +993,10 @@ struct SplashSkip {
 
 impl InputHandler for SplashSkip {
     fn subscribes(&self, signal: ActionSignal) -> bool {
-        matches!(signal, ActionSignal::Confirm | ActionSignal::Cancel | ActionSignal::Menu)
+        matches!(
+            signal,
+            ActionSignal::Confirm | ActionSignal::Cancel | ActionSignal::Menu
+        )
     }
 
     fn handle(&mut self, ev: &InputEvent, _rc: &mut RouteCtx) -> Flow {
@@ -942,9 +1008,13 @@ impl InputHandler for SplashSkip {
     }
 }
 
-/// Find the tree's `splash` node (the object the pair script configures).
+/// Find the tree's splash node — the image node the pair script configures — by its STABLE
+/// `id == "splash"`, NOT by kind. The `splash` component was folded into `sprite` (a splash is
+/// a `sprite` with a fade timeline), and `apply_props` already targets this node by that same
+/// id; keying on the retired `"splash"` kind found nothing, so `enter()` never read `image`
+/// nor set `tex` and the logo rendered blank.
 fn find_splash(node: &UiNode) -> Option<&UiNode> {
-    if node.component == "splash" {
+    if node.id == "splash" {
         return Some(node);
     }
     node.children.iter().find_map(find_splash)
@@ -952,7 +1022,7 @@ fn find_splash(node: &UiNode) -> Option<&UiNode> {
 
 /// [`find_splash`], mutably — for the engine-owned props (the loaded texture's index).
 fn find_splash_mut(node: &mut UiNode) -> Option<&mut UiNode> {
-    if node.component == "splash" {
+    if node.id == "splash" {
         return Some(node);
     }
     node.children.iter_mut().find_map(find_splash_mut)
@@ -963,21 +1033,27 @@ fn find_splash_mut(node: &mut UiNode) -> Option<&mut UiNode> {
 /// PNG + a pair script + a scene file with no tree required.
 fn synthesized_splash_tree() -> UiNode {
     let mut node = UiNode {
-        component: "splash".to_string(),
+        // `sprite` (id "splash") — the `splash` kind was folded into `sprite`; a file-less
+        // splash gets a bare full-bleed sprite the pair script configures with a fade.
+        component: "sprite".to_string(),
         id: "splash".to_string(),
         anchor: UiAnchor::from_name("top_left"),
         ..Default::default()
     };
-    node.props.insert("width_frac".to_string(), Value::Number(1.0));
-    node.props.insert("height_frac".to_string(), Value::Number(1.0));
+    node.props
+        .insert("width_frac".to_string(), Value::Number(1.0));
+    node.props
+        .insert("height_frac".to_string(), Value::Number(1.0));
     let mut root = UiNode {
         component: "screen".to_string(),
         anchor: UiAnchor::from_name("top_left"),
         children: vec![node],
         ..Default::default()
     };
-    root.props.insert("width_frac".to_string(), Value::Number(1.0));
-    root.props.insert("height_frac".to_string(), Value::Number(1.0));
+    root.props
+        .insert("width_frac".to_string(), Value::Number(1.0));
+    root.props
+        .insert("height_frac".to_string(), Value::Number(1.0));
     root
 }
 
@@ -1002,7 +1078,11 @@ impl Scene for LogoScene {
         // 2 — the tree: authored, or the synthesized full-bleed splash node; the
         // pair script's arrange() props are APPLIED onto it (Lua configuring the
         // features of the Rust-owned component — never rebuilding structure).
-        let mut tree = self.def.tree.clone().unwrap_or_else(synthesized_splash_tree);
+        let mut tree = self
+            .def
+            .tree
+            .clone()
+            .unwrap_or_else(synthesized_splash_tree);
         if let Some(script) = &self.script {
             match script.arrange() {
                 Ok(Some(a)) => a.apply_props(&mut tree),
@@ -1064,7 +1144,13 @@ impl Scene for LogoScene {
         Some(InputContext::Menu)
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         self.elapsed += dt;
         // Skip is a SIGNAL on the ONE bus, not a raw key (rule 37722F91): Confirm
         // (A / Enter / Space, or a pointer click) ADVANCES; Cancel / Menu (B /
@@ -1155,6 +1241,247 @@ impl Scene for LogoScene {
     }
 }
 
+/// The `loading` behaviour: the pre-load screen, page 3 of the intro chain
+/// (TegLogo → CeLogo → **Loading** → Main).
+///
+/// Unlike the two logo splashes ([`LogoScene`] — a single full-bleed sprite on a
+/// fade timeline), this walks a NATIVE component tree from its scene file: a dark
+/// backdrop, the do-not-close notice, and a `resource_gauge` progress bar. The
+/// shader-compile phase is a SIMULATED timer for now — `elapsed / params.seconds`
+/// drives `loading_progress` (0..1), which the bar BINDS and the pair script's
+/// `derive()` turns into the percent readout (`set_model`→`derive`→fold, the same
+/// split the benches use). When the timeline completes the scene fires
+/// [`SPLASH_NEXT`] and the file routes it — that completion is the seam the REAL
+/// pre-load will gate. Cancel/Esc backs out via [`SPLASH_EXIT`]; a Confirm/click is
+/// reported but the pair script ignores it, so a load in progress can't be skipped.
+struct LoadingScene {
+    /// This scene's FILE — its native tree, its styles, its `params` (the sim
+    /// duration) and its `exits` (routing DATA for the fired intents).
+    def: SceneDef,
+    /// The PAIR SCRIPT host (`Loading.lua`), module form: `derive()` = the percent
+    /// readout, `react(sig)` = signals → the `next`/`exit` intent.
+    script: Option<ScriptHost>,
+    /// The walked tree — the file's authored tree with any `arrange()` props applied.
+    tree: Option<UiNode>,
+    /// Token-resolved styles (embedded trio + this scene's own blocks).
+    styles: serde_json::Value,
+    ui_state: UiState,
+    /// Draw commands from `update`'s walker pass, blitted in `render`.
+    hud_commands: Vec<HudCommand>,
+    /// The 1×1 white texture every solid HudCommand samples (this scene loads no
+    /// images — the notice is components, not a baked PNG).
+    white: Option<TextureHandle>,
+    elapsed: Duration,
+}
+
+impl LoadingScene {
+    fn new(def: SceneDef) -> Self {
+        Self {
+            def,
+            script: None,
+            tree: None,
+            styles: serde_json::Value::Object(Default::default()),
+            ui_state: UiState::new(),
+            hud_commands: Vec::new(),
+            white: None,
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    /// The simulated load duration (seconds): `params.seconds`, floored to a sane
+    /// minimum so the bar always has a span to fill and `done` can never fire on
+    /// frame one from a zero/negative author value.
+    fn sim_total(&self) -> f32 {
+        self.def
+            .params
+            .get("seconds")
+            .and_then(serde_json::Value::as_f64)
+            .map_or(6.0, |s| s as f32)
+            .max(0.5)
+    }
+
+    /// This frame's Model: the raw `loading_progress` (0..1) the ENGINE publishes,
+    /// then the pair script's derived display values folded over it (the percent
+    /// readout) — the same `set_model`→`derive`→fold split the benches run.
+    fn model(&self, progress: f32) -> ValueMap {
+        let raw = ValueMap::new().with("loading_progress", f64::from(progress));
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("loading '{}': publishing raw vars failed: {e}", self.def.id);
+            }
+            match script.derive() {
+                Ok(Some(derived)) => {
+                    for (k, v) in derived.entries() {
+                        m.set(k.clone(), v.clone());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::error!("loading '{}': derive() failed: {e}", self.def.id),
+            }
+        }
+        m
+    }
+}
+
+impl Scene for LoadingScene {
+    fn enter(&mut self, renderer: &mut Renderer) {
+        // 1 — the PAIR SCRIPT (module form, like every pair script).
+        match ScriptHost::new(LOADING_SCRIPT, "Loading.lua") {
+            Ok(script) => self.script = Some(script),
+            Err(e) => tracing::error!("loading pair script failed to load: {e}"),
+        }
+        // A file that cannot route `next` leaves the bar full and the scene stuck —
+        // reported HERE, once, at enter, not per-frame and not silently.
+        if !self.def.exits.contains_key(SPLASH_NEXT) {
+            tracing::error!(
+                "loading '{}': no `{SPLASH_NEXT}` exit — it will fill and then sit there",
+                self.def.id
+            );
+        }
+        // 2 — the tree: the native notice comes straight off the scene FILE (a
+        // loading screen is DATA). The pair script's arrange() props, if any, are
+        // applied onto it (parity with every pair script; `Loading.lua` has none).
+        let mut tree = self.def.tree.clone().unwrap_or_else(|| {
+            tracing::error!(
+                "loading '{}': scene file has no `tree` — nothing to draw",
+                self.def.id
+            );
+            UiNode {
+                component: "screen".to_string(),
+                ..Default::default()
+            }
+        });
+        if let Some(script) = &self.script {
+            match script.arrange() {
+                Ok(Some(a)) => a.apply_props(&mut tree),
+                Ok(None) => {}
+                Err(e) => tracing::error!("loading '{}': arrange() failed: {e}", self.def.id),
+            }
+        }
+        self.tree = Some(tree);
+        self.styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            self.def.styles.as_ref(),
+        );
+        self.white = Some(renderer.load_texture(&[0xff, 0xff, 0xff, 0xff], 1, 1));
+        // Apply the persisted (or default) display setting now the window exists.
+        display::current().apply(renderer);
+    }
+
+    /// The loading screen runs in the **Menu** input context so the pump resolves
+    /// Cancel (B / Esc) for the back-out; there is nothing to confirm.
+    fn input_context(&self) -> Option<InputContext> {
+        Some(InputContext::Menu)
+    }
+
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
+        self.elapsed += dt;
+        // Skip is a SIGNAL on the ONE bus, not a raw key (rule 37722F91): Cancel /
+        // Menu (B / Esc / Start) BACKS OUT; Confirm is reported but `Loading.lua`
+        // ignores it (a load must not be click-skipped). Same responder shape the
+        // splashes use, a one-layer chain.
+        let mut root = SplashSkip::default();
+        {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut root];
+            Router::dispatch(signals.events, &mut chain, signals.route);
+        }
+        let advance = root.advance || input.mouse_left_pressed;
+
+        // The simulated shader-compile progress: the fraction of the sim duration
+        // elapsed, clamped. The bar binds `loading_progress`; `done` is the full bar.
+        let progress = (self.elapsed.as_secs_f32() / self.sim_total()).clamp(0.0, 1.0);
+
+        // Walk the native tree from this frame's model (raw progress + derived
+        // percent). The walker draws the components; this scene owns only the clock.
+        if let Some(tree) = self.tree.as_ref() {
+            let size = renderer.size();
+            let snap = UiInput {
+                mouse: input.mouse_position,
+                clicked: input.mouse_left_pressed,
+                down: input.mouse_left,
+                screen: size,
+                typed: String::new(),
+                backspace: false,
+                wheel: 0.0,
+            };
+            let frame = run_ui(
+                tree,
+                &self.model(progress),
+                &self.styles,
+                &snap,
+                &mut self.ui_state,
+            );
+            self.hud_commands = frame.commands;
+        }
+
+        let done = progress >= 1.0;
+        if !(done || advance || root.back_out) {
+            return Transition::None;
+        }
+        // Something fired. Report the signals to the pair script's react() — the
+        // ORCHESTRATION returns the intent (`next` / `exit`), fired as this scene's
+        // result and routed by the scene FILE's exits. Called only on a firing frame.
+        let mut sig = ValueMap::new();
+        if done {
+            sig.set(SIG_DONE, true);
+        }
+        if advance {
+            sig.set(SIG_CONFIRM, true);
+        }
+        if root.back_out {
+            sig.set(SIG_CANCEL, true);
+        }
+        if let Some(script) = &self.script {
+            match script.react(&sig) {
+                Ok(Some(intents)) => {
+                    if intents.is_on(SPLASH_EXIT) {
+                        return Transition::Fire(SPLASH_EXIT.to_string());
+                    }
+                    if intents.is_on(SPLASH_NEXT) {
+                        return Transition::Fire(SPLASH_NEXT.to_string());
+                    }
+                    // The script ignored the skip (a Confirm mid-load) — its call.
+                    // A completed timeline with no intent would strand the player, so
+                    // that advances loudly.
+                    if !done {
+                        return Transition::None;
+                    }
+                    tracing::error!(
+                        "loading '{}': timeline complete but react() named no intent — advancing",
+                        self.def.id
+                    );
+                }
+                Ok(None) => {} // react-less script: the engine mapping below.
+                Err(e) => tracing::error!("loading '{}': react() failed: {e}", self.def.id),
+            }
+        }
+        // No script to decide: Cancel backs out, a completed timeline advances.
+        if root.back_out {
+            return Transition::Fire(SPLASH_EXIT.to_string());
+        }
+        Transition::Fire(SPLASH_NEXT.to_string())
+    }
+
+    fn render(&mut self, renderer: &mut Renderer) {
+        if let Some(white) = self.white {
+            render_hud(renderer, &self.hud_commands, white, &[white]);
+        }
+    }
+
+    /// The loading screen routes its fired intents (`next` / `exit`) through its
+    /// scene file's exits — the kernel calls this after [`Transition::Fire`].
+    fn route(&self, result: &str) -> Option<Transition> {
+        self.def.exit(result)
+    }
+}
+
 /// Seconds the confirm overlay waits before auto-reverting a display change.
 const CONFIRM_SECS: f32 = 15.0;
 
@@ -1212,7 +1539,11 @@ struct ConfirmDisplayScene {
 impl ConfirmDisplayScene {
     fn new(theme: Theme, previous: display::DisplaySetting) -> Self {
         Self {
-            view: MenuView::new(&theme, "confirm", &MenuPage::default(), &confirm_items(), &[]),
+            view: MenuView::from_tree(
+                &theme,
+                parse_shared_modal(CONFIRM_SCENE_JSON, "confirm", None),
+                shared_modal_script(CONFIRM_SCRIPT, "confirm.lua"),
+            ),
             previous,
             remaining: CONFIRM_SECS,
         }
@@ -1226,7 +1557,10 @@ impl ConfirmDisplayScene {
     /// The countdown subtitle the modal renders under the title.
     fn subtitle(&self) -> String {
         let secs = self.remaining.ceil().max(0.0) as i32;
-        format!("{} {secs}s", flicker::ui::strings::resolve("$menu_reverting_in"))
+        format!(
+            "{} {secs}s",
+            flicker::ui::strings::resolve("$menu_reverting_in")
+        )
     }
 }
 
@@ -1242,7 +1576,13 @@ impl Scene for ConfirmDisplayScene {
         Some(InputContext::Menu)
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         self.remaining -= dt.as_secs_f32();
         if self.remaining <= 0.0 {
             self.revert(renderer);
@@ -1268,7 +1608,19 @@ impl Scene for ConfirmDisplayScene {
 }
 
 /// The unified settings Lua script, embedded so clients inherit it.
-const SETTINGS_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/shared/settings.lua");
+const SETTINGS_SCRIPT: &str =
+    include_str!("../../../../content/sensorium/scripts/shared/settings.lua");
+
+/// The SHARED pause + display-confirm example pair-scripts (`scripts/shared/pause|confirm.lua`).
+/// Each is a thin `arrange()` that lights its modal's optional-item visibility slices — the
+/// worked example a human copies to vary the pop-up in their own scene (the defaults the
+/// hardened Rust already implements, re-stated as the override surface). Held by [`PauseScene`]
+/// / [`ConfirmDisplayScene`] through [`MenuView`]'s pair-script slot and folded each frame; the
+/// trees gate their buttons on the slices via `visible_bind`. Embedded like [`SETTINGS_SCRIPT`],
+/// so a Lua error fails the build (`script_smoke`).
+const PAUSE_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/shared/pause.lua");
+const CONFIRM_SCRIPT: &str =
+    include_str!("../../../../content/sensorium/scripts/shared/confirm.lua");
 
 /// The main-menu Lua ORCHESTRATION script (`arrange()` only): it latches the
 /// realm-button press mirror (`sig_mode_<realm>`) into a persistent page and lights
@@ -1296,6 +1648,18 @@ const MAIN_SCENE_JSON: &str = include_str!("../../../../content/sensorium/scenes
 const SETTINGS_SCENE_JSON: &str =
     include_str!("../../../../content/sensorium/scenes/shared/settings.scene.json");
 
+/// The SHARED pause + display-confirm modal trees (`scenes/shared/pause|confirm.scene.json`):
+/// the pop-up chrome authored ONCE as data (Aaron 2026-08-14 ruling 2A3592D0 — pop-up modals
+/// are shared modal trees), replacing the retired Rust `menu_tree` builder. Loaded by
+/// [`PauseScene`] / [`ConfirmDisplayScene`] via `parse_ui_json`; their `screens.*` / `modal`
+/// chrome styles ride Main's carrier through [`main_scene_styles`] (never inlined here). Like
+/// settings, `scenes/shared/` is skipped by the manifest folder index, so these are direct
+/// includes, never roster scenes.
+const PAUSE_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/pause.scene.json");
+const CONFIRM_SCENE_JSON: &str =
+    include_str!("../../../../content/sensorium/scenes/shared/confirm.scene.json");
+
 /// The embedded THEME — `ui_theme.json`, the one palette (`theme.tokens`) and
 /// nothing else (five-line architecture, 491BD9BB). Component looks resolve their
 /// dotted `style` paths against it; the shell-furniture blocks (`modal`/`screens`/…)
@@ -1312,14 +1676,14 @@ const SHELL_STYLE_JSON: &str =
 /// `$token` into this (text ruling 2026-07-31); tier-2 content, en-us seeded.
 const SHELL_STRINGS_JSON: &str = include_str!("../../../../content/data/stringtable.json");
 
-/// The MAIN scene's `styles` — the shell-furniture carrier: pause / confirm are
-/// shell screens WITHOUT scene files yet (tracked: they become scenes/components),
-/// so their blocks (`modal`, `screens`, …) ride `Main.scene.json` until then. The
-/// SETTINGS block no longer lives inline in Main — it was moved to its own shared
-/// scene file (`scenes/shared/settings.scene.json`, Aaron 2026-08-14) so it is
-/// authored ONCE instead of copied per scene, and is merged back onto the carrier
-/// here until the settings screen is a fully self-contained scene pair. `None`
-/// before the manifest loads (tests build their own).
+/// The MAIN scene's `styles` — the shell-furniture carrier. Pause / confirm are now
+/// shared modal TREES (`scenes/shared/pause|confirm.scene.json`, Aaron 2026-08-14),
+/// but their CHROME blocks (`modal`, `screens.pause`, `screens.confirm`) still ride
+/// `Main.scene.json`: a shared modal references the carrier's styles, resolved here at
+/// runtime (and merged host⊕own by the style-path gate) — the same split settings uses.
+/// The SETTINGS block no longer lives inline in Main — it was moved to its own shared
+/// scene file (`scenes/shared/settings.scene.json`) and is merged back onto the carrier
+/// here. `None` before the manifest loads (tests build their own).
 fn main_scene_styles() -> Option<serde_json::Value> {
     let mut styles = manifest().get("Main").and_then(|d| d.styles.clone())?;
     if let Some(obj) = styles.as_object_mut() {
@@ -1342,21 +1706,6 @@ fn main_scene_styles() -> Option<serde_json::Value> {
 // `MenuView` / `UnifiedSettingsScene`), registering textures + the `UI` global
 // the same way.
 
-/// One item published to `menu.lua`'s data-driven button list: a stable action
-/// `id`, its display `label`, and its Prism style `variant`. The engine reads back
-/// `results.is_on(id)` to dispatch — the buttons are pure data.
-struct MenuItem {
-    id: String,
-    label: String,
-    variant: String,
-}
-
-impl MenuItem {
-    fn new(id: impl Into<String>, label: impl Into<String>, variant: &str) -> Self {
-        Self { id: id.into(), label: label.into(), variant: variant.to_string() }
-    }
-}
-
 /// One scene-selection-panel row published to the launcher menu (the rich form of
 /// a `SceneEntry` with `SceneInfo`). Its LOAD button fires `id`, the same action id
 /// the popup buttons would.
@@ -1369,124 +1718,55 @@ struct SceneRow {
     meta: String,
 }
 
-/// The page-level MENU fields beyond the item/scene lists: which mode tier the
-/// screen shows and the tier's presentation data. All ride the `MENU` global;
-/// `menu.lua` stays realm-agnostic and reads only these.
-struct MenuPage {
-    /// The realm id of the tier-2 page ("" = the root / a mode-less menu). Non-empty
-    /// makes `menu.lua` declare `on_cancel = "menu_back"` on the screen root, so
-    /// Escape/pad-B fires the same result the BACK button does.
-    mode: String,
-    /// A note token rendered as the popup footer ("" = none) — the DM page's
-    /// under-construction "$dm_coming_soon".
-    note: String,
-    /// Whether the scene panel renders its header block (caption / title / count).
-    /// `false` on the Adventurer page: exactly its entry, no other notes.
-    panel_head: bool,
-}
-
-impl Default for MenuPage {
-    fn default() -> Self {
-        Self { mode: String::new(), note: String::new(), panel_head: true }
-    }
-}
-
-/// Build a shell MODAL's tree — pause + display-confirm are each ONE `popup_panel`
-/// composite (the carved-modal component KIND: title / subtitle / divider / footer
-/// are chrome the component draws) over a full-bleed backdrop, with the buttons as
-/// runtime data flowed as the panel's items. Their old `pause.tree.json` /
-/// `confirm.tree.json` files died with the `.tree.json` form (violation 1F151933):
-/// a reusable composite is a Rust component kind (201F4F51), not a parallel
-/// scene-file spelling. `scenes`/`muse_id` are dead weight the [`MenuView`] callers
-/// still pass — the launcher lives in `main_menu_tree`.
-fn menu_tree(
-    screen: &str,
-    page: &MenuPage,
-    items: &[MenuItem],
-    _scenes: &[SceneRow],
-    _muse_id: Option<usize>,
-) -> UiNode {
-    let mut popup = UiNode {
-        component: "popup_panel".to_string(),
-        id: "popup".to_string(),
-        anchor: UiAnchor::from_name("center"),
-        children: item_button_nodes(items, screen),
-        ..Default::default()
+/// Parse a SHARED modal scene-def (`scenes/shared/pause|confirm.scene.json`) into its
+/// walker tree. The pop-up chrome is authored DATA now (Aaron 2026-08-14 ruling 2A3592D0 —
+/// pop-up modals are shared modal trees), so this only PARSES; the old Rust `menu_tree`
+/// builder is retired (its `.tree.json` predecessors died with 1F151933, but a `.scene.json`
+/// shared tree is the ratified form, not that one). Best-effort like [`settings_tree`]: on a
+/// parse failure it returns a bare `screen` that still declares the modal's `on_cancel` (so
+/// Esc → close never depends on layout — the screen IS the declaration), and logs loud.
+fn parse_shared_modal(json: &str, id: &str, on_cancel: Option<&str>) -> UiNode {
+    let fallback = || {
+        let mut n = UiNode {
+            component: "screen".to_string(),
+            id: id.to_string(),
+            ..Default::default()
+        };
+        if let Some(oc) = on_cancel {
+            n.props
+                .insert("on_cancel".to_string(), Value::Text(oc.to_string()));
+        }
+        n
     };
-    popup.props.insert("layer".to_string(), Value::Number(1.0));
-    popup.props.insert("divider".to_string(), Value::Bool(true));
-    match screen {
-        "pause" => {
-            popup.props.insert("title".to_string(), Value::Text("$pause_sanctum".to_string()));
-            popup.props.insert("title_size".to_string(), Value::Number(46.0));
-            popup.props.insert(
-                "subtitle".to_string(),
-                Value::Text("$pause_gather_yourself_the_world_runs_on".to_string()),
-            );
-            popup.props.insert("footer".to_string(), Value::Text("$pause_esc_to_return".to_string()));
+    let def: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("{id}.scene.json did not parse: {e}");
+            return fallback();
         }
-        "confirm" => {
-            popup.props.insert("title".to_string(), Value::Text("$confirm_display_title".to_string()));
-            popup.props.insert("title_size".to_string(), Value::Number(38.0));
-            // The countdown is LIVE Model data; the chrome draws the bind's current
-            // text each frame (`subtitle_bind` — the walker's popup_panel extension).
-            popup.props.insert("subtitle_bind".to_string(), Value::Text("subtitle".to_string()));
-            popup.props.insert("subtitle_size".to_string(), Value::Number(15.0));
-        }
-        other => {
-            // The launcher moved to `main_menu_tree` (Main.scene.json); `menu_tree`
-            // now serves only the pause/confirm modals, so any other screen is a bug.
-            tracing::error!("menu_tree: '{other}' is not a shell modal (the menu is main_menu_tree now)");
-            return UiNode { component: "screen".to_string(), ..Default::default() };
+    };
+    match parse_ui_json(&def["tree"]) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("{id}.scene.json tree failed to parse: {e}");
+            fallback()
         }
     }
-
-    // The dim full-bleed backdrop under the popup (the game / the new resolution
-    // stays visible behind it).
-    let mut backdrop = UiNode {
-        component: "cell".to_string(),
-        anchor: UiAnchor::from_name("top_left"),
-        ..Default::default()
-    };
-    backdrop.props.insert("style".to_string(), Value::Text(format!("screens.{screen}")));
-    backdrop.props.insert("width_frac".to_string(), Value::Number(1.0));
-    backdrop.props.insert("height_frac".to_string(), Value::Number(1.0));
-    backdrop.props.insert("layer".to_string(), Value::Number(0.0));
-
-    let mut tree = UiNode {
-        component: "screen".to_string(),
-        anchor: UiAnchor::from_name("top_left"),
-        children: vec![backdrop, popup],
-        ..Default::default()
-    };
-    tree.props.insert("width_frac".to_string(), Value::Number(1.0));
-    tree.props.insert("height_frac".to_string(), Value::Number(1.0));
-    // A tier-2 page (non-empty realm) declares the BACK intent on its root, so
-    // Escape / pad-B fires the same `menu_back` result the BACK button does (S9).
-    // `on_cancel` is a root prop the walker's `UiIntents::of` reads.
-    if !page.mode.is_empty() {
-        tree.props.insert("on_cancel".to_string(), Value::Text("menu_back".to_string()));
-    }
-    // The pause overlay backs out to the game: Escape / pad-B (Menu-context `Cancel`)
-    // fires the same `resume` result the Resume button does (S9), so the scene reads it
-    // off `results` like any click — no raw Menu poll. (Confirm has no Esc affordance:
-    // Keep / Revert / timeout only.)
-    if screen == "pause" {
-        tree.props.insert("on_cancel".to_string(), Value::Text("resume".to_string()));
-    }
-    tree
 }
 
-/// The Model values the launcher tree's `visible_bind` / `text_bind` read — whether
-/// the scene panel shows (`has_scenes`), whether its header shows (`panel_head`),
-/// and the popup footer note (`menu_footer` — the DM tier's, else empty). Held by
-/// [`MenuView`] and folded into every frame's model.
-fn menu_render_model(page: &MenuPage, scenes: &[SceneRow]) -> ValueMap {
-    let mut m = ValueMap::new();
-    m.set("has_scenes", Value::Bool(!scenes.is_empty()));
-    m.set("panel_head", Value::Bool(page.panel_head));
-    m.set("menu_footer", Value::Text(page.note.clone()));
-    m
+/// Load a shared modal's example pair-script into a held host, or `None` (logged) on a Lua
+/// error. `None` means the modal runs its static tree with the gated (optional) items hidden
+/// — survivable by design: pause keeps Resume + `on_cancel`, confirm keeps its revert timeout.
+/// The embedded scripts can only fail here on a syntax error, which `script_smoke` turns into
+/// a build failure, so at runtime this is the human-authored-copy fallback, not a shell one.
+fn shared_modal_script(src: &str, name: &str) -> Option<ScriptHost> {
+    match ScriptHost::new(src, name) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            tracing::error!("{name} failed to load — modal runs its static default: {e}");
+            None
+        }
+    }
 }
 
 /// Find the first descendant (or self) whose `id` matches, mutably — the seam the
@@ -1497,31 +1777,6 @@ fn find_by_id_mut<'a>(node: &'a mut UiNode, id: &str) -> Option<&'a mut UiNode> 
         return Some(node);
     }
     node.children.iter_mut().find_map(|c| find_by_id_mut(c, id))
-}
-
-/// One popup button per [`MenuItem`] — a `button` component node (leaf data the
-/// engine dispatches on via `results.is_on(id)`). The group is the screen name, so
-/// each popup is a self-contained focus group (spec §8) ordered by position.
-fn item_button_nodes(items: &[MenuItem], group: &str) -> Vec<UiNode> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(i, it)| {
-            let mut b = UiNode {
-                component: "button".to_string(),
-                id: it.id.clone(),
-                action: Some(it.id.clone()),
-                size: Some(48.0),
-                tab_group: group.to_string(),
-                nav_ordinal: i as u32,
-                ..Default::default()
-            };
-            b.props.insert("label".to_string(), Value::Text(it.label.clone()));
-            b.props.insert("label_size".to_string(), Value::Number(15.0));
-            b.props.insert("variant".to_string(), Value::Text(it.variant.clone()));
-            b
-        })
-        .collect()
 }
 
 /// One launcher scene row per registered scene — a `row` of primitive kinds:
@@ -1540,11 +1795,17 @@ fn scene_row_nodes(scenes: &[SceneRow]) -> Vec<UiNode> {
             };
             let mut preview_inner = kind("cell");
             preview_inner.grow = Some(1.0);
-            preview_inner.props.insert("style".to_string(), Value::Text("menu.preview_inner".to_string()));
+            preview_inner.props.insert(
+                "style".to_string(),
+                Value::Text("menu.preview_inner".to_string()),
+            );
             let mut preview = kind("cell");
             preview.size = Some(96.0);
             preview.pad = 3.0;
-            preview.props.insert("style".to_string(), Value::Text("menu.preview_frame".to_string()));
+            preview.props.insert(
+                "style".to_string(),
+                Value::Text("menu.preview_frame".to_string()),
+            );
             preview.children = vec![preview_inner];
 
             let mut details = kind("cell");
@@ -1568,9 +1829,15 @@ fn scene_row_nodes(scenes: &[SceneRow]) -> Vec<UiNode> {
                 nav_ordinal: i as u32,
                 ..Default::default()
             };
-            load_btn.props.insert("label".to_string(), Value::Text("$menu_load".to_string()));
-            load_btn.props.insert("label_size".to_string(), Value::Number(12.0));
-            load_btn.props.insert("variant".to_string(), Value::Text("primary".to_string()));
+            load_btn
+                .props
+                .insert("label".to_string(), Value::Text("$menu_load".to_string()));
+            load_btn
+                .props
+                .insert("label_size".to_string(), Value::Number(12.0));
+            load_btn
+                .props
+                .insert("variant".to_string(), Value::Text("primary".to_string()));
             let mut load = kind("cell");
             load.size = Some(150.0);
             load.children = vec![spacer, load_btn];
@@ -1579,7 +1846,8 @@ fn scene_row_nodes(scenes: &[SceneRow]) -> Vec<UiNode> {
             row.size = Some(126.0);
             row.pad = 15.0;
             row.gap = 20.0;
-            row.props.insert("style".to_string(), Value::Text("menu.row".to_string()));
+            row.props
+                .insert("style".to_string(), Value::Text("menu.row".to_string()));
             row.children = vec![preview, details, load];
             row
         })
@@ -1597,7 +1865,8 @@ fn muse_sprite(tex_id: usize) -> UiNode {
     };
     n.props.insert("width_frac".to_string(), Value::Number(1.0));
     n.props.insert("aspect".to_string(), Value::Number(1.0));
-    n.props.insert("tex".to_string(), Value::Number(tex_id as f64));
+    n.props
+        .insert("tex".to_string(), Value::Number(tex_id as f64));
     n.props.insert("alpha".to_string(), Value::Number(0.34));
     n.props.insert("layer".to_string(), Value::Number(0.0));
     n
@@ -1605,7 +1874,10 @@ fn muse_sprite(tex_id: usize) -> UiNode {
 
 /// A bare component node of `component` kind.
 fn kind(component: &str) -> UiNode {
-    UiNode { component: component.to_string(), ..Default::default() }
+    UiNode {
+        component: component.to_string(),
+        ..Default::default()
+    }
 }
 
 /// A scene-row detail text line: a display string at `size` / `text_size` in a named
@@ -1613,53 +1885,97 @@ fn kind(component: &str) -> UiNode {
 fn row_text(text: &str, size: f32, text_size: f32, color: &str, font: &str) -> UiNode {
     let mut n = kind("text");
     n.size = Some(size);
-    n.props.insert("text".to_string(), Value::Text(text.to_string()));
-    n.props.insert("text_size".to_string(), Value::Number(text_size as f64));
-    n.props.insert("color".to_string(), Value::Text(color.to_string()));
-    n.props.insert("font".to_string(), Value::Text(font.to_string()));
+    n.props
+        .insert("text".to_string(), Value::Text(text.to_string()));
+    n.props
+        .insert("text_size".to_string(), Value::Number(text_size as f64));
+    n.props
+        .insert("color".to_string(), Value::Text(color.to_string()));
+    n.props
+        .insert("font".to_string(), Value::Text(font.to_string()));
     n
-}
-
-/// The pause overlay's buttons — resume, settings, return to the main menu, quit.
-fn pause_items() -> Vec<MenuItem> {
-    vec![
-        MenuItem::new("resume", "$menu_resume", "primary"),
-        MenuItem::new("settings", "$menu_settings", "secondary"),
-        MenuItem::new("main_menu", "$menu_main_menu", "secondary"),
-        MenuItem::new("quit", "$menu_quit", "danger"),
-    ]
-}
-
-/// The display-confirm dialog's buttons.
-fn confirm_items() -> Vec<MenuItem> {
-    vec![
-        MenuItem::new("keep", "$menu_keep", "primary"),
-        MenuItem::new("revert", "$menu_revert", "danger"),
-    ]
 }
 
 #[cfg(test)]
 mod menu_tree_tests {
     use super::*;
 
-    /// Build a shell screen's tree GPU-free (no Theme / textures) — the exact path
-    /// `MenuView` caches, minus the muse sprite (no registered textures here).
-    fn built_tree(screen: &str, page: &MenuPage, items: &[MenuItem]) -> UiNode {
-        menu_tree(screen, page, items, &[], None)
+    /// Parse a shared modal scene-def const into its tree GPU-free (no Theme / textures) —
+    /// the exact `parse_shared_modal` path `PauseScene` / `ConfirmDisplayScene` load.
+    fn shared_tree(json: &str) -> UiNode {
+        let def: serde_json::Value = serde_json::from_str(json).expect("shared modal parses");
+        parse_ui_json(&def["tree"]).expect("shared modal tree parses")
     }
 
-    /// Pause + display-confirm are behaviour-built `popup_panel` composites (the
-    /// `.tree.json` files died with that form — 1F151933). Asserts each builds a
-    /// full-bleed `screen` and fills with real content.
+    /// Pause + display-confirm are SHARED modal trees now (`scenes/shared/*.scene.json`,
+    /// Aaron 2026-08-14) — the `menu_tree` Rust builder is retired. Asserts each file parses
+    /// into a full-bleed `screen` filled with real content, and that pause declares its
+    /// `on_cancel = resume` back-out intent (S9).
     #[test]
     fn pause_and_confirm_build_from_scene_json() {
-        let pause = built_tree("pause", &MenuPage::default(), &pause_items());
+        let pause = shared_tree(PAUSE_SCENE_JSON);
         assert_eq!(pause.component, "screen", "pause → full-bleed popup page");
-        assert!(!pause.children.is_empty(), "pause popup filled with real content");
+        assert!(
+            !pause.children.is_empty(),
+            "pause popup filled with real content"
+        );
+        assert_eq!(
+            UiIntents::of(&pause).result_for(ActionSignal::Cancel),
+            Some("resume"),
+            "Esc / pad-B backs the pause overlay out to the game (on_cancel = resume)"
+        );
 
-        let confirm = built_tree("confirm", &MenuPage::default(), &confirm_items());
-        assert_eq!(confirm.component, "screen", "confirm → full-bleed popup page");
-        assert!(!confirm.children.is_empty(), "confirm popup filled with real content");
+        let confirm = shared_tree(CONFIRM_SCENE_JSON);
+        assert_eq!(
+            confirm.component, "screen",
+            "confirm → full-bleed popup page"
+        );
+        assert!(
+            !confirm.children.is_empty(),
+            "confirm popup filled with real content"
+        );
+    }
+
+    /// LIVE-PAIR GATE — the shared modals are example pairs now (Aaron 2026-08-17): each
+    /// tree gates its optional buttons on `visible_bind` slices its pair script (`pause.lua`
+    /// / `confirm.lua`) `arrange()` lights. A gated button the default script leaves dark
+    /// would VANISH, so this pins every `visible_bind` in the shipped tree to a lit slice —
+    /// the two halves cannot drift, the way settings' derived gates pin to its tree. Derived
+    /// from the tree side (no hardcoded key list), so a new gated button must be lit too.
+    #[test]
+    fn pause_and_confirm_example_scripts_light_every_gated_button() {
+        fn visible_binds(node: &UiNode, out: &mut Vec<String>) {
+            if let Some(b) = &node.visible_bind {
+                out.push(b.clone());
+            }
+            for c in &node.children {
+                visible_binds(c, out);
+            }
+        }
+        for (scene, script, name) in [
+            (PAUSE_SCENE_JSON, PAUSE_SCRIPT, "pause.lua"),
+            (CONFIRM_SCENE_JSON, CONFIRM_SCRIPT, "confirm.lua"),
+        ] {
+            let tree = shared_tree(scene);
+            let mut binds = Vec::new();
+            visible_binds(&tree, &mut binds);
+            assert!(
+                !binds.is_empty(),
+                "{name}'s modal gates at least one optional item"
+            );
+            let host = ScriptHost::new(script, name).expect("example pair-script loads");
+            let model = host
+                .arrange()
+                .expect("arrange runs")
+                .expect("arrange present")
+                .to_model();
+            for b in &binds {
+                assert!(
+                    model.is_on(b),
+                    "{name} arrange() must light `{b}` — a gated button the script leaves dark vanishes"
+                );
+            }
+        }
     }
 
     /// RETIREMENT GATE (2026-08-14): the shared `modal.buttons.variants.*` blocks are
@@ -1707,7 +2023,10 @@ mod menu_tree_tests {
             .iter()
             .filter(|t| !table.contains_key(t.strip_prefix('$').unwrap_or(t)))
             .collect();
-        assert!(missing.is_empty(), "catalog tokens with no stringtable seed: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "catalog tokens with no stringtable seed: {missing:?}"
+        );
     }
 
     /// DERIVED-PAGE GATE (S4a): the keyboard page's keycaps are EXACTLY the Player-scope
@@ -1728,11 +2047,19 @@ mod menu_tree_tests {
         let mut caps = Vec::new();
         collect(&tree, &mut caps);
         caps.sort();
-        let mut want: Vec<String> =
-            ActionSignal::rebindable().map(|s| s.name().to_string()).collect();
+        let mut want: Vec<String> = ActionSignal::rebindable()
+            .map(|s| s.name().to_string())
+            .collect();
         want.sort();
-        assert_eq!(caps, want, "keyboard keycaps must be exactly the rebindable signals");
-        assert_eq!(caps.len(), 28, "the ruled Player set (Aaron 2026-08-14: 19 base + souls tier)");
+        assert_eq!(
+            caps, want,
+            "keyboard keycaps must be exactly the rebindable signals"
+        );
+        assert_eq!(
+            caps.len(),
+            29,
+            "the ruled Player set (19 base + souls tier incl. Grapple)"
+        );
     }
 
     /// RETIREMENT GATE (S4a): the hand-authored keyboard schema (`styles.settings.input.
@@ -1743,10 +2070,22 @@ mod menu_tree_tests {
         let def: serde_json::Value =
             serde_json::from_str(SETTINGS_SCENE_JSON).expect("settings.scene.json parses");
         let input = &def["styles"]["settings"]["input"];
-        assert!(input.get("keyboard").is_none(), "styles.settings.input.keyboard is retired");
-        assert!(input.get("tabs").is_none(), "styles.settings.input.tabs is retired");
+        assert!(
+            input.get("keyboard").is_none(),
+            "styles.settings.input.keyboard is retired"
+        );
+        assert!(
+            input.get("tabs").is_none(),
+            "styles.settings.input.tabs is retired"
+        );
         let table = flicker::ui::strings::flatten(SHELL_STRINGS_JSON, "en-us").expect("flatten");
-        for stem in ["set_movement", "set_interface", "set_actions", "set_move_forward", "set_quit"] {
+        for stem in [
+            "set_movement",
+            "set_interface",
+            "set_actions",
+            "set_move_forward",
+            "set_quit",
+        ] {
             assert!(!table.contains_key(stem), "retired token `{stem}` lingers");
         }
     }
@@ -1762,7 +2101,13 @@ mod menu_tree_tests {
             serde_json::from_str(SETTINGS_SCENE_JSON).expect("settings.scene.json parses");
         let mut tree = parse_ui_json(&def["tree"]).expect("settings static tree parses");
         assert_eq!(tree.id, "settings", "root is the settings screen");
-        for id in ["video_rows", "audio_rows", "kb_rows", "mouse_rows", "controller_rows"] {
+        for id in [
+            "video_rows",
+            "audio_rows",
+            "kb_rows",
+            "mouse_rows",
+            "controller_rows",
+        ] {
             assert!(
                 find_by_id_mut(&mut tree, id).is_some(),
                 "fill container `{id}` is authored for the hardened Rust row-filler"
@@ -1777,27 +2122,20 @@ mod menu_tree_tests {
     /// until someone opens the window. This turns that into a build failure.
     #[test]
     fn the_shipped_screens_name_only_kinds_the_engine_knows() {
-        // Pause + display-confirm are the shipped popup screens still built through
-        // these helpers. The launcher menu (root + tier-2 pages) went through the
-        // now-deleted `MenuScene`; the live main menu's vocabulary is gated by
-        // `the_main_menu_composes_from_the_rust_components`.
-        let cases = vec![
-            ("pause", MenuPage::default(), pause_items()),
-            ("confirm", MenuPage::default(), confirm_items()),
-        ];
-        for (screen, page, items) in cases {
-            let tree = built_tree(screen, &page, &items);
+        // Pause + display-confirm are the shipped popup screens — SHARED modal trees now
+        // (`scenes/shared/*.scene.json`, Aaron 2026-08-14). The live main menu's vocabulary
+        // is gated by `the_main_menu_composes_from_the_rust_components`.
+        for (screen, json) in [("pause", PAUSE_SCENE_JSON), ("confirm", CONFIRM_SCENE_JSON)] {
+            let tree = shared_tree(json);
             assert!(
                 flicker::ui::unknown_kinds(&tree).is_empty(),
-                "menu.lua screen '{screen}' (mode '{}') names unknown kinds: {:?}",
-                page.mode,
+                "shared modal '{screen}' names unknown kinds: {:?}",
                 flicker::ui::unknown_kinds(&tree)
             );
             // The strings gate (S10): every display literal is a `$token`.
             assert!(
                 flicker::ui::raw_display_literals(&tree).is_empty(),
-                "menu.lua screen '{screen}' (mode '{}') ships raw display literals: {:?}",
-                page.mode,
+                "shared modal '{screen}' ships raw display literals: {:?}",
                 flicker::ui::raw_display_literals(&tree)
             );
         }
@@ -1825,7 +2163,10 @@ mod menu_tree_tests {
         // self-gates its OWN source — every `.set`/`.with` value must be a resolved
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("shell.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
     }
 }
 
@@ -1872,58 +2213,22 @@ struct MenuView {
 }
 
 impl MenuView {
-    /// Load `menu.lua`, register the theme textures (so `Textures.muse` resolves),
-    /// expose the shell layout + styles, publish the `screen` + `page` + `items`, and
-    /// build the component tree ONCE — the parsed `UiNode` is fully owned, so the script
-    /// host is dropped after. Best-effort: a failure leaves a view that draws nothing.
-    fn new(
-        theme: &Theme,
-        screen: &str,
-        page: &MenuPage,
-        items: &[MenuItem],
-        scenes: &[SceneRow],
-    ) -> Self {
+    /// A walker view over an already-parsed scene tree, optionally Lua-orchestrated.
+    /// The MAIN MENU (`Main.scene.json`) passes its `menu.lua` host: `arrange()` runs each
+    /// frame and folds the `shown_realm_<n>` page-slice visibility into the model. The
+    /// pause / confirm popups (`scenes/shared/pause|confirm.scene.json`) pass `None` — static
+    /// chrome, no page, empty `render_model`. Registers the theme textures, resolves styles
+    /// against the shell-furniture carrier ([`main_scene_styles`]), and collects the tree's
+    /// declarative `on_<signal>` intents (S9) once. Replaces the retired `menu_tree` Rust
+    /// builder the old `new` expanded; a caller hands a fallback tree if its file failed to
+    /// parse (best-effort).
+    fn from_tree(theme: &Theme, tree: UiNode, script: Option<ScriptHost>) -> Self {
         let entries = theme.lua_textures();
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
-        // The host is dropped once the tree is built: the parsed `UiNode` is fully
-        // owned data, and every control draws in the engine, so nothing reads the VM
-        // again. (It was retained for a stretch of 2026-07/08 as the Lua component
-        // library the walker dispatched DRAW to; that tier is gone — 2026-08-10.)
-        // The muse backdrop sprite's texture index (the launcher only): `entries` is
-        // the theme's registered texture list in the SAME order as `textures`, so a
-        // name's position IS its draw-time `tex` index.
-        let muse_id = entries.iter().position(|(name, _)| *name == "muse");
-        // The screen is DATA now: a static template (`menu_launcher` / `popup_menu` /
-        // `choice_dialog`) whose buttons + scene rows the shell emits as slots,
-        // expanded ONCE and cached. No Lua tree-builder, no `ScriptHost`.
-        let tree = Some(menu_tree(screen, page, items, scenes, muse_id));
-        // The screen's declarative bindings (S9), read off the EXPANDED root once
-        // — cached exactly like the tree it was collected from.
-        let intents = tree.as_ref().map(UiIntents::of).unwrap_or_default();
-        Self {
-            textures,
-            tree,
-            styles,
-            ui_state: UiState::new(),
-            commands: Vec::new(),
-            intents,
-            fired_sigs: Vec::new(),
-            nav_initialized: false,
-            render_model: menu_render_model(page, scenes),
-            script: None,
-        }
-    }
-
-    /// A Lua-ORCHESTRATED menu view over an already-expanded scene tree (the MAIN MENU's
-    /// `Main.scene.json`): the SAME walker dispatch as [`new`], but a held `menu.lua`
-    /// `arrange()` runs each frame and folds its page-slice visibility into the model, and
-    /// the tree is the AUTHORED one (not a `menu_tree` build). No `render_model` binds — the
-    /// arrangement supplies visibility. Best-effort like [`new`].
-    fn orchestrated(theme: &Theme, tree: UiNode, script: ScriptHost) -> Self {
-        let entries = theme.lua_textures();
-        let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
+        let styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        );
         let intents = UiIntents::of(&tree);
         Self {
             textures,
@@ -1935,7 +2240,7 @@ impl MenuView {
             fired_sigs: Vec::new(),
             nav_initialized: false,
             render_model: ValueMap::new(),
-            script: Some(script),
+            script,
         }
     }
 
@@ -2027,8 +2332,9 @@ impl MenuView {
         //    `resume`) into a fired result name. `menu.lua` authors `tab_group` /
         //    `nav_ordinal` for EVERY popup (menu / pause / confirm), so all three are
         //    pad-navigable via this path. ──
-        let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree, &eff).with_intents(&self.intents);
+        let mut walker = WalkerHandler::hud(&mut self.ui_state, hud_hit)
+            .with_nav(tree, &eff)
+            .with_intents(&self.intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(signals.events, &mut chain, signals.route);
@@ -2313,7 +2619,11 @@ fn binding_label(b: &InputBinding) -> String {
         InputBinding::GamepadAxis { axis, direction } => {
             format!("{} {direction}", resolve(&axis.token()))
         }
-        InputBinding::MouseMotion { axis, direction, gate } => {
+        InputBinding::MouseMotion {
+            axis,
+            direction,
+            gate,
+        } => {
             let base = format!("{} {direction}", resolve(axis.token()));
             match gate {
                 Some(g) => format!("{base} ({} {})", resolve("$bind_hold"), resolve(&g.token())),
@@ -2325,14 +2635,26 @@ fn binding_label(b: &InputBinding) -> String {
 
 /// A settings text line — the Lua `line(text, box, glyph, color, font, align)`: a `text`
 /// node sized `box_len` on the main axis, glyph `glyph`, in a named ink / font, aligned.
-fn settings_line(text: &str, box_len: f32, glyph: f32, color: &str, font: &str, align: &str) -> UiNode {
+fn settings_line(
+    text: &str,
+    box_len: f32,
+    glyph: f32,
+    color: &str,
+    font: &str,
+    align: &str,
+) -> UiNode {
     let mut n = kind("text");
     n.size = Some(box_len);
-    n.props.insert("text".to_string(), Value::Text(text.to_string()));
-    n.props.insert("text_size".to_string(), Value::Number(glyph as f64));
-    n.props.insert("color".to_string(), Value::Text(color.to_string()));
-    n.props.insert("font".to_string(), Value::Text(font.to_string()));
-    n.props.insert("align".to_string(), Value::Text(align.to_string()));
+    n.props
+        .insert("text".to_string(), Value::Text(text.to_string()));
+    n.props
+        .insert("text_size".to_string(), Value::Number(glyph as f64));
+    n.props
+        .insert("color".to_string(), Value::Text(color.to_string()));
+    n.props
+        .insert("font".to_string(), Value::Text(font.to_string()));
+    n.props
+        .insert("align".to_string(), Value::Text(align.to_string()));
     n
 }
 
@@ -2354,9 +2676,12 @@ fn fixed_stack(size: f32) -> UiNode {
 fn preview_badge() -> UiNode {
     let mut n = kind("badge");
     n.size = Some(72.0);
-    n.props.insert("tone".to_string(), Value::Text("bronze".to_string()));
-    n.props.insert("label".to_string(), Value::Text("$set_preview".to_string()));
-    n.props.insert("style".to_string(), Value::Text("badge".to_string()));
+    n.props
+        .insert("tone".to_string(), Value::Text("bronze".to_string()));
+    n.props
+        .insert("label".to_string(), Value::Text("$set_preview".to_string()));
+    n.props
+        .insert("style".to_string(), Value::Text("badge".to_string()));
     n
 }
 
@@ -2370,7 +2695,8 @@ fn options_of(row: &SettingRow) -> Vec<UiNode> {
         .map(|(i, label)| {
             let mut n = kind("option");
             n.props.insert("value".to_string(), Value::Number(i as f64));
-            n.props.insert("label".to_string(), Value::Text(label.clone()));
+            n.props
+                .insert("label".to_string(), Value::Text(label.clone()));
             n
         })
         .collect()
@@ -2387,29 +2713,41 @@ fn control_node(row: &SettingRow) -> UiNode {
         "toggle" => {
             let mut n = kind("toggle");
             n.size = Some(56.0);
-            n.props.insert("style".to_string(), Value::Text("settings.controls.toggle".to_string()));
+            n.props.insert(
+                "style".to_string(),
+                Value::Text("settings.controls.toggle".to_string()),
+            );
             n.bind = Some(key);
             n
         }
         "slider" => {
             let mut n = kind("slider");
             n.size = Some(CTRL_W);
-            n.props.insert("min".to_string(), Value::Number(row.min.unwrap_or(0.0)));
-            n.props.insert("max".to_string(), Value::Number(row.max.unwrap_or(100.0)));
+            n.props
+                .insert("min".to_string(), Value::Number(row.min.unwrap_or(0.0)));
+            n.props
+                .insert("max".to_string(), Value::Number(row.max.unwrap_or(100.0)));
             n.props.insert("value_w".to_string(), Value::Number(46.0));
             n.props.insert("slider_h".to_string(), Value::Number(8.0));
             n.props.insert("decimals".to_string(), Value::Number(0.0));
             if let Some(suffix) = &row.suffix {
-                n.props.insert("suffix".to_string(), Value::Text(suffix.clone()));
+                n.props
+                    .insert("suffix".to_string(), Value::Text(suffix.clone()));
             }
-            n.props.insert("style".to_string(), Value::Text("settings.controls.slider".to_string()));
+            n.props.insert(
+                "style".to_string(),
+                Value::Text("settings.controls.slider".to_string()),
+            );
             n.bind = Some(key);
             n
         }
         "dropdown" | "cycler" => {
             let mut n = kind("select");
             n.size = Some(CTRL_W);
-            n.props.insert("style".to_string(), Value::Text("settings.controls".to_string()));
+            n.props.insert(
+                "style".to_string(),
+                Value::Text("settings.controls".to_string()),
+            );
             n.children = options_of(row);
             n.bind = Some(key);
             n
@@ -2418,7 +2756,10 @@ fn control_node(row: &SettingRow) -> UiNode {
             let count = row.options.as_ref().map_or(0, Vec::len);
             let mut n = kind("pill_toggle");
             n.size = Some(CTRL_W.max(60.0 * count as f32));
-            n.props.insert("style".to_string(), Value::Text("settings.controls.pill".to_string()));
+            n.props.insert(
+                "style".to_string(),
+                Value::Text("settings.controls.pill".to_string()),
+            );
             n.children = options_of(row);
             n.bind = Some(key);
             n
@@ -2449,15 +2790,33 @@ fn control_node(row: &SettingRow) -> UiNode {
 /// One settings row: name (+ desc) centred on the left, the control (+ a PREVIEW badge
 /// for an unwired row) in the right gutter (the Lua `ctrl_row`).
 fn ctrl_row(row: &SettingRow) -> UiNode {
-    let name_color = if row.wired { "settings.row.name_color" } else { "settings.row.desc_color" };
+    let name_color = if row.wired {
+        "settings.row.name_color"
+    } else {
+        "settings.row.desc_color"
+    };
 
     let mut left = kind("cell");
     left.grow = Some(1.0);
     left.gap = 2.0;
     left.children.push(grow_stack(1.0));
-    left.children.push(settings_line(&row.name, ROW_NAME_SIZE + 3.0, ROW_NAME_SIZE, name_color, "body", "left"));
+    left.children.push(settings_line(
+        &row.name,
+        ROW_NAME_SIZE + 3.0,
+        ROW_NAME_SIZE,
+        name_color,
+        "body",
+        "left",
+    ));
     if let Some(desc) = &row.desc {
-        left.children.push(settings_line(desc, ROW_DESC_SIZE + 3.0, ROW_DESC_SIZE, "settings.row.desc_color", "body", "left"));
+        left.children.push(settings_line(
+            desc,
+            ROW_DESC_SIZE + 3.0,
+            ROW_DESC_SIZE,
+            "settings.row.desc_color",
+            "body",
+            "left",
+        ));
     }
     left.children.push(grow_stack(1.0));
 
@@ -2478,7 +2837,14 @@ fn ctrl_row(row: &SettingRow) -> UiNode {
 
 /// A group header line (the Lua `group_head`).
 fn group_head(name: &str) -> UiNode {
-    settings_line(name, 30.0, ROW_GROUP_SIZE, "settings.row.group_color", "label", "left")
+    settings_line(
+        name,
+        30.0,
+        ROW_GROUP_SIZE,
+        "settings.row.group_color",
+        "label",
+        "left",
+    )
 }
 
 /// Append every group's header + rows, with a 10px gap after each (the Lua `add_groups`).
@@ -2504,8 +2870,22 @@ fn video_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
 fn audio_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
     let stub = &schema.audio.stub;
     let mut out = vec![
-        settings_line(&stub.title, 22.0, 10.0, "settings.audio.stub.title_color", "label", "left"),
-        settings_line(&stub.body, 22.0, 14.0, "settings.audio.stub.body_color", "body", "left"),
+        settings_line(
+            &stub.title,
+            22.0,
+            10.0,
+            "settings.audio.stub.title_color",
+            "label",
+            "left",
+        ),
+        settings_line(
+            &stub.body,
+            22.0,
+            14.0,
+            "settings.audio.stub.body_color",
+            "body",
+            "left",
+        ),
         fixed_stack(12.0),
     ];
     add_groups(&mut out, &schema.audio.groups);
@@ -2537,7 +2917,14 @@ fn kb_rows_nodes() -> Vec<UiNode> {
             let label = sig.token();
             name_cell.children = vec![
                 grow_stack(1.0),
-                settings_line(&label, 18.0, 16.0, "settings.row.name_color", "body", "left"),
+                settings_line(
+                    &label,
+                    18.0,
+                    16.0,
+                    "settings.row.name_color",
+                    "body",
+                    "left",
+                ),
                 grow_stack(1.0),
             ];
 
@@ -2545,9 +2932,12 @@ fn kb_rows_nodes() -> Vec<UiNode> {
             cap.id = format!("kc_{name}");
             cap.action = Some(format!("rebind_{name}"));
             cap.size = Some(KEYCAP_W);
-            cap.props.insert("text_bind".to_string(), Value::Text(format!("bind_{name}")));
-            cap.props.insert("label_size".to_string(), Value::Number(KEYCAP_LABEL_SIZE));
-            cap.props.insert("variant".to_string(), Value::Text("secondary".to_string()));
+            cap.props
+                .insert("text_bind".to_string(), Value::Text(format!("bind_{name}")));
+            cap.props
+                .insert("label_size".to_string(), Value::Number(KEYCAP_LABEL_SIZE));
+            cap.props
+                .insert("variant".to_string(), Value::Text("secondary".to_string()));
 
             let mut r = kind("row");
             r.size = Some(42.0);
@@ -2583,7 +2973,8 @@ fn controller_options() -> Vec<UiNode> {
         .map(|(i, (_name, label))| {
             let mut n = kind("option");
             n.props.insert("value".to_string(), Value::Number(i as f64));
-            n.props.insert("label".to_string(), Value::Text((*label).to_string()));
+            n.props
+                .insert("label".to_string(), Value::Text((*label).to_string()));
             n
         })
         .collect()
@@ -2598,13 +2989,23 @@ fn controller_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
     label_cell.grow = Some(1.0);
     label_cell.children = vec![
         fixed_stack(8.0),
-        settings_line("$set_active_profile", 20.0, 16.0, "settings.row.name_color", "body", "left"),
+        settings_line(
+            "$set_active_profile",
+            20.0,
+            16.0,
+            "settings.row.name_color",
+            "body",
+            "left",
+        ),
     ];
 
     let mut select = kind("select");
     select.id = "ctrl_profile".to_string();
     select.size = Some(CTRL_W);
-    select.props.insert("style".to_string(), Value::Text("settings.controls".to_string()));
+    select.props.insert(
+        "style".to_string(),
+        Value::Text("settings.controls".to_string()),
+    );
     select.children = controller_options();
     select.bind = Some("ctrl_profile".to_string());
 
@@ -2621,8 +3022,22 @@ fn controller_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
         group_head("$set_controller_profile"),
         profile_row,
         fixed_stack(16.0),
-        settings_line(&c.title, 30.0, c.title_size as f32, "settings.input.controller.title_color", "display", "left"),
-        settings_line(&c.body, 26.0, 15.0, "settings.input.controller.body_color", "body", "left"),
+        settings_line(
+            &c.title,
+            30.0,
+            c.title_size as f32,
+            "settings.input.controller.title_color",
+            "display",
+            "left",
+        ),
+        settings_line(
+            &c.body,
+            26.0,
+            15.0,
+            "settings.input.controller.body_color",
+            "body",
+            "left",
+        ),
     ]
 }
 
@@ -2640,7 +3055,10 @@ fn controller_rows_nodes(schema: &SettingsSchema) -> Vec<UiNode> {
 fn number_steppables(nodes: &mut [UiNode], group: &str, next: &mut u32) {
     for n in nodes.iter_mut() {
         if !n.id.is_empty()
-            && matches!(n.component.as_str(), "select" | "slider" | "toggle" | "pill_toggle" | "button")
+            && matches!(
+                n.component.as_str(),
+                "select" | "slider" | "toggle" | "pill_toggle" | "button"
+            )
         {
             n.tab_group = group.to_string();
             n.nav_ordinal = *next;
@@ -2660,7 +3078,10 @@ fn resolution_options(list: &[display::Resolution]) -> Vec<UiNode> {
         .map(|(i, r)| {
             let mut n = kind("option");
             n.props.insert("value".to_string(), Value::Number(i as f64));
-            n.props.insert("label".to_string(), Value::Text(format!("{} \u{00d7} {}", r.w, r.h)));
+            n.props.insert(
+                "label".to_string(),
+                Value::Text(format!("{} \u{00d7} {}", r.w, r.h)),
+            );
             n
         })
         .collect()
@@ -2670,8 +3091,15 @@ fn settings_tree(resolutions: &[display::Resolution]) -> UiNode {
     let fallback = || {
         // Even the degenerate no-scene root keeps its S9 input declaration so Esc → close
         // never depends on layout (the screen IS the declaration).
-        let mut n = UiNode { component: "screen".to_string(), id: "settings".to_string(), ..Default::default() };
-        n.props.insert("on_cancel".to_string(), Value::Text("settings_close".to_string()));
+        let mut n = UiNode {
+            component: "screen".to_string(),
+            id: "settings".to_string(),
+            ..Default::default()
+        };
+        n.props.insert(
+            "on_cancel".to_string(),
+            Value::Text("settings_close".to_string()),
+        );
         n
     };
     let def: serde_json::Value = match serde_json::from_str(SETTINGS_SCENE_JSON) {
@@ -2709,7 +3137,9 @@ fn settings_tree(resolutions: &[display::Resolution]) -> UiNode {
         number_steppables(&mut nodes, "settings_rows", &mut ord);
         match find_by_id_mut(&mut tree, id) {
             Some(container) => container.children = nodes,
-            None => tracing::error!("settings fill container `{id}` missing from settings.scene.json"),
+            None => {
+                tracing::error!("settings fill container `{id}` missing from settings.scene.json")
+            }
         }
     }
     // The resolution select's options are DEVICE-enumerated (per-monitor), so they are
@@ -2728,7 +3158,10 @@ impl UnifiedSettingsScene {
         let resolutions = display::enumerate(&renderer.video_mode_sizes());
         let entries = theme.lua_textures();
         let textures: Vec<TextureHandle> = entries.iter().map(|(_, h)| *h).collect();
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
+        let styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        );
         // The `settings.lua` host is HELD (`script` field) only for its per-frame
         // `derive()` — the untrusted, end-user-editable Lua composes NO structure (the
         // layout is the static scene; the client is in the enemy's hands; security). Its
@@ -2795,7 +3228,10 @@ impl UnifiedSettingsScene {
     /// The active sub-tab's position in [`INPUT_SUBTABS`] — what the `input_subtab`
     /// strip binds to.
     fn subtab_index(&self) -> usize {
-        INPUT_SUBTABS.iter().position(|s| *s == self.input_subtab).unwrap_or(0)
+        INPUT_SUBTABS
+            .iter()
+            .position(|s| *s == self.input_subtab)
+            .unwrap_or(0)
     }
 
     /// The active controller profile's position in the published `PROFILES` list —
@@ -2843,7 +3279,10 @@ impl UnifiedSettingsScene {
         // ── wired VIDEO (display mode + resolution ride the live DisplaySetting) ──
         let disp = display::current();
         m.set("video_display_mode", display::mode_index(disp.mode) as f64);
-        m.set("video_resolution", display::resolution_index(&self.resolutions, disp.res) as f64);
+        m.set(
+            "video_resolution",
+            display::resolution_index(&self.resolutions, disp.res) as f64,
+        );
         m.set("video_quality", self.settings.video.quality as f64);
         m.set("video_vsync", self.settings.video.vsync);
         m.set("video_fps_limit", self.settings.video.fps_limit as f64);
@@ -2902,7 +3341,8 @@ impl UnifiedSettingsScene {
             // BEFORE `save` — the single writer — so a rebind survives relaunch (the
             // spec §7.2 fix). The keyboard tab edits `self.input_map` (the World map);
             // the profile's other contexts (TextEntry / Menu) carry through unchanged.
-            gs.input_profile.set_context_map("World", self.input_map.clone());
+            gs.input_profile
+                .set_context_map("World", self.input_map.clone());
             gs.save();
         }
         set_pending_input(
@@ -2983,16 +3423,22 @@ impl Scene for UnifiedSettingsScene {
         Some(InputContext::Menu)
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         let Some(tree) = self.tree.as_ref() else {
             return Transition::Pop;
         };
 
         let size = renderer.size();
         self.applied = (self.applied - dt.as_secs_f32()).max(0.0); // decay the flash
-        // Raw Esc edge for the REBIND branch only (capture polls raw keys by
-        // design). Every other Esc path rides the mini-bus below as `Cancel` →
-        // the declared `settings_close` intent.
+                                                                   // Raw Esc edge for the REBIND branch only (capture polls raw keys by
+                                                                   // design). Every other Esc path rides the mini-bus below as `Cancel` →
+                                                                   // the declared `settings_close` intent.
         let esc_down = input.key_down(Key::Escape);
         let rebind_esc_edge = esc_down && !self.rebind_esc_prev;
         self.rebind_esc_prev = esc_down;
@@ -3046,8 +3492,9 @@ impl Scene for UnifiedSettingsScene {
         //    `on_cancel = "settings_close"` into a fired result name. Runs even while a
         //    rebind captures (the walker still draws), but the rebind branch below returns
         //    before the results ladder, so a fired name is simply dropped for that frame. ──
-        let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, hud_hit).with_nav(tree, &model).with_intents(&self.intents);
+        let mut walker = WalkerHandler::hud(&mut self.ui_state, hud_hit)
+            .with_nav(tree, &model)
+            .with_intents(&self.intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(signals.events, &mut chain, signals.route);
@@ -3116,7 +3563,9 @@ impl Scene for UnifiedSettingsScene {
             }
         }
         // Both strips report an INDEX; the scene maps it back to the name it stands for.
-        if let Some(name) = results.number("input_subtab").and_then(|i| INPUT_SUBTABS.get(i as usize))
+        if let Some(name) = results
+            .number("input_subtab")
+            .and_then(|i| INPUT_SUBTABS.get(i as usize))
         {
             if *name != self.input_subtab {
                 self.surfaces.set_exclusive(&format!("sub_{name}"));
@@ -3124,8 +3573,9 @@ impl Scene for UnifiedSettingsScene {
                 self.scroll_off = 0.0;
             }
         }
-        if let Some((name, _)) =
-            results.number("ctrl_profile").and_then(|i| InputProfile::PRESET_NAMES.get(i as usize))
+        if let Some((name, _)) = results
+            .number("ctrl_profile")
+            .and_then(|i| InputProfile::PRESET_NAMES.get(i as usize))
         {
             self.ctrl_profile = name.to_string();
         }
@@ -3174,9 +3624,12 @@ impl Scene for UnifiedSettingsScene {
         if let Some(idx) = results.number("video_resolution") {
             if let Some(res) = display::resolution_at(&self.resolutions, idx as usize) {
                 if res != display::current().res {
-                    if let Some(prev) = apply_display_change(DisplayChange::Resolution(res), renderer)
+                    if let Some(prev) =
+                        apply_display_change(DisplayChange::Resolution(res), renderer)
                     {
-                        return Transition::Push(Box::new(ConfirmDisplayScene::new(self.theme, prev)));
+                        return Transition::Push(Box::new(ConfirmDisplayScene::new(
+                            self.theme, prev,
+                        )));
                     }
                 }
             }
@@ -3218,10 +3671,13 @@ impl Scene for UnifiedSettingsScene {
         }
 
         // ── Start rebind (a keycap button fires `rebind_<signal>`) — the SAME derived
-        //    Player set the page's keycaps come from, so every keycap has a live handler ──
+        //    Player set the page's keycaps come from, so every keycap has a live handler.
+        //    The live snapshot seeds the capture's edge baseline, so the very click /
+        //    Confirm press that fired this action is prior state, never the captured
+        //    binding (the settings self-capture bug, MCP 49DE0F2C). ──
         for action in ActionSignal::rebindable() {
             if results.is_on(&format!("rebind_{}", action.name())) {
-                self.rebind.start(action, false);
+                self.rebind.start(action, false, input);
                 break;
             }
         }
@@ -3265,7 +3721,11 @@ impl PauseScene {
         _gamepad_config: &GamepadConfig,
     ) -> Self {
         Self {
-            view: MenuView::new(&theme, "pause", &MenuPage::default(), &pause_items(), &[]),
+            view: MenuView::from_tree(
+                &theme,
+                parse_shared_modal(PAUSE_SCENE_JSON, "pause", Some("resume")),
+                shared_modal_script(PAUSE_SCRIPT, "pause.lua"),
+            ),
             theme,
             bindings: input_map.clone(),
         }
@@ -3284,7 +3744,13 @@ impl Scene for PauseScene {
         Some(InputContext::Menu)
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        _dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         // ── Modal buttons: Resume, or Esc/pad-B via the declared `on_cancel = "resume"`
         //    (both fold into `results` as the same `resume` name). ──
         let actions = self.view.update(signals, input, renderer, &ValueMap::new());
@@ -3307,7 +3773,10 @@ impl Scene for PauseScene {
             // `Goto{ReplaceRoot}` resolves "Main" through the shared registry
             // (`build_menu` → `MainMenuScene`), so boot and return are identical. The
             // Stage-B cutover (MCP 5099BC88); the legacy `MenuScene` is now deleted (task #6).
-            return Transition::Goto { id: "Main".into(), mode: GotoMode::ReplaceRoot };
+            return Transition::Goto {
+                id: "Main".into(),
+                mode: GotoMode::ReplaceRoot,
+            };
         }
         if actions.is_on("quit") {
             return Transition::Quit;
@@ -3354,14 +3823,23 @@ mod script_smoke {
                 m.set(s, true);
             }
             host.set_model(&m).expect("model publishes to menu.lua");
-            host.arrange().expect("arrange runs").expect("arrange is present").to_model()
+            host.arrange()
+                .expect("arrange runs")
+                .expect("arrange is present")
+                .to_model()
         };
 
         // Resting state = the landing page (0): its slice is lit, the realms dark.
         let root = arrange_with(None);
-        assert!(root.is_on("shown_realm_0"), "the landing page (0) is lit at rest");
+        assert!(
+            root.is_on("shown_realm_0"),
+            "the landing page (0) is lit at rest"
+        );
         for n in 1..=4 {
-            assert!(!root.is_on(&format!("shown_realm_{n}")), "no realm lit at rest: {n}");
+            assert!(
+                !root.is_on(&format!("shown_realm_{n}")),
+                "no realm lit at rest: {n}"
+            );
         }
 
         // A realm button press mirrors `sig_mode_<realm>` for one frame → the page
@@ -3375,13 +3853,18 @@ mod script_smoke {
         // Persistence: the transient mirror is gone this frame, but the latched page
         // holds — the selection does not blink off when the one-frame sig drops.
         let held = arrange_with(None);
-        assert!(held.is_on("shown_realm_1"), "the page persists after the mirror drops");
+        assert!(
+            held.is_on("shown_realm_1"),
+            "the page persists after the mirror drops"
+        );
 
         // Switching realms moves the lit slice, and only ever one is lit.
         let dev = arrange_with(Some("sig_mode_developer"));
         assert!(dev.is_on("shown_realm_4"), "developer lights realm 4");
         assert!(!dev.is_on("shown_realm_1"), "the previous realm darkens");
-        let lit = (0..=4).filter(|n| dev.is_on(&format!("shown_realm_{n}"))).count();
+        let lit = (0..=4)
+            .filter(|n| dev.is_on(&format!("shown_realm_{n}")))
+            .count();
         assert_eq!(lit, 1, "exactly one page slice is ever lit");
     }
 
@@ -3420,15 +3903,31 @@ mod script_smoke {
             .filter(|n| n.component == "button")
             .filter_map(|n| n.action.as_deref())
             .collect();
-        for a in ["mode_adventurer", "mode_dm", "mode_gamemaster", "mode_developer", "settings", "quit"] {
-            assert!(actions.contains(&a), "the menu is missing the {a} button: {actions:?}");
+        for a in [
+            "mode_adventurer",
+            "mode_dm",
+            "mode_gamemaster",
+            "mode_developer",
+            "settings",
+            "quit",
+        ] {
+            assert!(
+                actions.contains(&a),
+                "the menu is missing the {a} button: {actions:?}"
+            );
         }
 
         // The PTT's 5 page slices, gated on the keys menu.lua's arrange() lights.
-        let gates: Vec<&str> = nodes.iter().filter_map(|n| n.visible_bind.as_deref()).collect();
+        let gates: Vec<&str> = nodes
+            .iter()
+            .filter_map(|n| n.visible_bind.as_deref())
+            .collect();
         for n in 0..=4 {
             let key = format!("shown_realm_{n}");
-            assert!(gates.contains(&key.as_str()), "missing PTT gate {key}: {gates:?}");
+            assert!(
+                gates.contains(&key.as_str()),
+                "missing PTT gate {key}: {gates:?}"
+            );
         }
     }
 
@@ -3445,14 +3944,20 @@ mod script_smoke {
         // One Adventurer-realm scene (a realm + `SceneInfo` → it becomes a
         // `scene_list_1` row with a LOAD button whose id/action is the scene id). The
         // factory is never called here — `main_menu_tree` reads metadata only.
-        let scenes = vec![SceneEntry::new(
-            "solarbirth",
-            "Solar Birth",
-            "primary",
-            |_: &SceneDef| Box::new(MainMenuScene::new()) as Box<dyn Scene>,
-        )
-        .with_realm(REALM_ADVENTURER)
-        .with_info(SceneInfo::new("Solar Birth", "Cinematic", "Celestial", "d", "m"))];
+        let scenes =
+            vec![
+                SceneEntry::new("solarbirth", "Solar Birth", "primary", |_: &SceneDef| {
+                    Box::new(MainMenuScene::new()) as Box<dyn Scene>
+                })
+                .with_realm(REALM_ADVENTURER)
+                .with_info(SceneInfo::new(
+                    "Solar Birth",
+                    "Cinematic",
+                    "Celestial",
+                    "d",
+                    "m",
+                )),
+            ];
         let tree = main_menu_tree(&scenes, None);
 
         // Adventurer is page 1 (`main_menu_tree`'s realm→n map). With `shown_realm_1`
@@ -3460,14 +3965,18 @@ mod script_smoke {
         // the pad can reach it, byte-identical to what the mouse hit-tests.
         let shown = ValueMap::new().with("shown_realm_1", true);
         assert!(
-            focusables_of(&tree, &shown).iter().any(|f| f.id == "solarbirth"),
+            focusables_of(&tree, &shown)
+                .iter()
+                .any(|f| f.id == "solarbirth"),
             "the scene LOAD button is pad-navigable when its realm slice is shown"
         );
         // …and at the landing page (no realm lit) the hidden slice stays OUT of the nav
         // ring — the exact discrepancy B514A222 rode: a slice `run_ui` would not draw
         // must not put a focusable in the pad's path.
         assert!(
-            !focusables_of(&tree, &ValueMap::new()).iter().any(|f| f.id == "solarbirth"),
+            !focusables_of(&tree, &ValueMap::new())
+                .iter()
+                .any(|f| f.id == "solarbirth"),
             "the hidden realm slice's LOAD button is pruned from nav under the bare model"
         );
     }
@@ -3494,7 +4003,10 @@ mod script_smoke {
             return M
         "#;
         let host = ScriptHost::new(SCREEN, "s1-screen").expect("screen loads");
-        let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
+        let tree = host
+            .ui_tree()
+            .expect("tree parses")
+            .expect("screen has a tree");
         let styles = flicker::ui::load_styles_str(
             r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1], "radius": 4,
                  "label": [0.9, 0.9, 0.85, 1], "label_size": 14 } }"#,
@@ -3508,20 +4020,40 @@ mod script_smoke {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui(&tree, &ValueMap::new(), &styles, &input, &mut UiState::new());
+        let frame = run_ui(
+            &tree,
+            &ValueMap::new(),
+            &styles,
+            &input,
+            &mut UiState::new(),
+        );
 
-        let panels: Vec<_> =
-            frame.commands.iter().filter(|c| matches!(c, HudCommand::Panel { .. })).collect();
-        let texts = frame.commands.iter().filter(|c| matches!(c, HudCommand::Text { .. })).count();
+        let panels: Vec<_> = frame
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Panel { .. }))
+            .collect();
+        let texts = frame
+            .commands
+            .iter()
+            .filter(|c| matches!(c, HudCommand::Text { .. }))
+            .count();
         assert_eq!(panels.len(), 1, "the button drew its slab");
         assert_eq!(texts, 1, "the button drew its label");
         assert!(
-            frame.commands.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == "OK")),
+            frame
+                .commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "OK")),
             "the button's top-level `label` prop reached the draw"
         );
         // Column pad 8 in a 200×60 screen → the button's flow rect is (8, 8, 184, 44).
         if let HudCommand::Panel { x, y, w, h, .. } = panels[0] {
-            assert_eq!((*x, *y, *w, *h), (8.0, 8.0, 184.0, 44.0), "layout engine placed the leaf");
+            assert_eq!(
+                (*x, *y, *w, *h),
+                (8.0, 8.0, 184.0, 44.0),
+                "layout engine placed the leaf"
+            );
         }
     }
 
@@ -3544,7 +4076,10 @@ mod script_smoke {
             return M
         "#;
         let host = ScriptHost::new(SCREEN, "glow-screen").expect("screen loads");
-        let tree = host.ui_tree().expect("tree parses").expect("screen has a tree");
+        let tree = host
+            .ui_tree()
+            .expect("tree parses")
+            .expect("screen has a tree");
         let styles = flicker::ui::load_styles_str(
             r#"{ "btn": { "fill_top": [0.14, 0.25, 0.47, 1.0], "fill_bot": [0.10, 0.18, 0.34, 1.0],
                  "glow": [0.20, 0.40, 0.80, 0.5], "label": [0.86, 0.90, 1.0, 1.0],
@@ -3569,30 +4104,69 @@ mod script_smoke {
                 .filter(|c| matches!(c, HudCommand::Panel { .. }))
                 .count()
         };
-        assert_eq!(panels_at(Vec2::new(-9.0, -9.0)), 1, "idle button: just the slab");
-        assert_eq!(panels_at(Vec2::new(100.0, 30.0)), 2, "hovered button: glow halo + slab");
+        assert_eq!(
+            panels_at(Vec2::new(-9.0, -9.0)),
+            1,
+            "idle button: just the slab"
+        );
+        assert_eq!(
+            panels_at(Vec2::new(100.0, 30.0)),
+            2,
+            "hovered button: glow halo + slab"
+        );
     }
 
     #[test]
-    fn menu_tree_runs_every_screen() {
-        // The shared `menu.lua` builds a component tree per screen from the published
-        // `MENU` items; the Rust walker draws it. Proves the data-driven button list
-        // AND the Rust↔Lua contract for all three shell screens at build time.
+    fn shared_modals_render_and_draw_their_buttons() {
+        // The SHARED modal trees (`scenes/shared/pause|confirm.scene.json`) parse and DRAW:
+        // the Rust walker renders the popup_panel chrome + every authored button, resolving
+        // the shell-furniture styles (`modal`/`screens.*` from Main's carrier). Proves the
+        // migrated files render at build time — the runtime path PauseScene/ConfirmDisplayScene
+        // walk. Button labels are read back FROM the parsed tree, so the file is the one source.
         use flicker::render::Vec2;
         use flicker::script::HudCommand;
 
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
-        let cases: [(&str, Vec<MenuItem>); 2] = [
-            ("pause", pause_items()),
-            ("confirm", confirm_items()),
-        ];
-        for (screen, items) in cases {
-            // The shell builds each screen from static templates, emitting the button
-            // list as instances — the exact path `MenuView` caches (muse-free here).
-            let tree = menu_tree(screen, &MenuPage::default(), &items, &[], None);
-            // The countdown subtitle, composed around its token exactly as the scene does.
-            let model = ValueMap::new()
-                .with("subtitle", format!("{} 9s", flicker::ui::strings::resolve("$menu_reverting_in")));
+        fn button_labels(node: &UiNode, out: &mut Vec<String>) {
+            if node.component == "button" {
+                if let Some(Value::Text(l)) = node.props.get("label") {
+                    out.push(l.clone());
+                }
+            }
+            for c in &node.children {
+                button_labels(c, out);
+            }
+        }
+
+        let styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        );
+        for (screen, json, script) in [
+            ("pause", PAUSE_SCENE_JSON, PAUSE_SCRIPT),
+            ("confirm", CONFIRM_SCENE_JSON, CONFIRM_SCRIPT),
+        ] {
+            // The real production parse path (`PauseScene`/`ConfirmDisplayScene` load this).
+            let tree = parse_shared_modal(json, screen, None);
+            let mut labels = Vec::new();
+            button_labels(&tree, &mut labels);
+            assert!(
+                !labels.is_empty(),
+                "shared modal '{screen}' authors its buttons"
+            );
+            // The countdown subtitle, composed around its token exactly as the scene does —
+            // PLUS the pair script's default `arrange()` gates. The optional buttons are
+            // `visible_bind`-gated now, so the render folds the slices exactly as MenuView does
+            // live; without them a gated button correctly would not draw.
+            let mut model = ValueMap::new();
+            model.set(
+                "subtitle",
+                format!("{} 9s", flicker::ui::strings::resolve("$menu_reverting_in")),
+            );
+            let host =
+                ScriptHost::new(script, &format!("{screen}.lua")).expect("pair script loads");
+            if let Some(a) = host.arrange().expect("arrange runs") {
+                model.extend(a.to_model());
+            }
             let snap = UiInput {
                 mouse: Vec2::new(-1.0, -1.0),
                 clicked: false,
@@ -3602,29 +4176,30 @@ mod script_smoke {
                 backspace: false,
                 wheel: 0.0,
             };
-            let frame =
-                run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+            let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
             assert!(
                 !frame.commands.is_empty(),
-                "menu screen '{screen}' emits panel + buttons + text"
+                "shared modal '{screen}' emits panel + buttons + text"
             );
-            // Every published item's label renders as a button text command — the
-            // data-driven list actually produced its buttons. Labels are stringtable
-            // tokens now, so what reaches a command is the RESOLVED text.
-            for it in &items {
-                let want = flicker::ui::strings::resolve(&it.label);
+            // Every authored button's label renders as a text command — the tree actually
+            // produced its buttons. Labels are stringtable tokens, so the RESOLVED text lands.
+            for label in &labels {
+                let want = flicker::ui::strings::resolve(label);
                 assert!(
-                    frame.commands.iter().any(
-                        |c| matches!(c, HudCommand::Text { text, .. } if *text == want)
-                    ),
-                    "screen '{screen}' renders button label '{want}'"
+                    frame
+                        .commands
+                        .iter()
+                        .any(|c| matches!(c, HudCommand::Text { text, .. } if *text == want)),
+                    "shared modal '{screen}' renders button label '{want}'"
                 );
             }
-            // The confirm modal's countdown is a LIVE bind the popup_panel chrome
-            // draws (`subtitle_bind` → `subtitle_live`); the model's current text
-            // must reach a command verbatim-resolved.
+            // The confirm modal's countdown is a LIVE bind the popup_panel chrome draws
+            // (`subtitle_bind` → `subtitle_live`); the model's current text reaches a command.
             if screen == "confirm" {
-                let want = model.text("subtitle").expect("countdown published").to_string();
+                let want = model
+                    .text("subtitle")
+                    .expect("countdown published")
+                    .to_string();
                 assert!(
                     frame
                         .commands
@@ -3645,12 +4220,15 @@ mod script_smoke {
     #[test]
     fn splash_pair_scripts_configure_the_splash() {
         let m = manifest();
-        for (id, next) in [("TegLogo", "CeLogo"), ("CeLogo", "Main")] {
+        for (id, next) in [("TegLogo", "CeLogo"), ("CeLogo", "Loading")] {
             let (src, name) = splash_script(id);
             let host = ScriptHost::new(src, name).expect("the pair script loads");
 
             // arrange(): the splash entry carries the component's configuration.
-            let a = host.arrange().expect("arrange() runs").expect("arrange() is exposed");
+            let a = host
+                .arrange()
+                .expect("arrange() runs")
+                .expect("arrange() is exposed");
             let splash = a
                 .components
                 .get("splash")
@@ -3678,15 +4256,23 @@ mod script_smoke {
                 .react(&ValueMap::new().with(SIG_DONE, true))
                 .expect("react() runs")
                 .expect("react() is exposed");
-            assert!(advance.is_on(SPLASH_NEXT), "'{id}': `{SIG_DONE}` yields `{SPLASH_NEXT}`");
+            assert!(
+                advance.is_on(SPLASH_NEXT),
+                "'{id}': `{SIG_DONE}` yields `{SPLASH_NEXT}`"
+            );
             let back = host
                 .react(&ValueMap::new().with(SIG_CANCEL, true))
                 .expect("react() runs")
                 .expect("react() is exposed");
-            assert!(back.is_on(SPLASH_EXIT), "'{id}': `{SIG_CANCEL}` yields `{SPLASH_EXIT}`");
+            assert!(
+                back.is_on(SPLASH_EXIT),
+                "'{id}': `{SIG_CANCEL}` yields `{SPLASH_EXIT}`"
+            );
 
             // The FILE routes both intents, to authored scenes.
-            let def = m.get(id).unwrap_or_else(|| panic!("'{id}' ships a scene file"));
+            let def = m
+                .get(id)
+                .unwrap_or_else(|| panic!("'{id}' ships a scene file"));
             assert_eq!(
                 goto_target(def.exit(SPLASH_NEXT)),
                 Some((next.to_string(), GotoMode::Replace)),
@@ -3703,6 +4289,89 @@ mod script_smoke {
         }
     }
 
+    /// The pre-load screen's pair script is a module like every other: `derive()`
+    /// turns the engine's `loading_progress` into the percent readout the bar's
+    /// label binds, and `react()` maps the timeline completing to `next` and a
+    /// back-out to `exit` while REFUSING to let a Confirm skip a load in progress.
+    /// Its FILE routes both intents to authored scenes.
+    #[test]
+    fn loading_pair_script_derives_percent_and_routes() {
+        let host = ScriptHost::new(LOADING_SCRIPT, "Loading.lua").expect("the pair script loads");
+
+        // derive(): loading_progress (0..1) → the human percent, composed in Lua.
+        for (p, pct) in [(0.0_f64, "0%"), (0.42, "42%"), (1.0, "100%")] {
+            host.set_model(&ValueMap::new().with("loading_progress", p))
+                .expect("model publishes");
+            let d = host
+                .derive()
+                .expect("derive() runs")
+                .expect("derive() is exposed");
+            assert_eq!(d.text("progress_pct"), Some(pct), "{p} reads as {pct}");
+        }
+
+        // react(): the timeline completing advances, Cancel backs out, a Confirm is
+        // ignored (a load must not be click-skipped — the whole point of the notice).
+        let done = host
+            .react(&ValueMap::new().with(SIG_DONE, true))
+            .expect("react() runs")
+            .expect("react() is exposed");
+        assert!(
+            done.is_on(SPLASH_NEXT),
+            "`{SIG_DONE}` yields `{SPLASH_NEXT}`"
+        );
+        let back = host
+            .react(&ValueMap::new().with(SIG_CANCEL, true))
+            .expect("react() runs")
+            .expect("react() is exposed");
+        assert!(
+            back.is_on(SPLASH_EXIT),
+            "`{SIG_CANCEL}` yields `{SPLASH_EXIT}`"
+        );
+        let skipped = host
+            .react(&ValueMap::new().with(SIG_CONFIRM, true))
+            .expect("react() runs")
+            .is_some_and(|m| m.is_on(SPLASH_NEXT) || m.is_on(SPLASH_EXIT));
+        assert!(!skipped, "a Confirm mid-load names no intent");
+
+        // The FILE routes both intents, to authored scenes.
+        let m = manifest();
+        let def = m.get("Loading").expect("Loading ships a scene file");
+        for intent in [SPLASH_NEXT, SPLASH_EXIT] {
+            let (target, _) = goto_target(def.exit(intent))
+                .unwrap_or_else(|| panic!("Loading routes `{intent}` in its file"));
+            assert!(
+                m.get(&target).is_some(),
+                "Loading routes `{intent}` to '{target}', which is an authored scene"
+            );
+        }
+    }
+
+    /// The pre-load screen sits BETWEEN the engine logo and the menu: CeLogo now
+    /// advances to Loading, and Loading advances to Main. Proven off the DATA so a
+    /// re-order is a file edit — the `loading` behaviour resolves by id like the rest.
+    #[test]
+    fn loading_is_page_three_of_the_intro_chain() {
+        let m = manifest();
+        assert_eq!(
+            goto_target(m.get("CeLogo").expect("CeLogo ships").exit(SPLASH_NEXT)),
+            Some(("Loading".to_string(), GotoMode::Replace)),
+            "the engine splash advances to the pre-load screen"
+        );
+        assert_eq!(
+            goto_target(m.get("Loading").expect("Loading ships").exit(SPLASH_NEXT)),
+            Some(("Main".to_string(), GotoMode::Replace)),
+            "the pre-load screen advances to the menu"
+        );
+        assert!(
+            builtin_behaviours().contains(&"loading"),
+            "`loading` is a shell builtin behaviour"
+        );
+        assert!(
+            resolve_shell_scene("Loading").is_some(),
+            "Loading resolves by id"
+        );
+    }
+
     /// The boot chain is reachable BY ID, end to end — the whole point of the roster.
     ///
     /// Resolving each id proves the chain exists as data rather than as constructor
@@ -3713,11 +4382,21 @@ mod script_smoke {
     fn the_default_scene_chain_resolves_by_id() {
         // The ids are the scene FILE names (minus `.scene.json`), and the boot scene
         // is whichever file claimed `boot` — never a constant in this code.
-        assert_eq!(manifest().boot(), "TegLogo", "the boot scene is authored, not compiled in");
-        for id in ["TegLogo", "CeLogo", "Main"] {
-            assert!(resolve_shell_scene(id).is_some(), "'{id}' is in the shell roster");
+        assert_eq!(
+            manifest().boot(),
+            "TegLogo",
+            "the boot scene is authored, not compiled in"
+        );
+        for id in ["TegLogo", "CeLogo", "Loading", "Main"] {
+            assert!(
+                resolve_shell_scene(id).is_some(),
+                "'{id}' is in the shell roster"
+            );
         }
-        assert!(resolve_shell_scene("no_such_scene").is_none(), "an unknown id resolves to None");
+        assert!(
+            resolve_shell_scene("no_such_scene").is_none(),
+            "an unknown id resolves to None"
+        );
     }
 
     /// Client-registered entries resolve on BOTH paths: an AUTHORED bench file builds
@@ -3766,6 +4445,35 @@ mod script_smoke {
     /// its target rewritten, and the resolved successor moves with it. If the chain
     /// were still compiled in — as `LogoScene { next: "ce_logo" }` was — editing the
     /// file could not change anything and this test would fail.
+    /// REGRESSION (blank logos, 2026-08-17): the splash node is a `sprite` located by its
+    /// stable id "splash" — the `splash` component was folded into `sprite`, so keying
+    /// `find_splash` on the retired `"splash"` kind returned None and `enter()` never read the
+    /// `image` prop nor set `tex`. Pins that every shipped splash (and the synthesized fallback)
+    /// exposes a findable sprite logo node.
+    #[test]
+    fn find_splash_locates_the_sprite_logo_node() {
+        for id in ["TegLogo", "CeLogo"] {
+            let path = scenes_dir().join(format!("{id}{}", flicker::ui::SCENE_FILE_SUFFIX));
+            let shipped = std::fs::read_to_string(&path).expect("the splash ships a file");
+            let def = SceneDef::parse(id, &shipped).expect("splash scene parses");
+            let tree = def.tree.expect("the splash authors a tree");
+            let node = find_splash(&tree)
+                .unwrap_or_else(|| panic!("{id}: find_splash locates the logo node"));
+            assert_eq!(
+                node.component, "sprite",
+                "{id}: the logo node is a sprite (splash folded in)"
+            );
+            assert_eq!(node.id, "splash");
+        }
+        // A file-less splash's synthesized node is a findable sprite too.
+        assert_eq!(
+            find_splash(&synthesized_splash_tree())
+                .expect("synthesized node findable")
+                .component,
+            "sprite",
+        );
+    }
+
     #[test]
     fn a_splash_exit_comes_from_its_file() {
         let path = scenes_dir().join(format!("TegLogo{}", flicker::ui::SCENE_FILE_SUFFIX));
@@ -3802,7 +4510,10 @@ mod script_smoke {
         // The manifest indexed the real folder — so this walks what SHIPS, and every
         // assertion runs the actual runtime resolver, not a test stand-in.
         let m = manifest();
-        assert!(m.len() >= 3, "the shell ships at least the two splashes and the menu");
+        assert!(
+            m.len() >= 3,
+            "the shell ships at least the two splashes and the menu"
+        );
         for def in m.scenes() {
             for (result, target) in def.targets() {
                 assert!(
@@ -3838,7 +4549,9 @@ mod script_smoke {
     #[test]
     fn the_tree_json_form_is_dead() {
         fn scan(dir: &std::path::Path, hits: &mut Vec<String>) {
-            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if p.is_dir() {
@@ -3854,7 +4567,10 @@ mod script_smoke {
         }
         let mut hits = Vec::new();
         scan(&flicker_content::roots().sensorium(), &mut hits);
-        assert!(hits.is_empty(), "the .tree.json form is dead (1F151933); found: {hits:?}");
+        assert!(
+            hits.is_empty(),
+            "the .tree.json form is dead (1F151933); found: {hits:?}"
+        );
     }
 
     /// Both splashes must declare BOTH intents their behaviour fires. Without
@@ -3865,7 +4581,9 @@ mod script_smoke {
     fn both_splashes_declare_next_and_exit() {
         let m = manifest();
         for id in ["TegLogo", "CeLogo"] {
-            let def = m.get(id).unwrap_or_else(|| panic!("'{id}' ships a scene file"));
+            let def = m
+                .get(id)
+                .unwrap_or_else(|| panic!("'{id}' ships a scene file"));
             for intent in [SPLASH_NEXT, SPLASH_EXIT] {
                 assert!(
                     def.exit(intent).is_some(),
@@ -3888,7 +4606,10 @@ mod script_smoke {
         // The screen's display copy is `$token`s now (S10 strings gate); load the
         // shipped table so the walked commands carry the resolved en-us text.
         flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
+        let styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        );
         // The layout is the STATIC scene filled by hardened Rust rows — the PRODUCTION tree
         // ([`settings_tree`]); the untrusted Lua composes no structure. Its `derive()` still
         // drives the section / sub-tab VISIBILITY, so hold a host to fold it in like `update`.
@@ -3902,9 +4623,15 @@ mod script_smoke {
         // come from the Lua derive fold, not from a hand-set model.
         let model = |section: &str, subtab: &str| {
             let mut m = ValueMap::new();
-            let sec_idx = ["video", "audio", "input"].iter().position(|s| *s == section).unwrap_or(0);
+            let sec_idx = ["video", "audio", "input"]
+                .iter()
+                .position(|s| *s == section)
+                .unwrap_or(0);
             m.set("settings_page", sec_idx as f64);
-            m.set("input_subtab", INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64);
+            m.set(
+                "input_subtab",
+                INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64,
+            );
             m.set("ctrl_profile", 0.0);
             m.set("scroll_off", 0.0);
             m.set("off", false);
@@ -3937,11 +4664,18 @@ mod script_smoke {
             wheel: 0.0,
         };
         let has = |cmds: &[HudCommand], s: &str| {
-            cmds.iter().any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
+            cmds.iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == s))
         };
         let run = |section: &str, subtab: &str| {
-            run_ui(&tree, &model(section, subtab), &styles, &snap, &mut UiState::new())
-                .commands
+            run_ui(
+                &tree,
+                &model(section, subtab),
+                &styles,
+                &snap,
+                &mut UiState::new(),
+            )
+            .commands
         };
 
         let video = run("video", "keyboard");
@@ -3949,16 +4683,31 @@ mod script_smoke {
         assert!(has(&video, "ᛞ"), "window rune corners render");
         // The vertical page rail draws all three section labels on every page (it IS the
         // section indicator now), and the active video section's own rows render below.
-        assert!(has(&video, "VIDEO") && has(&video, "INPUT"), "page rail shows the section labels");
+        assert!(
+            has(&video, "VIDEO") && has(&video, "INPUT"),
+            "page rail shows the section labels"
+        );
         assert!(has(&video, "Display Mode"), "video section rows");
-        assert!(has(&run("audio", "keyboard"), "NOT YET IMPLEMENTED"), "audio stub");
-        assert!(has(&run("input", "keyboard"), "MOVEMENT"), "input keyboard groups");
-        assert!(has(&run("input", "mouse"), "Look Sensitivity"), "input mouse rows");
+        assert!(
+            has(&run("audio", "keyboard"), "NOT YET IMPLEMENTED"),
+            "audio stub"
+        );
+        assert!(
+            has(&run("input", "keyboard"), "MOVEMENT"),
+            "input keyboard groups"
+        );
+        assert!(
+            has(&run("input", "mouse"), "Look Sensitivity"),
+            "input mouse rows"
+        );
         // Controller tab is a data-driven CONTROLLER-config selector (§7.3): the notes copy
         // renders, and the active controller config (`PRESET_NAMES[0]` = `xbox_souls`) shows
         // its label — proving the selector options came from the profile roster.
         let controller = run("input", "controller");
-        assert!(has(&controller, "Choose a control profile"), "controller notes render");
+        assert!(
+            has(&controller, "Choose a control profile"),
+            "controller notes render"
+        );
         assert!(
             has(&controller, "Default (Xbox)"),
             "selector shows the roster label for the default controller config"
@@ -3977,9 +4726,15 @@ mod script_smoke {
         let host = ScriptHost::new(SETTINGS_SCRIPT, "settings.lua").expect("load settings.lua");
         let model = |section: &str, subtab: &str| {
             let mut m = ValueMap::new();
-            let sec = ["video", "audio", "input"].iter().position(|s| *s == section).unwrap_or(0);
+            let sec = ["video", "audio", "input"]
+                .iter()
+                .position(|s| *s == section)
+                .unwrap_or(0);
             m.set("settings_page", sec as f64);
-            m.set("input_subtab", INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64);
+            m.set(
+                "input_subtab",
+                INPUT_SUBTABS.iter().position(|s| *s == subtab).unwrap_or(0) as f64,
+            );
             m.set("off", false);
             host.set_model(&m).expect("publish settings model");
             if let Some(derived) = host.derive().expect("settings derive()") {
@@ -3994,28 +4749,48 @@ mod script_smoke {
         // sections; the rails are absent; one flat group; the footer follows the keycaps.
         let kb = flicker::ui::focusables_of(&tree, &model("input", "keyboard"));
         let ids: Vec<&str> = kb.iter().map(|f| f.id.as_str()).collect();
-        assert!(ids.contains(&"kc_MoveForward") && ids.contains(&"kc_Quit"), "keycaps are focusable");
+        assert!(
+            ids.contains(&"kc_MoveForward") && ids.contains(&"kc_Quit"),
+            "keycaps are focusable"
+        );
         assert!(
             ids.contains(&"restore") && ids.contains(&"apply") && ids.contains(&"save_close"),
             "the footer is in the ring",
         );
-        assert!(!ids.iter().any(|id| id.starts_with("c_m_")), "mouse controls pruned off the keyboard sub-tab");
+        assert!(
+            !ids.iter().any(|id| id.starts_with("c_m_")),
+            "mouse controls pruned off the keyboard sub-tab"
+        );
         assert!(
             !ids.contains(&"settings_page") && !ids.contains(&"input_subtab"),
             "the rails are NOT focusable — they are the shoulder tier",
         );
-        assert!(kb.iter().all(|f| f.group == "settings_rows"), "one flat settings group");
-        let restore = kb.iter().find(|f| f.id == "restore").expect("restore focusable");
         assert!(
-            kb.iter().filter(|f| f.id.starts_with("kc_")).all(|f| f.ordinal < restore.ordinal),
+            kb.iter().all(|f| f.group == "settings_rows"),
+            "one flat settings group"
+        );
+        let restore = kb
+            .iter()
+            .find(|f| f.id == "restore")
+            .expect("restore focusable");
+        assert!(
+            kb.iter()
+                .filter(|f| f.id.starts_with("kc_"))
+                .all(|f| f.ordinal < restore.ordinal),
             "the footer follows the rows",
         );
 
         // Video: the resolution select is focusable; no keycaps leak onto the video page.
         let vid = flicker::ui::focusables_of(&tree, &model("video", "keyboard"));
         let vids: Vec<&str> = vid.iter().map(|f| f.id.as_str()).collect();
-        assert!(vids.contains(&"c_resolution"), "the resolution select is focusable");
-        assert!(!vids.iter().any(|id| id.starts_with("kc_")), "keycaps pruned off the video page");
+        assert!(
+            vids.contains(&"c_resolution"),
+            "the resolution select is focusable"
+        );
+        assert!(
+            !vids.iter().any(|id| id.starts_with("kc_")),
+            "keycaps pruned off the video page"
+        );
     }
 
     /// The settings root declares the four rail STEP intents, so L2/R2 (pages) and L1/R1
@@ -4025,11 +4800,20 @@ mod script_smoke {
     fn the_settings_root_declares_the_rail_step_intents() {
         use flicker_input_core::ActionSignal;
         let intents = flicker::ui::UiIntents::of(&settings_tree(&display::RESOLUTIONS));
-        assert_eq!(intents.result_for(ActionSignal::PageNext), Some("page_next"));
-        assert_eq!(intents.result_for(ActionSignal::PagePrev), Some("page_prev"));
+        assert_eq!(
+            intents.result_for(ActionSignal::PageNext),
+            Some("page_next")
+        );
+        assert_eq!(
+            intents.result_for(ActionSignal::PagePrev),
+            Some("page_prev")
+        );
         assert_eq!(intents.result_for(ActionSignal::TabNext), Some("tab_next"));
         assert_eq!(intents.result_for(ActionSignal::TabPrev), Some("tab_prev"));
-        assert_eq!(intents.result_for(ActionSignal::Cancel), Some("settings_close"));
+        assert_eq!(
+            intents.result_for(ActionSignal::Cancel),
+            Some("settings_close")
+        );
     }
 
     /// **A settings dropdown pick is an INDEX, and an index is a NUMBER.** The real
@@ -4043,7 +4827,10 @@ mod script_smoke {
         use flicker::render::Vec2;
 
         flicker::ui::strings::load_str(SHELL_STRINGS_JSON, "en-us");
-        let styles = flicker::ui::load_styles_strs_for(&[SHELL_UI_JSON, SHELL_STYLE_JSON], main_scene_styles().as_ref());
+        let styles = flicker::ui::load_styles_strs_for(
+            &[SHELL_UI_JSON, SHELL_STYLE_JSON],
+            main_scene_styles().as_ref(),
+        );
         // The PRODUCTION tree: the STATIC scene filled by hardened Rust rows ([`settings_tree`]).
         // The untrusted `settings.lua` derive drives section visibility; fold it as `update` does.
         let tree = settings_tree(&display::RESOLUTIONS);
@@ -4099,7 +4886,13 @@ mod script_smoke {
 
         // Click the field to open, then the PICK-th popup row (rows start 6px under
         // the field, `settings.controls.menu.row_h` = 30 tall).
-        run_ui(&tree, &m, &styles, &at(x + w * 0.5, y + h * 0.5, true), &mut state);
+        run_ui(
+            &tree,
+            &m,
+            &styles,
+            &at(x + w * 0.5, y + h * 0.5, true),
+            &mut state,
+        );
         let row_y = y + h + 6.0 + 30.0 * PICK as f32 + 15.0;
         let f = run_ui(&tree, &m, &styles, &at(x + 20.0, row_y, true), &mut state);
 
@@ -4108,7 +4901,11 @@ mod script_smoke {
             Some(PICK as f64),
             "the picked row reports its index as a NUMBER"
         );
-        assert_eq!(f.results.text("video_resolution"), None, "…and never as text");
+        assert_eq!(
+            f.results.text("video_resolution"),
+            None,
+            "…and never as text"
+        );
         // …and that index is what moves the window: a different rung than the shown one.
         assert_ne!(
             display::resolution_at(&display::RESOLUTIONS, PICK),
@@ -4126,13 +4923,21 @@ mod script_smoke {
         let list = display::enumerate(&[(1280, 720), (1920, 1080), (2560, 1440)]);
         let mut tree = settings_tree(&list);
         let sel = find_by_id_mut(&mut tree, "c_resolution").expect("resolution select present");
-        assert_eq!(sel.children.len(), list.len(), "one option per enumerated rung, device-built");
+        assert_eq!(
+            sel.children.len(),
+            list.len(),
+            "one option per enumerated rung, device-built"
+        );
         for (opt, r) in sel.children.iter().zip(&list) {
             let label = match opt.props.get("label") {
                 Some(Value::Text(t)) => t.clone(),
                 _ => String::new(),
             };
-            assert_eq!(label, format!("{} \u{00d7} {}", r.w, r.h), "label is the W × H size");
+            assert_eq!(
+                label,
+                format!("{} \u{00d7} {}", r.w, r.h),
+                "label is the W × H size"
+            );
         }
         assert!(
             !SETTINGS_SCENE_JSON.contains("1920 \u{00d7} 1080"),
@@ -4192,8 +4997,9 @@ mod script_smoke {
         let mut ui = UiState::new();
         let mut route = RouteCtx::new();
         let model = ValueMap::new();
-        let mut walker =
-            WalkerHandler::hud(&mut ui, false).with_nav(&tree, &model).with_intents(&intents);
+        let mut walker = WalkerHandler::hud(&mut ui, false)
+            .with_nav(&tree, &model)
+            .with_intents(&intents);
         {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut route);
@@ -4220,8 +5026,15 @@ mod script_smoke {
         let mut surfaces = settings_surfaces();
 
         // Dirty close → the confirm dialog goes up, nothing pops.
-        assert!(!UnifiedSettingsScene::close_requested(&mut surfaces, &close, true));
-        assert!(surfaces.is_on("confirm_close"), "dirty close raises the confirm dialog");
+        assert!(!UnifiedSettingsScene::close_requested(
+            &mut surfaces,
+            &close,
+            true
+        ));
+        assert!(
+            surfaces.is_on("confirm_close"),
+            "dirty close raises the confirm dialog"
+        );
 
         // Its context flip routes through the S9 seam: Menu pushed while up.
         let mut route = RouteCtx::new();
@@ -4229,7 +5042,11 @@ mod script_smoke {
         surfaces.apply_surface_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
-        assert_eq!(bindings.active(), InputContext::Menu, "the dialog holds its declared context");
+        assert_eq!(
+            bindings.active(),
+            InputContext::Menu,
+            "the dialog holds its declared context"
+        );
 
         // The dialog INTERCEPTS the next close intent: it dismisses the dialog
         // (Esc = Cancel), the overlay itself stays open.
@@ -4237,11 +5054,18 @@ mod script_smoke {
             UnifiedSettingsScene::modal_flow(&mut surfaces, &close),
             Some(ModalFlow::Stay)
         );
-        assert!(!surfaces.is_on("confirm_close"), "the intent cancelled the dialog, not settings");
+        assert!(
+            !surfaces.is_on("confirm_close"),
+            "the intent cancelled the dialog, not settings"
+        );
         surfaces.apply_surface_contexts(&mut route);
         apply_context_requests(&mut bindings, &route.requests);
         route.requests.clear();
-        assert_eq!(bindings.active(), InputContext::World, "…and its context popped with it");
+        assert_eq!(
+            bindings.active(),
+            InputContext::World,
+            "…and its context popped with it"
+        );
 
         // Save / Discard resolve through the dialog as before.
         surfaces.show("confirm_close");
@@ -4263,11 +5087,21 @@ mod script_smoke {
             UnifiedSettingsScene::modal_flow(&mut surfaces, &close),
             Some(ModalFlow::Stay)
         );
-        assert!(!surfaces.is_on("restore_note"), "the intent dismissed the ack");
+        assert!(
+            !surfaces.is_on("restore_note"),
+            "the intent dismissed the ack"
+        );
 
         // No dialog + clean → the close intent pops.
-        assert_eq!(UnifiedSettingsScene::modal_flow(&mut surfaces, &close), None);
-        assert!(UnifiedSettingsScene::close_requested(&mut surfaces, &close, false));
+        assert_eq!(
+            UnifiedSettingsScene::modal_flow(&mut surfaces, &close),
+            None
+        );
+        assert!(UnifiedSettingsScene::close_requested(
+            &mut surfaces,
+            &close,
+            false
+        ));
     }
 
     /// PAIR-SCRIPT CONTRACT GATE (Stage 3): `settings.lua` is the modern `derive()`-only half
@@ -4286,13 +5120,20 @@ mod script_smoke {
             "settings.lua must expose NO tree() — structure stays in settings.scene.json"
         );
         // `derive()` is the ONLY behaviour: a published section index → the `sec_*` gate.
-        host.set_model(&ValueMap::new().with("settings_page", 1.0)).expect("publish the index");
+        host.set_model(&ValueMap::new().with("settings_page", 1.0))
+            .expect("publish the index");
         let derived = host
             .derive()
             .expect("derive() runs")
             .expect("settings.lua exposes derive()");
-        assert!(derived.is_on("sec_audio"), "settings_page = 1 derives sec_audio visible");
-        assert!(!derived.is_on("sec_video"), "…and only that section (sec_video off)");
+        assert!(
+            derived.is_on("sec_audio"),
+            "settings_page = 1 derives sec_audio visible"
+        );
+        assert!(
+            !derived.is_on("sec_video"),
+            "…and only that section (sec_video off)"
+        );
     }
 }
 
@@ -4318,7 +5159,10 @@ mod persistence {
         // Start from defaults (World = WASD): W is MoveForward.
         let mut gs = GameSettings::default();
         assert_eq!(
-            gs.input_profile.context_map("World").unwrap().action_for(InputBinding::Key(Key::W)),
+            gs.input_profile
+                .context_map("World")
+                .unwrap()
+                .action_for(InputBinding::Key(Key::W)),
             Some(ActionSignal::MoveForward),
         );
 
@@ -4334,7 +5178,10 @@ mod persistence {
         // The seed source (`input_profile().context_map("World")`) now carries the rebind,
         // resolved through the STABLE NAME "World" (spec §7.1a) — this is what the menu
         // settings seed reads at line ~`unwrap_or_else`.
-        let reloaded_world = loaded.input_profile.context_map("World").expect("World persists");
+        let reloaded_world = loaded
+            .input_profile
+            .context_map("World")
+            .expect("World persists");
         assert_eq!(
             reloaded_world.action_for(InputBinding::Key(Key::Up)),
             Some(ActionSignal::MoveForward),
@@ -4359,7 +5206,10 @@ mod persistence {
         }"#;
         let gs: GameSettings = serde_json::from_str(legacy).expect("legacy settings still load");
         assert_eq!(
-            gs.input_profile.context_map("World").unwrap().action_for(InputBinding::Key(Key::W)),
+            gs.input_profile
+                .context_map("World")
+                .unwrap()
+                .action_for(InputBinding::Key(Key::W)),
             Some(ActionSignal::MoveForward),
             "missing profile defaults to WASD World",
         );

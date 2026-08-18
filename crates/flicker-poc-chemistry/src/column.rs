@@ -10,7 +10,6 @@
 use flicker_materials::ElementId;
 use flicker_worldstate::{Composition, CompoundLedger};
 
-
 /// Atomic number of silicon (the silica-fraction read of [`crust_kind`]).
 const SI: ElementId = 14;
 /// Carbon — what makes a bed organic rather than silicate.
@@ -156,7 +155,8 @@ impl Layer {
         if frac <= 0.0 {
             return Vec::new();
         }
-        let planned: Vec<(ElementId, f64)> = self.elements.iter().map(|(e, m)| (e, m * frac)).collect();
+        let planned: Vec<(ElementId, f64)> =
+            self.elements.iter().map(|(e, m)| (e, m * frac)).collect();
         let mut taken = Vec::with_capacity(planned.len());
         for (e, m) in planned {
             let got = self.elements.remove(e, m);
@@ -215,7 +215,11 @@ impl Column {
         if mass <= 0.0 {
             return MANTLE_DENSITY;
         }
-        let volume: f64 = self.layers.iter().map(|l| l.mass_kg() / density_kg_m3(l)).sum();
+        let volume: f64 = self
+            .layers
+            .iter()
+            .map(|l| l.mass_kg() / density_kg_m3(l))
+            .sum();
         if volume <= 0.0 {
             MANTLE_DENSITY
         } else {
@@ -257,7 +261,12 @@ impl Column {
     ///
     /// The caller has already debited the source reservoir, so this is the credit
     /// half of a conserved move.
-    pub fn deposit(&mut self, process: FormationProcess, formed_at_myr: f64, add: &[(ElementId, f64)]) {
+    pub fn deposit(
+        &mut self,
+        process: FormationProcess,
+        formed_at_myr: f64,
+        add: &[(ElementId, f64)],
+    ) {
         let arriving: f64 = add.iter().map(|&(_, m)| m).sum();
         let spawn = match self.layers.last() {
             // Nothing to accrete to.
@@ -282,9 +291,7 @@ impl Column {
             // between it and burial erasing boundaries again the stack averaged
             // **1.9 beds against a cap of 20** — the canyon wall the cap exists
             // for was never being deposited in the first place.
-            Some(top) => {
-                top.formed_by != process || top.peak_pt.0 >= LITHIFICATION_PA
-            }
+            Some(top) => top.formed_by != process || top.peak_pt.0 >= LITHIFICATION_PA,
         };
         if spawn {
             self.layers.push(Layer {
@@ -293,8 +300,8 @@ impl Column {
                 formed_at_myr,
                 formed_by: process,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
         }
         let top = self.layers.last_mut().expect("just ensured a top layer");
@@ -464,7 +471,10 @@ pub fn crust_kind(col: &Column) -> CrustKind {
     }
     let (mut mass, mut volume) = (0.0, 0.0);
     for bed in col.layers.iter().filter(|l| {
-        !matches!(l.formed_by, FormationProcess::Sediment | FormationProcess::Organic)
+        !matches!(
+            l.formed_by,
+            FormationProcess::Sediment | FormationProcess::Organic
+        )
     }) {
         let m = bed.mass_kg();
         mass += m;
@@ -472,7 +482,11 @@ pub fn crust_kind(col: &Column) -> CrustKind {
     }
     // A column that is nothing BUT veneer has no basement to read; fall back to
     // the whole stack rather than inventing an answer.
-    let density = if volume > 0.0 { mass / volume } else { col.mean_density() };
+    let density = if volume > 0.0 {
+        mass / volume
+    } else {
+        col.mean_density()
+    };
     if density <= SUBDUCTABLE_DENSITY {
         CrustKind::Continental
     } else {
@@ -619,8 +633,8 @@ fn eclogite_former_frac(layer: &Layer) -> f64 {
     if mass <= 0.0 {
         return 0.0;
     }
-    let mafic = (layer.elements.amount(MG) + layer.elements.amount(FE) + layer.elements.amount(CA))
-        / mass;
+    let mafic =
+        (layer.elements.amount(MG) + layer.elements.amount(FE) + layer.elements.amount(CA)) / mass;
     ((mafic - 0.10) / (0.24 - 0.10)).clamp(0.0, 1.0)
 }
 
@@ -638,7 +652,10 @@ pub fn thickness_m(layer: &Layer, cell_area_m2: f64) -> f64 {
 
 /// Total crust thickness of a column, m — the sum over its beds.
 pub fn crust_thickness_m(col: &Column, cell_area_m2: f64) -> f64 {
-    col.layers.iter().map(|l| thickness_m(l, cell_area_m2)).sum()
+    col.layers
+        .iter()
+        .map(|l| thickness_m(l, cell_area_m2))
+        .sum()
 }
 
 /// Depth over which the ground warms from its own surface to the temperature of
@@ -695,7 +712,9 @@ pub fn basal_pressure_pa(col: &Column, gravity_m_s2: f64, cell_area_m2: f64) -> 
 pub fn elevation_m(col: &Column, cell_area_m2: f64) -> f64 {
     col.layers
         .iter()
-        .map(|l| thickness_m(l, cell_area_m2) * (MANTLE_DENSITY - density_kg_m3(l)) / MANTLE_DENSITY)
+        .map(|l| {
+            thickness_m(l, cell_area_m2) * (MANTLE_DENSITY - density_kg_m3(l)) / MANTLE_DENSITY
+        })
         .sum()
 }
 
@@ -710,11 +729,21 @@ mod tests {
 
     /// Basalt-ish: O/Si/Mg/Fe.
     fn mafic(scale: f64) -> Vec<(ElementId, f64)> {
-        vec![(8, 0.45 * scale), (14, 0.24 * scale), (12, 0.19 * scale), (26, 0.12 * scale)]
+        vec![
+            (8, 0.45 * scale),
+            (14, 0.24 * scale),
+            (12, 0.19 * scale),
+            (26, 0.12 * scale),
+        ]
     }
     /// Granite-ish: the same elements in very different proportions.
     fn felsic(scale: f64) -> Vec<(ElementId, f64)> {
-        vec![(8, 0.47 * scale), (14, 0.34 * scale), (13, 0.15 * scale), (19, 0.04 * scale)]
+        vec![
+            (8, 0.47 * scale),
+            (14, 0.34 * scale),
+            (13, 0.15 * scale),
+            (19, 0.04 * scale),
+        ]
     }
 
     fn col_with(beds: &[Vec<(ElementId, f64)>]) -> Column {
@@ -728,8 +757,8 @@ mod tests {
                 formed_at_myr: i as f64,
                 formed_by: FormationProcess::OceanicCrust,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
             for &(e, m) in bed {
                 c.layers.last_mut().unwrap().elements.add(e, m);
@@ -743,13 +772,25 @@ mod tests {
     fn like_material_thickens_a_bed_and_unlike_material_starts_one() {
         let mut c = Column::empty(0);
         c.deposit(FormationProcess::OceanicCrust, 0.0, &mafic(BIG));
-        assert_eq!(c.layers.len(), 1, "the first material has nothing to accrete to");
+        assert_eq!(
+            c.layers.len(),
+            1,
+            "the first material has nothing to accrete to"
+        );
 
         c.deposit(FormationProcess::OceanicCrust, 1.0, &mafic(BIG));
-        assert_eq!(c.layers.len(), 1, "more of the same thickens the bed it lands on");
+        assert_eq!(
+            c.layers.len(),
+            1,
+            "more of the same thickens the bed it lands on"
+        );
 
         c.deposit(FormationProcess::ContinentalArc, 2.0, &felsic(BIG));
-        assert_eq!(c.layers.len(), 2, "material this different cannot be absorbed");
+        assert_eq!(
+            c.layers.len(),
+            2,
+            "material this different cannot be absorbed"
+        );
     }
 
     /// A trickle joins whatever it lands on, however exotic — otherwise a per-tick
@@ -758,7 +799,11 @@ mod tests {
     fn a_film_joins_the_bed_it_lands_on() {
         let mut c = Column::empty(0);
         c.deposit(FormationProcess::OceanicCrust, 0.0, &mafic(BIG));
-        c.deposit(FormationProcess::ContinentalArc, 1.0, &felsic(MIN_BED_MASS_KG * 0.5));
+        c.deposit(
+            FormationProcess::ContinentalArc,
+            1.0,
+            &felsic(MIN_BED_MASS_KG * 0.5),
+        );
         assert_eq!(c.layers.len(), 1);
     }
 
@@ -836,20 +881,33 @@ mod tests {
         let mut c = col_with(&[mafic(BIG), felsic(BIG)]);
         c.reconcile(1500.0, 1500.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
         let (p, t) = c.layers[0].peak_pt;
-        assert!(p > 0.0 && (t - 1500.0).abs() < 1e-9, "the buried bed recorded its load");
+        assert!(
+            p > 0.0 && (t - 1500.0).abs() < 1e-9,
+            "the buried bed recorded its load"
+        );
         // The top bed records the pressure at ITS OWN BASE — its own weight. A
         // bed's peak is at its bottom, and reading the top instead pinned the
         // surface bed at zero forever, which disabled the lithification half of
         // the bed-spawn rule (a bed could never cement, so nothing ever landed
         // ON it as a new stratum).
         let top = c.layers[1].peak_pt.0;
-        assert!(top > 0.0, "the top bed carries its own weight: {top:.3e} Pa");
-        assert!(top < p, "…and still less than the bed beneath it: {top:.3e} vs {p:.3e}");
+        assert!(
+            top > 0.0,
+            "the top bed carries its own weight: {top:.3e} Pa"
+        );
+        assert!(
+            top < p,
+            "…and still less than the bed beneath it: {top:.3e} vs {p:.3e}"
+        );
 
         // Strip the load and cool it: the record must not fall.
         c.layers.pop();
         c.reconcile(300.0, 300.0, GRAVITY_M_S2, AREA, STRATA_SOFT_CAP_FOR_TEST);
-        assert_eq!(c.layers[0].peak_pt, (p, t), "peak is a high-water mark, not a reading");
+        assert_eq!(
+            c.layers[0].peak_pt,
+            (p, t),
+            "peak is a high-water mark, not a reading"
+        );
     }
 
     /// Past the soft cap the tolerance widens until a pair gives way, so the stack
@@ -884,9 +942,16 @@ mod tests {
                 settled = 0;
             }
         }
-        assert!(c.layers.len() <= cap, "the cap was leaned on: {} beds", c.layers.len());
+        assert!(
+            c.layers.len() <= cap,
+            "the cap was leaned on: {} beds",
+            c.layers.len()
+        );
         assert!(!c.layers.is_empty());
-        assert!((c.mass_kg() - before).abs() < 1e-6 * before, "conserved through the squeeze");
+        assert!(
+            (c.mass_kg() - before).abs() < 1e-6 * before,
+            "conserved through the squeeze"
+        );
     }
 
     /// The escape the bake telescope caught: a rain of THIN films — none ever
@@ -905,9 +970,19 @@ mod tests {
         let beds: Vec<Vec<(ElementId, f64)>> = (0..60)
             .map(|i| {
                 if i % 2 == 0 {
-                    vec![(8, 0.45 * thin), (14, 0.24 * thin), (12, 0.19 * thin), (26, 0.12 * thin)]
+                    vec![
+                        (8, 0.45 * thin),
+                        (14, 0.24 * thin),
+                        (12, 0.19 * thin),
+                        (26, 0.12 * thin),
+                    ]
                 } else {
-                    vec![(8, 0.30 * thin), (14, 0.10 * thin), (12, 0.30 * thin), (26, 0.30 * thin)]
+                    vec![
+                        (8, 0.30 * thin),
+                        (14, 0.10 * thin),
+                        (12, 0.30 * thin),
+                        (26, 0.30 * thin),
+                    ]
                 }
             })
             .collect();
@@ -935,14 +1010,21 @@ mod tests {
             "loose films outran the guardrail: {} beds against a cap of {cap}",
             c.layers.len()
         );
-        assert!((c.mass_kg() - before).abs() < 1e-6 * before, "conserved through the squeeze");
+        assert!(
+            (c.mass_kg() - before).abs() < 1e-6 * before,
+            "conserved through the squeeze"
+        );
     }
 
     /// Pressure is the weight above, spread over the cell — nothing else.
     #[test]
     fn overburden_is_the_weight_above() {
         let c = col_with(&[mafic(BIG), mafic(BIG), mafic(BIG)]);
-        assert_eq!(overburden_pa(&c, 2, GRAVITY_M_S2, AREA), 0.0, "the top bed carries nothing");
+        assert_eq!(
+            overburden_pa(&c, 2, GRAVITY_M_S2, AREA),
+            0.0,
+            "the top bed carries nothing"
+        );
         let one_bed = c.layers[0].mass_kg() * GRAVITY_M_S2 / AREA;
         assert!((overburden_pa(&c, 1, GRAVITY_M_S2, AREA) - one_bed).abs() < 1e-3);
         assert!((overburden_pa(&c, 0, GRAVITY_M_S2, AREA) - 2.0 * one_bed).abs() < 1e-3);
@@ -953,9 +1035,19 @@ mod tests {
     #[test]
     fn dissimilarity_reads_proportions_not_amounts() {
         let (a, b) = (comp(&mafic(BIG)), comp(&mafic(BIG * 1000.0)));
-        assert!(dissimilarity(&a, &b) < 1e-9, "same proportions, different amounts");
-        assert!(dissimilarity(&a, &comp(&felsic(BIG))) > 0.1, "different proportions");
-        assert_eq!(dissimilarity(&Composition::new(), &a), 1.0, "nothing shares nothing");
+        assert!(
+            dissimilarity(&a, &b) < 1e-9,
+            "same proportions, different amounts"
+        );
+        assert!(
+            dissimilarity(&a, &comp(&felsic(BIG))) > 0.1,
+            "different proportions"
+        );
+        assert_eq!(
+            dissimilarity(&Composition::new(), &a),
+            1.0,
+            "nothing shares nothing"
+        );
     }
 
     fn comp(v: &[(ElementId, f64)]) -> Composition {

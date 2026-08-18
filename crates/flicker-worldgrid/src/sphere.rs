@@ -178,7 +178,10 @@ mod tests {
         for freq in [2, 4, 8] {
             let s = icosphere(freq);
             let pents = s.is_pentagon.iter().filter(|&&b| b).count();
-            assert_eq!(pents, 12, "freq {freq}: a hex-sphere has exactly 12 pentagons");
+            assert_eq!(
+                pents, 12,
+                "freq {freq}: a hex-sphere has exactly 12 pentagons"
+            );
             for i in 0..s.len() {
                 let deg = s.neighbors[i].len();
                 let want = if s.is_pentagon[i] { 5 } else { 6 };
@@ -191,7 +194,11 @@ mod tests {
     fn cell_count_matches_goldberg_formula() {
         for freq in [1, 3, 6, 10] {
             let s = icosphere(freq);
-            assert_eq!(s.len(), (10 * freq * freq + 2) as usize, "freq {freq} cell count");
+            assert_eq!(
+                s.len(),
+                (10 * freq * freq + 2) as usize,
+                "freq {freq} cell count"
+            );
         }
     }
 
@@ -234,7 +241,10 @@ mod tests {
         }
         assert!(counts.iter().all(|&c| c > 0), "an empty shard: {counts:?}");
         // Cells are emitted grouped by shard (the id is monotonic non-decreasing).
-        assert!(s.id.windows(2).all(|w| w[0] <= w[1]), "ids not in scan order");
+        assert!(
+            s.id.windows(2).all(|w| w[0] <= w[1]),
+            "ids not in scan order"
+        );
     }
 
     #[test]
@@ -246,7 +256,10 @@ mod tests {
         let total: f32 = s.area.iter().sum();
         // Flat barycentric-dual areas slightly under-count the curved sphere
         // (4π ≈ 12.566); within ~5% at this frequency.
-        assert!((total - 4.0 * std::f32::consts::PI).abs() < 0.7, "total area {total}");
+        assert!(
+            (total - 4.0 * std::f32::consts::PI).abs() < 0.7,
+            "total area {total}"
+        );
     }
 
     #[test]
@@ -283,4 +296,3 @@ mod tests {
         }
     }
 }
-

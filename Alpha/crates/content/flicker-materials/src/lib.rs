@@ -22,9 +22,9 @@
 //! the vocabulary that classifier will read; it does not guess the rules.
 
 pub mod compound;
-pub mod rock;
 pub mod element;
 pub mod material;
+pub mod rock;
 pub mod source;
 pub mod tables;
 

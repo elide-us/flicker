@@ -2,6 +2,7 @@
 name = "flicker-sablework"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # Sablework Bench — the texture SYNTHESIZER console. A face on
@@ -20,7 +21,7 @@ path = "src/lib.rs"
 # Umbrella: flicker-app (InputState), flicker-render (Renderer/Vec2),
 # flicker-scene (Scene/Transition), flicker-script (UiNode/Value), and
 # flicker-widgets (the walker + WalkerHandler + the gates).
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The input model + event bus: this bench declares its intents on the screen
 # root and routes them through the router like every other screen.
 flicker-input-core.workspace = true

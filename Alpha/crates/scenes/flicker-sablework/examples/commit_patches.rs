@@ -15,14 +15,25 @@ use flicker_texture::{presets, BAKE_DEFAULT};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let root = std::path::PathBuf::from(args.next().ok_or("usage: <staging_root> [size]")?);
-    let size: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(BAKE_DEFAULT);
+    let size: u32 = args
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(BAKE_DEFAULT);
 
     for recipe in presets::all() {
         let started = std::time::Instant::now();
         let out = commit::commit(&recipe, size, &root)?;
-        println!("{}  ({} ms)", out.dir.display(), started.elapsed().as_millis());
+        println!(
+            "{}  ({} ms)",
+            out.dir.display(),
+            started.elapsed().as_millis()
+        );
         for f in &out.files {
-            let name = f.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let bytes = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
             println!(
                 "  {:<28} {:>9} B   {}",

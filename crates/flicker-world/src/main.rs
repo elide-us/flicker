@@ -27,7 +27,12 @@ fn main() -> Result<()> {
     flicker_shell::run(flicker_shell::ShellConfig::single(
         Some(env!("CARGO_MANIFEST_DIR").into()),
         None,
-        || Box::new(scene::Loading::new(world::DEFAULT_FREQ, world::DEFAULT_SEED)),
+        || {
+            Box::new(scene::Loading::new(
+                world::DEFAULT_FREQ,
+                world::DEFAULT_SEED,
+            ))
+        },
     ))
 }
 
@@ -36,6 +41,5 @@ fn main() -> Result<()> {
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }

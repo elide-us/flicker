@@ -63,7 +63,11 @@ pub fn watersheds(layer: &[HexState]) -> Vec<Watershed> {
     groups
         .into_iter()
         .enumerate()
-        .map(|(id, (outlet, members))| Watershed { id: id as u32, outlet, members })
+        .map(|(id, (outlet, members))| Watershed {
+            id: id as u32,
+            outlet,
+            members,
+        })
         .collect()
 }
 
@@ -157,8 +161,9 @@ impl EpochTransform for Epoch6 {
         }
         let sea = prev[0].sea_level;
         // Erosion time → pass count: the nominal duration yields the baseline passes.
-        let passes =
-            ((self.duration as f32 / NOMINAL_DURATION as f32) * NOMINAL_EROSION_PASSES).round().max(1.0) as u32;
+        let passes = ((self.duration as f32 / NOMINAL_DURATION as f32) * NOMINAL_EROSION_PASSES)
+            .round()
+            .max(1.0) as u32;
 
         let mut elev: Vec<f32> = prev.iter().map(|s| s.elevation).collect();
         let mut sediment = vec![0.0f32; n];
@@ -172,11 +177,16 @@ impl EpochTransform for Epoch6 {
         // uniform sky: wet windward slopes gather more flow and carve harder than dry
         // leeward shadows. Normalised to the wettest hex, with a floor so drainage
         // still forms in the dry belts.
-        let pmax = prev.iter().map(|s| s.precipitation).fold(0.0f32, f32::max).max(1e-6);
+        let pmax = prev
+            .iter()
+            .map(|s| s.precipitation)
+            .fold(0.0f32, f32::max)
+            .max(1e-6);
         let rain_at: Vec<f32> = prev
             .iter()
             .map(|s| {
-                self.rain * (RAIN_FLOOR + (1.0 - RAIN_FLOOR) * (s.precipitation / pmax).clamp(0.0, 1.0))
+                self.rain
+                    * (RAIN_FLOOR + (1.0 - RAIN_FLOOR) * (s.precipitation / pmax).clamp(0.0, 1.0))
             })
             .collect();
         // The surface crust as a **conserved sediment conveyor**: erosion lifts the
@@ -190,10 +200,12 @@ impl EpochTransform for Epoch6 {
             // Process hexes high → low so each is handled before its outflow.
             let mut order: Vec<usize> = (0..n).collect();
             order.sort_by(|&a, &b| {
-                elev[b].partial_cmp(&elev[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+                elev[b]
+                    .partial_cmp(&elev[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(a.cmp(&b))
             });
-            let down: Vec<Option<usize>> =
-                (0..n).map(|i| lowest_neighbor(i, &elev, ctx)).collect();
+            let down: Vec<Option<usize>> = (0..n).map(|i| lowest_neighbor(i, &elev, ctx)).collect();
 
             // Drainage: accumulate the (precipitation-weighted) rainfall downstream.
             flow = rain_at.clone();
@@ -359,7 +371,8 @@ impl EpochTransform for Epoch6 {
                 // of the era) rain CaCO₃ onto warm shallow sea floors.
                 if s.water_depth > 0.0 && s.life_stage >= LifeStage::Microbial {
                     let shallow = (1.0 - s.water_depth / CHALK_DEPTH).clamp(0.0, 1.0);
-                    let chalk = (1.0 - self.carbonate_onset) * shallow * warmth * self.carbonate_rate;
+                    let chalk =
+                        (1.0 - self.carbonate_onset) * shallow * warmth * self.carbonate_rate;
                     if chalk > 0.0 {
                         deposits.add(CALCIUM, chalk as f64);
                         deposits.add(CARBON, chalk as f64 * 0.5); // carbonate C rides with the Ca
@@ -473,8 +486,16 @@ mod tests {
         neighbors: &'a [Vec<u32>],
     ) -> (EpochCtx<'a>, Vec<HexState>) {
         let e1 = Epoch1::new(t, Epoch1Params::default(), 7);
-        let ctx = EpochCtx { tables: t, dirs, neighbors, seed: 7 };
-        let seed: Vec<HexState> = dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let ctx = EpochCtx {
+            tables: t,
+            dirs,
+            neighbors,
+            seed: 7,
+        };
+        let seed: Vec<HexState> = dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let e2 = Epoch2::default().apply(&ctx, &seed);
         let e3 = Epoch3::default().apply(&ctx, &e2);
         let e4 = Epoch4::default().apply(&ctx, &e3);
@@ -498,10 +519,16 @@ mod tests {
             hi - lo
         };
         // Erosion grades the macro relief down (peaks shed, lows fill).
-        assert!(span(&out) < span(&e5), "erosion didn't reduce the relief span");
+        assert!(
+            span(&out) < span(&e5),
+            "erosion didn't reduce the relief span"
+        );
         // Material is moved, not created: total elevation ~conserved.
         let sum = |v: &[HexState]| v.iter().map(|s| s.elevation as f64).sum::<f64>();
-        assert!((sum(&out) - sum(&e5)).abs() < 0.5, "erosion didn't conserve mass");
+        assert!(
+            (sum(&out) - sum(&e5)).abs() < 0.5,
+            "erosion didn't conserve mass"
+        );
         assert!(out.iter().all(|s| (-1.0..=1.0).contains(&s.elevation)));
     }
 
@@ -520,8 +547,11 @@ mod tests {
             "crust sediment conveyor must conserve material globally: {after} vs {before}"
         );
         // And it actually transported some (per-hex crust totals shifted).
-        let moved: f64 =
-            out.iter().zip(&e5).map(|(o, p)| (o.crust.total() - p.crust.total()).abs()).sum();
+        let moved: f64 = out
+            .iter()
+            .zip(&e5)
+            .map(|(o, p)| (o.crust.total() - p.crust.total()).abs())
+            .sum();
         assert!(moved > 0.0, "no crust material was transported by erosion");
     }
 
@@ -538,9 +568,15 @@ mod tests {
         }
         let flat = Epoch6::default().apply(&ctx, &rainless);
         // Precipitation actually drives the erosion — zeroing it changes the terrain.
-        let diff: f64 =
-            real.iter().zip(&flat).map(|(a, b)| (a.elevation - b.elevation).abs() as f64).sum();
-        assert!(diff > 1e-4, "precipitation had no effect on where erosion carved");
+        let diff: f64 = real
+            .iter()
+            .zip(&flat)
+            .map(|(a, b)| (a.elevation - b.elevation).abs() as f64)
+            .sum();
+        assert!(
+            diff > 1e-4,
+            "precipitation had no effect on where erosion carved"
+        );
     }
 
     #[test]
@@ -551,7 +587,10 @@ mod tests {
         let out = Epoch6::default().apply(&ctx, &e5);
         // Some hex gathered more than the base rainfall — flow accumulated.
         let max_flow = out.iter().map(|s| s.flow).fold(0.0f32, f32::max);
-        assert!(max_flow > Epoch6::default().rain, "flow never accumulated downstream");
+        assert!(
+            max_flow > Epoch6::default().rain,
+            "flow never accumulated downstream"
+        );
     }
 
     #[test]
@@ -569,7 +608,10 @@ mod tests {
             }
         }
         let distinct: std::collections::BTreeSet<Biome> = out.iter().map(|s| s.biome).collect();
-        assert!(distinct.len() >= 2, "only one biome over the whole ring: {distinct:?}");
+        assert!(
+            distinct.len() >= 2,
+            "only one biome over the whole ring: {distinct:?}"
+        );
     }
 
     #[test]
@@ -594,18 +636,29 @@ mod tests {
             out.iter().any(|s| s.life_stage >= LifeStage::Fungal),
             "no fungus/flora established on land"
         );
-        assert!(out.iter().any(|s| s.organics > 0.0), "no dead organics accumulated");
+        assert!(
+            out.iter().any(|s| s.organics > 0.0),
+            "no dead organics accumulated"
+        );
         // The thread only advances — ocean keeps its Epoch-5 microbial life.
         for (before, after) in e5.iter().zip(&out) {
-            assert!(after.life_stage >= before.life_stage, "life stage regressed");
+            assert!(
+                after.life_stage >= before.life_stage,
+                "life stage regressed"
+            );
             assert!(after.biomass.is_finite() && after.organics.is_finite());
         }
 
         // The Floral branch genuinely fires given lush thresholds.
-        let lush = Epoch6 { floral_threshold: 0.0, fungal_threshold: 0.0, ..Epoch6::default() }
-            .apply(&ctx, &e5);
+        let lush = Epoch6 {
+            floral_threshold: 0.0,
+            fungal_threshold: 0.0,
+            ..Epoch6::default()
+        }
+        .apply(&ctx, &e5);
         assert!(
-            lush.iter().any(|s| s.life_stage == LifeStage::Floral && s.biomass > 0.0),
+            lush.iter()
+                .any(|s| s.life_stage == LifeStage::Floral && s.biomass > 0.0),
             "the Floral path never produced forest"
         );
     }
@@ -621,13 +674,23 @@ mod tests {
         // Every hex lands in exactly one basin, draining to that basin's outlet.
         assert!(!basins.is_empty(), "no watersheds formed");
         let total: usize = basins.iter().map(|b| b.members.len()).sum();
-        assert_eq!(total, out.len(), "watershed membership doesn't cover every hex once");
+        assert_eq!(
+            total,
+            out.len(),
+            "watershed membership doesn't cover every hex once"
+        );
         for b in &basins {
-            assert!(b.members.contains(&b.outlet), "a basin's outlet isn't one of its hexes");
+            assert!(
+                b.members.contains(&b.outlet),
+                "a basin's outlet isn't one of its hexes"
+            );
             // The outlet is a true sink: no neighbour is strictly lower.
             let o = b.outlet as usize;
             for &nb in &ctx.neighbors[o] {
-                assert!(out[nb as usize].elevation >= out[o].elevation, "outlet drains further downhill");
+                assert!(
+                    out[nb as usize].elevation >= out[o].elevation,
+                    "outlet drains further downhill"
+                );
             }
         }
     }
@@ -642,13 +705,28 @@ mod tests {
         // Late decomposers (onset 1) preserve far more buried carbon than
         // ever-present ones (onset 0) — the Carboniferous coal window. Carbonate
         // is held equal, so the difference is the organics-derived coal.
-        let coal_world = Epoch6 { decomposer_onset: 1.0, ..Epoch6::default() }.apply(&ctx, &e5);
-        let rot_world = Epoch6 { decomposer_onset: 0.0, ..Epoch6::default() }.apply(&ctx, &e5);
-        assert!(carbon(&coal_world) > carbon(&rot_world), "late decomposers should preserve more coal");
+        let coal_world = Epoch6 {
+            decomposer_onset: 1.0,
+            ..Epoch6::default()
+        }
+        .apply(&ctx, &e5);
+        let rot_world = Epoch6 {
+            decomposer_onset: 0.0,
+            ..Epoch6::default()
+        }
+        .apply(&ctx, &e5);
+        assert!(
+            carbon(&coal_world) > carbon(&rot_world),
+            "late decomposers should preserve more coal"
+        );
 
         // Chalk (calcium carbonate) forms in warm shallow seas once carbonate life
         // is present for the era.
-        let chalky = Epoch6 { carbonate_onset: 0.0, ..Epoch6::default() }.apply(&ctx, &e5);
+        let chalky = Epoch6 {
+            carbonate_onset: 0.0,
+            ..Epoch6::default()
+        }
+        .apply(&ctx, &e5);
         assert!(
             chalky.iter().any(|s| s.deposits.amount(CALCIUM) > 0.0),
             "no chalk deposited in the warm shallow seas"

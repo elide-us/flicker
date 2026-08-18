@@ -49,11 +49,18 @@ mod tests {
     fn freq_is_proportional_to_radius() {
         assert_eq!(hex_freq_for_radius(R_EARTH_AU), 100, "Earth → 100");
         // Mercury (~0.38 R⊕) scales to ~38 — derived from size, not a hand-set anchor.
-        assert_eq!(hex_freq_for_radius(R_MERCURY_AU), 38, "Mercury scales to ~38");
+        assert_eq!(
+            hex_freq_for_radius(R_MERCURY_AU),
+            38,
+            "Mercury scales to ~38"
+        );
         // The freq ratio equals the radius ratio (true proportionality).
         let big = hex_freq_for_radius(3.0e-5) as f64;
         let small = hex_freq_for_radius(1.5e-5) as f64;
-        assert!((big / small - 2.0).abs() < 0.06, "doubling radius ~doubles freq");
+        assert!(
+            (big / small - 2.0).abs() < 0.06,
+            "doubling radius ~doubles freq"
+        );
     }
 
     #[test]
@@ -68,7 +75,13 @@ mod tests {
     fn a_giant_uses_half_a_solid_world_s_tiles() {
         // Same size → half the freq: coarse, derived from size (not a static 48).
         let r = 5.0e-4; // a giant-sized radius
-        assert_eq!(hex_freq_for_giant(r), (hex_freq_for_radius(r) / 2).max(FREQ_MIN));
-        assert!(hex_freq_for_giant(r) < hex_freq_for_radius(r), "a giant is coarser than a same-size solid");
+        assert_eq!(
+            hex_freq_for_giant(r),
+            (hex_freq_for_radius(r) / 2).max(FREQ_MIN)
+        );
+        assert!(
+            hex_freq_for_giant(r) < hex_freq_for_radius(r),
+            "a giant is coarser than a same-size solid"
+        );
     }
 }

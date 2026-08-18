@@ -2,6 +2,7 @@
 name = "flicker-controllertester"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # A diagnostic PACKAGE (library only) — the Controller Tester `Scene`, driven by the
@@ -14,7 +15,9 @@ name = "flicker_controllertester"
 path = "src/lib.rs"
 
 [dependencies]
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
+# The content-roots service (flicker-core::roots): the golem body + clip paths resolve through it.
+flicker-core.workspace = true
 flicker-shell.workspace = true
 # The real input model + event bus this inspector drives (spec §10). Imported
 # directly (not via the `flicker::app` bridge) so the tester exercises the same

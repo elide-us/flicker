@@ -10,13 +10,15 @@
 
 use std::time::Duration;
 
-use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
     Mat4, MeshDrawOptions, MeshHandle, MeshIndices, Renderer, TextureHandle, Vec2,
 };
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{ScriptHost, ValueMap};
 use flicker::ui::{load_widgets, render_hud, strings};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
+};
 use flicker_input_core::{ActionSignal, Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_materials::Tables;
@@ -31,7 +33,8 @@ use flicker_worldgen::{FieldSampler, HexState};
 
 use crate::world::{
     generate, generate_phase_layer, generate_with_seeds, load_tables, mutate_epoch_params,
-    next_seed, WorldData, WorldParams, ABUNDANCE_DEFS, EPOCH_LABELS, MAX_FREQ, MIN_FREQ, PARAM_DEFS,
+    next_seed, WorldData, WorldParams, ABUNDANCE_DEFS, EPOCH_LABELS, MAX_FREQ, MIN_FREQ,
+    PARAM_DEFS,
 };
 
 const FREQ_STEP: u32 = 4;
@@ -39,8 +42,14 @@ const FREQ_STEP: u32 = 4;
 const TIMELINE_SECONDS: f32 = 60.0;
 /// The duration knob (shared 1..10 clock) that sets each epoch's weight on the
 /// timeline. Epoch 1 has none — it's the snapshot the clock starts from.
-const EPOCH_DURATION_IDS: [&str; 6] =
-    ["", "e2_duration", "e3_duration", "e4_duration", "e5_duration", "e6_duration"];
+const EPOCH_DURATION_IDS: [&str; 6] = [
+    "",
+    "e2_duration",
+    "e3_duration",
+    "e4_duration",
+    "e5_duration",
+    "e6_duration",
+];
 /// Timeline weight of the Epoch-1 snapshot — short but visible.
 const SNAPSHOT_WEIGHT: f32 = 2.0;
 /// Sub-steps each phase is iterated through (stop-motion granularity): the in-phase
@@ -50,8 +59,10 @@ const TEXT: [f32; 4] = [0.92, 0.94, 0.98, 1.0];
 const DIM: [f32; 4] = [0.70, 0.75, 0.85, 1.0];
 
 const HUD_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/world_ui.lua");
-const UI_ELEMENTS: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_theme.json");
+const UI_ELEMENTS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/sensorium/resources/ui_theme.json"
+);
 
 /// Splash + first generation. Renders one frame, then builds the world.
 pub struct Loading {
@@ -71,7 +82,13 @@ impl Loading {
 }
 
 impl Scene for Loading {
-    fn update(&mut self, _dt: Duration, _input: &InputState, _signals: &mut SceneInput, _renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        _dt: Duration,
+        _input: &InputState,
+        _signals: &mut SceneInput,
+        _renderer: &Renderer,
+    ) -> Transition {
         if !self.shown {
             self.shown = true; // let the splash render once before the (blocking) gen
             return Transition::None;
@@ -86,10 +103,20 @@ impl Scene for Loading {
         let size = renderer.size();
         let title = "flicker · world";
         let tw = renderer.measure_text(title, 32.0);
-        renderer.draw_text(title, Vec2::new((size.x - tw.x) * 0.5, size.y * 0.42), 32.0, TEXT);
+        renderer.draw_text(
+            title,
+            Vec2::new((size.x - tw.x) * 0.5, size.y * 0.42),
+            32.0,
+            TEXT,
+        );
         let sub = "generating planet…";
         let sw = renderer.measure_text(sub, 18.0);
-        renderer.draw_text(sub, Vec2::new((size.x - sw.x) * 0.5, size.y * 0.42 + 46.0), 18.0, DIM);
+        renderer.draw_text(
+            sub,
+            Vec2::new((size.x - sw.x) * 0.5, size.y * 0.42 + 46.0),
+            18.0,
+            DIM,
+        );
     }
 }
 
@@ -159,7 +186,7 @@ impl World {
             params,
             cam: OrbitCam::new(globe::RADIUS),
             celestial: CelestialState::default(),
-            phase_t: 0.0, // marker at the very start of Epoch 1 (the snapshot)
+            phase_t: 0.0,        // marker at the very start of Epoch 1 (the snapshot)
             timeline_speed: 0.0, // paused — drag the SKY "Speed" up to play the movie
             phase_layer,
             phase_key: (epoch, 0),
@@ -191,8 +218,13 @@ impl World {
             renderer.free_mesh(handle);
         }
         let sampler = FieldSampler::new(&self.tables, self.data.seeds[0]);
-        let (verts, indices) =
-            globe::build(&self.data, &self.phase_layer, self.mode, globe::RADIUS, &sampler);
+        let (verts, indices) = globe::build(
+            &self.data,
+            &self.phase_layer,
+            self.mode,
+            globe::RADIUS,
+            &sampler,
+        );
         self.mesh = Some(renderer.upload_mesh(&verts, MeshIndices::U32(&indices)));
         self.dirty = false;
     }
@@ -259,16 +291,28 @@ impl World {
             .with("freq", self.data.freq)
             .with("plates", self.data.plates.len())
             .with("basins", self.data.watersheds.len())
-            .with("seed", format!("{:#010x}", self.data.seeds[self.epoch.min(self.data.seeds.len() - 1)]))
+            .with(
+                "seed",
+                format!(
+                    "{:#010x}",
+                    self.data.seeds[self.epoch.min(self.data.seeds.len() - 1)]
+                ),
+            )
             .with("view_mode", self.mode.index())
             .with("view_label", self.mode.label())
             .with("epoch", (self.epoch + 1) as u32)
-            .with("epoch_label", strings::resolve(EPOCH_LABELS[self.epoch]).into_owned())
+            .with(
+                "epoch_label",
+                strings::resolve(EPOCH_LABELS[self.epoch]).into_owned(),
+            )
             // Sun-for-heat cycle — published every frame so the sliders track the
             // auto-advancing clock; harvested back in `apply_ui`.
             .with("time_of_day", self.celestial.time_of_day as f64)
             .with("year_month", self.celestial.year_month as f64)
-            .with("axial_tilt_deg", self.celestial.axial_tilt.to_degrees() as f64)
+            .with(
+                "axial_tilt_deg",
+                self.celestial.axial_tilt.to_degrees() as f64,
+            )
             // Evolution timeline: the marker position (derived from epoch+phase) +
             // its playback speed (the "Speed" slider).
             .with("timeline", self.playhead() as f64)
@@ -402,10 +446,16 @@ impl World {
             self.reseed();
         }
         if edges.freq_down && !self.prev.freq_down {
-            self.regen = Some((self.data.freq.saturating_sub(FREQ_STEP).max(MIN_FREQ), self.data.seeds.clone()));
+            self.regen = Some((
+                self.data.freq.saturating_sub(FREQ_STEP).max(MIN_FREQ),
+                self.data.seeds.clone(),
+            ));
         }
         if edges.freq_up && !self.prev.freq_up {
-            self.regen = Some(((self.data.freq + FREQ_STEP).min(MAX_FREQ), self.data.seeds.clone()));
+            self.regen = Some((
+                (self.data.freq + FREQ_STEP).min(MAX_FREQ),
+                self.data.seeds.clone(),
+            ));
         }
         // ↑/↓ step one epoch (shown fully formed).
         let segs = self.data.epochs();
@@ -451,9 +501,9 @@ fn natural_view(epoch: usize) -> ViewMode {
         0 => ViewMode::Composition, // foundations — the material mix
         1 => ViewMode::Crust,       // differentiation — molten-thin vs solid crust
         2 => ViewMode::Elevation,   // tectonics — continents & mountains
-        3 => ViewMode::Elevation,   // hydrosphere — oceans flood the basins (Temperature is a tab away)
-        4 => ViewMode::Life,        // mineralization — microbial life at the vents
-        5 => ViewMode::Biome,       // erosion — biomes
+        3 => ViewMode::Elevation, // hydrosphere — oceans flood the basins (Temperature is a tab away)
+        4 => ViewMode::Life,      // mineralization — microbial life at the vents
+        5 => ViewMode::Biome,     // erosion — biomes
         _ => ViewMode::Elevation,
     }
 }
@@ -479,7 +529,13 @@ impl Scene for World {
         }
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the raw
         // `esc_prev` Menu edge. `ev` is the REUSED Fired buffer (no per-frame alloc —
         // RT-7); the InputEvent list is a short-lived local because it borrows THIS
@@ -488,8 +544,13 @@ impl Scene for World {
         // the bus, further below. ──
         self.tick = self.tick.wrapping_add(1);
         self.ev.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
         let ctx = self.bindings.active();
         let events: Vec<InputEvent> = self
             .ev
@@ -559,7 +620,8 @@ impl Scene for World {
             let last = self.data.epochs() - 1;
             loop {
                 let w = weights[self.epoch.min(last)].max(0.1);
-                self.phase_t += dt.as_secs_f32() * self.timeline_speed * total / (w * TIMELINE_SECONDS);
+                self.phase_t +=
+                    dt.as_secs_f32() * self.timeline_speed * total / (w * TIMELINE_SECONDS);
                 if self.phase_t < 1.0 {
                     break;
                 }
@@ -625,9 +687,15 @@ mod tests {
     #[test]
     fn no_raw_display_copy_published_into_the_model() {
         let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
-        assert!(flags.is_empty(), "scene.rs publishes raw display copy into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "scene.rs publishes raw display copy into the Model: {flags:?}"
+        );
         let flags = strings::raw_model_publish_literals(include_str!("world.rs"));
-        assert!(flags.is_empty(), "world.rs publishes raw display copy into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "world.rs publishes raw display copy into the Model: {flags:?}"
+        );
     }
 
     /// The HUD script loads against the real layout JSON + widgets and runs an
@@ -646,7 +714,10 @@ mod tests {
             .with("view_mode", 1u32)
             .with("view_label", "elevation")
             .with("epoch", 3u32) // Tectonics — has four knobs
-            .with("epoch_label", strings::resolve("$w_epoch_tectonics").into_owned());
+            .with(
+                "epoch_label",
+                strings::resolve("$w_epoch_tectonics").into_owned(),
+            );
         for (ep, id, def, _, _) in PARAM_DEFS {
             if *ep == 2 {
                 model = model.with(*id, *def);
@@ -656,9 +727,15 @@ mod tests {
 
         let input = InputState::new();
         let results = script.update(&input, 1280.0, 720.0).expect("update runs");
-        assert!(results.is_on("ui_capture"), "capture rect should report a hit");
+        assert!(
+            results.is_on("ui_capture"),
+            "capture rect should report a hit"
+        );
         // The tectonics knobs round-trip through the slider widgets.
-        assert!(results.number("e3_plates").is_some(), "e3_plates slider value returned");
+        assert!(
+            results.number("e3_plates").is_some(),
+            "e3_plates slider value returned"
+        );
 
         let cmds = script.draw(1280.0, 720.0).expect("draw runs");
         assert!(!cmds.is_empty(), "HUD should emit draw commands");
@@ -679,7 +756,10 @@ mod tests {
             .with("view_mode", 5u32)
             .with("view_label", "composition")
             .with("epoch", 1u32)
-            .with("epoch_label", strings::resolve("$w_epoch_composition").into_owned());
+            .with(
+                "epoch_label",
+                strings::resolve("$w_epoch_composition").into_owned(),
+            );
         for (sym, def) in ABUNDANCE_DEFS {
             model = model.with(format!("ab_{sym}"), *def);
         }
@@ -687,7 +767,10 @@ mod tests {
 
         let input = InputState::new();
         let results = script.update(&input, 1280.0, 720.0).expect("update runs");
-        assert!(results.number("ab_O").is_some(), "O abundance slider returned");
+        assert!(
+            results.number("ab_O").is_some(),
+            "O abundance slider returned"
+        );
 
         let cmds = script.draw(1280.0, 720.0).expect("draw runs");
         assert!(!cmds.is_empty(), "element grid should emit draw commands");
@@ -708,7 +791,10 @@ mod tests {
             .with("view_mode", 1u32)
             .with("view_label", "elevation")
             .with("epoch", 4u32)
-            .with("epoch_label", strings::resolve("$w_epoch_hydrosphere").into_owned())
+            .with(
+                "epoch_label",
+                strings::resolve("$w_epoch_hydrosphere").into_owned(),
+            )
             .with("time_of_day", 8.0_f64)
             .with("play_speed", 1.0_f64)
             .with("moon_phase", 2.0_f64)
@@ -719,10 +805,19 @@ mod tests {
 
         let input = InputState::new();
         let results = script.update(&input, 1280.0, 720.0).expect("update runs");
-        assert!(results.number("time_of_day").is_some(), "time slider value returned");
-        assert!(results.number("axial_tilt_deg").is_some(), "tilt slider value returned");
+        assert!(
+            results.number("time_of_day").is_some(),
+            "time slider value returned"
+        );
+        assert!(
+            results.number("axial_tilt_deg").is_some(),
+            "tilt slider value returned"
+        );
         // The bottom timeline scrubber round-trips its playhead value.
-        assert!(results.number("timeline").is_some(), "timeline scrubber value returned");
+        assert!(
+            results.number("timeline").is_some(),
+            "timeline scrubber value returned"
+        );
 
         let cmds = script.draw(1280.0, 720.0).expect("draw runs");
         assert!(!cmds.is_empty(), "SKY panel should emit draw commands");

@@ -56,9 +56,17 @@ pub fn build(
         let center = outward * radius;
 
         let base = verts.len() as u32;
-        verts.push(MeshVertex { position: center.to_array(), normal, material });
+        verts.push(MeshVertex {
+            position: center.to_array(),
+            normal,
+            material,
+        });
         for c in outline {
-            verts.push(MeshVertex { position: (*c * radius).to_array(), normal, material });
+            verts.push(MeshVertex {
+                position: (*c * radius).to_array(),
+                normal,
+                material,
+            });
         }
 
         let n = outline.len();
@@ -124,12 +132,23 @@ fn build_terrain(
             let s = sampler.sample_blended_at(state, dir * SAMPLE_SCALE, 0.0, bo);
             let micro = (MICRO_GAIN * s.elevation).clamp(-MICRO_CLAMP, MICRO_CLAMP);
             let disp = MACRO_BUMP * be + micro;
-            (dir * (radius + disp), hardness_terrain(s.hardness, s.vein, submerged))
+            (
+                dir * (radius + disp),
+                hardness_terrain(s.hardness, s.vein, submerged),
+            )
         };
 
         let m = outline.len();
         for k in 0..m {
-            subdivide(center, outline[k], outline[(k + 1) % m], TERRAIN_SUBDIV, &sample, &mut verts, &mut indices);
+            subdivide(
+                center,
+                outline[k],
+                outline[(k + 1) % m],
+                TERRAIN_SUBDIV,
+                &sample,
+                &mut verts,
+                &mut indices,
+            );
         }
     }
 
@@ -156,7 +175,14 @@ fn subdivide<F: Fn(Vec3) -> (Vec3, u32)>(
         for j in 0..(nsub - i) {
             tri(pt(i, j), pt(i, j + 1), pt(i + 1, j), sample, verts, indices);
             if j < nsub - i - 1 {
-                tri(pt(i, j + 1), pt(i + 1, j + 1), pt(i + 1, j), sample, verts, indices);
+                tri(
+                    pt(i, j + 1),
+                    pt(i + 1, j + 1),
+                    pt(i + 1, j),
+                    sample,
+                    verts,
+                    indices,
+                );
             }
         }
     }

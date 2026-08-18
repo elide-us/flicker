@@ -326,12 +326,18 @@ mod tests {
         b.deposit(CondensationClass::Silicate, 2.0);
         b.deposit(CondensationClass::Metal, 1.0);
         b.deposit(CondensationClass::Gas, 0.5);
-        assert!((b.composition.total() - b.classes.total()).abs() < 1e-9, "sync after deposits");
+        assert!(
+            (b.composition.total() - b.classes.total()).abs() < 1e-9,
+            "sync after deposits"
+        );
         assert!((b.classes.total() - 3.5).abs() < 1e-12);
         let removed = b.strip(0.5); // peels the gas envelope first
         assert!((removed.total() - 0.5).abs() < 1e-12);
         assert_eq!(b.classes.get(CondensationClass::Gas), 0.0);
-        assert!((b.composition.total() - b.classes.total()).abs() < 1e-9, "sync after strip");
+        assert!(
+            (b.composition.total() - b.classes.total()).abs() < 1e-9,
+            "sync after strip"
+        );
     }
 
     #[test]
@@ -367,7 +373,10 @@ mod tests {
         assert!(g > 5.0 && g < 20.0, "earthlike gravity {g} m/s² off");
         // Central pressure positive and in a plausible 100s-of-GPa range.
         let p = b.central_pressure_gpa();
-        assert!(p > 50.0 && p < 2000.0, "earthlike central pressure {p} GPa off");
+        assert!(
+            p > 50.0 && p < 2000.0,
+            "earthlike central pressure {p} GPa off"
+        );
     }
 
     #[test]
@@ -385,7 +394,10 @@ mod tests {
             ClassComposition::of(CondensationClass::Ice, 1.0e-6),
         );
         assert!(iron.density_g_cm3() > icy.density_g_cm3());
-        assert!(iron.physical_radius() < icy.physical_radius(), "denser → smaller for equal mass");
+        assert!(
+            iron.physical_radius() < icy.physical_radius(),
+            "denser → smaller for equal mass"
+        );
     }
 
     #[test]

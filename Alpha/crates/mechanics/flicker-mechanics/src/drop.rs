@@ -27,7 +27,11 @@ pub struct FallingItem {
 impl FallingItem {
     /// Start an item falling from rest at its current shape position.
     pub fn new(shape: Shape) -> Self {
-        Self { shape, vel_z: 0.0, resting: false }
+        Self {
+            shape,
+            vel_z: 0.0,
+            resting: false,
+        }
     }
 
     /// Advance `dt` seconds under `gravity` (cm/s², negative). When the shape's lowest support point
@@ -73,7 +77,10 @@ mod tests {
     use glam::Vec3;
 
     fn sphere_at(z: f32, r: f32) -> Shape {
-        Shape::Sphere { center: Vec3::new(0.0, 0.0, z), radius: r }
+        Shape::Sphere {
+            center: Vec3::new(0.0, 0.0, z),
+            radius: r,
+        }
     }
 
     #[test]
@@ -82,7 +89,10 @@ mod tests {
         assert!((settle_offset(&sphere_at(10.0, 1.0), 2.0) + 7.0).abs() < 1e-6);
         let s = sphere_at(10.0, 1.0);
         let rested = s.translated(Vec3::new(0.0, 0.0, settle_offset(&s, 2.0)));
-        assert!((rested.lowest_z() - 2.0).abs() < 1e-6, "lowest point sits on the ground");
+        assert!(
+            (rested.lowest_z() - 2.0).abs() < 1e-6,
+            "lowest point sits on the ground"
+        );
     }
 
     #[test]
@@ -91,9 +101,19 @@ mod tests {
         let mut item = FallingItem::new(sphere_at(100.0, 1.0));
         let steps = item.settle(0.0, 1.0 / 60.0, GRAVITY_CM_S2, 10_000);
         assert!(item.resting, "item must come to rest");
-        assert!(item.shape.lowest_z().abs() < 1e-3, "rests on the ground, lowest {}", item.shape.lowest_z());
-        assert!(item.vel_z.abs() < 1e-9, "vertical velocity zeroed on settle");
-        assert!(steps > 1 && steps < 10_000, "fell over several steps, {steps}");
+        assert!(
+            item.shape.lowest_z().abs() < 1e-3,
+            "rests on the ground, lowest {}",
+            item.shape.lowest_z()
+        );
+        assert!(
+            item.vel_z.abs() < 1e-9,
+            "vertical velocity zeroed on settle"
+        );
+        assert!(
+            steps > 1 && steps < 10_000,
+            "fell over several steps, {steps}"
+        );
     }
 
     #[test]

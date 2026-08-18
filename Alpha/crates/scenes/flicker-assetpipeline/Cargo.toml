@@ -2,6 +2,7 @@
 name = "flicker-assetpipeline"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # The Asset Pipeline editor — the interactive HOST for `flicker-content`'s stages
@@ -16,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Umbrella: app (InputState/Key) + render (Renderer/Camera/QuadGrid) + scene.
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The reusable front-end shell — this scene runs inside its pause overlay + theme.
 flicker-shell.workspace = true
 # THE pipeline stages this editor hosts. The editor owns no processing of its own.

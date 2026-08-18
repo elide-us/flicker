@@ -171,7 +171,12 @@ pub struct Stage {
 
 impl Default for Stage {
     fn default() -> Self {
-        Self { lighting: SceneLighting::default(), yaw: 0.6, pitch: 0.28, dist: 2.6 }
+        Self {
+            lighting: SceneLighting::default(),
+            yaw: 0.6,
+            pitch: 0.28,
+            dist: 2.6,
+        }
     }
 }
 
@@ -190,7 +195,11 @@ impl Stage {
         // `lighting` NAMES a block in the shared `stages.lighting` table, the same
         // indirection every other stage source uses.
         if let Some(name) = stage.get("lighting").and_then(|v| v.as_str()) {
-            match styles.get("stages").and_then(|s| s.get("lighting")).and_then(|l| l.get(name)) {
+            match styles
+                .get("stages")
+                .and_then(|s| s.get("lighting"))
+                .and_then(|l| l.get(name))
+            {
                 Some(l) => {
                     let v3 = |k: &str| -> Option<Vec3> {
                         let a = l.get(k)?.as_array()?;
@@ -258,8 +267,8 @@ impl LitPreview {
     /// Advance the turntable.
     pub fn tick(&mut self, dt: std::time::Duration) {
         if self.spinning {
-            self.spin =
-                (self.spin + dt.as_secs_f32() * SPIN_RATE * std::f32::consts::TAU).rem_euclid(std::f32::consts::TAU);
+            self.spin = (self.spin + dt.as_secs_f32() * SPIN_RATE * std::f32::consts::TAU)
+                .rem_euclid(std::f32::consts::TAU);
         }
     }
 
@@ -321,7 +330,15 @@ impl LitPreview {
             r.set_camera(&cam);
             r.draw_textured_mesh_pbr(mesh, albedo, pbr, model, MeshDrawOptions::default());
         });
-        fg.composite_panel(target, CompositeTarget::Screen, rect, layer, [1.0; 4], None, None);
+        fg.composite_panel(
+            target,
+            CompositeTarget::Screen,
+            rect,
+            layer,
+            [1.0; 4],
+            None,
+            None,
+        );
     }
 }
 
@@ -337,7 +354,11 @@ mod tests {
         for (pos, nrm, uv) in [sphere_soup(12, 6), plane_soup()] {
             assert_eq!(pos.len(), nrm.len());
             assert_eq!(pos.len(), uv.len());
-            assert!(pos.len() >= 3 && pos.len() % 3 == 0, "{} vertices is not soup", pos.len());
+            assert!(
+                pos.len() >= 3 && pos.len() % 3 == 0,
+                "{} vertices is not soup",
+                pos.len()
+            );
         }
     }
 
@@ -353,7 +374,10 @@ mod tests {
             assert!(dot > 0.0, "normal points inward");
         }
         for [u, v] in uv {
-            assert!((0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v), "uv {u},{v} off-sheet");
+            assert!(
+                (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v),
+                "uv {u},{v} off-sheet"
+            );
         }
     }
 
@@ -369,7 +393,10 @@ mod tests {
             b.tick(std::time::Duration::from_secs_f32(1.0 / 60.0));
         }
         assert!((a.spin - b.spin).abs() < 1e-3, "{} vs {}", a.spin, b.spin);
-        assert!(a.spin < std::f32::consts::TAU, "the angle must stay wrapped");
+        assert!(
+            a.spin < std::f32::consts::TAU,
+            "the angle must stay wrapped"
+        );
 
         // Stopped means stopped.
         let before = a.spin;
@@ -393,8 +420,8 @@ mod tests {
             .expect("the shipped sablework.scene.json parses");
         let styles = flicker::ui::load_styles_for(
             concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/sensorium/resources/ui_theme.json"
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../content/sensorium/resources/ui_theme.json"
             ),
             def.styles.as_ref(),
         );
@@ -412,8 +439,14 @@ mod tests {
         // which is indistinguishable from the view being broken.
         let lum = |v: Vec3| v.x + v.y + v.z;
         assert!(lum(stage.lighting.sun_color) > 0.1, "the stage has no sun");
-        assert!(lum(stage.lighting.ambient) > 0.0, "the stage has no ambient floor");
-        assert!(stage.lighting.sun_dir.length() > 0.5, "the sun points nowhere");
+        assert!(
+            lum(stage.lighting.ambient) > 0.0,
+            "the stage has no ambient floor"
+        );
+        assert!(
+            stage.lighting.sun_dir.length() > 0.5,
+            "the sun points nowhere"
+        );
         assert!(stage.dist > 0.0, "the camera sits on the sample");
     }
 

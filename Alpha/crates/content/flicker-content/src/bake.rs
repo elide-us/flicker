@@ -80,7 +80,11 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
         slot: "material_0".to_string(),
         ..Default::default()
     }];
-    let submeshes = vec![Submesh { material: 0, start: 0, count: indices.len() }];
+    let submeshes = vec![Submesh {
+        material: 0,
+        start: 0,
+        count: indices.len(),
+    }];
 
     RigFile {
         format: "flicker.rig".to_string(),
@@ -93,7 +97,13 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
             ..Default::default()
         },
         skeleton: Skeleton { bones },
-        mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
+        mesh: Mesh {
+            vertices,
+            indices,
+            submeshes,
+            materials,
+            ..Default::default()
+        },
         clips: Vec::new(),
         attach: Default::default(),
         attach_points: Vec::new(),
@@ -138,8 +148,9 @@ pub fn bake_skin(model: &mut RawModel) {
         .collect();
     for v in &mut model.vertices {
         let p = Vec3::from_array(v.p);
-        let mut scored: Vec<(usize, f32)> =
-            (0..n).map(|i| (i, dist_point_segment(p, heads[i], tails[i]))).collect();
+        let mut scored: Vec<(usize, f32)> = (0..n)
+            .map(|i| (i, dist_point_segment(p, heads[i], tails[i])))
+            .collect();
         scored.sort_by(|a, b| a.1.total_cmp(&b.1));
         let mut joints = [0u32; 4];
         let mut weights = [0.0f32; 4];
@@ -182,7 +193,11 @@ fn rest_world_frames(model: &RawModel) -> Vec<Mat4> {
 fn dist_point_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     let ab = b - a;
     let len2 = ab.length_squared();
-    let t = if len2 > 1e-12 { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    let t = if len2 > 1e-12 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     (p - (a + ab * t)).length()
 }
 
@@ -207,7 +222,11 @@ pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
         slot: "material_0".to_string(),
         ..Default::default()
     }];
-    let submeshes = vec![Submesh { material: 0, start: 0, count: indices.len() }];
+    let submeshes = vec![Submesh {
+        material: 0,
+        start: 0,
+        count: indices.len(),
+    }];
 
     RigFile {
         format: "flicker.rig".to_string(),
@@ -220,7 +239,13 @@ pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
             ..Default::default()
         },
         skeleton: Skeleton { bones: Vec::new() },
-        mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
+        mesh: Mesh {
+            vertices,
+            indices,
+            submeshes,
+            materials,
+            ..Default::default()
+        },
         clips: Vec::new(),
         attach: Default::default(),
         attach_points: Vec::new(),
@@ -292,7 +317,11 @@ pub fn bake_garment(
         slot: "material_0".to_string(),
         ..Default::default()
     }];
-    let submeshes = vec![Submesh { material: 0, start: 0, count: indices.len() }];
+    let submeshes = vec![Submesh {
+        material: 0,
+        start: 0,
+        count: indices.len(),
+    }];
 
     Ok(RigFile {
         format: "flicker.rig".to_string(),
@@ -304,8 +333,16 @@ pub fn bake_garment(
             applied_transform: "baked-fit".to_string(),
             ..Default::default()
         },
-        skeleton: Skeleton { bones: body.skeleton.bones.clone() },
-        mesh: Mesh { vertices, indices, submeshes, materials, ..Default::default() },
+        skeleton: Skeleton {
+            bones: body.skeleton.bones.clone(),
+        },
+        mesh: Mesh {
+            vertices,
+            indices,
+            submeshes,
+            materials,
+            ..Default::default()
+        },
         clips: Vec::new(),
         attach: Default::default(),
         attach_points: Vec::new(),
@@ -358,7 +395,10 @@ impl VertexGrid {
         let cell = (extent / (verts.len() as f32).cbrt().max(1.0)).max(0.25);
         let mut buckets: HashMap<(i32, i32, i32), Vec<u32>> = HashMap::new();
         for (i, v) in verts.iter().enumerate() {
-            buckets.entry(cell_key(Vec3::from(v.p), cell)).or_default().push(i as u32);
+            buckets
+                .entry(cell_key(Vec3::from(v.p), cell))
+                .or_default()
+                .push(i as u32);
         }
         Self { cell, buckets }
     }
@@ -403,7 +443,9 @@ impl VertexGrid {
         best_d: &mut f32,
     ) {
         let mut visit = |k: (i32, i32, i32)| {
-            let Some(b) = self.buckets.get(&k) else { return };
+            let Some(b) = self.buckets.get(&k) else {
+                return;
+            };
             for &i in b {
                 let d = (Vec3::from(verts[i as usize].p) - p).length_squared();
                 if d < *best_d {
@@ -558,7 +600,13 @@ impl Fit {
 ///
 /// `source_fbx` is the mesh file the model was parsed from — its folder holds the vendor's texture
 /// maps, which are brought along by [`wire_source_textures`] exactly as the character import does.
-pub fn write_prop(model: &RawModel, source_fbx: &Path, source_name: &str, out: &Path, fit: &Fit) -> Result<()> {
+pub fn write_prop(
+    model: &RawModel,
+    source_fbx: &Path,
+    source_name: &str,
+    out: &Path,
+    fit: &Fit,
+) -> Result<()> {
     let mut rig = bake_prop(model, source_name);
     rig.attach = fit.to_attach();
     wire_source_textures(source_fbx, source_name, out, &mut rig)?;
@@ -572,10 +620,19 @@ pub fn write_prop(model: &RawModel, source_fbx: &Path, source_name: &str, out: &
 ///
 /// `source_fbx` carries the garment's own texture maps along, as for [`write_prop`] — a garment
 /// takes the BODY's skin weights but keeps its OWN material.
-pub fn write_garment(model: &RawModel, source_fbx: &Path, source_name: &str, out: &Path, fit: &Fit) -> Result<()> {
+pub fn write_garment(
+    model: &RawModel,
+    source_fbx: &Path,
+    source_name: &str,
+    out: &Path,
+    fit: &Fit,
+) -> Result<()> {
     let body_path = fitting_base();
     let body_text = crate::package::read_text(&body_path).with_context(|| {
-        format!("reading the fitting body rig {} to skin the garment onto", body_path.display())
+        format!(
+            "reading the fitting body rig {} to skin the garment onto",
+            body_path.display()
+        )
     })?;
     let body: RigFile = serde_json::from_str(&body_text).context("parsing the base body rig")?;
     let mut rig = bake_garment(model, source_name, &body, &fit.socket, &fit.to_attach())?;
@@ -618,7 +675,10 @@ pub fn fitting_base() -> std::path::PathBuf {
     // applies between an at-rest file and a stale raw twin. Staging is still searched, so a
     // freshly imported base works before it has been promoted.
     let roots = crate::roots::roots();
-    for characters in [roots.package().join("characters"), roots.staging().join("characters")] {
+    for characters in [
+        roots.package().join("characters"),
+        roots.staging().join("characters"),
+    ] {
         for candidate in ["GolemBase_Low", "GolemBase"] {
             let p = characters.join(candidate).join(format!("{candidate}.json"));
             if crate::package::file_exists(&p) {
@@ -634,11 +694,20 @@ pub fn fitting_base() -> std::path::PathBuf {
 /// piece. Only seeds the editor's socket picker; the user then confirms or changes it.
 pub fn garment_socket(name: &str) -> &'static str {
     let n = name.to_ascii_lowercase();
-    if n.contains("pant") || n.contains("hem") || n.contains("skirt") || n.contains("belt") || n.contains("leg") {
+    if n.contains("pant")
+        || n.contains("hem")
+        || n.contains("skirt")
+        || n.contains("belt")
+        || n.contains("leg")
+    {
         "pelvis"
     } else if n.contains("boot") || n.contains("shoe") || n.contains("foot") {
         "calf_l"
-    } else if n.contains("glove") || n.contains("gauntlet") || n.contains("hand") || n.contains("bracer") {
+    } else if n.contains("glove")
+        || n.contains("gauntlet")
+        || n.contains("hand")
+        || n.contains("bracer")
+    {
         "lowerarm_l"
     } else if n.contains("hood") || n.contains("hat") || n.contains("helm") || n.contains("mask") {
         "head"
@@ -655,10 +724,15 @@ mod tests {
     use crate::rig::rename_to_canonical;
 
     fn find_character() -> Option<std::path::PathBuf> {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
-        std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok().map(|e| e.path())).find(|p| {
-            p.to_string_lossy().contains("Character_output") && p.extension().map(|e| e == "fbx").unwrap_or(false)
-        })
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismHumanBaseA");
+        std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .find(|p| {
+                p.to_string_lossy().contains("Character_output")
+                    && p.extension().map(|e| e == "fbx").unwrap_or(false)
+            })
     }
 
     /// A real static-PROP FBX (a weapon) — no skeleton. Skips the prop tests when the content tree
@@ -724,13 +798,17 @@ mod tests {
         write_prop(&tiny_model(), &fbx, "PieceA", &out, &Fit::default()).expect("the prop writes");
 
         let rig: RigFile =
-            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written")).unwrap();
+            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written"))
+                .unwrap();
         let m = rig.mesh.materials.first().expect("the prop has a material");
         assert_eq!(m.base_color, "PieceA_BaseColor.png", "albedo wired");
         assert_eq!(m.metalness, "PieceA_Metallic.png");
         assert_eq!(m.roughness, "PieceA_Roughness.png");
         assert_eq!(m.normal, "PieceA_Normal.png");
-        assert_eq!(m.name, "PieceA", "named for the asset, as the character import names it");
+        assert_eq!(
+            m.name, "PieceA",
+            "named for the asset, as the character import names it"
+        );
         assert_eq!(m.slot, "PieceA");
 
         // The BYTES say which file actually landed: this piece's maps, and the dedicated metallic —
@@ -739,8 +817,16 @@ mod tests {
             std::fs::read_to_string(out_dir.join(n))
                 .unwrap_or_else(|e| panic!("{n} must sit beside the rig: {e}"))
         };
-        assert_eq!(beside("PieceA_BaseColor.png"), "A-base", "this piece's albedo, not the sibling's");
-        assert_eq!(beside("PieceA_Metallic.png"), "A-metal", "the dedicated metallic, not the packed map");
+        assert_eq!(
+            beside("PieceA_BaseColor.png"),
+            "A-base",
+            "this piece's albedo, not the sibling's"
+        );
+        assert_eq!(
+            beside("PieceA_Metallic.png"),
+            "A-metal",
+            "the dedicated metallic, not the packed map"
+        );
         assert_eq!(beside("PieceA_Roughness.png"), "A-rough");
         assert_eq!(beside("PieceA_Normal.png"), "A-normal");
         let _ = std::fs::remove_dir_all(&root);
@@ -779,16 +865,25 @@ mod tests {
         }
 
         let out = out_dir.join("Duster.json");
-        let fit = Fit { socket: socket.to_string(), ..Default::default() };
+        let fit = Fit {
+            socket: socket.to_string(),
+            ..Default::default()
+        };
         write_garment(&tiny_model(), &fbx, "Duster", &out, &fit).expect("the garment writes");
 
         let rig: RigFile =
-            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written")).unwrap();
-        let m = rig.mesh.materials.first().expect("the garment has a material");
+            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written"))
+                .unwrap();
+        let m = rig
+            .mesh
+            .materials
+            .first()
+            .expect("the garment has a material");
         assert_eq!(m.base_color, "Duster_BaseColor.png");
         assert_eq!(m.roughness, "Duster_Roughness.png");
         assert_eq!(
-            std::fs::read_to_string(out_dir.join("Duster_BaseColor.png")).expect("copied beside the rig"),
+            std::fs::read_to_string(out_dir.join("Duster_BaseColor.png"))
+                .expect("copied beside the rig"),
             "duster-base"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -817,7 +912,8 @@ mod tests {
         write_prop(&tiny_model(), &fbx, name, &out, &Fit::default()).expect("the hair prop writes");
 
         let rig: RigFile =
-            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written")).unwrap();
+            serde_json::from_str(&crate::package::read_text(&out).expect("the rig was written"))
+                .unwrap();
         let m = rig.mesh.materials.first().expect("the prop has a material");
         for (slot, got) in [
             ("BaseColor", &m.base_color),
@@ -826,10 +922,17 @@ mod tests {
             ("Normal", &m.normal),
         ] {
             let want = format!("{name}_{slot}.png");
-            assert_eq!(got.as_str(), want, "{slot} referenced by the content-standard basename");
+            assert_eq!(
+                got.as_str(),
+                want,
+                "{slot} referenced by the content-standard basename"
+            );
             let copied = dir.join(&want);
             assert!(copied.exists(), "{want} copied beside the rig");
-            assert!(std::fs::metadata(&copied).unwrap().len() > 0, "{want} is not empty");
+            assert!(
+                std::fs::metadata(&copied).unwrap().len() > 0,
+                "{want} is not empty"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -850,16 +953,34 @@ mod tests {
         assert!(!model.vertices.is_empty(), "but it has geometry");
 
         let rig = bake_prop(&model, "Dagger");
-        assert!(rig.skeleton.bones.is_empty(), "a prop bakes with NO skeleton (no synthesized root)");
+        assert!(
+            rig.skeleton.bones.is_empty(),
+            "a prop bakes with NO skeleton (no synthesized root)"
+        );
         assert!(!rig.retarget, "a rigid prop does not retarget");
-        assert_eq!(rig.mesh.vertices.len(), model.vertices.len(), "every vertex carried through");
-        assert_eq!(rig.mesh.indices.len(), rig.mesh.vertices.len(), "sequential-triple indices");
+        assert_eq!(
+            rig.mesh.vertices.len(),
+            model.vertices.len(),
+            "every vertex carried through"
+        );
+        assert_eq!(
+            rig.mesh.indices.len(),
+            rig.mesh.vertices.len(),
+            "sequential-triple indices"
+        );
         assert_eq!(rig.mesh.submeshes.len(), 1);
-        assert_eq!(rig.mesh.submeshes[0].count, rig.mesh.indices.len(), "one submesh spans the mesh");
+        assert_eq!(
+            rig.mesh.submeshes[0].count,
+            rig.mesh.indices.len(),
+            "one submesh spans the mesh"
+        );
         // The skin is inert and UNSHIFTED — there is no root to shift onto, so `[0;4]` stays `[0;4]`
         // (the character bake's `+1` shift would point these at a non-existent bone 1).
         assert!(
-            rig.mesh.vertices.iter().all(|v| v.joints == [0, 0, 0, 0] && v.weights == [0.0; 4]),
+            rig.mesh
+                .vertices
+                .iter()
+                .all(|v| v.joints == [0, 0, 0, 0] && v.weights == [0.0; 4]),
             "an unrigged prop keeps its zero skin verbatim"
         );
         assert_eq!(rig.source.source_axis, "Z_up");
@@ -897,20 +1018,50 @@ mod tests {
             source: Source::default(),
             skeleton: Skeleton {
                 bones: vec![
-                    BoneRaw { name: "root".into(), parent: -1, local: IDENTITY16, inverse_bind: IDENTITY16 },
-                    BoneRaw { name: "chest".into(), parent: 0, local: IDENTITY16, inverse_bind: ib_chest },
+                    BoneRaw {
+                        name: "root".into(),
+                        parent: -1,
+                        local: IDENTITY16,
+                        inverse_bind: IDENTITY16,
+                    },
+                    BoneRaw {
+                        name: "chest".into(),
+                        parent: 0,
+                        local: IDENTITY16,
+                        inverse_bind: ib_chest,
+                    },
                 ],
             },
             mesh: Mesh {
                 vertices: vec![
                     // chest-bound, AT the chest rest position — the nearest to the baked garment vert.
-                    Vertex { p: [0.0, 0.0, 100.0], n: [0.0, 0.0, 1.0], uv: [0.0, 0.0], joints: [1, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0] },
+                    Vertex {
+                        p: [0.0, 0.0, 100.0],
+                        n: [0.0, 0.0, 1.0],
+                        uv: [0.0, 0.0],
+                        joints: [1, 0, 0, 0],
+                        weights: [1.0, 0.0, 0.0, 0.0],
+                    },
                     // root-bound, at the origin — farther away, must NOT be chosen.
-                    Vertex { p: [0.0, 0.0, 0.0], n: [0.0, 0.0, 1.0], uv: [0.0, 0.0], joints: [0, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0] },
+                    Vertex {
+                        p: [0.0, 0.0, 0.0],
+                        n: [0.0, 0.0, 1.0],
+                        uv: [0.0, 0.0],
+                        joints: [0, 0, 0, 0],
+                        weights: [1.0, 0.0, 0.0, 0.0],
+                    },
                 ],
                 indices: vec![0, 1, 0],
-                submeshes: vec![Submesh { material: 0, start: 0, count: 3 }],
-                materials: vec![Material { name: "m".into(), slot: "m".into(), ..Default::default() }],
+                submeshes: vec![Submesh {
+                    material: 0,
+                    start: 0,
+                    count: 3,
+                }],
+                materials: vec![Material {
+                    name: "m".into(),
+                    slot: "m".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
             clips: Vec::new(),
@@ -919,7 +1070,13 @@ mod tests {
             collision: Default::default(),
         };
         let garment = RawModel {
-            vertices: vec![RawVertex { p: [0.0, 0.0, 0.0], n: [0.0, 0.0, 1.0], uv: [0.3, 0.4], joints: [0; 4], weights: [0.0; 4] }],
+            vertices: vec![RawVertex {
+                p: [0.0, 0.0, 0.0],
+                n: [0.0, 0.0, 1.0],
+                uv: [0.3, 0.4],
+                joints: [0; 4],
+                weights: [0.0; 4],
+            }],
             indices: vec![0],
             bones: Vec::new(),
         };
@@ -930,7 +1087,8 @@ mod tests {
             scale: [1.0; 3],
             uniform: 1.0,
         };
-        let rig = bake_garment(&garment, "TestGarment", &body, "chest", &fit).expect("garment bakes");
+        let rig =
+            bake_garment(&garment, "TestGarment", &body, "chest", &fit).expect("garment bakes");
 
         // Carries the body's FULL skeleton (so load_outfit's by-name remap is the identity).
         assert_eq!(rig.skeleton.bones.len(), 2);
@@ -944,7 +1102,11 @@ mod tests {
             "placed at the socket rest frame, got {:?}",
             v.p
         );
-        assert_eq!(v.joints, [1, 0, 0, 0], "took the chest-bound body vertex's joints");
+        assert_eq!(
+            v.joints,
+            [1, 0, 0, 0],
+            "took the chest-bound body vertex's joints"
+        );
         assert_eq!(v.weights, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(v.uv, [0.3, 0.4], "the garment keeps its own UV");
     }
@@ -958,7 +1120,11 @@ mod tests {
             .map(|i| {
                 let f = i as f32;
                 Vertex {
-                    p: [(f * 7.3) % 60.0 - 30.0, (f * 3.1) % 90.0 - 45.0, (f * 11.7) % 180.0],
+                    p: [
+                        (f * 7.3) % 60.0 - 30.0,
+                        (f * 3.1) % 90.0 - 45.0,
+                        (f * 11.7) % 180.0,
+                    ],
                     n: [0.0, 0.0, 1.0],
                     uv: [0.0, 0.0],
                     joints: [i % 60, 0, 0, 0],
@@ -989,7 +1155,10 @@ mod tests {
             // Ties are legitimate, so compare the DISTANCE — what the transfer actually depends on.
             let dg = (Vec3::from(verts[g].p) - p).length_squared();
             let db = (Vec3::from(verts[b].p) - p).length_squared();
-            assert!((dg - db).abs() < 1e-4, "grid picked a farther vertex at {p}: {dg} vs {db}");
+            assert!(
+                (dg - db).abs() < 1e-4,
+                "grid picked a farther vertex at {p}: {dg} vs {db}"
+            );
         }
     }
 
@@ -1012,8 +1181,8 @@ mod tests {
             eprintln!("skipping: body carries no skinned mesh");
             return;
         }
-        let fit_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/source/PrismFits/Muse001");
+        let fit_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/source/PrismFits/Muse001");
         let Some(fbx) = std::fs::read_dir(&fit_dir).ok().and_then(|rd| {
             rd.filter_map(|e| e.ok().map(|e| e.path()))
                 .find(|p| p.extension().map(|e| e == "fbx").unwrap_or(false))
@@ -1022,29 +1191,56 @@ mod tests {
             return;
         };
         let garment = parse_fbx(&fbx).expect("the raw garment FBX parses");
-        assert!(garment.bones.is_empty(), "a raw Meshy garment carries no skeleton");
+        assert!(
+            garment.bones.is_empty(),
+            "a raw Meshy garment carries no skeleton"
+        );
 
         let socket = ["spine_02", "spine_01", "pelvis"]
             .into_iter()
             .find(|s| body.skeleton.bones.iter().any(|b| b.name == *s))
             .expect("the body has a torso socket");
-        let fit = Attach { socket: socket.into(), offset: [0.0; 3], rotate: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3], uniform: 1.0 };
+        let fit = Attach {
+            socket: socket.into(),
+            offset: [0.0; 3],
+            rotate: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+            uniform: 1.0,
+        };
         let rig = bake_garment(&garment, "Muse001", &body, socket, &fit).expect("garment bakes");
 
-        assert_eq!(rig.skeleton.bones.len(), body.skeleton.bones.len(), "carries the body's full skeleton");
-        assert_eq!(rig.mesh.vertices.len(), garment.vertices.len(), "every garment vertex skinned");
+        assert_eq!(
+            rig.skeleton.bones.len(),
+            body.skeleton.bones.len(),
+            "carries the body's full skeleton"
+        );
+        assert_eq!(
+            rig.mesh.vertices.len(),
+            garment.vertices.len(),
+            "every garment vertex skinned"
+        );
         assert_eq!(rig.source.applied_transform, "baked-fit");
         let nb = body.skeleton.bones.len() as u32;
         for v in &rig.mesh.vertices {
-            assert!(v.joints.iter().all(|&j| j < nb), "joints index the body skeleton");
+            assert!(
+                v.joints.iter().all(|&j| j < nb),
+                "joints index the body skeleton"
+            );
             let w: f32 = v.weights.iter().sum();
-            assert!((w - 1.0).abs() < 0.05 || w == 0.0, "transferred weights normalised, got {w}");
+            assert!(
+                (w - 1.0).abs() < 0.05 || w == 0.0,
+                "transferred weights normalised, got {w}"
+            );
             assert!(Vec3::from(v.p).is_finite() && Vec3::from(v.n).is_finite());
         }
         // Round-trips through the real deserializer the paperdoll loads with.
         let json = serde_json::to_string(&rig).unwrap();
         let _back: RigFile = serde_json::from_str(&json).unwrap();
-        eprintln!("baked {} garment verts onto {} body bones", rig.mesh.vertices.len(), nb);
+        eprintln!(
+            "baked {} garment verts onto {} body bones",
+            rig.mesh.vertices.len(),
+            nb
+        );
     }
 
     /// The bake of the conformed female base yields the oracle's shape: 66 bones with a synthesized
@@ -1064,26 +1260,46 @@ mod tests {
         conform_to_canonical(&mut model, &reference).unwrap();
         let rig = bake_rig(&model, "PrismHumanBaseA");
 
-        assert_eq!(rig.skeleton.bones.len(), 66, "65 conformed + synthesized root");
+        assert_eq!(
+            rig.skeleton.bones.len(),
+            66,
+            "65 conformed + synthesized root"
+        );
         assert_eq!(rig.skeleton.bones[0].name, "root");
         assert_eq!(rig.skeleton.bones[0].parent, -1);
         assert_eq!(rig.skeleton.bones[0].local, IDENTITY16, "root is identity");
         let by_name = |n: &str| rig.skeleton.bones.iter().position(|b| b.name == n);
         let (pelvis, head) = (by_name("pelvis").unwrap(), by_name("head").unwrap());
-        assert_eq!(rig.skeleton.bones[pelvis].parent, 0, "pelvis parents to root");
+        assert_eq!(
+            rig.skeleton.bones[pelvis].parent, 0,
+            "pelvis parents to root"
+        );
         for n in ["jaw", "eye_l", "eye_r"] {
-            assert_eq!(rig.skeleton.bones[by_name(n).unwrap()].parent as usize, head, "{n} under head");
+            assert_eq!(
+                rig.skeleton.bones[by_name(n).unwrap()].parent as usize,
+                head,
+                "{n} under head"
+            );
         }
         // Every parent index is valid, and the tree is topological (parent precedes child).
         for (i, b) in rig.skeleton.bones.iter().enumerate() {
-            assert!(b.parent == -1 || (b.parent >= 0 && (b.parent as usize) < i), "bone {i} '{}' parent {} precedes it", b.name, b.parent);
+            assert!(
+                b.parent == -1 || (b.parent >= 0 && (b.parent as usize) < i),
+                "bone {i} '{}' parent {} precedes it",
+                b.name,
+                b.parent
+            );
         }
         assert_eq!(rig.mesh.vertices.len(), model.vertices.len());
         assert_eq!(rig.mesh.submeshes.len(), 1);
         assert_eq!(rig.mesh.submeshes[0].count, rig.mesh.indices.len());
         // Joints are valid bone indices (shifted into 1..=65, weighted ones real).
         let nb = rig.skeleton.bones.len() as u32;
-        assert!(rig.mesh.vertices.iter().all(|v| v.joints.iter().all(|&j| j < nb)));
+        assert!(rig
+            .mesh
+            .vertices
+            .iter()
+            .all(|v| v.joints.iter().all(|&j| j < nb)));
     }
 
     /// END-TO-END real pipeline: parse → rename → conform → bake → WRITE the flicker.rig → reload it
@@ -1094,7 +1310,9 @@ mod tests {
     #[test]
     #[ignore]
     fn bakes_and_reloads_through_the_engine_loader() {
-        let (Some(fbx), reference) = (find_character(), default_reference()) else { return };
+        let (Some(fbx), reference) = (find_character(), default_reference()) else {
+            return;
+        };
         if !reference.exists() {
             return;
         }
@@ -1109,11 +1327,23 @@ mod tests {
         let bytes = std::fs::metadata(&out).unwrap().len();
         eprintln!("wrote {} ({:.1} MB)", out.display(), bytes as f64 / 1.0e6);
 
-        let loaded = flicker_skeletal::format::load_dir(&dir).expect("engine loader accepts the bake");
-        eprintln!("engine loaded {} bones, {} verts", loaded.bones.len(), loaded.mesh.vertices.len());
+        let loaded =
+            flicker_skeletal::format::load_dir(&dir).expect("engine loader accepts the bake");
+        eprintln!(
+            "engine loaded {} bones, {} verts",
+            loaded.bones.len(),
+            loaded.mesh.vertices.len()
+        );
         assert_eq!(loaded.bones.len(), 66, "engine sees 66 bones");
-        assert_eq!(loaded.mesh.vertices.len(), model.vertices.len(), "mesh carried through");
-        assert!(loaded.bones.iter().any(|b| b.name == "root"), "root present");
+        assert_eq!(
+            loaded.mesh.vertices.len(),
+            model.vertices.len(),
+            "mesh carried through"
+        );
+        assert!(
+            loaded.bones.iter().any(|b| b.name == "root"),
+            "root present"
+        );
         // `write_rig` is the EDITOR's commit path (the CLI `import_folder` wires its own). It must
         // bring the source's maps along, or a character committed from the bench ships UNTEXTURED —
         // exactly the gap props carried until they were routed through the same call. Guarded here
@@ -1130,7 +1360,11 @@ mod tests {
         // Provenance too, not only the material: `source.textures` is the manifest a validator reads
         // to answer "does this asset carry its maps?" — it must list what was actually copied.
         assert!(
-            loaded.source.textures.iter().any(|t| t == "PrismHumanBaseA_BaseColor.png"),
+            loaded
+                .source
+                .textures
+                .iter()
+                .any(|t| t == "PrismHumanBaseA_BaseColor.png"),
             "the copied maps are recorded in the rig's source provenance, got {:?}",
             loaded.source.textures
         );
@@ -1152,8 +1386,22 @@ mod tests {
             }],
             indices: vec![0],
             bones: vec![
-                RawBone { name: "pelvis".into(), parent: -1, translation: [0.0, 0.0, 95.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3], inverse_bind: IDENTITY16 },
-                RawBone { name: "spine_01".into(), parent: 0, translation: [0.0, 0.0, 10.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0; 3], inverse_bind: IDENTITY16 },
+                RawBone {
+                    name: "pelvis".into(),
+                    parent: -1,
+                    translation: [0.0, 0.0, 95.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                    inverse_bind: IDENTITY16,
+                },
+                RawBone {
+                    name: "spine_01".into(),
+                    parent: 0,
+                    translation: [0.0, 0.0, 10.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: [1.0; 3],
+                    inverse_bind: IDENTITY16,
+                },
             ],
         };
         let rig = bake_rig(&model, "tiny");
@@ -1162,9 +1410,19 @@ mod tests {
         assert_eq!(back.skeleton.bones.len(), 3, "root + pelvis + spine_01");
         assert_eq!(back.skeleton.bones[0].name, "root");
         assert_eq!(back.skeleton.bones[1].name, "pelvis");
-        assert_eq!(back.skeleton.bones[1].parent, 0, "pelvis re-parented onto root");
-        assert_eq!(back.skeleton.bones[2].parent, 1, "spine_01 parent shifted +1");
-        assert_eq!(back.mesh.vertices[0].joints, [1, 1, 1, 1], "joints shifted for the root");
+        assert_eq!(
+            back.skeleton.bones[1].parent, 0,
+            "pelvis re-parented onto root"
+        );
+        assert_eq!(
+            back.skeleton.bones[2].parent, 1,
+            "spine_01 parent shifted +1"
+        );
+        assert_eq!(
+            back.mesh.vertices[0].joints,
+            [1, 1, 1, 1],
+            "joints shifted for the root"
+        );
         assert!(back.retarget);
         assert_eq!(back.source.source_axis, "Z_up");
     }

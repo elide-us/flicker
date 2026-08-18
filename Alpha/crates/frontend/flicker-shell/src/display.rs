@@ -114,7 +114,9 @@ pub const RESOLUTIONS: [Resolution; 6] = [
 /// index a size lands on may differ per monitor without breaking a saved file.
 pub fn enumerate(sizes: &[(u32, u32)]) -> Vec<Resolution> {
     if sizes.is_empty() {
-        tracing::warn!("no video modes enumerated (headless?) — using the fallback resolution rungs");
+        tracing::warn!(
+            "no video modes enumerated (headless?) — using the fallback resolution rungs"
+        );
         return RESOLUTIONS.to_vec();
     }
     let mut rungs: Vec<Resolution> = sizes.iter().map(|&(w, h)| Resolution { w, h }).collect();
@@ -125,7 +127,10 @@ pub fn enumerate(sizes: &[(u32, u32)]) -> Vec<Resolution> {
 
 /// The dropdown index of a display mode (its position in [`DisplayMode::ALL`]).
 pub fn mode_index(mode: DisplayMode) -> usize {
-    DisplayMode::ALL.iter().position(|m| *m == mode).unwrap_or(0)
+    DisplayMode::ALL
+        .iter()
+        .position(|m| *m == mode)
+        .unwrap_or(0)
 }
 
 /// The index in `list` CLOSEST to `res` (nearest rung by pixel distance), so an off-ladder
@@ -198,6 +203,33 @@ pub fn settings_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// The per-user settings directory for an INSTALLED build, where the install
+/// tree (Program Files / .app / /opt) is read-only and `settings.json` cannot
+/// live beside the exe: `%APPDATA%\<app>` · `~/Library/Application Support/<app>`
+/// · `$XDG_CONFIG_HOME|~/.config/<app>`. The name is used verbatim on every
+/// platform — one representation. Best-effort creation; with no resolvable home
+/// it falls back to `"."` exactly like [`settings_dir`], so startup never blocks.
+pub fn user_settings_dir(app: &str) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let base = std::env::var_os("APPDATA").map(PathBuf::from);
+    #[cfg(target_os = "macos")]
+    let base =
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+
+    match base {
+        Some(b) => {
+            let dir = b.join(app);
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        }
+        None => PathBuf::from("."),
+    }
+}
+
 // Display persistence is unified into the shell's `GameSettings` (one `settings.json`,
 // one writer): `set_current` folds a change into it, and the shell's settings load
 // seeds `CURRENT` via `seed`. The old DisplaySetting-only file I/O — which shared the
@@ -235,9 +267,20 @@ mod tests {
     #[test]
     fn resolution_index_is_nearest_over_the_list() {
         let list = enumerate(&[(1280, 720), (1920, 1080), (3840, 2160)]);
-        assert_eq!(resolution_index(&list, Resolution { w: 1920, h: 1080 }), 1, "exact rung");
-        assert_eq!(resolution_index(&list, Resolution { w: 1850, h: 1040 }), 1, "nearest rung");
-        assert_eq!(resolution_at(&list, 2), Some(Resolution { w: 3840, h: 2160 }));
+        assert_eq!(
+            resolution_index(&list, Resolution { w: 1920, h: 1080 }),
+            1,
+            "exact rung"
+        );
+        assert_eq!(
+            resolution_index(&list, Resolution { w: 1850, h: 1040 }),
+            1,
+            "nearest rung"
+        );
+        assert_eq!(
+            resolution_at(&list, 2),
+            Some(Resolution { w: 3840, h: 2160 })
+        );
         assert_eq!(resolution_at(&list, 9), None, "out of range");
     }
 }

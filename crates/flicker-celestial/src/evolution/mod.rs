@@ -95,7 +95,11 @@ pub struct BodyEvolution {
 impl BodyEvolution {
     /// A freshly-aggregated body (Epoch 1) at age zero.
     pub fn new(world: HexWorld) -> Self {
-        Self { world, stage: Stage::Aggregation, age_myr: 0.0 }
+        Self {
+            world,
+            stage: Stage::Aggregation,
+            age_myr: 0.0,
+        }
     }
 
     /// Advance the body by `dt_myr`: transport its material one step ([`step_world`]) and age it.
@@ -132,7 +136,11 @@ fn gaseous(world: &HexWorld) -> bool {
     if total <= 0.0 {
         return false;
     }
-    let gas: f64 = world.cells().iter().map(|c| c.amount(H) + c.amount(HE)).sum();
+    let gas: f64 = world
+        .cells()
+        .iter()
+        .map(|c| c.amount(H) + c.amount(HE))
+        .sum();
     gas > 0.5 * total
 }
 
@@ -155,7 +163,10 @@ mod tests {
         let before = e.world.total();
         let dirs = vec![Vec3::X; 7];
         let neighbors = vec![Vec::new(); 7];
-        let ctx = StepCtx { dirs: &dirs, neighbors: &neighbors };
+        let ctx = StepCtx {
+            dirs: &dirs,
+            neighbors: &neighbors,
+        };
         e.step(50.0, &ctx);
         assert_eq!(e.age_myr, 50.0);
         assert_eq!(e.world.total(), before, "stepping never changes total mass");
@@ -166,16 +177,38 @@ mod tests {
         // One ring cell flowing into the next, so any advection shows as a change at cell 0.
         let dirs = vec![Vec3::X, Vec3::new(0.0, 0.0, -1.0)];
         let neighbors = vec![vec![1u32], vec![0u32]];
-        let ctx = StepCtx { dirs: &dirs, neighbors: &neighbors };
+        let ctx = StepCtx {
+            dirs: &dirs,
+            neighbors: &neighbors,
+        };
 
         // Gas world (H/He) → advects → cell 0 loses material to its neighbour.
-        let gas = HexWorld::from_cells(1, vec![Composition::from_iter([(H, 80.0), (HE, 20.0)]), Composition::new()]);
+        let gas = HexWorld::from_cells(
+            1,
+            vec![
+                Composition::from_iter([(H, 80.0), (HE, 20.0)]),
+                Composition::new(),
+            ],
+        );
         let stepped_gas = step_world(&gas, 1.0, &ctx);
-        assert!(stepped_gas.cell(0).unwrap().total() < 100.0, "gas world transports material");
+        assert!(
+            stepped_gas.cell(0).unwrap().total() < 100.0,
+            "gas world transports material"
+        );
         assert_eq!(stepped_gas.total(), gas.total(), "and conserves it");
 
         // Solid world (O/Fe) → holds (density sort is the next slice) → unchanged.
-        let solid = HexWorld::from_cells(1, vec![Composition::from_iter([(8, 80.0), (26, 20.0)]), Composition::new()]);
-        assert_eq!(step_world(&solid, 1.0, &ctx), solid, "solid world holds for now");
+        let solid = HexWorld::from_cells(
+            1,
+            vec![
+                Composition::from_iter([(8, 80.0), (26, 20.0)]),
+                Composition::new(),
+            ],
+        );
+        assert_eq!(
+            step_world(&solid, 1.0, &ctx),
+            solid,
+            "solid world holds for now"
+        );
     }
 }

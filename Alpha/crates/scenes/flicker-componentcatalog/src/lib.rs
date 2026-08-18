@@ -1,14 +1,15 @@
 //! flicker-componentcatalog: the UI TEST scene — a workbench that shows ONE demo copy
 //! of every Rust widget component ([`RUST_COMPONENT_KINDS`]) with all its features
-//! enabled. Every component sits in its own card box; all 25 flow top-to-bottom in a
+//! enabled. Every component sits in its own card box; all 26 flow top-to-bottom in a
 //! scrollable tray on the right. A left nav rail of bookmarks SCROLLS the tray to a
 //! card, and the bookmark of the card at the top of the view highlights.
 //!
 //! A Developer-realm bench (like Click Trainer), on the ratified pattern:
 //! - **template-free** — `componentcatalog.scene.json` names primitive component KINDS
 //!   directly (201F4F51), loaded by the bench; every display string is a `$token`.
-//! - **no Lua** — nothing is gated or arranged (the tray is static), so like Click
-//!   Trainer this scene has no orchestration layer; the scroll-to is pure engine wiring.
+//! - **pair-script Lua** (five-line split, 491BD9BB) — `componentcatalog.lua` owns the
+//!   scene's component logic (demo seeds, nav highlight, the Paged Menu gates); the
+//!   tray itself is static and the scroll-to stays pure engine wiring.
 //! - **on the pump** (input-P3, 0569DA9B): owns no resolver — the PUMP resolves this
 //!   frame's events and hands them in via [`SceneInput`].
 //!
@@ -30,8 +31,6 @@ use flicker_shell::{PauseScene, Theme};
 /// demo seeds, nav highlight, the Paged Menu card's page/tab gates).
 const CATALOG_SCRIPT: &str =
     include_str!("../../../../content/sensorium/scripts/componentcatalog.lua");
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// The scrollable content tray's `bind` — the offset (px) the bench sets to scroll-to a
 /// card, and the wheel writes as you scroll.
@@ -113,7 +112,7 @@ impl ComponentCatalog {
     /// kernel parsed the file; this bench is only the behaviour that plays it) and
     /// seeds the demo values.
     pub fn new(def: &SceneDef) -> Self {
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let ui_styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         let tree = def.tree.clone();
         if tree.is_none() {
             tracing::error!("scene '{}' declares no `tree` — no UI", def.id);
@@ -186,7 +185,9 @@ impl ComponentCatalog {
     /// above card `i`; the active card is the one whose stack ≈ the offset.
     fn active_card(&self, rects: &[(String, [f32; 4])], scroll: f32, fallback: usize) -> usize {
         let card_y = |id: &str| rects.iter().find(|(n, _)| n == id).map(|(_, r)| r[1]);
-        let Some(first) = self.cards.first().and_then(|id| card_y(id)) else { return fallback };
+        let Some(first) = self.cards.first().and_then(|id| card_y(id)) else {
+            return fallback;
+        };
         let mut best = (f32::MAX, fallback);
         for (i, id) in self.cards.iter().enumerate() {
             if let Some(ci) = card_y(id) {
@@ -330,12 +331,22 @@ mod tests {
         let def = SceneDef::parse("componentcatalog", CATALOG_SCENE)
             .expect("componentcatalog.scene.json loads");
         let cat = ComponentCatalog::new(&def);
-        assert!(cat.script.is_some(), "componentcatalog.lua loads (the pair script)");
+        assert!(
+            cat.script.is_some(),
+            "componentcatalog.lua loads (the pair script)"
+        );
         let m = cat.model();
         assert!(m.is_on("cat_check_val"), "the checkbox demo seeds ON");
-        assert_eq!(m.text("nav_sty_0"), Some(NAV_ACTIVE_STYLE), "bookmark 0 starts active");
+        assert_eq!(
+            m.text("nav_sty_0"),
+            Some(NAV_ACTIVE_STYLE),
+            "bookmark 0 starts active"
+        );
         assert_eq!(m.text("nav_sty_1"), Some(NAV_IDLE_STYLE), "the rest rest");
-        assert!(m.is_on("cat_pm_on_p0"), "the Paged Menu card opens on page 1");
+        assert!(
+            m.is_on("cat_pm_on_p0"),
+            "the Paged Menu card opens on page 1"
+        );
     }
 
     /// THE AUTHORED-STYLE-PATH GATE (S1 of the styling pass): every style path any
@@ -365,7 +376,10 @@ mod tests {
         // carry no `behaviour` — the manifest skips that folder and a host scene
         // merges them — but their authored paths must resolve all the same.
         fn collect(node: &serde_json::Value, out: &mut Vec<(String, String)>) {
-            let kind = node.get("component").and_then(|c| c.as_str()).unwrap_or("?");
+            let kind = node
+                .get("component")
+                .and_then(|c| c.as_str())
+                .unwrap_or("?");
             for prop in BLOCK_PROPS {
                 if let Some(path) = node.get(prop).and_then(|p| p.as_str()) {
                     out.push((kind.to_string(), path.to_string()));
@@ -384,7 +398,9 @@ mod tests {
         for folder in [dir.clone(), dir.join("shared")] {
             for entry in std::fs::read_dir(&folder).expect("scenes folder reads") {
                 let p = entry.expect("dir entry").path();
-                if p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".scene.json")) {
+                if p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(".scene.json"))
+                {
                     files.push(p);
                 }
             }
@@ -402,13 +418,18 @@ mod tests {
             let text = std::fs::read_to_string(&path).expect("scene file reads");
             let doc: serde_json::Value = serde_json::from_str(&text)
                 .unwrap_or_else(|e| panic!("{id}.scene.json parses: {e}"));
-            let Some(tree) = doc.get("tree") else { continue };
+            let Some(tree) = doc.get("tree") else {
+                continue;
+            };
             // A shared modal tree renders under its HOST's merge (today: Main
             // merges scenes/shared/* back via main_scene_styles), so its paths
             // resolve against host styles ⊕ its own — that hosting contract is
             // part of what this gate pins.
             let in_shared = path.parent().is_some_and(|p| p.ends_with("shared"));
-            let own = doc.get("styles").cloned().unwrap_or(serde_json::Value::Null);
+            let own = doc
+                .get("styles")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let scene_styles = if in_shared {
                 let main_text = std::fs::read_to_string(dir.join("Main.scene.json"))
                     .expect("the host scene file reads");
@@ -424,15 +445,15 @@ mod tests {
             } else {
                 own
             };
-            let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&scene_styles));
+            let styles = flicker::ui::load_shared_styles(Some(&scene_styles));
             let mut named = Vec::new();
             collect(tree, &mut named);
             for (kind, p) in named {
                 match jwalk(&styles, &p) {
                     Some(v) if v.is_object() => {}
-                    Some(_) => {
-                        broken.push(format!("{id}: {kind} style '{p}' resolves to a non-block value"))
-                    }
+                    Some(_) => broken.push(format!(
+                        "{id}: {kind} style '{p}' resolves to a non-block value"
+                    )),
                     None => broken.push(format!("{id}: {kind} names style '{p}' → NOTHING")),
                 }
             }
@@ -451,7 +472,12 @@ mod tests {
     /// stack/popup_panel) consume the height as the MAIN extent and need nothing.
     #[test]
     fn every_ladder_button_in_a_row_sits_in_an_aligned_flow() {
-        fn walk(node: &serde_json::Value, parent: Option<&serde_json::Value>, id: &str, broken: &mut Vec<String>) {
+        fn walk(
+            node: &serde_json::Value,
+            parent: Option<&serde_json::Value>,
+            id: &str,
+            broken: &mut Vec<String>,
+        ) {
             let is_ladder_button = node.get("component").and_then(|c| c.as_str()) == Some("button")
                 && node.get("size_class").is_some()
                 && node.get("height").is_none();
@@ -480,7 +506,10 @@ mod tests {
         for folder in [dir.clone(), dir.join("shared")] {
             for entry in std::fs::read_dir(&folder).expect("scenes folder reads") {
                 let p = entry.expect("dir entry").path();
-                if !p.file_name().is_some_and(|n| n.to_string_lossy().ends_with(".scene.json")) {
+                if !p
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(".scene.json"))
+                {
                     continue;
                 }
                 let id = p.file_name().expect("name").to_string_lossy().to_string();
@@ -492,7 +521,11 @@ mod tests {
                 }
             }
         }
-        assert!(broken.is_empty(), "ladder buttons need an aligned row:\n{}", broken.join("\n"));
+        assert!(
+            broken.is_empty(),
+            "ladder buttons need an aligned row:\n{}",
+            broken.join("\n")
+        );
     }
 
     /// PROOF the catalog is NOT hardcoded — the full pipeline, walked end to end
@@ -500,7 +533,7 @@ mod tests {
     ///
     /// 1. `ui_theme.json` = COLORS ONLY (no modal block); the modal layout details
     ///    live in THIS SCENE'S OWN file (`componentcatalog.scene.json` `styles`);
-    /// 2. the bench's real loader path (`load_styles_for(theme, def.styles)`)
+    /// 2. the bench's real loader path (`load_shared_styles(def.styles)`)
     ///    resolves `modal.buttons.variants.primary` from the scene's blocks;
     /// 3. the resolved fill equals the theme file's `theme.tokens.sap_base` — the
     ///    COLOUR comes from the one palette (the scene points, the theme defines);
@@ -511,10 +544,13 @@ mod tests {
     fn the_nav_rail_draws_rust_owned_modal_chrome_not_hardcoded_bytes() {
         // 1 — provenance: theme = colors only; the scene file owns its layout blocks.
         let theme: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(HUD_UI_THEME).expect("theme reads"),
+            &std::fs::read_to_string(flicker::ui::shared_theme_path()).expect("theme reads"),
         )
         .expect("theme parses");
-        assert!(theme.get("modal").is_none(), "ui_theme.json carries colors, nothing else");
+        assert!(
+            theme.get("modal").is_none(),
+            "ui_theme.json carries colors, nothing else"
+        );
         let def = SceneDef::parse("componentcatalog", CATALOG_SCENE)
             .expect("componentcatalog.scene.json loads");
         assert!(
@@ -523,7 +559,7 @@ mod tests {
         );
 
         // 2 + 3 — the live loader resolves the scene's blocks against the file palette.
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         let fill = styles["modal"]["buttons"]["variants"]["primary"]["fill_top"]
             .as_array()
             .expect("primary fill_top resolved to an rgba array (style satellite merge)")
@@ -531,7 +567,7 @@ mod tests {
             .map(|v| v.as_f64().unwrap() as f32)
             .collect::<Vec<f32>>();
         let raw_theme: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(HUD_UI_THEME).expect("theme file reads"),
+            &std::fs::read_to_string(flicker::ui::shared_theme_path()).expect("theme file reads"),
         )
         .expect("theme file parses");
         let sap_base = raw_theme["theme"]["tokens"]["sap_base"]
@@ -540,7 +576,10 @@ mod tests {
             .iter()
             .map(|v| v.as_f64().unwrap() as f32)
             .collect::<Vec<f32>>();
-        assert_eq!(fill, sap_base, "structure from Rust, ink from the one palette");
+        assert_eq!(
+            fill, sap_base,
+            "structure from Rust, ink from the one palette"
+        );
 
         // 4 — the REAL tree draws it: the active bookmark's slab carries the fill.
         let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)
@@ -582,10 +621,18 @@ mod tests {
             .expect("componentcatalog.scene.json loads")
             .tree
             .expect("it declares a tree");
-        // (id, tab_group, nav_ordinal, has_action) for every focusable node.
+        // Every node's (id, tab_group, nav_ordinal, has_action) — membership AND
+        // the container candidates the ownership rule derives (nested panes,
+        // Aaron 2026-08-15: a container is a node other nodes CLAIM as their
+        // `tab_group`; it carries NO self-membership marker).
         fn collect(n: &UiNode, out: &mut Vec<(String, String, u32, bool)>) {
-            if !n.tab_group.is_empty() && !n.id.is_empty() {
-                out.push((n.id.clone(), n.tab_group.clone(), n.nav_ordinal, n.action.is_some()));
+            if !n.id.is_empty() {
+                out.push((
+                    n.id.clone(),
+                    n.tab_group.clone(),
+                    n.nav_ordinal,
+                    n.action.is_some(),
+                ));
             }
             for c in &n.children {
                 collect(c, out);
@@ -593,22 +640,40 @@ mod tests {
         }
         let mut nodes = Vec::new();
         collect(&tree, &mut nodes);
-        let groups: std::collections::BTreeSet<&str> =
-            nodes.iter().map(|(_, g, _, _)| g.as_str()).collect();
-        assert!(groups.contains("cat_nav") && groups.contains("cat_content"), "both panes present");
+        let groups: std::collections::BTreeSet<&str> = nodes
+            .iter()
+            .filter(|(_, g, _, _)| !g.is_empty())
+            .map(|(_, g, _, _)| g.as_str())
+            .collect();
+        assert!(
+            groups.contains("cat_nav") && groups.contains("cat_content"),
+            "both panes present"
+        );
         for g in groups {
-            let members: Vec<_> = nodes.iter().filter(|(_, grp, _, _)| grp == g).collect();
-            let containers = members
+            // OWNERSHIP: exactly one actionless node whose id IS the group — the
+            // container Confirm enters. An unclaimed group would strand its
+            // members off the pad (the fail-to-nothing class).
+            let containers: Vec<_> = nodes
                 .iter()
-                .filter(|(id, grp, ord, act)| id == grp && *ord == 0 && !act)
-                .count();
+                .filter(|(id, _, _, act)| id == g && !act)
+                .collect();
             assert_eq!(
-                containers, 1,
-                "pane group `{g}` needs exactly one ordinal-0 actionless container (id == group)",
+                containers.len(),
+                1,
+                "pane group `{g}` needs exactly one actionless container node with that id",
             );
-            for (id, _, ord, _) in &members {
-                if id != g {
-                    assert!(*ord > 0, "interior `{id}` in `{g}` must follow its container (ordinal > 0)");
+            // The stick-stop order is AUTHORED: every container carries an
+            // explicit non-zero ordinal (Aaron 2026-08-15 — never tree-implicit).
+            assert!(
+                containers[0].2 > 0,
+                "container `{g}` must author its stick-stop `nav_ordinal`",
+            );
+            for (id, grp, ord, _) in &nodes {
+                if grp == g {
+                    assert!(
+                        *ord > 0,
+                        "member `{id}` of `{g}` must author its ring ordinal"
+                    );
                 }
             }
         }
@@ -634,7 +699,10 @@ mod tests {
             flicker::ui::raw_display_literals(&tree)
         );
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw model-published copy (need a $token): {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw model-published copy (need a $token): {flags:?}"
+        );
     }
 
     /// One bookmark + one card box per component, counts agreeing: [`CARD_COUNT`] and the
@@ -650,7 +718,10 @@ mod tests {
         assert!(!cards.is_empty(), "the tray carries cards");
         for card in &cards {
             let nav = format!("\"nav_{}\"", &card["card_".len()..]);
-            assert!(CATALOG_SCENE.contains(&nav), "card {card} has its bookmark {nav}");
+            assert!(
+                CATALOG_SCENE.contains(&nav),
+                "card {card} has its bookmark {nav}"
+            );
         }
 
         // COVERAGE — derived from the ROSTER, the single source of truth: every
@@ -671,6 +742,9 @@ mod tests {
             .copied()
             .filter(|k| !present.contains(*k))
             .collect();
-        assert!(missing.is_empty(), "engine kinds with no demo in the catalog: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "engine kinds with no demo in the catalog: {missing:?}"
+        );
     }
 }

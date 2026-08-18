@@ -32,7 +32,10 @@ impl PlatformGamepad {
                 None
             }
         };
-        Self { gilrs, active: None }
+        Self {
+            gilrs,
+            active: None,
+        }
     }
 
     /// Drain gilrs's queue once into the maintained slot-0 snapshot.

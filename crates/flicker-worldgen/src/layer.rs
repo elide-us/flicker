@@ -88,7 +88,14 @@ impl Layer {
     /// A new layer of `kind` holding `composition` at temperature `heat` with `thickness`
     /// height, initially still (no motion) with an empty compound ledger.
     pub fn new(kind: LayerKind, composition: Composition, heat: f32, thickness: f32) -> Self {
-        Self { kind, composition, compounds: CompoundLedger::new(), heat, motion: Vec3::ZERO, thickness }
+        Self {
+            kind,
+            composition,
+            compounds: CompoundLedger::new(),
+            heat,
+            motion: Vec3::ZERO,
+            thickness,
+        }
     }
 
     /// Total conserved element mass in this layer.
@@ -110,7 +117,9 @@ impl LayerLedger {
     /// (`thickness` 1.0). Core, crust, ocean, and air are all OUTPUTS grown from here —
     /// never seeded.
     pub fn from_primordial(bulk: Composition, heat: f32) -> Self {
-        Self { layers: vec![Layer::new(LayerKind::Mantle, bulk, heat, 1.0)] }
+        Self {
+            layers: vec![Layer::new(LayerKind::Mantle, bulk, heat, 1.0)],
+        }
     }
 
     /// An empty column (no strata) — a cell before it is seeded.
@@ -189,7 +198,8 @@ impl LayerLedger {
             .iter()
             .position(|l| l.kind.rank() > rank)
             .unwrap_or(self.layers.len());
-        self.layers.insert(at, Layer::new(kind, Composition::new(), heat, 0.0));
+        self.layers
+            .insert(at, Layer::new(kind, Composition::new(), heat, 0.0));
         at
     }
 
@@ -293,12 +303,25 @@ mod tests {
     fn insert_and_remove_grow_and_shrink_the_column() {
         let mut c = LayerLedger::from_primordial(bulk(), 1.0);
         // A crust layer forms ON TOP of the mantle.
-        c.push_top(Layer::new(LayerKind::Crust, Composition::from_iter([(SI, 100.0)]), 0.2, 0.05));
+        c.push_top(Layer::new(
+            LayerKind::Crust,
+            Composition::from_iter([(SI, 100.0)]),
+            0.2,
+            0.05,
+        ));
         assert_eq!(c.len(), 2);
         assert_eq!(c.find(LayerKind::Crust), Some(1)); // above the mantle
-        // A stratum can be inserted BENEATH the top, not only appended (the carbon-atmosphere
-        // -grows-crust-under-it case).
-        c.insert(1, Layer::new(LayerKind::Crust, Composition::from_iter([(O, 10.0)]), 0.3, 0.01));
+                                                       // A stratum can be inserted BENEATH the top, not only appended (the carbon-atmosphere
+                                                       // -grows-crust-under-it case).
+        c.insert(
+            1,
+            Layer::new(
+                LayerKind::Crust,
+                Composition::from_iter([(O, 10.0)]),
+                0.3,
+                0.01,
+            ),
+        );
         assert_eq!(c.len(), 3);
         // …and removed again (it subducted / dissolved).
         let gone = c.remove(1);
@@ -313,9 +336,20 @@ mod tests {
         let before = c.total_mass();
         // Move some silica from the mantle (0) up into the crust (1).
         c.transfer(0, 1, &Composition::from_iter([(SI, 400.0)]));
-        assert!((c.total_mass() - before).abs() < 1e-9, "column mass must be conserved across a transfer");
-        assert_eq!(c.layers()[1].composition.amount(SI), 400.0, "the crust received the silica");
-        assert_eq!(c.layers()[0].composition.amount(SI), 1500.0 - 400.0, "the mantle gave it up");
+        assert!(
+            (c.total_mass() - before).abs() < 1e-9,
+            "column mass must be conserved across a transfer"
+        );
+        assert_eq!(
+            c.layers()[1].composition.amount(SI),
+            400.0,
+            "the crust received the silica"
+        );
+        assert_eq!(
+            c.layers()[0].composition.amount(SI),
+            1500.0 - 400.0,
+            "the mantle gave it up"
+        );
     }
 
     #[test]
@@ -326,8 +360,16 @@ mod tests {
         // Ask for far more iron than the mantle has — only what's present moves; conserved.
         c.transfer(0, 1, &Composition::from_iter([(FE, 1.0e9)]));
         assert!((c.total_mass() - before).abs() < 1e-9);
-        assert_eq!(c.layers()[0].composition.amount(FE), 0.0, "the mantle gave all its iron");
-        assert_eq!(c.layers()[1].composition.amount(FE), 3200.0, "the crust got exactly what existed");
+        assert_eq!(
+            c.layers()[0].composition.amount(FE),
+            0.0,
+            "the mantle gave all its iron"
+        );
+        assert_eq!(
+            c.layers()[1].composition.amount(FE),
+            3200.0,
+            "the crust got exactly what existed"
+        );
     }
 
     #[test]
@@ -338,7 +380,10 @@ mod tests {
         let (below, above) = c.neighbours(1);
         assert_eq!(below.map(|l| l.kind), Some(LayerKind::Mantle));
         assert_eq!(above.map(|l| l.kind), Some(LayerKind::Crust));
-        assert!(c.neighbours(0).0.is_none(), "nothing below the deepest layer");
+        assert!(
+            c.neighbours(0).0.is_none(),
+            "nothing below the deepest layer"
+        );
         assert!(c.neighbours(2).1.is_none(), "nothing above the top layer");
     }
 

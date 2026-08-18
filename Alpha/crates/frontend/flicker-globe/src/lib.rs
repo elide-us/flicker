@@ -83,12 +83,20 @@ pub fn build(
         let center = outward * r;
 
         let base = verts.len() as u32;
-        verts.push(MeshVertex { position: center.to_array(), normal, material });
+        verts.push(MeshVertex {
+            position: center.to_array(),
+            normal,
+            material,
+        });
         for corner in outline {
             // Blend toward the centre direction, then re-project to the sphere,
             // so an inset corner still sits ON the shell rather than inside it.
             let dir = (*corner * (1.0 - inset) + outward * inset).normalize();
-            verts.push(MeshVertex { position: (dir * r).to_array(), normal, material });
+            verts.push(MeshVertex {
+                position: (dir * r).to_array(),
+                normal,
+                material,
+            });
         }
         let n = outline.len();
         for k in 0..n {
@@ -218,7 +226,11 @@ mod tests {
         }
         assert_eq!(groups[2].1.len(), 2 * GRID_STEPS, "both tropics");
         assert_eq!(groups[3].1.len(), 2 * GRID_STEPS, "both polar circles");
-        assert_eq!(groups[4].1.len(), GRID_STEPS, "the prime seam, one full circle");
+        assert_eq!(
+            groups[4].1.len(),
+            GRID_STEPS,
+            "the prime seam, one full circle"
+        );
     }
 
     /// `inset` pulls corners toward the cell centre and `0.0` is the exact
@@ -238,13 +250,19 @@ mod tests {
         // Vertex 0 is the centre; corners follow.
         let c0 = Vec3::from_array(exact[1].position);
         let c0_in = Vec3::from_array(inset[1].position);
-        assert!((c0 - ring[0] * 10.0).length() < 1e-3, "inset 0 is the exact tiling");
+        assert!(
+            (c0 - ring[0] * 10.0).length() < 1e-3,
+            "inset 0 is the exact tiling"
+        );
         let centre = Vec3::from_array(exact[0].position);
         assert!(
             (c0_in - centre).length() < (c0 - centre).length(),
             "an inset corner moved toward the centre"
         );
-        assert!((c0_in.length() - 10.0).abs() < 1e-3, "and stayed on the shell");
+        assert!(
+            (c0_in.length() - 10.0).abs() < 1e-3,
+            "and stayed on the shell"
+        );
     }
 
     /// **The absorbed variant costs nothing and answers per column.** The third
@@ -273,17 +291,34 @@ mod tests {
         let heights = [100.0f32, 120.0, 140.0];
         let (stack_v, stack_i) = build(&dirs, &outlines, |i| heights[i], 0.0, all);
 
-        assert_eq!(stack_v.len(), flat_v.len(), "the same vertices as before the absorption");
+        assert_eq!(
+            stack_v.len(),
+            flat_v.len(),
+            "the same vertices as before the absorption"
+        );
         assert_eq!(stack_i.len(), flat_i.len(), "and the same triangles");
-        assert_eq!(stack_i, flat_i, "winding is decided by the outline, not the radius");
-        assert_eq!(flat_v.len(), dirs.len() * (1 + 6), "a centre plus its ring, per cell");
+        assert_eq!(
+            stack_i, flat_i,
+            "winding is decided by the outline, not the radius"
+        );
+        assert_eq!(
+            flat_v.len(),
+            dirs.len() * (1 + 6),
+            "a centre plus its ring, per cell"
+        );
         // Vertex 0 of each cell is its centre, at that cell's own radius.
         for (i, want) in heights.iter().enumerate() {
             let centre = Vec3::from_array(stack_v[i * 7].position);
-            assert!((centre.length() - want).abs() < 1e-2, "cell {i} stands at {want}");
+            assert!(
+                (centre.length() - want).abs() < 1e-2,
+                "cell {i} stands at {want}"
+            );
             for k in 1..7 {
                 let corner = Vec3::from_array(stack_v[i * 7 + k].position);
-                assert!((corner.length() - want).abs() < 1e-2, "its whole ring rides with it");
+                assert!(
+                    (corner.length() - want).abs() < 1e-2,
+                    "its whole ring rides with it"
+                );
             }
         }
         // A constant closure IS the sphere — the two framings are one builder.

@@ -54,7 +54,10 @@ pub struct ChemistryParams {
 
 impl Default for ChemistryParams {
     fn default() -> Self {
-        Self { water_delivery: 1200.0, formation_rate: 0.5 }
+        Self {
+            water_delivery: 1200.0,
+            formation_rate: 0.5,
+        }
     }
 }
 
@@ -135,11 +138,20 @@ impl FormerPlan {
                 water_h = frac(&fractions, H);
                 water_o = frac(&fractions, O);
             }
-            entries.push(Formable { id: c.id, class, fractions });
+            entries.push(Formable {
+                id: c.id,
+                class,
+                fractions,
+            });
         }
         // Stable order: by epoch then priority, so a pass forms in the right order.
         entries.sort_by_key(|e| (e.class.epoch(), e.class.priority(), e.id));
-        Self { entries, water_id, water_h, water_o }
+        Self {
+            entries,
+            water_id,
+            water_h,
+            water_o,
+        }
     }
 
     /// Run the compounds that form at `epoch` over every cell, in place.
@@ -161,13 +173,18 @@ impl FormerPlan {
         for cell in cells.iter_mut() {
             // Free element mass = ledger − what is already locked in compounds.
             let mut free = self.free_elements(cell);
-            for e in self.entries.iter().filter(|e| e.class.epoch() == epoch && e.class != Class::Water) {
+            for e in self
+                .entries
+                .iter()
+                .filter(|e| e.class.epoch() == epoch && e.class != Class::Water)
+            {
                 let cond = condition(e.class, cell);
                 if cond <= 0.0 {
                     continue;
                 }
                 // Stoichiometric ceiling: the least-available constituent limits it.
-                let max_form = formable_mass(|el| free.get(&el).copied().unwrap_or(0.0), &e.fractions);
+                let max_form =
+                    formable_mass(|el| free.get(&el).copied().unwrap_or(0.0), &e.fractions);
                 if max_form <= 0.0 {
                     continue;
                 }
@@ -185,8 +202,7 @@ impl FormerPlan {
 
     /// Free element mass in a cell = element ledger − mass locked in its compounds.
     fn free_elements(&self, cell: &HexState) -> HashMap<ElementId, f64> {
-        let mut free: HashMap<ElementId, f64> =
-            cell.composition.iter().collect();
+        let mut free: HashMap<ElementId, f64> = cell.composition.iter().collect();
         for (cid, amount) in cell.compounds.iter() {
             if let Some(e) = self.entries.iter().find(|e| e.id == cid) {
                 for &(el, fr) in &e.fractions {
@@ -200,7 +216,11 @@ impl FormerPlan {
 
 /// Mass fraction of element `n` in a fractions list (`0` if absent).
 fn frac(fractions: &[(ElementId, f64)], n: ElementId) -> f64 {
-    fractions.iter().find(|&&(e, _)| e == n).map(|&(_, f)| f).unwrap_or(0.0)
+    fractions
+        .iter()
+        .find(|&&(e, _)| e == n)
+        .map(|&(_, f)| f)
+        .unwrap_or(0.0)
 }
 
 /// The maximum mass of a compound formable from the available element masses (`avail(el)`),
@@ -239,7 +259,10 @@ pub fn water_element_split(tables: &Tables) -> Option<(u16, f64, f64)> {
 fn classify(c: &CompoundDef, fractions: &[(ElementId, f64)], tables: &Tables) -> Class {
     let has = |n: ElementId| fractions.iter().any(|&(e, _)| e == n);
     let has_metal = c.elements.iter().any(|e| {
-        tables.element(&e.symbol).map(|el| el.density_g_cm3 as f64 >= METAL_DENSITY).unwrap_or(false)
+        tables
+            .element(&e.symbol)
+            .map(|el| el.density_g_cm3 as f64 >= METAL_DENSITY)
+            .unwrap_or(false)
     });
 
     if c.category == "biological" {
@@ -329,8 +352,15 @@ mod tests {
     /// One warm, submerged, mineralized, living cell — conditions for many classes.
     fn rich_cell() -> HexState {
         let mut s = HexState::new(Composition::from_iter([
-            (O, 5000.0), (14, 2000.0), (26, 800.0), (CA, 400.0), (C, 200.0),
-            (S, 150.0), (NA, 300.0), (CL, 300.0), (H, 100.0),
+            (O, 5000.0),
+            (14, 2000.0),
+            (26, 800.0),
+            (CA, 400.0),
+            (C, 200.0),
+            (S, 150.0),
+            (NA, 300.0),
+            (CL, 300.0),
+            (H, 100.0),
         ]));
         s.temperature = 24.0;
         s.water_depth = 0.3;

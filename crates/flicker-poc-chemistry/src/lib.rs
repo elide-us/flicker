@@ -60,30 +60,28 @@ pub use column::{
     overburden_pa, thickness_m, Column, CrustKind, FormationProcess, Layer, GRAVITY_M_S2,
     MANTLE_DENSITY, SUBDUCTABLE_DENSITY,
 };
-pub use crust::{
-    CrustGeneration, Crystallization, Delamination, Eclogitisation, Metamorphism,
-    StrataReconcile, ThermalSubsidence,
-    Volcanism,
-    DEFAULT_ERUPTION_RATE, ECLOGITE_DEPTH_M, STRATA_SOFT_CAP,
-};
-pub use tectonics::{audit_occupancy, cell_spacing, Conveyor};
-pub use surface::{bed_resistance, greenhouse_k, Erosion, MassWasting, Weather, WeatherField};
-pub use infall::{LateVeneer, WaterDelivery};
-pub use hydrothermal::{enrichment, is_playable, ore_metals, prospect, Hydrothermal, Prospect};
 pub use config::{
     content_data_dir, radius_for_cells, radius_for_freq, size_scale, CELL_AREA_M2, NOMINAL_DT_MYR,
     PLANET_CELLS, PLANET_FREQ, PLANET_MASS_KG, TILE_SPAN_M,
 };
+pub use crust::{
+    CrustGeneration, Crystallization, Delamination, Eclogitisation, Metamorphism, StrataReconcile,
+    ThermalSubsidence, Volcanism, DEFAULT_ERUPTION_RATE, ECLOGITE_DEPTH_M, STRATA_SOFT_CAP,
+};
+pub use habitability::{observe as observe_habitability, Habitability};
+pub use hydrothermal::{enrichment, is_playable, ore_metals, prospect, Hydrothermal, Prospect};
+pub use infall::{LateVeneer, WaterDelivery};
 pub use interior::{radiogenic_power_w, CoreFormation, MantleConvection, RadiogenicDecay};
 pub use mantle::{MantleField, MAGMA_OCEAN_K};
 pub use observer::{PlateEvent, PlateId, PlateObservation, PlateObserver, PlateRecord, Seam};
-pub use habitability::{observe as observe_habitability, Habitability};
 pub use planet::{elevation_field, p_co2_pa, sea_level_m, PlanetState, World};
 pub use process_file::{load_processes, Gate, Gated, ProcessDef};
-pub use scheduler::ProcessState;
 pub use reservoir::{Ocean, Reservoirs};
+pub use scheduler::ProcessState;
 pub use scheduler::{CellProgress, Scheduler};
 pub use stage::{Stage, StageRng};
+pub use surface::{bed_resistance, greenhouse_k, Erosion, MassWasting, Weather, WeatherField};
+pub use tectonics::{audit_occupancy, cell_spacing, Conveyor};
 
 /// The M1 interior formation stages, in order (spec §7.5): radiogenic heat → core
 /// differentiation (iron sinks to the core) → mantle convection.
@@ -292,13 +290,14 @@ pub fn formation_stages(
     let defs = process_file::load_processes(&config::content_data_dir());
     defs.into_iter()
         .map(|def| {
-            let stage = build_stage(&def.runs, &tables, &world.budget, &levers).unwrap_or_else(|| {
-                panic!(
-                    "processes.json runs '{}', but no such transformation is registered — \
+            let stage =
+                build_stage(&def.runs, &tables, &world.budget, &levers).unwrap_or_else(|| {
+                    panic!(
+                        "processes.json runs '{}', but no such transformation is registered — \
                      new physics is written in Rust first, then named in the file",
-                    def.runs
-                )
-            });
+                        def.runs
+                    )
+                });
             Box::new(process_file::Gated::new(stage, def.gate, levers)) as Box<dyn Stage>
         })
         .collect()
@@ -314,11 +313,15 @@ fn build_stage(
     levers: &Levers,
 ) -> Option<Box<dyn Stage>> {
     Some(match name {
-        "RadiogenicDecay" => Box::new(RadiogenicDecay { heat: levers.core_heat }),
+        "RadiogenicDecay" => Box::new(RadiogenicDecay {
+            heat: levers.core_heat,
+        }),
         "CoreFormation" => Box::new(CoreFormation),
         "MantleConvection" => Box::new(MantleConvection),
         "Outgassing" => Box::new(Outgassing::new(tables, levers.outgas_rate)),
-        "CrustGeneration" => Box::new(CrustGeneration { rate: levers.crust_gen_rate }),
+        "CrustGeneration" => Box::new(CrustGeneration {
+            rate: levers.crust_gen_rate,
+        }),
         "ThermalSubsidence" => Box::new(ThermalSubsidence),
         "Eclogitisation" => Box::new(Eclogitisation),
         "Delamination" => Box::new(Delamination),
@@ -332,14 +335,17 @@ fn build_stage(
         }),
         "WaterCycle" => Box::new(WaterCycle::new(tables, levers.stellar_heat)),
         "CarbonSink" => Box::new(CarbonSink::new(tables)),
-        "Biosphere" => {
-            Box::new(Biosphere::new(tables, levers.production_rate, levers.decomposer_niche_kg))
-        }
+        "Biosphere" => Box::new(Biosphere::new(
+            tables,
+            levers.production_rate,
+            levers.decomposer_niche_kg,
+        )),
         "Maturation" => Box::new(Maturation::new(tables)),
         "LateVeneer" => Box::new(LateVeneer::new(tables, budget, levers.veneer_budget_kg)),
-        "Conveyor" => {
-            Box::new(Conveyor { yield_strain: levers.yield_strain, arc_return: levers.arc_return })
-        }
+        "Conveyor" => Box::new(Conveyor {
+            yield_strain: levers.yield_strain,
+            arc_return: levers.arc_return,
+        }),
         "Hydrothermal" => Box::new(Hydrothermal::new(tables, levers.leach_rate)),
         "Erosion" => Box::new(Erosion::new(
             std::sync::Arc::clone(tables),

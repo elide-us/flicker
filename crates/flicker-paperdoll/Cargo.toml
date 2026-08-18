@@ -2,6 +2,7 @@
 name = "flicker-paperdoll"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # flicker-paperdoll — the skeletal-animation "paperdoll" viewer: a character +
@@ -22,7 +23,7 @@ path = "src/lib.rs"
 [dependencies]
 # Umbrella: re-exports flicker-app (App/run/InputState/Key) + flicker-render
 # (Renderer/Camera/lines+mesh pipelines + glam math types).
-flicker = { path = "../../Alpha/crates/core/flicker" }
+flicker = { version = "0.1.0", path = "../../Alpha/crates/core/flicker" }
 # The reusable front-end shell (splash/menu/settings/pause) this viewer runs inside.
 flicker-shell.workspace = true
 # Input event bus (spec §9): the resolver's discrete edges (flicker-input-core) routed

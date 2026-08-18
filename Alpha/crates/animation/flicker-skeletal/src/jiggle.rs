@@ -72,7 +72,13 @@ impl JiggleChain {
     /// A straight chain of `segments` free links (so `segments + 1` points) hanging from
     /// `anchor` along unit `dir`, each `seg_len` apart. Starts settled (prev == pos ⇒ zero
     /// initial velocity).
-    pub fn new(anchor: Vec3, dir: Vec3, seg_len: f32, segments: usize, params: JiggleParams) -> Self {
+    pub fn new(
+        anchor: Vec3,
+        dir: Vec3,
+        seg_len: f32,
+        segments: usize,
+        params: JiggleParams,
+    ) -> Self {
         let dir = dir.normalize_or_zero();
         let n = segments + 1;
         let mut pos = Vec::with_capacity(n);
@@ -83,7 +89,13 @@ impl JiggleChain {
             rest.push(if i == 0 { 0.0 } else { seg_len });
             rest_dir.push(dir);
         }
-        Self { prev: pos.clone(), pos, rest, rest_dir, params }
+        Self {
+            prev: pos.clone(),
+            pos,
+            rest,
+            rest_dir,
+            params,
+        }
     }
 
     pub fn positions(&self) -> &[Vec3] {
@@ -171,16 +183,29 @@ mod tests {
     /// clean case: pure gravity + distance constraint.
     #[test]
     fn hangs_straight_down_at_rest() {
-        let params = JiggleParams { stiffness: 0.0, ..Default::default() };
+        let params = JiggleParams {
+            stiffness: 0.0,
+            ..Default::default()
+        };
         // Start pointing sideways (+x) so "settles downward" is a real change, not the start.
         let mut c = JiggleChain::new(Vec3::ZERO, Vec3::X, 5.0, 4, params);
         settle(&mut c, Vec3::ZERO, 2000);
         let p = c.positions();
         for i in 1..p.len() {
             let d = p[i] - p[i - 1];
-            assert!((d.length() - 5.0).abs() < 0.25, "segment {i} must hold its rest length (PBD ~1% stretch)");
-            assert!(d.z < -4.9, "segment {i} must hang below its parent (got dz {})", d.z);
-            assert!(d.x.abs() < 0.2 && d.y.abs() < 0.2, "segment {i} must be on the gravity axis");
+            assert!(
+                (d.length() - 5.0).abs() < 0.25,
+                "segment {i} must hold its rest length (PBD ~1% stretch)"
+            );
+            assert!(
+                d.z < -4.9,
+                "segment {i} must hang below its parent (got dz {})",
+                d.z
+            );
+            assert!(
+                d.x.abs() < 0.2 && d.y.abs() < 0.2,
+                "segment {i} must be on the gravity axis"
+            );
         }
     }
 
@@ -191,7 +216,10 @@ mod tests {
         for k in 0..50 {
             let a = Vec3::new(k as f32, 0.0, 20.0);
             c.step(a, Quat::IDENTITY, 1.0 / 60.0);
-            assert!((c.positions()[0] - a).length() < 1e-4, "anchor must track the driver");
+            assert!(
+                (c.positions()[0] - a).length() < 1e-4,
+                "anchor must track the driver"
+            );
         }
     }
 
@@ -225,7 +253,11 @@ mod tests {
     #[test]
     fn motion_decays_with_damping() {
         let energy = |c: &JiggleChain| -> f32 {
-            c.positions().iter().zip(&c.prev).map(|(p, q)| (*p - *q).length()).sum()
+            c.positions()
+                .iter()
+                .zip(&c.prev)
+                .map(|(p, q)| (*p - *q).length())
+                .sum()
         };
         let mut c = JiggleChain::new(Vec3::ZERO, -Vec3::Z, 4.0, 5, JiggleParams::default());
         settle(&mut c, Vec3::ZERO, 200);
@@ -234,7 +266,10 @@ mod tests {
             c.step(kick, Quat::IDENTITY, 1.0 / 60.0); // kick + swing = the transient
         }
         let early = energy(&c);
-        assert!(early > 1.0, "the kick must actually excite the chain (got {early})");
+        assert!(
+            early > 1.0,
+            "the kick must actually excite the chain (got {early})"
+        );
         settle(&mut c, kick, 2000);
         let late = energy(&c);
         assert!(
@@ -249,7 +284,11 @@ mod tests {
         let run = || {
             let mut c = JiggleChain::new(Vec3::ZERO, -Vec3::Z, 3.0, 6, JiggleParams::default());
             for k in 0..300 {
-                c.step(Vec3::new((k as f32 * 0.1).sin() * 10.0, 0.0, 15.0), Quat::IDENTITY, 1.0 / 60.0);
+                c.step(
+                    Vec3::new((k as f32 * 0.1).sin() * 10.0, 0.0, 15.0),
+                    Quat::IDENTITY,
+                    1.0 / 60.0,
+                );
             }
             c.positions().to_vec()
         };
@@ -262,7 +301,9 @@ mod tests {
         let mut c = JiggleChain::new(Vec3::ZERO, -Vec3::Z, 4.0, 5, JiggleParams::default());
         c.step(Vec3::new(0.0, 0.0, 20.0), Quat::IDENTITY, 5.0); // a 5-second "hitch"
         assert!(
-            c.positions().iter().all(|p| p.is_finite() && p.length() < 1e4),
+            c.positions()
+                .iter()
+                .all(|p| p.is_finite() && p.length() < 1e4),
             "a frame hitch must not launch the chain to infinity"
         );
     }

@@ -78,7 +78,9 @@ impl Tile {
     /// the bed erosion will cut into next.
     pub fn exposed_bed(&self, x: u32, y: u32) -> Option<usize> {
         let i = (y as usize) * TILE_DIM as usize + x as usize;
-        (0..self.strata.len()).rev().find(|&s| self.strata[s][i] > 0.0)
+        (0..self.strata.len())
+            .rev()
+            .find(|&s| self.strata[s][i] > 0.0)
     }
 
     /// Mass of one stratum as the maps actually hold it, kg — the left-hand side of
@@ -198,7 +200,11 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
     let want_total = crust_thickness_m(column, world.cell_area_m2());
     let laid: f64 = mask.iter().map(|(x, y)| relief[idx(x, y)]).sum();
     let residual = want_total * owned - laid;
-    let per_unit = if interior_sum > 0.0 { residual / interior_sum } else { 0.0 };
+    let per_unit = if interior_sum > 0.0 {
+        residual / interior_sum
+    } else {
+        0.0
+    };
 
     let mut composite = vec![0.0f64; TILE_DIM as usize * TILE_DIM as usize];
     for (x, y) in mask.iter() {
@@ -241,7 +247,11 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
         } else {
             0.0
         };
-        let share = if want_total > 0.0 { bed_thickness / want_total } else { 0.0 };
+        let share = if want_total > 0.0 {
+            bed_thickness / want_total
+        } else {
+            0.0
+        };
         let mut map = vec![0.0f32; TILE_DIM as usize * TILE_DIM as usize];
         for (x, y) in mask.iter() {
             let i = idx(x, y);
@@ -250,12 +260,27 @@ pub fn materialize(world: &World, cell: usize, radius_m: f64, outline: &[glam::V
         strata.push(map);
     }
 
-    Tile { cell: cell as u32, frame, mask, strata, skirt, pixel_born: 0 }
+    Tile {
+        cell: cell as u32,
+        frame,
+        mask,
+        strata,
+        skirt,
+        pixel_born: 0,
+    }
 }
 
 /// The eight pixel neighbours, straights then diagonals.
-pub(crate) const NEIGHBOURS_8: [(i64, i64); 8] =
-    [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+pub(crate) const NEIGHBOURS_8: [(i64, i64); 8] = [
+    (1, 0),
+    (-1, 0),
+    (0, 1),
+    (0, -1),
+    (1, 1),
+    (1, -1),
+    (-1, 1),
+    (-1, -1),
+];
 
 /// Flat index of a pixel.
 fn idx(x: u32, y: u32) -> usize {
@@ -304,7 +329,10 @@ pub(crate) fn guarantee_stack(w: &mut flicker_poc_chemistry::World) {
         })
         .expect("a world has columns");
     let beds: [(FormationProcess, [(u8, f64); 2]); 2] = [
-        (FormationProcess::ContinentalArc, [(14, 4.0e15), (13, 2.0e15)]),
+        (
+            FormationProcess::ContinentalArc,
+            [(14, 4.0e15), (13, 2.0e15)],
+        ),
         (FormationProcess::OceanicCrust, [(12, 3.0e15), (26, 3.0e15)]),
     ];
     for (process, wants) in beds {
@@ -338,8 +366,6 @@ mod tests {
     use flicker_worldgrid::icosphere_with_outlines;
     use std::sync::Arc;
 
-
-
     fn grown(freq: u32, ticks: usize) -> (World, Vec<Vec<glam::Vec3>>) {
         let t = Arc::new(
             Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables"),
@@ -368,7 +394,11 @@ mod tests {
             .position(|c| c.layers.len() >= 2)
             .expect("the fixture stratified a column");
         let tile = materialize(&w, cell, crate::radius_for_freq(6), &outlines[cell]);
-        assert_eq!(tile.strata.len(), w.columns[cell].layers.len(), "a map per bed");
+        assert_eq!(
+            tile.strata.len(),
+            w.columns[cell].layers.len(),
+            "a map per bed"
+        );
         // The column's beds keep their PROPORTIONS exactly — which is the trial
         // balance that matters, because the tile's own pixel area and the grid's
         // nominal cell area are two different conventions and reconciling them is
@@ -416,7 +446,10 @@ mod tests {
             .mask
             .iter()
             .filter(|&(x, y)| {
-                x > 0 && y > 0 && x + 1 < TILE_DIM && y + 1 < TILE_DIM
+                x > 0
+                    && y > 0
+                    && x + 1 < TILE_DIM
+                    && y + 1 < TILE_DIM
                     && (!tile.mask.contains(x - 1, y)
                         || !tile.mask.contains(x + 1, y)
                         || !tile.mask.contains(x, y - 1)
@@ -462,11 +495,15 @@ mod tests {
             .expect("the fixture stratified a column");
         let tile = materialize(&w, cell, crate::radius_for_freq(6), &outlines[cell]);
         let (mx, my) = (TILE_DIM / 2, TILE_DIM / 2);
-        assert!(tile.composite_m(mx, my) > 0.0, "there is ground in the middle of a cell");
-        assert!(tile.exposed_bed(mx, my).is_some(), "and something is exposed at the top of it");
+        assert!(
+            tile.composite_m(mx, my) > 0.0,
+            "there is ground in the middle of a cell"
+        );
+        assert!(
+            tile.exposed_bed(mx, my).is_some(),
+            "and something is exposed at the top of it"
+        );
         // Nothing outside the hexagon: the corners belong to nobody.
         assert_eq!(tile.composite_m(0, 0), 0.0);
     }
-
 }
-

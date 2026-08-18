@@ -95,7 +95,11 @@ impl EpochTransform for Epoch2 {
                     }
                 }
                 let total = s.composition.total();
-                s.crust_fraction = if total > 0.0 { crust.total() / total } else { 0.0 };
+                s.crust_fraction = if total > 0.0 {
+                    crust.total() / total
+                } else {
+                    0.0
+                };
                 s.crust = crust;
                 // Crust thickness: more crust + polar cooling → thicker → less
                 // volcanic. `poleness` is 0 at the equator, 1 at a pole.
@@ -132,7 +136,12 @@ mod tests {
         let comp = Composition::from_iter([(SI, 5000.0), (FE, 5000.0)]);
         let dirs = [Vec3::Y];
         let neighbors = [vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let out = Epoch2::default().apply(&ctx, &[HexState::new(comp)]);
         let s = &out[0];
         // Silicon stayed in the crust; iron sank out.
@@ -151,16 +160,36 @@ mod tests {
         let comp = Composition::from_iter([(SI, 5000.0), (FE, 5000.0)]);
         let dirs = [Vec3::Y];
         let neighbors = [vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
-        let brief = Epoch2 { duration: 1, ..Epoch2::default() }.apply(&ctx, &[HexState::new(comp.clone())]);
-        let full = Epoch2 { duration: NOMINAL_DURATION, ..Epoch2::default() }.apply(&ctx, &[HexState::new(comp)]);
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
+        let brief = Epoch2 {
+            duration: 1,
+            ..Epoch2::default()
+        }
+        .apply(&ctx, &[HexState::new(comp.clone())]);
+        let full = Epoch2 {
+            duration: NOMINAL_DURATION,
+            ..Epoch2::default()
+        }
+        .apply(&ctx, &[HexState::new(comp)]);
         // A short molten era strands iron at the surface; a full one drains it.
         assert!(
             brief[0].crust.amount(FE) > full[0].crust.amount(FE),
             "less differentiation time should leave more iron in the crust"
         );
-        assert_eq!(full[0].crust.amount(FE), 0.0, "the default (full) era drains the iron");
-        assert!(brief[0].crust.amount(FE) > 0.0, "a brief era keeps some iron up");
+        assert_eq!(
+            full[0].crust.amount(FE),
+            0.0,
+            "the default (full) era drains the iron"
+        );
+        assert!(
+            brief[0].crust.amount(FE) > 0.0,
+            "a brief era keeps some iron up"
+        );
     }
 
     #[test]
@@ -169,7 +198,12 @@ mod tests {
         let comp = Composition::from_iter([(SI, 1000.0), (FE, 100.0)]);
         let dirs = [Vec3::new(1.0, 0.0, 0.0)]; // equator
         let neighbors = [vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         let out = Epoch2::default().apply(&ctx, &[HexState::new(comp)]);
         assert!((0.0..=1.0).contains(&out[0].volcanic));
     }

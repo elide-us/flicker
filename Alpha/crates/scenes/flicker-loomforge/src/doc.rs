@@ -76,7 +76,11 @@ pub const TRIGGERS: [(Trigger, &str); 16] = [
 
 /// Wire name of a trigger.
 pub fn trigger_label(t: Trigger) -> &'static str {
-    TRIGGERS.iter().find(|(k, _)| *k == t).map(|(_, s)| *s).unwrap_or("?")
+    TRIGGERS
+        .iter()
+        .find(|(k, _)| *k == t)
+        .map(|(_, s)| *s)
+        .unwrap_or("?")
 }
 
 /// The next trigger in cycle order (wraps).
@@ -132,19 +136,18 @@ pub fn remove_state_def(def: &mut StateMachineDef, index: usize) -> bool {
     }
     def.any.retain(|t| t.to != removed);
     if def.initial == removed {
-        def.initial = def.states.first().map(|s| s.name.clone()).unwrap_or_default();
+        def.initial = def
+            .states
+            .first()
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
     }
     true
 }
 
 /// Add a `from → to` transition on `on`. Rejects unknown indices and exact duplicates
 /// (same target AND trigger), so repeated drags don't pile up identical edges.
-pub fn add_transition_def(
-    def: &mut StateMachineDef,
-    from: usize,
-    to: usize,
-    on: Trigger,
-) -> bool {
+pub fn add_transition_def(def: &mut StateMachineDef, from: usize, to: usize, on: Trigger) -> bool {
     let Some(target) = def.states.get(to).map(|s| s.name.clone()) else {
         return false;
     };
@@ -383,8 +386,12 @@ pub enum Tab {
 
 impl Tab {
     /// Tab order, left to right (matches the Loomforge Bench design).
-    pub const ALL: [Tab; 4] =
-        [Tab::StateMachine, Tab::PackBrowser, Tab::CreatureComposer, Tab::TaeEditor];
+    pub const ALL: [Tab; 4] = [
+        Tab::StateMachine,
+        Tab::PackBrowser,
+        Tab::CreatureComposer,
+        Tab::TaeEditor,
+    ];
 
     /// Display label in the tab bar.
     pub fn label(self) -> &'static str {
@@ -440,8 +447,15 @@ impl EditorDoc {
     /// Build a document straight from an in-memory pack + model (tests / future
     /// in-app authoring of a brand-new pack).
     pub fn from_parts(path: PathBuf, pack: PackFile, model: Model) -> Self {
-        let mut doc =
-            Self { path, pack, model, preview: None, warnings: Vec::new(), selected: None, dirty: false };
+        let mut doc = Self {
+            path,
+            pack,
+            model,
+            preview: None,
+            warnings: Vec::new(),
+            selected: None,
+            dirty: false,
+        };
         doc.rebuild_preview();
         doc
     }
@@ -488,7 +502,11 @@ impl EditorDoc {
 
     /// Index of a state by name.
     pub fn state_index(&self, name: &str) -> Option<usize> {
-        self.pack.state_machine.states.iter().position(|s| s.name == name)
+        self.pack
+            .state_machine
+            .states
+            .iter()
+            .position(|s| s.name == name)
     }
 
     /// Index of a clip in the resolved library — what a Stage doll poses with. `None`
@@ -672,7 +690,10 @@ impl EditorDoc {
                 .model
                 .clips
                 .iter()
-                .map(|c| ClipRef { name: c.name.as_str(), duration_ticks: c.duration_ticks })
+                .map(|c| ClipRef {
+                    name: c.name.as_str(),
+                    duration_ticks: c.duration_ticks,
+                })
                 .collect();
             StateMachine::build(&self.pack.state_machine, &clips)
         };
@@ -730,7 +751,11 @@ mod tests {
             default_blend_ticks: 0,
             tick_rate_hz: 60,
             any: vec![tr("Hit", Trigger::Hit)],
-            states: vec![st("Idle", "idle", vec![tr("Walk", Trigger::Move)]), walk, st("Hit", "hit", vec![])],
+            states: vec![
+                st("Idle", "idle", vec![tr("Walk", Trigger::Move)]),
+                walk,
+                st("Hit", "hit", vec![]),
+            ],
         }
     }
 
@@ -779,21 +804,39 @@ mod tests {
         assert!(event(&d, e).unwrap().combat.is_none());
         assert!(cycle_hit_type(&mut d, e));
         let hit = event(&d, e).unwrap().combat.as_ref().unwrap().hit_type;
-        assert_eq!(hit, Some(HitType::Slash), "first cycle lands on the first type");
+        assert_eq!(
+            hit,
+            Some(HitType::Slash),
+            "first cycle lands on the first type"
+        );
         // The full taxonomy wraps: Slash→Thrust→Strike→Sweep→Grab→Slash.
         let seen: Vec<HitType> = (0..4)
             .map(|_| {
                 cycle_hit_type(&mut d, e);
-                event(&d, e).unwrap().combat.as_ref().unwrap().hit_type.unwrap()
+                event(&d, e)
+                    .unwrap()
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .hit_type
+                    .unwrap()
             })
             .collect();
         assert_eq!(
             seen,
-            vec![HitType::Thrust, HitType::Strike, HitType::Sweep, HitType::Grab],
+            vec![
+                HitType::Thrust,
+                HitType::Strike,
+                HitType::Sweep,
+                HitType::Grab
+            ],
             "every hit shape must be reachable from the inspector"
         );
         cycle_hit_type(&mut d, e);
-        assert_eq!(event(&d, e).unwrap().combat.as_ref().unwrap().hit_type, Some(HitType::Slash));
+        assert_eq!(
+            event(&d, e).unwrap().combat.as_ref().unwrap().hit_type,
+            Some(HitType::Slash)
+        );
     }
 
     #[test]
@@ -804,9 +847,19 @@ mod tests {
         for _ in 0..50 {
             nudge_capsule(&mut d, e, -0.05);
         }
-        let r = event(&d, e).unwrap().combat.as_ref().unwrap().capsule_radius.unwrap();
+        let r = event(&d, e)
+            .unwrap()
+            .combat
+            .as_ref()
+            .unwrap()
+            .capsule_radius
+            .unwrap();
         assert!((MIN_CAPSULE_M..=MAX_CAPSULE_M).contains(&r));
-        assert_eq!((r * 100.0).round(), r * 100.0, "snapped to whole centimetres");
+        assert_eq!(
+            (r * 100.0).round(),
+            r * 100.0,
+            "snapped to whole centimetres"
+        );
     }
 
     /// Narrowing the mask to one answer is how an attack becomes perilous — but the LAST
@@ -818,20 +871,36 @@ mod tests {
         let e = EventRef { state: 0, index: 0 };
         // Starts permissive (the default), so an un-annotated attack is unchanged.
         let mask = |d: &StateMachineDef| {
-            event(d, e).unwrap().combat.as_ref().map(|c| c.response_mask).unwrap_or_default()
+            event(d, e)
+                .unwrap()
+                .combat
+                .as_ref()
+                .map(|c| c.response_mask)
+                .unwrap_or_default()
         };
         assert!(mask(&d).is_all());
 
         // Turn it into a sweep: only Jump remains.
-        for r in [Response::Block, Response::Parry, Response::Dodge, Response::Counter] {
+        for r in [
+            Response::Block,
+            Response::Parry,
+            Response::Dodge,
+            Response::Counter,
+        ] {
             assert!(toggle_response(&mut d, e, r), "clearing {r:?} should apply");
         }
         assert!(mask(&d).is_perilous());
         assert!(mask(&d).allows(Response::Jump));
 
         // Clearing the last one is REFUSED — and leaves the mask untouched.
-        assert!(!toggle_response(&mut d, e, Response::Jump), "cannot clear the last answer");
-        assert!(mask(&d).allows(Response::Jump), "mask survived the refused edit");
+        assert!(
+            !toggle_response(&mut d, e, Response::Jump),
+            "cannot clear the last answer"
+        );
+        assert!(
+            mask(&d).allows(Response::Jump),
+            "mask survived the refused edit"
+        );
     }
 
     /// `1.0` means "unchanged", so it must clear the field rather than persist a value that
@@ -840,8 +909,13 @@ mod tests {
     fn parry_scale_clears_at_one_and_clamps_at_the_floor() {
         let mut d = def_with_event();
         let e = EventRef { state: 0, index: 0 };
-        let scale =
-            |d: &StateMachineDef| event(d, e).unwrap().combat.as_ref().and_then(|c| c.parry_window_scale);
+        let scale = |d: &StateMachineDef| {
+            event(d, e)
+                .unwrap()
+                .combat
+                .as_ref()
+                .and_then(|c| c.parry_window_scale)
+        };
 
         assert!(nudge_parry_scale(&mut d, e, -0.05));
         assert_eq!(scale(&d), Some(0.95), "tightening records a real value");
@@ -875,7 +949,13 @@ mod tests {
         d.states[3].name = "State 5".into();
         let j = add_state_def(&mut d, "idle");
         assert_ne!(d.states[j].name, "State 5", "names stay unique");
-        assert_eq!(d.states.iter().filter(|s| s.name == d.states[j].name).count(), 1);
+        assert_eq!(
+            d.states
+                .iter()
+                .filter(|s| s.name == d.states[j].name)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -884,10 +964,19 @@ mod tests {
         // Remove "Hit" — referenced by an any-edge AND by Walk's `next`.
         assert!(remove_state_def(&mut d, 2));
         assert_eq!(d.states.len(), 2);
-        assert!(d.any.is_empty(), "any-state edge into the deleted state is dropped");
-        assert!(d.states.iter().all(|s| s.next.is_none()), "dangling `next` cleared");
         assert!(
-            d.states.iter().flat_map(|s| &s.transitions).all(|t| t.to != "Hit"),
+            d.any.is_empty(),
+            "any-state edge into the deleted state is dropped"
+        );
+        assert!(
+            d.states.iter().all(|s| s.next.is_none()),
+            "dangling `next` cleared"
+        );
+        assert!(
+            d.states
+                .iter()
+                .flat_map(|s| &s.transitions)
+                .all(|t| t.to != "Hit"),
             "no transition may point at a deleted state"
         );
     }
@@ -903,14 +992,20 @@ mod tests {
         assert!(remove_state_def(&mut d, 0));
         assert!(d.states.is_empty());
         assert_eq!(d.initial, "");
-        assert!(!remove_state_def(&mut d, 0), "out-of-range delete is a no-op");
+        assert!(
+            !remove_state_def(&mut d, 0),
+            "out-of-range delete is a no-op"
+        );
     }
 
     #[test]
     fn add_transition_rejects_duplicates_and_bad_indices() {
         let mut d = def();
         // Idle already has Idle→Walk on `move`; the same edge again is refused.
-        assert!(!add_transition_def(&mut d, 0, 1, Trigger::Move), "exact duplicate refused");
+        assert!(
+            !add_transition_def(&mut d, 0, 1, Trigger::Move),
+            "exact duplicate refused"
+        );
         // Same target, different trigger is a legitimately different edge.
         assert!(add_transition_def(&mut d, 0, 1, Trigger::Run));
         assert_eq!(d.states[0].transitions.len(), 2);
@@ -932,8 +1027,14 @@ mod tests {
         assert_eq!(d.states.len(), states_before, "both states survive");
         assert_eq!(d.any.len(), 1, "any-state edges are untouched");
         // Out-of-range removals are no-ops, not panics.
-        assert!(!remove_transition_def(&mut d, EdgeRef { from: 0, index: 0 }));
-        assert!(!remove_transition_def(&mut d, EdgeRef { from: 99, index: 0 }));
+        assert!(!remove_transition_def(
+            &mut d,
+            EdgeRef { from: 0, index: 0 }
+        ));
+        assert!(!remove_transition_def(
+            &mut d,
+            EdgeRef { from: 99, index: 0 }
+        ));
     }
 
     #[test]
@@ -952,7 +1053,11 @@ mod tests {
         assert_eq!(transition(&d, e).unwrap().blend_ticks, None);
         // A stale edge is refused rather than silently editing a neighbour.
         assert!(!set_priority(&mut d, EdgeRef { from: 0, index: 7 }, 1));
-        assert!(!set_trigger(&mut d, EdgeRef { from: 42, index: 0 }, Trigger::Jump));
+        assert!(!set_trigger(
+            &mut d,
+            EdgeRef { from: 42, index: 0 },
+            Trigger::Jump
+        ));
     }
 
     /// Stepping the blend below zero returns it to "inherit", so the author can reach
@@ -982,7 +1087,11 @@ mod tests {
         assert!(!doc.dirty(), "loading is not an edit");
 
         doc.nudge_blend(e, 1);
-        assert_eq!(doc.def().states[0].transitions[0].blend_ticks, Some(0), "leaves inherit at 0");
+        assert_eq!(
+            doc.def().states[0].transitions[0].blend_ticks,
+            Some(0),
+            "leaves inherit at 0"
+        );
         doc.nudge_blend(e, 1);
         assert_eq!(doc.def().states[0].transitions[0].blend_ticks, Some(1));
         doc.nudge_blend(e, -1);
@@ -1012,6 +1121,10 @@ mod tests {
         assert_eq!(t, TRIGGERS[0].0, "cycling the full list wraps to the start");
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), TRIGGERS.len(), "every trigger has a distinct wire name");
+        assert_eq!(
+            seen.len(),
+            TRIGGERS.len(),
+            "every trigger has a distinct wire name"
+        );
     }
 }

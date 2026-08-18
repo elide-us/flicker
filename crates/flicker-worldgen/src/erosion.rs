@@ -98,8 +98,9 @@ mod tests {
                 Vec3::new(a.cos(), 0.0, a.sin())
             })
             .collect();
-        let neighbors =
-            (0..n).map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32]).collect();
+        let neighbors = (0..n)
+            .map(|i| vec![((i + 1) % n) as u32, ((i + n - 1) % n) as u32])
+            .collect();
         (dirs, neighbors)
     }
 
@@ -110,7 +111,12 @@ mod tests {
         let t = tables();
         let n = 24;
         let (dirs, neighbors) = ring(n);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 0 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 0,
+        };
         // A single tall spike on an otherwise flat crust (uniform soft silica).
         let mut cells: Vec<HexState> = (0..n)
             .map(|_| {
@@ -125,9 +131,15 @@ mod tests {
 
         run_protoatmospheric_erosion(&mut cells, &ctx, 0.08, 0.25, 20);
 
-        assert!(cells[n / 2].elevation < peak0 - 0.05, "the spike wasn't weathered down");
+        assert!(
+            cells[n / 2].elevation < peak0 - 0.05,
+            "the spike wasn't weathered down"
+        );
         let sum1: f32 = cells.iter().map(|s| s.elevation).sum();
-        assert!((sum1 - sum0).abs() < 1e-3, "weathering didn't conserve the elevation field");
+        assert!(
+            (sum1 - sum0).abs() < 1e-3,
+            "weathering didn't conserve the elevation field"
+        );
         // steps = 0 is a no-op (the scrubber's pristine t=0).
         let mut pristine = vec![HexState::new(Composition::new()); n];
         pristine[0].elevation = 1.0;
@@ -143,7 +155,12 @@ mod tests {
         let t = tables();
         let n = 24;
         let (dirs, neighbors) = ring(n);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 0 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 0,
+        };
         // Two worlds, identical spike; one built of a soft former, one of a hard former.
         let (soft, hard) = {
             // Pick the softest and hardest solid elements the tables carry.

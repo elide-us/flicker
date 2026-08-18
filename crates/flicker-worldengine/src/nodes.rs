@@ -67,8 +67,8 @@ pub fn ensure_ore_veins(cells: &mut [HexState], tables: &Tables) -> usize {
             let mut ceiling = f64::INFINITY;
             for &(el, fr) in &fractions {
                 if fr > 0.0 {
-                    let free =
-                        (c.composition.amount(el) - locked.get(&el).copied().unwrap_or(0.0)).max(0.0);
+                    let free = (c.composition.amount(el) - locked.get(&el).copied().unwrap_or(0.0))
+                        .max(0.0);
                     ceiling = ceiling.min(free / fr);
                 }
             }
@@ -108,8 +108,14 @@ fn vein_marker(
         }
     }
     fractions.iter().map(|&(el, _)| el).max_by(|&a, &b| {
-        let da = tables.element_by_number(a).map(|e| e.density_g_cm3).unwrap_or(0.0);
-        let db = tables.element_by_number(b).map(|e| e.density_g_cm3).unwrap_or(0.0);
+        let da = tables
+            .element_by_number(a)
+            .map(|e| e.density_g_cm3)
+            .unwrap_or(0.0);
+        let db = tables
+            .element_by_number(b)
+            .map(|e| e.density_g_cm3)
+            .unwrap_or(0.0);
         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
     })
 }

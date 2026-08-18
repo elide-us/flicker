@@ -30,7 +30,7 @@
 //! settings panel reaches the globe.
 
 use flicker::render::{
-    Camera, FrameGraph, MeshHandle, MeshIndices, Rect, Renderer, Vec3, MeshVertex,
+    Camera, FrameGraph, MeshHandle, MeshIndices, MeshVertex, Rect, Renderer, Vec3,
 };
 use flicker_input_core::{AbstractControls, ActionSignal, InputState};
 use flicker_input_router::{Flow, InputEvent, InputHandler, RouteCtx};
@@ -155,7 +155,11 @@ impl GlobeWorld {
             .layers
             .iter()
             .filter_map(|l| match *l {
-                StageLayer::Shell { radius_scale, inset, color } => Some(ShellSpec {
+                StageLayer::Shell {
+                    radius_scale,
+                    inset,
+                    color,
+                } => Some(ShellSpec {
                     dirs,
                     outlines,
                     radius: RADIUS * radius_scale,
@@ -176,7 +180,14 @@ impl GlobeWorld {
             shells
                 .into_iter()
                 .map(|s| {
-                    let ShellSpec { dirs, outlines, radius, inset, color, cell_radius } = s;
+                    let ShellSpec {
+                        dirs,
+                        outlines,
+                        radius,
+                        inset,
+                        color,
+                        cell_radius,
+                    } = s;
                     // The sphere and the per-column stack are the SAME builder:
                     // one answers `radius` for every cell, the other answers the
                     // column's own height.
@@ -247,7 +258,11 @@ impl GlobeWorld {
             (Some(panel), Some(f)) => panel == f,
             _ => false,
         };
-        self.look = if self.owns_camera { look } else { (0.0, 0.0, 0.0) };
+        self.look = if self.owns_camera {
+            look
+        } else {
+            (0.0, 0.0, 0.0)
+        };
         let (dx, dy, dz) = self.look;
         if dx != 0.0 || dy != 0.0 {
             self.cam.orbit(dx, dy, dt);
@@ -310,7 +325,14 @@ impl GlobeWorld {
         let Some(rect) = self.rect else { return };
         // Split the borrow: the view is written while the stage, the meshes and
         // the arrows are read into the same graph.
-        let Self { view, cam, stage, meshes, arrows, .. } = self;
+        let Self {
+            view,
+            cam,
+            stage,
+            meshes,
+            arrows,
+            ..
+        } = self;
         view.render(r, fg, rect, layer, cam.camera(), stage, meshes, arrows);
     }
 
@@ -351,7 +373,9 @@ mod tests {
     use flicker_input_core::device::{GamepadAxis, Key};
     // Test-only now: the scenes resolve the look tuple from these and hand the world the
     // result (input-P3) — the world itself no longer takes bindings/gamepad.
-    use flicker_input_core::{ContextualBindings, EventKind, GamepadConfig, InputContext, InputMap};
+    use flicker_input_core::{
+        ContextualBindings, EventKind, GamepadConfig, InputContext, InputMap,
+    };
 
     fn styles(stage: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "stages": { "test_globe": stage } })
@@ -390,18 +414,38 @@ mod tests {
         let world = GlobeWorld::new("test_globe", &s, None);
         let stage = world.stage();
         for (got, want) in stage.clear.iter().zip([0.1, 0.2, 0.3, 1.0]) {
-            assert!((got - want).abs() < 1e-6, "the authored clear is read: {got} vs {want}");
+            assert!(
+                (got - want).abs() < 1e-6,
+                "the authored clear is read: {got} vs {want}"
+            );
         }
-        assert_eq!(stage.layers.len(), 3, "three known layers; the unknown kind is skipped");
+        assert_eq!(
+            stage.layers.len(),
+            3,
+            "three known layers; the unknown kind is skipped"
+        );
         assert_eq!(
             stage.layers[0],
-            StageLayer::Shell { radius_scale: 0.998, inset: 0.0, color: [0.0, 0.0, 0.1] }
+            StageLayer::Shell {
+                radius_scale: 0.998,
+                inset: 0.0,
+                color: [0.0, 0.0, 0.1]
+            }
         );
         assert_eq!(
             stage.layers[1],
-            StageLayer::Shell { radius_scale: 1.0, inset: 0.12, color: [0.4, 0.5, 0.6] }
+            StageLayer::Shell {
+                radius_scale: 1.0,
+                inset: 0.12,
+                color: [0.4, 0.5, 0.6]
+            }
         );
-        assert_eq!(stage.layers[2], StageLayer::Graticule { radius_scale: 1.022 });
+        assert_eq!(
+            stage.layers[2],
+            StageLayer::Graticule {
+                radius_scale: 1.022
+            }
+        );
 
         // …and the authored shells materialize over a caller's tiling at those
         // radii, in authored order, with no colour named anywhere but the file.
@@ -499,8 +543,12 @@ mod tests {
 
         let raw = InputState::new();
         let mut rc = RouteCtx::default();
-        let look =
-            InputEvent::new(ActionSignal::LookRight, EventKind::Press, InputContext::World, &raw);
+        let look = InputEvent::new(
+            ActionSignal::LookRight,
+            EventKind::Press,
+            InputContext::World,
+            &raw,
+        );
 
         // The scene resolves the look tuple from its bindings (the pump does this in the
         // migrated scenes); the world takes the tuple and gates it on focus.
@@ -509,17 +557,36 @@ mod tests {
         for elsewhere in [None, Some("other_panel")] {
             let before = world.camera().position;
             world.update(0.5, &input, look_axes, elsewhere);
-            assert_eq!(world.camera().position, before, "{elsewhere:?} does not fly the planet");
-            assert_eq!(world.handle(&look, &mut rc), Flow::Pass, "and the signal is not ours");
+            assert_eq!(
+                world.camera().position,
+                before,
+                "{elsewhere:?} does not fly the planet"
+            );
+            assert_eq!(
+                world.handle(&look, &mut rc),
+                Flow::Pass,
+                "and the signal is not ours"
+            );
         }
 
         let before = world.camera().position;
         world.update(0.5, &input, look_axes, Some("view"));
-        assert!((world.camera().position - before).length() > 1.0, "the focused panel flies it");
-        assert_eq!(world.handle(&look, &mut rc), Flow::Consumed, "and owns the signal");
+        assert!(
+            (world.camera().position - before).length() > 1.0,
+            "the focused panel flies it"
+        );
+        assert_eq!(
+            world.handle(&look, &mut rc),
+            Flow::Consumed,
+            "and owns the signal"
+        );
         // Anything that is not a camera signal always passes.
-        let confirm =
-            InputEvent::new(ActionSignal::Confirm, EventKind::Press, InputContext::World, &raw);
+        let confirm = InputEvent::new(
+            ActionSignal::Confirm,
+            EventKind::Press,
+            InputContext::World,
+            &raw,
+        );
         assert_eq!(world.handle(&confirm, &mut rc), Flow::Pass);
     }
 
@@ -535,7 +602,9 @@ mod tests {
         let dz = cfg.right_stick_deadzone;
         let mut input = InputState::new();
 
-        input.gamepad_mut(0).set_axis(GamepadAxis::RightStickX, dz * 0.5);
+        input
+            .gamepad_mut(0)
+            .set_axis(GamepadAxis::RightStickX, dz * 0.5);
         assert_eq!(
             bindings.signal_axis(ActionSignal::LookRight, &input, &cfg),
             0.0,
@@ -543,7 +612,9 @@ mod tests {
         );
 
         let nudge = dz + (1.0 - dz) * 0.1;
-        input.gamepad_mut(0).set_axis(GamepadAxis::RightStickX, nudge);
+        input
+            .gamepad_mut(0)
+            .set_axis(GamepadAxis::RightStickX, nudge);
         let v = bindings.signal_axis(ActionSignal::LookRight, &input, &cfg);
         assert!(v > 0.0, "just past the deadzone the stick is already live");
         let snapshot = input.gamepad(0).unwrap().right_stick().x;
@@ -554,7 +625,10 @@ mod tests {
         assert!(v < nudge, "and it is the RESCALED travel, not the raw axis");
 
         // The other half of the axis is a different signal, not a sign.
-        assert_eq!(bindings.signal_axis(ActionSignal::LookLeft, &input, &cfg), 0.0);
+        assert_eq!(
+            bindings.signal_axis(ActionSignal::LookLeft, &input, &cfg),
+            0.0
+        );
         // A digital binding is a full deflection while it is held.
         input.set_key(Key::Up, true);
         assert_eq!(bindings.signal_axis(ActionSignal::NavUp, &input, &cfg), 1.0);
@@ -570,6 +644,10 @@ mod tests {
         assert_eq!(world.facing(&[]), None, "no world, no answer");
         let toward = world.camera().position.normalize_or_zero();
         let dirs = vec![-toward, Vec3::Y, toward];
-        assert_eq!(world.facing(&dirs), Some(2), "the cell pointing at the camera");
+        assert_eq!(
+            world.facing(&dirs),
+            Some(2),
+            "the cell pointing at the camera"
+        );
     }
 }

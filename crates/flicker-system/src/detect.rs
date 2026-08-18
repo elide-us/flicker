@@ -41,7 +41,13 @@ pub struct HotSpot {
 }
 
 /// Scan the cloud for candidate body sites, strongest (peak overdensity) first.
-pub fn detect(ej: &Ejecta, cast: &CastParams, cloud: &CloudField, time: f32, anchor_au: f32) -> Vec<HotSpot> {
+pub fn detect(
+    ej: &Ejecta,
+    cast: &CastParams,
+    cloud: &CloudField,
+    time: f32,
+    anchor_au: f32,
+) -> Vec<HotSpot> {
     // 1. Every ring's clump crests → lumps at (au, angle, prominence).
     let mut lumps: Vec<(f32, f32, f32)> = Vec::new();
     for (i, el) in ej.elements.iter().enumerate() {
@@ -80,7 +86,11 @@ pub fn detect(ej: &Ejecta, cast: &CastParams, cloud: &CloudField, time: f32, anc
             }
         }
         if peak >= MIN_PEAK {
-            out.push(HotSpot { au: au_a, theta: th_a, strength: peak });
+            out.push(HotSpot {
+                au: au_a,
+                theta: th_a,
+                strength: peak,
+            });
         }
     }
 

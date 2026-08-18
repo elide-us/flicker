@@ -116,7 +116,11 @@ impl<'a> Epoch1<'a> {
     /// A kernel reading element traits from `tables`, parameterized by `params`,
     /// seeded by `seed`.
     pub fn new(tables: &'a Tables, params: Epoch1Params, seed: u64) -> Self {
-        Self { tables, params, seed }
+        Self {
+            tables,
+            params,
+            seed,
+        }
     }
 
     /// The generation parameters (the birth certificate).
@@ -136,7 +140,11 @@ impl<'a> Epoch1<'a> {
         let p = &self.params;
         let mut comp = Composition::new();
         for e in self.tables.elements() {
-            let base = p.abundance.get(&e.symbol).copied().unwrap_or(p.abundance_floor);
+            let base = p
+                .abundance
+                .get(&e.symbol)
+                .copied()
+                .unwrap_or(p.abundance_floor);
             if base <= 0.0 {
                 continue;
             }
@@ -214,7 +222,11 @@ mod tests {
         let e1 = Epoch1::new(&t, Epoch1Params::default(), 1234);
         for d in sphere_dirs(200) {
             let c = e1.seed_hex(d);
-            assert!((c.total() - 10_000.0).abs() < 1e-3, "total {} off target", c.total());
+            assert!(
+                (c.total() - 10_000.0).abs() < 1e-3,
+                "total {} off target",
+                c.total()
+            );
             assert!(!c.is_empty());
         }
     }
@@ -303,12 +315,22 @@ mod tests {
         let dirs = sphere_dirs(300);
         let mut hist: BTreeMap<String, usize> = BTreeMap::new();
         for d in &dirs {
-            *hist.entry(dominant_symbol(&t, &e1.seed_hex(*d))).or_default() += 1;
+            *hist
+                .entry(dominant_symbol(&t, &e1.seed_hex(*d)))
+                .or_default() += 1;
         }
-        println!("Epoch 1 dominant-element distribution over {} hexes:", dirs.len());
+        println!(
+            "Epoch 1 dominant-element distribution over {} hexes:",
+            dirs.len()
+        );
         for (sym, n) in &hist {
             println!("  {sym:>3}: {n}");
         }
-        assert!(hist.len() >= 3, "only {} distinct dominants: {:?}", hist.len(), hist);
+        assert!(
+            hist.len() >= 3,
+            "only {} distinct dominants: {:?}",
+            hist.len(),
+            hist
+        );
     }
 }

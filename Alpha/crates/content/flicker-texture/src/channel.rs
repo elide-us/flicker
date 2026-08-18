@@ -256,7 +256,12 @@ impl Channel {
         // period, which is what keeps a warped channel seamless (a periodic warp
         // of a periodic field is periodic).
         if self.warp.abs() > f64::EPSILON {
-            let w = Fbm { octaves: 2, lacunarity: 2.0, gain: 0.5, period };
+            let w = Fbm {
+                octaves: 2,
+                lacunarity: 2.0,
+                gain: 0.5,
+                period,
+            };
             let wx = noise::fbm2(x, y, w, self.salt ^ WARP_SALT_X, seed) - 0.5;
             let wy = noise::fbm2(x, y, w, self.salt ^ WARP_SALT_Y, seed) - 0.5;
             x += wx * self.warp;
@@ -307,7 +312,12 @@ mod tests {
     #[test]
     fn blend_amount_zero_is_the_bus_untouched() {
         for mode in BlendMode::ALL {
-            assert_eq!(mode.apply(0.37, 0.91, 0.0), 0.37, "{:?} not neutral at 0", mode);
+            assert_eq!(
+                mode.apply(0.37, 0.91, 0.0),
+                0.37,
+                "{:?} not neutral at 0",
+                mode
+            );
         }
     }
 
@@ -334,7 +344,10 @@ mod tests {
                 for &top in &[0.0, 0.5, 1.0] {
                     for &amt in &[0.0, 0.5, 1.0] {
                         let v = mode.apply(bus, top, amt);
-                        assert!((0.0..=1.0).contains(&v), "{mode:?}({bus},{top},{amt}) = {v}");
+                        assert!(
+                            (0.0..=1.0).contains(&v),
+                            "{mode:?}({bus},{top},{amt}) = {v}"
+                        );
                     }
                 }
             }
@@ -346,11 +359,19 @@ mod tests {
     #[test]
     fn every_source_is_finite_and_in_range() {
         for source in NoiseKind::ALL {
-            let ch = Channel { enabled: true, source, warp: 0.7, ..Channel::default() };
+            let ch = Channel {
+                enabled: true,
+                source,
+                warp: 0.7,
+                ..Channel::default()
+            };
             for i in 0..16 {
                 for j in 0..16 {
                     let v = ch.eval(i as f64 / 16.0, j as f64 / 16.0, 9);
-                    assert!(v.is_finite() && (0.0..=1.0).contains(&v), "{source:?} → {v}");
+                    assert!(
+                        v.is_finite() && (0.0..=1.0).contains(&v),
+                        "{source:?} → {v}"
+                    );
                 }
             }
         }
@@ -360,9 +381,16 @@ mod tests {
     #[test]
     fn a_disabled_channel_is_silent() {
         let mut rack = [Channel::default(); CHANNEL_COUNT];
-        rack[0] = Channel { enabled: true, ..Channel::default() };
+        rack[0] = Channel {
+            enabled: true,
+            ..Channel::default()
+        };
         let with_only_first = mix(&rack, 0.3, 0.6, 5);
-        rack[1] = Channel { enabled: false, blend: BlendMode::Add, ..Channel::default() };
+        rack[1] = Channel {
+            enabled: false,
+            blend: BlendMode::Add,
+            ..Channel::default()
+        };
         assert_eq!(with_only_first, mix(&rack, 0.3, 0.6, 5));
     }
 

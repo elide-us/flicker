@@ -254,9 +254,7 @@ pub(crate) fn edge_point(a: Vec3, b: Vec3, n: u32, m: u32) -> Vec3 {
     let (a, b) = (a.as_dvec3().normalize(), b.as_dvec3().normalize());
     let arc = edge_arc(n as f64 / m as f64, face_circumradius());
     let toward_b = (b - a * a.dot(b)).normalize();
-    (a * arc.cos() + toward_b * arc.sin())
-        .normalize()
-        .as_vec3()
+    (a * arc.cos() + toward_b * arc.sin()).normalize().as_vec3()
 }
 
 #[cfg(test)]
@@ -331,9 +329,6 @@ mod tests {
             prev = d;
         }
     }
-
-
-
 
     /// Area of the geodesic triangle `(p, q, r)` by Girard's excess.
     fn excess(p: DVec3, q: DVec3, r: DVec3) -> f64 {

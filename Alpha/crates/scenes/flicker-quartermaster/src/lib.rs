@@ -158,9 +158,7 @@ use std::time::Duration;
 use flicker::render::{Renderer, Vec2};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
-};
+use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
 use flicker_input_core::{
     AbstractControls, ActionSignal, EventKind, GamepadConfig, InputMap, InputState, Key,
 };
@@ -169,11 +167,8 @@ use flicker_shell::{PauseScene, Theme};
 
 use fs_model::{QueueItem, Roots, Row, SortKey, TreeRow};
 
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 /// The pair script — the scene's LOGIC half, by name (five-line architecture).
-const QM_SCRIPT: &str =
-    include_str!("../../../../content/sensorium/scripts/quartermaster.lua");
+const QM_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/quartermaster.lua");
 /// The shipped scene file — the tests' copy of the authored tree (the runtime
 /// receives the same file through the manifest `SceneDef`).
 const QM_SCENE: &str =
@@ -560,7 +555,11 @@ impl Quartermaster {
 
     /// Left stick: move between panels.
     pub fn focus_pane(&mut self, forward: bool) {
-        self.pane = if forward { self.pane.next() } else { self.pane.prev() };
+        self.pane = if forward {
+            self.pane.next()
+        } else {
+            self.pane.prev()
+        };
     }
 
     /// L1/R1: change tab.
@@ -611,7 +610,9 @@ impl Quartermaster {
     /// one. A no-op when the destination is where the item already lives —
     /// which must NOT push a history entry the user would have to undo twice.
     pub fn paste(&mut self) {
-        let Some(src) = self.clipboard.clone() else { return };
+        let Some(src) = self.clipboard.clone() else {
+            return;
+        };
         // Prefer a focused folder as the destination — that is what "paste into"
         // means when the cursor is sitting on one.
         let dst_dir = match self.focused_row() {
@@ -673,7 +674,9 @@ impl Quartermaster {
     /// while nothing is held — the same condition the proto's `disabled` param
     /// reads, so the highlight and the pick can never disagree.
     fn menu_row_live(&self, i: usize) -> bool {
-        MENU_ROWS.get(i).is_some_and(|(verb, _)| *verb != "paste" || self.clipboard.is_some())
+        MENU_ROWS
+            .get(i)
+            .is_some_and(|(verb, _)| *verb != "paste" || self.clipboard.is_some())
     }
 
     /// Move the pad cursor within the menu, skipping any dead row.
@@ -728,9 +731,15 @@ impl Quartermaster {
     /// a single undo entry.
     pub fn resolve_conflict(&mut self, how: flicker_content::Resolution) {
         use flicker_content::Resolution;
-        let Some(mut p) = self.prompt.take() else { return };
+        let Some(mut p) = self.prompt.take() else {
+            return;
+        };
         let take = if p.apply_rest { p.pending.len() } else { 1 };
-        for c in p.pending.drain(..take.min(p.pending.len())).collect::<Vec<_>>() {
+        for c in p
+            .pending
+            .drain(..take.min(p.pending.len()))
+            .collect::<Vec<_>>()
+        {
             match how {
                 // The occupant is PARKED, never unlinked (`BatchFileOp` moves it
                 // into `.trash/<batch>`), which is what keeps Replace revertible.
@@ -809,7 +818,10 @@ impl Quartermaster {
 
     /// The selected asset's warning `$token`s (tests + the model read the same).
     pub fn facts_warning_tokens(&self) -> Vec<&'static str> {
-        self.facts.as_ref().map(|f| f.warnings.clone()).unwrap_or_default()
+        self.facts
+            .as_ref()
+            .map(|f| f.warnings.clone())
+            .unwrap_or_default()
     }
 
     /// The current error token/text, if any (test accessor).
@@ -850,7 +862,9 @@ impl Quartermaster {
     /// manifest row — ONE history entry, so one undo returns files AND ledger.
     /// A collision raises the same prompt every other mutation uses.
     pub fn promote_selected(&mut self) {
-        let Some(item) = self.queue.get(self.review_sel).cloned() else { return };
+        let Some(item) = self.queue.get(self.review_sel).cloned() else {
+            return;
+        };
         let files = fs_model::files_under(&item.dir);
         if files.is_empty() {
             return;
@@ -866,7 +880,10 @@ impl Quartermaster {
         let row = flicker_content::manifest::ManifestEntry {
             name: item.name.clone(),
             class: item.class.id().to_string(),
-            path: PathBuf::from("package").join(&item.rel).to_string_lossy().into_owned(),
+            path: PathBuf::from("package")
+                .join(&item.rel)
+                .to_string_lossy()
+                .into_owned(),
             promoted_from: PathBuf::from("staging")
                 .join(&item.rel)
                 .to_string_lossy()
@@ -956,12 +973,15 @@ impl Quartermaster {
 
     /// Open an in-place rename on the focused item.
     pub fn begin_rename(&mut self) {
-        let Some((path, name)) =
-            self.focused_row().map(|r| (r.path.clone(), r.name.clone()))
+        let Some((path, name)) = self.focused_row().map(|r| (r.path.clone(), r.name.clone()))
         else {
             return;
         };
-        self.rename = Some(Rename { path, draft: name, pristine: true });
+        self.rename = Some(Rename {
+            path,
+            draft: name,
+            pristine: true,
+        });
         self.last_error = None;
     }
 
@@ -974,7 +994,9 @@ impl Quartermaster {
     /// Fold this frame's typed text into the draft. The first character
     /// REPLACES the name (see [`Rename::pristine`]); afterwards it appends.
     pub fn type_into_rename(&mut self, typed: &str, backspace: bool) {
-        let Some(r) = self.rename.as_mut() else { return };
+        let Some(r) = self.rename.as_mut() else {
+            return;
+        };
         if !typed.is_empty() {
             if r.pristine {
                 r.draft.clear();
@@ -1006,7 +1028,9 @@ impl Quartermaster {
             self.last_error = Some("$qm_err_bad_name".into());
             return;
         }
-        let Some(parent) = r.path.parent() else { return };
+        let Some(parent) = r.path.parent() else {
+            return;
+        };
         let dst = parent.join(name);
         if dst == r.path {
             self.rename = None; // unchanged
@@ -1055,7 +1079,11 @@ impl Quartermaster {
     /// Raise a confirmation. Newest last (the proto stacks downward); the bank
     /// is capped at the proto's slot count, oldest dropped first.
     fn toast(&mut self, label: &str, name: String) {
-        self.toasts.push(Toast { label: label.to_string(), name, born: self.tick });
+        self.toasts.push(Toast {
+            label: label.to_string(),
+            name,
+            born: self.tick,
+        });
         while self.toasts.len() > TOAST_SLOTS {
             self.toasts.remove(0);
         }
@@ -1063,7 +1091,10 @@ impl Quartermaster {
 
     /// The toasts still within their dwell, oldest first.
     fn live_toasts(&self) -> Vec<&Toast> {
-        self.toasts.iter().filter(|t| toast_alive(t.born, self.tick)).collect()
+        self.toasts
+            .iter()
+            .filter(|t| toast_alive(t.born, self.tick))
+            .collect()
     }
 
     /// How many confirmations are currently up.
@@ -1172,7 +1203,10 @@ impl Quartermaster {
                 m.set(format!("row_slot_{s}_type"), class_token(row));
                 m.set(format!("row_slot_{s}_size"), human_size(row));
                 m.set(format!("row_slot_{s}_color"), class_color(row));
-                m.set(format!("row_slot_{s}_sel"), i == self.sel && self.pane == Pane::List);
+                m.set(
+                    format!("row_slot_{s}_sel"),
+                    i == self.sel && self.pane == Pane::List,
+                );
                 // Folder-vs-file at a glance: the name node is a gated PAIR (bold
                 // for a folder, regular for a file — `bold` is a static prop, so
                 // the state picks the node instead).
@@ -1187,9 +1221,15 @@ impl Quartermaster {
             if let Some(t) = t {
                 let i = tbase + s;
                 m.set(format!("tree_slot_{s}_text"), Self::tree_slot_text(t));
-                m.set(format!("tree_slot_{s}_sel"), i == self.tree_sel && self.pane == Pane::Tree);
+                m.set(
+                    format!("tree_slot_{s}_sel"),
+                    i == self.tree_sel && self.pane == Pane::Tree,
+                );
                 // Real px indentation, one arrange bind per slot line.
-                m.set(format!("tree_line_{s}_off_x"), t.depth as f64 * Self::TREE_INDENT_PX);
+                m.set(
+                    format!("tree_line_{s}_off_x"),
+                    t.depth as f64 * Self::TREE_INDENT_PX,
+                );
             }
         }
         // The Review bank + the selected item's facts (the queue is short and
@@ -1200,7 +1240,10 @@ impl Quartermaster {
             if let Some(item) = item {
                 m.set(format!("rv_slot_{s}_name"), item.name.clone());
                 m.set(format!("rv_slot_{s}_meta"), human_bytes(item.bytes));
-                m.set(format!("rv_slot_{s}_color"), format!("quartermaster.class.{}", item.class.id()));
+                m.set(
+                    format!("rv_slot_{s}_color"),
+                    format!("quartermaster.class.{}", item.class.id()),
+                );
                 m.set(format!("rv_slot_{s}_sel"), s == self.review_sel);
             }
         }
@@ -1208,8 +1251,17 @@ impl Quartermaster {
             m.set("rv_class", format!("$qm_class_{}", item.class.id()));
             m.set("rv_files", item.files.to_string());
             m.set("rv_size", human_bytes(item.bytes));
-            m.set("rv_target", fs_model::logical(&self.roots.package.join(&item.rel)).display().to_string());
-            let warnings = self.facts.as_ref().map(|f| f.warnings.as_slice()).unwrap_or(&[]);
+            m.set(
+                "rv_target",
+                fs_model::logical(&self.roots.package.join(&item.rel))
+                    .display()
+                    .to_string(),
+            );
+            let warnings = self
+                .facts
+                .as_ref()
+                .map(|f| f.warnings.as_slice())
+                .unwrap_or(&[]);
             for (i, w) in warnings.iter().take(3).enumerate() {
                 m.set(format!("rv_warn_{i}_on"), true);
                 m.set(format!("rv_warn_{i}"), *w);
@@ -1222,7 +1274,10 @@ impl Quartermaster {
         if let Some(c) = self.prompt_conflict() {
             m.set(
                 "conflict_name",
-                c.dst.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                c.dst
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
             );
             m.set(
                 "conflict_where",
@@ -1239,7 +1294,10 @@ impl Quartermaster {
             let rest = self.prompt_remaining().saturating_sub(1);
             m.set("conflict_multi", rest > 0);
             m.set("conflict_rest", rest.to_string());
-            m.set(APPLY_REST_ID, self.prompt.as_ref().is_some_and(|p| p.apply_rest));
+            m.set(
+                APPLY_REST_ID,
+                self.prompt.as_ref().is_some_and(|p| p.apply_rest),
+            );
         }
         // The toast bank. The proto spells out TOAST_SLOTS rows and the live
         // toasts are paged into them, newest last — the sanctioned dynamic-rows
@@ -1253,7 +1311,10 @@ impl Quartermaster {
                 m.set(format!("toast_{i}_name"), t.name.clone());
             }
         }
-        m.set("crumbs", fs_model::breadcrumb(&self.roots, &self.cwd).join(" / "));
+        m.set(
+            "crumbs",
+            fs_model::breadcrumb(&self.roots, &self.cwd).join(" / "),
+        );
         m.set("count", self.rows.len().to_string());
         // Clipboard / error state for the status line. All display copy is a
         // `$token`; only the item's own NAME is data.
@@ -1261,7 +1322,9 @@ impl Quartermaster {
         if let Some(clip) = &self.clipboard {
             m.set(
                 "clip_name",
-                clip.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                clip.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
             );
         }
         m.set("can_undo", self.history.can_undo());
@@ -1363,8 +1426,9 @@ impl Quartermaster {
             // "anything else" closed the menu on the first idle frame after the
             // edge-resolved open signal — a one-frame lifetime (QA 2026-08-03:
             // "appears then disappears immediately").
-            let verb_fired =
-                ["rename", "cut", "paste", "create_folder"].iter().any(|v| results.is_on(v));
+            let verb_fired = ["rename", "cut", "paste", "create_folder"]
+                .iter()
+                .any(|v| results.is_on(v));
             if results.is_on("menu_dismiss") || verb_fired {
                 self.close_menu();
             } else {
@@ -1510,14 +1574,21 @@ impl Scene for Quartermaster {
         self.ui_theme = Some(Theme::build(renderer));
         // The theme, the shared satellites, and THIS scene's own style blocks
         // (`def.styles` — the five-line home for the bench's values).
-        self.ui_styles =
-            flicker::ui::load_styles_for(HUD_UI_THEME, self.scene_styles_json.as_ref());
+        self.ui_styles = flicker::ui::load_shared_styles(self.scene_styles_json.as_ref());
         self.refresh();
         renderer.window().set_title("Quartermaster Bench");
     }
 
-    fn update(&mut self, _dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
-        let Some(tree) = self.authored.take() else { return Transition::None };
+    fn update(
+        &mut self,
+        _dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
+        let Some(tree) = self.authored.take() else {
+            return Transition::None;
+        };
         let screen = renderer.size();
 
         self.tick = self.tick.wrapping_add(1);
@@ -1533,7 +1604,11 @@ impl Scene for Quartermaster {
         // scene folds the same text into its own draft below, which is what
         // makes the pristine-replace possible.
         let renaming = self.is_renaming();
-        let typed = if renaming { input.typed().to_string() } else { String::new() };
+        let typed = if renaming {
+            input.typed().to_string()
+        } else {
+            String::new()
+        };
         let backspace = renaming && input.backspace();
         if renaming {
             self.ui_state.request_focus(RENAME_ID);
@@ -1741,7 +1816,10 @@ impl ReviewFacts {
         if target_dir.exists() {
             warnings.push("$qm_warn_target_occupied");
         }
-        Self { dir: item.dir.clone(), warnings }
+        Self {
+            dir: item.dir.clone(),
+            warnings,
+        }
     }
 }
 
@@ -1762,13 +1840,17 @@ fn class_color(row: &Row) -> String {
     format!("quartermaster.class.{}", row.class.id())
 }
 
-
 /// A compact size for the Size column. Folders show a dash.
 /// The context menu's PICKABLE rows: `(verb, proto row index)`. The proto's
 /// divider sits at index 4 and is not pickable, so the cursor indexes THIS table
 /// and the row index is looked up — a pad cursor can never land on a hairline.
-const MENU_ROWS: [(&str, usize); 5] =
-    [("confirm", 0), ("rename", 1), ("cut", 2), ("paste", 3), ("create_folder", 5)];
+const MENU_ROWS: [(&str, usize); 5] = [
+    ("confirm", 0),
+    ("rename", 1),
+    ("cut", 2),
+    ("paste", 3),
+    ("create_folder", 5),
+];
 
 /// What a confirmation names for one operation: the item's own file name. Data,
 /// never copy — the `$token` beside it says what HAPPENED to it.
@@ -1777,7 +1859,9 @@ fn op_subject(op: &FileOp) -> String {
         FileOp::Move { dst, .. } => dst,
         FileOp::Mkdir { path } => path,
     };
-    path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 /// One side of a collision, as the prompt shows it: the measured size, or the
@@ -1821,7 +1905,10 @@ mod tests {
     fn scratch(name: &str) -> (Quartermaster, PathBuf) {
         let d = std::env::temp_dir().join(format!("flicker_qmbench_{name}"));
         let _ = std::fs::remove_dir_all(&d);
-        let roots = Roots { package: d.join("package"), staging: d.join("staging") };
+        let roots = Roots {
+            package: d.join("package"),
+            staging: d.join("staging"),
+        };
         std::fs::create_dir_all(roots.package.join("characters/katanami")).unwrap();
         std::fs::create_dir_all(&roots.staging).unwrap();
         flicker_content::package::write_text(
@@ -1863,7 +1950,11 @@ mod tests {
         qm.nav(1);
         assert_eq!(qm.selected().unwrap().name, "Alpha.json");
         qm.nav(-5);
-        assert_eq!(qm.selected().unwrap().name, "characters", "clamped at the top");
+        assert_eq!(
+            qm.selected().unwrap().name,
+            "characters",
+            "clamped at the top"
+        );
 
         // A opens a folder; B climbs back and lands on the folder we left.
         qm.confirm();
@@ -1899,7 +1990,11 @@ mod tests {
         qm.sort_by(SortKey::Name);
         assert_eq!(qm.sort(), (SortKey::Name, true), "same key flips");
         qm.sort_by(SortKey::Size);
-        assert_eq!(qm.sort(), (SortKey::Size, false), "a new key starts ascending");
+        assert_eq!(
+            qm.sort(),
+            (SortKey::Size, false),
+            "a new key starts ascending"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -1916,10 +2011,16 @@ mod tests {
         assert!(unknown.is_empty(), "unknown component kinds: {unknown:?}");
 
         let raw = flicker::ui::raw_display_literals(&tree);
-        assert!(raw.is_empty(), "raw display literals (must be $tokens): {raw:?}");
+        assert!(
+            raw.is_empty(),
+            "raw display literals (must be $tokens): {raw:?}"
+        );
 
         let flags = flicker::ui::strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
 
         // The declared intents are the ratified contract, exactly.
         let intents = UiIntents::of(&tree);
@@ -1935,7 +2036,11 @@ mod tests {
             (ActionSignal::TabNext, "tab_next"),
             (ActionSignal::TabPrev, "tab_prev"),
         ] {
-            assert_eq!(intents.result_for(sig), Some(name), "declared intent for {sig:?}");
+            assert_eq!(
+                intents.result_for(sig),
+                Some(name),
+                "declared intent for {sig:?}"
+            );
         }
         // The inverse: no node anywhere declares a walker-owned signal.
         fn no_walker_owned(n: &UiNode) {
@@ -1965,8 +2070,12 @@ mod tests {
 
         // The pair script loads and derives.
         let host = ScriptHost::new(QM_SCRIPT, "quartermaster.lua").expect("pair script loads");
-        host.set_model(&ValueMap::new().with("tab", "tab_files")).expect("model publishes");
-        let derived = host.derive().expect("derive runs").expect("derive returns a table");
+        host.set_model(&ValueMap::new().with("tab", "tab_files"))
+            .expect("model publishes");
+        let derived = host
+            .derive()
+            .expect("derive runs")
+            .expect("derive returns a table");
         assert!(derived.is_on("files_on"), "the Files page gate derives on");
     }
 
@@ -1984,9 +2093,18 @@ mod tests {
             expanded,
             has_children,
         };
-        assert_eq!(Quartermaster::tree_slot_text(&row("pack", 0, false, true)), "^ pack");
-        assert_eq!(Quartermaster::tree_slot_text(&row("pack", 0, true, true)), "> pack");
-        assert_eq!(Quartermaster::tree_slot_text(&row("readme", 1, false, false)), "\u{b7} readme");
+        assert_eq!(
+            Quartermaster::tree_slot_text(&row("pack", 0, false, true)),
+            "^ pack"
+        );
+        assert_eq!(
+            Quartermaster::tree_slot_text(&row("pack", 0, true, true)),
+            "> pack"
+        );
+        assert_eq!(
+            Quartermaster::tree_slot_text(&row("readme", 1, false, false)),
+            "\u{b7} readme"
+        );
 
         // Both roots open from the first frame, so a depth-1 line exists and its
         // slot's indent bind carries one level of real pixels.
@@ -2007,7 +2125,7 @@ mod tests {
         let (qm, d) = scratch("clicks");
         let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
         let tree = def.tree.expect("the scene file ships a tree");
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         let screen = Vec2::new(1920.0, 1080.0);
         let model = qm.model();
         let mut state = UiState::default();
@@ -2052,10 +2170,16 @@ mod tests {
         };
         let f = click(slot, &mut state);
         assert!(f.results.is_on("hud_hit"), "the slot claims the pointer");
-        assert!(f.results.is_on("row_pick_slot_0"), "the slot click fires its pick");
+        assert!(
+            f.results.is_on("row_pick_slot_0"),
+            "the slot click fires its pick"
+        );
 
         let f = click(tree_slot, &mut UiState::default());
-        assert!(f.results.is_on("tree_open_slot_0"), "the tree slot click fires its open");
+        assert!(
+            f.results.is_on("tree_open_slot_0"),
+            "the tree slot click fires its open"
+        );
 
         let f = click(tab, &mut UiState::default());
         assert!(f.results.is_on("tab_review"), "the tab button fires");
@@ -2078,7 +2202,7 @@ mod tests {
 
         let def = SceneDef::parse("quartermaster", QM_SCENE).expect("scene file parses");
         let tree = def.tree.expect("the scene file ships a tree");
-        let styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         let mut state = UiState::default();
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
@@ -2115,10 +2239,18 @@ mod tests {
         let (mut qm, d) = scratch("pristine");
         qm.nav(1); // Alpha.json
         qm.begin_rename();
-        assert_eq!(qm.rename_draft(), Some("Alpha.json"), "opens on the current name");
+        assert_eq!(
+            qm.rename_draft(),
+            Some("Alpha.json"),
+            "opens on the current name"
+        );
 
         qm.type_into_rename("K", false);
-        assert_eq!(qm.rename_draft(), Some("K"), "the first key REPLACED the name");
+        assert_eq!(
+            qm.rename_draft(),
+            Some("K"),
+            "the first key REPLACED the name"
+        );
         qm.type_into_rename("atana", false);
         assert_eq!(qm.rename_draft(), Some("Katana"), "and then appends");
         let _ = std::fs::remove_dir_all(d);
@@ -2132,7 +2264,11 @@ mod tests {
         qm.nav(1);
         qm.begin_rename();
         qm.type_into_rename("", true);
-        assert_eq!(qm.rename_draft(), Some("Alpha.jso"), "one character removed");
+        assert_eq!(
+            qm.rename_draft(),
+            Some("Alpha.jso"),
+            "one character removed"
+        );
         qm.type_into_rename("n", false);
         assert_eq!(qm.rename_draft(), Some("Alpha.json"), "typing now appends");
         let _ = std::fs::remove_dir_all(d);
@@ -2150,12 +2286,22 @@ mod tests {
         assert!(!qm.is_renaming(), "the field closed");
 
         let after = qm.cwd().join("Renamed.json");
-        assert!(flicker_content::occupied(&after), "the file took the new name");
+        assert!(
+            flicker_content::occupied(&after),
+            "the file took the new name"
+        );
         assert!(!flicker_content::occupied(&before));
-        assert_eq!(qm.selected().unwrap().name, "Renamed.json", "focus followed the rename");
+        assert_eq!(
+            qm.selected().unwrap().name,
+            "Renamed.json",
+            "focus followed the rename"
+        );
 
         qm.undo();
-        assert!(flicker_content::occupied(&before), "one undo restored the old name");
+        assert!(
+            flicker_content::occupied(&before),
+            "one undo restored the old name"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2173,7 +2319,10 @@ mod tests {
             qm.type_into_rename(typed, false);
             qm.commit_rename();
             assert_eq!(qm.last_error(), Some(err), "typing {typed:?}");
-            assert!(qm.is_renaming(), "the field stays open so the typing is not lost");
+            assert!(
+                qm.is_renaming(),
+                "the field stays open so the typing is not lost"
+            );
             assert_eq!(qm.rename_draft(), Some(typed), "and the draft survives");
             qm.cancel_rename();
         }
@@ -2200,7 +2349,10 @@ mod tests {
         qm.type_into_rename("Whatever", false);
         qm.cancel_rename();
         assert!(!qm.is_renaming());
-        assert!(flicker_content::occupied(&qm.cwd().join("Alpha.json")), "the file is untouched");
+        assert!(
+            flicker_content::occupied(&qm.cwd().join("Alpha.json")),
+            "the file is untouched"
+        );
         assert!(!qm.can_undo());
         let _ = std::fs::remove_dir_all(d);
     }
@@ -2215,11 +2367,23 @@ mod tests {
         let focused = qm.selected().unwrap().path.clone();
         qm.begin_rename();
 
-        for verb in ["nav_down", "nav_up", "cut", "paste", "create_folder", "undo", "confirm"] {
+        for verb in [
+            "nav_down",
+            "nav_up",
+            "cut",
+            "paste",
+            "create_folder",
+            "undo",
+            "confirm",
+        ] {
             qm.apply_results(&on(verb));
         }
         assert!(qm.is_renaming(), "still renaming after every other intent");
-        assert_eq!(qm.selected().unwrap().path, focused, "the cursor did not move");
+        assert_eq!(
+            qm.selected().unwrap().path,
+            focused,
+            "the cursor did not move"
+        );
         assert!(qm.clipboard().is_none(), "no verb ran");
         assert!(!qm.can_undo(), "and nothing mutated");
 
@@ -2248,7 +2412,11 @@ mod tests {
 
         // A click on dead space: the edge alone — dismiss, and nothing runs.
         assert!(!qm.can_undo());
-        qm.apply_results(&ValueMap::new().with("hud_hit", true).with("menu_dismiss", true));
+        qm.apply_results(
+            &ValueMap::new()
+                .with("hud_hit", true)
+                .with("menu_dismiss", true),
+        );
         assert!(!qm.is_menu_open(), "a dead-space click dismisses");
         assert!(!qm.can_undo(), "and no verb ran");
         let _ = std::fs::remove_dir_all(d);
@@ -2287,7 +2455,10 @@ mod tests {
         let (mut qm, d) = scratch("promote");
         stage_asset(&d, "NewThing", true);
         qm.refresh_queue();
-        assert_eq!(qm.selected_queue_item().map(|q| q.name.as_str()), Some("NewThing"));
+        assert_eq!(
+            qm.selected_queue_item().map(|q| q.name.as_str()),
+            Some("NewThing")
+        );
 
         qm.promote_selected();
         assert!(!qm.is_prompting(), "a clean target asks no questions");
@@ -2296,7 +2467,10 @@ mod tests {
             flicker_content::package::file_exists(&target.join("NewThing.json")),
             "the rig landed in the package"
         );
-        assert!(target.join("NewThing_BaseColor.png").exists(), "its texture travelled WITH it");
+        assert!(
+            target.join("NewThing_BaseColor.png").exists(),
+            "its texture travelled WITH it"
+        );
         let manifest = d.join("package/manifest.json");
         let rows = flicker_content::manifest::read(&manifest).unwrap();
         assert_eq!(rows.len(), 1, "one promote, one ledger row");
@@ -2315,10 +2489,20 @@ mod tests {
             ),
             "undo returned the asset to staging"
         );
-        assert!(!flicker_content::package::file_exists(&target.join("NewThing.json")));
-        assert!(flicker_content::manifest::read(&manifest).unwrap().is_empty(), "row removed");
+        assert!(!flicker_content::package::file_exists(
+            &target.join("NewThing.json")
+        ));
+        assert!(
+            flicker_content::manifest::read(&manifest)
+                .unwrap()
+                .is_empty(),
+            "row removed"
+        );
         qm.refresh_queue();
-        assert_eq!(qm.selected_queue_item().map(|q| q.name.as_str()), Some("NewThing"));
+        assert_eq!(
+            qm.selected_queue_item().map(|q| q.name.as_str()),
+            Some("NewThing")
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2334,7 +2518,8 @@ mod tests {
         flicker_content::package::write_text(&old.join("Golem.json"), r#"{"old":true}"#).unwrap();
         qm.refresh_queue();
         assert!(
-            qm.facts_warning_tokens().contains(&"$qm_warn_target_occupied"),
+            qm.facts_warning_tokens()
+                .contains(&"$qm_warn_target_occupied"),
             "the occupied target is a WARNING before it is a surprise"
         );
 
@@ -2343,12 +2528,19 @@ mod tests {
         qm.toggle_apply_rest();
         qm.resolve_conflict(flicker_content::Resolution::Replace);
         assert!(!qm.is_prompting());
-        assert!(qm.last_error_token().is_none(), "replace completes the promote");
-        let text =
-            flicker_content::package::read_text(&old.join("Golem.json")).unwrap();
-        assert!(text.contains("flicker.rig"), "the NEW rig sits at the target");
+        assert!(
+            qm.last_error_token().is_none(),
+            "replace completes the promote"
+        );
+        let text = flicker_content::package::read_text(&old.join("Golem.json")).unwrap();
+        assert!(
+            text.contains("flicker.rig"),
+            "the NEW rig sits at the target"
+        );
         assert_eq!(
-            flicker_content::manifest::read(&d.join("package/manifest.json")).unwrap().len(),
+            flicker_content::manifest::read(&d.join("package/manifest.json"))
+                .unwrap()
+                .len(),
             1
         );
         let _ = std::fs::remove_dir_all(d);
@@ -2370,13 +2562,13 @@ mod tests {
         qm.resolve_conflict(flicker_content::Resolution::Skip);
         assert_eq!(qm.last_error_token(), Some("$qm_err_promote_partial"));
         assert!(
-            flicker_content::package::file_exists(
-                &d.join("staging/characters/Golem/Golem.json")
-            ),
+            flicker_content::package::file_exists(&d.join("staging/characters/Golem/Golem.json")),
             "nothing moved"
         );
         assert!(
-            flicker_content::manifest::read(&d.join("package/manifest.json")).unwrap().is_empty(),
+            flicker_content::manifest::read(&d.join("package/manifest.json"))
+                .unwrap()
+                .is_empty(),
             "and nothing was recorded"
         );
         let _ = std::fs::remove_dir_all(d);
@@ -2395,11 +2587,18 @@ mod tests {
         qm.review_nav(1); // → Beta2
         assert_eq!(qm.selected_queue_item().unwrap().name, "Beta2");
         let warns = qm.facts_warning_tokens();
-        assert!(warns.contains(&"$qm_warn_off_canon"), "2 bones ≠ the canon: {warns:?}");
+        assert!(
+            warns.contains(&"$qm_warn_off_canon"),
+            "2 bones ≠ the canon: {warns:?}"
+        );
         assert!(warns.contains(&"$qm_warn_missing_textures"), "{warns:?}");
 
         qm.refresh_queue();
-        assert_eq!(qm.selected_queue_item().unwrap().name, "Beta2", "cursor survived");
+        assert_eq!(
+            qm.selected_queue_item().unwrap().name,
+            "Beta2",
+            "cursor survived"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2426,7 +2625,11 @@ mod tests {
         for _ in 0..4 {
             qm.apply_results(&on("nav_down"));
         }
-        assert_eq!(qm.selected().map(|r| r.path.clone()), before, "the listing held still");
+        assert_eq!(
+            qm.selected().map(|r| r.path.clone()),
+            before,
+            "the listing held still"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2467,7 +2670,10 @@ mod tests {
         qm.open_menu();
         qm.apply_results(&on("paste"));
         assert!(!qm.is_menu_open(), "the menu closed");
-        assert!(qm.is_prompting(), "and the collision question took the screen");
+        assert!(
+            qm.is_prompting(),
+            "and the collision question took the screen"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2489,7 +2695,8 @@ mod tests {
             "the ACTION is a token"
         );
         assert!(
-            m.text("toast_0_name").is_some_and(|n| n.starts_with("New Folder")),
+            m.text("toast_0_name")
+                .is_some_and(|n| n.starts_with("New Folder")),
             "the SUBJECT is the item's own name, as data: {:?}",
             m.text("toast_0_name")
         );
@@ -2522,7 +2729,10 @@ mod tests {
         // `now`. Saturating arithmetic makes that read as freshly-raised rather
         // than long-expired — the safe direction: a confirmation lingers instead
         // of vanishing before it is read.
-        assert!(toast_alive(u64::MAX, 0), "a born-ahead toast shows rather than vanishing");
+        assert!(
+            toast_alive(u64::MAX, 0),
+            "a born-ahead toast shows rather than vanishing"
+        );
     }
 
     /// Stage a collision: `Alpha.json` cut from `cwd`, with an occupant of the
@@ -2586,7 +2796,10 @@ mod tests {
             "the occupant is untouched"
         );
         let beside = dst.parent().unwrap().join("Alpha_01.json");
-        assert!(flicker_content::occupied(&beside), "the incoming landed as _01");
+        assert!(
+            flicker_content::occupied(&beside),
+            "the incoming landed as _01"
+        );
         assert!(!flicker_content::occupied(&src), "and left its old home");
         assert!(qm.can_undo(), "one entry");
         let _ = std::fs::remove_dir_all(d);
@@ -2636,16 +2849,33 @@ mod tests {
         let (src, _) = staged_collision(&mut qm);
         let before = qm.selected().map(|r| r.path.clone());
 
-        for verb in
-            ["nav_down", "nav_up", "cut", "paste", "create_folder", "undo", "redo", "rename"]
-        {
+        for verb in [
+            "nav_down",
+            "nav_up",
+            "cut",
+            "paste",
+            "create_folder",
+            "undo",
+            "redo",
+            "rename",
+        ] {
             qm.apply_results(&on(verb));
         }
-        assert!(qm.is_prompting(), "still prompting after every other intent");
+        assert!(
+            qm.is_prompting(),
+            "still prompting after every other intent"
+        );
         assert!(!qm.is_renaming(), "rename never opened");
-        assert_eq!(qm.selected().map(|r| r.path.clone()), before, "the cursor did not move");
+        assert_eq!(
+            qm.selected().map(|r| r.path.clone()),
+            before,
+            "the cursor did not move"
+        );
         assert!(!qm.can_undo(), "nothing mutated");
-        assert!(flicker_content::occupied(&src), "the item in question is untouched");
+        assert!(
+            flicker_content::occupied(&src),
+            "the item in question is untouched"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2690,7 +2920,10 @@ mod tests {
         assert!(qm.clipboard().is_none(), "the clipboard cleared on paste");
 
         let moved = qm.cwd().join("characters/Alpha.json");
-        assert!(flicker_content::occupied(&moved), "the file landed in the folder");
+        assert!(
+            flicker_content::occupied(&moved),
+            "the file landed in the folder"
+        );
         assert!(!flicker_content::occupied(&src), "and left where it was");
         assert!(qm.can_undo());
 
@@ -2728,7 +2961,11 @@ mod tests {
         assert_eq!(qm.clipboard(), Some(folder.as_path()));
         qm.confirm(); // navigate INTO it
         qm.paste();
-        assert_eq!(qm.last_error(), Some("$qm_err_into_self"), "refused with a reason");
+        assert_eq!(
+            qm.last_error(),
+            Some("$qm_err_into_self"),
+            "refused with a reason"
+        );
         assert!(!qm.can_undo(), "and nothing was recorded");
         let _ = std::fs::remove_dir_all(d);
     }
@@ -2759,13 +2996,19 @@ mod tests {
         assert!(qm.is_prompting(), "a collision raises the prompt");
         assert_eq!(qm.prompt_remaining(), 1, "one collision to answer");
         assert!(!qm.can_undo(), "nothing was recorded");
-        assert!(qm.clipboard().is_some(), "the move is still pending, ready to retry");
+        assert!(
+            qm.clipboard().is_some(),
+            "the move is still pending, ready to retry"
+        );
         assert_eq!(
             flicker_content::package::read_text(&folder.join("Alpha.json")).unwrap(),
             r#"{"clips":[{"name":"already here"}]}"#,
             "the occupant is untouched"
         );
-        assert!(flicker_content::occupied(&qm.cwd().join("Alpha.json")), "and so is the source");
+        assert!(
+            flicker_content::occupied(&qm.cwd().join("Alpha.json")),
+            "and so is the source"
+        );
         let _ = std::fs::remove_dir_all(d);
     }
 
@@ -2776,7 +3019,10 @@ mod tests {
         qm.create_folder();
         assert!(qm.last_error().is_none(), "{:?}", qm.last_error());
         assert_eq!(qm.rows().len(), before + 1);
-        assert!(qm.selected().unwrap().is_dir, "the new folder is focused, ready to rename");
+        assert!(
+            qm.selected().unwrap().is_dir,
+            "the new folder is focused, ready to rename"
+        );
 
         // A second one must not collide with the first.
         qm.create_folder();
@@ -2800,7 +3046,10 @@ mod tests {
         assert!(qm.clipboard().is_some());
 
         qm.apply_results(&on("cancel"));
-        assert!(qm.clipboard().is_none(), "the first Cancel dropped the move");
+        assert!(
+            qm.clipboard().is_none(),
+            "the first Cancel dropped the move"
+        );
         assert_eq!(qm.cwd(), qm.cwd(), "and did not also navigate");
 
         qm.apply_results(&on("cancel"));
@@ -2846,6 +3095,4 @@ mod tests {
         m.set(name, true);
         m
     }
-
 }
-

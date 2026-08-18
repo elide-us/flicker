@@ -57,8 +57,9 @@ impl WaterDelivery {
     /// the catalog moved — same contract as
     /// [`WaterCycle::new`](crate::atmosphere::WaterCycle::new).
     pub fn new(tables: &Tables) -> Self {
-        let def =
-            tables.compound("Water").expect("water delivery needs 'Water' in compounds.json");
+        let def = tables
+            .compound("Water")
+            .expect("water delivery needs 'Water' in compounds.json");
         assert_eq!(
             def.id,
             crate::atmosphere::WATER_VAPOUR,
@@ -94,20 +95,38 @@ impl Stage for WaterDelivery {
         // onto a magma ocean and every ocean-gated stage downstream believes it.
         let n = world.mantle.n_cells().max(1) as f64;
         let solidus = crate::crust::SOLIDUS_K;
-        let molten = world.mantle.temp_k.iter().filter(|&&t| t >= solidus).count() as f64 / n;
+        let molten = world
+            .mantle
+            .temp_k
+            .iter()
+            .filter(|&&t| t >= solidus)
+            .count() as f64
+            / n;
         let steam = amount * molten;
         // Booked at CATALOG stoichiometry — it is water, not a bag of atoms,
         // and the species ledger is bounded against water's real fractions.
         for &(element, frac) in &self.fracs {
             world.reservoirs.delivered.add(element, amount * frac);
-            world.reservoirs.ocean.contents.add(element, (amount - steam) * frac);
-            world.reservoirs.atmosphere.contents.add(element, steam * frac);
+            world
+                .reservoirs
+                .ocean
+                .contents
+                .add(element, (amount - steam) * frac);
+            world
+                .reservoirs
+                .atmosphere
+                .contents
+                .add(element, steam * frac);
         }
         if steam > 0.0 {
             // Booked as the compound it flies as — the same booking as
             // `WaterCycle::lift` — so the veil, the greenhouse and the
             // saturation law all see the steam.
-            world.reservoirs.atmosphere.species.add(crate::atmosphere::WATER_VAPOUR, steam);
+            world
+                .reservoirs
+                .atmosphere
+                .species
+                .add(crate::atmosphere::WATER_VAPOUR, steam);
         }
     }
 }
@@ -174,11 +193,20 @@ impl LateVeneer {
         cargo.sort_by_key(|&(e, _)| e);
         cargo.dedup_by_key(|&mut (e, _)| e);
         cargo.retain(|&(_, share)| share > 0.0);
-        let total: f64 = cargo.iter().map(|&(_, w)| w).sum::<f64>().max(f64::MIN_POSITIVE);
+        let total: f64 = cargo
+            .iter()
+            .map(|&(_, w)| w)
+            .sum::<f64>()
+            .max(f64::MIN_POSITIVE);
         for slot in cargo.iter_mut() {
             slot.1 /= total;
         }
-        Self { budget_kg, rate: 0.01, cargo, after_differentiation: VENEER_AFTER_DIFFERENTIATION }
+        Self {
+            budget_kg,
+            rate: 0.01,
+            cargo,
+            after_differentiation: VENEER_AFTER_DIFFERENTIATION,
+        }
     }
 }
 
@@ -247,7 +275,10 @@ mod tests {
         let (mut w, t) = dry_world();
         assert_eq!(w.reservoirs.ocean.mass_kg(), 0.0, "the planet starts dry");
         assert!(
-            w.mantle.temp_k.iter().all(|&t| t >= crate::crust::SOLIDUS_K),
+            w.mantle
+                .temp_k
+                .iter()
+                .all(|&t| t >= crate::crust::SOLIDUS_K),
             "a fresh seed is a magma ocean — the premise of the steam routing"
         );
         let stage = WaterDelivery::new(&t);
@@ -258,7 +289,11 @@ mod tests {
             w.audit_compound_bound("WaterDelivery");
         }
         assert_eq!(w.reservoirs.ocean.mass_kg(), 0.0, "no sea stands on magma");
-        let vapour = w.reservoirs.atmosphere.species.amount(crate::atmosphere::WATER_VAPOUR);
+        let vapour = w
+            .reservoirs
+            .atmosphere
+            .species
+            .amount(crate::atmosphere::WATER_VAPOUR);
         assert!(vapour > 0.0, "the infall flashed to steam in the sky");
         // Roughly two hydrogens to an oxygen by mass — it is water at catalog
         // stoichiometry, not a bag of atoms.
@@ -266,8 +301,15 @@ mod tests {
             w.reservoirs.atmosphere.contents.amount(1),
             w.reservoirs.atmosphere.contents.amount(8),
         );
-        assert!((o / h - 8.0).abs() < 0.1, "delivered H:O is {}:1 by mass", o / h);
-        assert!((vapour - (h + o)).abs() < 1.0, "the steam is booked as the compound it flies as");
+        assert!(
+            (o / h - 8.0).abs() < 0.1,
+            "delivered H:O is {}:1 by mass",
+            o / h
+        );
+        assert!(
+            (vapour - (h + o)).abs() < 1.0,
+            "the steam is booked as the compound it flies as"
+        );
     }
 
     /// The other half of the arrival rule: once the ground is solid, the same
@@ -286,14 +328,19 @@ mod tests {
             w.audit("WaterDelivery");
             w.audit_compound_bound("WaterDelivery");
         }
-        assert!(w.reservoirs.ocean.mass_kg() > 0.0, "a sea arrived on the solid world");
+        assert!(
+            w.reservoirs.ocean.mass_kg() > 0.0,
+            "a sea arrived on the solid world"
+        );
         assert_eq!(
-            w.reservoirs.atmosphere.species.amount(crate::atmosphere::WATER_VAPOUR),
+            w.reservoirs
+                .atmosphere
+                .species
+                .amount(crate::atmosphere::WATER_VAPOUR),
             0.0,
             "nothing flashed to steam — no molten ground to flash on"
         );
     }
-
 
     /// **Why a planet needs a late veneer to be worth digging.** The metals that
     /// followed iron into the core are gone from the mantle; what arrives after the
@@ -311,7 +358,10 @@ mod tests {
             stage.tick(&mut w, 1.0, &mut rng);
             w.audit("LateVeneer");
         }
-        assert!(w.mantle.element_mass(gold) > before, "the veneer put metal into the mantle");
+        assert!(
+            w.mantle.element_mass(gold) > before,
+            "the veneer put metal into the mantle"
+        );
     }
 
     /// It waits on the planet's chemistry, never on the clock: a veneer means
@@ -320,7 +370,13 @@ mod tests {
     fn the_veneer_waits_for_a_core_to_exist() {
         let (w, _t) = dry_world();
         let state = crate::planet::PlanetState::sample(&w);
-        assert_eq!(state.differentiation_frac, 0.0, "nothing has differentiated at t=0");
-        assert!(!crate::process_file::gate_of("LateVeneer").holds(&state, &crate::Levers::default()), "so the veneer has not arrived");
+        assert_eq!(
+            state.differentiation_frac, 0.0,
+            "nothing has differentiated at t=0"
+        );
+        assert!(
+            !crate::process_file::gate_of("LateVeneer").holds(&state, &crate::Levers::default()),
+            "so the veneer has not arrived"
+        );
     }
 }

@@ -5,6 +5,8 @@
 //! through the umbrella as `flicker::input_core::…`.
 
 pub mod compression;
+pub mod mount;
+pub mod roots;
 
 pub use compression::{
     compress_gzip, compress_gzip_with_level, decompress_gzip, is_gzipped, CompressionError,

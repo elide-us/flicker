@@ -31,9 +31,10 @@ mod display;
 mod shell;
 mod theme;
 
+pub use display::user_settings_dir;
 pub use shell::{
-    builtin_behaviours, current_world_map, input_controls, input_profile, run,
-    take_pending_input, PauseScene, SceneEntry, SceneFactory, SceneInfo, ShellConfig,
-    REALM_ADVENTURER, REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER,
+    builtin_behaviours, current_world_map, input_controls, input_profile, run, take_pending_input,
+    PauseScene, SceneEntry, SceneFactory, SceneInfo, ShellConfig, REALM_ADVENTURER,
+    REALM_DEVELOPER, REALM_DM, REALM_GAMEMASTER,
 };
 pub use theme::Theme;

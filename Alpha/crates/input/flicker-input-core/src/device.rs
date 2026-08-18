@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 /// variant identifier (pinned for every catalogued control by the
 /// `tokens_ride_the_serde_names` test below, so any drift is loud).
 fn variant_token(prefix: &str, variant: &impl fmt::Debug) -> String {
-    format!("${prefix}_{}", crate::signal::snake(&format!("{variant:?}")))
+    format!(
+        "${prefix}_{}",
+        crate::signal::snake(&format!("{variant:?}"))
+    )
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -33,44 +36,122 @@ fn variant_token(prefix: &str, variant: &impl fmt::Debug) -> String {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Key {
     // ── Letters ──
-    A, B, C, D, E, F, G, H, I, J, K, L, M,
-    N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
 
     // ── Digits ──
-    Digit0, Digit1, Digit2, Digit3, Digit4,
-    Digit5, Digit6, Digit7, Digit8, Digit9,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
 
     // ── Function keys ──
-    F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 
     // ── Arrow keys ──
-    Up, Down, Left, Right,
+    Up,
+    Down,
+    Left,
+    Right,
 
     // ── Modifiers ──
-    LeftShift, RightShift,
-    LeftControl, RightControl,
-    LeftAlt, RightAlt,
-    LeftSuper, RightSuper,
+    LeftShift,
+    RightShift,
+    LeftControl,
+    RightControl,
+    LeftAlt,
+    RightAlt,
+    LeftSuper,
+    RightSuper,
 
     // ── Navigation / editing ──
-    Home, End, PageUp, PageDown,
-    Insert, Delete,
-    Backspace, Tab, Enter, Escape, Space,
-    PrintScreen, ScrollLock, Pause,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    Backspace,
+    Tab,
+    Enter,
+    Escape,
+    Space,
+    PrintScreen,
+    ScrollLock,
+    Pause,
 
     // ── Punctuation ──
-    Minus, Equal,
-    LeftBracket, RightBracket,
+    Minus,
+    Equal,
+    LeftBracket,
+    RightBracket,
     Backslash,
-    Semicolon, Apostrophe,
-    Comma, Period, Slash,
+    Semicolon,
+    Apostrophe,
+    Comma,
+    Period,
+    Slash,
     Grave,
 
     // ── Numpad ──
-    Numpad0, Numpad1, Numpad2, Numpad3, Numpad4,
-    Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
-    NumpadAdd, NumpadSubtract, NumpadMultiply, NumpadDivide,
-    NumpadDecimal, NumpadEnter, NumpadEqual,
+    Numpad0,
+    Numpad1,
+    Numpad2,
+    Numpad3,
+    Numpad4,
+    Numpad5,
+    Numpad6,
+    Numpad7,
+    Numpad8,
+    Numpad9,
+    NumpadAdd,
+    NumpadSubtract,
+    NumpadMultiply,
+    NumpadDivide,
+    NumpadDecimal,
+    NumpadEnter,
+    NumpadEqual,
     NumLock,
 }
 
@@ -79,27 +160,109 @@ impl Key {
     /// (relocated from rebind.rs's `ALL_KEYS`; rebind capture and the derived
     /// settings surface iterate this). Length + uniqueness pinned by tests.
     pub const ALL: &'static [Key] = &[
-        Key::A, Key::B, Key::C, Key::D, Key::E, Key::F, Key::G, Key::H,
-        Key::I, Key::J, Key::K, Key::L, Key::M, Key::N, Key::O, Key::P,
-        Key::Q, Key::R, Key::S, Key::T, Key::U, Key::V, Key::W, Key::X,
-        Key::Y, Key::Z,
-        Key::Digit0, Key::Digit1, Key::Digit2, Key::Digit3, Key::Digit4,
-        Key::Digit5, Key::Digit6, Key::Digit7, Key::Digit8, Key::Digit9,
-        Key::F1, Key::F2, Key::F3, Key::F4, Key::F5, Key::F6,
-        Key::F7, Key::F8, Key::F9, Key::F10, Key::F11, Key::F12,
-        Key::Up, Key::Down, Key::Left, Key::Right,
-        Key::LeftShift, Key::RightShift, Key::LeftControl, Key::RightControl,
-        Key::LeftAlt, Key::RightAlt, Key::LeftSuper, Key::RightSuper,
-        Key::Space, Key::Enter, Key::Escape, Key::Tab, Key::Backspace,
-        Key::Delete, Key::Insert, Key::Home, Key::End, Key::PageUp, Key::PageDown,
-        Key::PrintScreen, Key::ScrollLock, Key::Pause,
-        Key::Minus, Key::Equal, Key::LeftBracket, Key::RightBracket,
-        Key::Backslash, Key::Semicolon, Key::Apostrophe,
-        Key::Comma, Key::Period, Key::Slash, Key::Grave,
-        Key::Numpad0, Key::Numpad1, Key::Numpad2, Key::Numpad3, Key::Numpad4,
-        Key::Numpad5, Key::Numpad6, Key::Numpad7, Key::Numpad8, Key::Numpad9,
-        Key::NumpadAdd, Key::NumpadSubtract, Key::NumpadMultiply, Key::NumpadDivide,
-        Key::NumpadDecimal, Key::NumpadEnter, Key::NumpadEqual, Key::NumLock,
+        Key::A,
+        Key::B,
+        Key::C,
+        Key::D,
+        Key::E,
+        Key::F,
+        Key::G,
+        Key::H,
+        Key::I,
+        Key::J,
+        Key::K,
+        Key::L,
+        Key::M,
+        Key::N,
+        Key::O,
+        Key::P,
+        Key::Q,
+        Key::R,
+        Key::S,
+        Key::T,
+        Key::U,
+        Key::V,
+        Key::W,
+        Key::X,
+        Key::Y,
+        Key::Z,
+        Key::Digit0,
+        Key::Digit1,
+        Key::Digit2,
+        Key::Digit3,
+        Key::Digit4,
+        Key::Digit5,
+        Key::Digit6,
+        Key::Digit7,
+        Key::Digit8,
+        Key::Digit9,
+        Key::F1,
+        Key::F2,
+        Key::F3,
+        Key::F4,
+        Key::F5,
+        Key::F6,
+        Key::F7,
+        Key::F8,
+        Key::F9,
+        Key::F10,
+        Key::F11,
+        Key::F12,
+        Key::Up,
+        Key::Down,
+        Key::Left,
+        Key::Right,
+        Key::LeftShift,
+        Key::RightShift,
+        Key::LeftControl,
+        Key::RightControl,
+        Key::LeftAlt,
+        Key::RightAlt,
+        Key::LeftSuper,
+        Key::RightSuper,
+        Key::Space,
+        Key::Enter,
+        Key::Escape,
+        Key::Tab,
+        Key::Backspace,
+        Key::Delete,
+        Key::Insert,
+        Key::Home,
+        Key::End,
+        Key::PageUp,
+        Key::PageDown,
+        Key::PrintScreen,
+        Key::ScrollLock,
+        Key::Pause,
+        Key::Minus,
+        Key::Equal,
+        Key::LeftBracket,
+        Key::RightBracket,
+        Key::Backslash,
+        Key::Semicolon,
+        Key::Apostrophe,
+        Key::Comma,
+        Key::Period,
+        Key::Slash,
+        Key::Grave,
+        Key::Numpad0,
+        Key::Numpad1,
+        Key::Numpad2,
+        Key::Numpad3,
+        Key::Numpad4,
+        Key::Numpad5,
+        Key::Numpad6,
+        Key::Numpad7,
+        Key::Numpad8,
+        Key::Numpad9,
+        Key::NumpadAdd,
+        Key::NumpadSubtract,
+        Key::NumpadMultiply,
+        Key::NumpadDivide,
+        Key::NumpadDecimal,
+        Key::NumpadEnter,
+        Key::NumpadEqual,
+        Key::NumLock,
     ];
 
     /// The stringtable token for this key's player-facing display name —
@@ -113,49 +276,116 @@ impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             // Letters
-            Key::A => "A", Key::B => "B", Key::C => "C", Key::D => "D",
-            Key::E => "E", Key::F => "F", Key::G => "G", Key::H => "H",
-            Key::I => "I", Key::J => "J", Key::K => "K", Key::L => "L",
-            Key::M => "M", Key::N => "N", Key::O => "O", Key::P => "P",
-            Key::Q => "Q", Key::R => "R", Key::S => "S", Key::T => "T",
-            Key::U => "U", Key::V => "V", Key::W => "W", Key::X => "X",
-            Key::Y => "Y", Key::Z => "Z",
+            Key::A => "A",
+            Key::B => "B",
+            Key::C => "C",
+            Key::D => "D",
+            Key::E => "E",
+            Key::F => "F",
+            Key::G => "G",
+            Key::H => "H",
+            Key::I => "I",
+            Key::J => "J",
+            Key::K => "K",
+            Key::L => "L",
+            Key::M => "M",
+            Key::N => "N",
+            Key::O => "O",
+            Key::P => "P",
+            Key::Q => "Q",
+            Key::R => "R",
+            Key::S => "S",
+            Key::T => "T",
+            Key::U => "U",
+            Key::V => "V",
+            Key::W => "W",
+            Key::X => "X",
+            Key::Y => "Y",
+            Key::Z => "Z",
             // Digits
-            Key::Digit0 => "0", Key::Digit1 => "1", Key::Digit2 => "2",
-            Key::Digit3 => "3", Key::Digit4 => "4", Key::Digit5 => "5",
-            Key::Digit6 => "6", Key::Digit7 => "7", Key::Digit8 => "8",
+            Key::Digit0 => "0",
+            Key::Digit1 => "1",
+            Key::Digit2 => "2",
+            Key::Digit3 => "3",
+            Key::Digit4 => "4",
+            Key::Digit5 => "5",
+            Key::Digit6 => "6",
+            Key::Digit7 => "7",
+            Key::Digit8 => "8",
             Key::Digit9 => "9",
             // Function keys
-            Key::F1 => "F1", Key::F2 => "F2", Key::F3 => "F3", Key::F4 => "F4",
-            Key::F5 => "F5", Key::F6 => "F6", Key::F7 => "F7", Key::F8 => "F8",
-            Key::F9 => "F9", Key::F10 => "F10", Key::F11 => "F11", Key::F12 => "F12",
+            Key::F1 => "F1",
+            Key::F2 => "F2",
+            Key::F3 => "F3",
+            Key::F4 => "F4",
+            Key::F5 => "F5",
+            Key::F6 => "F6",
+            Key::F7 => "F7",
+            Key::F8 => "F8",
+            Key::F9 => "F9",
+            Key::F10 => "F10",
+            Key::F11 => "F11",
+            Key::F12 => "F12",
             // Arrows
-            Key::Up => "Up", Key::Down => "Down", Key::Left => "Left", Key::Right => "Right",
+            Key::Up => "Up",
+            Key::Down => "Down",
+            Key::Left => "Left",
+            Key::Right => "Right",
             // Modifiers
-            Key::LeftShift => "L-Shift", Key::RightShift => "R-Shift",
-            Key::LeftControl => "L-Ctrl", Key::RightControl => "R-Ctrl",
-            Key::LeftAlt => "L-Alt", Key::RightAlt => "R-Alt",
-            Key::LeftSuper => "L-Super", Key::RightSuper => "R-Super",
+            Key::LeftShift => "L-Shift",
+            Key::RightShift => "R-Shift",
+            Key::LeftControl => "L-Ctrl",
+            Key::RightControl => "R-Ctrl",
+            Key::LeftAlt => "L-Alt",
+            Key::RightAlt => "R-Alt",
+            Key::LeftSuper => "L-Super",
+            Key::RightSuper => "R-Super",
             // Navigation
-            Key::Home => "Home", Key::End => "End", Key::PageUp => "PageUp",
-            Key::PageDown => "PageDown", Key::Insert => "Insert", Key::Delete => "Del",
-            Key::Backspace => "Backspace", Key::Tab => "Tab", Key::Enter => "Enter",
-            Key::Escape => "Esc", Key::Space => "Space",
-            Key::PrintScreen => "PrtSc", Key::ScrollLock => "ScrLk", Key::Pause => "Pause",
+            Key::Home => "Home",
+            Key::End => "End",
+            Key::PageUp => "PageUp",
+            Key::PageDown => "PageDown",
+            Key::Insert => "Insert",
+            Key::Delete => "Del",
+            Key::Backspace => "Backspace",
+            Key::Tab => "Tab",
+            Key::Enter => "Enter",
+            Key::Escape => "Esc",
+            Key::Space => "Space",
+            Key::PrintScreen => "PrtSc",
+            Key::ScrollLock => "ScrLk",
+            Key::Pause => "Pause",
             // Punctuation
-            Key::Minus => "-", Key::Equal => "=",
-            Key::LeftBracket => "[", Key::RightBracket => "]",
-            Key::Backslash => "\\", Key::Semicolon => ";", Key::Apostrophe => "'",
-            Key::Comma => ",", Key::Period => ".", Key::Slash => "/", Key::Grave => "`",
+            Key::Minus => "-",
+            Key::Equal => "=",
+            Key::LeftBracket => "[",
+            Key::RightBracket => "]",
+            Key::Backslash => "\\",
+            Key::Semicolon => ";",
+            Key::Apostrophe => "'",
+            Key::Comma => ",",
+            Key::Period => ".",
+            Key::Slash => "/",
+            Key::Grave => "`",
             // Numpad
-            Key::Numpad0 => "KP0", Key::Numpad1 => "KP1", Key::Numpad2 => "KP2",
-            Key::Numpad3 => "KP3", Key::Numpad4 => "KP4", Key::Numpad5 => "KP5",
-            Key::Numpad6 => "KP6", Key::Numpad7 => "KP7", Key::Numpad8 => "KP8",
+            Key::Numpad0 => "KP0",
+            Key::Numpad1 => "KP1",
+            Key::Numpad2 => "KP2",
+            Key::Numpad3 => "KP3",
+            Key::Numpad4 => "KP4",
+            Key::Numpad5 => "KP5",
+            Key::Numpad6 => "KP6",
+            Key::Numpad7 => "KP7",
+            Key::Numpad8 => "KP8",
             Key::Numpad9 => "KP9",
-            Key::NumpadAdd => "KP+", Key::NumpadSubtract => "KP-",
-            Key::NumpadMultiply => "KP*", Key::NumpadDivide => "KP/",
-            Key::NumpadDecimal => "KP.", Key::NumpadEnter => "KPEnter",
-            Key::NumpadEqual => "KP=", Key::NumLock => "NumLk",
+            Key::NumpadAdd => "KP+",
+            Key::NumpadSubtract => "KP-",
+            Key::NumpadMultiply => "KP*",
+            Key::NumpadDivide => "KP/",
+            Key::NumpadDecimal => "KP.",
+            Key::NumpadEnter => "KPEnter",
+            Key::NumpadEqual => "KP=",
+            Key::NumLock => "NumLk",
         };
         write!(f, "{name}")
     }
@@ -216,10 +446,10 @@ impl fmt::Display for MouseButton {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GamepadButton {
     // ── Face buttons (Xbox layout names) ──
-    South,   // A / Cross
-    East,    // B / Circle
-    North,   // Y / Triangle
-    West,    // X / Square
+    South, // A / Cross
+    East,  // B / Circle
+    North, // Y / Triangle
+    West,  // X / Square
 
     // ── Shoulder / trigger ──
     LeftBumper,
@@ -228,10 +458,10 @@ pub enum GamepadButton {
     RightTrigger,
 
     // ── Meta ──
-    Select,  // Back / Share
-    Start,   // Menu / Options
-    Guide,   // Xbox / PS button
-    Mode,    // Platform-specific home
+    Select, // Back / Share
+    Start,  // Menu / Options
+    Guide,  // Xbox / PS button
+    Mode,   // Platform-specific home
 
     // ── Stick clicks ──
     LeftStick,
@@ -410,7 +640,10 @@ mod tests {
         assert_eq!(MouseButton::ALL.len(), 5);
         assert_eq!(GamepadButton::ALL.len(), 21);
         assert_eq!(GamepadAxis::ALL.len(), 6);
-        assert_eq!(Key::ALL.iter().collect::<HashSet<_>>().len(), Key::ALL.len());
+        assert_eq!(
+            Key::ALL.iter().collect::<HashSet<_>>().len(),
+            Key::ALL.len()
+        );
         assert_eq!(
             MouseButton::ALL.iter().collect::<HashSet<_>>().len(),
             MouseButton::ALL.len()
@@ -443,7 +676,10 @@ mod tests {
                     "{dbg}: Debug must equal the serde variant name"
                 );
                 let token = variant_token(prefix.trim_start_matches('$').trim_end_matches('_'), v);
-                assert!(token.starts_with(prefix), "{dbg}: token {token:?} lacks {prefix}");
+                assert!(
+                    token.starts_with(prefix),
+                    "{dbg}: token {token:?} lacks {prefix}"
+                );
                 assert!(seen.insert(token), "duplicate token for {dbg}");
             }
         }

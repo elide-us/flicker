@@ -126,7 +126,12 @@ mod tests {
         let t = tables();
         let e1 = Epoch1::new(&t, Epoch1Params::default(), 7);
         let (dirs, neighbors) = ring(30);
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 7 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 7,
+        };
         let stack = six_epoch_stack(&e1, &ctx);
 
         assert_eq!(stack.len(), EPOCHS);
@@ -134,7 +139,9 @@ mod tests {
             assert_eq!(layer.len(), dirs.len());
         }
         // Epoch 1 (seed): undifferentiated, sea-level.
-        assert!(stack[0].iter().all(|s| s.crust.is_empty() && s.elevation == 0.0));
+        assert!(stack[0]
+            .iter()
+            .all(|s| s.crust.is_empty() && s.elevation == 0.0));
         // Epoch 2: a crust appeared.
         assert!(stack[1].iter().all(|s| !s.crust.is_empty()));
         // Epoch 3: plates + elevation written.
@@ -142,13 +149,25 @@ mod tests {
         assert!(stack[2].iter().any(|s| s.boundary != Boundary::Interior));
         // Epoch 4 adds the hydrosphere (sea level + oceans).
         assert_ne!(stack[3], stack[2], "Epoch 4 should change the state");
-        assert!(stack[3].iter().any(|s| s.water_depth > 0.0), "Epoch 4 made no ocean");
+        assert!(
+            stack[3].iter().any(|s| s.water_depth > 0.0),
+            "Epoch 4 made no ocean"
+        );
         // Epoch 5 mineralizes: hydrothermal signature + ore veins appear.
         assert_ne!(stack[4], stack[3], "Epoch 5 should change the state");
-        assert!(stack[4].iter().any(|s| s.hydrothermal > 0.0), "Epoch 5 made no hydrothermal activity");
-        assert!(stack[4].iter().any(|s| s.vein_element.is_some()), "Epoch 5 formed no veins");
+        assert!(
+            stack[4].iter().any(|s| s.hydrothermal > 0.0),
+            "Epoch 5 made no hydrothermal activity"
+        );
+        assert!(
+            stack[4].iter().any(|s| s.vein_element.is_some()),
+            "Epoch 5 formed no veins"
+        );
         // Epoch 6 erodes + assigns biomes.
         assert_ne!(stack[5], stack[4], "Epoch 6 should change the state");
-        assert!(stack[5].iter().any(|s| s.flow > Epoch6::default().rain), "Epoch 6 routed no drainage");
+        assert!(
+            stack[5].iter().any(|s| s.flow > Epoch6::default().rain),
+            "Epoch 6 routed no drainage"
+        );
     }
 }

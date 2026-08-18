@@ -273,7 +273,10 @@ mod tests {
     fn discrete_writes_held_buttons_and_axis_bridge_to_slot0() {
         let snap = snap_with(
             &[GamepadButton::South, GamepadButton::DPadUp],
-            &[(GamepadAxis::LeftStickX, 0.5), (GamepadAxis::RightTrigger, 0.9)],
+            &[
+                (GamepadAxis::LeftStickX, 0.5),
+                (GamepadAxis::RightTrigger, 0.9),
+            ],
         );
         let mut input = InputState::new();
         apply_discrete(&snap, &mut input);
@@ -357,12 +360,15 @@ mod tests {
 
     #[test]
     fn caps_all_vs_default() {
-        assert_eq!(DeviceCaps::default(), DeviceCaps {
-            has_left_stick: false,
-            has_right_stick: false,
-            has_triggers: false,
-            has_dpad: false,
-        });
+        assert_eq!(
+            DeviceCaps::default(),
+            DeviceCaps {
+                has_left_stick: false,
+                has_right_stick: false,
+                has_triggers: false,
+                has_dpad: false,
+            }
+        );
         let all = DeviceCaps::all();
         assert!(all.has_left_stick && all.has_right_stick && all.has_triggers && all.has_dpad);
     }

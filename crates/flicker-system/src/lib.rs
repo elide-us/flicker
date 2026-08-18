@@ -27,4 +27,4 @@ pub use config::{SystemConfig, Tuning, DEFAULT_CLUMP, DEFAULT_MOTES_PER_EL, DEFA
 pub use detect::{detect, HotSpot, MAX_HOT_SPOTS};
 pub use mass::{CloudMass, MassParams, EARTH_PER_SUN};
 pub use model::{load_tables, CastParams, Ejecta, ElementCast};
-pub use system::{BodySnapshot, Epoch3Handoff, ElementMass, System, SystemState};
+pub use system::{BodySnapshot, ElementMass, Epoch3Handoff, System, SystemState};

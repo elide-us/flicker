@@ -140,11 +140,8 @@ impl HeightField {
         let mut heights = vec![0.0_f32; dim * dim];
         for z in 0..dim {
             for x in 0..dim {
-                heights[z * dim + x] = world_height_seeded(
-                    offset[0] + x as f32,
-                    offset[2] + z as f32,
-                    seed,
-                );
+                heights[z * dim + x] =
+                    world_height_seeded(offset[0] + x as f32, offset[2] + z as f32, seed);
             }
         }
         Self {
@@ -630,7 +627,7 @@ mod tests {
     #[test]
     fn flat_field_solidity_boundary() {
         let f = FlatField::at_half(); // height 128
-        // Origin of voxel 127 is 127 < 128 → solid.
+                                      // Origin of voxel 127 is 127 < 128 → solid.
         assert!(f.is_solid(10, 127, 10));
         // Origin of voxel 128 is 128 ≥ 128 → empty.
         assert!(!f.is_solid(10, 128, 10));
@@ -667,7 +664,10 @@ mod tests {
         // is empty (origin-based: is_solid(y) iff y < h).
         let below = h.floor() as i32 - 1;
         let above = h.ceil() as i32;
-        assert!(f.is_solid(x, below, z), "y={below} should be solid for h={h}");
+        assert!(
+            f.is_solid(x, below, z),
+            "y={below} should be solid for h={h}"
+        );
         assert!(
             !f.is_solid(x, above, z),
             "y={above} should be empty for h={h}"

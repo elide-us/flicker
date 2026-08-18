@@ -2,6 +2,7 @@
 name = "flicker-poc-chemistry"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # The chemistry-first world sim — bulk-accretion budget, two conserved ledgers,

@@ -57,7 +57,13 @@ pub struct Surface {
 impl Surface {
     /// A surface starting hidden, publishing under its own id.
     pub fn new(id: impl Into<String>) -> Self {
-        Self { id: id.into(), key: None, initial: false, group: None, context: None }
+        Self {
+            id: id.into(),
+            key: None,
+            initial: false,
+            group: None,
+            context: None,
+        }
     }
 
     /// Publish under `key` instead of the id (the tree's `visible_bind` key when
@@ -144,7 +150,12 @@ impl Surfaces {
         // A surface declared initially-on with a context never saw an on-EDGE,
         // so nothing is held at construction (contexts ride edges, and the
         // stack's World base is the router's floor anyway).
-        Self { decls: kept, state, prev, held: Vec::new() }
+        Self {
+            decls: kept,
+            state,
+            prev,
+            held: Vec::new(),
+        }
     }
 
     fn idx(&self, id: &str) -> Option<usize> {
@@ -245,7 +256,9 @@ impl Surfaces {
             }
             self.prev[i] = self.state[i];
             let d = &self.decls[i];
-            let Some(name) = d.context.as_deref() else { continue };
+            let Some(name) = d.context.as_deref() else {
+                continue;
+            };
             let Some(context) = InputContext::from_name(name) else {
                 tracing::warn!(
                     "surfaces: `{}` names unknown InputContext `{name}` — not routed",
@@ -287,7 +300,9 @@ impl Surfaces {
     /// baseline), kept for tests and tooling. A quiet frame returns an empty
     /// `Vec` without allocating.
     pub fn visibility_diff(&mut self) -> Vec<SurfaceChange<'_>> {
-        let Self { decls, state, prev, .. } = self;
+        let Self {
+            decls, state, prev, ..
+        } = self;
         decls
             .iter()
             .zip(state.iter().zip(prev.iter_mut()))
@@ -296,7 +311,11 @@ impl Surfaces {
                     return None;
                 }
                 *before = *now;
-                Some(SurfaceChange { id: &d.id, on: *now, context: d.context.as_deref() })
+                Some(SurfaceChange {
+                    id: &d.id,
+                    on: *now,
+                    context: d.context.as_deref(),
+                })
             })
             .collect()
     }
@@ -324,16 +343,28 @@ mod tests {
     #[test]
     fn declaration_initial_states_publish_under_their_keys() {
         let s = Surfaces::new(decls());
-        assert!(s.is_on("sec_video") && s.is_on("sub_keyboard"), "declared-on surfaces start on");
-        assert!(!s.is_on("sec_audio") && !s.is_on("inspector"), "the rest start hidden");
+        assert!(
+            s.is_on("sec_video") && s.is_on("sub_keyboard"),
+            "declared-on surfaces start on"
+        );
+        assert!(
+            !s.is_on("sec_audio") && !s.is_on("inspector"),
+            "the rest start hidden"
+        );
         assert!(!s.is_on("nonsense"), "an unknown id reads as hidden");
 
         let mut m = ValueMap::new();
         s.publish(&mut m);
-        assert!(m.is_on("sec_video"), "a surface publishes under its id by default");
+        assert!(
+            m.is_on("sec_video"),
+            "a surface publishes under its id by default"
+        );
         assert!(!m.is_on("sec_audio"));
         assert!(!m.is_on("has_pick"), "a declared `key` overrides the id");
-        assert!(m.get("inspector").is_none(), "…and the id itself is NOT published");
+        assert!(
+            m.get("inspector").is_none(),
+            "…and the id itself is NOT published"
+        );
         assert!(!m.is_on("confirm_close"));
     }
 
@@ -359,8 +390,14 @@ mod tests {
         s.show("confirm_close"); // an ungrouped dialog, on
         s.set_exclusive("sec_input");
         assert!(s.is_on("sec_input"), "the chosen member is on");
-        assert!(!s.is_on("sec_video") && !s.is_on("sec_audio"), "its group siblings are off");
-        assert!(s.is_on("sub_keyboard"), "the OTHER radio group is untouched");
+        assert!(
+            !s.is_on("sec_video") && !s.is_on("sec_audio"),
+            "its group siblings are off"
+        );
+        assert!(
+            s.is_on("sub_keyboard"),
+            "the OTHER radio group is untouched"
+        );
         assert!(s.is_on("confirm_close"), "ungrouped surfaces are untouched");
         // Ungrouped exclusivity degrades to show (with a warning).
         s.set_exclusive("inspector");
@@ -371,7 +408,10 @@ mod tests {
     #[test]
     fn visibility_diff_reports_flips_once_with_their_context() {
         let mut s = Surfaces::new(decls());
-        assert!(s.visibility_diff().is_empty(), "the initial states are the baseline");
+        assert!(
+            s.visibility_diff().is_empty(),
+            "the initial states are the baseline"
+        );
 
         s.set_exclusive("sec_audio");
         s.show("confirm_close");
@@ -379,18 +419,37 @@ mod tests {
         assert_eq!(
             diff,
             vec![
-                SurfaceChange { id: "sec_video", on: false, context: None },
-                SurfaceChange { id: "sec_audio", on: true, context: None },
-                SurfaceChange { id: "confirm_close", on: true, context: Some("Menu") },
+                SurfaceChange {
+                    id: "sec_video",
+                    on: false,
+                    context: None
+                },
+                SurfaceChange {
+                    id: "sec_audio",
+                    on: true,
+                    context: None
+                },
+                SurfaceChange {
+                    id: "confirm_close",
+                    on: true,
+                    context: Some("Menu")
+                },
             ],
             "each flip is reported once, carrying its declared S9 context"
         );
-        assert!(s.visibility_diff().is_empty(), "taking the diff advances the baseline");
+        assert!(
+            s.visibility_diff().is_empty(),
+            "taking the diff advances the baseline"
+        );
 
         s.hide("confirm_close");
         assert_eq!(
             s.visibility_diff(),
-            vec![SurfaceChange { id: "confirm_close", on: false, context: Some("Menu") }],
+            vec![SurfaceChange {
+                id: "confirm_close",
+                on: false,
+                context: Some("Menu")
+            }],
             "the off edge carries the context too — S9's PopContext"
         );
 
@@ -546,10 +605,12 @@ mod tests {
         // The ONE arrangement reader — no expansion pass; the tree is already kinds.
         let value: serde_json::Value = serde_json::from_str(json).expect("json parses");
         let tree = flicker_script::parse_ui_json(&value).expect("arrangement parses");
-        assert!(crate::unknown_kinds(&tree).is_empty(), "the declared screen names known kinds");
+        assert!(
+            crate::unknown_kinds(&tree).is_empty(),
+            "the declared screen names known kinds"
+        );
 
-        let mut surfaces =
-            Surfaces::new(vec![Surface::new("workbench").key("workbench_on").on()]);
+        let mut surfaces = Surfaces::new(vec![Surface::new("workbench").key("workbench_on").on()]);
         let mut state = UiState::new();
         let run = |surfaces: &Surfaces, state: &mut UiState| {
             let mut m = ValueMap::new();
@@ -559,21 +620,36 @@ mod tests {
 
         let shown = run(&surfaces, &mut state);
         let ids: Vec<&str> = shown.rtts.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec!["pair_left_rtt", "pair_right_rtt"], "both stages reserve slots");
+        assert_eq!(
+            ids,
+            vec!["pair_left_rtt", "pair_right_rtt"],
+            "both stages reserve slots"
+        );
         assert_eq!(shown.rtts[0].source, "cam_a");
         assert_eq!(shown.rtts[1].source, "cam_b");
 
         surfaces.hide("workbench");
         assert_eq!(
             surfaces.visibility_diff(),
-            vec![SurfaceChange { id: "workbench", on: false, context: None }]
+            vec![SurfaceChange {
+                id: "workbench",
+                on: false,
+                context: None
+            }]
         );
         let hidden = run(&surfaces, &mut state);
-        assert!(hidden.rtts.is_empty(), "a hidden rtt surface reserves nothing");
+        assert!(
+            hidden.rtts.is_empty(),
+            "a hidden rtt surface reserves nothing"
+        );
 
         surfaces.show("workbench");
         let back = run(&surfaces, &mut state);
-        assert_eq!(back.rtts.len(), 2, "showing it again brings both slots back");
+        assert_eq!(
+            back.rtts.len(),
+            2,
+            "showing it again brings both slots back"
+        );
     }
 
     // ── Cache discipline ─────────────────────────────────────────────────────
@@ -590,7 +666,10 @@ mod tests {
 
         // A screen with an always-on button and a surface-gated panel.
         let btn = {
-            let mut n = UiNode { component: "button".into(), ..Default::default() };
+            let mut n = UiNode {
+                component: "button".into(),
+                ..Default::default()
+            };
             n.id = "ok".into();
             n.size = Some(24.0);
             n.props.insert("label".into(), Value::Text("OK".into()));
@@ -598,18 +677,27 @@ mod tests {
             n
         };
         let panel = {
-            let mut n = UiNode { component: "cell".into(), ..Default::default() };
+            let mut n = UiNode {
+                component: "cell".into(),
+                ..Default::default()
+            };
             n.id = "tools".into();
             n.size = Some(40.0);
             n.visible_bind = Some("tools".into());
             n.props.insert("style".into(), Value::Text("box".into()));
             n
         };
-        let mut col = UiNode { component: "cell".into(), ..Default::default() };
+        let mut col = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
         col.width = Some(120.0);
         col.anchor = Some(flicker_script::UiAnchor::TopLeft);
         col.children = vec![btn, panel];
-        let mut page = UiNode { component: "screen".into(), ..Default::default() };
+        let mut page = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
         page.children = vec![col];
 
         let styles = serde_json::json!({
@@ -630,14 +718,23 @@ mod tests {
         assert!(first.stats.redraw_nodes > 0, "cold frame draws the button");
 
         let second = run(&surfaces, &mut state);
-        assert_eq!(second.stats.redraw_nodes, 0, "republished, unchanged: nothing redraws");
-        assert_eq!(second.commands, first.commands, "the replay is byte-identical");
+        assert_eq!(
+            second.stats.redraw_nodes, 0,
+            "republished, unchanged: nothing redraws"
+        );
+        assert_eq!(
+            second.commands, first.commands,
+            "the replay is byte-identical"
+        );
 
         surfaces.show("tools");
         let third = run(&surfaces, &mut state);
         // The appearing panel is a cache miss, and its auto-height parent re-measures
         // (its rect grew) — but the button REPLAYS: a surface flip that leaves its
         // inputs alone must not redraw it.
-        assert_eq!(third.stats.redraw_nodes, 2, "the appearing panel + its resized parent");
+        assert_eq!(
+            third.stats.redraw_nodes, 2,
+            "the appearing panel + its resized parent"
+        );
     }
 }

@@ -61,12 +61,12 @@ impl BodyType {
     /// (gold / amber / blue / red / cyan / stone), each still evocative of the material.
     pub fn color(self) -> [f32; 3] {
         match self {
-            BodyType::Star => [1.00, 0.82, 0.18],     // gold
-            BodyType::GasGiant => [0.96, 0.56, 0.16], // amber-orange (Jupiter)
-            BodyType::IceGiant => [0.26, 0.50, 1.00], // deep blue (Neptune)
+            BodyType::Star => [1.00, 0.82, 0.18],        // gold
+            BodyType::GasGiant => [0.96, 0.56, 0.16],    // amber-orange (Jupiter)
+            BodyType::IceGiant => [0.26, 0.50, 1.00],    // deep blue (Neptune)
             BodyType::RockyPlanet => [0.90, 0.30, 0.24], // red (Mars/rust)
-            BodyType::IcyBody => [0.40, 0.88, 0.92],  // bright cyan
-            BodyType::Asteroid => [0.64, 0.62, 0.52], // neutral stone
+            BodyType::IcyBody => [0.40, 0.88, 0.92],     // bright cyan
+            BodyType::Asteroid => [0.64, 0.62, 0.52],    // neutral stone
         }
     }
 
@@ -313,7 +313,11 @@ impl Sim {
             // in, cross, and accrete into planets. Around a PLANET (a satellite), it targets
             // exactly circular — circularise the captured moon, never feed it inward to its
             // death. The perpetual floor always targets circular (stable settled orbits).
-            let active_frac = if prim == 0 { self.tuning.drag_target_frac } else { 1.0 };
+            let active_frac = if prim == 0 {
+                self.tuning.drag_target_frac
+            } else {
+                1.0
+            };
             let mut v = self.vel[i];
             v += (v_prim + t_hat * (active_frac * v_circ) - v) * k_active;
             v += (v_prim + t_hat * v_circ - v) * k_floor;
@@ -395,7 +399,11 @@ impl Sim {
             };
             inv_rho += (w / m) / rho_e;
         }
-        let rho_gcc = if inv_rho > 0.0 { 1.0 / inv_rho } else { self.tuning.rho_rock_gcc };
+        let rho_gcc = if inv_rho > 0.0 {
+            1.0 / inv_rho
+        } else {
+            self.tuning.rho_rock_gcc
+        };
         rho_gcc * GCC_TO_MSUN_AU3
     }
 
@@ -414,7 +422,9 @@ impl Sim {
     /// ring), a dense rock barely shreds (just stays a close moon or merges) — so ice giants ring
     /// and captured rocks tend to survive or fall in.
     fn roche_radius(&self, a: usize, b: usize) -> f32 {
-        self.radius_au(a) * self.tuning.tidal_frac * (2.0 * self.density(a) / self.density(b).max(1e-30)).cbrt()
+        self.radius_au(a)
+            * self.tuning.tidal_frac
+            * (2.0 * self.density(a) / self.density(b).max(1e-30)).cbrt()
     }
 
     /// Pericenter and apocenter (AU) of body `b`'s orbit about body `a`, from their real relative
@@ -431,7 +441,11 @@ impl Sim {
         let eps = 0.5 * w.length_squared() - mu / r;
         let e = (1.0 + 2.0 * eps * lz * lz / (mu * mu)).max(0.0).sqrt();
         let peri = p / (1.0 + e);
-        let apo = if e < 1.0 { p / (1.0 - e) } else { f32::INFINITY };
+        let apo = if e < 1.0 {
+            p / (1.0 - e)
+        } else {
+            f32::INFINITY
+        };
         (peri, apo)
     }
 
@@ -484,7 +498,11 @@ impl Sim {
                 if (self.pos[i] - self.pos[j]).length_squared() >= reach * reach {
                     continue;
                 }
-                let (a, b) = if self.mass[i] >= self.mass[j] { (i, j) } else { (j, i) };
+                let (a, b) = if self.mass[i] >= self.mass[j] {
+                    (i, j)
+                } else {
+                    (j, i)
+                };
                 // Protection/rings apply only to satellites of a PLANET, never of the star. A
                 // planet has a *bounded* domain — its Hill/L1 sphere, set by the L1 point with the
                 // star — inside which satellites legitimately orbit. The star is the root dominant
@@ -561,7 +579,12 @@ impl Sim {
 
     /// Total live mass (M☉) — invariant; equals the starting tonnage.
     pub fn total_mass(&self) -> f32 {
-        self.mass.iter().zip(&self.alive).filter(|(_, &a)| a).map(|(&m, _)| m).sum()
+        self.mass
+            .iter()
+            .zip(&self.alive)
+            .filter(|(_, &a)| a)
+            .map(|(&m, _)| m)
+            .sum()
     }
 
     /// Starting total mass, for a conservation check.
@@ -572,8 +595,7 @@ impl Sim {
 
 /// Small integer hash (xorshift-multiply) → reproducible per-parcel draws without an RNG crate.
 fn hash3(a: u32, b: u32, c: u32) -> u32 {
-    let mut x = a
-        .wrapping_mul(0x9E37_79B1)
+    let mut x = a.wrapping_mul(0x9E37_79B1)
         ^ b.wrapping_mul(0x85EB_CA77)
         ^ c.wrapping_mul(0xC2B2_AE3D).wrapping_add(0x1656_67B1);
     x ^= x >> 15;
@@ -612,7 +634,10 @@ mod tests {
             s.step(0.02);
         }
         let after = s.total_mass();
-        assert!((after - before).abs() < 1e-3 * before, "mass conserved: {before} -> {after}");
+        assert!(
+            (after - before).abs() < 1e-3 * before,
+            "mass conserved: {before} -> {after}"
+        );
     }
 
     #[test]
@@ -622,7 +647,11 @@ mod tests {
         for _ in 0..400 {
             s.step(0.02);
         }
-        assert!(s.live_count() < start, "collapse coalesces motes ({start} -> {})", s.live_count());
+        assert!(
+            s.live_count() < start,
+            "collapse coalesces motes ({start} -> {})",
+            s.live_count()
+        );
     }
 
     #[test]
@@ -654,7 +683,11 @@ mod tests {
             .filter(|&i| s.alive[i] && s.pos[i].length() < 80.0)
             .map(|i| s.mass[i])
             .sum();
-        assert!(bound > 0.95 * s.total_mass(), "system stays bound: {bound} of {}", s.total_mass());
+        assert!(
+            bound > 0.95 * s.total_mass(),
+            "system stays bound: {bound} of {}",
+            s.total_mass()
+        );
     }
 
     #[test]
@@ -695,9 +728,15 @@ mod tests {
         for _ in 0..3000 {
             s.step(0.02);
         }
-        assert!(s.alive[2], "the moon survived (was not swallowed by its planet)");
+        assert!(
+            s.alive[2],
+            "the moon survived (was not swallowed by its planet)"
+        );
         let d = (s.pos[2] - s.pos[1]).length();
-        assert!((0.02..0.6).contains(&d), "moon stays in orbit about its planet (d = {d} AU)");
+        assert!(
+            (0.02..0.6).contains(&d),
+            "moon stays in orbit about its planet (d = {d} AU)"
+        );
     }
 
     #[test]
@@ -732,16 +771,29 @@ mod tests {
         // tiny surface), so apocenter < roche → shred.
         let roche = s.roche_radius(1, 2);
         let surface = s.phys_radius(1) + s.phys_radius(2);
-        assert!(roche > surface, "icy body has a real tidal shell: roche {roche} > surface {surface}");
+        assert!(
+            roche > surface,
+            "icy body has a real tidal shell: roche {roche} > surface {surface}"
+        );
         let r = 0.5 * (surface + roche);
         s.pos[2] = host_p + Vec2::new(r, 0.0);
         s.vel[2] = Vec2::new(0.0, (G * host_m / r).sqrt()); // circular ⇒ peri ≈ apo ≈ r
 
         let before = s.total_mass();
         s.merge();
-        assert!(!s.alive[2], "the icy satellite was shredded (no longer a standalone body)");
-        assert!(s.ring_mass[1] > 0.0, "its host gained a ring ({} M_sun)", s.ring_mass[1]);
-        assert!((s.total_mass() - before).abs() < 1e-12, "mass conserved through shredding");
+        assert!(
+            !s.alive[2],
+            "the icy satellite was shredded (no longer a standalone body)"
+        );
+        assert!(
+            s.ring_mass[1] > 0.0,
+            "its host gained a ring ({} M_sun)",
+            s.ring_mass[1]
+        );
+        assert!(
+            (s.total_mass() - before).abs() < 1e-12,
+            "mass conserved through shredding"
+        );
     }
 
     #[test]
@@ -770,7 +822,10 @@ mod tests {
         };
         // 0.2 AU is well inside the star's accretion reach (~0.8 AU) but far outside its surface.
         s.merge();
-        assert!(!s.alive[1], "the close inner body was absorbed by the star, not kept as a moon");
+        assert!(
+            !s.alive[1],
+            "the close inner body was absorbed by the star, not kept as a moon"
+        );
         assert!(s.ring_mass[0] == 0.0, "the star grows no ring");
     }
 
@@ -785,7 +840,13 @@ mod tests {
         let sqrt_l = 0.966f32.powf(3.5).sqrt();
         let (hz_in, hz_out) = (t.hz_inner_frac * sqrt_l, t.hz_outer_frac * sqrt_l);
         let mut total = 0usize;
-        for seed in [0xC10D_5EED_u32, 0x1111_2222, 0xABCD_0001, 0xDEAD_BEEF, 0x5A5A_1234] {
+        for seed in [
+            0xC10D_5EED_u32,
+            0x1111_2222,
+            0xABCD_0001,
+            0xDEAD_BEEF,
+            0x5A5A_1234,
+        ] {
             let cloud = CloudField::new(ej.elements.len(), seed, 0.6);
             let mut s = Sim::from_cloud(&ej, &cast, &cloud, &cm, 24, t);
             for _ in 0..40000 {
@@ -794,14 +855,24 @@ mod tests {
             for i in 1..s.mass.len() {
                 if s.is_playable(i) {
                     total += 1;
-                    assert_eq!(s.classify(i), BodyType::RockyPlanet, "playable world is rocky");
-                    assert!((t.playable_mass_min..=t.playable_mass_max).contains(&s.mass[i]), "in mass band");
+                    assert_eq!(
+                        s.classify(i),
+                        BodyType::RockyPlanet,
+                        "playable world is rocky"
+                    );
+                    assert!(
+                        (t.playable_mass_min..=t.playable_mass_max).contains(&s.mass[i]),
+                        "in mass band"
+                    );
                     let r = s.pos[i].length();
                     assert!((hz_in..=hz_out).contains(&r), "in the habitable zone");
                 }
             }
         }
-        assert!(total > 0, "at least one playable world emerges across the seed set");
+        assert!(
+            total > 0,
+            "at least one playable world emerges across the seed set"
+        );
     }
 
     #[test]
@@ -812,7 +883,10 @@ mod tests {
         }
         for (i, &a) in s.alive.iter().enumerate() {
             if a {
-                assert!(s.pos[i].is_finite() && s.vel[i].is_finite(), "no blow-up at mote {i}");
+                assert!(
+                    s.pos[i].is_finite() && s.vel[i].is_finite(),
+                    "no blow-up at mote {i}"
+                );
             }
         }
     }

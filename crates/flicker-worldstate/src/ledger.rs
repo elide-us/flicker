@@ -148,8 +148,12 @@ mod tests {
         let mut l = Ledger::new();
         let a = CellCoord::new(0, 0);
         let b = CellCoord::new(1, 0);
-        assert!(l.insert(a, Cell::from_surface(Composition::from_iter([(FE, 10.0)]))).is_none());
-        assert!(l.insert(b, Cell::from_surface(Composition::from_iter([(SI, 20.0)]))).is_none());
+        assert!(l
+            .insert(a, Cell::from_surface(Composition::from_iter([(FE, 10.0)])))
+            .is_none());
+        assert!(l
+            .insert(b, Cell::from_surface(Composition::from_iter([(SI, 20.0)])))
+            .is_none());
         assert_eq!(l.len(), 2);
         let removed = l.remove(a).expect("a was present");
         assert_eq!(removed.composition.amount(FE), 10.0);

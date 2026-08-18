@@ -72,12 +72,15 @@ pub fn nav(items: &[Focusable], current: Option<&str>, dir: NavDir) -> Option<St
     match current.and_then(|id| find(items, id)) {
         Some(cur) => {
             // Group-filtered, ordinal-sorted ring (id as a stable tiebreak).
-            let mut ring: Vec<&Focusable> =
-                items.iter().filter(|f| f.group == cur.group).collect();
+            let mut ring: Vec<&Focusable> = items.iter().filter(|f| f.group == cur.group).collect();
             ring.sort_by(|a, b| a.ordinal.cmp(&b.ordinal).then_with(|| a.id.cmp(&b.id)));
             let pos = ring.iter().position(|f| f.id == cur.id)?;
             let n = ring.len();
-            let next = if forward { (pos + 1) % n } else { (pos + n - 1) % n };
+            let next = if forward {
+                (pos + 1) % n
+            } else {
+                (pos + n - 1) % n
+            };
             Some(ring[next].id.clone())
         }
         None => {
@@ -122,7 +125,11 @@ pub fn tab(items: &[Focusable], current: Option<&str>, forward: bool) -> Option<
             }
             let pos = groups.iter().position(|g| *g == cur.group.as_str())?;
             let n = groups.len();
-            let next = if forward { (pos + 1) % n } else { (pos + n - 1) % n };
+            let next = if forward {
+                (pos + 1) % n
+            } else {
+                (pos + n - 1) % n
+            };
             groups[next]
         }
         None => {
@@ -146,7 +153,12 @@ mod tests {
     use super::*;
 
     fn f(id: &str, group: &str, ordinal: u32) -> Focusable {
-        Focusable { id: id.into(), group: group.into(), ordinal, rect: [0.0; 4] }
+        Focusable {
+            id: id.into(),
+            group: group.into(),
+            ordinal,
+            rect: [0.0; 4],
+        }
     }
 
     #[test]
@@ -188,7 +200,10 @@ mod tests {
     #[test]
     fn nav_unknown_current_is_treated_as_no_current() {
         let items = vec![f("a0", "A", 0), f("a1", "A", 1)];
-        assert_eq!(nav(&items, Some("ghost"), NavDir::Down).as_deref(), Some("a0"));
+        assert_eq!(
+            nav(&items, Some("ghost"), NavDir::Down).as_deref(),
+            Some("a0")
+        );
     }
 
     #[test]
@@ -236,7 +251,11 @@ mod tests {
     #[test]
     fn tab_single_group_with_current_is_a_no_op() {
         let items = vec![f("r0", "settings_rows", 0), f("r1", "settings_rows", 1)];
-        assert_eq!(tab(&items, Some("r1"), true), None, "no other pane to cycle to");
+        assert_eq!(
+            tab(&items, Some("r1"), true),
+            None,
+            "no other pane to cycle to"
+        );
         assert_eq!(tab(&items, Some("r0"), false), None);
         // …but with no focus yet, entering the sole group is still useful acquisition.
         assert_eq!(tab(&items, None, true).as_deref(), Some("r0"));

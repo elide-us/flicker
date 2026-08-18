@@ -107,7 +107,13 @@ impl ClothSim {
                     })
                 })
                 .collect();
-            regions.push(Region { anchor_bone, chains, anchor_bind, rest_dir, binds });
+            regions.push(Region {
+                anchor_bone,
+                chains,
+                anchor_bind,
+                rest_dir,
+                binds,
+            });
         }
         Self { regions }
     }
@@ -122,7 +128,9 @@ impl ClothSim {
     /// bound verts only, so non-cloth verts keep their rigid skin.
     pub fn update(&mut self, palette: &[Mat4], dt: f32, skinned: &mut [SkinnedVertex]) {
         for r in &mut self.regions {
-            let Some(pa) = palette.get(r.anchor_bone).copied() else { continue };
+            let Some(pa) = palette.get(r.anchor_bone).copied() else {
+                continue;
+            };
             let driver_rot = Quat::from_mat4(&pa).normalize();
             // Step each chain from its posed anchor; cache its posed points and the per-segment
             // bend rotation (rest direction → current direction, both in posed space).
@@ -167,13 +175,27 @@ mod tests {
     use crate::format::{ClothBind, ClothChain, ClothParams, ClothRegion};
 
     fn bone(name: &str) -> Bone {
-        Bone { name: name.into(), parent: -1, local: Mat4::IDENTITY, inverse_bind: Mat4::IDENTITY }
+        Bone {
+            name: name.into(),
+            parent: -1,
+            local: Mat4::IDENTITY,
+            inverse_bind: Mat4::IDENTITY,
+        }
     }
     fn sv(p: [f32; 3]) -> SkinnedVertex {
-        SkinnedVertex { position: p, normal: [0.0, 1.0, 0.0] }
+        SkinnedVertex {
+            position: p,
+            normal: [0.0, 1.0, 0.0],
+        }
     }
     fn vtx(p: [f32; 3]) -> Vertex {
-        Vertex { p, n: [0.0, 1.0, 0.0], uv: [0.0, 0.0], joints: [0; 4], weights: [1.0, 0.0, 0.0, 0.0] }
+        Vertex {
+            p,
+            n: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        }
     }
 
     // A HORIZONTAL chain (+x) with 3 verts sitting ON it, so gravity drapes them off the
@@ -184,12 +206,38 @@ mod tests {
             regions: vec![ClothRegion {
                 name: "r".into(),
                 anchor_bone: "a".into(),
-                params: ClothParams { gravity: [0.0, 0.0, -600.0], stiffness: 0.005, damping: 0.9, iterations: 8, max_dt: 1.0 / 30.0 },
-                chains: vec![ClothChain { anchor: [0.0, 0.0, 0.0], dir: [1.0, 0.0, 0.0], seg_len: 5.0, segments: 4 }],
+                params: ClothParams {
+                    gravity: [0.0, 0.0, -600.0],
+                    stiffness: 0.005,
+                    damping: 0.9,
+                    iterations: 8,
+                    max_dt: 1.0 / 30.0,
+                },
+                chains: vec![ClothChain {
+                    anchor: [0.0, 0.0, 0.0],
+                    dir: [1.0, 0.0, 0.0],
+                    seg_len: 5.0,
+                    segments: 4,
+                }],
                 binds: vec![
-                    ClothBind { v: 0, c: 0, k: 0, f: 0.0 }, // at the anchor
-                    ClothBind { v: 1, c: 0, k: 2, f: 0.0 },
-                    ClothBind { v: 2, c: 0, k: 3, f: 1.0 }, // the free tip
+                    ClothBind {
+                        v: 0,
+                        c: 0,
+                        k: 0,
+                        f: 0.0,
+                    }, // at the anchor
+                    ClothBind {
+                        v: 1,
+                        c: 0,
+                        k: 2,
+                        f: 0.0,
+                    },
+                    ClothBind {
+                        v: 2,
+                        c: 0,
+                        k: 3,
+                        f: 1.0,
+                    }, // the free tip
                 ],
             }],
         };
@@ -197,7 +245,12 @@ mod tests {
         (ClothSim::build(&cloth, &verts, &[bone("a")]), orig)
     }
 
-    fn drive(sim: &mut ClothSim, palette: &[Mat4], orig: &[[f32; 3]], frames: usize) -> Vec<SkinnedVertex> {
+    fn drive(
+        sim: &mut ClothSim,
+        palette: &[Mat4],
+        orig: &[[f32; 3]],
+        frames: usize,
+    ) -> Vec<SkinnedVertex> {
         let mut skinned: Vec<SkinnedVertex> = orig.iter().map(|p| sv(*p)).collect();
         for _ in 0..frames {
             sim.update(palette, 1.0 / 60.0, &mut skinned);
@@ -211,9 +264,19 @@ mod tests {
     fn region_drapes_off_the_rest_shape() {
         let (mut sim, orig) = one_region_sim();
         let out = drive(&mut sim, &[Mat4::IDENTITY], &orig, 300);
-        assert!(Vec3::from(out[0].position).length() < 1e-2, "the anchor-bound vert stays at the anchor");
-        assert!(out[2].position[2] < -5.0, "the tip must drape well below its rest height (z {})", out[2].position[2]);
-        assert!(out.iter().all(|s| Vec3::from(s.position).is_finite()), "cloth must stay finite");
+        assert!(
+            Vec3::from(out[0].position).length() < 1e-2,
+            "the anchor-bound vert stays at the anchor"
+        );
+        assert!(
+            out[2].position[2] < -5.0,
+            "the tip must drape well below its rest height (z {})",
+            out[2].position[2]
+        );
+        assert!(
+            out.iter().all(|s| Vec3::from(s.position).is_finite()),
+            "cloth must stay finite"
+        );
     }
 
     /// Moving the anchor bone carries the whole hang with it; the anchor-bound vert tracks
@@ -221,14 +284,21 @@ mod tests {
     #[test]
     fn anchor_move_carries_the_hang() {
         let (mut sim, orig) = one_region_sim();
-        let out = drive(&mut sim, &[Mat4::from_translation(Vec3::new(40.0, 0.0, 0.0))], &orig, 40);
+        let out = drive(
+            &mut sim,
+            &[Mat4::from_translation(Vec3::new(40.0, 0.0, 0.0))],
+            &orig,
+            40,
+        );
         assert!(
             (Vec3::from(out[0].position) - Vec3::new(40.0, 0.0, 0.0)).length() < 1e-2,
             "the anchor-bound vert must track the bone (got {:?})",
             out[0].position
         );
         assert!(
-            out.iter().all(|s| Vec3::from(s.position).is_finite() && Vec3::from(s.position).length() < 1e4),
+            out.iter().all(
+                |s| Vec3::from(s.position).is_finite() && Vec3::from(s.position).length() < 1e4
+            ),
             "cloth must stay bounded"
         );
     }
@@ -251,6 +321,9 @@ mod tests {
         let mesh: crate::format::Mesh = serde_json::from_str(json).expect("parse mesh+cloth");
         assert_eq!(mesh.cloth.regions.len(), 1);
         let sim = ClothSim::build(&mesh.cloth, &mesh.vertices, &[bone("a")]);
-        assert!(!sim.is_empty(), "the bound vert must produce a non-empty sim");
+        assert!(
+            !sim.is_empty(),
+            "the bound vert must produce a non-empty sim"
+        );
     }
 }

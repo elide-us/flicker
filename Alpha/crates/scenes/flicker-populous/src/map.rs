@@ -58,7 +58,11 @@ impl HexMap {
     pub fn new(freq: u32) -> Self {
         let freq = freq.clamp(MIN_FREQ, MAX_FREQ);
         let (grid, outlines) = icosphere_with_outlines(freq);
-        Self { freq, grid, outlines }
+        Self {
+            freq,
+            grid,
+            outlines,
+        }
     }
 
     /// The size dial this map was built at.

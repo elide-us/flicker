@@ -32,7 +32,7 @@
 //! ([`WIDGETS_LUA`] / [`load_widgets`] are the legacy immediate-mode residue —
 //! one flagged consumer left; see their docs.)
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flicker_render::{Renderer, TextureHandle, Vec2};
 use flicker_script::{HudCommand, ScriptHost, TextAlign, UiNode};
@@ -108,8 +108,9 @@ pub const WIDGETS_LUA: &str = include_str!("widgets.lua");
 /// Together these are the complete vocabulary. A kind outside it is a typo: the walker
 /// would anchor-overlay its children and draw nothing, silently, so
 /// [`unknown_kinds`] exists to make that a test failure instead of a blank panel.
-const STRUCTURAL_KINDS: &[&str] =
-    &["screen", "cell", "row", "stack", "grid", "rtt", "text", "option"];
+const STRUCTURAL_KINDS: &[&str] = &[
+    "screen", "cell", "row", "stack", "grid", "rtt", "text", "option",
+];
 
 /// The **Rust component** kinds — interactive Components whose draw/hit/bind logic
 /// lives in the ENGINE (`component.rs`), which is where a Component's logic belongs:
@@ -125,14 +126,39 @@ const STRUCTURAL_KINDS: &[&str] =
 /// half of a migration meter. A new control is a new arm in `component.rs` and a new
 /// entry here — there is no other tier to put one in.
 const RUST_COMPONENT_KINDS: &[&str] = &[
-    "button", "panel", "sprite", "tooltip", "checkbox", "toggle", "radio", "tile",
-    "pill_toggle", "tabs", "select", "slider", "stepper", "text_field", "list", "context_menu",
-    "gauge", "resource_gauge", "stat_dot", "action_slot", "medallion", "badge",
+    "button",
+    "panel",
+    "sprite",
+    "tooltip",
+    "checkbox",
+    "toggle",
+    "radio",
+    "tile",
+    "pill_toggle",
+    "tabs",
+    "select",
+    "slider",
+    "stepper",
+    "text_field",
+    "list",
+    "context_menu",
+    "gauge",
+    "resource_gauge",
+    "stat_dot",
+    "action_slot",
+    "medallion",
+    "badge",
     // Composites the engine draws at walk time — the carved modal slab and the two-rail
     // page/tab control (PTT). Formalised from the retired `popup_panel` / `paged_menu`
     // template builders (201F4F51 P1): now first-class kinds the scene names via
     // `component:` and the walker lays out / draws / hit-tests, never a template pass.
-    "popup_panel", "paged_menu",
+    "popup_panel",
+    "paged_menu",
+    // The bench-standard footer band: a left LEGEND of controller-glyph + help-label
+    // pairs and the scene's authored button cluster right-aligned (`[ MENU ]` always,
+    // `[ BACK ]`/`[ NEXT ]` as relevant). Stateless — its buttons fire the same result
+    // names the screen's declared Next/Prev/Menu intents fire, one activation channel.
+    "nav_footer",
 ];
 
 /// Whether `kind` is an interactive Component — i.e. one the engine draws and hit-tests
@@ -315,11 +341,15 @@ pub fn render_hud(
                 let role = font_role(*font);
                 let left = match align {
                     TextAlign::Center => {
-                        x - renderer.measure_text_role(text, *size, role, *italic, *bold, *tracking).x
+                        x - renderer
+                            .measure_text_role(text, *size, role, *italic, *bold, *tracking)
+                            .x
                             * 0.5
                     }
                     TextAlign::Right => {
-                        x - renderer.measure_text_role(text, *size, role, *italic, *bold, *tracking).x
+                        x - renderer
+                            .measure_text_role(text, *size, role, *italic, *bold, *tracking)
+                            .x
                     }
                     TextAlign::Left => *x,
                 };
@@ -335,13 +365,26 @@ pub fn render_hud(
                     *wrap,
                 );
             }
-            HudCommand::TextCaret { x, y, w, h, prefix, size, color, layer, font, max_x } => {
+            HudCommand::TextCaret {
+                x,
+                y,
+                w,
+                h,
+                prefix,
+                size,
+                color,
+                layer,
+                font,
+                max_x,
+            } => {
                 // The caret sits after the SHAPED width of the text before it — real
                 // glyph measurement, here at the render bridge where the glyphs live,
                 // never a char-count estimate (text ruling 2026-07-31).
                 renderer.set_layer(base + layer);
                 let role = font_role(*font);
-                let cx = (x + renderer.measure_text_role(prefix, *size, role, false, false, -1.0).x)
+                let cx = (x + renderer
+                    .measure_text_role(prefix, *size, role, false, false, -1.0)
+                    .x)
                     .min(*max_x);
                 renderer.draw_sprite(white, Vec2::new(cx, *y), Vec2::new(*w, *h), *color);
             }
@@ -457,6 +500,30 @@ pub fn load_ui_json_strs_for(
     }
 }
 
+/// The one shared `ui_theme.json` path, resolved through the content-roots
+/// service — `<content_root>/sensorium/resources/ui_theme.json`. Every scene
+/// crate used to spell its own `CARGO_MANIFEST_DIR` climb to this file, which
+/// baked the repo layout into ~11 call sites and broke the moment the app was
+/// installed anywhere; the roots service is the one knob that relocates them all.
+pub fn shared_theme_path() -> PathBuf {
+    flicker_core::roots::roots()
+        .sensorium()
+        .join("resources/ui_theme.json")
+}
+
+/// [`load_styles_for`] over [`shared_theme_path`] — the styles input for a scene
+/// crate's Rust walker, satellites merged, scene blocks over them, tokens
+/// resolved. Call this instead of spelling a path to the theme file.
+pub fn load_shared_styles(scene: Option<&serde_json::Value>) -> serde_json::Value {
+    load_styles_for(shared_theme_path(), scene)
+}
+
+/// [`load_ui_json_for`] over [`shared_theme_path`] — the `UI` global exposure
+/// for a scene pair's Lua, from the one shared theme location.
+pub fn load_shared_ui_json(script: &ScriptHost, scene: Option<&serde_json::Value>) {
+    load_ui_json_for(script, shared_theme_path(), scene);
+}
+
 /// The theme's SATELLITE files, merged into the loaded root by [`load_styles`]:
 /// the RTT stage sources (`ui_stages.json`) and the shell chrome (`ui_style.json`)
 /// — split out of the one big file by Aaron 2026-08-12. The PALETTE never leaves
@@ -522,14 +589,19 @@ pub fn load_styles_for(
             }
         },
         Err(e) => {
-            tracing::error!("ui_theme.json read failed (styles) ({}): {e}", path.display());
+            tracing::error!(
+                "ui_theme.json read failed (styles) ({}): {e}",
+                path.display()
+            );
             serde_json::Value::Object(Default::default())
         }
     };
     if let Some(dir) = path.parent() {
         for name in THEME_SATELLITES {
             let sp = dir.join(name);
-            let Ok(text) = std::fs::read_to_string(&sp) else { continue };
+            let Ok(text) = std::fs::read_to_string(&sp) else {
+                continue;
+            };
             match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(sat) => merge_satellite(&mut ui, sat, name),
                 Err(e) => tracing::error!("{name} parse failed ({}): {e}", sp.display()),
@@ -576,7 +648,10 @@ pub fn load_styles_strs_for(
     parts: &[&str],
     scene: Option<&serde_json::Value>,
 ) -> serde_json::Value {
-    let mut ui = match parts.first().map(|p| serde_json::from_str::<serde_json::Value>(p)) {
+    let mut ui = match parts
+        .first()
+        .map(|p| serde_json::from_str::<serde_json::Value>(p))
+    {
         Some(Ok(ui)) => ui,
         Some(Err(e)) => {
             tracing::error!("ui_theme.json parse failed (styles str): {e}");
@@ -669,7 +744,12 @@ mod tests {
             .expect("theme.tokens present")
             .iter()
             .map(|(k, v)| {
-                let c: Vec<f64> = v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+                let c: Vec<f64> = v
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.as_f64().unwrap())
+                    .collect();
                 (k.clone(), [c[0], c[1], c[2], c[3]])
             })
             .collect()
@@ -678,7 +758,10 @@ mod tests {
     /// The name of the token `parts` matches exactly, else the nearest one — so a
     /// drifted fallback's failure message names what it probably meant.
     fn nearest_token(tokens: &[(String, [f64; 4])], parts: &[f64]) -> Option<String> {
-        if tokens.iter().any(|(_, tv)| tv.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6)) {
+        if tokens
+            .iter()
+            .any(|(_, tv)| tv.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6))
+        {
             return None;
         }
         Some(
@@ -709,21 +792,38 @@ mod tests {
         let mut checked = 0;
         let mut bad = Vec::new();
         for line in include_str!("component.rs").lines() {
-            let Some(rest) = line.strip_prefix("const ") else { continue };
-            let Some((name, value)) = rest.split_once(": [f32; 4] = [") else { continue };
-            let Some((inner, _)) = value.split_once(']') else { continue };
-            let parts: Vec<f64> =
-                inner.split(',').filter_map(|p| p.trim().parse::<f64>().ok()).collect();
+            let Some(rest) = line.strip_prefix("const ") else {
+                continue;
+            };
+            let Some((name, value)) = rest.split_once(": [f32; 4] = [") else {
+                continue;
+            };
+            let Some((inner, _)) = value.split_once(']') else {
+                continue;
+            };
+            let parts: Vec<f64> = inner
+                .split(',')
+                .filter_map(|p| p.trim().parse::<f64>().ok())
+                .collect();
             if parts.len() != 4 {
                 continue;
             }
             checked += 1;
             if let Some(near) = nearest_token(&tokens, &parts) {
-                bad.push(format!("component.rs `{name}` = {parts:?} (nearest token: ${near})"));
+                bad.push(format!(
+                    "component.rs `{name}` = {parts:?} (nearest token: ${near})"
+                ));
             }
         }
-        assert!(checked >= 9, "the gate must actually find the fallback consts ({checked})");
-        assert!(bad.is_empty(), "engine fallback consts drifted from theme.tokens:\n{}", bad.join("\n"));
+        assert!(
+            checked >= 9,
+            "the gate must actually find the fallback consts ({checked})"
+        );
+        assert!(
+            bad.is_empty(),
+            "engine fallback consts drifted from theme.tokens:\n{}",
+            bad.join("\n")
+        );
     }
 
     /// The NAMED half of the same law, and the replacement for the Lua fallback gate
@@ -776,8 +876,10 @@ mod tests {
                 let rest = line.strip_prefix("const ")?;
                 let (name, value) = rest.split_once(": [f32; 4] = [")?;
                 let (inner, _) = value.split_once(']')?;
-                let parts: Vec<f64> =
-                    inner.split(',').filter_map(|p| p.trim().parse::<f64>().ok()).collect();
+                let parts: Vec<f64> = inner
+                    .split(',')
+                    .filter_map(|p| p.trim().parse::<f64>().ok())
+                    .collect();
                 (parts.len() == 4).then(|| (name.to_string(), parts))
             })
             .collect();
@@ -785,18 +887,26 @@ mod tests {
         let mut bad = Vec::new();
         for (name, token) in PAIRS {
             let Some((_, parts)) = found.iter().find(|(n, _)| n == name) else {
-                bad.push(format!("`{name}` is gone from component.rs — the pairing is stale"));
+                bad.push(format!(
+                    "`{name}` is gone from component.rs — the pairing is stale"
+                ));
                 continue;
             };
             let Some((_, want)) = tokens.iter().find(|(t, _)| t == token) else {
-                bad.push(format!("`{name}` names `${token}`, which theme.tokens does not have"));
+                bad.push(format!(
+                    "`{name}` names `${token}`, which theme.tokens does not have"
+                ));
                 continue;
             };
             if !want.iter().zip(parts).all(|(a, b)| (a - b).abs() < 1e-6) {
                 bad.push(format!("`{name}` = {parts:?} but `${token}` = {want:?}"));
             }
         }
-        assert!(bad.is_empty(), "engine fallback consts drifted from their tokens:\n{}", bad.join("\n"));
+        assert!(
+            bad.is_empty(),
+            "engine fallback consts drifted from their tokens:\n{}",
+            bad.join("\n")
+        );
 
         let unpaired: Vec<&str> = found
             .iter()
@@ -816,17 +926,33 @@ mod tests {
     /// roster rather than by a hardcoded `kind != "core"`.
     #[test]
     fn unknown_kinds_catches_a_typo() {
-        let leaf = |kind: &str| UiNode { component: kind.to_string(), ..Default::default() };
+        let leaf = |kind: &str| UiNode {
+            component: kind.to_string(),
+            ..Default::default()
+        };
         let mut screen = leaf("screen");
         screen.children = vec![leaf("cell"), leaf("button"), leaf("text")];
-        assert!(unknown_kinds(&screen).is_empty(), "a well-formed tree is clean");
+        assert!(
+            unknown_kinds(&screen).is_empty(),
+            "a well-formed tree is clean"
+        );
 
         screen.children.push(leaf("colunm")); // the typo a rename leaves behind
-        assert_eq!(unknown_kinds(&screen), vec!["colunm".to_string()], "a stale kind is reported");
+        assert_eq!(
+            unknown_kinds(&screen),
+            vec!["colunm".to_string()],
+            "a stale kind is reported"
+        );
 
-        assert!(!is_known_kind("core"), "`core` is the emitter library, never a component kind");
+        assert!(
+            !is_known_kind("core"),
+            "`core` is the emitter library, never a component kind"
+        );
         for kind in rust_component_kinds() {
-            assert!(is_known_kind(kind), "`{kind}` is an engine component but not a legal kind");
+            assert!(
+                is_known_kind(kind),
+                "`{kind}` is an engine component but not a legal kind"
+            );
         }
     }
 
@@ -835,27 +961,39 @@ mod tests {
     /// bind-shadowed literals) or miss real copy.
     #[test]
     fn raw_display_literals_finds_copy_and_honours_exemptions() {
-        let mut screen = UiNode { component: "screen".into(), ..Default::default() };
+        let mut screen = UiNode {
+            component: "screen".into(),
+            ..Default::default()
+        };
         let node = |props: &[(&str, &str)]| {
-            let mut n = UiNode { component: "text".into(), ..Default::default() };
+            let mut n = UiNode {
+                component: "text".into(),
+                ..Default::default()
+            };
             for (k, v) in props {
-                n.props.insert((*k).to_string(), flicker_script::Value::Text((*v).to_string()));
+                n.props.insert(
+                    (*k).to_string(),
+                    flicker_script::Value::Text((*v).to_string()),
+                );
             }
             n
         };
         screen.children = vec![
-            node(&[("text", "Hello World")]),            // raw copy → reported
-            node(&[("label", "$menu_quit")]),            // token → exempt
-            node(&[("text", "")]),                       // empty → exempt
-            node(&[("label", "✕")]),                     // single glyph → exempt
-            node(&[("text", "·")]),                      // no alphabetics → exempt
-            node(&[("text", "%d")]),                     // pure format → exempt
-            node(&[("text", "%.2f%%")]),                 // pure format chain → exempt
+            node(&[("text", "Hello World")]), // raw copy → reported
+            node(&[("label", "$menu_quit")]), // token → exempt
+            node(&[("text", "")]),            // empty → exempt
+            node(&[("label", "✕")]),          // single glyph → exempt
+            node(&[("text", "·")]),           // no alphabetics → exempt
+            node(&[("text", "%d")]),          // pure format → exempt
+            node(&[("text", "%.2f%%")]),      // pure format chain → exempt
             node(&[("text", "dead"), ("text_bind", "live")]), // bind-shadowed → exempt
-            node(&[("text", "Hello World")]),            // duplicate → deduped
+            node(&[("text", "Hello World")]), // duplicate → deduped
         ];
         // A nested child's literal is walked too.
-        let mut holder = UiNode { component: "cell".into(), ..Default::default() };
+        let mut holder = UiNode {
+            component: "cell".into(),
+            ..Default::default()
+        };
         holder.children = vec![node(&[("label", "Nested Copy")])];
         screen.children.push(holder);
 
@@ -874,9 +1012,18 @@ mod tests {
             "oops": "$missing"
         });
         resolve_tokens(&mut ui);
-        assert_eq!(ui["modal"]["title"]["color"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
-        assert_eq!(ui["modal"]["buttons"]["fill"], serde_json::json!([0.1, 0.2, 0.3, 1.0]));
-        assert_eq!(ui["screens"]["menu"]["overlay"], serde_json::json!([0.1, 0.2, 0.3, 1.0]));
+        assert_eq!(
+            ui["modal"]["title"]["color"],
+            serde_json::json!([0.9, 0.9, 0.8, 1.0])
+        );
+        assert_eq!(
+            ui["modal"]["buttons"]["fill"],
+            serde_json::json!([0.1, 0.2, 0.3, 1.0])
+        );
+        assert_eq!(
+            ui["screens"]["menu"]["overlay"],
+            serde_json::json!([0.1, 0.2, 0.3, 1.0])
+        );
         // literal strings (labels) are untouched; an unknown token is left as-is.
         assert_eq!(ui["screens"]["menu"]["title"], serde_json::json!("START"));
         assert_eq!(ui["oops"], serde_json::json!("$missing"));
@@ -907,7 +1054,10 @@ mod tests {
 
         let ui = load_styles(dir.join("ui_theme.json"));
         // Satellite keys merged in — and their $tokens resolved against the ONE palette.
-        assert_eq!(ui["stages"]["test_stage"]["tint"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
+        assert_eq!(
+            ui["stages"]["test_stage"]["tint"],
+            serde_json::json!([0.9, 0.9, 0.8, 1.0])
+        );
         // The fork was refused: the satellite's `theme` never replaced the palette.
         assert_eq!(ui["panel"]["fill"], serde_json::json!([0.9, 0.9, 0.8, 1.0]));
         // A colliding key keeps the theme file's value.
@@ -919,7 +1069,10 @@ mod tests {
             .join("../../../content/sensorium/resources/ui_theme.json");
         let shipped = load_styles(&root);
         assert!(
-            shipped.get("stages").and_then(|s| s.as_object()).is_some_and(|s| !s.is_empty()),
+            shipped
+                .get("stages")
+                .and_then(|s| s.as_object())
+                .is_some_and(|s| !s.is_empty()),
             "the shipped ui_stages.json merges into the theme root"
         );
     }
@@ -959,8 +1112,18 @@ mod tests {
     #[test]
     fn no_component_block_lives_in_a_shared_file() {
         const COMPONENT_BLOCKS: &[&str] = &[
-            "modal", "badge", "tooltip", "pad_glyphs", "paged_menu", "resource_gauge",
-            "action_slot", "medallion", "rtt_holder", "slider", "panel", "stat_dot",
+            "modal",
+            "badge",
+            "tooltip",
+            "pad_glyphs",
+            "paged_menu",
+            "resource_gauge",
+            "action_slot",
+            "medallion",
+            "rtt_holder",
+            "slider",
+            "panel",
+            "stat_dot",
         ];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../content/sensorium/resources");
@@ -982,7 +1145,10 @@ mod tests {
             &std::fs::read_to_string(dir.join("ui_style.json")).expect("style reads"),
         )
         .expect("style parses");
-        assert!(style.get("theme").is_none(), "ui_style.json must never carry a `theme` key");
+        assert!(
+            style.get("theme").is_none(),
+            "ui_style.json must never carry a `theme` key"
+        );
     }
 
     #[test]
@@ -1040,11 +1206,19 @@ mod tests {
         let mut files = Vec::new();
         rust_files(&root, &mut files);
         files.sort();
-        assert!(files.len() > 20, "the sweep found the scene crates: {}", files.len());
+        assert!(
+            files.len() > 20,
+            "the sweep found the scene crates: {}",
+            files.len()
+        );
         let crate_of = |p: &Path| -> String {
             p.strip_prefix(&root)
                 .ok()
-                .and_then(|r| r.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()))
+                .and_then(|r| {
+                    r.components()
+                        .next()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                })
                 .unwrap_or_default()
         };
 
@@ -1111,15 +1285,23 @@ mod tests {
                 {
                     globes.push(at.clone());
                 }
-                if owned.iter().any(|o| line.contains(o.as_str())) && !declarers.contains(&krate)
-                {
+                if owned.iter().any(|o| line.contains(o.as_str())) && !declarers.contains(&krate) {
                     declarers.push(krate.clone());
                 }
             }
         }
-        assert!(devices.is_empty(), "a scene reached past the input map for a device: {devices:?}");
-        assert!(panes.is_empty(), "a scene named the retired pane palette: {panes:?}");
-        assert!(globes.is_empty(), "a scene grew its own globe again: {globes:?}");
+        assert!(
+            devices.is_empty(),
+            "a scene reached past the input map for a device: {devices:?}"
+        );
+        assert!(
+            panes.is_empty(),
+            "a scene named the retired pane palette: {panes:?}"
+        );
+        assert!(
+            globes.is_empty(),
+            "a scene grew its own globe again: {globes:?}"
+        );
         declarers.sort();
         let mut expected: Vec<String> = NOT_YET_MIGRATED.iter().map(|s| s.to_string()).collect();
         expected.sort();
@@ -1139,9 +1321,11 @@ mod tests {
     #[test]
     fn no_shipped_scene_names_the_template_tier() {
         use std::path::PathBuf;
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../content/sensorium/scenes");
-        let dir = dir.canonicalize().expect("content/sensorium/scenes resolves");
+        let dir =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../content/sensorium/scenes");
+        let dir = dir
+            .canonicalize()
+            .expect("content/sensorium/scenes resolves");
 
         fn has_key(v: &serde_json::Value, key: &str) -> bool {
             match v {
@@ -1172,6 +1356,10 @@ mod tests {
             }
             checked += 1;
         }
-        assert!(checked > 0, "the gate found the shipped scene files in {}", dir.display());
+        assert!(
+            checked > 0,
+            "the gate found the shipped scene files in {}",
+            dir.display()
+        );
     }
 }

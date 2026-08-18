@@ -27,7 +27,10 @@ pub struct Row {
 impl Row {
     /// The logical display name: `Foo.json.gz` on disk is `Foo.json` here.
     fn display_name(path: &Path) -> String {
-        let raw = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let raw = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         raw.strip_suffix(".gz").unwrap_or(&raw).to_string()
     }
 
@@ -76,7 +79,8 @@ pub fn list_dir(dir: &Path, sort: SortKey, descending: bool) -> Vec<Row> {
         .map(|e| e.path())
         // `.trash` is the undo machinery's parking space, not content.
         .filter(|p| {
-            p.file_name().is_none_or(|n| n != flicker_content::TRASH_DIR)
+            p.file_name()
+                .is_none_or(|n| n != flicker_content::TRASH_DIR)
         })
         .map(|physical| {
             let is_dir = physical.is_dir();
@@ -101,14 +105,15 @@ pub fn list_dir(dir: &Path, sort: SortKey, descending: bool) -> Vec<Row> {
 
     rows.sort_by(|a, b| {
         // Folders first, always — the one ordering rule no sort key overrides.
-        a.is_dir
-            .cmp(&b.is_dir)
-            .reverse()
-            .then_with(|| match sort {
-                SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortKey::Type => a.class.id().cmp(b.class.id()).then_with(|| a.name.cmp(&b.name)),
-                SortKey::Size => a.size.cmp(&b.size).then_with(|| a.name.cmp(&b.name)),
-            })
+        a.is_dir.cmp(&b.is_dir).reverse().then_with(|| match sort {
+            SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            SortKey::Type => a
+                .class
+                .id()
+                .cmp(b.class.id())
+                .then_with(|| a.name.cmp(&b.name)),
+            SortKey::Size => a.size.cmp(&b.size).then_with(|| a.name.cmp(&b.name)),
+        })
     });
     if descending {
         // Reverse WITHIN each group so folders stay on top.
@@ -142,7 +147,10 @@ impl Roots {
     /// From the executable's declared content root.
     pub fn from_config() -> Self {
         let r = flicker_content::roots();
-        Self { package: r.package(), staging: r.staging() }
+        Self {
+            package: r.package(),
+            staging: r.staging(),
+        }
     }
 
     pub fn all(&self) -> [&Path; 2] {
@@ -173,7 +181,10 @@ fn push_tree_row(dir: &Path, depth: usize, expanded: &[PathBuf], out: &mut Vec<T
     }
     let is_open = expanded.iter().any(|e| e == dir);
     out.push(TreeRow {
-        name: dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+        name: dir
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
         depth,
         expanded: is_open,
         has_children: has_subdir(dir),
@@ -182,11 +193,17 @@ fn push_tree_row(dir: &Path, depth: usize, expanded: &[PathBuf], out: &mut Vec<T
     if !is_open {
         return;
     }
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut subs: Vec<PathBuf> = read
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.file_name().is_none_or(|n| n != flicker_content::TRASH_DIR))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .is_none_or(|n| n != flicker_content::TRASH_DIR)
+        })
         .collect();
     subs.sort();
     for sub in subs {
@@ -200,14 +217,21 @@ fn push_tree_row(dir: &Path, depth: usize, expanded: &[PathBuf], out: &mut Vec<T
 pub fn breadcrumb(roots: &Roots, dir: &Path) -> Vec<String> {
     for root in roots.all() {
         if let Ok(rel) = dir.strip_prefix(root) {
-            let mut crumbs = vec![
-                root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-            ];
-            crumbs.extend(rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()));
+            let mut crumbs = vec![root
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()];
+            crumbs.extend(
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy().to_string()),
+            );
             return crumbs;
         }
     }
-    vec![dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()]
+    vec![dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default()]
 }
 
 /// The parent to go "up" to, unless `dir` is already one of the roots — the
@@ -231,7 +255,10 @@ mod tests {
     fn scratch(name: &str) -> Roots {
         let d = std::env::temp_dir().join(format!("flicker_qm_{name}"));
         let _ = std::fs::remove_dir_all(&d);
-        let roots = Roots { package: d.join("package"), staging: d.join("staging") };
+        let roots = Roots {
+            package: d.join("package"),
+            staging: d.join("staging"),
+        };
         std::fs::create_dir_all(&roots.package).unwrap();
         std::fs::create_dir_all(&roots.staging).unwrap();
         roots
@@ -244,17 +271,27 @@ mod tests {
     #[test]
     fn a_listing_shows_logical_names_not_the_at_rest_gz() {
         let r = scratch("names");
-        write(&r.package.join("Foo.json"), r#"{"format":"flicker.rig","mesh":{"indices":[1]}}"#);
+        write(
+            &r.package.join("Foo.json"),
+            r#"{"format":"flicker.rig","mesh":{"indices":[1]}}"#,
+        );
         let rows = list_dir(&r.package, SortKey::Name, false);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].name, "Foo.json", "the .gz is an encoding detail, not a name");
+        assert_eq!(
+            rows[0].name, "Foo.json",
+            "the .gz is an encoding detail, not a name"
+        );
         assert_eq!(
             rows[0].path,
             r.package.join("Foo.json"),
             "and the PATH is logical too, matching the name — carrying the physical .gz here \
              makes dst==src comparisons silently fail"
         );
-        assert_eq!(rows[0].class, PackageClass::Rig, "class is derived from content");
+        assert_eq!(
+            rows[0].class,
+            PackageClass::Rig,
+            "class is derived from content"
+        );
         assert!(rows[0].size > 0);
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
@@ -266,9 +303,12 @@ mod tests {
         write(&r.package.join("aaa.json"), r#"{"clips":[{"name":"x"}]}"#);
         write(&r.package.join("mmm.json"), r#"{"clips":[{"name":"y"}]}"#);
 
-        for (key, desc) in
-            [(SortKey::Name, false), (SortKey::Name, true), (SortKey::Size, true), (SortKey::Type, true)]
-        {
+        for (key, desc) in [
+            (SortKey::Name, false),
+            (SortKey::Name, true),
+            (SortKey::Size, true),
+            (SortKey::Type, true),
+        ] {
             let rows = list_dir(&r.package, key, desc);
             assert!(rows[0].is_dir, "a folder leads under {key:?} desc={desc}");
         }
@@ -307,14 +347,20 @@ mod tests {
         assert_eq!(closed.len(), 2, "just the two roots");
         assert_eq!(closed[0].name, "package");
         assert_eq!(closed[1].name, "staging");
-        assert!(closed[0].has_children, "caret shows there is something inside");
+        assert!(
+            closed[0].has_children,
+            "caret shows there is something inside"
+        );
         assert!(!closed[0].expanded);
 
         let open = tree_rows(&r, std::slice::from_ref(&r.package));
         assert_eq!(open.len(), 3, "package opened one level");
         assert_eq!(open[1].name, "characters");
         assert_eq!(open[1].depth, 1);
-        assert!(!open[1].expanded, "a child is not opened just because its parent is");
+        assert!(
+            !open[1].expanded,
+            "a child is not opened just because its parent is"
+        );
 
         let deep = tree_rows(&r, &[r.package.clone(), r.package.join("characters")]);
         assert_eq!(deep.len(), 4);
@@ -328,7 +374,10 @@ mod tests {
         let r = scratch("crumbs");
         let deep = r.package.join("characters/katanami");
         std::fs::create_dir_all(&deep).unwrap();
-        assert_eq!(breadcrumb(&r, &deep), vec!["package", "characters", "katanami"]);
+        assert_eq!(
+            breadcrumb(&r, &deep),
+            vec!["package", "characters", "katanami"]
+        );
         assert_eq!(breadcrumb(&r, &r.staging), vec!["staging"]);
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
@@ -339,8 +388,15 @@ mod tests {
         let r = scratch("up");
         let deep = r.package.join("characters/katanami");
         std::fs::create_dir_all(&deep).unwrap();
-        assert_eq!(parent_within_roots(&r, &deep), Some(r.package.join("characters")));
-        assert_eq!(parent_within_roots(&r, &r.package), None, "a root is the ceiling");
+        assert_eq!(
+            parent_within_roots(&r, &deep),
+            Some(r.package.join("characters"))
+        );
+        assert_eq!(
+            parent_within_roots(&r, &r.package),
+            None,
+            "a root is the ceiling"
+        );
         assert_eq!(parent_within_roots(&r, &r.staging), None);
         let _ = std::fs::remove_dir_all(r.package.parent().unwrap());
     }
@@ -389,7 +445,9 @@ pub fn files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -408,28 +466,44 @@ pub fn staging_queue(roots: &Roots) -> Vec<QueueItem> {
     let mut out = Vec::new();
     for tier in ITEM_ROOTS {
         let root = roots.staging.join(tier);
-        let Ok(rd) = std::fs::read_dir(&root) else { continue };
-        let mut dirs: Vec<PathBuf> =
-            rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let Ok(rd) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut dirs: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
         dirs.sort();
         for dir in dirs {
             let files = files_under(&dir);
             if files.is_empty() {
                 continue; // an empty folder is not an asset
             }
-            let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             // Classify off the primary json (the asset's own file where present).
             let primary = files
                 .iter()
-                .find(|f| f.to_string_lossy().contains(&name) && f.to_string_lossy().contains(".json"))
+                .find(|f| {
+                    f.to_string_lossy().contains(&name) && f.to_string_lossy().contains(".json")
+                })
                 .or_else(|| files.iter().find(|f| f.to_string_lossy().contains(".json")));
-            let class = primary.map(|p| classify_package(p)).unwrap_or(PackageClass::Unknown);
+            let class = primary
+                .map(|p| classify_package(p))
+                .unwrap_or(PackageClass::Unknown);
             out.push(QueueItem {
                 rel: PathBuf::from(tier).join(&name),
                 name,
                 class,
                 files: files.len(),
-                bytes: files.iter().filter_map(|f| f.metadata().ok()).map(|m| m.len()).sum(),
+                bytes: files
+                    .iter()
+                    .filter_map(|f| f.metadata().ok())
+                    .map(|m| m.len())
+                    .sum(),
                 dir,
             });
         }

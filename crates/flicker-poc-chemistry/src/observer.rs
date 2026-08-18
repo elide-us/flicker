@@ -135,7 +135,10 @@ impl Default for PlateObserver {
 
 impl PlateObserver {
     pub fn new() -> Self {
-        Self { prev: Vec::new(), next_id: 1 }
+        Self {
+            prev: Vec::new(),
+            next_id: 1,
+        }
     }
 
     /// Forget all identity — the next observation starts fresh (every plate `Born`).
@@ -184,14 +187,24 @@ impl PlateObserver {
         let seams = classify_seams(world, &labels, &drift_of);
 
         self.prev = labels.clone();
-        PlateObservation { labels, seams, plates, events }
+        PlateObservation {
+            labels,
+            seams,
+            plates,
+            events,
+        }
     }
 
     /// Map each new raw component (`1..=n_raw`) to a persistent id, and emit the
     /// life-events implied by how the previous plates map onto the new ones. Returns
     /// `persistent[raw]` (index `0` unused) and the events. Deterministic: every
     /// order-dependent choice breaks ties by size then smallest id.
-    fn resolve(&mut self, raw: &[u32], n_raw: usize, new_size: &[usize]) -> (Vec<PlateId>, Vec<PlateEvent>) {
+    fn resolve(
+        &mut self,
+        raw: &[u32],
+        n_raw: usize,
+        new_size: &[usize],
+    ) -> (Vec<PlateId>, Vec<PlateEvent>) {
         let mut persistent = vec![0u32; n_raw + 1];
         let mut events = Vec::new();
 
@@ -287,7 +300,8 @@ impl PlateObserver {
                     for &r in &order[1..] {
                         persistent[r as usize] = self.alloc();
                     }
-                    let into: Vec<PlateId> = order.iter().map(|&r| persistent[r as usize]).collect();
+                    let into: Vec<PlateId> =
+                        order.iter().map(|&r| persistent[r as usize]).collect();
                     events.push(PlateEvent::Split { from, into });
                 }
                 _ => {
@@ -455,7 +469,10 @@ struct UnionFind {
 
 impl UnionFind {
     fn new(n: usize) -> Self {
-        Self { parent: (0..n as u32).collect(), size: vec![1; n] }
+        Self {
+            parent: (0..n as u32).collect(),
+            size: vec![1; n],
+        }
     }
 
     fn find(&mut self, x: usize) -> usize {
@@ -477,7 +494,11 @@ impl UnionFind {
         if ra == rb {
             return;
         }
-        let (big, small) = if self.size[ra] >= self.size[rb] { (ra, rb) } else { (rb, ra) };
+        let (big, small) = if self.size[ra] >= self.size[rb] {
+            (ra, rb)
+        } else {
+            (rb, ra)
+        };
         self.parent[small] = big as u32;
         self.size[big] += self.size[small];
     }
@@ -503,7 +524,13 @@ mod tests {
     /// Drive convection so the velocity field has real structure.
     fn convected(freq: u32, seed: u64, ticks: usize) -> World {
         let mut w = world(freq, seed);
-        let mut s = Scheduler::new(vec![Box::new(RadiogenicDecay::default()), Box::new(MantleConvection)], seed);
+        let mut s = Scheduler::new(
+            vec![
+                Box::new(RadiogenicDecay::default()),
+                Box::new(MantleConvection),
+            ],
+            seed,
+        );
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
@@ -560,7 +587,13 @@ mod tests {
             }
         }
         // First observation → every plate was Born.
-        assert_eq!(obs.events.iter().filter(|e| matches!(e, PlateEvent::Born(_))).count(), obs.plates.len());
+        assert_eq!(
+            obs.events
+                .iter()
+                .filter(|e| matches!(e, PlateEvent::Born(_)))
+                .count(),
+            obs.plates.len()
+        );
     }
 
     #[test]
@@ -583,8 +616,15 @@ mod tests {
         let mut obs = PlateObserver::new();
         let first = obs.observe(&w);
         let second = obs.observe(&w);
-        assert_eq!(first.labels, second.labels, "identity is stable across a still tick");
-        assert!(second.events.is_empty(), "a steady world flags no events, got {:?}", second.events);
+        assert_eq!(
+            first.labels, second.labels,
+            "identity is stable across a still tick"
+        );
+        assert!(
+            second.events.is_empty(),
+            "a steady world flags no events, got {:?}",
+            second.events
+        );
     }
 
     /// **The count does not flicker while the world does not change.** The
@@ -615,7 +655,9 @@ mod tests {
         // numerical drift the real run carries.
         for tick in 0..10u32 {
             for cell in 0..n {
-                let h = (cell as u32).wrapping_mul(2_654_435_761).wrapping_add(tick * 97);
+                let h = (cell as u32)
+                    .wrapping_mul(2_654_435_761)
+                    .wrapping_add(tick * 97);
                 let eps = ((h >> 8) % 1000) as f32 / 1000.0 - 0.5; // −0.5..0.5
                 w.mantle.velocity[cell] = base(&w, cell) * (1.0 + 0.04 * eps);
             }
@@ -625,7 +667,11 @@ mod tests {
                 first.plates.len(),
                 "tick {tick}: the count churned under jitter"
             );
-            assert!(next.events.is_empty(), "tick {tick}: jitter is not a tectonic event: {:?}", next.events);
+            assert!(
+                next.events.is_empty(),
+                "tick {tick}: jitter is not a tectonic event: {:?}",
+                next.events
+            );
         }
     }
 
@@ -642,17 +688,33 @@ mod tests {
         }
         let a = obs.observe(&w);
         assert_eq!(a.plates.len(), 1, "uniform flow is one plate");
-        assert!(a.events.iter().any(|e| matches!(e, PlateEvent::Born(_))), "the plate was born");
+        assert!(
+            a.events.iter().any(|e| matches!(e, PlateEvent::Born(_))),
+            "the plate was born"
+        );
 
         // (2) Two opposed hemispheres → the plate splits in two.
         for i in 0..n {
-            w.mantle.velocity[i] = if w.grid.dirs[i].x >= 0.0 { Vec3::X } else { -Vec3::X };
+            w.mantle.velocity[i] = if w.grid.dirs[i].x >= 0.0 {
+                Vec3::X
+            } else {
+                -Vec3::X
+            };
         }
         let b = obs.observe(&w);
         assert_eq!(b.plates.len(), 2, "opposed hemispheres are two plates");
-        assert!(b.events.iter().any(|e| matches!(e, PlateEvent::Split { .. })), "a split fired, got {:?}", b.events);
+        assert!(
+            b.events
+                .iter()
+                .any(|e| matches!(e, PlateEvent::Split { .. })),
+            "a split fired, got {:?}",
+            b.events
+        );
         // The seam between them is flagged (not all Interior).
-        assert!(b.seams.iter().any(|&s| s != Seam::Interior), "the plate boundary is a seam");
+        assert!(
+            b.seams.iter().any(|&s| s != Seam::Interior),
+            "the plate boundary is a seam"
+        );
 
         // (3) Back to uniform → the two plates merge.
         for i in 0..n {
@@ -660,6 +722,12 @@ mod tests {
         }
         let c = obs.observe(&w);
         assert_eq!(c.plates.len(), 1, "the field is coherent again");
-        assert!(c.events.iter().any(|e| matches!(e, PlateEvent::Merged { .. })), "a merge fired, got {:?}", c.events);
+        assert!(
+            c.events
+                .iter()
+                .any(|e| matches!(e, PlateEvent::Merged { .. })),
+            "a merge fired, got {:?}",
+            c.events
+        );
     }
 }

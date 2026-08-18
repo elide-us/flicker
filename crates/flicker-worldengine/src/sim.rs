@@ -87,7 +87,13 @@ fn tick_world(world: &mut World, ctx: &EpochCtx, procs: &[Box<dyn Process>]) {
     };
     world.water_budget -= deliver_total;
 
-    let delivered = run_tick(&mut world.cells, ctx.neighbors, ctx.tables, procs, deliver_total);
+    let delivered = run_tick(
+        &mut world.cells,
+        ctx.neighbors,
+        ctx.tables,
+        procs,
+        deliver_total,
+    );
     world.delivered += delivered;
 
     if !world.cells.is_empty() {
@@ -129,9 +135,23 @@ impl Simulation {
         let seed_mass: f64 = cells.iter().map(|c| c.column.total_mass()).sum();
         let water_budget = WATER_BUDGET_FRAC * seed_mass;
         let mut checkpoints = BTreeMap::new();
-        checkpoints
-            .insert(0, World { cells, tick: 0, temp: T_MOLTEN, water_budget, delivered: 0.0 });
-        Self { tables, sphere, outlines, base_seed: config.seed, checkpoints }
+        checkpoints.insert(
+            0,
+            World {
+                cells,
+                tick: 0,
+                temp: T_MOLTEN,
+                water_budget,
+                delivered: 0.0,
+            },
+        );
+        Self {
+            tables,
+            sphere,
+            outlines,
+            base_seed: config.seed,
+            checkpoints,
+        }
     }
 
     /// Build from the repo's `Alpha/content/data` at the Earth-like defaults.

@@ -120,7 +120,14 @@ impl CondensationClass {
             // Refractory carbon / organics (CHON, carbon-rich).
             Self::Carbon => &[(6, 0.85), (8, 0.07), (1, 0.05), (7, 0.03)],
             // Water ice (H₂O dominant) plus volatile ices.
-            Self::Ice => &[(8, 0.70), (1, 0.11), (6, 0.10), (7, 0.06), (16, 0.02), (17, 0.01)],
+            Self::Ice => &[
+                (8, 0.70),
+                (1, 0.11),
+                (6, 0.10),
+                (7, 0.06),
+                (16, 0.02),
+                (17, 0.01),
+            ],
             // Nebular gas — solar H/He.
             Self::Gas => &[(1, 0.74), (2, 0.26)],
         }
@@ -327,7 +334,10 @@ mod tests {
         // A single class projects to elements whose masses sum to the class mass.
         let c = ClassComposition::of(CondensationClass::Silicate, 2.0);
         let total: f64 = c.to_element_composition().total();
-        assert!((total - 2.0).abs() < 1e-9, "element masses conserve class mass, got {total}");
+        assert!(
+            (total - 2.0).abs() < 1e-9,
+            "element masses conserve class mass, got {total}"
+        );
     }
 
     #[test]
@@ -353,9 +363,15 @@ mod tests {
         c.add_class(CondensationClass::Ice, 1.0);
         c.add_class(CondensationClass::Gas, 0.5);
         let removed = c.strip_outermost(0.7);
-        assert!((removed.total() - 0.7).abs() < 1e-12, "removed the requested mass");
+        assert!(
+            (removed.total() - 0.7).abs() < 1e-12,
+            "removed the requested mass"
+        );
         assert_eq!(c.get(CondensationClass::Gas), 0.0, "all gas peeled first");
-        assert!((c.get(CondensationClass::Ice) - 0.8).abs() < 1e-12, "then 0.2 of the ice");
+        assert!(
+            (c.get(CondensationClass::Ice) - 0.8).abs() < 1e-12,
+            "then 0.2 of the ice"
+        );
         assert_eq!(c.get(CondensationClass::Metal), 1.0, "core untouched");
     }
 

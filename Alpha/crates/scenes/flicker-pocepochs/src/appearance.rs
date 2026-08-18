@@ -19,7 +19,6 @@
 use flicker_globe::RADIUS;
 use flicker_worldengine::{classify, HexState, LayerKind, Phase, Tables};
 
-
 /// How the planet is coloured. `V` cycles them.
 #[derive(Copy, Clone, PartialEq)]
 pub enum ViewMode {
@@ -100,13 +99,21 @@ pub fn cell_stack(cell: &HexState, tables: &Tables) -> Vec<StackLayer> {
         let pressure = 1.0 - (i as f32 / (n - 1) as f32); // deep = high, top (air) = low
         let c = classify(&l.composition, &l.compounds, temp, pressure, tables);
         if l.kind == LayerKind::Mantle {
-            out.push(StackLayer { kind: l.kind, outer_r: R_BASE, color: c.color });
+            out.push(StackLayer {
+                kind: l.kind,
+                outer_r: R_BASE,
+                color: c.color,
+            });
             r = R_BASE;
         } else {
             let vol = (l.mass() / c.density_g_cm3.max(1e-4) as f64).max(0.0);
             let rel = (vol / mantle_vol) as f32;
             r += STACK_MIN_T + STACK_K * rel.cbrt();
-            out.push(StackLayer { kind: l.kind, outer_r: r, color: c.color });
+            out.push(StackLayer {
+                kind: l.kind,
+                outer_r: r,
+                color: c.color,
+            });
         }
     }
     out
@@ -124,7 +131,11 @@ pub fn phase_color(phase: Phase) -> [f32; 3] {
 
 fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     let t = t.clamp(0.0, 1.0);
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
 }
 
 /// Muted colour per dominant surface element (atomic number).

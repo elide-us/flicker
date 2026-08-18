@@ -214,7 +214,10 @@ pub struct Conveyor {
 impl Default for Conveyor {
     /// The physics as written.
     fn default() -> Self {
-        Self { yield_strain: DEFAULT_YIELD_STRAIN, arc_return: DEFAULT_ARC_RETURN }
+        Self {
+            yield_strain: DEFAULT_YIELD_STRAIN,
+            arc_return: DEFAULT_ARC_RETURN,
+        }
     }
 }
 
@@ -360,8 +363,11 @@ impl Conveyor {
                 .iter()
                 .map(|&j| j as usize)
                 .max_by(|&a, &b| {
-                    let score = |c: usize| (world.grid.dirs[c] - here).normalize_or_zero().dot(heading);
-                    score(a).partial_cmp(&score(b)).unwrap_or(std::cmp::Ordering::Equal)
+                    let score =
+                        |c: usize| (world.grid.dirs[c] - here).normalize_or_zero().dot(heading);
+                    score(a)
+                        .partial_cmp(&score(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
             else {
                 continue;
@@ -578,19 +584,27 @@ impl Conveyor {
         // — keeps its accumulation, which is also right: the push is still
         // there and still building.
         for (from, to) in arrested {
-            let (mine, theirs) =
-                (world.columns[from].mean_density(), world.columns[to].mean_density());
+            let (mine, theirs) = (
+                world.columns[from].mean_density(),
+                world.columns[to].mean_density(),
+            );
             let overridden = mine > theirs || (mine == theirs && from > to);
             if !overridden || world.columns[from].layers.len() < 2 {
                 continue;
             }
             let spacing = cell_spacing(world, from);
-            let sheet = world.columns[from].layers.pop().expect("checked: at least two beds");
+            let sheet = world.columns[from]
+                .layers
+                .pop()
+                .expect("checked: at least two beds");
             world.columns[to].pile_on(vec![sheet]);
             let d = world.columns[from].accum_disp;
             let carried = d.length();
-            world.columns[from].accum_disp =
-                if carried > spacing { d * ((carried - spacing) / carried) } else { Vec3::ZERO };
+            world.columns[from].accum_disp = if carried > spacing {
+                d * ((carried - spacing) / carried)
+            } else {
+                Vec3::ZERO
+            };
         }
 
         audit_occupancy(world, "Conveyor");
@@ -627,7 +641,12 @@ fn unsubductable(col: &Column) -> bool {
 /// decompresses: it melts and freezes a thin mafic crust. Dense, low-riding — read
 /// by isostasy as ocean floor, which is what a spreading ridge leaves behind.
 fn open_ground(world: &mut World, cell: usize, from_the_well_kg: f64) {
-    let mut melt = draw_melt(world, cell, RIDGE_MELT_FRACTION, crate::crust::oceanic_affinity);
+    let mut melt = draw_melt(
+        world,
+        cell,
+        RIDGE_MELT_FRACTION,
+        crate::crust::oceanic_affinity,
+    );
     // **The fountain runs on what the well took in.** Decompression melt alone
     // is blind to what the seams ate, which is why welling returned 8.7% of
     // subduction and the rest sat stranded under the trenches. This asks for
@@ -645,7 +664,12 @@ fn open_ground(world: &mut World, cell: usize, from_the_well_kg: f64) {
             .sum();
         if reachable > 0.0 {
             let fraction = (from_the_well_kg - have) / reachable;
-            melt.extend(draw_melt(world, cell, fraction, crate::crust::oceanic_affinity));
+            melt.extend(draw_melt(
+                world,
+                cell,
+                fraction,
+                crate::crust::oceanic_affinity,
+            ));
         }
     }
     add_flux(&WELLED_BITS, melt.iter().map(|&(_, m)| m).sum());
@@ -855,7 +879,9 @@ pub(crate) fn collide_for_test(
     sea_level: f64,
     area: f64,
 ) {
-    collide(world, cell, contenders, arc_return, sea_level, area, &mut 0.0)
+    collide(
+        world, cell, contenders, arc_return, sea_level, area, &mut 0.0,
+    )
 }
 
 /// Every cell holds exactly one column, and each column knows the cell it stands
@@ -939,7 +965,14 @@ mod tests {
             let mut winner = Column::empty(cell as u32);
             winner.layers.push(bed(&[(14, 5.0e18), (19, 2.0e18)]));
             let before = w.columns[cell].mass_kg();
-            collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, sea, area);
+            collide_for_test(
+                &mut w,
+                cell,
+                vec![winner, loser],
+                DEFAULT_ARC_RETURN,
+                sea,
+                area,
+            );
             let _ = before;
             w.columns[cell]
                 .layers
@@ -977,10 +1010,20 @@ mod tests {
         winner.layers.push(bed(&[(14, 5.0e18), (19, 2.0e18)]));
 
         let area = w.cell_area_m2();
-        collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        collide_for_test(
+            &mut w,
+            cell,
+            vec![winner, loser],
+            DEFAULT_ARC_RETURN,
+            DRY_WORLD,
+            area,
+        );
 
         let survived = &w.columns[cell];
-        assert!(survived.layers.len() >= 3, "the buoyant rock and what rode above it stayed");
+        assert!(
+            survived.layers.len() >= 3,
+            "the buoyant rock and what rode above it stayed"
+        );
         assert!(
             survived.element_mass(14) > 4.0e18,
             "the felsic bed was thrust onto the winner, not swallowed"
@@ -1005,7 +1048,14 @@ mod tests {
         let total = a.mass_kg() + b.mass_kg();
 
         let area = w.cell_area_m2();
-        collide_for_test(&mut w, cell, vec![a, b], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        collide_for_test(
+            &mut w,
+            cell,
+            vec![a, b],
+            DEFAULT_ARC_RETURN,
+            DRY_WORLD,
+            area,
+        );
 
         let piled = &w.columns[cell];
         assert_eq!(piled.layers.len(), 2, "neither stack was swallowed");
@@ -1037,7 +1087,6 @@ mod tests {
         );
     }
 
-
     fn bed(elements: &[(ElementId, f64)]) -> crate::column::Layer {
         let mut c = flicker_worldstate::Composition::new();
         for &(e, m) in elements {
@@ -1061,10 +1110,14 @@ mod tests {
         use flicker_materials::{JsonTableSource, Tables};
         use flicker_worldgrid::icosphere;
         let dir = content_data_dir();
-        let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
+        let t =
+            std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut sched = Scheduler::new(crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
+        let mut sched = Scheduler::new(
+            crate::formation_stages(std::sync::Arc::clone(&t), &w, &crate::Levers::brisk()),
+            seed,
+        );
         for _ in 0..90 {
             sched.step(&mut w, 1.0, None);
         }
@@ -1079,7 +1132,8 @@ mod tests {
         use flicker_materials::{JsonTableSource, Tables};
         use flicker_worldgrid::icosphere;
         let dir = content_data_dir();
-        let t = std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
+        let t =
+            std::sync::Arc::new(Tables::from_source(&JsonTableSource::new(&dir)).expect("tables"));
         let b = Budget::from_dir(&dir, &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
         crate::planet::freeze_lid(&mut w);
@@ -1104,7 +1158,10 @@ mod tests {
             // one-bed column has no cover to thrust, so the crumple would have
             // nothing to act on. Masses sized to a freq-6 planetoid's cells,
             // which hold only a few 10^18 kg all told.
-            let beds = [(13u8, FormationProcess::ContinentalArc), (11, FormationProcess::Volcanic)];
+            let beds = [
+                (13u8, FormationProcess::ContinentalArc),
+                (11, FormationProcess::Volcanic),
+            ];
             for (k, (cover, process)) in beds.into_iter().enumerate() {
                 let mut melt = Vec::new();
                 for (e, want) in [(14u8, 2.0e17), (cover, 5.0e16)] {
@@ -1137,7 +1194,11 @@ mod tests {
         let mut w = continental_world(6, 5);
         let land = |w: &World| w.columns.iter().filter(|c| unsubductable(c)).count();
         let before = land(&w);
-        assert_eq!(before, w.columns.len(), "the fixture starts all-continental");
+        assert_eq!(
+            before,
+            w.columns.len(),
+            "the fixture starts all-continental"
+        );
 
         // TWO hemispheres driving head-on into each other at the equator, with
         // the bodies named by hand. It has to be two BODIES: same-body
@@ -1177,7 +1238,10 @@ mod tests {
         // cover has been thrust, so somewhere is carrying more beds than it
         // started with.
         let deepest = w.columns.iter().map(|c| c.layers.len()).max().unwrap_or(0);
-        assert!(deepest > 2, "the crumple thickened a belt: deepest stack is {deepest} beds");
+        assert!(
+            deepest > 2,
+            "the crumple thickened a belt: deepest stack is {deepest} beds"
+        );
     }
 
     /// **A THRUST COSTS CONVERGENCE.** The crumple used to fire once per locked
@@ -1254,7 +1318,10 @@ mod tests {
         // Thrusting MOVES a bed between columns, so the planet's total bed count
         // cannot change — that is the conservation half.
         let beds_after: usize = w.columns.iter().map(|c| c.layers.len()).sum();
-        assert_eq!(beds_before, beds_after, "thrusting moves beds, it does not make them");
+        assert_eq!(
+            beds_before, beds_after,
+            "thrusting moves beds, it does not make them"
+        );
 
         // And the pacing half: a foreland can only give up as many sheets as the
         // convergence paid for. Unpaced, thirty ticks strip every foreland to
@@ -1290,7 +1357,14 @@ mod tests {
 
         let before = w.mantle.element_mass(12);
         let area = w.cell_area_m2();
-        collide_for_test(&mut w, cell, vec![winner, loser], DEFAULT_ARC_RETURN, DRY_WORLD, area);
+        collide_for_test(
+            &mut w,
+            cell,
+            vec![winner, loser],
+            DEFAULT_ARC_RETURN,
+            DRY_WORLD,
+            area,
+        );
         assert!(w.mantle.element_mass(12) > before, "the slab went down");
     }
 
@@ -1344,12 +1418,25 @@ mod tests {
             // Alternating processes, because a bed is a depositional EVENT now:
             // three arc pulses onto un-lithified arc rock are correctly ONE bed,
             // and this fixture needs three.
-            let process =
-                if k == 1 { FormationProcess::Volcanic } else { FormationProcess::ContinentalArc };
+            let process = if k == 1 {
+                FormationProcess::Volcanic
+            } else {
+                FormationProcess::ContinentalArc
+            };
             w.columns[source].deposit(process, *stamp, &melt);
-            masses.push(w.columns[source].layers.last().expect("just laid").mass_kg());
+            masses.push(
+                w.columns[source]
+                    .layers
+                    .last()
+                    .expect("just laid")
+                    .mass_kg(),
+            );
         }
-        assert_eq!(w.columns[source].layers.len(), 3, "the fixture is a three-bed stack");
+        assert_eq!(
+            w.columns[source].layers.len(),
+            3,
+            "the fixture is a three-bed stack"
+        );
         w.audit("stack fixture");
 
         // One body, one heading — a plain translation, so the stack has
@@ -1386,7 +1473,11 @@ mod tests {
             homes.len()
         );
         let (landed, found) = &homes[0];
-        assert_eq!(found.as_slice(), &stamps, "all three beds arrived, still in order");
+        assert_eq!(
+            found.as_slice(),
+            &stamps,
+            "all three beds arrived, still in order"
+        );
         let arrived = &w.columns[*landed];
         for (k, stamp) in stamps.iter().enumerate() {
             let bed = arrived
@@ -1415,13 +1506,20 @@ mod tests {
     #[test]
     fn a_rigid_body_never_feeds_itself_to_the_mantle() {
         let mut w = lidded_world(6, 5);
-        let pent =
-            w.grid.is_pentagon.iter().position(|&b| b).expect("an icosphere has pentagons");
+        let pent = w
+            .grid
+            .is_pentagon
+            .iter()
+            .position(|&b| b)
+            .expect("an icosphere has pentagons");
         let axis = w.grid.dirs[pent];
         // Yield high enough that the uniform-strain rigid field reads as ONE
         // body — the claim under test is about a body's own motion, not about
         // where segmentation draws its boundaries.
-        let conveyor = Conveyor { yield_strain: 1.0e6, ..Conveyor::default() };
+        let conveyor = Conveyor {
+            yield_strain: 1.0e6,
+            ..Conveyor::default()
+        };
         let mut sched = Scheduler::new(vec![Box::new(conveyor)], 5);
         let ticks = 80;
         let mut fed_in = 0.0f32;
@@ -1455,8 +1553,6 @@ mod tests {
         );
     }
 
-
-
     /// The fit recovers the rotation it was given: sample a rigid field and get its
     /// own axis back. Without this a "plate" is just a bag of cells that happen to
     /// be adjacent.
@@ -1485,6 +1581,3 @@ mod tests {
         assert!(fitted.is_finite());
     }
 }
-
-
-

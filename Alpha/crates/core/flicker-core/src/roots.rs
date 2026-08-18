@@ -64,7 +64,9 @@ pub struct ContentConfig {
 
 impl Default for ContentConfig {
     fn default() -> Self {
-        Self { content_root: default_content_root() }
+        Self {
+            content_root: default_content_root(),
+        }
     }
 }
 
@@ -110,8 +112,11 @@ impl ContentRoots {
     /// hangs off `app_dir`, an absolute one is taken as-is.
     pub fn resolve(app_dir: &Path, cfg: &ContentConfig) -> Self {
         let declared = Path::new(&cfg.content_root);
-        let root =
-            if declared.is_absolute() { declared.to_path_buf() } else { app_dir.join(declared) };
+        let root = if declared.is_absolute() {
+            declared.to_path_buf()
+        } else {
+            app_dir.join(declared)
+        };
         Self::new(root)
     }
 
@@ -158,11 +163,48 @@ pub fn set_content_root(root: Option<PathBuf>) {
 
 /// Read `<app_dir>/content.json`, install the resolved root for the process,
 /// and hand it back. Call once at startup, before anything touches content.
+///
+/// A `package.flk` beside the content root is the SHIPPED package tree: it is
+/// mounted over `package/` ([`crate::mount`]), and a present-but-unreadable
+/// package is fatal — the same class as a broken scene manifest, because
+/// nothing meaningful can run on top of it. No `package.flk` (every dev tree)
+/// → no mount → loose-tree behaviour, unchanged. The [`set_content_root`]
+/// escape hatch never mounts.
 pub fn init_from_app_dir(app_dir: &Path) -> ContentRoots {
     let roots = ContentRoots::resolve(app_dir, &ContentConfig::load_from(app_dir));
     set_content_root(Some(roots.root().to_path_buf()));
     tracing::info!("content root: {}", roots.root().display());
+    let flk = roots.root().join("package.flk");
+    if flk.is_file() {
+        match crate::mount::mount_package(&flk, &roots.package()) {
+            Ok(count) => tracing::info!(
+                "mounted {} ({count} entries) over {}",
+                flk.display(),
+                roots.package().display()
+            ),
+            Err(e) => panic!(
+                "content package {} is present but unreadable: {e}",
+                flk.display()
+            ),
+        }
+    }
     roots
+}
+
+/// The running executable's directory IF this is an installed layout — i.e. a
+/// `content.json` sits beside the exe. Dev builds (`cargo run`) keep the exe in
+/// `target/…` with no declaration beside it and get `None`, so the caller falls
+/// back to its compile-time dev root. The ONE place an exe path is consulted.
+pub fn installed_app_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.to_path_buf();
+    dir_declares_content(&dir).then_some(dir)
+}
+
+/// The classifier [`installed_app_dir`] applies to the exe's directory — split
+/// out so tests can exercise it without faking `current_exe()`.
+pub fn dir_declares_content(dir: &Path) -> bool {
+    dir.join(CONTENT_CONFIG_FILE).is_file()
 }
 
 /// The process's content roots.
@@ -174,9 +216,11 @@ pub fn init_from_app_dir(app_dir: &Path) -> ContentRoots {
 /// caller.
 pub fn roots() -> ContentRoots {
     let declared = CONTENT_ROOT.lock().expect("content root lock").clone();
-    ContentRoots::new(declared.unwrap_or_else(|| {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content"))
-    }))
+    ContentRoots::new(
+        declared.unwrap_or_else(|| {
+            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content"))
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -196,11 +240,18 @@ mod tests {
 
     #[test]
     fn a_relative_root_hangs_off_the_app_dir_and_an_absolute_one_wins() {
-        let cfg = ContentConfig { content_root: "../content".into() };
+        let cfg = ContentConfig {
+            content_root: "../content".into(),
+        };
         let r = ContentRoots::resolve(Path::new("/repo/Alpha/prism-alpha"), &cfg);
-        assert_eq!(r.package(), Path::new("/repo/Alpha/prism-alpha/../content/package"));
+        assert_eq!(
+            r.package(),
+            Path::new("/repo/Alpha/prism-alpha/../content/package")
+        );
 
-        let abs = ContentConfig { content_root: "/srv/content".into() };
+        let abs = ContentConfig {
+            content_root: "/srv/content".into(),
+        };
         let r = ContentRoots::resolve(Path::new("/repo/Alpha/prism-alpha"), &abs);
         assert_eq!(r.root(), Path::new("/srv/content"));
     }
@@ -213,18 +264,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        assert_eq!(ContentConfig::load_from(&dir).content_root, DEFAULT_CONTENT_ROOT);
+        assert_eq!(
+            ContentConfig::load_from(&dir).content_root,
+            DEFAULT_CONTENT_ROOT
+        );
 
         std::fs::write(dir.join(CONTENT_CONFIG_FILE), b"{ not json").unwrap();
-        assert_eq!(ContentConfig::load_from(&dir).content_root, DEFAULT_CONTENT_ROOT);
+        assert_eq!(
+            ContentConfig::load_from(&dir).content_root,
+            DEFAULT_CONTENT_ROOT
+        );
 
-        std::fs::write(dir.join(CONTENT_CONFIG_FILE), br#"{"content_root":"../elsewhere"}"#)
-            .unwrap();
+        std::fs::write(
+            dir.join(CONTENT_CONFIG_FILE),
+            br#"{"content_root":"../elsewhere"}"#,
+        )
+        .unwrap();
         assert_eq!(ContentConfig::load_from(&dir).content_root, "../elsewhere");
 
         // An unknown/absent field must still load — the forward-compat discipline.
         std::fs::write(dir.join(CONTENT_CONFIG_FILE), br#"{}"#).unwrap();
-        assert_eq!(ContentConfig::load_from(&dir).content_root, DEFAULT_CONTENT_ROOT);
+        assert_eq!(
+            ContentConfig::load_from(&dir).content_root,
+            DEFAULT_CONTENT_ROOT
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An installed layout is declared by exactly one marker: a `content.json`
+    /// beside the executable. No marker → dev mode → compile-time root.
+    #[test]
+    fn installed_layout_is_declared_by_an_exe_adjacent_content_json() {
+        let dir = std::env::temp_dir().join("flicker_roots_installed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert!(!dir_declares_content(&dir));
+        std::fs::write(
+            dir.join(CONTENT_CONFIG_FILE),
+            br#"{"content_root":"content"}"#,
+        )
+        .unwrap();
+        assert!(dir_declares_content(&dir));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -235,6 +317,10 @@ mod tests {
     fn the_undeclared_fallback_finds_the_repo_tree() {
         set_content_root(None);
         let r = roots();
-        assert!(r.data().join("periodic_table.json").exists(), "fallback root: {:?}", r.root());
+        assert!(
+            r.data().join("periodic_table.json").exists(),
+            "fallback root: {:?}",
+            r.root()
+        );
     }
 }

@@ -85,7 +85,13 @@ fn moon_direction(time_of_day: f32, moon_phase: f32, year_month: f32, latitude: 
 /// The full lighting/sky state for one frame — the engine sky pass reads this.
 /// Sun/moon direction + colour, ambient, the sky gradient, fog, the star-field
 /// rotation, and the Advent **eclipse** darkening when the discs align.
-fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32, latitude: f32) -> SceneLighting {
+fn compute_scene(
+    time_of_day: f32,
+    moon_phase: f32,
+    year_month: f32,
+    fog: f32,
+    latitude: f32,
+) -> SceneLighting {
     use std::f32::consts::TAU;
 
     let sun_dir = sun_direction(time_of_day, year_month, latitude);
@@ -108,7 +114,12 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32, l
     // key light and sink sky + ambient into a blood shadow. (Coverage geometry is
     // mirrored in sky.wgsl for the corona.)
     let separation = sun_dir.dot(moon_dir).clamp(-1.0, 1.0).acos();
-    let coverage = 1.0 - smoothstep(MOON_DISC_R - SUN_DISC_R, MOON_DISC_R + SUN_DISC_R, separation);
+    let coverage = 1.0
+        - smoothstep(
+            MOON_DISC_R - SUN_DISC_R,
+            MOON_DISC_R + SUN_DISC_R,
+            separation,
+        );
     let eclipse = coverage * smoothstep(-0.02, 0.05, sun_dir.y);
     let sun_color = sun_color * (1.0 - eclipse);
     let ambient = ambient.lerp(Vec3::new(0.07, 0.022, 0.028), eclipse);
@@ -119,7 +130,8 @@ fn compute_scene(time_of_day: f32, moon_phase: f32, year_month: f32, fog: f32, l
     let fog_color = sky_horizon;
     let fog_density = fog.clamp(0.0, 1.0) * 0.0020 * fog_curve;
 
-    let star_rotation = (latitude_mat(latitude) * Mat4::from_rotation_z(day_angle(time_of_day))).inverse();
+    let star_rotation =
+        (latitude_mat(latitude) * Mat4::from_rotation_z(day_angle(time_of_day))).inverse();
 
     SceneLighting {
         sun_dir,
@@ -171,8 +183,9 @@ pub fn build_star_glow_texture() -> (Vec<u8>, u32, u32) {
             let d = (dx * dx + dy * dy).sqrt();
             let core = smoothstep(0.16, 0.0, d); // tight bright centre
             let halo = 0.55 * (-d * 3.6).exp(); // soft wide bloom
-            // Thin bright cross fading radially — the diffraction glint.
-            let glint = 0.30 * ((-dy.abs() * 24.0).exp() + (-dx.abs() * 24.0).exp()) * (-d * 2.4).exp();
+                                                // Thin bright cross fading radially — the diffraction glint.
+            let glint =
+                0.30 * ((-dy.abs() * 24.0).exp() + (-dx.abs() * 24.0).exp()) * (-d * 2.4).exp();
             let a = (core + halo + glint).clamp(0.0, 1.0);
             let i = (y * N + x) * 4;
             px[i] = 255;
@@ -275,7 +288,12 @@ pub fn constellations() -> Vec<Constellation> {
             stars.push(p.normalize());
         }
         let edges: Vec<(usize, usize)> = (0..stars.len() - 1).map(|i| (i, i + 1)).collect();
-        out.push(Constellation { name: "placeholder", stars, edges, canonical: false });
+        out.push(Constellation {
+            name: "placeholder",
+            stars,
+            edges,
+            canonical: false,
+        });
     }
     out
 }
@@ -356,7 +374,13 @@ impl CelestialState {
         // `Mat4::from_rotation_x`); `latitude` is stored in degrees, so convert here —
         // exactly as `draw` does. (Passing degrees rotated the whole sky by ~57× and
         // desynced the Milky-Way band from the constellations.)
-        compute_scene(self.time_of_day, self.moon_phase, self.year_month, self.fog, self.latitude.to_radians())
+        compute_scene(
+            self.time_of_day,
+            self.moon_phase,
+            self.year_month,
+            self.fog,
+            self.latitude.to_radians(),
+        )
     }
 
     /// Draw the sky overlays from the observer at `eye`: the seven worlds on the
@@ -376,7 +400,12 @@ impl CelestialState {
         let to_sky = |d: Vec3| eye + m.transform_vector3(d) * SKY_R;
         let (se, ce) = OBLIQUITY.sin_cos();
         let ecl = |lon: f32| Vec3::new(lon.cos(), lon.sin() * ce, lon.sin() * se);
-        let night = 1.0 - smoothstep(-0.12, 0.06, sun_direction(self.time_of_day, self.year_month, lat).y);
+        let night = 1.0
+            - smoothstep(
+                -0.12,
+                0.06,
+                sun_direction(self.time_of_day, self.year_month, lat).y,
+            );
 
         // Night sky: the connecting figures (lines) — placeholders blue, the Chalice
         // gold — then the stars themselves as soft glowing dots.
@@ -384,7 +413,11 @@ impl CelestialState {
             let mut placeholder: Vec<(Vec3, Vec3)> = Vec::new();
             let mut chalice: Vec<(Vec3, Vec3)> = Vec::new();
             for fig in &self.figures {
-                let dst = if fig.canonical { &mut chalice } else { &mut placeholder };
+                let dst = if fig.canonical {
+                    &mut chalice
+                } else {
+                    &mut placeholder
+                };
                 for &(i, j) in &fig.edges {
                     dst.push((to_sky(fig.stars[i]), to_sky(fig.stars[j])));
                 }
@@ -436,7 +469,10 @@ impl CelestialState {
                 // Home's heliocentric position at the epoch+season clock.
                 let clock = self.epoch + self.year_month / 12.0;
                 let t = clock * orrery::HOME_YEAR_SECONDS;
-                let home = roster.iter().find(|p| p.moon).expect("Home carries the moon");
+                let home = roster
+                    .iter()
+                    .find(|p| p.moon)
+                    .expect("Home carries the moon");
                 let home_pos = orrery::planet_pos(home, t);
                 // Ecliptic pole (in the same celestial frame `ecl` lives in) — latitude
                 // tilts toward it, lifting inclined bodies off the ecliptic line.
@@ -461,7 +497,14 @@ impl CelestialState {
                         (p.color[2] * dim * boost).min(1.0),
                         1.0,
                     ];
-                    renderer.draw_billboard(tex, pos, Vec2::splat(PLANET_DISC), Vec2::ZERO, Vec2::ONE, color);
+                    renderer.draw_billboard(
+                        tex,
+                        pos,
+                        Vec2::splat(PLANET_DISC),
+                        Vec2::ZERO,
+                        Vec2::ONE,
+                        color,
+                    );
                 }
             }
         }
@@ -469,7 +512,9 @@ impl CelestialState {
         // The Advent alignment overlay: the sun's + moon's full daily arcs as rings.
         if self.show_paths {
             let sun_ring = arc(eye, |t| sun_direction(t, self.year_month, lat));
-            let moon_ring = arc(eye, |t| moon_direction(t, self.moon_phase, self.year_month, lat));
+            let moon_ring = arc(eye, |t| {
+                moon_direction(t, self.moon_phase, self.year_month, lat)
+            });
             renderer.draw_lines(&sun_ring, [0.95, 0.72, 0.35, 0.5]);
             renderer.draw_lines(&moon_ring, [0.45, 0.55, 0.85, 0.5]);
         }
@@ -502,8 +547,14 @@ pub fn fmt_clock(hours: f32) -> String {
 /// Moon phase name + week, from weeks in `0..4`.
 pub fn fmt_moon(weeks: f32) -> String {
     const PH: [&str; 8] = [
-        "New", "Waxing Crescent", "First Quarter", "Waxing Gibbous", "Full", "Waning Gibbous",
-        "Last Quarter", "Waning Crescent",
+        "New",
+        "Waxing Crescent",
+        "First Quarter",
+        "Waxing Gibbous",
+        "Full",
+        "Waning Gibbous",
+        "Last Quarter",
+        "Waning Crescent",
     ];
     let frac = (weeks / 4.0).rem_euclid(1.0);
     let idx = (frac * 8.0).round() as usize % 8;
@@ -512,8 +563,9 @@ pub fn fmt_moon(weeks: f32) -> String {
 
 /// Month name from `0..12`.
 pub fn fmt_month(m: f32) -> String {
-    const MO: [&str; 12] =
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const MO: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     MO[(m.floor() as i32).rem_euclid(12) as usize].to_string()
 }
 

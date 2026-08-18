@@ -121,7 +121,18 @@ pub fn roster() -> Vec<Planet> {
     // 0.54–0.60 (Light>Air, like Jupiter>Saturn), dwarf 0.15 (smallest of all).
     // Eccentricity/inclination are subtle for the inner worlds and modest-but-visible
     // for Death.
-    type Def = (&'static str, BodyKind, [f32; 3], f32, f32, f32, f32, bool, bool, bool);
+    type Def = (
+        &'static str,
+        BodyKind,
+        [f32; 3],
+        f32,
+        f32,
+        f32,
+        f32,
+        bool,
+        bool,
+        bool,
+    );
     #[rustfmt::skip]
     let defs: [Def; 8] = [
         ("Chaos", Rocky,    [0.95, 0.45, 0.10], 1.4,    0.08,  6.0, 0.26, false, false, false), // orange
@@ -213,7 +224,10 @@ mod tests {
         use BodyKind::{Dwarf, GasGiant, IceGiant, Rocky};
         let r = roster();
         let names: Vec<&str> = r.iter().map(|p| p.name).collect();
-        assert_eq!(names, ["Chaos", "Fire", "Home", "Earth", "Light", "Air", "Water", "Death"]);
+        assert_eq!(
+            names,
+            ["Chaos", "Fire", "Home", "Earth", "Light", "Air", "Water", "Death"]
+        );
         // Semi-major axes strictly increase inner → outer.
         assert!(r.windows(2).all(|w| w[1].a > w[0].a));
         // Exactly one moon-bearer (Home), one ringed (Air), one occulted (Death).
@@ -227,7 +241,10 @@ mod tests {
         // Composition classes follow BookV: four inner rockies, two gas giants, the
         // ice giant Water, the dwarf Death.
         let kinds: Vec<BodyKind> = r.iter().map(|p| p.kind).collect();
-        assert_eq!(kinds, [Rocky, Rocky, Rocky, Rocky, GasGiant, GasGiant, IceGiant, Dwarf]);
+        assert_eq!(
+            kinds,
+            [Rocky, Rocky, Rocky, Rocky, GasGiant, GasGiant, IceGiant, Dwarf]
+        );
 
         // Sizes are driven by class, NOT equal (the deliberate override of BookV's
         // "equal apparent sizes", which is a from-Home *sky* rule — see module docs):
@@ -247,7 +264,10 @@ mod tests {
         assert!(smallest_giant > ice, "gas giants larger than the ice giant");
         assert!(ice > biggest_rocky, "ice giant larger than any rocky");
         assert!(biggest_rocky > dwarf, "every rocky larger than the dwarf");
-        assert!(r.iter().all(|p| p.radius >= dwarf), "the dwarf (Death) is the smallest body");
+        assert!(
+            r.iter().all(|p| p.radius >= dwarf),
+            "the dwarf (Death) is the smallest body"
+        );
 
         // Orbits are eccentric ellipses: inner rockies nearly circular; the dwarf the
         // most eccentric of all (a grounded, Pluto-like swing).
@@ -261,12 +281,18 @@ mod tests {
             "Death is the most eccentric body"
         );
         // And it clears the layout envelope at aphelion.
-        assert!(death.a * (1.0 + death.e) < SYSTEM_OUTER, "Death's aphelion stays inside SYSTEM_OUTER");
+        assert!(
+            death.a * (1.0 + death.e) < SYSTEM_OUTER,
+            "Death's aphelion stays inside SYSTEM_OUTER"
+        );
 
         // The reckoning anchor: Home's orbital period is exactly one canonical year,
         // and periods grow with distance (Kepler III), so Death's year is longest.
         let home = r.iter().find(|p| p.name == "Home").unwrap();
-        assert!((orbital_period_years(home.a) - 1.0).abs() < 1e-6, "Home = one year");
+        assert!(
+            (orbital_period_years(home.a) - 1.0).abs() < 1e-6,
+            "Home = one year"
+        );
         assert!(orbital_period_years(death.a) > orbital_period_years(home.a));
     }
 

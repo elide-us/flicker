@@ -142,18 +142,35 @@ mod tests {
             duration_ticks: 1,
             // The clip's offset EQUALS the source rest (a constant-offset bone) → delta 0.
             tracks: vec![
-                ResolvedTrack { bone: 0, keys: vec![key(99.0)], source_rest: [99.0, 0.0, 0.0] },
-                ResolvedTrack { bone: 1, keys: vec![key(99.0)], source_rest: [99.0, 0.0, 0.0] },
+                ResolvedTrack {
+                    bone: 0,
+                    keys: vec![key(99.0)],
+                    source_rest: [99.0, 0.0, 0.0],
+                },
+                ResolvedTrack {
+                    bone: 1,
+                    keys: vec![key(99.0)],
+                    source_rest: [99.0, 0.0, 0.0],
+                },
             ],
             unresolved: vec![],
         };
         // Authoring rig: full clip translation on both bones.
         let off = sample_local_poses(&bones, &clip, 0, false);
-        assert!((off[1].w_axis.x - 99.0).abs() < 1e-4, "retarget off → clip translation");
+        assert!(
+            (off[1].w_axis.x - 99.0).abs() < 1e-4,
+            "retarget off → clip translation"
+        );
         // Retargeted rig: child keeps its rest offset (10, delta 0), root keeps clip motion (99).
         let on = sample_local_poses(&bones, &clip, 0, true);
-        assert!((on[1].w_axis.x - 10.0).abs() < 1e-4, "retarget on → child rest translation");
-        assert!((on[0].w_axis.x - 99.0).abs() < 1e-4, "retarget on → root keeps clip motion");
+        assert!(
+            (on[1].w_axis.x - 10.0).abs() < 1e-4,
+            "retarget on → child rest translation"
+        );
+        assert!(
+            (on[0].w_axis.x - 99.0).abs() < 1e-4,
+            "retarget on → root keeps clip motion"
+        );
     }
 
     /// A bone that actually TRANSLATES (the pelvis's hip motion) keeps its animated delta,
@@ -162,7 +179,12 @@ mod tests {
     #[test]
     fn retarget_applies_translation_delta_for_moving_bone() {
         let bones = vec![
-            Bone { name: "root".into(), parent: -1, local: Mat4::IDENTITY, inverse_bind: Mat4::IDENTITY },
+            Bone {
+                name: "root".into(),
+                parent: -1,
+                local: Mat4::IDENTITY,
+                inverse_bind: Mat4::IDENTITY,
+            },
             Bone {
                 name: "pelvis".into(),
                 parent: 0,
@@ -171,17 +193,29 @@ mod tests {
             },
         ];
         let key = |z: f32| Keyframe {
-            t: 0, translation: [0.0, 0.0, z], rotation: [0.0, 0.0, 0.0, 1.0], scale: [1.0, 1.0, 1.0],
+            t: 0,
+            translation: [0.0, 0.0, z],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
         };
         // Source rest hip z=106; the clip drops it to 103 mid-stride (a -3 delta).
         let clip = ResolvedClip {
-            name: "walk".into(), tick_rate_hz: 60, duration_ticks: 1,
-            tracks: vec![ResolvedTrack { bone: 1, keys: vec![key(103.0)], source_rest: [0.0, 0.0, 106.0] }],
+            name: "walk".into(),
+            tick_rate_hz: 60,
+            duration_ticks: 1,
+            tracks: vec![ResolvedTrack {
+                bone: 1,
+                keys: vec![key(103.0)],
+                source_rest: [0.0, 0.0, 106.0],
+            }],
             unresolved: vec![],
         };
         let on = sample_local_poses(&bones, &clip, 0, true);
         // her hip = 95 + (103 - 106) = 92 → the stride drop preserved, at HER height (not 103).
-        assert!((on[1].w_axis.z - 92.0).abs() < 1e-4, "pelvis keeps animated delta at rig's height");
+        assert!(
+            (on[1].w_axis.z - 92.0).abs() < 1e-4,
+            "pelvis keeps animated delta at rig's height"
+        );
     }
 
     #[test]
@@ -195,10 +229,16 @@ mod tests {
         let (_, _, t0) = blend_local_poses(&[a], &[b], 0.0)[0].to_scale_rotation_translation();
         let (_, _, t1) = blend_local_poses(&[a], &[b], 1.0)[0].to_scale_rotation_translation();
         assert!(t0.length() < 1e-5, "w=0 returns `from`");
-        assert!((t1 - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-5, "w=1 returns `to`");
+        assert!(
+            (t1 - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-5,
+            "w=1 returns `to`"
+        );
 
         let (s, r, t) = blend_local_poses(&[a], &[b], 0.5)[0].to_scale_rotation_translation();
-        assert!((t - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5, "translation lerps");
+        assert!(
+            (t - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5,
+            "translation lerps"
+        );
         assert!((s - Vec3::splat(1.5)).length() < 1e-5, "scale lerps");
         assert!(r.is_normalized(), "slerped rotation stays a unit quat");
     }
@@ -210,6 +250,9 @@ mod tests {
         let (_, _, below) = blend_local_poses(&[a], &[b], -1.0)[0].to_scale_rotation_translation();
         let (_, _, above) = blend_local_poses(&[a], &[b], 2.0)[0].to_scale_rotation_translation();
         assert!(below.length() < 1e-5, "w<0 clamps to `from`");
-        assert!((above - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5, "w>1 clamps to `to`");
+        assert!(
+            (above - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5,
+            "w>1 clamps to `to`"
+        );
     }
 }

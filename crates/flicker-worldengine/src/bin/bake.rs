@@ -14,7 +14,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let freq: u32 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
     let seed: Option<u64> = args.next().and_then(|s| s.parse().ok());
     let out = args.next().unwrap_or_else(|| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/epochs/earthlike.epoch.gz").to_string()
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/package/epochs/earthlike.epoch.gz"
+        )
+        .to_string()
     });
 
     let mut engine = WorldEngine::from_repo()?;

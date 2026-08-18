@@ -274,6 +274,13 @@ text, option).
 A new component = a new arm in the engine's `component.rs`, an entry in the
 kinds list, and a catalog card. There is no other tier.
 
+> **Sprites, colour, and the raster engine beneath the components** have their
+> own companion guide: [`RASTER_AND_SPRITES.md`](RASTER_AND_SPRITES.md). Read it
+> for how `draw_sprite`/`draw_sprite_uv` and the `sprite` widget work, how the
+> one palette resolves, atlas UV, and the ClayEngine `Sprite`/`SpriteStrip` port
+> for 2D games. (The `sprite` component here is presentation-only — no atlas, no
+> animation; those live in the `flicker-2d` layer.)
+
 ---
 
 ## Input is signals

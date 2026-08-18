@@ -47,7 +47,11 @@ pub struct CloudRing {
 impl CloudRing {
     /// A ring of the given radial extent and material.
     pub fn new(inner: f64, outer: f64, material: ClassComposition) -> Self {
-        Self { inner, outer, material }
+        Self {
+            inner,
+            outer,
+            material,
+        }
     }
 
     /// Material mass still available in this ring (M☉).
@@ -170,7 +174,11 @@ mod tests {
     fn drawing_into_a_body_conserves_mass() {
         let mut cloud = rocky_cloud();
         let before = cloud.total_mass();
-        let mut body = Body::new(DVec3::new(1.2, 0.0, 0.0), DVec3::ZERO, BodyKind::Protoplanet);
+        let mut body = Body::new(
+            DVec3::new(1.2, 0.0, 0.0),
+            DVec3::ZERO,
+            BodyKind::Protoplanet,
+        );
 
         // A body in the terrestrial band sweeps up some of the available material.
         let want = 5.0e-6;
@@ -178,14 +186,27 @@ mod tests {
         body.absorb(&drawn);
 
         // The body got exactly what left the cloud, and total mass is conserved.
-        assert!((drawn.total() - want).abs() < 1e-12, "drew the requested mass");
-        assert!((body.mass() - drawn.total()).abs() < 1e-12, "body got exactly the draw");
-        assert!((cloud.total_mass() + body.mass() - before).abs() < 1e-12, "mass conserved");
+        assert!(
+            (drawn.total() - want).abs() < 1e-12,
+            "drew the requested mass"
+        );
+        assert!(
+            (body.mass() - drawn.total()).abs() < 1e-12,
+            "body got exactly the draw"
+        );
+        assert!(
+            (cloud.total_mass() + body.mass() - before).abs() < 1e-12,
+            "mass conserved"
+        );
         // It pulled from both overlapping inner rings (metal + silicate), so the body
         // is a rock+iron mix — the accounting carried the class character across.
         assert!(body.classes.get(CondensationClass::Metal) > 0.0);
         assert!(body.classes.get(CondensationClass::Silicate) > 0.0);
-        assert_eq!(body.classes.get(CondensationClass::Ice), 0.0, "snow-line ring untouched");
+        assert_eq!(
+            body.classes.get(CondensationClass::Ice),
+            0.0,
+            "snow-line ring untouched"
+        );
     }
 
     #[test]
@@ -193,7 +214,13 @@ mod tests {
         let mut cloud = rocky_cloud();
         let in_band = cloud.mass_in_band(0.0, 1.0); // the metal ring only
         let drawn = cloud.draw_band(0.0, 1.0, 1.0); // ask for far more than exists
-        assert!((drawn.total() - in_band).abs() < 1e-15, "clamped to available");
-        assert!((cloud.mass_in_band(0.0, 1.0)).abs() < 1e-15, "ring emptied, not over-drawn");
+        assert!(
+            (drawn.total() - in_band).abs() < 1e-15,
+            "clamped to available"
+        );
+        assert!(
+            (cloud.mass_in_band(0.0, 1.0)).abs() < 1e-15,
+            "ring emptied, not over-drawn"
+        );
     }
 }

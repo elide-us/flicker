@@ -51,10 +51,7 @@ use std::time::Duration;
 use flicker::render::{FrameGraph, Renderer, TextureHandle};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState,
-    WalkerHandler,
-};
+use flicker::ui::{render_hud, run_ui, SceneDef, UiInput, UiIntents, UiState, WalkerHandler};
 use flicker_globe::GlobeWorld;
 use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
 use flicker_input_router::{InputHandler, Router};
@@ -62,13 +59,6 @@ use flicker_shell::{PauseScene, Theme};
 
 use crate::map::{HexMap, DEFAULT_FREQ, MAX_FREQ, MIN_FREQ};
 use crate::ui;
-
-/// The scene's `$token` styles live in the shared `ui_theme.json` — the ONE
-/// global UI-element definition + Prism palette every prism-alpha scene reads.
-/// NOT a per-scene copy: a second file would need its own `theme.tokens`, forking
-/// the palette.
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// The bench's Lua ORCHESTRATION script — `arrange()` decides which tab-specific
 /// components are shown from the two-way-bound page/tab selection. Embedded (the
@@ -119,11 +109,12 @@ impl PopulousBench {
     pub fn new(def: &SceneDef) -> Self {
         let map = HexMap::new(DEFAULT_FREQ);
         tracing::info!("populous: {} tiles at freq {}", map.len(), map.freq());
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, def.styles.as_ref());
+        let ui_styles = flicker::ui::load_shared_styles(def.styles.as_ref());
         // Open with the world FILLING the square viewport (Aaron: ~85%), not a
         // distant marble; the camera belongs to the viewport PANE, which is what
         // hands it the look signals.
-        let world = GlobeWorld::new(ui::STAGE_SOURCE, &ui_styles, Some(0.85)).in_panel(ui::VIEW_PANE);
+        let world =
+            GlobeWorld::new(ui::STAGE_SOURCE, &ui_styles, Some(0.85)).in_panel(ui::VIEW_PANE);
 
         // The scene is DATA: the kernel's manifest parsed the authored scene-def and
         // handed it here (this bench is the BEHAVIOUR that plays it). Its tree names
@@ -234,7 +225,11 @@ impl PopulousBench {
         }
         self.map = HexMap::new(freq);
         self.publish_world();
-        tracing::info!("populous: {} tiles at freq {}", self.map.len(), self.map.freq());
+        tracing::info!(
+            "populous: {} tiles at freq {}",
+            self.map.len(),
+            self.map.freq()
+        );
     }
 
     /// **The one dispatcher.** A click and a pad press arrive here identically,
@@ -315,7 +310,13 @@ impl Scene for PopulousBench {
         self.world.free(renderer);
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         if let Some((_map, look, _gp)) = flicker_shell::take_pending_input() {
             // The pump owns the key rebind now (S1c, non-draining); this scene keeps only
             // the player's LOOK controls (sensitivity + invert) for its globe camera — they
@@ -347,7 +348,13 @@ impl Scene for PopulousBench {
             backspace: false,
             wheel: input.mouse_wheel_delta,
         };
-        let frame = run_ui(&self.tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        let frame = run_ui(
+            &self.tree,
+            &model,
+            &self.ui_styles,
+            &snap,
+            &mut self.ui_state,
+        );
         let over_hud = frame.results.is_on("hud_hit");
         // The walker RESERVES the viewport's rect and never fills it (it runs
         // late; offscreen passes must run first) — hand it to the world here,
@@ -453,8 +460,8 @@ mod tests {
     use super::*;
     use flicker::script::{UiNode, Value};
     // Test-only: the gates load the raw theme without a scene-styles overlay;
-    // the lib itself always merges through `load_styles_for`.
-    use flicker::ui::load_styles;
+    // the lib itself always merges through `load_shared_styles`.
+    use flicker::ui::load_shared_styles;
     // Test-only now: the tests synthesize events with a real resolver to drive the walker
     // chain end-to-end; the scene itself owns none of this any more (input-P3).
     use flicker_input_core::{
@@ -509,16 +516,21 @@ mod tests {
     fn the_bench_is_exactly_the_catalog_and_nothing_else() {
         /// Aaron's catalog, expanded to the component kinds it is built from.
         const CATALOG: &[&str] = &[
-            "screen", "cell", "row", "stack",
+            "screen",
+            "cell",
+            "row",
+            "stack",
             // (corner runes are the `runes` FLAG on the window stack now — a
             // decoration, not a kind — so they no longer appear in the census)
-            "paged_menu",   // the PTT — a native Component (rails/hints/rule drawn by Rust)
-            "tabs", "pill_toggle", // the PTT's authored page + tab rails
-            "panel",  // UI Panel and RTT Panel
-            "rtt",    // the hex world's viewport
-            "slider", // the size dial
-            "button", // the seams action
-            "text", "option", // localized strings
+            "paged_menu", // the PTT — a native Component (rails/hints/rule drawn by Rust)
+            "tabs",
+            "pill_toggle", // the PTT's authored page + tab rails
+            "panel",       // UI Panel and RTT Panel
+            "rtt",         // the hex world's viewport
+            "slider",      // the size dial
+            "button",      // the seams action
+            "text",
+            "option", // localized strings
         ];
         for tab in [0.0, 1.0] {
             let mut bench = test_bench();
@@ -526,12 +538,17 @@ mod tests {
             r.set(ui::TAB_BIND, tab);
             bench.apply_results(&r);
             let tree = bench.build_tree();
-            let mut kinds: Vec<&str> =
-                flatten(&tree).iter().map(|n| n.component.as_str()).collect();
+            let mut kinds: Vec<&str> = flatten(&tree)
+                .iter()
+                .map(|n| n.component.as_str())
+                .collect();
             kinds.sort_unstable();
             kinds.dedup();
             for k in &kinds {
-                assert!(CATALOG.contains(k), "tab {tab}: `{k}` is not in the catalog");
+                assert!(
+                    CATALOG.contains(k),
+                    "tab {tab}: `{k}` is not in the catalog"
+                );
             }
         }
         // …and the catalog is not aspirational: on the MAP tab every interactive
@@ -556,10 +573,16 @@ mod tests {
         // The three panes, each the ONE panel component, and the viewport wired
         // to its authored stage (the default light source).
         for id in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE] {
-            let p = all.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} is placed"));
+            let p = all
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("{id} is placed"));
             assert_eq!(p.component, "panel", "{id} is the ONE panel component");
         }
-        let view = all.iter().find(|n| n.id == ui::VIEW_SLOT).expect("the viewport is placed");
+        let view = all
+            .iter()
+            .find(|n| n.id == ui::VIEW_SLOT)
+            .expect("the viewport is placed");
         assert_eq!(view.component, "rtt", "the centre pane is the viewport");
         assert_eq!(
             view.props.get("source"),
@@ -590,15 +613,28 @@ mod tests {
         );
         // The size dial: bound over the offered range, focusable (the pad
         // channel's gate), and wearing the label the proto carries.
-        let dial = all.iter().find(|n| n.component == "slider").expect("the dial");
-        assert_eq!(dial.props.get("vertical"), Some(&Value::Bool(true)), "upright");
+        let dial = all
+            .iter()
+            .find(|n| n.component == "slider")
+            .expect("the dial");
+        assert_eq!(
+            dial.props.get("vertical"),
+            Some(&Value::Bool(true)),
+            "upright"
+        );
         assert_eq!(dial.bind.as_deref(), Some(ui::FREQ_BIND));
         assert_eq!(dial.props.get("min"), Some(&Value::Number(48.0)));
         assert_eq!(dial.props.get("max"), Some(&Value::Number(120.0)));
-        assert_eq!(dial.props.get("label"), Some(&Value::Text("$pop_size".into())));
+        assert_eq!(
+            dial.props.get("label"),
+            Some(&Value::Text("$pop_size".into()))
+        );
         assert_eq!(dial.props.get("step"), Some(&Value::Number(1.0)));
         assert_eq!(dial.props.get("step_coarse"), Some(&Value::Number(10.0)));
-        assert!(!dial.tab_group.is_empty(), "walker-focusable — the pad channel's gate");
+        assert!(
+            !dial.tab_group.is_empty(),
+            "walker-focusable — the pad channel's gate"
+        );
         // NOT ONE style string reaches a node from this crate: every skin the
         // surface wears is named by a proto, in data.
         for n in &all {
@@ -618,11 +654,16 @@ mod tests {
                 subtree(c, out);
             }
         }
-        let right = all.iter().find(|n| n.id == ui::RIGHT_PANE).expect("right pane");
+        let right = all
+            .iter()
+            .find(|n| n.id == ui::RIGHT_PANE)
+            .expect("right pane");
         let mut nodes = Vec::new();
         subtree(right, &mut nodes);
         assert!(
-            nodes.iter().all(|n| matches!(n.component.as_str(), "panel" | "cell" | "row" | "text")),
+            nodes
+                .iter()
+                .all(|n| matches!(n.component.as_str(), "panel" | "cell" | "row" | "text")),
             "the stats pane is display-only (its slice gate is a plain `cell`)"
         );
         // ONE set of corner runes: the page chrome's — the `runes` DECORATION
@@ -633,29 +674,54 @@ mod tests {
             .filter(|n| matches!(n.props.get("runes"), Some(Value::Bool(true))))
             .collect();
         assert_eq!(flagged.len(), 1, "exactly one slab wears the corner runes");
-        assert_eq!(flagged[0].component, "stack", "…and it is the page chrome's window stack");
+        assert_eq!(
+            flagged[0].component, "stack",
+            "…and it is the page chrome's window stack"
+        );
     }
 
     /// **The panes are PANELS, and the walker owns which one has the cursor.**
-    /// Three `panel` nodes, each its own `tab_group`, each at the group's lowest
-    /// ordinal — that is the entire pane model this bench carries. The wrapping,
-    /// the rim and the enter/exit that used to live here are the walker's and the
-    /// `panel` component's (walker gate: `the_left_stick_cycles_panels_and_wraps`;
-    /// component gate: `a_focused_panel_draws_its_own_rim`).
+    /// Three `panel` nodes on the NESTED-pane convention (Aaron 2026-08-15): a
+    /// container carries NO self-membership marker — its members claim it (the
+    /// dial claims the left pane) or it authors `pane: true` (the viewport and
+    /// stats panes, which have no focusable interior) — and its `nav_ordinal` is
+    /// the AUTHORED stick-stop order. The wrapping, the rim and the enter/exit
+    /// live in the walker and the `panel` component.
     #[test]
     fn the_panes_are_panels_the_walker_can_cycle() {
         let tree = test_bench().build_tree();
         let all = flatten(&tree);
         let panes: Vec<&&UiNode> = all.iter().filter(|n| n.component == "panel").collect();
         assert_eq!(panes.len(), 3, "three panes, all the ONE panel component");
-        for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE].iter().enumerate() {
+        for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE]
+            .iter()
+            .enumerate()
+        {
             let p = panes[i];
             assert_eq!(&p.id, id, "panes keep authoring order");
-            assert_eq!(&p.tab_group, id, "each pane is its own focus group");
-            assert_eq!(p.nav_ordinal, 0, "the pane is the group's entry point");
             assert!(
-                !p.props.keys().any(|k| k == "focused" || k.ends_with("_style")),
+                p.tab_group.is_empty(),
+                "a container carries no self-membership marker"
+            );
+            assert_eq!(
+                p.nav_ordinal,
+                i as u32 + 1,
+                "the stick-stop order is authored"
+            );
+            assert!(
+                !p.props
+                    .keys()
+                    .any(|k| k == "focused" || k.ends_with("_style")),
                 "{id}: the scene passes no rim and no focus flag"
+            );
+        }
+        // The two panes with no focusable interior author the explicit marker;
+        // the left pane is claimed by its dial and needs none.
+        for id in [ui::VIEW_PANE, ui::RIGHT_PANE] {
+            let p = all.iter().find(|n| n.id == id).expect("pane");
+            assert!(
+                matches!(p.props.get("pane"), Some(Value::Bool(true))),
+                "{id} authors `pane: true` (nothing claims it)"
             );
         }
         // …and the ONE interactive control inside a pane sits ABOVE the pane in
@@ -664,9 +730,15 @@ mod tests {
         // dial itself is (its range, its two pad step sizes, its skin, its own
         // default ordinal) is the proto's contract and is gated beside the proto:
         // flicker-widgets `the_size_dial_proto_carries_the_whole_control_contract`.
-        let dial = all.iter().find(|n| n.component == "slider").expect("the dial");
+        let dial = all
+            .iter()
+            .find(|n| n.component == "slider")
+            .expect("the dial");
         assert_eq!(dial.tab_group, ui::LEFT_PANE);
-        assert!(dial.nav_ordinal > 0, "the control follows its panel in the group");
+        assert!(
+            dial.nav_ordinal > 0,
+            "the control follows its panel in the group"
+        );
     }
 
     /// **Both rails carry the roster.** One entry per page and one per tab of
@@ -683,7 +755,11 @@ mod tests {
                 .len()
         };
         assert_eq!(rail("paged_pages"), ui::PAGES.len(), "one entry per page");
-        assert_eq!(rail("paged_tabs"), ui::PAGES[0].tabs.len(), "one entry per tab");
+        assert_eq!(
+            rail("paged_tabs"),
+            ui::PAGES[0].tabs.len(),
+            "one entry per tab"
+        );
     }
 
     /// **The rails step THEMSELVES, and the scene only reads the result.** Each
@@ -701,9 +777,18 @@ mod tests {
             ("paged_pages", "page_next", "page_prev"),
             ("paged_tabs", "tab_next", "tab_prev"),
         ] {
-            let rail = all.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("{id} is placed"));
-            assert_eq!(rail.props.get("next_action"), Some(&Value::Text(next.into())));
-            assert_eq!(rail.props.get("prev_action"), Some(&Value::Text(prev.into())));
+            let rail = all
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("{id} is placed"));
+            assert_eq!(
+                rail.props.get("next_action"),
+                Some(&Value::Text(next.into()))
+            );
+            assert_eq!(
+                rail.props.get("prev_action"),
+                Some(&Value::Text(prev.into()))
+            );
         }
         // The scene has NO stepper: a fired step name it happens to see moves
         // nothing — only the index the strip wrote does.
@@ -714,7 +799,11 @@ mod tests {
         let mut wrote = ValueMap::default();
         wrote.set(ui::TAB_BIND, 1.0);
         bench.apply_results(&wrote);
-        assert_eq!(bench.selection(), (0, 1), "the strip's index is what moves the tab");
+        assert_eq!(
+            bench.selection(),
+            (0, 1),
+            "the strip's index is what moves the tab"
+        );
     }
 
     /// **Both tab slices live in ONE static tree, over the SAME panes, gated apart.**
@@ -733,7 +822,10 @@ mod tests {
         assert!(flicker::ui::raw_display_literals(&tree).is_empty());
 
         // The one viewport, wired to the one stage — shared by both tabs, ungated.
-        let view = all.iter().find(|n| n.id == ui::VIEW_SLOT).expect("the viewport is placed");
+        let view = all
+            .iter()
+            .find(|n| n.id == ui::VIEW_SLOT)
+            .expect("the viewport is placed");
         assert_eq!(view.component, "rtt", "the centre pane is the viewport");
         assert_eq!(
             view.props.get("source"),
@@ -743,30 +835,46 @@ mod tests {
 
         // The one three-pane arrangement, all the `panel` component, left/view/right.
         let panes: Vec<&&UiNode> = all.iter().filter(|n| n.component == "panel").collect();
-        assert_eq!(panes.len(), 3, "one three-pane arrangement, shared by both tabs");
-        for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE].iter().enumerate() {
+        assert_eq!(
+            panes.len(),
+            3,
+            "one three-pane arrangement, shared by both tabs"
+        );
+        for (i, id) in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE]
+            .iter()
+            .enumerate()
+        {
             assert_eq!(&panes[i].id, id, "the panes keep left/view/right order");
         }
 
         // BOTH slices are DECLARED in the one tree — the tab lights one, never adds or
         // removes structure. The map slice's dial and the seams slice's button coexist.
         assert!(
-            all.iter().any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::FREQ_BIND)),
+            all.iter()
+                .any(|n| n.component == "slider" && n.bind.as_deref() == Some(ui::FREQ_BIND)),
             "the map slice's size dial is declared"
         );
         assert!(
-            all.iter().any(|n| n.action.as_deref() == Some(ui::SEAMS_ACTION)),
+            all.iter()
+                .any(|n| n.action.as_deref() == Some(ui::SEAMS_ACTION)),
             "the seams slice's randomize button is declared"
         );
         let placeholders = all
             .iter()
-            .filter(|n| matches!(n.props.get("text"), Some(Value::Text(t)) if t == "$ui_pane_empty"))
+            .filter(
+                |n| matches!(n.props.get("text"), Some(Value::Text(t)) if t == "$ui_pane_empty"),
+            )
             .count();
-        assert_eq!(placeholders, 1, "the seams pane declares one empty placeholder");
+        assert_eq!(
+            placeholders, 1,
+            "the seams pane declares one empty placeholder"
+        );
 
         // Both slices are gated, on DIFFERENT keys, so a selection lights exactly one.
-        let gates: std::collections::HashSet<&str> =
-            all.iter().filter_map(|n| n.visible_bind.as_deref()).collect();
+        let gates: std::collections::HashSet<&str> = all
+            .iter()
+            .filter_map(|n| n.visible_bind.as_deref())
+            .collect();
         assert!(
             gates.contains("shown_p0_t0") && gates.contains("shown_p0_t1"),
             "the map and seams slices are gated apart"
@@ -806,7 +914,11 @@ mod tests {
         // there is no per-tab copy to drift.
         bench.apply_results(&tab(1.0));
         assert_eq!(bench.selection(), (0, 1), "on the seams tab");
-        assert_eq!(bench.map().freq(), 72, "the seams tab shows the resized world");
+        assert_eq!(
+            bench.map().freq(),
+            72,
+            "the seams tab shows the resized world"
+        );
 
         // Returning, the dial reads the SHARED value back out of the model —
         // the size did not reset with the tab.
@@ -826,7 +938,11 @@ mod tests {
         let mut wild = ValueMap::default();
         wild.set(ui::FREQ_BIND, 9_000.0);
         bench.apply_results(&wild);
-        assert_eq!(bench.map().freq(), MAX_FREQ, "a wild number clamps into the range");
+        assert_eq!(
+            bench.map().freq(),
+            MAX_FREQ,
+            "a wild number clamps into the range"
+        );
     }
 
     /// **A rail click jumps the selection directly** — the strip writes its
@@ -840,7 +956,11 @@ mod tests {
         let mut wild = ValueMap::default();
         wild.set(ui::TAB_BIND, 9.0);
         bench.apply_results(&wild);
-        assert_eq!(bench.selection(), (0, 1), "clamped into the roster and applied");
+        assert_eq!(
+            bench.selection(),
+            (0, 1),
+            "clamped into the roster and applied"
+        );
         // The resting echo (both binds, current values) changes nothing.
         let mut echo = ValueMap::default();
         echo.set(ui::PAGE_BIND, 0.0);
@@ -872,7 +992,7 @@ mod tests {
         let mut bench = test_bench();
         let tree = bench.build_tree();
         let model = bench.model();
-        let styles = load_styles(HUD_UI_THEME);
+        let styles = load_shared_styles(None);
         let mut state = UiState::default();
         let snap = |mouse: Vec2, clicked: bool, down: bool| UiInput {
             mouse,
@@ -885,10 +1005,18 @@ mod tests {
         };
 
         // Resolve the rail's rect, then click the centre of its SECOND pill.
-        let idle =
-            run_ui(&tree, &model, &styles, &snap(Vec2::ZERO, false, false), &mut state);
+        let idle = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap(Vec2::ZERO, false, false),
+            &mut state,
+        );
         let rail = idle.rect("paged_tabs").expect("the tab rail resolves");
-        let click = Vec2::new(rail.pos.x + rail.size.x * 0.75, rail.pos.y + rail.size.y * 0.5);
+        let click = Vec2::new(
+            rail.pos.x + rail.size.x * 0.75,
+            rail.pos.y + rail.size.y * 0.5,
+        );
         let f = run_ui(&tree, &model, &styles, &snap(click, true, true), &mut state);
         assert_eq!(
             f.results.number(ui::TAB_BIND),
@@ -896,7 +1024,11 @@ mod tests {
             "the pill's numeric value rides the bind write"
         );
         bench.apply_results(&f.results);
-        assert_eq!(bench.selection(), (0, 1), "the click switched to the seams tab");
+        assert_eq!(
+            bench.selection(),
+            (0, 1),
+            "the click switched to the seams tab"
+        );
     }
 
     /// **Five intents declared, every one with an arm — and NOT ONE the walker
@@ -951,10 +1083,9 @@ mod tests {
             );
         }
         assert!(
-            !flatten(&tree).iter().any(|n| n
-                .props
-                .keys()
-                .any(|k| matches!(
+            !flatten(&tree)
+                .iter()
+                .any(|n| n.props.keys().any(|k| matches!(
                     k.as_str(),
                     "on_confirm"
                         | "on_cancel"
@@ -1007,8 +1138,15 @@ mod tests {
             .into_iter()
             .find(|n| n.action.as_deref() == Some(ui::SEAMS_ACTION))
             .expect("the seams button fires the authored action");
-        assert_eq!(button.component, "button", "a plain button, not a bench widget");
-        assert_eq!(button.tab_group, ui::LEFT_PANE, "it lives in the left pane's focus group");
+        assert_eq!(
+            button.component, "button",
+            "a plain button, not a bench widget"
+        );
+        assert_eq!(
+            button.tab_group,
+            ui::LEFT_PANE,
+            "it lives in the left pane's focus group"
+        );
 
         // …and the dispatcher has an arm for it: it consumes the name without
         // disturbing the world (there is nothing behind it yet).
@@ -1016,8 +1154,16 @@ mod tests {
         let mut fired = ValueMap::default();
         fired.set(ui::SEAMS_ACTION, true);
         bench.apply_results(&fired);
-        assert_eq!(bench.map().freq(), before, "not built yet — and it changes nothing");
-        assert_eq!(bench.selection(), (0, 1), "…and it is not a navigation either");
+        assert_eq!(
+            bench.map().freq(),
+            before,
+            "not built yet — and it changes nothing"
+        );
+        assert_eq!(
+            bench.selection(),
+            (0, 1),
+            "…and it is not a navigation either"
+        );
     }
 
     /// **The PTT rails fire results this screen dispatches.** The glyph hints are now
@@ -1081,7 +1227,7 @@ mod tests {
         // dial is placed — it is dark until the selection lights `shown_p0_t0`.
         let mut model = ValueMap::default();
         model.set("shown_p0_t0", true);
-        let styles = load_styles(HUD_UI_THEME);
+        let styles = load_shared_styles(None);
         let snap = UiInput {
             mouse: Vec2::ZERO,
             clicked: false,
@@ -1143,7 +1289,7 @@ mod tests {
         // Light the MAP slice so the gated dial is placed + hittable (tab 0).
         let mut model = bench.model();
         model.set("shown_p0_t0", true);
-        let styles = load_styles(HUD_UI_THEME);
+        let styles = load_shared_styles(None);
         let mut state = UiState::default();
         let snap = |mouse: Vec2, clicked: bool, down: bool| UiInput {
             mouse,
@@ -1160,13 +1306,28 @@ mod tests {
         // independent of the label band's height above the track.
         let count_48 = |cmds: &[flicker::script::HudCommand]| {
             cmds.iter()
-                .filter(|c| matches!(c, flicker::script::HudCommand::Text { text, .. } if text == "48"))
+                .filter(
+                    |c| matches!(c, flicker::script::HudCommand::Text { text, .. } if text == "48"),
+                )
                 .count()
         };
-        let frame = run_ui(&tree, &model, &styles, &snap(Vec2::ZERO, false, false), &mut state);
+        let frame = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap(Vec2::ZERO, false, false),
+            &mut state,
+        );
         let dial = frame.rect(ui::FREQ_BIND).expect("the dial resolves");
-        assert_eq!(count_48(&frame.commands), 1, "at rest: the min range mark alone reads 48");
-        let grab = Vec2::new(dial.pos.x + dial.size.x * 0.5, dial.pos.y + dial.size.y - 2.0);
+        assert_eq!(
+            count_48(&frame.commands),
+            1,
+            "at rest: the min range mark alone reads 48"
+        );
+        let grab = Vec2::new(
+            dial.pos.x + dial.size.x * 0.5,
+            dial.pos.y + dial.size.y - 2.0,
+        );
 
         let held = run_ui(&tree, &model, &styles, &snap(grab, true, true), &mut state);
         // The drag INDICATOR: while the hand holds the knob, the LIVE value
@@ -1177,8 +1338,13 @@ mod tests {
             2,
             "mid-drag: the live readout joins the min mark beside the handle"
         );
-        let released =
-            run_ui(&tree, &model, &styles, &snap(grab, false, false), &mut state);
+        let released = run_ui(
+            &tree,
+            &model,
+            &styles,
+            &snap(grab, false, false),
+            &mut state,
+        );
         let v = released
             .results
             .number(ui::FREQ_BIND)
@@ -1197,7 +1363,11 @@ mod tests {
     fn the_map_is_the_standard_ninety_six() {
         let bench = test_bench();
         assert_eq!(bench.map().freq(), 96);
-        assert_eq!(bench.map().len(), (10 * 96 * 96 + 2) as usize, "92,162 tiles");
+        assert_eq!(
+            bench.map().len(),
+            (10 * 96 * 96 + 2) as usize,
+            "92,162 tiles"
+        );
     }
 
     /// **The whole look of this world is AUTHORED.** The bench names a stage
@@ -1216,11 +1386,19 @@ mod tests {
 
         let bench = test_bench();
         let layers = &bench.world.stage().layers;
-        let shells: Vec<&StageLayer> =
-            layers.iter().filter(|l| matches!(l, StageLayer::Shell { .. })).collect();
-        assert_eq!(shells.len(), 2, "the under-shell and the tile shell, both authored");
+        let shells: Vec<&StageLayer> = layers
+            .iter()
+            .filter(|l| matches!(l, StageLayer::Shell { .. }))
+            .collect();
+        assert_eq!(
+            shells.len(),
+            2,
+            "the under-shell and the tile shell, both authored"
+        );
         assert!(
-            layers.iter().any(|l| matches!(l, StageLayer::Graticule { .. })),
+            layers
+                .iter()
+                .any(|l| matches!(l, StageLayer::Graticule { .. })),
             "the reference frame is a layer of the stage, not scene code"
         );
         assert!(
@@ -1228,9 +1406,19 @@ mod tests {
             "this bench publishes no simulated shells — its world is the authored one"
         );
         // The tiling the world is drawn over is the map's, at every size.
-        let shells = bench.world.authored_shells(&bench.map.grid().dirs, bench.map.outlines());
-        assert_eq!(shells.len(), 2, "one shell per authored layer, over the map's own tiling");
-        assert_eq!(shells[0].dirs.len(), bench.map.len(), "the world IS the map");
+        let shells = bench
+            .world
+            .authored_shells(&bench.map.grid().dirs, bench.map.outlines());
+        assert_eq!(
+            shells.len(),
+            2,
+            "one shell per authored layer, over the map's own tiling"
+        );
+        assert_eq!(
+            shells[0].dirs.len(),
+            bench.map.len(),
+            "the world IS the map"
+        );
     }
 
     /// **A key press steps the dial through the WHOLE component chain** — the
@@ -1251,7 +1439,7 @@ mod tests {
         // Light the MAP slice so the gated dial is placed + focusable (tab 0).
         let mut model = bench.model();
         model.set("shown_p0_t0", true);
-        let styles = load_styles(HUD_UI_THEME);
+        let styles = load_shared_styles(None);
         let intents = UiIntents::of(&tree);
         let bindings = ContextualBindings::new(InputMap::wasd_and_mouse());
         let cfg = GamepadConfig::default();
@@ -1262,15 +1450,18 @@ mod tests {
         let mut ev: Vec<Fired> = Vec::new();
         resolver.resolve_frame(&bindings, &cfg, &input, 1, &mut ev);
         assert!(
-            ev.iter().any(|f| f.signal == ActionSignal::NavUp && f.kind == EventKind::Press),
+            ev.iter()
+                .any(|f| f.signal == ActionSignal::NavUp && f.kind == EventKind::Press),
             "the resolver edges the bound key into NavUp"
         );
 
         // The entered-left context: the dial holds the walker focus and the
         // pane's focus graph is live — exactly what the scene sets up.
         let ctx = bindings.active();
-        let events: Vec<InputEvent> =
-            ev.iter().map(|f| InputEvent::from_fired(f, ctx, &input)).collect();
+        let events: Vec<InputEvent> = ev
+            .iter()
+            .map(|f| InputEvent::from_fired(f, ctx, &input))
+            .collect();
         let mut ui = UiState::default();
         ui.request_focus(ui::FREQ_BIND);
         let mut walker = WalkerHandler::hud(&mut ui, false)
@@ -1281,7 +1472,10 @@ mod tests {
             let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
             Router::dispatch(&events, &mut chain, &mut route);
         }
-        assert!(walker.take_fired().is_empty(), "a nudge is not a declared intent");
+        assert!(
+            walker.take_fired().is_empty(),
+            "a nudge is not a declared intent"
+        );
 
         // The next `run_ui` pass applies the nudge with the NODE's own step and
         // writes the bind — the component's committed write, one step up.
@@ -1319,14 +1513,26 @@ mod tests {
         let turn = |b: &mut PopulousBench, input: &InputState| {
             let before = b.world.camera().position;
             let focus = b.ui_state.focused().map(str::to_string);
-            b.world.update(0.5, input, (1.0, 0.0, 0.0), focus.as_deref());
+            b.world
+                .update(0.5, input, (1.0, 0.0, 0.0), focus.as_deref());
             (b.world.camera().position - before).length()
         };
-        assert_eq!(turn(&mut bench, &input), 0.0, "panel navigation owns the sticks");
+        assert_eq!(
+            turn(&mut bench, &input),
+            0.0,
+            "panel navigation owns the sticks"
+        );
         bench.focus_for_test(ui::RIGHT_PANE);
-        assert_eq!(turn(&mut bench, &input), 0.0, "another pane owns its interior, never the camera");
+        assert_eq!(
+            turn(&mut bench, &input),
+            0.0,
+            "another pane owns its interior, never the camera"
+        );
         bench.focus_for_test(ui::VIEW_PANE);
-        assert!(turn(&mut bench, &input) > 0.0, "the focused viewport pane flies the planet");
+        assert!(
+            turn(&mut bench, &input) > 0.0,
+            "the focused viewport pane flies the planet"
+        );
     }
 
     /// **A Menu press fires the pause intent** through the real chain: the
@@ -1339,8 +1545,12 @@ mod tests {
         let intents = UiIntents::of(&tree);
 
         let raw = InputState::new();
-        let events =
-            [InputEvent::new(ActionSignal::Menu, EventKind::Press, InputContext::World, &raw)];
+        let events = [InputEvent::new(
+            ActionSignal::Menu,
+            EventKind::Press,
+            InputContext::World,
+            &raw,
+        )];
         let mut ui = UiState::default();
         let mut walker = WalkerHandler::hud(&mut ui, false).with_intents(&intents);
         let mut route = RouteCtx::default();
@@ -1371,18 +1581,27 @@ mod tests {
             m.set(ui::PAGE_BIND, page);
             m.set(ui::TAB_BIND, tab);
             host.set_model(&m).expect("model publishes");
-            host.arrange().expect("arrange runs").expect("arrange is present").to_model()
+            host.arrange()
+                .expect("arrange runs")
+                .expect("arrange is present")
+                .to_model()
         };
 
         // MAP tab (page 0, tab 0): its slice is lit, the seams slice is dark.
         let map = arrange_at(0.0, 0.0);
         assert!(map.is_on("shown_p0_t0"), "the map tab lights its slice");
-        assert!(!map.is_on("shown_p0_t1"), "the map tab darkens the seams slice");
+        assert!(
+            !map.is_on("shown_p0_t1"),
+            "the map tab darkens the seams slice"
+        );
 
         // SEAMS tab (page 0, tab 1): its slice is lit, the map slice is dark.
         let seams = arrange_at(0.0, 1.0);
         assert!(seams.is_on("shown_p0_t1"), "the seams tab lights its slice");
-        assert!(!seams.is_on("shown_p0_t0"), "the seams tab darkens the map slice");
+        assert!(
+            !seams.is_on("shown_p0_t0"),
+            "the seams tab darkens the map slice"
+        );
     }
 
     /// **The static tree loads and declares BOTH tabs' slices gated.** The authored
@@ -1413,9 +1632,15 @@ mod tests {
 
         // The whole layout is present at once — both tabs, gated (not a per-tab rebuild).
         for id in [ui::LEFT_PANE, ui::VIEW_PANE, ui::RIGHT_PANE] {
-            assert!(all.iter().any(|n| n.id == id), "the `{id}` pane is in the static tree");
+            assert!(
+                all.iter().any(|n| n.id == id),
+                "the `{id}` pane is in the static tree"
+            );
         }
-        let view = all.iter().find(|n| n.id == ui::VIEW_SLOT).expect("the viewport is placed");
+        let view = all
+            .iter()
+            .find(|n| n.id == ui::VIEW_SLOT)
+            .expect("the viewport is placed");
         assert_eq!(view.component, "rtt", "the centre pane is the viewport");
         assert!(
             all.iter().any(|n| n.bind.as_deref() == Some(ui::FREQ_BIND)),
@@ -1423,9 +1648,17 @@ mod tests {
         );
 
         // Both tabs' slices are declared and gated on the keys `arrange()` lights.
-        let gates: std::collections::HashSet<&str> =
-            all.iter().filter_map(|n| n.visible_bind.as_deref()).collect();
-        assert!(gates.contains("shown_p0_t0"), "the map tab's slice is gated");
-        assert!(gates.contains("shown_p0_t1"), "the seams tab's slice is gated");
+        let gates: std::collections::HashSet<&str> = all
+            .iter()
+            .filter_map(|n| n.visible_bind.as_deref())
+            .collect();
+        assert!(
+            gates.contains("shown_p0_t0"),
+            "the map tab's slice is gated"
+        );
+        assert!(
+            gates.contains("shown_p0_t1"),
+            "the seams tab's slice is gated"
+        );
     }
 }

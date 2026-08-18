@@ -11,6 +11,7 @@ tracing.workspace = true
 thiserror.workspace = true
 flate2.workspace = true
 serde = { workspace = true, features = ["derive"] }
-
-[dev-dependencies]
-serde_json = { workspace = true }
+# roots.rs parses the per-exe content.json declaration at startup.
+serde_json.workspace = true
+# The mounted package.flk reader (store-only container; no compression features).
+zip.workspace = true

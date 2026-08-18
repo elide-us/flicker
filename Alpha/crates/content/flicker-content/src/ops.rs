@@ -88,11 +88,19 @@ impl FileFacts {
     #[must_use]
     pub fn of(logical: &Path) -> Option<Self> {
         if logical.is_dir() {
-            return Some(Self { path: logical.to_path_buf(), size: 0, is_dir: true });
+            return Some(Self {
+                path: logical.to_path_buf(),
+                size: 0,
+                is_dir: true,
+            });
         }
         let physical = physical_path(logical)?;
         let size = std::fs::metadata(&physical).map(|m| m.len()).unwrap_or(0);
-        Some(Self { path: physical, size, is_dir: false })
+        Some(Self {
+            path: physical,
+            size,
+            is_dir: false,
+        })
     }
 }
 
@@ -131,7 +139,12 @@ pub fn probe_conflicts(moves: &[(PathBuf, PathBuf)]) -> Vec<Conflict> {
         .filter_map(|(src, dst)| {
             let existing = FileFacts::of(dst)?;
             let incoming = FileFacts::of(src)?;
-            Some(Conflict { src: src.clone(), dst: dst.clone(), existing, incoming })
+            Some(Conflict {
+                src: src.clone(),
+                dst: dst.clone(),
+                existing,
+                incoming,
+            })
         })
         .collect()
 }
@@ -210,7 +223,12 @@ impl FileOp {
     /// Move `src` to `dst` (both LOGICAL paths).
     #[must_use]
     pub fn mv(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
-        Self::Move { src: src.into(), dst: dst.into(), displaced: None, landed: None }
+        Self::Move {
+            src: src.into(),
+            dst: dst.into(),
+            displaced: None,
+            landed: None,
+        }
     }
 
     /// Rename `path` to `new_name`, keeping it in place.
@@ -245,8 +263,17 @@ pub struct BatchFileOp {
 impl BatchFileOp {
     /// A batch of `ops`, parking any displaced files under
     /// `<trash_root>/.trash/<batch_id>/`.
-    pub fn new(ops: Vec<FileOp>, trash_root: impl Into<PathBuf>, batch_id: impl Into<String>) -> Self {
-        Self { ops, trash_root: trash_root.into(), batch_id: batch_id.into(), applied: false }
+    pub fn new(
+        ops: Vec<FileOp>,
+        trash_root: impl Into<PathBuf>,
+        batch_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            ops,
+            trash_root: trash_root.into(),
+            batch_id: batch_id.into(),
+            applied: false,
+        }
     }
 
     /// How many operations this batch carries (still ONE history entry).
@@ -305,7 +332,12 @@ impl BatchFileOp {
         match &mut self.ops[i] {
             FileOp::Mkdir { path } => std::fs::create_dir_all(&*path)
                 .with_context(|| format!("creating {}", path.display())),
-            FileOp::Move { src, dst, displaced, landed } => {
+            FileOp::Move {
+                src,
+                dst,
+                displaced,
+                landed,
+            } => {
                 if src.is_dir() {
                     if dst.exists() {
                         bail!("{} already exists", dst.display());
@@ -315,15 +347,17 @@ impl BatchFileOp {
                     *displaced = None;
                     return Ok(());
                 }
-                let physical_src = physical_path(src)
-                    .with_context(|| format!("nothing at {}", src.display()))?;
+                let physical_src =
+                    physical_path(src).with_context(|| format!("nothing at {}", src.display()))?;
                 let physical_dst = matching_form(dst, &physical_src);
 
                 // Never unlink: an occupant is PARKED so the batch stays revertible.
                 *displaced = match physical_path(dst) {
                     Some(occupant) => {
                         let parked = trash.join(format!("{i}")).join(
-                            occupant.file_name().unwrap_or_else(|| std::ffi::OsStr::new("file")),
+                            occupant
+                                .file_name()
+                                .unwrap_or_else(|| std::ffi::OsStr::new("file")),
                         );
                         relocate(&occupant, &parked)?;
                         Some(parked)
@@ -342,13 +376,22 @@ impl BatchFileOp {
             FileOp::Mkdir { path } => {
                 // Only remove a directory WE created and that is still empty —
                 // never take content down with it.
-                if path.is_dir() && std::fs::read_dir(&*path).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                if path.is_dir()
+                    && std::fs::read_dir(&*path)
+                        .map(|mut d| d.next().is_none())
+                        .unwrap_or(false)
+                {
                     std::fs::remove_dir(&*path)
                         .with_context(|| format!("removing {}", path.display()))?;
                 }
                 Ok(())
             }
-            FileOp::Move { src, dst, displaced, landed } => {
+            FileOp::Move {
+                src,
+                dst,
+                displaced,
+                landed,
+            } => {
                 // Send the mover home FIRST, which frees `dst` for its original
                 // occupant; then un-park whatever Replace displaced.
                 if let Some(there) = landed.take() {
@@ -401,7 +444,11 @@ mod tests {
 
         let raw = d.join("Bare.json");
         std::fs::write(&raw, b"{}").unwrap();
-        assert_eq!(physical_path(&raw), Some(raw.clone()), "dev-loose raw file still resolves");
+        assert_eq!(
+            physical_path(&raw),
+            Some(raw.clone()),
+            "dev-loose raw file still resolves"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -422,7 +469,11 @@ mod tests {
         assert_eq!(read_content(&dst), r#"{"format":"flicker.rig"}"#);
 
         b.revert().unwrap();
-        assert_eq!(read_content(&src), r#"{"format":"flicker.rig"}"#, "back byte-for-byte");
+        assert_eq!(
+            read_content(&src),
+            r#"{"format":"flicker.rig"}"#,
+            "back byte-for-byte"
+        );
         assert!(physical_path(&dst).is_none(), "destination cleared");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -449,11 +500,18 @@ mod tests {
         write_content(&d.join("staging/Kit/A.json"), "a");
         write_content(&d.join("staging/Kit/sub/B.json"), "b");
 
-        let mut b =
-            BatchFileOp::new(vec![FileOp::mv(d.join("staging/Kit"), d.join("package/Kit"))], &d, "b1");
+        let mut b = BatchFileOp::new(
+            vec![FileOp::mv(d.join("staging/Kit"), d.join("package/Kit"))],
+            &d,
+            "b1",
+        );
         b.apply().unwrap();
         assert_eq!(read_content(&d.join("package/Kit/A.json")), "a");
-        assert_eq!(read_content(&d.join("package/Kit/sub/B.json")), "b", "nested content came too");
+        assert_eq!(
+            read_content(&d.join("package/Kit/sub/B.json")),
+            "b",
+            "nested content came too"
+        );
         assert!(!d.join("staging/Kit").exists());
 
         b.revert().unwrap();
@@ -474,10 +532,17 @@ mod tests {
         let mut b = BatchFileOp::new(vec![FileOp::mv(&src, &dst)], &d, "batch7");
         b.apply().unwrap();
         assert_eq!(read_content(&dst), "incoming", "the incoming file won");
-        assert!(d.join(TRASH_DIR).join("batch7").exists(), "the displaced file was parked, not unlinked");
+        assert!(
+            d.join(TRASH_DIR).join("batch7").exists(),
+            "the displaced file was parked, not unlinked"
+        );
 
         b.revert().unwrap();
-        assert_eq!(read_content(&dst), "existing", "the displaced file came home");
+        assert_eq!(
+            read_content(&dst),
+            "existing",
+            "the displaced file came home"
+        );
         assert_eq!(read_content(&src), "incoming", "and the mover went back");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -486,19 +551,30 @@ mod tests {
     fn keep_both_counts_from_01_and_survives_a_compound_extension() {
         let d = scratch("keepboth");
         let free = d.join("Nothing.json");
-        assert_eq!(keep_both_name(&free).unwrap(), free, "a free name is used as-is");
+        assert_eq!(
+            keep_both_name(&free).unwrap(),
+            free,
+            "a free name is used as-is"
+        );
 
         let taken = d.join("Foo.json");
         write_content(&taken, "x");
         assert_eq!(keep_both_name(&taken).unwrap(), d.join("Foo_01.json"));
 
         write_content(&d.join("Foo_01.json"), "x");
-        assert_eq!(keep_both_name(&taken).unwrap(), d.join("Foo_02.json"), "skips the taken suffix");
+        assert_eq!(
+            keep_both_name(&taken).unwrap(),
+            d.join("Foo_02.json"),
+            "skips the taken suffix"
+        );
 
         // The compound extension must survive intact.
         let pack = d.join("Katanami.pack.json");
         write_content(&pack, "x");
-        assert_eq!(keep_both_name(&pack).unwrap(), d.join("Katanami_01.pack.json"));
+        assert_eq!(
+            keep_both_name(&pack).unwrap(),
+            d.join("Katanami_01.pack.json")
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -512,13 +588,19 @@ mod tests {
         write_content(&b, "b");
         write_content(&taken, "old");
 
-        let moves = vec![(a.clone(), taken.clone()), (b.clone(), d.join("package/B.json"))];
+        let moves = vec![
+            (a.clone(), taken.clone()),
+            (b.clone(), d.join("package/B.json")),
+        ];
         let conflicts = probe_conflicts(&moves);
         assert_eq!(conflicts.len(), 1, "only A collides");
         assert_eq!(conflicts[0].src, a);
         assert_eq!(conflicts[0].dst, taken);
         assert!(conflicts[0].existing.size > 0 && conflicts[0].incoming.size > 0);
-        assert!(conflicts[0].existing.path.ends_with("A.json.gz"), "shows the real at-rest name");
+        assert!(
+            conflicts[0].existing.path.ends_with("A.json.gz"),
+            "shows the real at-rest name"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -536,12 +618,18 @@ mod tests {
         assert_eq!(b.len(), 40);
         b.apply().unwrap();
         for i in 0..40 {
-            assert_eq!(read_content(&d.join(format!("package/f{i}.json"))), format!("v{i}"));
+            assert_eq!(
+                read_content(&d.join(format!("package/f{i}.json"))),
+                format!("v{i}")
+            );
         }
 
         b.revert().unwrap();
         for i in 0..40 {
-            assert_eq!(read_content(&d.join(format!("staging/f{i}.json"))), format!("v{i}"));
+            assert_eq!(
+                read_content(&d.join(format!("staging/f{i}.json"))),
+                format!("v{i}")
+            );
             assert!(physical_path(&d.join(format!("package/f{i}.json"))).is_none());
         }
         let _ = std::fs::remove_dir_all(&d);
@@ -557,7 +645,10 @@ mod tests {
         let ops = vec![
             FileOp::mv(&ok, d.join("package/Good.json")),
             // Nothing at this source — the batch must fail here.
-            FileOp::mv(d.join("staging/Missing.json"), d.join("package/Missing.json")),
+            FileOp::mv(
+                d.join("staging/Missing.json"),
+                d.join("package/Missing.json"),
+            ),
         ];
         let mut b = BatchFileOp::new(ops, &d, "b1");
         assert!(b.apply().is_err(), "the batch fails");

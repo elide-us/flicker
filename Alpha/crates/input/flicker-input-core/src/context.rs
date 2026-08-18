@@ -230,7 +230,10 @@ impl ContextualBindings {
     pub fn new(world: InputMap) -> Self {
         let mut maps = HashMap::new();
         maps.insert(InputContext::World, world);
-        Self { maps, stack: vec![InputContext::World] }
+        Self {
+            maps,
+            stack: vec![InputContext::World],
+        }
     }
 
     /// Register a map for a context (builder style).
@@ -420,7 +423,11 @@ pub struct ContextBindings {
 impl ContextBindings {
     /// A simple context: just the base map, `Press` default, no reshape rows.
     pub fn simple(map: InputMap) -> Self {
-        Self { map, default_event: EventKind::Press, signals: Vec::new() }
+        Self {
+            map,
+            default_event: EventKind::Press,
+            signals: Vec::new(),
+        }
     }
 }
 
@@ -501,11 +508,18 @@ impl InputProfile {
             name: name.to_string(),
             contexts: vec![
                 ("World".to_string(), ContextBindings::simple(world)),
-                ("TextEntry".to_string(), ContextBindings::simple(InputMap::empty())),
+                (
+                    "TextEntry".to_string(),
+                    ContextBindings::simple(InputMap::empty()),
+                ),
                 (
                     "Menu".to_string(),
                     // Menus fire on RELEASE (escape a mis-press before letting go, spec §3.2).
-                    ContextBindings { map: menu_map(), default_event: EventKind::Release, signals: Vec::new() },
+                    ContextBindings {
+                        map: menu_map(),
+                        default_event: EventKind::Release,
+                        signals: Vec::new(),
+                    },
                 ),
                 // The flight-camera VEHICLE contexts (3B4DB4C2): part of the built-in set so
                 // the shared pump can resolve them when a scene (Solar Birth) declares one —
@@ -513,8 +527,14 @@ impl InputProfile {
                 // Press-default: their throttle/zoom/look signals are CONTINUOUS (queried via
                 // `signal_axis`/`signal_pointer_delta`, not edges), and only Interact (restart)
                 // + Menu (pause) ride the edge stream.
-                ("FlightPath".to_string(), ContextBindings::simple(InputMap::flight_path())),
-                ("Flying".to_string(), ContextBindings::simple(InputMap::flying())),
+                (
+                    "FlightPath".to_string(),
+                    ContextBindings::simple(InputMap::flight_path()),
+                ),
+                (
+                    "Flying".to_string(),
+                    ContextBindings::simple(InputMap::flying()),
+                ),
             ],
             controls: AbstractControls::default(),
             gamepad: GamepadConfig::default(),
@@ -523,7 +543,10 @@ impl InputProfile {
 
     /// The map for a context by stable NAME, if the profile carries one.
     pub fn context_map(&self, name: &str) -> Option<&InputMap> {
-        self.contexts.iter().find(|(n, _)| n == name).map(|(_, cb)| &cb.map)
+        self.contexts
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, cb)| &cb.map)
     }
 
     /// Fill the gaps a stale save leaves: for every context of the PRESET this
@@ -558,7 +581,8 @@ impl InputProfile {
         if let Some((_, cb)) = self.contexts.iter_mut().find(|(n, _)| n == name) {
             cb.map = map;
         } else {
-            self.contexts.push((name.to_string(), ContextBindings::simple(map)));
+            self.contexts
+                .push((name.to_string(), ContextBindings::simple(map)));
         }
     }
 }
@@ -588,10 +612,22 @@ fn menu_map() -> InputMap {
     m.bind(ActionSignal::NavLeft, InputBinding::Key(Key::Left));
     m.bind(ActionSignal::NavRight, InputBinding::Key(Key::Right));
     // Gamepad: d-pad moves, bumpers cycle groups, A confirms, B cancels.
-    m.bind(ActionSignal::NavUp, InputBinding::GamepadButton(GamepadButton::DPadUp));
-    m.bind(ActionSignal::NavDown, InputBinding::GamepadButton(GamepadButton::DPadDown));
-    m.bind(ActionSignal::NavLeft, InputBinding::GamepadButton(GamepadButton::DPadLeft));
-    m.bind(ActionSignal::NavRight, InputBinding::GamepadButton(GamepadButton::DPadRight));
+    m.bind(
+        ActionSignal::NavUp,
+        InputBinding::GamepadButton(GamepadButton::DPadUp),
+    );
+    m.bind(
+        ActionSignal::NavDown,
+        InputBinding::GamepadButton(GamepadButton::DPadDown),
+    );
+    m.bind(
+        ActionSignal::NavLeft,
+        InputBinding::GamepadButton(GamepadButton::DPadLeft),
+    );
+    m.bind(
+        ActionSignal::NavRight,
+        InputBinding::GamepadButton(GamepadButton::DPadRight),
+    );
     // The two menu-rail scales (bumpers+`,`/`.` tabs, triggers+`[`/`]` pages) —
     // the ONE shared definition, also carried by the `World` preset for bench
     // chrome (see `InputMap::bind_menu_rails`).
@@ -603,14 +639,26 @@ fn menu_map() -> InputMap {
     // superset of World and would otherwise leave the panel signal dead hardware.
     m.bind(
         ActionSignal::PanelPrev,
-        InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Negative },
+        InputBinding::GamepadAxis {
+            axis: GamepadAxis::LeftStickX,
+            direction: AxisDirection::Negative,
+        },
     );
     m.bind(
         ActionSignal::PanelNext,
-        InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Positive },
+        InputBinding::GamepadAxis {
+            axis: GamepadAxis::LeftStickX,
+            direction: AxisDirection::Positive,
+        },
     );
-    m.bind(ActionSignal::Confirm, InputBinding::GamepadButton(GamepadButton::South));
-    m.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
+    m.bind(
+        ActionSignal::Confirm,
+        InputBinding::GamepadButton(GamepadButton::South),
+    );
+    m.bind(
+        ActionSignal::Cancel,
+        InputBinding::GamepadButton(GamepadButton::East),
+    );
     m
 }
 
@@ -717,12 +765,16 @@ mod tests {
     fn context_without_its_own_map_falls_back_to_world() {
         // Radial has no map registered → it should read the World map rather than go dead.
         let mut world = InputMap::empty();
-        world.bind(ActionSignal::Dodge, InputBinding::GamepadButton(GamepadButton::East));
+        world.bind(
+            ActionSignal::Dodge,
+            InputBinding::GamepadButton(GamepadButton::East),
+        );
         let mut cb = ContextualBindings::new(world);
         cb.push(InputContext::Radial);
         assert_eq!(cb.active(), InputContext::Radial);
         assert_eq!(
-            cb.active_map().action_for(InputBinding::GamepadButton(GamepadButton::East)),
+            cb.active_map()
+                .action_for(InputBinding::GamepadButton(GamepadButton::East)),
             Some(ActionSignal::Dodge),
         );
     }
@@ -754,7 +806,10 @@ mod tests {
             assert_eq!(ctx.name(), Some(*name), "{name} reverses");
         }
         assert_eq!(InputContext::from_name("World"), Some(InputContext::World));
-        assert_eq!(InputContext::from_name("TextEntry"), Some(InputContext::TextEntry));
+        assert_eq!(
+            InputContext::from_name("TextEntry"),
+            Some(InputContext::TextEntry)
+        );
         // Unknown / consumer-registered names have no frozen entry.
         assert_eq!(InputContext::from_name("Nonsense"), None);
         assert_eq!(InputContext::register(64).name(), None);
@@ -778,7 +833,10 @@ mod tests {
 
         let json = serde_json::to_string(&profile).expect("InputProfile serializes");
         // The JSON carries the frozen context NAME, not the u16 id (RT-4).
-        assert!(json.contains("\"World\""), "contexts keyed by name in JSON: {json}");
+        assert!(
+            json.contains("\"World\""),
+            "contexts keyed by name in JSON: {json}"
+        );
         assert!(json.contains("\"TextEntry\""), "TextEntry present by name");
         let back: InputProfile = serde_json::from_str(&json).expect("InputProfile deserializes");
 
@@ -786,7 +844,9 @@ mod tests {
         assert_eq!(back.name, "default");
         // The rebind survived, resolved through the name.
         assert_eq!(
-            back.context_map("World").unwrap().action_for(InputBinding::Key(Key::Up)),
+            back.context_map("World")
+                .unwrap()
+                .action_for(InputBinding::Key(Key::Up)),
             Some(ActionSignal::MoveForward),
         );
         // The Menu context's non-default event kind (Release) round-trips too.
@@ -840,11 +900,17 @@ mod tests {
         );
 
         // Round-trip back to a profile, then serde: the World rebind survives.
-        let profile2 = cb.to_profile("default", AbstractControls::default(), GamepadConfig::default());
+        let profile2 = cb.to_profile(
+            "default",
+            AbstractControls::default(),
+            GamepadConfig::default(),
+        );
         let json = serde_json::to_string(&profile2).unwrap();
         let back: InputProfile = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            back.context_map("World").unwrap().action_for(InputBinding::Key(Key::W)),
+            back.context_map("World")
+                .unwrap()
+                .action_for(InputBinding::Key(Key::W)),
             Some(ActionSignal::MoveForward),
         );
     }
@@ -859,10 +925,17 @@ mod tests {
         assert_eq!(cb.active(), InputContext::Menu);
 
         let json = serde_json::to_string(&cb).expect("ContextualBindings serializes");
-        assert!(json.contains("\"World\"") && json.contains("\"Menu\""), "keyed by name");
+        assert!(
+            json.contains("\"World\"") && json.contains("\"Menu\""),
+            "keyed by name"
+        );
         let back: ContextualBindings = serde_json::from_str(&json).expect("deserializes");
         // Stack was skipped → rebuilt to [World].
-        assert_eq!(back.active(), InputContext::World, "stack rebuilt to base on load");
+        assert_eq!(
+            back.active(),
+            InputContext::World,
+            "stack rebuilt to base on load"
+        );
         // Maps survived, resolved by name.
         assert_eq!(
             back.active_map().action_for(InputBinding::Key(Key::W)),
@@ -890,7 +963,11 @@ mod tests {
         s.set_mouse_button(MouseButton::Right, true);
         assert_eq!(cb.signal_pointer_delta(ActionSignal::LookRight, &s), 12.0);
         assert_eq!(cb.signal_pointer_delta(ActionSignal::LookLeft, &s), 0.0);
-        assert_eq!(cb.signal_pointer_delta(ActionSignal::LookUp, &s), 3.0, "screen y-down: up = -y");
+        assert_eq!(
+            cb.signal_pointer_delta(ActionSignal::LookUp, &s),
+            3.0,
+            "screen y-down: up = -y"
+        );
         assert_eq!(cb.signal_pointer_delta(ActionSignal::LookDown, &s), 0.0);
 
         // …and it never leaks into the stick RATE channel (`signal_axis` stays 0..1).

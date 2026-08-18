@@ -76,7 +76,11 @@ impl Bvh {
     pub fn global_rotations(&self, local: &[Quat]) -> Vec<Quat> {
         let mut g = vec![Quat::IDENTITY; self.joints.len()];
         for (idx, j) in self.joints.iter().enumerate() {
-            g[idx] = if j.parent < 0 { local[idx] } else { g[j.parent as usize] * local[idx] };
+            g[idx] = if j.parent < 0 {
+                local[idx]
+            } else {
+                g[j.parent as usize] * local[idx]
+            };
         }
         g
     }
@@ -96,7 +100,8 @@ fn q_axis(axis: u8, deg: f32) -> Quat {
 /// Parse a BVH file into a [`Bvh`]. End Sites are dropped (no channels); channel order is respected
 /// AS DECLARED per joint.
 pub fn parse_bvh(path: &Path) -> Result<Bvh> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading BVH {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading BVH {}", path.display()))?;
 
     let mut joints: Vec<BvhJoint> = Vec::new();
     let mut stack: Vec<Option<usize>> = Vec::new(); // joint index, or None for an End Site sentinel
@@ -109,7 +114,12 @@ pub fn parse_bvh(path: &Path) -> Result<Bvh> {
         let Some(&head) = w.first() else { continue };
         match head {
             "ROOT" | "JOINT" => {
-                let parent = stack.iter().rev().find_map(|s| *s).map(|i| i as i32).unwrap_or(-1);
+                let parent = stack
+                    .iter()
+                    .rev()
+                    .find_map(|s| *s)
+                    .map(|i| i as i32)
+                    .unwrap_or(-1);
                 joints.push(BvhJoint {
                     name: w.get(1).unwrap_or(&"").to_string(),
                     parent,
@@ -121,8 +131,7 @@ pub fn parse_bvh(path: &Path) -> Result<Bvh> {
             "End" => stack.push(None), // "End Site"
             "OFFSET" => {
                 if let Some(Some(idx)) = stack.last().copied() {
-                    joints[idx].offset =
-                        [parse3(&w, 1)?, parse3(&w, 2)?, parse3(&w, 3)?];
+                    joints[idx].offset = [parse3(&w, 1)?, parse3(&w, 2)?, parse3(&w, 3)?];
                 }
             }
             "CHANNELS" => {
@@ -151,7 +160,11 @@ pub fn parse_bvh(path: &Path) -> Result<Bvh> {
     if joints.is_empty() {
         bail!("no joints parsed from BVH {}", path.display());
     }
-    Ok(Bvh { joints, frames, frame_time })
+    Ok(Bvh {
+        joints,
+        frames,
+        frame_time,
+    })
 }
 
 fn parse3(w: &[&str], i: usize) -> Result<f32> {
@@ -185,24 +198,49 @@ mod tests {
         eprintln!(
             "{}: {} joints, {} frames @ {:.3}s ({:.0} fps); root '{}'",
             path.file_name().unwrap().to_string_lossy(),
-            bvh.joints.len(), bvh.frames.len(), bvh.frame_time, bvh.fps(), bvh.joints[0].name
+            bvh.joints.len(),
+            bvh.frames.len(),
+            bvh.frame_time,
+            bvh.fps(),
+            bvh.joints[0].name
         );
         assert_eq!(bvh.joints[0].name, "Hips", "root is Hips");
         assert_eq!(bvh.joints[0].parent, -1, "root has no parent");
-        assert_eq!(bvh.joints[0].channels.len(), 6, "root has 6 channels (pos+rot)");
-        assert!(bvh.joints.iter().skip(1).all(|j| j.channels.len() == 3 || j.channels.is_empty()));
-        assert!((28.0..32.0).contains(&bvh.fps()), "≈30 fps, got {}", bvh.fps());
+        assert_eq!(
+            bvh.joints[0].channels.len(),
+            6,
+            "root has 6 channels (pos+rot)"
+        );
+        assert!(bvh
+            .joints
+            .iter()
+            .skip(1)
+            .all(|j| j.channels.len() == 3 || j.channels.is_empty()));
+        assert!(
+            (28.0..32.0).contains(&bvh.fps()),
+            "≈30 fps, got {}",
+            bvh.fps()
+        );
         assert!(!bvh.frames.is_empty(), "has motion frames");
         assert!(bvh.joints.iter().any(|j| j.name == "Spine1"), "has Spine1");
-        assert!(bvh.joints.iter().any(|j| j.name == "LeftFoot"), "has LeftFoot");
+        assert!(
+            bvh.joints.iter().any(|j| j.name == "LeftFoot"),
+            "has LeftFoot"
+        );
 
         // Frame decode: finite local quats + FK globals.
         let (local, root_pos) = bvh.frame_locals(&bvh.frames[0]);
         assert_eq!(local.len(), bvh.joints.len());
         assert!(local.iter().all(|q| q.is_finite()), "finite local quats");
-        assert!(root_pos.iter().all(|v| v.is_finite()), "finite root position");
+        assert!(
+            root_pos.iter().all(|v| v.is_finite()),
+            "finite root position"
+        );
         let g = bvh.global_rotations(&local);
         assert!(g.iter().all(|q| q.is_finite()), "finite FK globals");
-        eprintln!("frame 0: root_pos={root_pos:?}, {} local quats decoded", local.len());
+        eprintln!(
+            "frame 0: root_pos={root_pos:?}, {} local quats decoded",
+            local.len()
+        );
     }
 }

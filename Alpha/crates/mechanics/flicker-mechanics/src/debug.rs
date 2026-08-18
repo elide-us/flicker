@@ -24,7 +24,11 @@ pub fn wireframe(shape: &Shape) -> Vec<(Vec3, Vec3)> {
         }
         Shape::Capsule { a, b, radius } => {
             let axis = b - a;
-            let dir = if axis.length() > 1e-6 { axis.normalize() } else { Vec3::Z };
+            let dir = if axis.length() > 1e-6 {
+                axis.normalize()
+            } else {
+                Vec3::Z
+            };
             let (u, v) = perp_basis(dir);
             let mut s = ring(a, dir, radius);
             s.extend(ring(b, dir, radius));
@@ -40,21 +44,38 @@ pub fn wireframe(shape: &Shape) -> Vec<(Vec3, Vec3)> {
             s.push((a, b)); // centre axis
             s
         }
-        Shape::Obb { center, half_extents, rotation } => {
+        Shape::Obb {
+            center,
+            half_extents,
+            rotation,
+        } => {
             // 8 corners (all ± sign combos), 12 edges connecting corners that differ in one axis.
             let corner = |sx: f32, sy: f32, sz: f32| {
                 center + rotation * (half_extents * Vec3::new(sx, sy, sz))
             };
             let c = [
-                corner(-1.0, -1.0, -1.0), corner(1.0, -1.0, -1.0),
-                corner(1.0, 1.0, -1.0), corner(-1.0, 1.0, -1.0),
-                corner(-1.0, -1.0, 1.0), corner(1.0, -1.0, 1.0),
-                corner(1.0, 1.0, 1.0), corner(-1.0, 1.0, 1.0),
+                corner(-1.0, -1.0, -1.0),
+                corner(1.0, -1.0, -1.0),
+                corner(1.0, 1.0, -1.0),
+                corner(-1.0, 1.0, -1.0),
+                corner(-1.0, -1.0, 1.0),
+                corner(1.0, -1.0, 1.0),
+                corner(1.0, 1.0, 1.0),
+                corner(-1.0, 1.0, 1.0),
             ];
             const EDGES: [(usize, usize); 12] = [
-                (0, 1), (1, 2), (2, 3), (3, 0), // bottom face
-                (4, 5), (5, 6), (6, 7), (7, 4), // top face
-                (0, 4), (1, 5), (2, 6), (3, 7), // verticals
+                (0, 1),
+                (1, 2),
+                (2, 3),
+                (3, 0), // bottom face
+                (4, 5),
+                (5, 6),
+                (6, 7),
+                (7, 4), // top face
+                (0, 4),
+                (1, 5),
+                (2, 6),
+                (3, 7), // verticals
             ];
             EDGES.iter().map(|&(i, j)| (c[i], c[j])).collect()
         }
@@ -63,7 +84,11 @@ pub fn wireframe(shape: &Shape) -> Vec<(Vec3, Vec3)> {
 
 /// An `n`-gon ring of `radius` about `center`, in the plane perpendicular to `axis`.
 fn ring(center: Vec3, axis: Vec3, radius: f32) -> Vec<(Vec3, Vec3)> {
-    let (u, v) = perp_basis(if axis.length() > 1e-6 { axis.normalize() } else { Vec3::Z });
+    let (u, v) = perp_basis(if axis.length() > 1e-6 {
+        axis.normalize()
+    } else {
+        Vec3::Z
+    });
     let point = |t: f32| center + (u * t.cos() + v * t.sin()) * radius;
     let mut segs = Vec::with_capacity(RING_SEGMENTS);
     let mut prev = point(0.0);
@@ -143,7 +168,10 @@ pub fn frame_axis_segments(world: Mat4, parents: &[i32], globals: &[Mat4]) -> Ve
             continue;
         }
         let dir = x_axis.normalize() * len * to_child.dot(x_axis).signum();
-        segs.push((world.transform_point3(origin), world.transform_point3(origin + dir)));
+        segs.push((
+            world.transform_point3(origin),
+            world.transform_point3(origin + dir),
+        ));
     }
     segs
 }
@@ -153,7 +181,12 @@ pub fn frame_axis_segments(world: Mat4, parents: &[i32], globals: &[Mat4]) -> Ve
 /// DCC skeleton look. Replaces the flat parent→child [`joint_segments`] line. `waist_frac` sets both
 /// where the waist square sits along the bone (from the head) and its half-size, both as a fraction
 /// of the bone length, so short bones stay slim. Twelve segments per bone; root bones are skipped.
-pub fn bone_diamonds(world: Mat4, parents: &[i32], globals: &[Mat4], waist_frac: f32) -> Vec<(Vec3, Vec3)> {
+pub fn bone_diamonds(
+    world: Mat4,
+    parents: &[i32],
+    globals: &[Mat4],
+    waist_frac: f32,
+) -> Vec<(Vec3, Vec3)> {
     let mut segs = Vec::with_capacity(parents.len() * 12);
     for (i, &parent) in parents.iter().enumerate() {
         if parent < 0 {
@@ -191,7 +224,13 @@ pub fn bone_diamonds(world: Mat4, parents: &[i32], globals: &[Mat4], waist_frac:
 /// child, or to its parent for a leaf) so extremity joints read smaller than the hips/spine, then
 /// clamped to `[min_r, max_r]`. Lengths are in the rig's own units (a translation/axis-swap `world`
 /// preserves them, so the caller can draw the balls under the same `world`).
-pub fn joint_ball_radii(parents: &[i32], globals: &[Mat4], frac: f32, min_r: f32, max_r: f32) -> Vec<f32> {
+pub fn joint_ball_radii(
+    parents: &[i32],
+    globals: &[Mat4],
+    frac: f32,
+    min_r: f32,
+    max_r: f32,
+) -> Vec<f32> {
     (0..parents.len())
         .map(|i| {
             let here = globals[i].w_axis.truncate();
@@ -200,9 +239,8 @@ pub fn joint_ball_radii(parents: &[i32], globals: &[Mat4], frac: f32, min_r: f32
                 .position(|&p| p == i as i32)
                 .map(|c| (globals[c].w_axis.truncate() - here).length())
                 .or_else(|| {
-                    (parents[i] >= 0).then(|| {
-                        (globals[parents[i] as usize].w_axis.truncate() - here).length()
-                    })
+                    (parents[i] >= 0)
+                        .then(|| (globals[parents[i] as usize].w_axis.truncate() - here).length())
                 })
                 .unwrap_or(0.0);
             (len * frac).clamp(min_r, max_r)
@@ -218,17 +256,28 @@ mod tests {
     #[test]
     fn wireframe_shapes_produce_segments_on_their_surface() {
         // Sphere: three rings of 16 segments each; every vertex is `radius` from the centre.
-        let sph = wireframe(&Shape::Sphere { center: Vec3::ZERO, radius: 5.0 });
+        let sph = wireframe(&Shape::Sphere {
+            center: Vec3::ZERO,
+            radius: 5.0,
+        });
         assert_eq!(sph.len(), 3 * RING_SEGMENTS);
         for (p, q) in &sph {
             assert!((p.length() - 5.0).abs() < 1e-4 && (q.length() - 5.0).abs() < 1e-4);
         }
         // Capsule: two rings + 4 longitudinals + centre axis + 4 dome ribs (half a ring each).
-        let cap = wireframe(&Shape::Capsule { a: Vec3::ZERO, b: Vec3::new(0.0, 0.0, 10.0), radius: 1.0 });
-        assert_eq!(cap.len(), 2 * RING_SEGMENTS + 4 + 1 + 4 * (RING_SEGMENTS / 2));
+        let cap = wireframe(&Shape::Capsule {
+            a: Vec3::ZERO,
+            b: Vec3::new(0.0, 0.0, 10.0),
+            radius: 1.0,
+        });
+        assert_eq!(
+            cap.len(),
+            2 * RING_SEGMENTS + 4 + 1 + 4 * (RING_SEGMENTS / 2)
+        );
         // The domes bulge PAST the segment ends: the bottom cap reaches its pole at z = -radius.
         assert!(
-            cap.iter().any(|(p, q)| (p.z + 1.0).abs() < 1e-4 || (q.z + 1.0).abs() < 1e-4),
+            cap.iter()
+                .any(|(p, q)| (p.z + 1.0).abs() < 1e-4 || (q.z + 1.0).abs() < 1e-4),
             "the bottom dome reaches its pole at z = -radius"
         );
         // Box: exactly 12 edges.
@@ -252,22 +301,44 @@ mod tests {
         let segs = joint_segments(Mat4::IDENTITY, &parents, &globals);
         assert_eq!(segs.len(), 2, "root skipped; two parent→child links");
         assert_eq!(segs[0], (Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)));
-        assert_eq!(segs[1], (Vec3::new(10.0, 0.0, 0.0), Vec3::new(15.0, 0.0, 0.0)));
+        assert_eq!(
+            segs[1],
+            (Vec3::new(10.0, 0.0, 0.0), Vec3::new(15.0, 0.0, 0.0))
+        );
     }
 
     #[test]
     fn frame_axis_lies_on_the_limb_when_aligned_and_crosses_when_off() {
         let parents = [-1i32, 0, 1];
         // Aligned: bone 1's frame +X points +x, its child (bone 2) is at +x10 → axis reaches it.
-        let aligned = [Mat4::IDENTITY, Mat4::IDENTITY, Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))];
+        let aligned = [
+            Mat4::IDENTITY,
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+        ];
         let a = frame_axis_segments(Mat4::IDENTITY, &parents, &aligned);
-        assert_eq!(a.len(), 1, "only bone 1 has a child (root skipped, bone 2 is a leaf)");
-        assert!((a[0].1 - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-4, "aligned axis reaches the child");
+        assert_eq!(
+            a.len(),
+            1,
+            "only bone 1 has a child (root skipped, bone 2 is a leaf)"
+        );
+        assert!(
+            (a[0].1 - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-4,
+            "aligned axis reaches the child"
+        );
         // Off: bone 1's frame rotated 90° about z (its +X now points +y) → axis crosses the +x limb.
         let rot = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2);
-        let off = [Mat4::IDENTITY, rot, Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0))];
+        let off = [
+            Mat4::IDENTITY,
+            rot,
+            Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)),
+        ];
         let b = frame_axis_segments(Mat4::IDENTITY, &parents, &off);
-        assert!(b[0].1.y.abs() > 1.0, "off-limb axis points along y, crossing the x limb: {:?}", b[0].1);
+        assert!(
+            b[0].1.y.abs() > 1.0,
+            "off-limb axis points along y, crossing the x limb: {:?}",
+            b[0].1
+        );
     }
 
     #[test]
@@ -292,9 +363,15 @@ mod tests {
             Mat4::from_translation(Vec3::new(12.0, 0.0, 0.0)),
         ];
         let r = joint_ball_radii(&parents, &globals, 0.2, 0.1, 100.0);
-        assert!(r[0] > r[1], "joint 0 heads a length-10 bone, joint 1 a length-2 bone");
+        assert!(
+            r[0] > r[1],
+            "joint 0 heads a length-10 bone, joint 1 a length-2 bone"
+        );
         assert!((r[1] - 0.4).abs() < 1e-4, "joint 1: 2 × 0.2");
-        assert!((r[2] - 0.4).abs() < 1e-4, "leaf joint 2 falls back to its parent bone (2 × 0.2)");
+        assert!(
+            (r[2] - 0.4).abs() < 1e-4,
+            "leaf joint 2 falls back to its parent bone (2 × 0.2)"
+        );
         // The clamp holds: a huge frac is capped at max_r.
         let capped = joint_ball_radii(&parents, &globals, 100.0, 0.1, 5.0);
         assert!(capped.iter().all(|&x| x <= 5.0));

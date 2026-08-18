@@ -13,12 +13,12 @@ pub use runner::{last_window_geometry, run, run_with_input, WindowGeometry};
 // alongside the runner entry points. The canonical home of every input type is
 // `flicker-input-core`; this is a courtesy surface on the integration crate,
 // re-exported straight from it under the canonical names.
+pub use flicker_input_core::rebind::RebindCapture;
 pub use flicker_input_core::{
     AbstractControls, ActionSignal, AxisDirection, ContextBindings, ContextualBindings,
     DeadzoneShape, GamepadAxis, GamepadButton, GamepadConfig, GamepadState, InputBinding,
     InputContext, InputMap, InputProfile, InputState, Key, MouseButton, SignalBinding,
 };
-pub use flicker_input_core::rebind::RebindCapture;
 pub use flicker_input_router::{InputEvent, RouteCtx};
 
 use std::time::Duration;
@@ -60,7 +60,11 @@ impl<'a> FrameInput<'a> {
         route: &'a mut RouteCtx,
         cont: Option<(&'a ContextualBindings, &'a GamepadConfig)>,
     ) -> Self {
-        Self { events, route, cont }
+        Self {
+            events,
+            route,
+            cont,
+        }
     }
 
     /// Analog deflection of `signal` in the active context, 0..1 — the stick-rate /
@@ -68,7 +72,8 @@ impl<'a> FrameInput<'a> {
     /// drive one path). A camera multiplies this by `dt`. Zero with no pump. Delegates
     /// to the pump's [`ContextualBindings::signal_axis`].
     pub fn axis(&self, signal: ActionSignal, input: &InputState) -> f32 {
-        self.cont.map_or(0.0, |(b, g)| b.signal_axis(signal, input, g))
+        self.cont
+            .map_or(0.0, |(b, g)| b.signal_axis(signal, input, g))
     }
 
     /// Pointer-look delta (pixels THIS frame) for `signal` — the mouse channel beside
@@ -76,13 +81,15 @@ impl<'a> FrameInput<'a> {
     /// Zero unless a `MouseMotion` is bound to `signal` (and its gate held). Zero with
     /// no pump. Delegates to [`ContextualBindings::signal_pointer_delta`].
     pub fn pointer_delta(&self, signal: ActionSignal, input: &InputState) -> f32 {
-        self.cont.map_or(0.0, |(b, _)| b.signal_pointer_delta(signal, input))
+        self.cont
+            .map_or(0.0, |(b, _)| b.signal_pointer_delta(signal, input))
     }
 
     /// Is any binding for `signal` held in the active context (deadzone-aware)? The
     /// stance-level query (`signal_held`). False with no pump.
     pub fn held(&self, signal: ActionSignal, input: &InputState) -> bool {
-        self.cont.is_some_and(|(b, g)| b.signal_held(signal, input, g))
+        self.cont
+            .is_some_and(|(b, g)| b.signal_held(signal, input, g))
     }
 }
 
@@ -177,7 +184,11 @@ mod tests {
         let input = InputState::new();
         let mut route = RouteCtx::new();
         let f = FrameInput::new(&[], &mut route, Some((&bindings, &gamepad)));
-        assert_eq!(f.axis(ActionSignal::MoveForward, &input), 0.0, "idle keys/stick = no deflection");
+        assert_eq!(
+            f.axis(ActionSignal::MoveForward, &input),
+            0.0,
+            "idle keys/stick = no deflection"
+        );
         assert!(!f.held(ActionSignal::MoveForward, &input));
     }
 }

@@ -40,7 +40,15 @@ fn patch(
 }
 
 fn ramp(stops: &[(f32, [f32; 3])]) -> ColorRamp {
-    ColorRamp { stops: stops.iter().map(|(at, color)| RampStop { at: *at, color: *color }).collect() }
+    ColorRamp {
+        stops: stops
+            .iter()
+            .map(|(at, color)| RampStop {
+                at: *at,
+                color: *color,
+            })
+            .collect(),
+    }
 }
 
 /// **Granite** (material 10) — a coarse plutonic rock: a mottled feldspar bed
@@ -331,7 +339,11 @@ mod tests {
             let base = set.get(MapKind::BaseColor).unwrap();
             let lo = base.pixels.chunks(4).map(|p| p[0]).min().unwrap();
             let hi = base.pixels.chunks(4).map(|p| p[0]).max().unwrap();
-            assert!(hi as i32 - lo as i32 > 24, "patch '{}' is nearly flat ({lo}..{hi})", r.id);
+            assert!(
+                hi as i32 - lo as i32 > 24,
+                "patch '{}' is nearly flat ({lo}..{hi})",
+                r.id
+            );
         }
     }
 }

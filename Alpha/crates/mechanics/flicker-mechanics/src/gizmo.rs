@@ -68,12 +68,7 @@ impl Axis {
     /// Brightened RGBA for the hovered/active axis (pushed toward white, alpha kept).
     pub fn hover_color(self) -> [f32; 4] {
         let [r, g, b, a] = self.color();
-        [
-            (r + 1.0) * 0.5,
-            (g + 1.0) * 0.5,
-            (b + 1.0) * 0.5,
-            a,
-        ]
+        [(r + 1.0) * 0.5, (g + 1.0) * 0.5, (b + 1.0) * 0.5, a]
     }
 }
 
@@ -133,7 +128,13 @@ pub fn gizmo_segments(
 }
 
 /// Shaft `origin → tip` plus a two-line V arrowhead at the tip.
-fn push_arrow(segs: &mut Vec<(Vec3, Vec3, [f32; 4])>, origin: Vec3, dir: Vec3, size: f32, color: [f32; 4]) {
+fn push_arrow(
+    segs: &mut Vec<(Vec3, Vec3, [f32; 4])>,
+    origin: Vec3,
+    dir: Vec3,
+    size: f32,
+    color: [f32; 4],
+) {
     let tip = origin + dir * size;
     segs.push((origin, tip, color));
     let (u, _) = perp_basis(dir);
@@ -144,7 +145,13 @@ fn push_arrow(segs: &mut Vec<(Vec3, Vec3, [f32; 4])>, origin: Vec3, dir: Vec3, s
 }
 
 /// A segmented ring of `radius` about `origin` in the plane perpendicular to `dir`.
-fn push_ring(segs: &mut Vec<(Vec3, Vec3, [f32; 4])>, origin: Vec3, dir: Vec3, radius: f32, color: [f32; 4]) {
+fn push_ring(
+    segs: &mut Vec<(Vec3, Vec3, [f32; 4])>,
+    origin: Vec3,
+    dir: Vec3,
+    radius: f32,
+    color: [f32; 4],
+) {
     let (u, v) = perp_basis(dir);
     let point = |t: f32| origin + (u * t.cos() + v * t.sin()) * radius;
     let mut prev = point(0.0);
@@ -157,22 +164,41 @@ fn push_ring(segs: &mut Vec<(Vec3, Vec3, [f32; 4])>, origin: Vec3, dir: Vec3, ra
 }
 
 /// Shaft `origin → tip` plus a small axis-aligned-to-`dir` box at the tip (12 edges).
-fn push_scale_handle(segs: &mut Vec<(Vec3, Vec3, [f32; 4])>, origin: Vec3, dir: Vec3, size: f32, color: [f32; 4]) {
+fn push_scale_handle(
+    segs: &mut Vec<(Vec3, Vec3, [f32; 4])>,
+    origin: Vec3,
+    dir: Vec3,
+    size: f32,
+    color: [f32; 4],
+) {
     let tip = origin + dir * size;
     segs.push((origin, tip, color));
     let (u, v) = perp_basis(dir);
     let h = size * BOX_HALF_FRAC;
     let corner = |sx: f32, sy: f32, sz: f32| tip + (dir * sx + u * sy + v * sz) * h;
     let c = [
-        corner(-1.0, -1.0, -1.0), corner(1.0, -1.0, -1.0),
-        corner(1.0, 1.0, -1.0), corner(-1.0, 1.0, -1.0),
-        corner(-1.0, -1.0, 1.0), corner(1.0, -1.0, 1.0),
-        corner(1.0, 1.0, 1.0), corner(-1.0, 1.0, 1.0),
+        corner(-1.0, -1.0, -1.0),
+        corner(1.0, -1.0, -1.0),
+        corner(1.0, 1.0, -1.0),
+        corner(-1.0, 1.0, -1.0),
+        corner(-1.0, -1.0, 1.0),
+        corner(1.0, -1.0, 1.0),
+        corner(1.0, 1.0, 1.0),
+        corner(-1.0, 1.0, 1.0),
     ];
     const EDGES: [(usize, usize); 12] = [
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        (0, 4), (1, 5), (2, 6), (3, 7),
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
     ];
     for &(i, j) in &EDGES {
         segs.push((c[i], c[j], color));
@@ -200,7 +226,9 @@ pub fn pick_handle(
                 let (pr, ps) = closest_point_ray_segment(ray_origin, ray_dir, origin, tip);
                 (pr - ps).length()
             }
-            GizmoMode::Rotate => ring_miss(ray_origin, ray_dir, origin, dir, size * RING_RADIUS_FRAC),
+            GizmoMode::Rotate => {
+                ring_miss(ray_origin, ray_dir, origin, dir, size * RING_RADIUS_FRAC)
+            }
         };
         if miss <= max_dist && best.map(|(_, m)| miss < m).unwrap_or(true) {
             best = Some((axis, miss));
@@ -312,7 +340,13 @@ mod tests {
 
     #[test]
     fn hover_brightens_only_the_hovered_axis() {
-        let segs = gizmo_segments(Vec3::ZERO, Mat3::IDENTITY, GizmoMode::Translate, 10.0, Some(Axis::Y));
+        let segs = gizmo_segments(
+            Vec3::ZERO,
+            Mat3::IDENTITY,
+            GizmoMode::Translate,
+            10.0,
+            Some(Axis::Y),
+        );
         assert_eq!(segs[0].2, Axis::X.color(), "X unchanged");
         assert_eq!(segs[3].2, Axis::Y.hover_color(), "Y brightened");
         assert_ne!(Axis::Y.color(), Axis::Y.hover_color());
@@ -382,7 +416,10 @@ mod tests {
             (Vec3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0)),
             (Vec3::new(3.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0)),
         );
-        assert!((delta - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-4, "delta {delta:?}");
+        assert!(
+            (delta - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-4,
+            "delta {delta:?}"
+        );
     }
 
     #[test]
@@ -409,7 +446,10 @@ mod tests {
             (Vec3::new(0.0, 0.0, 10.0), Vec3::new(0.0, 0.0, -1.0)),
             (Vec3::new(0.0, 4.0, 10.0), Vec3::new(0.0, 0.0, -1.0)),
         );
-        assert!((delta - Vec3::new(0.0, 4.0, 0.0)).length() < 1e-4, "delta {delta:?}");
+        assert!(
+            (delta - Vec3::new(0.0, 4.0, 0.0)).length() < 1e-4,
+            "delta {delta:?}"
+        );
     }
 
     #[test]
@@ -419,7 +459,10 @@ mod tests {
         let prev = (Vec3::new(1.0, 2.0, 10.0), Vec3::new(0.0, 0.0, -1.0));
         let now = (Vec3::new(4.0, 6.0, 10.0), Vec3::new(0.0, 0.0, -1.0));
         let d = drag_plane(n, Vec3::ZERO, prev, now);
-        assert!((d - Vec3::new(3.0, 4.0, 0.0)).length() < 1e-4, "in-plane XY move, Z locked: {d:?}");
+        assert!(
+            (d - Vec3::new(3.0, 4.0, 0.0)).length() < 1e-4,
+            "in-plane XY move, Z locked: {d:?}"
+        );
         // A ray parallel to the plane cannot resolve a point → no move.
         let par = (Vec3::ZERO, Vec3::X);
         assert_eq!(drag_plane(n, Vec3::ZERO, par, par), Vec3::ZERO);

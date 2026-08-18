@@ -11,7 +11,7 @@ license.workspace = true
 # brought in next (still rough); this slice is the runnable viewer. Name not final.
 [dependencies]
 serde_json.workspace = true
-flicker = { path = "../../Alpha/crates/core/flicker" }
+flicker = { version = "0.1.0", path = "../../Alpha/crates/core/flicker" }
 # Shared front-end shell (logo/menu/settings/pause + the Prism UI theme). The app
 # routes through `flicker_shell::run`; no per-app shell/UI copy.
 flicker-shell.workspace = true

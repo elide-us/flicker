@@ -326,7 +326,10 @@ mod tests {
         ];
         for k in kinds {
             let lane = lane_of(k);
-            assert!(Lane::ALL.contains(&lane), "{k:?} mapped outside the lane set");
+            assert!(
+                Lane::ALL.contains(&lane),
+                "{k:?} mapped outside the lane set"
+            );
         }
         // The authoring contract's rulings, pinned so a later edit has to face them.
         assert_eq!(
@@ -334,7 +337,11 @@ mod tests {
             Lane::Parry,
             "Parry owns its lane — its tick IS the server commit horizon"
         );
-        assert_ne!(lane_of(EventKind::Parry), Lane::Cancel, "Parry no longer rides Cancel");
+        assert_ne!(
+            lane_of(EventKind::Parry),
+            Lane::Cancel,
+            "Parry no longer rides Cancel"
+        );
         // Every combat WINDOW kind now has a lane to itself: no folding.
         for k in [
             EventKind::HitboxActive,
@@ -363,11 +370,17 @@ mod tests {
     #[test]
     fn parry_budget_flags_an_undeliverable_commit_horizon() {
         let (ms8, v8) = parry_budget(8, 60);
-        assert!((ms8 - 133.3).abs() < 0.5, "tick 8 at 60 Hz ≈ 133 ms, got {ms8}");
+        assert!(
+            (ms8 - 133.3).abs() < 0.5,
+            "tick 8 at 60 Hz ≈ 133 ms, got {ms8}"
+        );
         assert_eq!(v8, Budget::Ok);
 
         let (ms4, v4) = parry_budget(4, 60);
-        assert!((ms4 - 66.7).abs() < 0.5, "tick 4 at 60 Hz ≈ 66 ms, got {ms4}");
+        assert!(
+            (ms4 - 66.7).abs() < 0.5,
+            "tick 4 at 60 Hz ≈ 66 ms, got {ms4}"
+        );
         assert_eq!(v4, Budget::Over, "66 ms cannot cross an ocean");
 
         // The verdict follows real time, not tick count: the same tick at half the rate is
@@ -385,9 +398,18 @@ mod tests {
         assert!((top - TELEGRAPH_TOP_MS).abs() < 0.01);
         assert!(top < entry, "higher tiers unlock tighter windows");
         // Monotone, and out-of-range tiers clamp rather than extrapolate.
-        let floors: Vec<f32> = (1..=TIER_MAX).map(|t| telegraph_floor_ms(Some(t))).collect();
-        assert!(floors.windows(2).all(|w| w[1] <= w[0] + 0.001), "ladder never widens");
-        assert_eq!(telegraph_floor_ms(Some(99)), top, "tier clamps to the top rung");
+        let floors: Vec<f32> = (1..=TIER_MAX)
+            .map(|t| telegraph_floor_ms(Some(t)))
+            .collect();
+        assert!(
+            floors.windows(2).all(|w| w[1] <= w[0] + 0.001),
+            "ladder never widens"
+        );
+        assert_eq!(
+            telegraph_floor_ms(Some(99)),
+            top,
+            "tier clamps to the top rung"
+        );
         // No tier yet (the creature model is unbuilt) ⇒ the entry rung, the safe default.
         assert_eq!(telegraph_floor_ms(None), entry);
     }
@@ -406,8 +428,16 @@ mod tests {
         // ladder, not a single global threshold, is what decides.
         let (ms, v) = telegraph_budget(21, 60, Some(TIER_MAX));
         assert!((ms - 350.0).abs() < 1.0);
-        assert_eq!(v, Budget::Tight, "350 ms clears the 330 ms floor, but only just");
-        assert_eq!(telegraph_budget(21, 60, Some(1)).1, Budget::Over, "illegal at tier 1");
+        assert_eq!(
+            v,
+            Budget::Tight,
+            "350 ms clears the 330 ms floor, but only just"
+        );
+        assert_eq!(
+            telegraph_budget(21, 60, Some(1)).1,
+            Budget::Over,
+            "illegal at tier 1"
+        );
         // Clear of the top rung's comfort band entirely.
         assert_eq!(telegraph_budget(30, 60, Some(TIER_MAX)).1, Budget::Ok);
     }
@@ -436,19 +466,28 @@ mod tests {
         }
         let first = rects[0];
         let last = rects[rects.len() - 1];
-        assert!(first.pos.y >= s.pos.y + RULER_H, "lanes start below the ruler");
+        assert!(
+            first.pos.y >= s.pos.y + RULER_H,
+            "lanes start below the ruler"
+        );
         assert!(
             last.pos.y + last.size.y <= s.pos.y + s.size.y + 0.01,
             "the last lane stays inside the strip"
         );
-        assert!(first.pos.x >= s.pos.x + GUTTER_W, "tracks clear the label gutter");
+        assert!(
+            first.pos.x >= s.pos.x + GUTTER_W,
+            "tracks clear the label gutter"
+        );
     }
 
     /// A cramped strip must still produce usable, positive geometry rather than negative
     /// heights that would draw inverted quads.
     #[test]
     fn lane_geometry_survives_a_tiny_strip() {
-        let s = Strip { pos: Vec2::ZERO, size: Vec2::new(40.0, 10.0) };
+        let s = Strip {
+            pos: Vec2::ZERO,
+            size: Vec2::new(40.0, 10.0),
+        };
         assert!(s.lane_h() > 0.0);
         assert!(s.track_w() > 0.0);
         let r = s.lane_rect(6);
@@ -458,15 +497,24 @@ mod tests {
     #[test]
     fn frames_map_across_the_track_and_clamp() {
         let s = strip();
-        assert!((s.frame_x(0, 40) - s.track_x()).abs() < 0.01, "frame 0 at the left");
+        assert!(
+            (s.frame_x(0, 40) - s.track_x()).abs() < 0.01,
+            "frame 0 at the left"
+        );
         assert!(
             (s.frame_x(40, 40) - (s.track_x() + s.track_w())).abs() < 0.01,
             "the last frame reaches the right"
         );
-        assert!(s.frame_x(20, 40) > s.frame_x(10, 40), "frames advance rightward");
+        assert!(
+            s.frame_x(20, 40) > s.frame_x(10, 40),
+            "frames advance rightward"
+        );
         // A zero-length clip and an over-long event are both survivable.
         assert!(s.frame_x(5, 0).is_finite());
-        assert!((s.frame_x(999, 40) - (s.track_x() + s.track_w())).abs() < 0.01, "clamped");
+        assert!(
+            (s.frame_x(999, 40) - (s.track_x() + s.track_w())).abs() < 0.01,
+            "clamped"
+        );
     }
 
     /// A window event spans its frames; a one-shot draws as a marker. Both stay inside
@@ -476,7 +524,10 @@ mod tests {
         let s = strip();
         let span = s.event_rect(0, 10, Some(20), 40);
         let point = s.event_rect(0, 10, None, 40);
-        assert!(span.size.x > point.size.x, "a window is wider than a one-shot");
+        assert!(
+            span.size.x > point.size.x,
+            "a window is wider than a one-shot"
+        );
         assert_eq!(point.size.x, POINT_W);
         assert_eq!(span.pos.y, s.lane_rect(0).pos.y, "the bar sits in its lane");
         assert_eq!(span.size.y, s.lane_rect(0).size.y);
@@ -504,7 +555,10 @@ mod tests {
             assert!(t.len() <= 11, "{frames}: {} ticks is unreadable", t.len());
             assert_eq!(t[0], 0);
             assert!(t.windows(2).all(|w| w[1] > w[0]), "{frames}: ticks ascend");
-            assert!(t.iter().all(|f| *f <= frames.max(1)), "{frames}: tick past the clip");
+            assert!(
+                t.iter().all(|f| *f <= frames.max(1)),
+                "{frames}: tick past the clip"
+            );
         }
     }
 }

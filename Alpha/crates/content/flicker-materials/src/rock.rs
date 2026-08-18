@@ -56,7 +56,11 @@ impl RockDef {
     /// classifier wants to match in.
     pub fn modal_sorted(&self) -> Vec<(&str, f32)> {
         let mut v: Vec<(&str, f32)> = self.modal.iter().map(|(k, &f)| (k.as_str(), f)).collect();
-        v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(b.0)));
+        v.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(b.0))
+        });
         v
     }
 }

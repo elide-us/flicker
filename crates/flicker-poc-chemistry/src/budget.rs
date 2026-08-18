@@ -138,7 +138,10 @@ impl Budget {
             }
         }
         let planet_mass_kg = accreted_kg.values().sum();
-        Self { accreted_kg, planet_mass_kg }
+        Self {
+            accreted_kg,
+            planet_mass_kg,
+        }
     }
 
     /// A size-honest copy: every element `× factor`, so a reference-composition
@@ -147,9 +150,15 @@ impl Budget {
     /// applies `size_scale³` through this; `× 1.0` is bit-exact, which is what
     /// keeps the reference freq-96 world untouched by the size model.
     pub fn sized(&self, factor: f64) -> Self {
-        let accreted_kg =
-            self.accreted_kg.iter().map(|(&e, &m)| (e, m * factor)).collect();
-        Self { accreted_kg, planet_mass_kg: self.planet_mass_kg * factor }
+        let accreted_kg = self
+            .accreted_kg
+            .iter()
+            .map(|(&e, &m)| (e, m * factor))
+            .collect();
+        Self {
+            accreted_kg,
+            planet_mass_kg: self.planet_mass_kg * factor,
+        }
     }
 
     /// Accreted mass of one element (0 if absent — but every element is explicit).
@@ -191,15 +200,24 @@ mod tests {
         let fe = 26u8;
         let h = 1u8;
         let heavy = b.rescaled(&[(fe, 3.0), (h, 0.1)]);
-        assert!((heavy.accreted(fe) - 3.0 * b.accreted(fe)).abs() < 1.0, "iron tripled");
-        assert!((heavy.accreted(h) - 0.1 * b.accreted(h)).abs() < 1.0, "hydrogen decimated");
+        assert!(
+            (heavy.accreted(fe) - 3.0 * b.accreted(fe)).abs() < 1.0,
+            "iron tripled"
+        );
+        assert!(
+            (heavy.accreted(h) - 0.1 * b.accreted(h)).abs() < 1.0,
+            "hydrogen decimated"
+        );
         // The whole follows the parts — conservation's right-hand side is
         // internally consistent, not pinned to the old mass.
         assert!(
             (heavy.total() - heavy.planet_mass_kg()).abs() < 1e-3 * heavy.total(),
             "total and planet mass agree after the re-endowment"
         );
-        assert!(heavy.total() > b.total(), "more iron than lost hydrogen: heavier world");
+        assert!(
+            heavy.total() > b.total(),
+            "more iron than lost hydrogen: heavier world"
+        );
         // And the untouched elements are untouched.
         assert_eq!(heavy.accreted(14), b.accreted(14), "silicon unchanged");
     }
@@ -219,7 +237,10 @@ mod tests {
             "bulk planet is iron-dominated, not oxygen-dominated"
         );
         // Magnesium (Z=12) is a major reservoir (~14%), not a trace floor.
-        assert!(b.accreted(12) > b.accreted(20), "Mg is a major element, not a floor");
+        assert!(
+            b.accreted(12) > b.accreted(20),
+            "Mg is a major element, not a floor"
+        );
         // Sums to Earth mass.
         let rel = (b.total() - PLANET_MASS_KG).abs() / PLANET_MASS_KG;
         assert!(rel < 1e-3, "budget sums to Earth mass (rel err {rel:.2e})");

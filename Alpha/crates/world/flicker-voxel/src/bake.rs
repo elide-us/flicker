@@ -199,8 +199,9 @@ impl BakedCluster {
         }
 
         let mut cluster = Cluster::empty();
-        cluster
-            .set_default_material(Material::from_raw(u32::from_le_bytes(schema.default_material)));
+        cluster.set_default_material(Material::from_raw(u32::from_le_bytes(
+            schema.default_material,
+        )));
         cluster.replace_state_field(StateField::from_words(words));
 
         // Surface overrides: each entry's state is whatever the dense
@@ -455,14 +456,19 @@ mod tests {
             LocalCoord::new(255, 127, 255).unwrap(),
             LocalCoord::new(128, 128, 128).unwrap(),
         ];
-        let original_states: Vec<_> =
-            probe_coords.iter().map(|c| cluster.get(*c).state()).collect();
+        let original_states: Vec<_> = probe_coords
+            .iter()
+            .map(|c| cluster.get(*c).state())
+            .collect();
         let baked = BakedCluster::from_cluster(id, cluster);
         let json = baked.to_json().expect("serialize");
         let reloaded = BakedCluster::from_json(&json).expect("deserialize");
 
         assert_eq!(reloaded.id.bits(), baked.id.bits());
-        assert_eq!(reloaded.cluster.default_material(), original_default_material);
+        assert_eq!(
+            reloaded.cluster.default_material(),
+            original_default_material
+        );
         assert_eq!(reloaded.cluster.override_count(), original_override_count);
         for (c, expected_state) in probe_coords.iter().zip(original_states.iter()) {
             assert_eq!(
@@ -537,7 +543,13 @@ mod tests {
         }"#;
         let err = BakedCluster::from_json(json).expect_err("must reject version mismatch");
         assert!(
-            matches!(err, BakeError::UnsupportedVersion { got: 99, expected: 2 }),
+            matches!(
+                err,
+                BakeError::UnsupportedVersion {
+                    got: 99,
+                    expected: 2
+                }
+            ),
             "wrong error: {err:?}"
         );
     }
@@ -575,29 +587,20 @@ mod tests {
             CornerVector::from_bytes([1, 2, 3]),
             grey(),
         );
-        for &(x, y, z) in &[
-            (5_u32, 1, 2),
-            (1, 1, 2),
-            (1, 5, 2),
-            (1, 5, 1),
-            (1, 1, 1),
-        ] {
+        for &(x, y, z) in &[(5_u32, 1, 2), (1, 1, 2), (1, 5, 2), (1, 5, 1), (1, 1, 1)] {
             cluster.set(LocalCoord::new(x, y, z).expect("in range"), v);
         }
         let json_a = BakedCluster::from_cluster(id, cluster).to_json().unwrap();
         let id2 = ClusterId::new(0, 0, 0, 0);
         let mut cluster2 = Cluster::empty();
-        for &(x, y, z) in &[
-            (1_u32, 5, 1),
-            (5, 1, 2),
-            (1, 5, 2),
-            (1, 1, 1),
-            (1, 1, 2),
-        ] {
+        for &(x, y, z) in &[(1_u32, 5, 1), (5, 1, 2), (1, 5, 2), (1, 1, 1), (1, 1, 2)] {
             cluster2.set(LocalCoord::new(x, y, z).expect("in range"), v);
         }
         let json_b = BakedCluster::from_cluster(id2, cluster2).to_json().unwrap();
-        assert_eq!(json_a, json_b, "ordering must not depend on insertion order");
+        assert_eq!(
+            json_a, json_b,
+            "ordering must not depend on insertion order"
+        );
     }
 
     #[test]
@@ -613,7 +616,10 @@ mod tests {
         assert!(flicker_core::is_gzipped(&bytes));
         let reloaded = BakedCluster::from_bytes(&bytes).expect("decompress + parse");
         assert_eq!(reloaded.id.bits(), baked.id.bits());
-        assert_eq!(reloaded.cluster.override_count(), baked.cluster.override_count());
+        assert_eq!(
+            reloaded.cluster.override_count(),
+            baked.cluster.override_count()
+        );
         assert_eq!(reloaded.horizon_voxel, baked.horizon_voxel);
         assert_eq!(
             reloaded.cluster.default_material(),
@@ -650,15 +656,24 @@ mod tests {
         let json = baked.to_json().unwrap();
         let reloaded = BakedCluster::from_json(&json).unwrap();
         assert_eq!(
-            reloaded.cluster.get(LocalCoord::new(0, 0, 0).unwrap()).state(),
+            reloaded
+                .cluster
+                .get(LocalCoord::new(0, 0, 0).unwrap())
+                .state(),
             VoxelState::Solid
         );
         assert_eq!(
-            reloaded.cluster.get(LocalCoord::new(1, 0, 0).unwrap()).state(),
+            reloaded
+                .cluster
+                .get(LocalCoord::new(1, 0, 0).unwrap())
+                .state(),
             VoxelState::Viscous
         );
         assert_eq!(
-            reloaded.cluster.get(LocalCoord::new(2, 0, 0).unwrap()).state(),
+            reloaded
+                .cluster
+                .get(LocalCoord::new(2, 0, 0).unwrap())
+                .state(),
             VoxelState::Flowing
         );
         assert_eq!(
@@ -669,7 +684,10 @@ mod tests {
             VoxelState::Solid
         );
         assert_eq!(
-            reloaded.cluster.get(LocalCoord::new(50, 50, 50).unwrap()).state(),
+            reloaded
+                .cluster
+                .get(LocalCoord::new(50, 50, 50).unwrap())
+                .state(),
             VoxelState::Empty
         );
     }

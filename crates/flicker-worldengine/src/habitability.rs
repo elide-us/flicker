@@ -73,7 +73,10 @@ fn volatile_split(world: &World) -> (f64, f64) {
     let (mut air, mut total) = (0.0f64, 0.0f64);
     for c in &world.cells {
         for layer in c.column.layers() {
-            let m: f64 = VOLATILES.iter().map(|&el| layer.composition.amount(el)).sum();
+            let m: f64 = VOLATILES
+                .iter()
+                .map(|&el| layer.composition.amount(el))
+                .sum();
             total += m;
             if layer.kind == LayerKind::Atmosphere {
                 air += m;
@@ -205,7 +208,13 @@ pub fn observe(world: &World) -> Habitability {
     // Life-supporting = the full conjunction: every axis live AND in band.
     let life_supporting = axes.iter().all(|a| a.in_band());
 
-    Habitability { axes, life_supporting, axes_in_band, axes_live, atmosphere_kind: atmosphere_kind(world) }
+    Habitability {
+        axes,
+        life_supporting,
+        axes_in_band,
+        axes_live,
+        atmosphere_kind: atmosphere_kind(world),
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +242,9 @@ mod tests {
         let h = observe(s.state_at(0));
         assert_eq!(h.axes.len(), 5, "the five condition axes");
         let again = observe(s.state_at(0));
-        assert_eq!(h.axes[0].signal, again.axes[0].signal, "the read is pure (no mutation)");
+        assert_eq!(
+            h.axes[0].signal, again.axes[0].signal,
+            "the read is pure (no mutation)"
+        );
     }
 }

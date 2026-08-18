@@ -74,7 +74,11 @@ impl fmt::Display for InputBinding {
             Self::MouseButton(mb) => write!(f, "{mb}"),
             Self::GamepadButton(gb) => write!(f, "{gb}"),
             Self::GamepadAxis { axis, direction } => write!(f, "{axis} {direction}"),
-            Self::MouseMotion { axis, direction, gate } => match gate {
+            Self::MouseMotion {
+                axis,
+                direction,
+                gate,
+            } => match gate {
                 Some(g) => write!(f, "Mouse {axis:?} {direction} (hold {g})"),
                 None => write!(f, "Mouse {axis:?} {direction}"),
             },
@@ -107,9 +111,7 @@ impl InputBinding {
         match self {
             InputBinding::Key(k) => s.key_down(k),
             InputBinding::MouseButton(mb) => s.mouse_button_down(mb),
-            InputBinding::GamepadButton(btn) => {
-                s.gamepad(0).is_some_and(|gp| gp.button_down(btn))
-            }
+            InputBinding::GamepadButton(btn) => s.gamepad(0).is_some_and(|gp| gp.button_down(btn)),
             InputBinding::GamepadAxis { axis, direction } => s.gamepad(0).is_some_and(|gp| {
                 let v = gp.axis_value(axis);
                 let threshold = match axis {
@@ -134,7 +136,12 @@ impl InputBinding {
     ///
     /// [`MouseMotion`]: InputBinding::MouseMotion
     pub fn mouse_delta_axis(self, s: &InputState) -> f32 {
-        let InputBinding::MouseMotion { axis, direction, gate } = self else {
+        let InputBinding::MouseMotion {
+            axis,
+            direction,
+            gate,
+        } = self
+        else {
             return 0.0;
         };
         if let Some(g) = gate {
@@ -187,7 +194,9 @@ struct InputMapData {
 
 impl From<InputMap> for InputMapData {
     fn from(map: InputMap) -> Self {
-        Self { action_to_bindings: map.action_to_bindings.into_iter().collect() }
+        Self {
+            action_to_bindings: map.action_to_bindings.into_iter().collect(),
+        }
     }
 }
 
@@ -291,15 +300,13 @@ impl InputMap {
             InputBinding::GamepadButton(btn) => {
                 input.gamepad(0).is_some_and(|gp| gp.button_down(*btn))
             }
-            InputBinding::GamepadAxis { axis, direction } => {
-                input.gamepad(0).is_some_and(|gp| {
-                    let v = gp.axis_value(*axis);
-                    match direction {
-                        AxisDirection::Positive => v > 0.5,
-                        AxisDirection::Negative => v < -0.5,
-                    }
-                })
-            }
+            InputBinding::GamepadAxis { axis, direction } => input.gamepad(0).is_some_and(|gp| {
+                let v = gp.axis_value(*axis);
+                match direction {
+                    AxisDirection::Positive => v > 0.5,
+                    AxisDirection::Negative => v < -0.5,
+                }
+            }),
             InputBinding::MouseMotion { .. } => false,
         })
     }
@@ -340,19 +347,35 @@ impl InputMap {
         // up = negative Y); gated on RMB held, so a plain cursor never turns the camera.
         map.bind(
             ActionSignal::LookRight,
-            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::X,
+                direction: AxisDirection::Positive,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookLeft,
-            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::X,
+                direction: AxisDirection::Negative,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookDown,
-            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::Y,
+                direction: AxisDirection::Positive,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookUp,
-            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::Y,
+                direction: AxisDirection::Negative,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
         map.bind(ActionSignal::Sprint, InputBinding::Key(Key::LeftShift));
@@ -390,34 +413,64 @@ impl InputMap {
         use crate::device::GamepadButton;
         self.bind(
             ActionSignal::PanelPrev,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickX,
+                direction: AxisDirection::Negative,
+            },
         );
         self.bind(
             ActionSignal::PanelNext,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickX, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickX,
+                direction: AxisDirection::Positive,
+            },
         );
         self.bind(ActionSignal::NavUp, InputBinding::Key(Key::Up));
         self.bind(ActionSignal::NavDown, InputBinding::Key(Key::Down));
         self.bind(ActionSignal::NavLeft, InputBinding::Key(Key::Left));
         self.bind(ActionSignal::NavRight, InputBinding::Key(Key::Right));
-        self.bind(ActionSignal::NavUp, InputBinding::GamepadButton(GamepadButton::DPadUp));
-        self.bind(ActionSignal::NavDown, InputBinding::GamepadButton(GamepadButton::DPadDown));
-        self.bind(ActionSignal::NavLeft, InputBinding::GamepadButton(GamepadButton::DPadLeft));
-        self.bind(ActionSignal::NavRight, InputBinding::GamepadButton(GamepadButton::DPadRight));
+        self.bind(
+            ActionSignal::NavUp,
+            InputBinding::GamepadButton(GamepadButton::DPadUp),
+        );
+        self.bind(
+            ActionSignal::NavDown,
+            InputBinding::GamepadButton(GamepadButton::DPadDown),
+        );
+        self.bind(
+            ActionSignal::NavLeft,
+            InputBinding::GamepadButton(GamepadButton::DPadLeft),
+        );
+        self.bind(
+            ActionSignal::NavRight,
+            InputBinding::GamepadButton(GamepadButton::DPadRight),
+        );
         self.bind(ActionSignal::Confirm, InputBinding::Key(Key::Enter));
-        self.bind(ActionSignal::Confirm, InputBinding::GamepadButton(GamepadButton::South));
-        self.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
+        self.bind(
+            ActionSignal::Confirm,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
+        self.bind(
+            ActionSignal::Cancel,
+            InputBinding::GamepadButton(GamepadButton::East),
+        );
         // The stick's other axis: up draws the entered viewport's camera in,
         // down backs it away (Positive = forward/up, the same convention the
         // gamepad preset's MoveForward uses). The wheel stays the pointer's
         // zoom, outside the signal map.
         self.bind(
             ActionSignal::ZoomIn,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            },
         );
         self.bind(
             ActionSignal::ZoomOut,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Negative,
+            },
         );
         // The RIGHT stick looks around — the other half of the three-tier floor,
         // and dead hardware on every bench until this binding existed: a scene
@@ -427,26 +480,41 @@ impl InputMap {
         // of an axis and a reader takes the difference.
         self.bind(
             ActionSignal::LookRight,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Positive,
+            },
         );
         self.bind(
             ActionSignal::LookLeft,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Negative,
+            },
         );
         self.bind(
             ActionSignal::LookUp,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Positive,
+            },
         );
         self.bind(
             ActionSignal::LookDown,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Negative,
+            },
         );
         // The chord modifier (Y / North — Aaron's ergonomic ruling: A/B are
         // Confirm/Cancel, so Y opens the chord). Bound PLAIN here, not as a
         // suppressing `modifier`: a bench holds it to scale a step (chord +
         // d-pad = ±10), read via `signal_held` beside the step's own edge. A
         // bench that grows real chord VERBS graduates to the ChordLayer.
-        self.bind(ActionSignal::ChordBegin, InputBinding::GamepadButton(GamepadButton::North));
+        self.bind(
+            ActionSignal::ChordBegin,
+            InputBinding::GamepadButton(GamepadButton::North),
+        );
     }
 
     /// The two menu-rail scales, on both devices — ONE definition, shared by the
@@ -461,12 +529,24 @@ impl InputMap {
         use crate::device::GamepadButton;
         self.bind(ActionSignal::TabPrev, InputBinding::Key(Key::Comma));
         self.bind(ActionSignal::TabNext, InputBinding::Key(Key::Period));
-        self.bind(ActionSignal::TabPrev, InputBinding::GamepadButton(GamepadButton::LeftBumper));
-        self.bind(ActionSignal::TabNext, InputBinding::GamepadButton(GamepadButton::RightBumper));
+        self.bind(
+            ActionSignal::TabPrev,
+            InputBinding::GamepadButton(GamepadButton::LeftBumper),
+        );
+        self.bind(
+            ActionSignal::TabNext,
+            InputBinding::GamepadButton(GamepadButton::RightBumper),
+        );
         self.bind(ActionSignal::PagePrev, InputBinding::Key(Key::LeftBracket));
         self.bind(ActionSignal::PageNext, InputBinding::Key(Key::RightBracket));
-        self.bind(ActionSignal::PagePrev, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
-        self.bind(ActionSignal::PageNext, InputBinding::GamepadButton(GamepadButton::RightTrigger));
+        self.bind(
+            ActionSignal::PagePrev,
+            InputBinding::GamepadButton(GamepadButton::LeftTrigger),
+        );
+        self.bind(
+            ActionSignal::PageNext,
+            InputBinding::GamepadButton(GamepadButton::RightTrigger),
+        );
     }
 
     /// ESDF keyboard layout. Same idea as WASD but shifted right.
@@ -565,8 +645,14 @@ impl InputMap {
             },
         );
         // Face buttons
-        map.bind(ActionSignal::Jump, InputBinding::GamepadButton(GamepadButton::South));
-        map.bind(ActionSignal::Cancel, InputBinding::GamepadButton(GamepadButton::East));
+        map.bind(
+            ActionSignal::Jump,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
+        map.bind(
+            ActionSignal::Cancel,
+            InputBinding::GamepadButton(GamepadButton::East),
+        );
         map.bind(
             ActionSignal::Interact,
             InputBinding::GamepadButton(GamepadButton::West),
@@ -593,9 +679,18 @@ impl InputMap {
             InputBinding::GamepadButton(GamepadButton::RightBumper),
         );
         // Meta
-        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
-        map.bind(ActionSignal::Map, InputBinding::GamepadButton(GamepadButton::Select));
-        map.bind(ActionSignal::Quit, InputBinding::GamepadButton(GamepadButton::Guide));
+        map.bind(
+            ActionSignal::Menu,
+            InputBinding::GamepadButton(GamepadButton::Start),
+        );
+        map.bind(
+            ActionSignal::Map,
+            InputBinding::GamepadButton(GamepadButton::Select),
+        );
+        map.bind(
+            ActionSignal::Quit,
+            InputBinding::GamepadButton(GamepadButton::Guide),
+        );
         map
     }
 
@@ -619,48 +714,88 @@ impl InputMap {
         // Look via right stick (mirrors gamepad_default's convention: +Y = up).
         map.bind(
             ActionSignal::LookRight,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Positive,
+            },
         );
         map.bind(
             ActionSignal::LookLeft,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickX, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickX,
+                direction: AxisDirection::Negative,
+            },
         );
         map.bind(
             ActionSignal::LookUp,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Positive,
+            },
         );
         map.bind(
             ActionSignal::LookDown,
-            InputBinding::GamepadAxis { axis: GamepadAxis::RightStickY, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::RightStickY,
+                direction: AxisDirection::Negative,
+            },
         );
         // Look via mouse RIGHT-drag (left stays free). Screen y is down, so look up = −Y.
         map.bind(
             ActionSignal::LookRight,
-            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::X,
+                direction: AxisDirection::Positive,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookLeft,
-            InputBinding::MouseMotion { axis: MouseAxis::X, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::X,
+                direction: AxisDirection::Negative,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookDown,
-            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Positive, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::Y,
+                direction: AxisDirection::Positive,
+                gate: Some(MouseButton::Right),
+            },
         );
         map.bind(
             ActionSignal::LookUp,
-            InputBinding::MouseMotion { axis: MouseAxis::Y, direction: AxisDirection::Negative, gate: Some(MouseButton::Right) },
+            InputBinding::MouseMotion {
+                axis: MouseAxis::Y,
+                direction: AxisDirection::Negative,
+                gate: Some(MouseButton::Right),
+            },
         );
         // Interact = start/restart the cinematic: controller West (X) + keyboard E.
         map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
-        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::West));
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::West),
+        );
         // Left-click stays FREE for select-target — bound to a NAMED signal a future
         // pick consumes, never a raw poll; RMB is the look gate, also named.
-        map.bind(ActionSignal::PrimaryAction, InputBinding::MouseButton(MouseButton::Left));
-        map.bind(ActionSignal::SecondaryAction, InputBinding::MouseButton(MouseButton::Right));
+        map.bind(
+            ActionSignal::PrimaryAction,
+            InputBinding::MouseButton(MouseButton::Left),
+        );
+        map.bind(
+            ActionSignal::SecondaryAction,
+            InputBinding::MouseButton(MouseButton::Right),
+        );
         // Pause still opens from the active context: Esc + Start (mirrors wasd_and_mouse).
         map.bind(ActionSignal::Quit, InputBinding::Key(Key::Escape));
         map.bind(ActionSignal::Menu, InputBinding::Key(Key::Escape));
-        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
+        map.bind(
+            ActionSignal::Menu,
+            InputBinding::GamepadButton(GamepadButton::Start),
+        );
     }
 
     /// The flight camera ON its rail — the map for context
@@ -676,11 +811,17 @@ impl InputMap {
         map.bind(ActionSignal::MoveBackward, InputBinding::Key(Key::S));
         map.bind(
             ActionSignal::MoveForward,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            },
         );
         map.bind(
             ActionSignal::MoveBackward,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Negative,
+            },
         );
         Self::flight_camera_common(&mut map);
         map
@@ -698,11 +839,17 @@ impl InputMap {
         // the pad equivalent — no throttle here, the camera is off the rail.
         map.bind(
             ActionSignal::ZoomIn,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Positive },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Positive,
+            },
         );
         map.bind(
             ActionSignal::ZoomOut,
-            InputBinding::GamepadAxis { axis: GamepadAxis::LeftStickY, direction: AxisDirection::Negative },
+            InputBinding::GamepadAxis {
+                axis: GamepadAxis::LeftStickY,
+                direction: AxisDirection::Negative,
+            },
         );
         Self::flight_camera_common(&mut map);
         map
@@ -722,21 +869,57 @@ impl InputMap {
         // NOT the discrete map (spec RT-12 / §7.1): binding the sticks here as well would
         // double-drive `signal_held(MoveForward)` (once digital, once from the stick). Only
         // the stick *presses* stay discrete.
-        map.bind(ActionSignal::LockOn, InputBinding::GamepadButton(GamepadButton::RightStick));
-        map.bind(ActionSignal::Crouch, InputBinding::GamepadButton(GamepadButton::LeftStick));
+        map.bind(
+            ActionSignal::LockOn,
+            InputBinding::GamepadButton(GamepadButton::RightStick),
+        );
+        map.bind(
+            ActionSignal::Crouch,
+            InputBinding::GamepadButton(GamepadButton::LeftStick),
+        );
         // Attacks / defend / special on the shoulders.
-        map.bind(ActionSignal::AttackLight, InputBinding::GamepadButton(GamepadButton::RightBumper));
-        map.bind(ActionSignal::AttackHeavy, InputBinding::GamepadButton(GamepadButton::RightTrigger));
-        map.bind(ActionSignal::Defend, InputBinding::GamepadButton(GamepadButton::LeftBumper));
-        map.bind(ActionSignal::Special, InputBinding::GamepadButton(GamepadButton::LeftTrigger));
+        map.bind(
+            ActionSignal::AttackLight,
+            InputBinding::GamepadButton(GamepadButton::RightBumper),
+        );
+        map.bind(
+            ActionSignal::AttackHeavy,
+            InputBinding::GamepadButton(GamepadButton::RightTrigger),
+        );
+        map.bind(
+            ActionSignal::Defend,
+            InputBinding::GamepadButton(GamepadButton::LeftBumper),
+        );
+        map.bind(
+            ActionSignal::Special,
+            InputBinding::GamepadButton(GamepadButton::LeftTrigger),
+        );
         // Face buttons (A=South, B=East, X=West, Y=North).
-        map.bind(ActionSignal::Dodge, InputBinding::GamepadButton(GamepadButton::East));
-        map.bind(ActionSignal::Jump, InputBinding::GamepadButton(GamepadButton::North));
-        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::South));
-        map.bind(ActionSignal::Interact, InputBinding::GamepadButton(GamepadButton::West));
+        map.bind(
+            ActionSignal::Dodge,
+            InputBinding::GamepadButton(GamepadButton::East),
+        );
+        map.bind(
+            ActionSignal::Jump,
+            InputBinding::GamepadButton(GamepadButton::North),
+        );
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::West),
+        );
         // Meta.
-        map.bind(ActionSignal::Menu, InputBinding::GamepadButton(GamepadButton::Start));
-        map.bind(ActionSignal::Map, InputBinding::GamepadButton(GamepadButton::Select));
+        map.bind(
+            ActionSignal::Menu,
+            InputBinding::GamepadButton(GamepadButton::Start),
+        );
+        map.bind(
+            ActionSignal::Map,
+            InputBinding::GamepadButton(GamepadButton::Select),
+        );
         map
     }
 }
@@ -816,11 +999,26 @@ mod tests {
     #[test]
     fn wasd_preset_carries_the_additive_combat_binds() {
         let map = InputMap::wasd_and_mouse();
-        assert_eq!(map.action_for(InputBinding::Key(Key::LeftShift)), Some(ActionSignal::Sprint));
-        assert_eq!(map.action_for(InputBinding::Key(Key::RightShift)), Some(ActionSignal::Sprint));
-        assert_eq!(map.action_for(InputBinding::Key(Key::LeftControl)), Some(ActionSignal::Crouch));
-        assert_eq!(map.action_for(InputBinding::Key(Key::C)), Some(ActionSignal::Crouch));
-        assert_eq!(map.action_for(InputBinding::Key(Key::Space)), Some(ActionSignal::Jump));
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::LeftShift)),
+            Some(ActionSignal::Sprint)
+        );
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::RightShift)),
+            Some(ActionSignal::Sprint)
+        );
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::LeftControl)),
+            Some(ActionSignal::Crouch)
+        );
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::C)),
+            Some(ActionSignal::Crouch)
+        );
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::Space)),
+            Some(ActionSignal::Jump)
+        );
     }
 
     /// The flight camera's TWO modes (MCP `3B4DB4C2` / Solar Birth signal map `5B9A8B50`):
@@ -863,14 +1061,26 @@ mod tests {
                 }),
                 Some(ActionSignal::LookRight),
             );
-            assert!(map.bindings_for(ActionSignal::LookRight).iter().any(|b| matches!(
-                b,
-                InputBinding::MouseMotion { gate: Some(MouseButton::Right), .. }
-            )));
-            assert!(!map.bindings_for(ActionSignal::LookRight).iter().any(|b| matches!(
-                b,
-                InputBinding::MouseMotion { gate: Some(MouseButton::Left), .. }
-            )));
+            assert!(map
+                .bindings_for(ActionSignal::LookRight)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::MouseMotion {
+                        gate: Some(MouseButton::Right),
+                        ..
+                    }
+                )));
+            assert!(!map
+                .bindings_for(ActionSignal::LookRight)
+                .iter()
+                .any(|b| matches!(
+                    b,
+                    InputBinding::MouseMotion {
+                        gate: Some(MouseButton::Left),
+                        ..
+                    }
+                )));
             assert_eq!(
                 map.action_for(InputBinding::MouseButton(MouseButton::Left)),
                 Some(ActionSignal::PrimaryAction),
@@ -988,7 +1198,11 @@ mod tests {
             ActionSignal::Confirm,
             ActionSignal::Cancel,
         ] {
-            assert_eq!(map.bindings_for(action), back.bindings_for(action), "{action} survives");
+            assert_eq!(
+                map.bindings_for(action),
+                back.bindings_for(action),
+                "{action} survives"
+            );
         }
         // the reverse index is rebuilt on load, not serialized
         assert_eq!(

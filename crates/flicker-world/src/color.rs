@@ -154,7 +154,9 @@ pub fn cell_material(mode: ViewMode, s: &HexState, r: &Ranges) -> u32 {
         ViewMode::Elevation => relief_color(s, r),
         ViewMode::Biome => solid(biome_index(s.biome)),
         ViewMode::Plates => solid(PLATE_PALETTE[s.plate as usize % PLATE_PALETTE.len()]),
-        ViewMode::Temperature => pack_ramp(MID_WATER, LAVA, norm(s.temperature, r.temp_min, r.temp_max)),
+        ViewMode::Temperature => {
+            pack_ramp(MID_WATER, LAVA, norm(s.temperature, r.temp_min, r.temp_max))
+        }
         // Baseline precipitation (Epoch 4): arid tan → green → humid blue. The
         // moisture field the runtime water cycle starts from. Already `0..1`.
         ViewMode::Precipitation => direct(gradient(&PRECIP_STOPS, s.precipitation.clamp(0.0, 1.0))),
@@ -172,7 +174,10 @@ pub fn cell_material(mode: ViewMode, s: &HexState, r: &Ranges) -> u32 {
         ViewMode::Flow => flow_color(s, r),
         // Deposited sediment (Epoch 6): bare rock → sediment tan, the conveyor's
         // payload pooling in basins and along coasts.
-        ViewMode::Sediment => direct(gradient(&SEDIMENT_STOPS, norm(s.sediment, 0.0, r.sediment_max))),
+        ViewMode::Sediment => direct(gradient(
+            &SEDIMENT_STOPS,
+            norm(s.sediment, 0.0, r.sediment_max),
+        )),
         // Drainage basins (Epoch 6): a distinct tint per watershed so the basins
         // that share an outlet read as one region.
         ViewMode::Watersheds => solid(PLATE_PALETTE[s.watershed as usize % PLATE_PALETTE.len()]),
@@ -242,7 +247,11 @@ fn relief_color(s: &HexState, r: &Ranges) -> u32 {
         let t = (s.water_depth / span).clamp(0.0, 1.0); // 0 shore .. 1 abyss
         direct(gradient(&OCEAN_STOPS, t))
     } else {
-        let floor = if r.max_depth > 0.0 { s.sea_level } else { r.elev_min };
+        let floor = if r.max_depth > 0.0 {
+            s.sea_level
+        } else {
+            r.elev_min
+        };
         let span = (r.elev_max - floor).max(1.0e-4);
         let t = ((s.elevation - floor) / span).clamp(0.0, 1.0); // 0 shore/low .. 1 peak
         direct(gradient(&LAND_STOPS, t))
@@ -380,10 +389,7 @@ const FLOW_STOPS: [(f32, [f32; 3]); 3] = [
 ];
 
 /// Sediment: bare rock (t=0) → deposited tan/silt (t=1).
-const SEDIMENT_STOPS: [(f32, [f32; 3]); 2] = [
-    (0.0, [0.15, 0.15, 0.16]),
-    (1.0, [0.64, 0.52, 0.33]),
-];
+const SEDIMENT_STOPS: [(f32, [f32; 3]); 2] = [(0.0, [0.15, 0.15, 0.16]), (1.0, [0.64, 0.52, 0.33])];
 
 /// Preservation-deposit tint: blend coal/oil (carbon, near-black) → chalk (calcium
 /// carbonate, white) by the calcium share, brightness scaled by total mass in the

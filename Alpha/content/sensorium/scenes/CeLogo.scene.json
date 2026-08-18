@@ -1,9 +1,9 @@
 {
-  "_comment": "SCENE FILE — the engine splash. The `tree` below is the arrangement — one full-bleed `splash` component (the Rust widgets kind that owns all drawing). The PAIR SCRIPT (scripts/CeLogo.lua) is a module like every pair script: its arrange() sets the splash node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed; `exit` = the player backed out (Cancel/Esc).",
+  "_comment": "SCENE FILE — the engine splash. The `tree` below is the arrangement — one full-bleed `splash` component (the Rust widgets kind that owns all drawing). The PAIR SCRIPT (scripts/CeLogo.lua) is a module like every pair script: its arrange() sets the splash node's properties (the image and the fade timeline) and its react() maps the fired signals to the `next`/`exit` intents. The `exits` map below is the ROUTING DATA for those intents: `next` = the timeline completed or the player confirmed → the pre-load screen (Loading, page 3 of the intro chain); `exit` = the player backed out (Cancel/Esc) → skip the intro straight to the menu.",
   "behaviour": "splash",
   "exits": {
     "next": {
-      "to": "Main",
+      "to": "Loading",
       "mode": "replace"
     },
     "exit": {

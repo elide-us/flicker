@@ -124,7 +124,10 @@ pub fn ore_metals(tables: &Tables) -> Vec<ElementId> {
 
 impl Hydrothermal {
     pub fn new(tables: &Tables, leach_rate: f64) -> Self {
-        Self { mobile: ore_metals(tables), leach_rate }
+        Self {
+            mobile: ore_metals(tables),
+            leach_rate,
+        }
     }
 }
 
@@ -176,7 +179,9 @@ impl Stage for Hydrothermal {
                     .map(|&j| j as usize)
                     .filter(|&j| fracture[j] > fracture[i])
                     .max_by(|&a, &b| {
-                        fracture[a].partial_cmp(&fracture[b]).unwrap_or(std::cmp::Ordering::Equal)
+                        fracture[a]
+                            .partial_cmp(&fracture[b])
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     })
             })
             .collect();
@@ -200,7 +205,12 @@ impl Stage for Hydrothermal {
                 if self.mobile.binary_search(&e).is_ok() {
                     *load[cell].entry(e).or_insert(0.0) += m;
                 } else {
-                    world.columns[cell].layers.last_mut().expect("bed").elements.add(e, m);
+                    world.columns[cell]
+                        .layers
+                        .last_mut()
+                        .expect("bed")
+                        .elements
+                        .add(e, m);
                 }
             }
         }
@@ -210,7 +220,9 @@ impl Stage for Hydrothermal {
         // the flow, since fluid only ever moves toward more broken rock.
         let mut order: Vec<usize> = (0..n).collect();
         order.sort_by(|&a, &b| {
-            fracture[a].partial_cmp(&fracture[b]).unwrap_or(std::cmp::Ordering::Equal)
+            fracture[a]
+                .partial_cmp(&fracture[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         for &cell in &order {
             let carried = std::mem::take(&mut load[cell]);
@@ -405,10 +417,15 @@ mod tests {
     use std::sync::Arc;
 
     fn run(freq: u32, seed: u64, ticks: usize) -> (World, Arc<Tables>) {
-        let t = Arc::new(Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables"));
+        let t = Arc::new(
+            Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables"),
+        );
         let b = Budget::from_dir(&content_data_dir(), &t).expect("budget");
         let mut w = World::seed(icosphere(freq), b, &t, seed);
-        let mut s = Scheduler::new(crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()), seed);
+        let mut s = Scheduler::new(
+            crate::formation_stages(Arc::clone(&t), &w, &crate::Levers::brisk()),
+            seed,
+        );
         for _ in 0..ticks {
             s.step(&mut w, 1.0, None);
         }
@@ -423,9 +440,15 @@ mod tests {
     fn the_fluid_carries_metal_not_the_framework() {
         let t = Tables::from_source(&JsonTableSource::new(content_data_dir())).expect("tables");
         let h = Hydrothermal::new(&t, crate::hydrothermal::DEFAULT_LEACH_RATE);
-        let has = |sym: &str| t.element(sym).is_some_and(|e| h.mobile.binary_search(&e.number).is_ok());
+        let has = |sym: &str| {
+            t.element(sym)
+                .is_some_and(|e| h.mobile.binary_search(&e.number).is_ok())
+        };
         assert!(has("Cu") && has("Au") && has("Fe"), "metal travels");
-        assert!(!has("Si") && !has("Al") && !has("O"), "the framework stays put");
+        assert!(
+            !has("Si") && !has("Al") && !has("O"),
+            "the framework stays put"
+        );
     }
 
     /// Leach, carry and drop move mass and never make it — and nothing is left
@@ -462,19 +485,26 @@ mod tests {
                 formed_at_myr: 0.0,
                 formed_by: FormationProcess::Hydrothermal,
                 peak_pt: (0.0, 0.0),
-            cooled: 0.0,
-            eclogitised: 0.0,
+                cooled: 0.0,
+                eclogitised: 0.0,
             });
         }
         let (best, bed) = enrichment(&w, cell, gold);
-        assert_eq!(bed, Some(w.columns[cell].layers.len() - 1), "the richest bed is the seam");
+        assert_eq!(
+            bed,
+            Some(w.columns[cell].layers.len() - 1),
+            "the richest bed is the seam"
+        );
         // Averaged over the column the seam is one part in ten thousand; read as a
         // bed it is the whole of it.
         let col = &w.columns[cell];
         let averaged = col.element_mass(gold) / col.mass_kg();
         let as_bed = col.layers.last().expect("seam").elements.amount(gold)
             / col.layers.last().expect("seam").mass_kg();
-        assert!(as_bed > averaged * 100.0, "the column average buries the seam");
+        assert!(
+            as_bed > averaged * 100.0,
+            "the column average buries the seam"
+        );
         assert!(best > 0.0);
     }
 
@@ -487,7 +517,10 @@ mod tests {
         let before: Vec<usize> = w.columns.iter().map(|c| c.layers.len()).collect();
         let before_mass: f64 = w.columns.iter().map(|c| c.mass_kg()).sum();
         let report = prospect(&w, &t, 5.0, 3000.0);
-        assert!(!report.is_empty(), "the catalog names things worth extracting");
+        assert!(
+            !report.is_empty(),
+            "the catalog names things worth extracting"
+        );
         let after: Vec<usize> = w.columns.iter().map(|c| c.layers.len()).collect();
         let after_mass: f64 = w.columns.iter().map(|c| c.mass_kg()).sum();
         assert_eq!(before, after, "prospecting changed the world");
@@ -511,6 +544,9 @@ mod tests {
         // Potassium is the most incompatible thing in the table; magnesium stays in
         // the residue. Their ratio in the crust must beat their ratio in the planet.
         let sorted = (in_crust(19) / bulk(19)) / (in_crust(12) / bulk(12)).max(1e-12);
-        assert!(sorted > 1.5, "the melt did not sort incompatible from compatible: {sorted:.2}x");
+        assert!(
+            sorted > 1.5,
+            "the melt did not sort incompatible from compatible: {sorted:.2}x"
+        );
     }
 }

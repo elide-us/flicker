@@ -148,14 +148,24 @@ impl GasVocabulary {
                 let def = tables
                     .compound(name)
                     .unwrap_or_else(|| panic!("outgassing needs '{name}' in compounds.json"));
-                assert_eq!(def.id, id, "'{name}' moved in the catalog: {} != {id}", def.id);
+                assert_eq!(
+                    def.id, id,
+                    "'{name}' moved in the catalog: {} != {id}",
+                    def.id
+                );
                 let fracs = tables.compound_mass_fractions(def);
                 let driver_frac = fracs
                     .iter()
                     .find(|(e, _)| *e == driver)
                     .map(|(_, f)| *f)
                     .unwrap_or_else(|| panic!("'{name}' does not contain element {driver}"));
-                GasSpecies { compound: id, driver, driver_frac, floor_k, fracs }
+                GasSpecies {
+                    compound: id,
+                    driver,
+                    driver_frac,
+                    floor_k,
+                    fracs,
+                }
             })
             .collect();
         Self { species }
@@ -175,8 +185,7 @@ impl GasVocabulary {
     /// the melt can supply, so the shared oxygen is never spent twice and the
     /// air's compound bound holds by construction.
     pub fn vent(&self, air: &mut crate::reservoir::Air, melt: &mut Vec<(ElementId, f64)>) {
-        let mut budget: f64 =
-            melt.iter().map(|&(_, m)| m).sum::<f64>() * MAGMATIC_VOLATILE_FRAC;
+        let mut budget: f64 = melt.iter().map(|&(_, m)| m).sum::<f64>() * MAGMATIC_VOLATILE_FRAC;
         // **Most volatile first**, which is the reverse of the bulk order: a high
         // release floor means the rock gives that species up only reluctantly —
         // it is the *least* volatile — so on decompression it is the last to come
@@ -230,7 +239,10 @@ pub struct Outgassing {
 impl Outgassing {
     /// Resolve the gas vocabulary from the compound catalog.
     pub fn new(tables: &Tables, rate: f64) -> Self {
-        Self { rate, gases: GasVocabulary::load(tables) }
+        Self {
+            rate,
+            gases: GasVocabulary::load(tables),
+        }
     }
 }
 
@@ -250,8 +262,8 @@ impl Stage for Outgassing {
                     continue;
                 }
                 // Fierce at magma-ocean heat, tapering to nothing at the floor.
-                let warmth = ((t - sp.floor_k) / (MAGMA_OCEAN_K - sp.floor_k).max(1.0))
-                    .clamp(0.0, 1.0);
+                let warmth =
+                    ((t - sp.floor_k) / (MAGMA_OCEAN_K - sp.floor_k).max(1.0)).clamp(0.0, 1.0);
                 let release = (self.rate * warmth * lid * dt_myr).min(1.0);
                 if release <= 0.0 {
                     continue;
@@ -446,9 +458,18 @@ impl WaterCycle {
     /// Resolve water's stoichiometry from the catalog. Panics if the catalog
     /// moved — same contract as [`Outgassing::new`].
     pub fn new(tables: &Tables, stellar: f64) -> Self {
-        let def = tables.compound("Water").expect("the water cycle needs 'Water' in compounds.json");
-        assert_eq!(def.id, WATER_VAPOUR, "'Water' moved in the catalog: {}", def.id);
-        Self { stellar, fracs: tables.compound_mass_fractions(def) }
+        let def = tables
+            .compound("Water")
+            .expect("the water cycle needs 'Water' in compounds.json");
+        assert_eq!(
+            def.id, WATER_VAPOUR,
+            "'Water' moved in the catalog: {}",
+            def.id
+        );
+        Self {
+            stellar,
+            fracs: tables.compound_mass_fractions(def),
+        }
     }
 
     /// Move up to `kg` of water **sea → sky**, bounded by every constituent the
@@ -461,7 +482,9 @@ impl WaterCycle {
             .fracs
             .iter()
             .filter(|(_, f)| *f > 0.0)
-            .fold(kg, |k, &(e, f)| k.min(world.reservoirs.ocean.contents.amount(e) / f));
+            .fold(kg, |k, &(e, f)| {
+                k.min(world.reservoirs.ocean.contents.amount(e) / f)
+            });
         if take <= 0.0 {
             return;
         }
@@ -509,8 +532,13 @@ impl Stage for WaterCycle {
             return;
         }
         let solidus = crate::crust::SOLIDUS_K;
-        let molten =
-            world.mantle.temp_k.iter().filter(|&&t| t >= solidus).count() as f64 / n as f64;
+        let molten = world
+            .mantle
+            .temp_k
+            .iter()
+            .filter(|&&t| t >= solidus)
+            .count() as f64
+            / n as f64;
 
         // The boil: a sea cannot stand on magma.
         let ocean_kg = world.reservoirs.ocean.mass_kg();
@@ -520,8 +548,8 @@ impl Stage for WaterCycle {
 
         // The equilibrium: how much water this warmth keeps aloft.
         let area = world.cell_area_m2() * world.columns.len().max(1) as f64;
-        let target = saturation_kg_m2(crate::surface::mean_surface_temp_k(world, self.stellar))
-            * area;
+        let target =
+            saturation_kg_m2(crate::surface::mean_surface_temp_k(world, self.stellar)) * area;
         let vapour = world.reservoirs.atmosphere.species.amount(WATER_VAPOUR);
         if vapour > target {
             // The rain — over solid ground only.
@@ -604,12 +632,22 @@ impl CarbonSink {
     /// Resolve the sink's chemistry from the catalog. Panics if the vocabulary
     /// moved — same contract as [`Outgassing::new`].
     pub fn new(tables: &Tables) -> Self {
-        let co2 = tables.compound("Carbon Dioxide").expect("the sink needs 'Carbon Dioxide'");
+        let co2 = tables
+            .compound("Carbon Dioxide")
+            .expect("the sink needs 'Carbon Dioxide'");
         assert_eq!(co2.id, CARBON_DIOXIDE, "'Carbon Dioxide' moved: {}", co2.id);
-        let calcite = tables.compound("Calcite").expect("the sink needs 'Calcite'");
+        let calcite = tables
+            .compound("Calcite")
+            .expect("the sink needs 'Calcite'");
         assert_eq!(calcite.id, CALCITE, "'Calcite' moved: {}", calcite.id);
-        let ca = tables.element("Ca").expect("calcium in the periodic table").number;
-        let c = tables.element("C").expect("carbon in the periodic table").number;
+        let ca = tables
+            .element("Ca")
+            .expect("calcium in the periodic table")
+            .number;
+        let c = tables
+            .element("C")
+            .expect("carbon in the periodic table")
+            .number;
         let ca_locked = tables
             .compounds()
             .iter()
@@ -648,8 +686,11 @@ impl Stage for CarbonSink {
         // back, below it it drinks. Two-way, like the water, so the pair can run
         // down to their joint equilibrium instead of past it.
         let ocean_kg = world.reservoirs.ocean.mass_kg();
-        let f_c_in_co2 =
-            self.co2_fracs.iter().find(|&&(e, _)| e == self.c).map_or(0.0, |&(_, f)| f);
+        let f_c_in_co2 = self
+            .co2_fracs
+            .iter()
+            .find(|&&(e, _)| e == self.c)
+            .map_or(0.0, |&(_, f)| f);
         let area_total = world.cell_area_m2() * world.columns.len().max(1) as f64;
         let p_co2 = world.reservoirs.atmosphere.species.amount(CARBON_DIOXIDE)
             * world.gravity_m_s2()
@@ -660,7 +701,11 @@ impl Stage for CarbonSink {
         if dic < target_c && f_c_in_co2 > 0.0 {
             // Drink: move CO₂ air → sea toward the partition target.
             let want_gas = (target_c - dic) * step / f_c_in_co2;
-            let got = world.reservoirs.atmosphere.species.remove(CARBON_DIOXIDE, want_gas);
+            let got = world
+                .reservoirs
+                .atmosphere
+                .species
+                .remove(CARBON_DIOXIDE, want_gas);
             for &(e, f) in &self.co2_fracs {
                 let took = world.reservoirs.atmosphere.contents.remove(e, got * f);
                 if took > 0.0 {
@@ -685,7 +730,11 @@ impl Stage for CarbonSink {
                     }
                 }
                 if moved > 0.0 {
-                    world.reservoirs.atmosphere.species.add(CARBON_DIOXIDE, moved);
+                    world
+                        .reservoirs
+                        .atmosphere
+                        .species
+                        .add(CARBON_DIOXIDE, moved);
                 }
             }
         }
@@ -701,7 +750,10 @@ impl Stage for CarbonSink {
         // is one term here, not a second carbonate pathway.
         let living = world.life >= crate::biosphere::LifeStage::Microbial;
         let (floor_frac, rate) = if living {
-            (DIC_FLOOR_FRAC * BIOGENIC_FLOOR_RELIEF, PRECIPITATION_RATE * BIOGENIC_GAIN)
+            (
+                DIC_FLOOR_FRAC * BIOGENIC_FLOOR_RELIEF,
+                PRECIPITATION_RATE * BIOGENIC_GAIN,
+            )
         } else {
             (DIC_FLOOR_FRAC, PRECIPITATION_RATE)
         };
@@ -720,8 +772,16 @@ impl Stage for CarbonSink {
         if submerged.is_empty() {
             return;
         }
-        let f_ca = self.calcite_fracs.iter().find(|&&(e, _)| e == self.ca).map_or(0.0, |&(_, f)| f);
-        let f_c = self.calcite_fracs.iter().find(|&&(e, _)| e == carbon).map_or(0.0, |&(_, f)| f);
+        let f_ca = self
+            .calcite_fracs
+            .iter()
+            .find(|&&(e, _)| e == self.ca)
+            .map_or(0.0, |&(_, f)| f);
+        let f_c = self
+            .calcite_fracs
+            .iter()
+            .find(|&&(e, _)| e == carbon)
+            .map_or(0.0, |&(_, f)| f);
         if f_ca <= 0.0 || f_c <= 0.0 {
             return;
         }
@@ -757,7 +817,12 @@ impl Stage for CarbonSink {
                     continue;
                 }
                 let got = if e == self.ca {
-                    world.columns[i].layers.last_mut().expect("still there").elements.remove(e, make * f)
+                    world.columns[i]
+                        .layers
+                        .last_mut()
+                        .expect("still there")
+                        .elements
+                        .remove(e, make * f)
                 } else {
                     world.reservoirs.ocean.contents.remove(e, make * f)
                 };
@@ -774,7 +839,9 @@ impl Stage for CarbonSink {
             // Book the mineral on the bed the deposit landed in, at the exact
             // stoichiometric mass the moved elements can cover — the compound
             // bound holds by construction.
-            let booked = stoich_bound.max(0.0).min(deposited.iter().map(|&(_, m)| m).sum::<f64>());
+            let booked = stoich_bound
+                .max(0.0)
+                .min(deposited.iter().map(|&(_, m)| m).sum::<f64>());
             if booked > 0.0 {
                 if let Some(bed) = world.columns[i].layers.last_mut() {
                     bed.minerals.add(CALCITE, booked);
@@ -858,12 +925,18 @@ mod tests {
 
         let state = crate::planet::PlanetState::sample(&w);
         assert!(state.water_vapour_kg > 0.0 && state.lid_frac == 0.0 && state.ocean_mass_kg == 0.0);
-        assert!(!crate::process_file::gate_of("WaterCycle").holds(&state, &crate::Levers::default()), "steam over magma: nothing to exchange yet");
+        assert!(
+            !crate::process_file::gate_of("WaterCycle").holds(&state, &crate::Levers::default()),
+            "steam over magma: nothing to exchange yet"
+        );
 
         crate::planet::freeze_lid(&mut w);
         let state = crate::planet::PlanetState::sample(&w);
         assert!(state.lid_frac > 0.0, "the lid closed");
-        assert!(crate::process_file::gate_of("WaterCycle").holds(&state, &crate::Levers::default()), "ground to rain on: the cycle opens");
+        assert!(
+            crate::process_file::gate_of("WaterCycle").holds(&state, &crate::Levers::default()),
+            "ground to rain on: the cycle opens"
+        );
     }
 
     /// "No sea, no sink" — and with arrival routed by what the ground can hold,
@@ -876,8 +949,14 @@ mod tests {
         let mut rng = StageRng::new(5);
         delivery.tick(&mut w, 1.0, &mut rng);
         let state = crate::planet::PlanetState::sample(&w);
-        assert_eq!(state.ocean_mass_kg, 0.0, "infall on magma leaves no standing sea");
-        assert!(!crate::process_file::gate_of("CarbonSink").holds(&state, &crate::Levers::default()), "so the sink stays shut");
+        assert_eq!(
+            state.ocean_mass_kg, 0.0,
+            "infall on magma leaves no standing sea"
+        );
+        assert!(
+            !crate::process_file::gate_of("CarbonSink").holds(&state, &crate::Levers::default()),
+            "so the sink stays shut"
+        );
     }
 
     #[test]
@@ -907,7 +986,10 @@ mod tests {
 
         let vapour = w.reservoirs.atmosphere.species.amount(WATER_VAPOUR);
         let ocean = w.reservoirs.ocean.mass_kg();
-        assert!(ocean > steam * 0.9, "the steam rained out into a sea: {ocean:.3e}");
+        assert!(
+            ocean > steam * 0.9,
+            "the steam rained out into a sea: {ocean:.3e}"
+        );
         assert!(vapour > 0.0, "a saturation trace stays aloft");
         assert!(vapour < steam * 0.01, "and it is a trace: {vapour:.3e}");
     }
@@ -941,7 +1023,10 @@ mod tests {
         let dim = vapour_under(1.0);
         let bright = vapour_under(1.4);
         assert!(dim > 0.0, "a temperate sea keeps a vapour trace aloft");
-        assert!(bright > dim, "the brighter star lifts more: {bright:.3e} vs {dim:.3e}");
+        assert!(
+            bright > dim,
+            "the brighter star lifts more: {bright:.3e} vs {dim:.3e}"
+        );
     }
 
     #[test]
@@ -1005,12 +1090,17 @@ mod tests {
             w.reservoirs.atmosphere.species.amount(CARBON_DIOXIDE) < sky_before,
             "the sea drank from the sky"
         );
-        assert!(w.reservoirs.ocean.contents.amount(sink.c) > 0.0, "carbon is dissolved in it");
+        assert!(
+            w.reservoirs.ocean.contents.amount(sink.c) > 0.0,
+            "carbon is dissolved in it"
+        );
         let col = &w.columns[0];
         let calcite: f64 = col.layers.iter().map(|l| l.minerals.amount(CALCITE)).sum();
         assert!(calcite > 0.0, "and the floor turned some of it to stone");
         assert!(
-            col.layers.iter().any(|l| l.formed_by == FormationProcess::Sediment),
+            col.layers
+                .iter()
+                .any(|l| l.formed_by == FormationProcess::Sediment),
             "as a sediment bed in the stratum lifecycle"
         );
     }
@@ -1027,7 +1117,13 @@ mod tests {
             w.reservoirs.delivered.add(e, co2 * f);
         }
         w.reservoirs.atmosphere.species.add(CARBON_DIOXIDE, co2);
-        assert!(!crate::process_file::gate_of("CarbonSink").holds(&crate::planet::PlanetState::sample(&w), &crate::Levers::default()), "no sea, no sink");
+        assert!(
+            !crate::process_file::gate_of("CarbonSink").holds(
+                &crate::planet::PlanetState::sample(&w),
+                &crate::Levers::default()
+            ),
+            "no sea, no sink"
+        );
         let mut rng = StageRng::new(7);
         sink.tick(&mut w, 1.0, &mut rng);
         w.audit("CarbonSink");
@@ -1058,8 +1154,15 @@ mod tests {
 
         let shells = air_shells(&w, &t);
         let order: Vec<CompoundId> = shells.iter().map(|s| s.compound).collect();
-        assert_eq!(order, vec![CARBON_DIOXIDE, NITROGEN, WATER_VAPOUR], "heaviest lowest");
-        assert!(shells.iter().all(|s| s.column_kg_m2 > 0.0), "every shell has column mass");
+        assert_eq!(
+            order,
+            vec![CARBON_DIOXIDE, NITROGEN, WATER_VAPOUR],
+            "heaviest lowest"
+        );
+        assert!(
+            shells.iter().all(|s| s.column_kg_m2 > 0.0),
+            "every shell has column mass"
+        );
         assert!(
             shells.windows(2).all(|p| p[0].molar_mass > p[1].molar_mass),
             "strictly ordered by weight"
@@ -1092,9 +1195,19 @@ mod tests {
         let so2_before = w.reservoirs.atmosphere.species.amount(SULFUR_DIOXIDE);
         run(&stage, &mut w, 5);
         let air = &w.reservoirs.atmosphere;
-        assert_eq!(air.species.amount(SULFUR_DIOXIDE), so2_before, "SO₂ floor passed");
-        assert!(air.species.amount(CARBON_DIOXIDE) > 0.0, "CO₂ still exhaling at 2500 K");
-        assert!(air.species.amount(NITROGEN) > 0.0, "N₂ still exhaling at 2500 K");
+        assert_eq!(
+            air.species.amount(SULFUR_DIOXIDE),
+            so2_before,
+            "SO₂ floor passed"
+        );
+        assert!(
+            air.species.amount(CARBON_DIOXIDE) > 0.0,
+            "CO₂ still exhaling at 2500 K"
+        );
+        assert!(
+            air.species.amount(NITROGEN) > 0.0,
+            "N₂ still exhaling at 2500 K"
+        );
 
         // Cooled below everything but nitrogen: the residue is N₂ alone.
         for c in 0..w.mantle.n_cells() {
@@ -1104,8 +1217,15 @@ mod tests {
         let n2_mid = air.species.amount(NITROGEN);
         run(&stage, &mut w, 5);
         let air = &w.reservoirs.atmosphere;
-        assert_eq!(air.species.amount(CARBON_DIOXIDE), co2_mid, "CO₂ floor passed");
-        assert!(air.species.amount(NITROGEN) > n2_mid, "N₂ trickles nearly forever");
+        assert_eq!(
+            air.species.amount(CARBON_DIOXIDE),
+            co2_mid,
+            "CO₂ floor passed"
+        );
+        assert!(
+            air.species.amount(NITROGEN) > n2_mid,
+            "N₂ trickles nearly forever"
+        );
     }
 
     #[test]
@@ -1146,7 +1266,10 @@ mod tests {
 
         let open_kg = open.reservoirs.atmosphere.mass_kg();
         let lid_kg = lidded.reservoirs.atmosphere.mass_kg();
-        assert!(open_kg > 0.0 && lid_kg > 0.0, "both exhale ({open_kg}, {lid_kg})");
+        assert!(
+            open_kg > 0.0 && lid_kg > 0.0,
+            "both exhale ({open_kg}, {lid_kg})"
+        );
         assert!(
             lid_kg < open_kg * 0.2,
             "the lid throttles: {lid_kg:.3e} vs open {open_kg:.3e}"
@@ -1163,7 +1286,11 @@ mod tests {
         let (mut co2_world, _t) = world(4, 15);
         co2_world.reservoirs.atmosphere.contents.add(6, 0.273e18);
         co2_world.reservoirs.atmosphere.contents.add(8, 0.727e18);
-        co2_world.reservoirs.atmosphere.species.add(CARBON_DIOXIDE, 1.0e18);
+        co2_world
+            .reservoirs
+            .atmosphere
+            .species
+            .add(CARBON_DIOXIDE, 1.0e18);
 
         let cold = crate::surface::greenhouse_k(&n2_world);
         let warm = crate::surface::greenhouse_k(&co2_world);

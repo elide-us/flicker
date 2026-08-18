@@ -35,7 +35,11 @@ pub fn uv_sphere(color: [f32; 3], sectors: u32, stacks: u32) -> (Vec<MeshVertex>
             let theta = std::f32::consts::TAU * j as f32 / sectors as f32;
             let (st, ct) = theta.sin_cos();
             let n = [sp * ct, cp, sp * st];
-            verts.push(MeshVertex { position: n, normal: n, material: mat });
+            verts.push(MeshVertex {
+                position: n,
+                normal: n,
+                material: mat,
+            });
         }
     }
     let mut idx = Vec::with_capacity((stacks * sectors * 6) as usize);
@@ -54,7 +58,12 @@ pub fn uv_sphere(color: [f32; 3], sectors: u32, stacks: u32) -> (Vec<MeshVertex>
 /// `[inner, outer]` (units of the planet radius). Concentric greyscale brightness
 /// bands (a Cassini-division feel); the caller tilts, scales, and **tints** it.
 /// Double-sided so it shows from either face. Salvaged from the old `planet.rs`.
-pub fn ring_mesh(inner: f32, outer: f32, segments: usize, bands: usize) -> (Vec<MeshVertex>, Vec<u32>) {
+pub fn ring_mesh(
+    inner: f32,
+    outer: f32,
+    segments: usize,
+    bands: usize,
+) -> (Vec<MeshVertex>, Vec<u32>) {
     use std::f32::consts::TAU;
     let stride = segments + 1;
     let mut verts = Vec::with_capacity((bands + 1) * stride);
@@ -65,7 +74,11 @@ pub fn ring_mesh(inner: f32, outer: f32, segments: usize, bands: usize) -> (Vec<
         for si in 0..=segments {
             let a = si as f32 / segments as f32 * TAU;
             let (s, c) = a.sin_cos();
-            verts.push(MeshVertex { position: [r * c, 0.0, r * s], normal: [0.0, 1.0, 0.0], material: m });
+            verts.push(MeshVertex {
+                position: [r * c, 0.0, r * s],
+                normal: [0.0, 1.0, 0.0],
+                material: m,
+            });
         }
     }
     let mut idx = Vec::with_capacity(bands * segments * 12);

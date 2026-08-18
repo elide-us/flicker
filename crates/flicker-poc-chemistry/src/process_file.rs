@@ -91,10 +91,14 @@ impl Gate {
                     .unwrap_or_else(|| panic!("processes.json reads unknown field '{read}'"));
                 let rhs = match value {
                     serde_json::Value::Number(n) => n.as_f64().expect("finite gate number"),
-                    serde_json::Value::String(s) => resolve(s, state, levers).unwrap_or_else(
-                        || panic!("processes.json compares against unknown field '{s}'"),
-                    ),
-                    other => panic!("processes.json gate value must be a number or a read: {other}"),
+                    serde_json::Value::String(s) => {
+                        resolve(s, state, levers).unwrap_or_else(|| {
+                            panic!("processes.json compares against unknown field '{s}'")
+                        })
+                    }
+                    other => {
+                        panic!("processes.json gate value must be a number or a read: {other}")
+                    }
                 };
                 match op.as_str() {
                     "<" => lhs < rhs,
@@ -170,7 +174,10 @@ pub fn load_processes(dir: &Path) -> Vec<ProcessDef> {
         .unwrap_or_else(|e| panic!("processes.json missing at {}: {e}", path.display()));
     let file: ProcessFile = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("processes.json does not parse: {e}"));
-    assert!(!file.processes.is_empty(), "processes.json names no processes at all");
+    assert!(
+        !file.processes.is_empty(),
+        "processes.json names no processes at all"
+    );
     file.processes
 }
 
@@ -184,7 +191,11 @@ pub struct Gated {
 
 impl Gated {
     pub fn new(inner: Box<dyn Stage>, gate: Gate, levers: Levers) -> Self {
-        Self { inner, gate, levers }
+        Self {
+            inner,
+            gate,
+            levers,
+        }
     }
 }
 

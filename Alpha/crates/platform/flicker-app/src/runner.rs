@@ -60,7 +60,11 @@ struct InputPump {
 impl InputPump {
     /// Resolve this frame's snapshot into signal events for `ctx` (the active surface's
     /// context, `None` = the base). The returned events borrow `input`.
-    fn resolve<'a>(&mut self, input: &'a InputState, ctx: Option<InputContext>) -> Vec<InputEvent<'a>> {
+    fn resolve<'a>(
+        &mut self,
+        input: &'a InputState,
+        ctx: Option<InputContext>,
+    ) -> Vec<InputEvent<'a>> {
         // Settings-rebind (S1c): adopt the latest committed World map before resolving,
         // so a key rebound in the pause→settings overlay takes effect live. Non-draining
         // (it reads the profile, never the scene-facing `take_pending_input`), so a scene
@@ -78,10 +82,18 @@ impl InputPump {
             }
         }
         self.fired.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad, input, self.tick, &mut self.fired);
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad,
+            input,
+            self.tick,
+            &mut self.fired,
+        );
         let active = self.bindings.active();
-        self.fired.iter().map(|f| InputEvent::from_fired(f, active, input)).collect()
+        self.fired
+            .iter()
+            .map(|f| InputEvent::from_fired(f, active, input))
+            .collect()
     }
 
     /// Reconcile the handler chain's context requests into the shared stack (focus is
@@ -128,7 +140,11 @@ impl<A: App> ApplicationHandler for Runner<A> {
             // pointer — that stays with the input-modality wiring.
             if let Some(c) = self.app.cursor() {
                 match winit::window::CustomCursor::from_rgba(
-                    c.rgba, c.width, c.height, c.hotspot.0, c.hotspot.1,
+                    c.rgba,
+                    c.width,
+                    c.height,
+                    c.hotspot.0,
+                    c.hotspot.1,
                 ) {
                     Ok(src) => window.set_cursor(event_loop.create_custom_cursor(src)),
                     Err(e) => {
@@ -263,7 +279,10 @@ impl<A: App> ApplicationHandler for Runner<A> {
         // the window is still alive.
         if let Some(window) = self.window.as_ref() {
             let inner = window.inner_size();
-            let (x, y) = window.outer_position().map(|p| (p.x, p.y)).unwrap_or((0, 0));
+            let (x, y) = window
+                .outer_position()
+                .map(|p| (p.x, p.y))
+                .unwrap_or((0, 0));
             let geom = WindowGeometry {
                 x,
                 y,

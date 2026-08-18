@@ -2,6 +2,7 @@
 name = "flicker-clicktrainer"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # A minigame PACKAGE (library only) — the click-trainer `Scene`, driven by the
@@ -12,7 +13,7 @@ name = "flicker_clicktrainer"
 path = "src/lib.rs"
 
 [dependencies]
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The new input model (Resolver/Fired/ActionSignal) + the event bus
 # (Router/InputHandler/RouteCtx) this scene routes its Esc + click through (spec §9).
 flicker-input-core.workspace = true

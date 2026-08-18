@@ -34,7 +34,11 @@ pub fn ring_segments(center: Vec3, radius: f32, segments: usize) -> Vec<(Vec3, V
     }
     let at = |k: usize| {
         let a = k as f32 / segments as f32 * TAU;
-        Vec3::new(center.x + radius * a.cos(), center.y, center.z + radius * a.sin())
+        Vec3::new(
+            center.x + radius * a.cos(),
+            center.y,
+            center.z + radius * a.sin(),
+        )
     };
     (0..segments).map(|i| (at(i), at(i + 1))).collect()
 }
@@ -99,7 +103,10 @@ mod tests {
             let c = |v: &Vec3| if axis == 0 { v.x } else { v.y };
             let min = segs.iter().map(|(a, _)| c(a)).fold(f32::MAX, f32::min);
             let max = segs.iter().map(|(a, _)| c(a)).fold(f32::MIN, f32::max);
-            assert!((min + 3.0).abs() < 1e-5 && (max - 3.0).abs() < 1e-5, "axis {axis} spans the extent");
+            assert!(
+                (min + 3.0).abs() < 1e-5 && (max - 3.0).abs() < 1e-5,
+                "axis {axis} spans the extent"
+            );
         }
         // The Y-up sibling is untouched by this: it is still flat in Y.
         assert!(grid_segments(0.5, 3.0, 0.0).iter().all(|(a, _)| a.y == 0.0));
@@ -125,7 +132,10 @@ mod tests {
         for w in segs.windows(2) {
             assert!((w[0].1 - w[1].0).length() < 1e-5, "ring has a gap");
         }
-        assert!((segs[23].1 - segs[0].0).length() < 1e-4, "ring never closed");
+        assert!(
+            (segs[23].1 - segs[0].0).length() < 1e-4,
+            "ring never closed"
+        );
     }
 
     #[test]

@@ -92,7 +92,9 @@ impl CompoundLedger {
 
     /// Iterate `(compound, amount)` in ascending id order.
     pub fn iter(&self) -> impl Iterator<Item = (CompoundId, f64)> + '_ {
-        self.amounts.iter().map(|(&compound, &amount)| (compound, amount))
+        self.amounts
+            .iter()
+            .map(|(&compound, &amount)| (compound, amount))
     }
 }
 

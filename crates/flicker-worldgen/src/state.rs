@@ -16,7 +16,9 @@ use crate::layer::LayerLedger;
 /// Dominant biome of a hex's surface (Epoch 6), from temperature + moisture +
 /// elevation. A Whittaker-style classification; the runtime reads it to dress
 /// the surface.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub enum Biome {
     /// Submerged — below sea level.
     #[default]
@@ -59,7 +61,9 @@ pub enum Boundary {
 /// never regressed. Precursor chemistry (Epoch 4) → microbial mats at the vents
 /// (Epoch 5) → fungus and flora on land (Epoch 6). Ordered so gates can ask
 /// `stage >= Floral`.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 pub enum LifeStage {
     /// No appreciable chemistry.
     #[default]
@@ -216,7 +220,11 @@ impl HexState {
     /// `Ocean`), so growing the data model with new fields needs no change here.
     pub fn new(composition: Composition) -> Self {
         let column = LayerLedger::from_primordial(composition.clone(), 1.0);
-        Self { composition, column, ..Default::default() }
+        Self {
+            composition,
+            column,
+            ..Default::default()
+        }
     }
 
     /// The composition visible at the surface: the crust once differentiated,

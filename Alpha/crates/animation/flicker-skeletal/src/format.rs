@@ -232,7 +232,13 @@ pub struct ClothParams {
 
 impl Default for ClothParams {
     fn default() -> Self {
-        Self { gravity: [0.0, 0.0, -600.0], stiffness: 0.015, damping: 0.9, iterations: 8, max_dt: 1.0 / 30.0 }
+        Self {
+            gravity: [0.0, 0.0, -600.0],
+            stiffness: 0.015,
+            damping: 0.9,
+            iterations: 8,
+            max_dt: 1.0 / 30.0,
+        }
     }
 }
 
@@ -483,16 +489,17 @@ fn mat4_from_contract(m: &[f32; 16]) -> Mat4 {
 }
 
 /// Recursively collect every `*.json` path under `dir` — loose or in its
-/// gz-at-rest form (`*.json.gz`, how package content ships).
+/// gz-at-rest form (`*.json.gz`, how package content ships). Enumerates
+/// through the seam's [`flicker_core::compression::list_dir`], so a mounted
+/// `package.flk` serves the same listing an on-disk tree would.
 fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
+    for entry in flicker_core::compression::list_dir(dir)
         .with_context(|| format!("reading assets dir {}", dir.display()))?
     {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_json_files(&path, out)?;
-        } else if is_json_asset(&path) {
-            out.push(path);
+        if entry.is_dir {
+            collect_json_files(&entry.path, out)?;
+        } else if is_json_asset(&entry.path) {
+            out.push(entry.path);
         }
     }
     Ok(())
@@ -507,7 +514,8 @@ fn is_json_asset(path: &Path) -> bool {
 
 /// Whether any component of `path` equals `name` (e.g. `clips`, `RootMotion`).
 fn path_has_component(path: &Path, name: &str) -> bool {
-    path.components().any(|c| c.as_os_str().to_str() == Some(name))
+    path.components()
+        .any(|c| c.as_os_str().to_str() == Some(name))
 }
 
 /// Recursively load every `*.json` under `dir`, pick the rig (the file carrying the
@@ -549,8 +557,11 @@ pub fn rig_bones(file: &RigFile) -> Vec<Bone> {
 /// structured clip library's RootMotion convention; an in-memory consumer whose
 /// variant identity lives elsewhere passes `false`.
 pub fn resolve_clips(file: &RigFile, bones: &[Bone], rm_namespace: bool) -> Vec<ResolvedClip> {
-    let name_to_index: HashMap<&str, usize> =
-        bones.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+    let name_to_index: HashMap<&str, usize> = bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.as_str(), i))
+        .collect();
     let src_rest: HashMap<&str, [f32; 3]> = file
         .skeleton
         .bones
@@ -566,14 +577,24 @@ pub fn resolve_clips(file: &RigFile, bones: &[Bone], rm_namespace: bool) -> Vec<
                 Some(&bi) => {
                     // Fall back to the target bone's own rest translation → delta 0.
                     let w = bones[bi].local.w_axis;
-                    let source_rest =
-                        src_rest.get(tr.bone.as_str()).copied().unwrap_or([w.x, w.y, w.z]);
-                    tracks.push(ResolvedTrack { bone: bi, keys: tr.keys.clone(), source_rest });
+                    let source_rest = src_rest
+                        .get(tr.bone.as_str())
+                        .copied()
+                        .unwrap_or([w.x, w.y, w.z]);
+                    tracks.push(ResolvedTrack {
+                        bone: bi,
+                        keys: tr.keys.clone(),
+                        source_rest,
+                    });
                 }
                 None => unresolved.push(tr.bone.clone()),
             }
         }
-        let name = if rm_namespace { format!("RM/{}", clip.name) } else { clip.name.clone() };
+        let name = if rm_namespace {
+            format!("RM/{}", clip.name)
+        } else {
+            clip.name.clone()
+        };
         out.push(ResolvedClip {
             name,
             tick_rate_hz: clip.tick_rate_hz,
@@ -601,14 +622,16 @@ pub fn load_dirs(dirs: &[&Path]) -> Result<Model> {
         // gz at rest; loose dev files read the same way.
         let text = flicker_core::compression::read_text(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let file: RigFile = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let file: RigFile =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         parsed.push((path, file));
     }
     if parsed.is_empty() {
         anyhow::bail!(
             "no .json rig/clip assets found in {:?} — run the exporter and copy its output here",
-            dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>()
+            dirs.iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -695,8 +718,8 @@ pub fn load_mesh(path: &Path) -> Result<Mesh> {
 pub fn load_mesh_with_attach(path: &Path) -> Result<(Mesh, Attach)> {
     let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading prop {}", path.display()))?;
-    let file: RigFile = serde_json::from_str(&text)
-        .with_context(|| format!("parsing prop {}", path.display()))?;
+    let file: RigFile =
+        serde_json::from_str(&text).with_context(|| format!("parsing prop {}", path.display()))?;
     Ok((file.mesh, file.attach))
 }
 
@@ -819,13 +842,23 @@ mod tests {
         assert_eq!(f.attach.socket, "lhand");
         assert_eq!(f.attach.offset, [1.0, 2.0, 3.0]);
         assert_eq!(f.attach.uniform, 37.5);
-        assert_eq!(f.attach.scale, [1.0, 1.0, 1.0], "omitted attach.scale defaults to unit");
+        assert_eq!(
+            f.attach.scale,
+            [1.0, 1.0, 1.0],
+            "omitted attach.scale defaults to unit"
+        );
         assert_eq!(f.collision.volumes.len(), 2);
-        assert!(matches!(f.collision.volumes[0].role, CollisionRole::Physics));
+        assert!(matches!(
+            f.collision.volumes[0].role,
+            CollisionRole::Physics
+        ));
         assert!(matches!(f.collision.volumes[0].shape,
             CollisionShape::Capsule { radius, .. } if radius == 8.0));
         assert!(matches!(f.collision.volumes[1].role, CollisionRole::Hitbox));
-        assert!(matches!(f.collision.volumes[1].shape, CollisionShape::Box { .. }));
+        assert!(matches!(
+            f.collision.volumes[1].shape,
+            CollisionShape::Box { .. }
+        ));
     }
 
     /// WS-C C-α backward-compat: a file that predates the self-describing sections still loads —
@@ -845,8 +878,16 @@ mod tests {
         assert_eq!(m.orm, "", "orm defaults empty");
         // Absent `attach` block must default to identity/unit (not the derived all-zeros).
         assert_eq!(f.attach.socket, "");
-        assert_eq!(f.attach.rotate, [0.0, 0.0, 0.0, 1.0], "absent attach rotate = identity");
-        assert_eq!(f.attach.scale, [1.0, 1.0, 1.0], "absent attach scale = unit");
+        assert_eq!(
+            f.attach.rotate,
+            [0.0, 0.0, 0.0, 1.0],
+            "absent attach rotate = identity"
+        );
+        assert_eq!(
+            f.attach.scale,
+            [1.0, 1.0, 1.0],
+            "absent attach scale = unit"
+        );
         assert_eq!(f.attach.uniform, 1.0, "absent attach uniform = one");
         assert!(f.collision.volumes.is_empty(), "collision defaults empty");
     }
@@ -868,7 +909,11 @@ mod tests {
         assert_eq!(attach.socket, "lhand", "slot folds into socket");
         assert_eq!(attach.uniform, 37.5);
         assert_eq!(attach.offset, [1.0, 2.0, 3.0]);
-        assert_eq!(attach.scale, [1.0, 1.0, 1.0], "omitted attach.scale defaults to unit");
+        assert_eq!(
+            attach.scale,
+            [1.0, 1.0, 1.0],
+            "omitted attach.scale defaults to unit"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -901,11 +946,18 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../content/package/characters/GolemBase_Low");
         if !dir.exists() {
-            eprintln!("skipping: canonical content not present at {}", dir.display());
+            eprintln!(
+                "skipping: canonical content not present at {}",
+                dir.display()
+            );
             return;
         }
         let model = load_dir(&dir).expect("canonical reference rig should load");
-        assert_eq!(model.bones.len(), 67, "the reference must carry the 67-bone canon (source: baseline::TOPOLOGY)");
+        assert_eq!(
+            model.bones.len(),
+            67,
+            "the reference must carry the 67-bone canon (source: baseline::TOPOLOGY)"
+        );
         let head = model
             .bones
             .iter()

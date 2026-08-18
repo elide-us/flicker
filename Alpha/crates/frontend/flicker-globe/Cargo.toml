@@ -2,6 +2,7 @@
 name = "flicker-globe"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # One hex-globe mesh builder, shared. A shell of hex patches on a sphere of a
@@ -14,7 +15,7 @@ name = "flicker_globe"
 path = "src/lib.rs"
 
 [dependencies]
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 # The orbit camera reads the shared input state.
 flicker-input-core.workspace = true
 # The world sits in the input chain: it answers the look/zoom signals while its

@@ -115,7 +115,9 @@ impl EpochTransform for Epoch5 {
             };
             let volcanic = self.volcanic_drive * s.volcanic;
             let wet = s.water_depth > 0.0
-                || ctx.neighbors[i].iter().any(|&nb| prev[nb as usize].water_depth > 0.0);
+                || ctx.neighbors[i]
+                    .iter()
+                    .any(|&nb| prev[nb as usize].water_depth > 0.0);
             let water = if wet { self.water_drive } else { 0.0 };
             hydro[i] = (boundary + volcanic + water).clamp(0.0, 1.0);
         }
@@ -123,9 +125,14 @@ impl EpochTransform for Epoch5 {
         // 2. Vein sources: the hottest hexes, strongest first (deterministic).
         //    Skip a candidate that already sits on a traced vein so veins spread
         //    along the fault network rather than stacking on one hot spot.
-        let mut sources: Vec<usize> = (0..n).filter(|&i| hydro[i] >= self.vein_threshold).collect();
+        let mut sources: Vec<usize> = (0..n)
+            .filter(|&i| hydro[i] >= self.vein_threshold)
+            .collect();
         sources.sort_by(|&a, &b| {
-            hydro[b].partial_cmp(&hydro[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+            hydro[b]
+                .partial_cmp(&hydro[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(&b))
         });
 
         // Mineralization time: longer circulation matures longer veins carrying
@@ -209,7 +216,10 @@ impl Epoch5 {
                 .map(|&nb| nb as usize)
                 .filter(|&nb| !path.contains(&nb) && !on_vein[nb] && hydro[nb] > 0.0)
                 .max_by(|&a, &b| {
-                    hydro[a].partial_cmp(&hydro[b]).unwrap_or(std::cmp::Ordering::Equal).then(b.cmp(&a))
+                    hydro[a]
+                        .partial_cmp(&hydro[b])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(b.cmp(&a))
                 });
             match next {
                 Some(nb) => {
@@ -240,7 +250,11 @@ impl Epoch5 {
         if metals.is_empty() {
             return None;
         }
-        metals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        metals.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
         let r = rand01(ctx.seed ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let rank = (r * r * metals.len() as f64) as usize; // bias toward the top
         Some(metals[rank.min(metals.len() - 1)].0)
@@ -281,10 +295,22 @@ mod tests {
     }
 
     /// Run Epochs 1→2→3 so Epoch 5 has real boundaries / volcanism / bulk metals.
-    fn through_epoch3<'a>(t: &'a Tables, dirs: &'a [Vec3], neighbors: &'a [Vec<u32>]) -> (EpochCtx<'a>, Vec<HexState>) {
+    fn through_epoch3<'a>(
+        t: &'a Tables,
+        dirs: &'a [Vec3],
+        neighbors: &'a [Vec<u32>],
+    ) -> (EpochCtx<'a>, Vec<HexState>) {
         let e1 = Epoch1::new(t, Epoch1Params::default(), 7);
-        let ctx = EpochCtx { tables: t, dirs, neighbors, seed: 7 };
-        let seed: Vec<HexState> = dirs.iter().map(|&d| HexState::new(e1.seed_hex(d))).collect();
+        let ctx = EpochCtx {
+            tables: t,
+            dirs,
+            neighbors,
+            seed: 7,
+        };
+        let seed: Vec<HexState> = dirs
+            .iter()
+            .map(|&d| HexState::new(e1.seed_hex(d)))
+            .collect();
         let e2 = Epoch2::default().apply(&ctx, &seed);
         let e3 = Epoch3::default().apply(&ctx, &e2);
         (ctx, e3)
@@ -301,10 +327,16 @@ mod tests {
         // Interiors are inert; boundaries are where the signature lives.
         for s in &out {
             if s.boundary == Boundary::Interior && s.volcanic == 0.0 {
-                assert_eq!(s.hydrothermal, 0.0, "an inert interior should not be hydrothermal");
+                assert_eq!(
+                    s.hydrothermal, 0.0,
+                    "an inert interior should not be hydrothermal"
+                );
             }
         }
-        assert!(out.iter().any(|s| s.hydrothermal > 0.0), "no hydrothermal activity anywhere");
+        assert!(
+            out.iter().any(|s| s.hydrothermal > 0.0),
+            "no hydrothermal activity anywhere"
+        );
     }
 
     #[test]
@@ -320,11 +352,20 @@ mod tests {
             assert!(s.vein_strength > 0.0);
             let metal = s.vein_element.unwrap();
             // The vein deposited metal into the crust that wasn't there before.
-            let before = e3.iter().find(|p| p.composition == s.composition).map(|p| p.crust.amount(metal));
+            let before = e3
+                .iter()
+                .find(|p| p.composition == s.composition)
+                .map(|p| p.crust.amount(metal));
             if let Some(before) = before {
-                assert!(s.crust.amount(metal) >= before, "vein removed metal instead of adding it");
+                assert!(
+                    s.crust.amount(metal) >= before,
+                    "vein removed metal instead of adding it"
+                );
             }
-            assert!(s.crust.amount(metal) > 0.0, "vein hex carries no metal in its crust");
+            assert!(
+                s.crust.amount(metal) > 0.0,
+                "vein hex carries no metal in its crust"
+            );
         }
     }
 
@@ -339,7 +380,10 @@ mod tests {
         let cores = out.iter().filter(|s| s.vein_strength >= 0.999).count();
         let members = out.iter().filter(|s| s.vein_strength > 0.0).count();
         assert!(cores >= 1, "no vein core");
-        assert!(members > cores, "veins never extended past their source hex");
+        assert!(
+            members > cores,
+            "veins never extended past their source hex"
+        );
     }
 
     #[test]
@@ -350,8 +394,16 @@ mod tests {
         // Veins add metal to the crust; longer circulation runs longer veins with a
         // larger deposit fraction, so the total crust mass grows.
         let crust_mass = |out: &[HexState]| out.iter().map(|s| s.crust.total()).sum::<f64>();
-        let brief = Epoch5 { duration: 1, ..Epoch5::default() }.apply(&ctx, &e3);
-        let mature = Epoch5 { duration: 10, ..Epoch5::default() }.apply(&ctx, &e3);
+        let brief = Epoch5 {
+            duration: 1,
+            ..Epoch5::default()
+        }
+        .apply(&ctx, &e3);
+        let mature = Epoch5 {
+            duration: 10,
+            ..Epoch5::default()
+        }
+        .apply(&ctx, &e3);
         assert!(
             crust_mass(&mature) > crust_mass(&brief),
             "longer mineralization should pump more vein metal into the crust ({} vs {})",
@@ -387,20 +439,31 @@ mod tests {
         let t = tables();
         let (dirs, neighbors) = ring(30);
         let (ctx, e4) = through_epoch4(&t, &dirs, &neighbors);
-        assert!(e4.iter().any(|s| s.prebiotic > 0.0), "precondition: Epoch 4 made precursors");
+        assert!(
+            e4.iter().any(|s| s.prebiotic > 0.0),
+            "precondition: Epoch 4 made precursors"
+        );
 
         // A low threshold so any precursor cradle crosses into life — tests the
         // mechanism without depending on exact magnitudes.
-        let out = Epoch5 { microbial_threshold: 0.01, ..Epoch5::default() }.apply(&ctx, &e4);
+        let out = Epoch5 {
+            microbial_threshold: 0.01,
+            ..Epoch5::default()
+        }
+        .apply(&ctx, &e4);
         assert!(
-            out.iter().any(|s| s.life_stage == LifeStage::Microbial && s.biomass > 0.0),
+            out.iter()
+                .any(|s| s.life_stage == LifeStage::Microbial && s.biomass > 0.0),
             "no microbial life emerged at the precursor cradles"
         );
         for s in &out {
             assert!(s.biomass.is_finite() && (0.0..=1.0).contains(&s.biomass));
             // No precursors ⇒ no life, no standing biomass.
             if s.prebiotic <= 0.0 {
-                assert!(s.life_stage < LifeStage::Microbial, "life with no precursors");
+                assert!(
+                    s.life_stage < LifeStage::Microbial,
+                    "life with no precursors"
+                );
                 assert_eq!(s.biomass, 0.0);
             }
         }
@@ -411,12 +474,22 @@ mod tests {
         let t = tables();
         let dirs = [Vec3::X];
         let neighbors = [vec![]];
-        let ctx = EpochCtx { tables: &t, dirs: &dirs, neighbors: &neighbors, seed: 1 };
+        let ctx = EpochCtx {
+            tables: &t,
+            dirs: &dirs,
+            neighbors: &neighbors,
+            seed: 1,
+        };
         // A column with iron present.
         let s = HexState::new(Composition::from_iter([(14, 8000.0), (FE, 2000.0)]));
         let e5 = Epoch5::default();
-        let metal = e5.pick_metal(&s, &ctx, 0).expect("a dense metal is present");
+        let metal = e5
+            .pick_metal(&s, &ctx, 0)
+            .expect("a dense metal is present");
         let density = t.element_by_number(metal).unwrap().density_g_cm3 as f64;
-        assert!(density >= e5.metal_density_min, "picked a light element as ore metal");
+        assert!(
+            density >= e5.metal_density_min,
+            "picked a light element as ore metal"
+        );
     }
 }

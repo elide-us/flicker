@@ -33,21 +33,38 @@ pub struct ImportSummary {
 /// Import one source folder into `out_dir/<asset_name>.json` (+ role-named textures), conforming to
 /// `reference` (use [`crate::default_reference`] for PrismHumanBaseA). Errors — rather than guessing —
 /// when the folder has no riggable mesh or more than one (the editor disambiguates that case).
-pub fn import_folder(source_dir: &Path, out_dir: &Path, asset_name: &str, reference: &Path) -> Result<ImportSummary> {
-    let scan = scan_folder(source_dir).with_context(|| format!("scanning {}", source_dir.display()))?;
+pub fn import_folder(
+    source_dir: &Path,
+    out_dir: &Path,
+    asset_name: &str,
+    reference: &Path,
+) -> Result<ImportSummary> {
+    let scan =
+        scan_folder(source_dir).with_context(|| format!("scanning {}", source_dir.display()))?;
     let rig_entry = match (scan.sole_riggable(), scan.riggable.len()) {
         (Some(e), _) => e.clone(),
         (None, 0) => bail!("no riggable mesh found in {}", source_dir.display()),
         (None, n) => {
-            let names: Vec<_> = scan.candidates().filter_map(|e| e.path.file_name().map(|s| s.to_string_lossy().into_owned())).collect();
-            bail!("{n} riggable meshes in {} — the editor must pick one: {names:?}", source_dir.display());
+            let names: Vec<_> = scan
+                .candidates()
+                .filter_map(|e| e.path.file_name().map(|s| s.to_string_lossy().into_owned()))
+                .collect();
+            bail!(
+                "{n} riggable meshes in {} — the editor must pick one: {names:?}",
+                source_dir.display()
+            );
         }
     };
 
     let mut model = parse_fbx(&rig_entry.path)?;
     rename_to_canonical(&mut model);
-    conform_to_canonical(&mut model, reference)
-        .with_context(|| format!("conforming {} to {}", rig_entry.path.display(), reference.display()))?;
+    conform_to_canonical(&mut model, reference).with_context(|| {
+        format!(
+            "conforming {} to {}",
+            rig_entry.path.display(),
+            reference.display()
+        )
+    })?;
     let mut rig = bake_rig(&model, asset_name);
 
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
@@ -89,14 +106,42 @@ pub(crate) fn wire_textures(
     asset_name: &str,
     rig: &mut flicker_skeletal::format::RigFile,
 ) -> Result<Vec<String>> {
-    let SourceMaps { base_color: base, metalness: metal, roughness: rough, normal } =
-        source_maps(scan, mesh);
+    let SourceMaps {
+        base_color: base,
+        metalness: metal,
+        roughness: rough,
+        normal,
+    } = source_maps(scan, mesh);
 
     let mut copied = Vec::new();
-    let bc = copy_role(base.as_deref(), "BaseColor", out_dir, asset_name, &mut copied)?;
-    let me = copy_role(metal.as_deref(), "Metallic", out_dir, asset_name, &mut copied)?;
-    let ro = copy_role(rough.as_deref(), "Roughness", out_dir, asset_name, &mut copied)?;
-    let no = copy_role(normal.as_deref(), "Normal", out_dir, asset_name, &mut copied)?;
+    let bc = copy_role(
+        base.as_deref(),
+        "BaseColor",
+        out_dir,
+        asset_name,
+        &mut copied,
+    )?;
+    let me = copy_role(
+        metal.as_deref(),
+        "Metallic",
+        out_dir,
+        asset_name,
+        &mut copied,
+    )?;
+    let ro = copy_role(
+        rough.as_deref(),
+        "Roughness",
+        out_dir,
+        asset_name,
+        &mut copied,
+    )?;
+    let no = copy_role(
+        normal.as_deref(),
+        "Normal",
+        out_dir,
+        asset_name,
+        &mut copied,
+    )?;
 
     if let Some(m) = rig.mesh.materials.get_mut(0) {
         m.name = asset_name.to_string();
@@ -148,19 +193,37 @@ pub struct SourceMaps {
 /// a `…biped_Character_output.fbx` — the folder's whole texture list is considered.
 pub fn source_maps(scan: &crate::scan::Scan, mesh: &Path) -> SourceMaps {
     // The maps named after THIS mesh, else (no piece-named map at all) the folder's whole list.
-    let mine: Vec<&crate::scan::Entry> = scan.of_kind(Kind::Texture).filter(|e| belongs_to(e, mesh)).collect();
-    let textures: Vec<&crate::scan::Entry> =
-        if mine.is_empty() { scan.of_kind(Kind::Texture).collect() } else { mine };
+    let mine: Vec<&crate::scan::Entry> = scan
+        .of_kind(Kind::Texture)
+        .filter(|e| belongs_to(e, mesh))
+        .collect();
+    let textures: Vec<&crate::scan::Entry> = if mine.is_empty() {
+        scan.of_kind(Kind::Texture).collect()
+    } else {
+        mine
+    };
 
     let mut out = SourceMaps::default();
     for e in textures {
-        let n = e.path.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let n = e
+            .path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         // Maps with no single-channel slot to sit in: Meshy's packed `…_metallic_roughness` (it
         // ships the dedicated `…_metallic` / `…_roughness` beside it, and the packed one would
         // otherwise land in `metalness`) and its `…_emit` / `…_emission`. Skipped explicitly so
         // neither is mistaken for a map role — or, worse, for the albedo. Matched with the role
         // separator, so only a `<stem>_<role>.png` suffix counts.
-        if ["_metallic_roughness", "_metalness_roughness", "_emit", "_emission"].iter().any(|s| n.contains(s)) {
+        if [
+            "_metallic_roughness",
+            "_metalness_roughness",
+            "_emit",
+            "_emission",
+        ]
+        .iter()
+        .any(|s| n.contains(s))
+        {
             continue;
         }
         if n.contains("metallic") || n.contains("metalness") {
@@ -180,8 +243,16 @@ pub fn source_maps(scan: &crate::scan::Scan, mesh: &Path) -> SourceMaps {
 /// (`…_texture.fbx` → `…_texture.png`, `…_texture_metallic.png`, …), which is the only thing that
 /// tells a katana's maps from its scabbard's in a shared set folder.
 fn belongs_to(e: &crate::scan::Entry, mesh: &Path) -> bool {
-    let Some(stem) = mesh.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else { return false };
-    let Some(name) = e.path.file_name().map(|s| s.to_string_lossy().to_lowercase()) else { return false };
+    let Some(stem) = mesh.file_stem().map(|s| s.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    let Some(name) = e
+        .path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_lowercase())
+    else {
+        return false;
+    };
     !stem.is_empty() && name.starts_with(&stem)
 }
 
@@ -195,7 +266,13 @@ pub(crate) fn dir_of(file: &Path) -> &Path {
 }
 
 /// Copy one map file to `out_dir/<AssetName>_<Map>.png`; return the written basename.
-fn copy_role(src: Option<&Path>, map: &str, out_dir: &Path, asset_name: &str, copied: &mut Vec<String>) -> Result<Option<String>> {
+fn copy_role(
+    src: Option<&Path>,
+    map: &str,
+    out_dir: &Path,
+    asset_name: &str,
+    copied: &mut Vec<String>,
+) -> Result<Option<String>> {
     let Some(src) = src else { return Ok(None) };
     let dst_name = format!("{asset_name}_{map}.png");
     std::fs::copy(src, out_dir.join(&dst_name))
@@ -220,12 +297,17 @@ mod tests {
         let base = content.join("characters/HumanBaseA");
         // Prefer HumanBaseA's OWN re-baked (flat-foot) clips, matching the paperdoll's per-body path.
         let own = content.join("retarget/clips/HumanBaseA/locomotion");
-        let clips = if own.is_dir() { own } else { content.join("retarget/clips/locomotion") };
+        let clips = if own.is_dir() {
+            own
+        } else {
+            content.join("retarget/clips/locomotion")
+        };
         if !crate::package::file_exists(&base.join("HumanBaseA.json")) {
             eprintln!("skipping: run `--example import_folder` first to produce HumanBaseA");
             return;
         }
-        let model = flicker_skeletal::format::load_dirs(&[&base, &clips]).expect("engine loads HumanBaseA + clips");
+        let model = flicker_skeletal::format::load_dirs(&[&base, &clips])
+            .expect("engine loads HumanBaseA + clips");
         let resolved: usize = model.clips.iter().map(|c| c.tracks.len()).sum();
         let unresolved: usize = model.clips.iter().map(|c| c.unresolved.len()).sum();
         eprintln!(
@@ -236,17 +318,38 @@ mod tests {
         assert_eq!(model.bones.len(), 66, "engine sees the canonical 66 bones");
         assert!(model.mesh.vertices.len() > 10_000, "mesh carried through");
         assert!(!model.clips.is_empty(), "shared locomotion clips loaded");
-        assert!(resolved > 0, "clip tracks resolve against HumanBaseA's bones by name");
-        assert_eq!(model.mesh.materials.first().map(|m| m.base_color.as_str()), Some("HumanBaseA_BaseColor.png"));
-        assert!(base.join("HumanBaseA_BaseColor.png").exists(), "base-color texture written beside the rig");
+        assert!(
+            resolved > 0,
+            "clip tracks resolve against HumanBaseA's bones by name"
+        );
+        assert_eq!(
+            model.mesh.materials.first().map(|m| m.base_color.as_str()),
+            Some("HumanBaseA_BaseColor.png")
+        );
+        assert!(
+            base.join("HumanBaseA_BaseColor.png").exists(),
+            "base-color texture written beside the rig"
+        );
 
         // The copied locomotion pack drives the Animate view: its state machine builds against
         // HumanBaseA's clip list (same shared names) — so the walk plays, not just bind.
         use flicker_skeletal::state::{self, StateMachine};
-        let pack = state::load_pack(&base.join("HumanBaseA.pack.json")).expect("HumanBaseA pack loads");
-        let refs: Vec<state::ClipRef> = model.clips.iter().map(|c| state::ClipRef { name: &c.name, duration_ticks: c.duration_ticks }).collect();
-        let sm = StateMachine::build(&pack, &refs).expect("state machine builds against HumanBaseA clips");
-        eprintln!("pack state machine ready, initial state '{}'", sm.current_state_name());
+        let pack =
+            state::load_pack(&base.join("HumanBaseA.pack.json")).expect("HumanBaseA pack loads");
+        let refs: Vec<state::ClipRef> = model
+            .clips
+            .iter()
+            .map(|c| state::ClipRef {
+                name: &c.name,
+                duration_ticks: c.duration_ticks,
+            })
+            .collect();
+        let sm = StateMachine::build(&pack, &refs)
+            .expect("state machine builds against HumanBaseA clips");
+        eprintln!(
+            "pack state machine ready, initial state '{}'",
+            sm.current_state_name()
+        );
     }
 
     /// DECISIVE bind check: at the REST pose the skinning palette is `rest_world · inverse_bind`, which
@@ -258,7 +361,8 @@ mod tests {
     #[ignore]
     fn humanbasea_rest_skin_matches_bind_mesh() {
         use flicker_skeletal::{pose, skin};
-        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../content/package/characters/HumanBaseA");
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../content/package/characters/HumanBaseA");
         if !crate::package::file_exists(&base.join("HumanBaseA.json")) {
             eprintln!("skipping: bake HumanBaseA first (--example import_folder)");
             return;
@@ -271,10 +375,14 @@ mod tests {
         let mut worst = 0.0f32;
         for (i, v) in model.mesh.vertices.iter().enumerate() {
             let p = skinned[i].position;
-            let d = ((p[0] - v.p[0]).powi(2) + (p[1] - v.p[1]).powi(2) + (p[2] - v.p[2]).powi(2)).sqrt();
+            let d = ((p[0] - v.p[0]).powi(2) + (p[1] - v.p[1]).powi(2) + (p[2] - v.p[2]).powi(2))
+                .sqrt();
             worst = worst.max(d);
         }
-        eprintln!("REST-skin vs bind mesh: worst {worst:.4} cm across {} verts", model.mesh.vertices.len());
+        eprintln!(
+            "REST-skin vs bind mesh: worst {worst:.4} cm across {} verts",
+            model.mesh.vertices.len()
+        );
         assert!(worst < 0.5, "rest pose must skin back to the bind mesh (worst {worst:.4} cm) — else inverse_bind is wrong");
     }
 }

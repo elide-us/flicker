@@ -92,15 +92,27 @@ fn match_material(comp: &Composition, tables: &Tables) -> (String, [f32; 3], f32
         if m.signature.is_empty() {
             continue;
         }
-        let score = m.signature.iter().filter(|s| present.contains(&s.as_str())).count();
+        let score = m
+            .signature
+            .iter()
+            .filter(|s| present.contains(&s.as_str()))
+            .count();
         // Require the whole signature to be present (a real match), prefer the most specific.
-        if score == m.signature.len() && best.map(|(b, _)| m.signature.len() > b.signature.len()).unwrap_or(true) {
+        if score == m.signature.len()
+            && best
+                .map(|(b, _)| m.signature.len() > b.signature.len())
+                .unwrap_or(true)
+        {
             best = Some((m, score));
         }
     }
     match best {
         Some((m, _)) => (m.name.clone(), m.color, m.density_g_cm3),
-        None => ("rock".into(), [0.50, 0.50, 0.52], solid_density(comp, tables).max(2.5)),
+        None => (
+            "rock".into(),
+            [0.50, 0.50, 0.52],
+            solid_density(comp, tables).max(2.5),
+        ),
     }
 }
 
@@ -115,16 +127,29 @@ pub fn classify(
     tables: &Tables,
 ) -> LayerClass {
     if comp.total() <= 0.0 {
-        return LayerClass { phase: Phase::Gas, name: "void".into(), color: [0.10, 0.10, 0.12], density_g_cm3: 0.0 };
+        return LayerClass {
+            phase: Phase::Gas,
+            name: "void".into(),
+            color: [0.10, 0.10, 0.12],
+            density_g_cm3: 0.0,
+        };
     }
 
     // A gas body: dominated by a non-water atmospheric gas compound.
     if let Some(gid) = compounds.dominant() {
         if gid != WATER {
             if let Some((name, color)) = gas_look(gid) {
-                let density =
-                    tables.compound_by_id(gid).and_then(|c| c.density_g_cm3).unwrap_or(0.0015).max(1e-4);
-                return LayerClass { phase: Phase::Gas, name: name.into(), color, density_g_cm3: density };
+                let density = tables
+                    .compound_by_id(gid)
+                    .and_then(|c| c.density_g_cm3)
+                    .unwrap_or(0.0015)
+                    .max(1e-4);
+                return LayerClass {
+                    phase: Phase::Gas,
+                    name: name.into(),
+                    color,
+                    density_g_cm3: density,
+                };
             }
         }
     }
@@ -133,22 +158,50 @@ pub fn classify(
     // low-pressure air holds it as vapour, otherwise it condenses / freezes.
     if compounds.dominant() == Some(WATER) {
         return if pressure < LOW_PRESSURE || temp > T_CONDENSE {
-            LayerClass { phase: Phase::Gas, name: "steam".into(), color: [0.85, 0.88, 0.92], density_g_cm3: 0.0006 }
+            LayerClass {
+                phase: Phase::Gas,
+                name: "steam".into(),
+                color: [0.85, 0.88, 0.92],
+                density_g_cm3: 0.0006,
+            }
         } else if temp > T_WATER_FREEZE {
-            LayerClass { phase: Phase::Liquid, name: "water".into(), color: [0.15, 0.40, 0.78], density_g_cm3: 1.0 }
+            LayerClass {
+                phase: Phase::Liquid,
+                name: "water".into(),
+                color: [0.15, 0.40, 0.78],
+                density_g_cm3: 1.0,
+            }
         } else {
-            LayerClass { phase: Phase::Solid, name: "ice".into(), color: [0.80, 0.90, 0.96], density_g_cm3: 0.92 }
+            LayerClass {
+                phase: Phase::Solid,
+                name: "ice".into(),
+                color: [0.80, 0.90, 0.96],
+                density_g_cm3: 0.92,
+            }
         };
     }
 
     // A metal body (dense siderophiles — the differentiated core): molten above iron's melt.
-    let dom_density =
-        comp.dominant().and_then(|el| tables.element_by_number(el)).map(|e| e.density_g_cm3).unwrap_or(0.0);
+    let dom_density = comp
+        .dominant()
+        .and_then(|el| tables.element_by_number(el))
+        .map(|e| e.density_g_cm3)
+        .unwrap_or(0.0);
     if dom_density >= METAL_DENSITY {
         return if temp > T_METAL_MELT {
-            LayerClass { phase: Phase::Molten, name: "molten metal".into(), color: [0.95, 0.55, 0.25], density_g_cm3: dom_density * 0.92 }
+            LayerClass {
+                phase: Phase::Molten,
+                name: "molten metal".into(),
+                color: [0.95, 0.55, 0.25],
+                density_g_cm3: dom_density * 0.92,
+            }
         } else {
-            LayerClass { phase: Phase::Solid, name: "metal".into(), color: [0.55, 0.55, 0.60], density_g_cm3: dom_density }
+            LayerClass {
+                phase: Phase::Solid,
+                name: "metal".into(),
+                color: [0.55, 0.55, 0.60],
+                density_g_cm3: dom_density,
+            }
         };
     }
 
@@ -156,10 +209,23 @@ pub fn classify(
     let (name, color, density) = match_material(comp, tables);
     if temp > T_SOLIDUS {
         // Glow toward hot orange; molten rock is a little less dense than the solid.
-        let hot = [color[0] * 0.4 + 0.51, color[1] * 0.4 + 0.18, color[2] * 0.4 + 0.07];
-        LayerClass { phase: Phase::Molten, name: format!("molten {name}"), color: hot, density_g_cm3: density * 0.9 }
+        let hot = [
+            color[0] * 0.4 + 0.51,
+            color[1] * 0.4 + 0.18,
+            color[2] * 0.4 + 0.07,
+        ];
+        LayerClass {
+            phase: Phase::Molten,
+            name: format!("molten {name}"),
+            color: hot,
+            density_g_cm3: density * 0.9,
+        }
     } else {
-        LayerClass { phase: Phase::Solid, name, color, density_g_cm3: density }
+        LayerClass {
+            phase: Phase::Solid,
+            name,
+            color,
+            density_g_cm3: density,
+        }
     }
 }
-

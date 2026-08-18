@@ -36,7 +36,10 @@ pub struct MassParams {
 impl Default for MassParams {
     fn default() -> Self {
         // A roughly Sol-like cloud: about one star's worth of material at solar metallicity.
-        Self { total: 1.0, metallicity: 0.014 }
+        Self {
+            total: 1.0,
+            metallicity: 0.014,
+        }
     }
 }
 
@@ -71,14 +74,29 @@ impl CloudMass {
             }
         }
         let z = p.metallicity.clamp(0.0, 1.0);
-        let gas_scale = if gas_raw > 0.0 { (1.0 - z) * p.total / gas_raw } else { 0.0 };
-        let metal_scale = if metal_raw > 0.0 { z * p.total / metal_raw } else { 0.0 };
+        let gas_scale = if gas_raw > 0.0 {
+            (1.0 - z) * p.total / gas_raw
+        } else {
+            0.0
+        };
+        let metal_scale = if metal_raw > 0.0 {
+            z * p.total / metal_raw
+        } else {
+            0.0
+        };
 
         let tonnage = ej
             .elements
             .iter()
             .enumerate()
-            .map(|(i, e)| raw[i] * if is_gas(e.number) { gas_scale } else { metal_scale })
+            .map(|(i, e)| {
+                raw[i]
+                    * if is_gas(e.number) {
+                        gas_scale
+                    } else {
+                        metal_scale
+                    }
+            })
             .collect();
         Self { tonnage }
     }
@@ -155,14 +173,26 @@ mod tests {
     #[test]
     fn total_tonnage_matches_the_mass_dial() {
         let ej = ejecta();
-        let m = CloudMass::derive(&ej, &MassParams { total: 3.0, metallicity: 0.02 });
+        let m = CloudMass::derive(
+            &ej,
+            &MassParams {
+                total: 3.0,
+                metallicity: 0.02,
+            },
+        );
         assert!((m.total() - 3.0).abs() < 1e-3, "Σ tonnage == Mass");
     }
 
     #[test]
     fn metals_hold_exactly_the_metallicity_fraction() {
         let ej = ejecta();
-        let m = CloudMass::derive(&ej, &MassParams { total: 1.0, metallicity: 0.05 });
+        let m = CloudMass::derive(
+            &ej,
+            &MassParams {
+                total: 1.0,
+                metallicity: 0.05,
+            },
+        );
         assert!((m.metals(&ej) - 0.05).abs() < 1e-4, "Σ metals == Z·Mass");
     }
 
@@ -174,7 +204,10 @@ mod tests {
         assert!(m.tonnage[idx("H")] > m.tonnage[idx("U")], "H outweighs U");
         // Uranium is present but vanishingly small — the HZ-world uranium trace.
         assert!(m.tonnage[idx("U")] > 0.0, "U is present, not zero");
-        assert!(m.tonnage[idx("U")] < 1e-6 * m.tonnage[idx("H")], "U is a deep trace vs H");
+        assert!(
+            m.tonnage[idx("U")] < 1e-6 * m.tonnage[idx("H")],
+            "U is a deep trace vs H"
+        );
     }
 
     #[test]
@@ -190,10 +223,25 @@ mod tests {
     #[test]
     fn raising_metallicity_shifts_mass_from_gas_to_metals() {
         let ej = ejecta();
-        let lo = CloudMass::derive(&ej, &MassParams { total: 1.0, metallicity: 0.01 });
-        let hi = CloudMass::derive(&ej, &MassParams { total: 1.0, metallicity: 0.10 });
+        let lo = CloudMass::derive(
+            &ej,
+            &MassParams {
+                total: 1.0,
+                metallicity: 0.01,
+            },
+        );
+        let hi = CloudMass::derive(
+            &ej,
+            &MassParams {
+                total: 1.0,
+                metallicity: 0.10,
+            },
+        );
         let idx = |s: &str| ej.elements.iter().position(|e| e.symbol == s).unwrap();
         assert!(hi.metals(&ej) > lo.metals(&ej), "more Z → more metals");
-        assert!(hi.tonnage[idx("H")] < lo.tonnage[idx("H")], "more Z → less hydrogen");
+        assert!(
+            hi.tonnage[idx("H")] < lo.tonnage[idx("H")],
+            "more Z → less hydrogen"
+        );
     }
 }

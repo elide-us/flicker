@@ -79,7 +79,11 @@ impl CloudField {
         self.wob = Vec::with_capacity(n);
         self.wob_norm = Vec::with_capacity(n);
         for i in 0..n {
-            let mut d = [Harm { m: 2.0, phase: 0.0, amp: 0.0 }; K_DENS];
+            let mut d = [Harm {
+                m: 2.0,
+                phase: 0.0,
+                amp: 0.0,
+            }; K_DENS];
             let mut dn = 0.0;
             for (k, slot) in d.iter_mut().enumerate() {
                 let m = 2.0 + (hash3(self.seed, i as u32, (k * 3) as u32) % 6) as f32; // 2..7
@@ -93,12 +97,17 @@ impl CloudField {
             self.dens_norm.push(dn.max(1e-3));
 
             let ws = self.seed ^ 0x5151_5151;
-            let mut w = [Harm { m: 1.0, phase: 0.0, amp: 0.0 }; K_WOB];
+            let mut w = [Harm {
+                m: 1.0,
+                phase: 0.0,
+                amp: 0.0,
+            }; K_WOB];
             let mut wn = 0.0;
             for (k, slot) in w.iter_mut().enumerate() {
                 let m = 1.0 + (hash3(ws, i as u32, (k * 3) as u32) % 4) as f32; // 1..4
                 let phase = rand01(hash3(ws, i as u32, (k * 3 + 1) as u32)) * TAU;
-                let amp = (0.5 + 0.5 * rand01(hash3(ws, i as u32, (k * 3 + 2) as u32))) / (k as f32 + 1.0);
+                let amp = (0.5 + 0.5 * rand01(hash3(ws, i as u32, (k * 3 + 2) as u32)))
+                    / (k as f32 + 1.0);
                 *slot = Harm { m, phase, amp };
                 wn += amp;
             }
@@ -149,8 +158,7 @@ impl CloudField {
 /// A small integer hash (xorshift-multiply mix) → reproducible per-element parameters
 /// without pulling in an RNG crate.
 fn hash3(a: u32, b: u32, c: u32) -> u32 {
-    let mut x = a
-        .wrapping_mul(0x9E37_79B1)
+    let mut x = a.wrapping_mul(0x9E37_79B1)
         ^ b.wrapping_mul(0x85EB_CA77)
         ^ c.wrapping_mul(0xC2B2_AE3D).wrapping_add(0x1656_67B1);
     x ^= x >> 15;
@@ -193,7 +201,10 @@ mod tests {
     fn inner_rings_shear_faster_than_outer() {
         let f = CloudField::new(27, 1, 0.6);
         let anchor = 5.0;
-        assert!(f.omega(0.4, anchor) > f.omega(50.0, anchor), "Keplerian shear: inner faster");
+        assert!(
+            f.omega(0.4, anchor) > f.omega(50.0, anchor),
+            "Keplerian shear: inner faster"
+        );
     }
 
     #[test]
@@ -204,6 +215,9 @@ mod tests {
         let anchor = 11.0;
         let inner = f.omega(6.0, anchor);
         let outer = f.omega(20.0, anchor);
-        assert!(inner > 1.5 * outer, "adjacent visible rings shear (got {inner} vs {outer})");
+        assert!(
+            inner > 1.5 * outer,
+            "adjacent visible rings shear (got {inner} vs {outer})"
+        );
     }
 }

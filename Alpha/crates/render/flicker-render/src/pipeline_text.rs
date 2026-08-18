@@ -181,14 +181,30 @@ impl TextPipeline {
         wrap: Option<f32>,
     ) {
         let to_u8 = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let c = Color::rgba(to_u8(color[0]), to_u8(color[1]), to_u8(color[2]), to_u8(color[3]));
+        let c = Color::rgba(
+            to_u8(color[0]),
+            to_u8(color[1]),
+            to_u8(color[2]),
+            to_u8(color[3]),
+        );
 
         // Per-call `tracking` overrides the role default when non-negative (a data
         // cell passes 0.0 to stay tight so fixed-width numeric columns align).
-        let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
+        let track = (if tracking < 0.0 {
+            role.tracking()
+        } else {
+            tracking
+        }) * size;
         if track == 0.0 {
             let buffer = self.shape(text, size, role, italic, bold, wrap);
-            self.queued.push(QueuedText { buffer, left, top, color: c, layer, clip });
+            self.queued.push(QueuedText {
+                buffer,
+                left,
+                top,
+                color: c,
+                layer,
+                clip,
+            });
             return;
         }
         // Tracked caps: cosmic-text has no letter-spacing, so lay out one glyph at
@@ -203,8 +219,19 @@ impl TextPipeline {
             }
             let mut tmp = [0u8; 4];
             let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold, None);
-            let w = buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5);
-            self.queued.push(QueuedText { buffer, left: x, top, color: c, layer, clip });
+            let w = buffer
+                .layout_runs()
+                .next()
+                .map(|r| r.line_w)
+                .unwrap_or(size * 0.5);
+            self.queued.push(QueuedText {
+                buffer,
+                left: x,
+                top,
+                color: c,
+                layer,
+                clip,
+            });
             x += w + track;
         }
     }
@@ -230,7 +257,11 @@ impl TextPipeline {
         let line_height = size * 1.2;
         // Per-call `tracking` overrides the role default when non-negative (a data
         // cell passes 0.0 to stay tight so fixed-width numeric columns align).
-        let track = (if tracking < 0.0 { role.tracking() } else { tracking }) * size;
+        let track = (if tracking < 0.0 {
+            role.tracking()
+        } else {
+            tracking
+        }) * size;
         if track == 0.0 {
             let buffer = self.shape(text, size, role, italic, bold, None);
             let mut width = 0.0_f32;
@@ -250,7 +281,12 @@ impl TextPipeline {
             }
             let mut tmp = [0u8; 4];
             let buffer = self.shape(ch.encode_utf8(&mut tmp), size, role, italic, bold, None);
-            width += buffer.layout_runs().next().map(|r| r.line_w).unwrap_or(size * 0.5) + track;
+            width += buffer
+                .layout_runs()
+                .next()
+                .map(|r| r.line_w)
+                .unwrap_or(size * 0.5)
+                + track;
         }
         ((width - track).max(0.0), line_height)
     }
@@ -342,7 +378,12 @@ fn text_bounds(clip: Option<[f32; 4]>, width: u32, height: u32) -> TextBounds {
             right: ((x + cw) as i32).clamp(0, w),
             bottom: ((y + ch) as i32).clamp(0, h),
         },
-        None => TextBounds { left: 0, top: 0, right: w, bottom: h },
+        None => TextBounds {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        },
     }
 }
 

@@ -143,7 +143,12 @@ impl World {
         // `present` and is checked against a zero expected.
         let r = &self.reservoirs;
         let mut present: BTreeMap<ElementId, f64> = BTreeMap::new();
-        for comp in [&r.core, &r.atmosphere.contents, &r.ocean.contents, &r.escaped] {
+        for comp in [
+            &r.core,
+            &r.atmosphere.contents,
+            &r.ocean.contents,
+            &r.escaped,
+        ] {
             for (e, m) in comp.iter() {
                 *present.entry(e).or_insert(0.0) += m;
             }
@@ -318,7 +323,11 @@ pub(crate) fn freeze_lid(world: &mut World) {
 /// [`PlanetState::sample`] and the habitability observer's pH proxy so the two
 /// can never disagree about the sky.
 pub fn p_co2_pa(world: &World) -> f64 {
-    world.reservoirs.atmosphere.species.amount(crate::atmosphere::CARBON_DIOXIDE)
+    world
+        .reservoirs
+        .atmosphere
+        .species
+        .amount(crate::atmosphere::CARBON_DIOXIDE)
         * world.gravity_m_s2()
         / (world.cell_area_m2() * world.columns.len().max(1) as f64)
 }
@@ -414,8 +423,11 @@ impl PlanetState {
         let m = &world.mantle;
         let crust: f64 = world.columns.iter().map(Column::mass_kg).sum();
         let n = m.n_cells().max(1) as f64;
-        let power_w =
-            crate::interior::radiogenic_power_w(m.element_mass(U), m.element_mass(K), world.tick_myr);
+        let power_w = crate::interior::radiogenic_power_w(
+            m.element_mass(U),
+            m.element_mass(K),
+            world.tick_myr,
+        );
 
         // Crust aggregates (M2): how much crust, how much of it is continental, and
         // how high it rides.
@@ -462,8 +474,16 @@ impl PlanetState {
             differentiation_frac: m.differentiation.iter().sum::<f64>() / n,
             radiogenic_power_tw: power_w / 1e12,
             crust_frac: crust / world.budget.total().max(1.0),
-            continental_frac: if n_crust > 0 { n_cont as f64 / n_crust as f64 } else { 0.0 },
-            mean_elevation_m: if n_crust > 0 { elev_sum / n_crust as f64 } else { 0.0 },
+            continental_frac: if n_crust > 0 {
+                n_cont as f64 / n_crust as f64
+            } else {
+                0.0
+            },
+            mean_elevation_m: if n_crust > 0 {
+                elev_sum / n_crust as f64
+            } else {
+                0.0
+            },
             lid_frac: n_crust as f64 / world.columns.len().max(1) as f64,
             p_co2: p_co2_pa(world),
             water_vapour_kg: r.atmosphere.species.amount(crate::atmosphere::WATER_VAPOUR),
@@ -550,8 +570,7 @@ pub fn elevation_field(world: &World) -> Vec<f64> {
                 continue;
             }
             let sum: f64 = nb.iter().map(|&j| prev[j as usize]).sum();
-            e[i] = (prev[i] * FLEXURE_SELF_WEIGHT + sum)
-                / (FLEXURE_SELF_WEIGHT + nb.len() as f64);
+            e[i] = (prev[i] * FLEXURE_SELF_WEIGHT + sum) / (FLEXURE_SELF_WEIGHT + nb.len() as f64);
         }
     }
     e
@@ -620,7 +639,6 @@ mod tests {
         World::seed(icosphere(4), b, &t, 42)
     }
 
-
     /// Give a column a bed of `mass` kg of `element`, so its elevation is nonzero.
     /// Drawn OUT of that cell's mantle, because the harness is right: a fixture
     /// that conjures mass is a fixture that is testing a world that cannot exist.
@@ -655,7 +673,10 @@ mod tests {
             .iter()
             .map(|c| elevation_m(c, area))
             .fold(f64::MAX, f64::min);
-        assert!((sea - lowest).abs() < 1e-9, "sea {sea} rests on the lowest ground {lowest}");
+        assert!(
+            (sea - lowest).abs() < 1e-9,
+            "sea {sea} rests on the lowest ground {lowest}"
+        );
         assert!(w.columns.iter().all(|c| elevation_m(c, area) >= sea));
     }
 
@@ -680,9 +701,14 @@ mod tests {
         // and the one water actually ponds on. The claim under test is that the
         // level holds exactly the water present — not which surface it is.
         let elevations: Vec<f64> = elevation_field(&w);
-        let (lo, hi) = elevations.iter().fold((f64::MAX, f64::MIN), |(a, b), &e| (a.min(e), b.max(e)));
+        let (lo, hi) = elevations
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &e| (a.min(e), b.max(e)));
         let want_level = 0.5 * (lo + hi);
-        let want_volume: f64 = elevations.iter().map(|&e| (want_level - e).max(0.0) * area).sum();
+        let want_volume: f64 = elevations
+            .iter()
+            .map(|&e| (want_level - e).max(0.0) * area)
+            .sum();
         assert!(want_volume > 0.0, "the fixture has to have basins to flood");
 
         // Water arrives (a delivery, so the conservation ledger stays balanced).
@@ -726,8 +752,14 @@ mod tests {
     fn seed_is_undifferentiated_and_balanced() {
         let w = tiny_world();
         // The whole budget is mantle; core/atmosphere/ocean are empty (§3.1).
-        assert!(w.reservoirs.core.is_empty(), "core has not differentiated yet");
-        assert!(w.reservoirs.atmosphere.is_empty(), "no atmosphere outgassed yet");
+        assert!(
+            w.reservoirs.core.is_empty(),
+            "core has not differentiated yet"
+        );
+        assert!(
+            w.reservoirs.atmosphere.is_empty(),
+            "no atmosphere outgassed yet"
+        );
         assert_eq!(w.reservoirs.ocean.mass_kg(), 0.0, "no ocean yet");
         assert!(
             w.columns.iter().all(|c| c.layers.is_empty()),
@@ -760,9 +792,20 @@ mod tests {
             w.budget.total(),
             PLANET_MASS_KG * s.powi(3),
         );
-        assert!((w.gravity_m_s2() - GRAVITY_M_S2 * s).abs() < 1e-12, "gravity rides size");
-        assert_eq!(w.cell_area_m2(), CELL_AREA_M2, "the hex is the same hex at every size");
-        assert_eq!(size_scale(PLANET_CELLS), 1.0, "…and the reference world is scale 1 exactly");
+        assert!(
+            (w.gravity_m_s2() - GRAVITY_M_S2 * s).abs() < 1e-12,
+            "gravity rides size"
+        );
+        assert_eq!(
+            w.cell_area_m2(),
+            CELL_AREA_M2,
+            "the hex is the same hex at every size"
+        );
+        assert_eq!(
+            size_scale(PLANET_CELLS),
+            1.0,
+            "…and the reference world is scale 1 exactly"
+        );
     }
 
     #[test]
@@ -781,8 +824,8 @@ mod tests {
     fn raw_leak_is_caught() {
         let mut w = tiny_world();
         w.audit("seed"); // balanced
-        // Vanish iron into nowhere — no escaped, no delivered. The harness must
-        // catch it.
+                         // Vanish iron into nowhere — no escaped, no delivered. The harness must
+                         // catch it.
         w.mantle.remove(0, 26, 1.0e18);
         w.audit("leak");
     }
@@ -839,6 +882,9 @@ mod tests {
         w.reservoirs.atmosphere.contents.add(1, 5.0e19); // hydrogen arriving
         w.reservoirs.delivered.add(1, 5.0e19);
         w.audit("delivery");
-        assert!(w.expected_mass(1) > w.budget.accreted(1), "delivery raised the accounted total");
+        assert!(
+            w.expected_mass(1) > w.budget.accreted(1),
+            "delivery raised the accounted total"
+        );
     }
 }

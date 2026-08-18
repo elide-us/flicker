@@ -34,6 +34,5 @@ pub fn scene() -> Box<dyn flicker::scene::Scene> {
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }

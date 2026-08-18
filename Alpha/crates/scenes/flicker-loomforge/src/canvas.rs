@@ -79,7 +79,11 @@ pub struct View {
 
 impl Default for View {
     fn default() -> Self {
-        Self { pan: Vec2::ZERO, zoom: 1.0, placed: std::collections::HashMap::new() }
+        Self {
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+            placed: std::collections::HashMap::new(),
+        }
     }
 }
 
@@ -119,7 +123,10 @@ pub fn layout<'a>(
     names
         .enumerate()
         .map(|(i, name)| CardRect {
-            pos: view.to_screen(area, view.placed.get(name).copied().unwrap_or(grid_slot(i, cols))),
+            pos: view.to_screen(
+                area,
+                view.placed.get(name).copied().unwrap_or(grid_slot(i, cols)),
+            ),
             size,
         })
         .collect()
@@ -135,7 +142,10 @@ fn columns(area: CanvasArea) -> usize {
 /// The `i`th default grid slot, in canvas-local coordinates.
 fn grid_slot(i: usize, cols: usize) -> Vec2 {
     let (c, r) = (i % cols.max(1), i / cols.max(1));
-    Vec2::new(PAD + c as f32 * (CARD_W + GAP_X), PAD + r as f32 * (CARD_H + GAP_Y))
+    Vec2::new(
+        PAD + c as f32 * (CARD_W + GAP_X),
+        PAD + r as f32 * (CARD_H + GAP_Y),
+    )
 }
 
 /// The doll's rect inside a card. The scene draws the backdrop from this and the stage
@@ -155,7 +165,12 @@ pub fn card_text_x(zoom: f32) -> f32 {
 
 /// Topmost card under `p` (last wins, matching draw order).
 pub fn hit_test(cards: &[CardRect], p: Vec2) -> Option<usize> {
-    cards.iter().enumerate().rev().find(|(_, c)| c.contains(p)).map(|(i, _)| i)
+    cards
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, c)| c.contains(p))
+        .map(|(i, _)| i)
 }
 
 /// Where a transition edge meets the two cards: the segment between their centres,
@@ -203,8 +218,16 @@ fn clip_to_border(rect: CardRect, centre: Vec2, target: Vec2) -> Vec2 {
         return centre;
     }
     // Scale the direction so it just touches the box: the smaller axis ratio wins.
-    let tx = if d.x.abs() > f32::EPSILON { hw / d.x.abs() } else { f32::INFINITY };
-    let ty = if d.y.abs() > f32::EPSILON { hh / d.y.abs() } else { f32::INFINITY };
+    let tx = if d.x.abs() > f32::EPSILON {
+        hw / d.x.abs()
+    } else {
+        f32::INFINITY
+    };
+    let ty = if d.y.abs() > f32::EPSILON {
+        hh / d.y.abs()
+    } else {
+        f32::INFINITY
+    };
     centre + d * tx.min(ty)
 }
 
@@ -213,7 +236,10 @@ mod tests {
     use super::*;
 
     fn area() -> CanvasArea {
-        CanvasArea { pos: Vec2::new(56.0, 96.0), size: Vec2::new(1304.0, 794.0) }
+        CanvasArea {
+            pos: Vec2::new(56.0, 96.0),
+            size: Vec2::new(1304.0, 794.0),
+        }
     }
 
     fn names(n: usize) -> Vec<String> {
@@ -227,20 +253,29 @@ mod tests {
         assert_eq!(cards.len(), 9);
         // Every card starts inside the area.
         for c in &cards {
-            assert!(c.pos.x >= area().pos.x && c.pos.y >= area().pos.y, "card escapes the area");
+            assert!(
+                c.pos.x >= area().pos.x && c.pos.y >= area().pos.y,
+                "card escapes the area"
+            );
         }
         // Row 0 shares a y; the first card of row 1 sits lower and back at the left.
         let cols = cards.iter().filter(|c| c.pos.y == cards[0].pos.y).count();
         assert!(cols >= 2, "expected several columns at this width");
         assert!(cards[cols].pos.y > cards[0].pos.y, "wraps to a new row");
-        assert_eq!(cards[cols].pos.x, cards[0].pos.x, "new row restarts at the left");
+        assert_eq!(
+            cards[cols].pos.x, cards[0].pos.x,
+            "new row restarts at the left"
+        );
     }
 
     #[test]
     fn grid_layout_handles_empty_and_narrow() {
         let v = View::default();
         assert!(layout([].into_iter(), area(), &v).is_empty());
-        let narrow = CanvasArea { pos: Vec2::ZERO, size: Vec2::new(10.0, 400.0) };
+        let narrow = CanvasArea {
+            pos: Vec2::ZERO,
+            size: Vec2::new(10.0, 400.0),
+        };
         let cards = layout(names(3).iter().map(String::as_str), narrow, &v);
         // One column minimum — never a divide-by-zero or an empty layout.
         assert_eq!(cards.len(), 3);
@@ -250,10 +285,18 @@ mod tests {
 
     #[test]
     fn hit_test_finds_the_card_under_the_cursor() {
-        let cards = layout(names(4).iter().map(String::as_str), area(), &View::default());
+        let cards = layout(
+            names(4).iter().map(String::as_str),
+            area(),
+            &View::default(),
+        );
         let c = cards[2];
         assert_eq!(hit_test(&cards, c.center()), Some(2));
-        assert_eq!(hit_test(&cards, c.pos - Vec2::new(5.0, 5.0)), None, "gap is empty");
+        assert_eq!(
+            hit_test(&cards, c.pos - Vec2::new(5.0, 5.0)),
+            None,
+            "gap is empty"
+        );
         assert_eq!(hit_test(&cards, Vec2::new(-100.0, -100.0)), None);
     }
 
@@ -270,7 +313,10 @@ mod tests {
         let mut shifted = names(4);
         shifted.insert(0, "State new".into());
         let after = layout(shifted.iter().map(String::as_str), area(), &v);
-        assert_eq!(after[3].pos, before[2].pos, "a placed card is pinned by name, not index");
+        assert_eq!(
+            after[3].pos, before[2].pos,
+            "a placed card is pinned by name, not index"
+        );
         // An unplaced neighbour DOES take the next grid slot, as it should.
         assert_eq!(after[0].pos, before[0].pos, "grid slots are positional");
     }
@@ -284,10 +330,17 @@ mod tests {
             (Vec2::new(15.0, -60.0), 0.5),
             (Vec2::new(-4.0, 7.0), 2.0),
         ] {
-            let v = View { pan, zoom, ..View::default() };
+            let v = View {
+                pan,
+                zoom,
+                ..View::default()
+            };
             let p = Vec2::new(742.0, 415.0);
             let back = v.to_screen(area(), v.to_local(area(), p));
-            assert!((back - p).length() < 1e-3, "pan {pan} zoom {zoom} lost the point");
+            assert!(
+                (back - p).length() < 1e-3,
+                "pan {pan} zoom {zoom} lost the point"
+            );
         }
     }
 
@@ -311,11 +364,19 @@ mod tests {
         for _ in 0..64 {
             v.zoom_at(area(), Vec2::new(700.0, 400.0), 1.3);
         }
-        assert!((v.zoom - ZOOM_MAX).abs() < 1e-4, "zoom ran past the ceiling: {}", v.zoom);
+        assert!(
+            (v.zoom - ZOOM_MAX).abs() < 1e-4,
+            "zoom ran past the ceiling: {}",
+            v.zoom
+        );
         for _ in 0..128 {
             v.zoom_at(area(), Vec2::new(700.0, 400.0), 0.8);
         }
-        assert!((v.zoom - ZOOM_MIN).abs() < 1e-4, "zoom ran past the floor: {}", v.zoom);
+        assert!(
+            (v.zoom - ZOOM_MIN).abs() < 1e-4,
+            "zoom ran past the floor: {}",
+            v.zoom
+        );
         // And the pan stayed finite through all of it.
         assert!(v.pan.is_finite());
     }
@@ -324,9 +385,16 @@ mod tests {
     /// graph would be unclickable where it is drawn.
     #[test]
     fn hit_test_follows_zoom_and_pan() {
-        let v = View { pan: Vec2::new(-120.0, 40.0), zoom: 0.5, ..View::default() };
+        let v = View {
+            pan: Vec2::new(-120.0, 40.0),
+            zoom: 0.5,
+            ..View::default()
+        };
         let cards = layout(names(4).iter().map(String::as_str), area(), &v);
-        assert!((cards[0].size.x - CARD_W * 0.5).abs() < 1e-3, "cards scale with zoom");
+        assert!(
+            (cards[0].size.x - CARD_W * 0.5).abs() < 1e-3,
+            "cards scale with zoom"
+        );
         for (i, c) in cards.iter().enumerate() {
             assert_eq!(hit_test(&cards, c.center()), Some(i));
         }
@@ -334,19 +402,32 @@ mod tests {
         // laying out again puts it back under that point.
         let mut v2 = v.clone();
         let target = Vec2::new(800.0, 300.0);
-        v2.placed.insert("State 1".into(), v2.to_local(area(), target));
-        assert!((layout(names(4).iter().map(String::as_str), area(), &v2)[1].pos - target).length() < 1e-3);
+        v2.placed
+            .insert("State 1".into(), v2.to_local(area(), target));
+        assert!(
+            (layout(names(4).iter().map(String::as_str), area(), &v2)[1].pos - target).length()
+                < 1e-3
+        );
     }
 
     #[test]
     fn edge_points_start_on_the_borders_not_the_centres() {
-        let a = CardRect { pos: Vec2::new(0.0, 0.0), size: Vec2::new(200.0, 100.0) };
-        let b = CardRect { pos: Vec2::new(400.0, 0.0), size: Vec2::new(200.0, 100.0) };
+        let a = CardRect {
+            pos: Vec2::new(0.0, 0.0),
+            size: Vec2::new(200.0, 100.0),
+        };
+        let b = CardRect {
+            pos: Vec2::new(400.0, 0.0),
+            size: Vec2::new(200.0, 100.0),
+        };
         let (p, q) = edge_points(a, b);
         // Horizontal neighbours: the edge leaves a's right border and hits b's left.
         assert!((p.x - 200.0).abs() < 0.01, "left card's right border");
         assert!((q.x - 400.0).abs() < 0.01, "right card's left border");
-        assert!((p.y - 50.0).abs() < 0.01 && (q.y - 50.0).abs() < 0.01, "mid-height");
+        assert!(
+            (p.y - 50.0).abs() < 0.01 && (q.y - 50.0).abs() < 0.01,
+            "mid-height"
+        );
         // And they are strictly inside the span between the centres.
         assert!(p.x > a.center().x && q.x < b.center().x);
     }
@@ -360,18 +441,44 @@ mod tests {
         let b = (2u32, Vec2::new(0.0, 120.0), Vec2::new(400.0, 120.0));
         let edges = [a, b];
 
-        assert_eq!(hit_edge(&edges, Vec2::new(200.0, 100.0)), Some(1), "dead on the first");
-        assert_eq!(hit_edge(&edges, Vec2::new(200.0, 118.0)), Some(2), "nearest wins");
+        assert_eq!(
+            hit_edge(&edges, Vec2::new(200.0, 100.0)),
+            Some(1),
+            "dead on the first"
+        );
+        assert_eq!(
+            hit_edge(&edges, Vec2::new(200.0, 118.0)),
+            Some(2),
+            "nearest wins"
+        );
         assert_eq!(hit_edge(&edges, Vec2::new(200.0, 104.0)), Some(1));
         // Beyond the grab radius, and past the ends, nothing is picked.
-        assert_eq!(hit_edge(&edges, Vec2::new(200.0, 160.0)), None, "too far away");
-        assert_eq!(hit_edge(&edges, Vec2::new(-50.0, 100.0)), None, "past the start");
-        assert_eq!(hit_edge(&edges, Vec2::new(460.0, 100.0)), None, "past the end");
+        assert_eq!(
+            hit_edge(&edges, Vec2::new(200.0, 160.0)),
+            None,
+            "too far away"
+        );
+        assert_eq!(
+            hit_edge(&edges, Vec2::new(-50.0, 100.0)),
+            None,
+            "past the start"
+        );
+        assert_eq!(
+            hit_edge(&edges, Vec2::new(460.0, 100.0)),
+            None,
+            "past the end"
+        );
         assert_eq!(hit_edge::<u32>(&[], Vec2::ZERO), None);
 
         // The tolerance is real: a click a few pixels off a thin line still lands.
-        assert_eq!(hit_edge(&[a], Vec2::new(200.0, 100.0 + EDGE_GRAB - 0.5)), Some(1));
-        assert_eq!(hit_edge(&[a], Vec2::new(200.0, 100.0 + EDGE_GRAB + 0.5)), None);
+        assert_eq!(
+            hit_edge(&[a], Vec2::new(200.0, 100.0 + EDGE_GRAB - 0.5)),
+            Some(1)
+        );
+        assert_eq!(
+            hit_edge(&[a], Vec2::new(200.0, 100.0 + EDGE_GRAB + 0.5)),
+            None
+        );
     }
 
     #[test]
@@ -385,7 +492,10 @@ mod tests {
 
     #[test]
     fn edge_points_are_stable_for_coincident_cards() {
-        let a = CardRect { pos: Vec2::ZERO, size: Vec2::new(100.0, 50.0) };
+        let a = CardRect {
+            pos: Vec2::ZERO,
+            size: Vec2::new(100.0, 50.0),
+        };
         let (p, q) = edge_points(a, a);
         assert_eq!(p, a.center());
         assert_eq!(q, a.center());

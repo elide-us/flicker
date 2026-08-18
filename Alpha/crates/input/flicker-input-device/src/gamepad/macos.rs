@@ -56,7 +56,11 @@ impl PlatformGamepad {
         if connected != self.was_connected {
             tracing::info!(
                 "GameController: slot-0 pad {}",
-                if connected { "connected" } else { "disconnected" }
+                if connected {
+                    "connected"
+                } else {
+                    "disconnected"
+                }
             );
         }
         self.was_connected = connected;
@@ -75,10 +79,26 @@ fn read_pad(pad: &GCExtendedGamepad, snap: &mut PadSnapshot) {
         set_button(snap, GamepadButton::North, pad.buttonY().isPressed());
 
         // Shoulders + triggers (triggers are also analog axes below).
-        set_button(snap, GamepadButton::LeftBumper, pad.leftShoulder().isPressed());
-        set_button(snap, GamepadButton::RightBumper, pad.rightShoulder().isPressed());
-        set_button(snap, GamepadButton::LeftTrigger, pad.leftTrigger().isPressed());
-        set_button(snap, GamepadButton::RightTrigger, pad.rightTrigger().isPressed());
+        set_button(
+            snap,
+            GamepadButton::LeftBumper,
+            pad.leftShoulder().isPressed(),
+        );
+        set_button(
+            snap,
+            GamepadButton::RightBumper,
+            pad.rightShoulder().isPressed(),
+        );
+        set_button(
+            snap,
+            GamepadButton::LeftTrigger,
+            pad.leftTrigger().isPressed(),
+        );
+        set_button(
+            snap,
+            GamepadButton::RightTrigger,
+            pad.rightTrigger().isPressed(),
+        );
 
         // Meta buttons (Options/Home are optional on some pads).
         set_button(snap, GamepadButton::Start, pad.buttonMenu().isPressed());
@@ -107,13 +127,19 @@ fn read_pad(pad: &GCExtendedGamepad, snap: &mut PadSnapshot) {
         // Sticks + trigger axes (GameController Y is +up, matching our
         // convention — the device only normalizes sign/range, spec §6.3).
         let ls = pad.leftThumbstick();
-        snap.axes.insert(GamepadAxis::LeftStickX, ls.xAxis().value());
-        snap.axes.insert(GamepadAxis::LeftStickY, ls.yAxis().value());
+        snap.axes
+            .insert(GamepadAxis::LeftStickX, ls.xAxis().value());
+        snap.axes
+            .insert(GamepadAxis::LeftStickY, ls.yAxis().value());
         let rs = pad.rightThumbstick();
-        snap.axes.insert(GamepadAxis::RightStickX, rs.xAxis().value());
-        snap.axes.insert(GamepadAxis::RightStickY, rs.yAxis().value());
-        snap.axes.insert(GamepadAxis::LeftTrigger, pad.leftTrigger().value());
-        snap.axes.insert(GamepadAxis::RightTrigger, pad.rightTrigger().value());
+        snap.axes
+            .insert(GamepadAxis::RightStickX, rs.xAxis().value());
+        snap.axes
+            .insert(GamepadAxis::RightStickY, rs.yAxis().value());
+        snap.axes
+            .insert(GamepadAxis::LeftTrigger, pad.leftTrigger().value());
+        snap.axes
+            .insert(GamepadAxis::RightTrigger, pad.rightTrigger().value());
     }
 }
 

@@ -104,7 +104,10 @@ pub const NOMINAL_DT_MYR: f64 = HEX_CM / PLATE_SPEED_CM_YR / 1.0e6;
 /// The repo content directory (`Alpha/content/data`), resolved relative to this
 /// crate — mirrors `flicker-worldengine`'s `from_repo` seam.
 pub fn content_data_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/data"))
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../Alpha/content/data"
+    ))
 }
 
 #[cfg(test)]
@@ -124,7 +127,10 @@ mod tests {
             (NOMINAL_DT_MYR - expect_myr).abs() < 1e-6,
             "the tick drifted from the hex-crossing law: {NOMINAL_DT_MYR} vs {expect_myr}"
         );
-        assert!((NOMINAL_DT_MYR - 1.6).abs() < 0.05, "≈1.6 My at 5 cm/yr: {NOMINAL_DT_MYR}");
+        assert!(
+            (NOMINAL_DT_MYR - 1.6).abs() < 0.05,
+            "≈1.6 My at 5 cm/yr: {NOMINAL_DT_MYR}"
+        );
     }
 
     /// **The span law closes at every frequency**: `4πR²/n` recovers the one
@@ -133,7 +139,11 @@ mod tests {
     /// bit-identical across the size-model unification.
     #[test]
     fn the_planet_fits_the_grid() {
-        assert_eq!(size_scale(PLANET_CELLS), 1.0, "the reference grid is the reference planet");
+        assert_eq!(
+            size_scale(PLANET_CELLS),
+            1.0,
+            "the reference grid is the reference planet"
+        );
         for freq in [4u32, 12, 24, 48, 96] {
             let n = (10 * freq * freq + 2) as usize;
             let r = radius_for_freq(freq);
@@ -145,7 +155,10 @@ mod tests {
         }
         // Half the frequency is (almost exactly) half the planet: √(23042/92162).
         let ratio = radius_for_freq(48) / radius_for_freq(96);
-        assert!((ratio - 0.5).abs() < 1e-3, "freq 48 is a half-radius world: {ratio}");
+        assert!(
+            (ratio - 0.5).abs() < 1e-3,
+            "freq 48 is a half-radius world: {ratio}"
+        );
     }
 
     /// The reference planet is Earth to within the two retired constants'
@@ -156,9 +169,15 @@ mod tests {
     #[test]
     fn the_reference_planet_is_earth_sized() {
         let r = radius_for_freq(PLANET_FREQ);
-        assert!(((r - 6_371_000.0) / 6_371_000.0).abs() < 1e-3, "≈ Earth radius: {r}");
+        assert!(
+            ((r - 6_371_000.0) / 6_371_000.0).abs() < 1e-3,
+            "≈ Earth radius: {r}"
+        );
         let old_area = 4.0 * std::f64::consts::PI * 6_371_000.0 * 6_371_000.0 / PLANET_CELLS as f64;
         let shift = (CELL_AREA_M2 - old_area) / old_area;
-        assert!(shift.abs() < 1.2e-3, "cell area moved {shift:.2e} against the retired model");
+        assert!(
+            shift.abs() < 1.2e-3,
+            "cell area moved {shift:.2e} against the retired model"
+        );
     }
 }

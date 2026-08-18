@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Prism Alpha
+Comment=Prism Alpha — the Flicker engine client
+Exec=/opt/prism-alpha/prism-alpha
+Terminal=false
+Categories=Game;

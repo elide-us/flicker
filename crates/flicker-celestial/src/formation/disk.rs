@@ -73,7 +73,11 @@ impl Nebula {
         let mut rng = Rng::new(seed ^ 0x5E7A_11C0_0DEE_F00D);
         let z_t = (0.6 * s + 0.4 * rng.f64()).clamp(0.0, 1.0);
         let metallicity = Z_MIN * (Z_MAX / Z_MIN).powf(z_t);
-        Self { supernova_size: s, sigma_1au, metallicity }
+        Self {
+            supernova_size: s,
+            sigma_1au,
+            metallicity,
+        }
     }
 
     /// Solid surface density at 1 AU (g/cm²) actually available to build bodies — the
@@ -198,7 +202,10 @@ mod tests {
         let s = 7.0;
         let inside = solid_surface_density(SNOW_LINE - 0.5, s);
         let outside = solid_surface_density(SNOW_LINE + 0.5, s);
-        assert!(outside > inside, "ice boost raises solids past the snow line");
+        assert!(
+            outside > inside,
+            "ice boost raises solids past the snow line"
+        );
         assert!(solid_surface_density(1.0, s) > 0.0);
     }
 
@@ -206,8 +213,14 @@ mod tests {
     fn supernova_sets_disk_mass_and_metallicity() {
         let small = Nebula::new(1, 0.1);
         let big = Nebula::new(1, 0.9);
-        assert!(big.sigma_1au > small.sigma_1au, "bigger nova → heavier disk");
-        assert!(big.metallicity > small.metallicity, "bigger nova → more metals");
+        assert!(
+            big.sigma_1au > small.sigma_1au,
+            "bigger nova → heavier disk"
+        );
+        assert!(
+            big.metallicity > small.metallicity,
+            "bigger nova → more metals"
+        );
         assert!(big.solid_sigma() > small.solid_sigma());
         assert!((SIGMA_MIN..=SIGMA_MAX).contains(&big.sigma_1au));
         assert!((Z_MIN..=Z_MAX).contains(&big.metallicity));
@@ -219,10 +232,16 @@ mod tests {
     #[test]
     fn composition_is_dry_inside_and_icy_outside() {
         let ice = CondensationClass::Ice.index();
-        assert!(composition_fractions(0.4)[ice] < 1e-6, "bone dry by the star");
+        assert!(
+            composition_fractions(0.4)[ice] < 1e-6,
+            "bone dry by the star"
+        );
         let hz = composition_fractions(1.0)[ice];
         assert!(hz > 0.0 && hz < 0.02, "HZ has only trace water, got {hz}");
-        assert!(composition_fractions(5.0)[ice] > 0.3, "ice dominates outer solids");
+        assert!(
+            composition_fractions(5.0)[ice] > 0.3,
+            "ice dominates outer solids"
+        );
         for r in [0.4, 1.0, 2.7, 5.0, 14.0] {
             let s: f64 = composition_fractions(r).iter().sum();
             assert!((s - 1.0).abs() < 1e-9, "fractions sum to 1 at {r} AU");
@@ -233,7 +252,14 @@ mod tests {
     fn class_composition_at_carries_the_radius_mix() {
         // Past the snow line a ring's material is ice-dominant; its total is the mass.
         let c = class_composition_at(6.0, 10.0e-6);
-        assert!((c.total() - 10.0e-6).abs() < 1e-15, "conserves the ring mass");
-        assert_eq!(c.dominant(), Some(CondensationClass::Ice), "icy past the snow line");
+        assert!(
+            (c.total() - 10.0e-6).abs() < 1e-15,
+            "conserves the ring mass"
+        );
+        assert_eq!(
+            c.dominant(),
+            Some(CondensationClass::Ice),
+            "icy past the snow line"
+        );
     }
 }

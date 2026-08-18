@@ -104,7 +104,11 @@ impl GlobeStage {
         // `lighting` NAMES a block in the shared `stages.lighting` table, the
         // same indirection every other stage source uses.
         if let Some(name) = stage.get("lighting").and_then(|v| v.as_str()) {
-            match styles.get("stages").and_then(|s| s.get("lighting")).and_then(|l| l.get(name)) {
+            match styles
+                .get("stages")
+                .and_then(|s| s.get("lighting"))
+                .and_then(|l| l.get(name))
+            {
                 Some(l) => {
                     let v3 = |k: &str| -> Option<Vec3> {
                         let a = l.get(k)?.as_array()?;
@@ -181,7 +185,9 @@ fn parse_layer(v: &serde_json::Value) -> Option<StageLayer> {
                 color: [c[0], c[1], c[2]],
             })
         }
-        "graticule" => Some(StageLayer::Graticule { radius_scale: jnum(v, "radius_scale", 1.0) }),
+        "graticule" => Some(StageLayer::Graticule {
+            radius_scale: jnum(v, "radius_scale", 1.0),
+        }),
         other => {
             tracing::warn!("globe stage: unknown layer draw kind {other:?} — skipped");
             None
@@ -259,7 +265,15 @@ impl GlobeView {
         });
         // `frame: None` — the walker already drew the node's `rtt_holder` panel
         // on the 2D path, so a second frame here would double the chrome.
-        fg.composite_panel(target, CompositeTarget::Screen, rect, layer, [1.0; 4], None, None);
+        fg.composite_panel(
+            target,
+            CompositeTarget::Screen,
+            rect,
+            layer,
+            [1.0; 4],
+            None,
+            None,
+        );
     }
 
     /// Give the target back. A bench that leaves its viewport (scene `exit`)

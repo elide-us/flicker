@@ -63,7 +63,9 @@ fn gzify_walk(dir: &Path, stats: &mut GzifyStats) -> Result<()> {
     let entries =
         std::fs::read_dir(dir).with_context(|| format!("gzify: reading dir {}", dir.display()))?;
     for entry in entries {
-        let path = entry.with_context(|| format!("gzify: reading dir {}", dir.display()))?.path();
+        let path = entry
+            .with_context(|| format!("gzify: reading dir {}", dir.display()))?
+            .path();
         if path.is_dir() {
             gzify_walk(&path, stats)?;
         } else {
@@ -135,7 +137,11 @@ mod tests {
         std::fs::write(dir.join("clips/walk.json"), r#"{"clips":[]}"#).unwrap();
         std::fs::write(dir.join("intro.flight"), r#"{"format":"flicker.flight"}"#).unwrap();
         std::fs::write(dir.join("skin.png"), [0x89, b'P', b'N', b'G']).unwrap();
-        std::fs::write(dir.join("already.json.gz"), flicker_core::compress_gzip(b"{}")).unwrap();
+        std::fs::write(
+            dir.join("already.json.gz"),
+            flicker_core::compress_gzip(b"{}"),
+        )
+        .unwrap();
 
         let first = gzify_dir(&dir).expect("first pass");
         assert_eq!(first.converted, 3, "json + nested json + flight convert");
@@ -153,7 +159,10 @@ mod tests {
         assert!(dir.join("skin.png").is_file(), "binary content stays raw");
 
         // The seam reads the converted files by their LOGICAL paths.
-        assert_eq!(read_text(&dir.join("rig.json")).unwrap(), r#"{"format":"flicker.rig"}"#);
+        assert_eq!(
+            read_text(&dir.join("rig.json")).unwrap(),
+            r#"{"format":"flicker.rig"}"#
+        );
         assert_eq!(
             read_text(&dir.join("intro.flight")).unwrap(),
             r#"{"format":"flicker.flight"}"#
@@ -163,7 +172,10 @@ mod tests {
         let second = gzify_dir(&dir).expect("second pass");
         assert_eq!(second.converted, 0, "re-running converts nothing");
         assert_eq!(second.bytes_before, 0);
-        assert_eq!(second.skipped_gz, 4, "the three conversions + the original .gz");
+        assert_eq!(
+            second.skipped_gz, 4,
+            "the three conversions + the original .gz"
+        );
         assert_eq!(second.skipped_other, 1);
 
         let _ = std::fs::remove_dir_all(&dir);

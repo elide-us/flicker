@@ -465,7 +465,10 @@ fn draw_runs<'a>(
     let bytes = std::mem::size_of_val(vertices) as u64;
     pass.set_vertex_buffer(0, vertex_buffer.slice(0..bytes));
     for run in runs {
-        let Some(tex) = textures.get(run.texture.0 as usize).and_then(|t| t.as_ref()) else {
+        let Some(tex) = textures
+            .get(run.texture.0 as usize)
+            .and_then(|t| t.as_ref())
+        else {
             continue;
         };
         let Some(bg) = tex.billboard_bind_group.as_ref() else {

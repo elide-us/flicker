@@ -102,9 +102,17 @@ impl RebindCapture {
     }
 
     /// Start rebinding `action`. Set `for_gamepad` to capture gamepad input.
-    pub fn start(&mut self, action: ActionSignal, for_gamepad: bool) {
+    ///
+    /// `input` is the LIVE snapshot at the moment of arming, and seeding the edge
+    /// baseline from it is the contract: whatever is physically held right now —
+    /// above all the very click or button press that fired the arming action — is
+    /// PRIOR state, not a fresh edge. Only an actuation that BEGINS after this
+    /// call can capture. Without the seed, the first `poll` compared against an
+    /// empty baseline and captured the still-held arming click as the binding.
+    pub fn start(&mut self, action: ActionSignal, for_gamepad: bool, input: &InputState) {
         self.action = Some(action);
         self.for_gamepad = for_gamepad;
+        self.update_prev(input);
     }
 
     /// Cancel the current rebind.
@@ -175,7 +183,10 @@ impl RebindCapture {
     /// was being rebound or the action had no binding. Capture always ends. The CALLER
     /// detects the Backspace edge — Backspace is otherwise a bindable key, so it must be
     /// intercepted before `poll` would capture it.
-    pub fn unbind_current(&mut self, input_map: &mut InputMap) -> Option<(ActionSignal, InputBinding)> {
+    pub fn unbind_current(
+        &mut self,
+        input_map: &mut InputMap,
+    ) -> Option<(ActionSignal, InputBinding)> {
         let action = self.action?;
         let removed = input_map.bindings_for(action).first().copied();
         if let Some(binding) = removed {
@@ -227,18 +238,21 @@ mod tests {
     fn captures_fresh_key_press_as_binding() {
         let mut rc = RebindCapture::new();
         let mut map = InputMap::empty();
-        rc.start(ActionSignal::Jump, false);
+        rc.start(ActionSignal::Jump, false, &InputState::new());
         assert!(rc.is_active());
         assert_eq!(rc.current_action(), Some(ActionSignal::Jump));
 
-        // A down key with no prior-frame state is a fresh edge → captured on the first
-        // poll (the pre-move behavior). No capture until a key is actually down.
+        // Nothing held at arming, nothing down yet → still waiting; a key that
+        // goes down AFTER arming is a fresh edge and captures on sight.
         assert_eq!(rc.poll(&InputState::new(), &mut map), None);
         let mut down = InputState::new();
         down.set_key(Key::J, true);
         let got = rc.poll(&down, &mut map);
         assert_eq!(got, Some((ActionSignal::Jump, InputBinding::Key(Key::J))));
-        assert_eq!(map.action_for(InputBinding::Key(Key::J)), Some(ActionSignal::Jump));
+        assert_eq!(
+            map.action_for(InputBinding::Key(Key::J)),
+            Some(ActionSignal::Jump)
+        );
         assert!(!rc.is_active());
     }
 
@@ -248,10 +262,10 @@ mod tests {
     #[test]
     fn captures_fresh_mouse_press_as_binding() {
         // The MouseButton::ALL loop must behave exactly like the old five
-        // per-button if-blocks: edge on a held-down button, none on repeat.
+        // per-button if-blocks: edge on a fresh press, none on repeat.
         let mut rc = RebindCapture::new();
         let mut map = InputMap::empty();
-        rc.start(ActionSignal::Interact, false);
+        rc.start(ActionSignal::Interact, false, &InputState::new());
         let mut down = InputState::new();
         down.mouse_middle = true;
         let got = rc.poll(&down, &mut map);
@@ -262,9 +276,49 @@ mod tests {
                 InputBinding::MouseButton(MouseButton::Middle)
             ))
         );
-        // Held across frames after the capture consumed it: no re-capture.
-        rc.start(ActionSignal::Interact, false);
+        // Re-armed while the button is STILL HELD: the seed makes it prior
+        // state, so no re-capture until it is released and pressed again.
+        rc.start(ActionSignal::Interact, false, &down);
         assert_eq!(rc.poll(&down, &mut map), None);
+    }
+
+    /// THE SELF-CAPTURE REGRESSION (MCP 49DE0F2C): the settings field is armed BY
+    /// a mouse click, and that click is still physically held on the first poll
+    /// frame. Seeding the baseline at `start` makes the arming click prior state —
+    /// it must never be captured, through its whole hold and its release. Only a
+    /// fresh press that begins after arming binds.
+    #[test]
+    fn the_arming_click_is_never_captured_as_the_binding() {
+        let mut rc = RebindCapture::new();
+        let mut map = InputMap::empty();
+        // Frame N: the user clicks the keycap; Left is down when capture arms.
+        let mut arming = InputState::new();
+        arming.mouse_left = true;
+        rc.start(ActionSignal::Jump, false, &arming);
+        // Frames N+1…: the click is still held — NOT a fresh edge, no capture.
+        assert_eq!(
+            rc.poll(&arming, &mut map),
+            None,
+            "the held arming click must not bind"
+        );
+        // The release is not an edge-down either.
+        assert_eq!(
+            rc.poll(&InputState::new(), &mut map),
+            None,
+            "its release binds nothing"
+        );
+        // A press that BEGINS after arming is the real capture.
+        let mut fresh = InputState::new();
+        fresh.mouse_left = true;
+        assert_eq!(
+            rc.poll(&fresh, &mut map),
+            Some((
+                ActionSignal::Jump,
+                InputBinding::MouseButton(MouseButton::Left)
+            )),
+            "a fresh press after arming captures"
+        );
+        assert!(!rc.is_active());
     }
 
     #[test]
@@ -272,15 +326,18 @@ mod tests {
         let mut rc = RebindCapture::new();
         let mut map = InputMap::empty();
         map.bind(ActionSignal::Jump, InputBinding::Key(Key::Space));
-        rc.start(ActionSignal::Jump, false);
+        rc.start(ActionSignal::Jump, false, &InputState::new());
         assert_eq!(
             rc.unbind_current(&mut map),
             Some((ActionSignal::Jump, InputBinding::Key(Key::Space))),
         );
-        assert!(map.bindings_for(ActionSignal::Jump).is_empty(), "slot 0 removed");
+        assert!(
+            map.bindings_for(ActionSignal::Jump).is_empty(),
+            "slot 0 removed"
+        );
         assert!(!rc.is_active(), "capture ends after an unbind");
         // Backspace on an already-unbound action: capture still ends, nothing removed.
-        rc.start(ActionSignal::Reload, false);
+        rc.start(ActionSignal::Reload, false, &InputState::new());
         assert_eq!(rc.unbind_current(&mut map), None);
         assert!(!rc.is_active());
         // No action being rebound → None, no panic.

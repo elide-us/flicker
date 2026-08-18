@@ -41,6 +41,14 @@ function M.derive()
   end
   out.lit_shown = (view == #MAPS)
 
+  -- The material rename: the dropdown yields to a draft field while editing, and the Rename
+  -- affordance shows only when a material is bound and no edit is open. (`renaming` is
+  -- published raw by the behaviour; these are the derived companions the tree gates on.)
+  local renaming = (Model and Model.renaming) or false
+  local bound = (Model and Model.material_bound) or false
+  out.not_renaming = not renaming
+  out.can_rename = bound and not renaming
+
   return out
 end
 

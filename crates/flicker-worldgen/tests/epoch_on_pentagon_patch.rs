@@ -9,9 +9,7 @@
 //! the public API.
 
 use flicker_materials::{JsonTableSource, Tables};
-use flicker_worldgen::{
-    six_epoch_stack, Boundary, Epoch1, Epoch1Params, Epoch6, EpochCtx, EPOCHS,
-};
+use flicker_worldgen::{six_epoch_stack, Boundary, Epoch1, Epoch1Params, Epoch6, EpochCtx, EPOCHS};
 use flicker_worldgrid::pentagon_patch;
 
 fn tables() -> Tables {
@@ -52,7 +50,11 @@ fn epoch_stack_runs_on_a_pentagon_patch() {
     let patch = pentagon_patch(6);
     let n = patch.len();
     let pent = patch.center as usize;
-    assert_eq!(patch.neighbors[pent].len(), 5, "the centre is the pentagon defect");
+    assert_eq!(
+        patch.neighbors[pent].len(),
+        5,
+        "the centre is the pentagon defect"
+    );
 
     // Feed the grid straight into the existing context — no special-casing.
     let ctx = EpochCtx {
@@ -71,13 +73,22 @@ fn epoch_stack_runs_on_a_pentagon_patch() {
 
     // --- each real epoch did its work on the icosahedral topology (the
     //     neighbour-driven epochs 3 & 6 thus handled the 5-neighbour cell) ---
-    assert!(stack[1].iter().all(|s| !s.crust.is_empty()), "Epoch 2 made no crust");
-    assert!(stack[2].iter().any(|s| s.elevation != 0.0), "Epoch 3 wrote no elevation");
+    assert!(
+        stack[1].iter().all(|s| !s.crust.is_empty()),
+        "Epoch 2 made no crust"
+    );
+    assert!(
+        stack[2].iter().any(|s| s.elevation != 0.0),
+        "Epoch 3 wrote no elevation"
+    );
     assert!(
         stack[2].iter().any(|s| s.boundary != Boundary::Interior),
         "Epoch 3 found no plate boundary"
     );
-    assert!(stack[3].iter().any(|s| s.water_depth > 0.0), "Epoch 4 made no ocean");
+    assert!(
+        stack[3].iter().any(|s| s.water_depth > 0.0),
+        "Epoch 4 made no ocean"
+    );
     assert!(
         stack[4].iter().any(|s| s.hydrothermal > 0.0),
         "Epoch 5 made no hydrothermal activity"

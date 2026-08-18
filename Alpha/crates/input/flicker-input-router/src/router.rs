@@ -188,7 +188,9 @@ pub struct DispatchReport {
 impl DispatchReport {
     /// Did `layer` consume `signal` this frame (in either phase)?
     pub fn consumed_by(&self, layer: usize, signal: ActionSignal) -> bool {
-        self.consumed.iter().any(|&(l, s)| l == layer && s == signal)
+        self.consumed
+            .iter()
+            .any(|&(l, s)| l == layer && s == signal)
     }
 
     /// Did `signal` fall through the whole chain unconsumed this frame?
@@ -222,7 +224,14 @@ mod tests {
 
     impl Mock {
         fn new(name: &'static str, log: &Log) -> Self {
-            Self { name, cap: Flow::Pass, hnd: Flow::Pass, log: log.clone(), emit: None, subs: None }
+            Self {
+                name,
+                cap: Flow::Pass,
+                hnd: Flow::Pass,
+                log: log.clone(),
+                emit: None,
+                subs: None,
+            }
         }
         fn capturing(mut self) -> Self {
             self.cap = Flow::Consumed;
@@ -304,10 +313,17 @@ mod tests {
             let nav = [event(ActionSignal::NavDown, &raw)];
             let mut chain: [&mut dyn InputHandler; 2] = [&mut scene, &mut focus];
             let report = Router::dispatch(&nav, &mut chain, &mut rc);
-            assert!(report.consumed_by(1, ActionSignal::NavDown), "focus owns Nav");
+            assert!(
+                report.consumed_by(1, ActionSignal::NavDown),
+                "focus owns Nav"
+            );
             assert!(!report.passed(ActionSignal::NavDown));
         }
-        assert_eq!(*log.borrow(), vec!["focus:capture", "focus:handle"], "scene never saw the Nav");
+        assert_eq!(
+            *log.borrow(),
+            vec!["focus:capture", "focus:handle"],
+            "scene never saw the Nav"
+        );
 
         // A Confirm signal: focus is NOT subscribed → skipped; the scene owns + consumes it.
         log.borrow_mut().clear();
@@ -315,9 +331,16 @@ mod tests {
             let confirm = [event(ActionSignal::Confirm, &raw)];
             let mut chain: [&mut dyn InputHandler; 2] = [&mut scene, &mut focus];
             let report = Router::dispatch(&confirm, &mut chain, &mut rc);
-            assert!(report.consumed_by(0, ActionSignal::Confirm), "scene owns Confirm");
+            assert!(
+                report.consumed_by(0, ActionSignal::Confirm),
+                "scene owns Confirm"
+            );
         }
-        assert_eq!(*log.borrow(), vec!["scene:capture", "scene:handle"], "focus never saw the Confirm");
+        assert_eq!(
+            *log.borrow(),
+            vec!["scene:capture", "scene:handle"],
+            "focus never saw the Confirm"
+        );
     }
 
     #[test]
@@ -340,7 +363,13 @@ mod tests {
         // c.handle is never reached.
         assert_eq!(
             *log.borrow(),
-            vec!["a:capture", "b:capture", "c:capture", "a:handle", "b:handle"]
+            vec![
+                "a:capture",
+                "b:capture",
+                "c:capture",
+                "a:handle",
+                "b:handle"
+            ]
         );
     }
 
@@ -428,15 +457,27 @@ mod tests {
     #[test]
     fn clear_focus_wins_when_emitted_last() {
         let mut cb = ContextualBindings::new(InputMap::empty());
-        let requests = vec![RouterRequest::SetFocus("a".into()), RouterRequest::ClearFocus];
-        assert_eq!(apply_context_requests(&mut cb, &requests), Some(FocusChange::Clear));
+        let requests = vec![
+            RouterRequest::SetFocus("a".into()),
+            RouterRequest::ClearFocus,
+        ];
+        assert_eq!(
+            apply_context_requests(&mut cb, &requests),
+            Some(FocusChange::Clear)
+        );
     }
 
     #[test]
     fn set_focus_wins_when_emitted_last() {
         let mut cb = ContextualBindings::new(InputMap::empty());
-        let requests = vec![RouterRequest::ClearFocus, RouterRequest::SetFocus("z".into())];
-        assert_eq!(apply_context_requests(&mut cb, &requests), Some(FocusChange::Set("z".into())));
+        let requests = vec![
+            RouterRequest::ClearFocus,
+            RouterRequest::SetFocus("z".into()),
+        ];
+        assert_eq!(
+            apply_context_requests(&mut cb, &requests),
+            Some(FocusChange::Set("z".into()))
+        );
     }
 
     #[test]

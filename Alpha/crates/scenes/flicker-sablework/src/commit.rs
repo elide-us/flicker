@@ -82,11 +82,7 @@ pub fn asset_name(name: &str, id: &str) -> String {
 ///
 /// `staging_root` is passed in rather than looked up so a test can drive this
 /// against a temp tree; the scene asks `flicker_content::roots().staging()`.
-pub fn commit(
-    recipe: &TextureRecipe,
-    size: u32,
-    staging_root: &Path,
-) -> io::Result<Committed> {
+pub fn commit(recipe: &TextureRecipe, size: u32, staging_root: &Path) -> io::Result<Committed> {
     let name = asset_name(&recipe.name, &recipe.id);
     let dir = staging_root.join(MATERIALS_DIR).join(&name);
     std::fs::create_dir_all(&dir)?;
@@ -98,7 +94,10 @@ pub fn commit(
         let Some(map) = set.get(kind) else { continue };
         let path = dir.join(format!("{name}_{}.png", kind.role()));
         let png = encode_png(kind, &map.pixels, map.size).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("{kind:?} PNG encode: {e}"))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{kind:?} PNG encode: {e}"),
+            )
         })?;
         // Raw, not gz — see the module docs.
         std::fs::write(&path, png)?;
@@ -138,7 +137,9 @@ fn encode_png(kind: MapKind, rgba: &[u8], size: u32) -> Result<Vec<u8>, image::I
     let (color, pixels) = match kind {
         _ if kind.is_color() || kind == MapKind::Normal => (
             image::ColorType::Rgb8,
-            rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect::<Vec<u8>>(),
+            rgba.chunks_exact(4)
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect::<Vec<u8>>(),
         ),
         // Scalar: one channel is the whole map.
         _ => (
@@ -147,7 +148,14 @@ fn encode_png(kind: MapKind, rgba: &[u8], size: u32) -> Result<Vec<u8>, image::I
         ),
     };
     let mut out = std::io::Cursor::new(Vec::new());
-    image::write_buffer_with_format(&mut out, &pixels, size, size, color, image::ImageFormat::Png)?;
+    image::write_buffer_with_format(
+        &mut out,
+        &pixels,
+        size,
+        size,
+        color,
+        image::ImageFormat::Png,
+    )?;
     Ok(out.into_inner())
 }
 
@@ -190,12 +198,22 @@ mod tests {
 
         let png = out.dir.join("Basalt_BaseColor.png");
         assert!(png.is_file(), "the map is at its plain path");
-        assert!(!out.dir.join("Basalt_BaseColor.png.gz").exists(), "a PNG must not be gzipped");
+        assert!(
+            !out.dir.join("Basalt_BaseColor.png.gz").exists(),
+            "a PNG must not be gzipped"
+        );
         let bytes = std::fs::read(&png).expect("read map");
-        assert_eq!(&bytes[..4], b"\x89PNG", "the map is a real PNG, not a gz stream");
+        assert_eq!(
+            &bytes[..4],
+            b"\x89PNG",
+            "the map is a real PNG, not a gz stream"
+        );
 
         let plain = out.dir.join("Basalt.texture.json");
-        assert!(plain.with_extension("json.gz").is_file(), "the recipe is gz at rest");
+        assert!(
+            plain.with_extension("json.gz").is_file(),
+            "the recipe is gz at rest"
+        );
         assert!(!plain.is_file(), "no stale raw twin beside the gz");
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -209,12 +227,15 @@ mod tests {
         let recipe = presets::sandstone();
         let out = commit(&recipe, 32, &root).expect("commit writes");
 
-        let text =
-            flicker_content::package::read_text(&out.dir.join("Sandstone.texture.json"))
-                .expect("recipe reads back");
+        let text = flicker_content::package::read_text(&out.dir.join("Sandstone.texture.json"))
+            .expect("recipe reads back");
         let back: TextureRecipe = serde_json::from_str(&text).expect("recipe parses");
         assert_eq!(back, recipe);
-        assert_eq!(bake(&back, 32), bake(&recipe, 32), "the recipe rebuilds its image");
+        assert_eq!(
+            bake(&back, 32),
+            bake(&recipe, 32),
+            "the recipe rebuilds its image"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -227,7 +248,12 @@ mod tests {
         let out = commit(&presets::hematite(), 32, &root).expect("commit writes");
         for f in &out.files {
             let class = flicker_content::classify_package(f);
-            assert_ne!(class, PackageClass::Unknown, "{} classified Unknown", f.display());
+            assert_ne!(
+                class,
+                PackageClass::Unknown,
+                "{} classified Unknown",
+                f.display()
+            );
         }
         assert_eq!(
             flicker_content::classify_package(&out.dir.join("Hematite.texture.json")),
@@ -244,9 +270,16 @@ mod tests {
         let root = temp_root("scope");
         let out = commit(&presets::granite(), 16, &root).expect("commit writes");
         for f in &out.files {
-            assert!(f.starts_with(&root), "{} escaped the staging root", f.display());
+            assert!(
+                f.starts_with(&root),
+                "{} escaped the staging root",
+                f.display()
+            );
         }
-        assert!(!root.join("package").exists(), "a bench never writes into package/");
+        assert!(
+            !root.join("package").exists(),
+            "a bench never writes into package/"
+        );
     }
 
     /// An authored name reaches here from a text field, so the folder name must be
@@ -263,7 +296,10 @@ mod tests {
         // No name can escape its folder.
         for wild in ["../../etc", "a/b", "..", "  "] {
             let n = asset_name(wild, "fallback");
-            assert!(!n.contains('/') && !n.contains('.'), "{wild:?} folded to {n:?}");
+            assert!(
+                !n.contains('/') && !n.contains('.'),
+                "{wild:?} folded to {n:?}"
+            );
         }
     }
 
@@ -287,15 +323,27 @@ mod tests {
             } else {
                 image::ColorType::L8
             };
-            assert_eq!(img.color(), expect_color, "{kind:?} shipped in the wrong form");
+            assert_eq!(
+                img.color(),
+                expect_color,
+                "{kind:?} shipped in the wrong form"
+            );
 
             // Widened back, every channel that carried meaning must be intact.
             let got = img.to_rgba8();
             let want = set.get(kind).unwrap();
-            for (i, (g, w)) in got.chunks_exact(4).zip(want.pixels.chunks_exact(4)).enumerate() {
+            for (i, (g, w)) in got
+                .chunks_exact(4)
+                .zip(want.pixels.chunks_exact(4))
+                .enumerate()
+            {
                 assert_eq!(g[0], w[0], "{kind:?} texel {i} red changed");
                 if expect_color == image::ColorType::Rgb8 {
-                    assert_eq!((g[1], g[2]), (w[1], w[2]), "{kind:?} texel {i} colour changed");
+                    assert_eq!(
+                        (g[1], g[2]),
+                        (w[1], w[2]),
+                        "{kind:?} texel {i} colour changed"
+                    );
                 }
                 assert_eq!(g[3], 255, "{kind:?} texel {i} lost its opaque alpha");
             }

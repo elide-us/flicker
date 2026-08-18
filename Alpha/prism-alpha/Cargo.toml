@@ -2,6 +2,7 @@
 name = "prism-alpha"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # prism-alpha — the unified Prism client shell (the single harness). One binary
@@ -21,17 +22,17 @@ path = "src/main.rs"
 flicker-shell.workspace = true
 # The lib-ified scenes this launcher hosts (one `SceneEntry` each). Pack Editor is a
 # raw `impl App`, not a `Scene` yet, so it is NOT here until it is converted.
-flicker-clicktrainer = { path = "../crates/scenes/flicker-clicktrainer" }
-flicker-componentcatalog = { path = "../crates/scenes/flicker-componentcatalog" }
-flicker-controllertester = { path = "../crates/scenes/flicker-controllertester" }
-flicker-solarbirth = { path = "../crates/scenes/flicker-solarbirth" }
-flicker-loomforge = { path = "../crates/scenes/flicker-loomforge" }
-flicker-pocclusters = { path = "../crates/scenes/flicker-pocclusters" }
-flicker-assetpipeline = { path = "../crates/scenes/flicker-assetpipeline" }
-flicker-godmode = { path = "../crates/scenes/flicker-godmode" }
-flicker-populous = { path = "../crates/scenes/flicker-populous" }
-flicker-sablework = { path = "../crates/scenes/flicker-sablework" }
-flicker-quartermaster = { path = "../crates/scenes/flicker-quartermaster" }
+flicker-clicktrainer = { version = "0.1.0", path = "../crates/scenes/flicker-clicktrainer" }
+flicker-componentcatalog = { version = "0.1.0", path = "../crates/scenes/flicker-componentcatalog" }
+flicker-controllertester = { version = "0.1.0", path = "../crates/scenes/flicker-controllertester" }
+flicker-solarbirth = { version = "0.1.0", path = "../crates/scenes/flicker-solarbirth" }
+flicker-loomforge = { version = "0.1.0", path = "../crates/scenes/flicker-loomforge" }
+flicker-pocclusters = { version = "0.1.0", path = "../crates/scenes/flicker-pocclusters" }
+flicker-assetpipeline = { version = "0.1.0", path = "../crates/scenes/flicker-assetpipeline" }
+flicker-godmode = { version = "0.1.0", path = "../crates/scenes/flicker-godmode" }
+flicker-populous = { version = "0.1.0", path = "../crates/scenes/flicker-populous" }
+flicker-sablework = { version = "0.1.0", path = "../crates/scenes/flicker-sablework" }
+flicker-quartermaster = { version = "0.1.0", path = "../crates/scenes/flicker-quartermaster" }
 # Declares this executable's content roots (content.json) before any scene loads.
 flicker-content.workspace = true
 anyhow.workspace = true
@@ -41,3 +42,29 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # The manifest gate test reads the scenes folder the same way the shell does.
 flicker-widgets.workspace = true
+
+# Debian package (built by release.yml: `cargo deb -p prism-alpha --no-build --no-strip`
+# AFTER the locked release build and the dist/stage/ layout step — asset paths below
+# point at that staged tree, relative to this manifest's directory). Explicit
+# per-subdir globs, so the installed layout can never silently flatten.
+# `$auto` = dpkg-shlibdeps over the linked .so set; the four explicit packages are
+# the dlopen'd libraries shlibdeps cannot see (wgpu→vulkan, winit→xkbcommon/wayland/x11).
+[package.metadata.deb]
+maintainer = "Aaron Stackpole <aaron@elideus.net>"
+copyright = "2026, Aaron Stackpole"
+extended-description = "Prism Alpha — the Flicker engine client."
+section = "games"
+priority = "optional"
+depends = "$auto, libvulkan1, libxkbcommon0, libwayland-client0, libx11-6"
+assets = [
+    ["../../dist/stage/prism-alpha", "opt/prism-alpha/", "755"],
+    ["../../dist/stage/content.json", "opt/prism-alpha/", "644"],
+    ["../../dist/stage/content/package.flk", "opt/prism-alpha/content/", "644"],
+    ["../../dist/stage/content/sensorium/scenes/*.scene.json", "opt/prism-alpha/content/sensorium/scenes/", "644"],
+    ["../../dist/stage/content/sensorium/scenes/shared/*.scene.json", "opt/prism-alpha/content/sensorium/scenes/shared/", "644"],
+    ["../../dist/stage/content/sensorium/scripts/*.lua", "opt/prism-alpha/content/sensorium/scripts/", "644"],
+    ["../../dist/stage/content/sensorium/scripts/shared/*.lua", "opt/prism-alpha/content/sensorium/scripts/shared/", "644"],
+    ["../../dist/stage/content/sensorium/resources/*.json", "opt/prism-alpha/content/sensorium/resources/", "644"],
+    ["../../dist/stage/content/data/*.json", "opt/prism-alpha/content/data/", "644"],
+    ["packaging/linux/prism-alpha.desktop", "usr/share/applications/", "644"],
+]

@@ -158,19 +158,16 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     }
 
     // ── view-only: which map the swatch shows ──
-    // The tabs bind `sel_map`, a NUMBER (an index is a number — everywhere): a
-    // click writes the picked value back, the bumpers step the ring, and both
-    // arrive here as results, so the pad and the pointer are the same event. The
-    // LIT view rides the same bound number as the seven flat maps.
+    // The tabs bind `sel_map`, a NUMBER (an index is a number — everywhere). THE
+    // RAIL OWNS ITS OWN STEPPING: the strip authors `next_action`/`prev_action`
+    // ("map_next"/"map_prev"), so a bumper, a gutter click and a picked tab all
+    // step the rail's bind INSIDE the walker, and the ONLY thing that arrives
+    // here is the resulting index. Hand-stepping it here too was the skipped-tab
+    // bug (MCP 801B1B09): two consumers of one fired name, +2 per press. The LIT
+    // view rides the same bound number as the seven flat maps.
     if let Some(v) = slid(results, "sel_map") {
         // A wild number clamps into the ring rather than pointing past it.
         bench.sel_map = (v.max(0.0) as usize).min(VIEW_COUNT - 1);
-    }
-    if results.is_on("map_next") {
-        bench.sel_map = (bench.sel_map + 1) % VIEW_COUNT;
-    }
-    if results.is_on("map_prev") {
-        bench.sel_map = (bench.sel_map + VIEW_COUNT - 1) % VIEW_COUNT;
     }
     // The lit sample's own two controls. Neither touches the recipe — they change
     // how you are LOOKING at the surface, not what it is.
@@ -185,8 +182,19 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     // The material binding and the bake rung are RECIPE and OUTPUT settings, not
     // view state, but neither changes the IMAGE — a re-bake would show the same
     // pixels — so neither asks for one.
-    if results.is_on("material") {
-        bench.step_material();
+    if let Some(n) = results.number("sel_material") {
+        bench.set_material_by_option(n);
+    }
+    // The material RENAME — an authored-name edit, not an image edit: begin on the bound
+    // material, and commit/cancel from the raw Enter/Esc the scene folded into `results`.
+    if results.is_on("rename") {
+        bench.begin_rename();
+    }
+    if results.is_on("rename_commit") {
+        bench.commit_rename();
+    }
+    if results.is_on("rename_cancel") {
+        bench.cancel_rename();
     }
     if results.is_on("bake_size") {
         bench.step_size();
@@ -198,14 +206,22 @@ pub fn apply(bench: &mut Sablework, results: &ValueMap) -> bool {
     // glow together. Seeded off the current seed so the sequence is reproducible
     // rather than clock-driven, which keeps a roll you liked saveable.
     if results.is_on("roll") {
-        let seed = bench.recipe.seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let seed = bench
+            .recipe
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         bench.recipe = flicker_texture::random(seed);
         edited = true;
     }
     if results.is_on("reseed") {
         // A new seed re-rolls every field at once while keeping the whole rack —
         // the "same instrument, different performance" control.
-        bench.recipe.seed = bench.recipe.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        bench.recipe.seed = bench
+            .recipe
+            .seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1);
         edited = true;
     }
     let patches = presets_len();

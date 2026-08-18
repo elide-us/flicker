@@ -2,6 +2,7 @@
 name = "flicker-content"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # flicker-content — the in-app content pipeline (golden-spec WS-F, content-pipeline node A3A3259C).
@@ -23,8 +24,11 @@ flicker-skeletal.workspace = true
 # THE shared compression routine (flicker-core::compression): the gz-at-rest read/write
 # seam + gzip itself. `package` re-exports it; `content-tool gzify` converts through it.
 flicker-core.workspace = true
+# The store-only package container writer (`content-tool pack` → package.flk).
+# No compression features compiled in — entries are Stored; the tree is already gz-at-rest.
+zip.workspace = true
 
-# The offline package-content tool (`content-tool gzify <dir>` today; `pack` later).
+# The offline package-content tool (gzify / pack / verify).
 [[bin]]
 name = "content-tool"
 path = "src/bin/content_tool.rs"

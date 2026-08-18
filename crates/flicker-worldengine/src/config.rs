@@ -61,7 +61,11 @@ impl WorldConfig {
         for a in params.abundance() {
             values.insert(format!("{ABUNDANCE_PREFIX}{}", a.symbol), a.weight);
         }
-        Self { values, freq: DEFAULT_FREQ, seed: DEFAULT_SEED }
+        Self {
+            values,
+            freq: DEFAULT_FREQ,
+            seed: DEFAULT_SEED,
+        }
     }
 
     /// Current value of a lever id (`0.0` if unknown — the epoch builders only ask
@@ -97,7 +101,12 @@ pub fn build_epoch1(config: &WorldConfig, params: &GeneratorParams) -> Epoch1Par
     let abundance = params
         .abundance()
         .iter()
-        .map(|a| (a.symbol.clone(), config.get(&format!("{ABUNDANCE_PREFIX}{}", a.symbol))))
+        .map(|a| {
+            (
+                a.symbol.clone(),
+                config.get(&format!("{ABUNDANCE_PREFIX}{}", a.symbol)),
+            )
+        })
         .collect();
     Epoch1Params {
         abundance,
@@ -216,8 +225,12 @@ pub fn mutate_epoch(config: &mut WorldConfig, epoch: u8, seed: u64, params: &Gen
     if epoch == 1 {
         let ab_seed = next_seed(seed);
         for (i, a) in params.abundance().iter().enumerate() {
-            let factor = (1.0 + centered_rand(ab_seed, i as u64 + 1) * ABUNDANCE_MUTATION).max(0.05);
-            config.set(&format!("{ABUNDANCE_PREFIX}{}", a.symbol), a.weight * factor);
+            let factor =
+                (1.0 + centered_rand(ab_seed, i as u64 + 1) * ABUNDANCE_MUTATION).max(0.05);
+            config.set(
+                &format!("{ABUNDANCE_PREFIX}{}", a.symbol),
+                a.weight * factor,
+            );
         }
     }
 }

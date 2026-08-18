@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use flicker_input_core::{AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key};
 use flicker::render::{
     build_textured_verts, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, PbrMaps,
     QuadGrid, Renderer, SceneLighting, TextureHandle, TexturedMeshHandle, Vec2, Vec3,
@@ -31,8 +30,10 @@ use flicker::render::{
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
 use flicker::ui::{
-    render_hud, run_ui, Surface, Surfaces, UiInput, UiIntents,
-    UiState, WalkerHandler,
+    render_hud, run_ui, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
+};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
 };
 // The strings module (fixture tokens + the Model-channel gate scan) is test-only.
 #[cfg(test)]
@@ -41,10 +42,10 @@ use glam::Mat4;
 
 use flicker_input_core::{ActionSignal, Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_mechanics as mechanics;
 use flicker_shell::{PauseScene, Theme};
 use flicker_skeletal::state::{Inputs, StateMachine};
 use flicker_skeletal::{cloth, format, jiggle, pose, skin, state};
-use flicker_mechanics as mechanics;
 
 mod route;
 use route::{GameplayBase, RootHandler};
@@ -93,7 +94,11 @@ fn draw_prop_parts(renderer: &mut Renderer, parts: &[PropPart], model: Mat4, sho
     for part in parts {
         match part {
             PropPart::Textured(h, tex, maps) => {
-                let maps = if show_textures { *maps } else { PbrMaps::default() };
+                let maps = if show_textures {
+                    *maps
+                } else {
+                    PbrMaps::default()
+                };
                 renderer.draw_textured_mesh_pbr(*h, *tex, maps, model, MeshDrawOptions::default());
             }
             PropPart::Flat(h) => renderer.draw_mesh(*h, model, MeshDrawOptions::default()),
@@ -109,8 +114,10 @@ const HUD_SCRIPT_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../Alpha/content/sensorium/scripts/shared/hud_paperdoll.lua"
 );
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/sensorium/resources/ui_theme.json");
+const HUD_UI_THEME: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../Alpha/content/sensorium/resources/ui_theme.json"
+);
 
 /// A submesh's GPU upload for the current frame — textured (albedo) or flat (gray).
 enum SubGpu {
@@ -121,7 +128,11 @@ enum SubGpu {
 /// A base-body submesh uploaded for the editor grid: a textured draw (albedo + PBR maps) or a
 /// flat-coloured draw. Built once per frame, drawn into all four RTT panels, then freed.
 enum PanelSub {
-    Textured { h: TexturedMeshHandle, tex: TextureHandle, maps: PbrMaps },
+    Textured {
+        h: TexturedMeshHandle,
+        tex: TextureHandle,
+        maps: PbrMaps,
+    },
     Flat(MeshHandle),
 }
 
@@ -215,19 +226,79 @@ struct SlotDef {
 const SLOTS: &[SlotDef] = &[
     // Hair rides the head as a rigid prop (fittable via the gadget); like cloth it will want
     // a jiggle chain — a swinging ponytail — later.
-    SlotDef { key: "hair", dir: "musefit", file: "Hair-Ponytail.json", fit: Fit::Prop("head") , mirror: None },
-    SlotDef { key: "neck", dir: "musefit", file: "Neck-Pendant.json", fit: Fit::Prop("neck_01") , mirror: None },
-    SlotDef { key: "chest", dir: "musefit", file: "Corset-Duster.skinned.json", fit: Fit::Garment, mirror: None },
-    SlotDef { key: "legs", dir: "musefit", file: "Hem-Pants.skinned.json", fit: Fit::Garment, mirror: None },
+    SlotDef {
+        key: "hair",
+        dir: "musefit",
+        file: "Hair-Ponytail.json",
+        fit: Fit::Prop("head"),
+        mirror: None,
+    },
+    SlotDef {
+        key: "neck",
+        dir: "musefit",
+        file: "Neck-Pendant.json",
+        fit: Fit::Prop("neck_01"),
+        mirror: None,
+    },
+    SlotDef {
+        key: "chest",
+        dir: "musefit",
+        file: "Corset-Duster.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
+    SlotDef {
+        key: "legs",
+        dir: "musefit",
+        file: "Hem-Pants.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
     // Gloves and boots ship as symmetric PAIRS in one mesh; the converter splits them by
     // loose parts (`split: "lr"` in the manifest) so each half can follow its own limb. An
     // unsplit pair is unwearable at any transform — one bone cannot drive two feet.
-    SlotDef { key: "glove_l", dir: "musefit", file: "Hand-Gloves-L.skinned.json", fit: Fit::Garment, mirror: None },
-    SlotDef { key: "glove_r", dir: "musefit", file: "Hand-Gloves-R.skinned.json", fit: Fit::Garment, mirror: None },
-    SlotDef { key: "boot_l", dir: "musefit", file: "Foot-Boots-L.skinned.json", fit: Fit::Garment, mirror: None },
-    SlotDef { key: "boot_r", dir: "musefit", file: "Foot-Boots-R.skinned.json", fit: Fit::Garment, mirror: None },
-    SlotDef { key: "rhand", dir: "musefit", file: "Katana.json", fit: Fit::Prop("Weapon_R") , mirror: None },
-    SlotDef { key: "lhand", dir: "musefit", file: "Dagger.json", fit: Fit::Prop("Weapon_L") , mirror: None },
+    SlotDef {
+        key: "glove_l",
+        dir: "musefit",
+        file: "Hand-Gloves-L.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
+    SlotDef {
+        key: "glove_r",
+        dir: "musefit",
+        file: "Hand-Gloves-R.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
+    SlotDef {
+        key: "boot_l",
+        dir: "musefit",
+        file: "Foot-Boots-L.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
+    SlotDef {
+        key: "boot_r",
+        dir: "musefit",
+        file: "Foot-Boots-R.skinned.json",
+        fit: Fit::Garment,
+        mirror: None,
+    },
+    SlotDef {
+        key: "rhand",
+        dir: "musefit",
+        file: "Katana.json",
+        fit: Fit::Prop("Weapon_R"),
+        mirror: None,
+    },
+    SlotDef {
+        key: "lhand",
+        dir: "musefit",
+        file: "Dagger.json",
+        fit: Fit::Prop("Weapon_L"),
+        mirror: None,
+    },
 ];
 
 /// A piece's placement onto the body: uniform scale + an offset in its socket bone's frame.
@@ -286,7 +357,9 @@ impl PieceFit {
         let longest = mesh
             .vertices
             .iter()
-            .fold([f32::MAX; 3], |mn, v| std::array::from_fn(|i| mn[i].min(v.p[i])))
+            .fold([f32::MAX; 3], |mn, v| {
+                std::array::from_fn(|i| mn[i].min(v.p[i]))
+            })
             .iter()
             .zip(mesh.vertices.iter().fold([f32::MIN; 3], |mx, v| {
                 std::array::from_fn(|i| mx[i].max(v.p[i]))
@@ -306,7 +379,13 @@ impl PieceFit {
         let rot = socket
             .map(|b| glam::Quat::from_mat4(&b.inverse_bind).normalize())
             .unwrap_or(glam::Quat::IDENTITY);
-        Self { uniform, scale, offset: Vec3::ZERO, user_rot: glam::Quat::IDENTITY, rot }
+        Self {
+            uniform,
+            scale,
+            offset: Vec3::ZERO,
+            user_rot: glam::Quat::IDENTITY,
+            rot,
+        }
     }
 
     /// This fit REFLECTED across the body's midline (x = 0) — the fit its mirrored partner
@@ -324,7 +403,12 @@ impl PieceFit {
             offset: Vec3::new(-self.offset.x, self.offset.y, self.offset.z),
             // Reflect the quaternion across x = 0: keep PITCH (x) and w, negate YAW (y) and
             // ROLL (z). Derived from axis-angle: the mirror sends axis a→(ax,−ay,−az), angle→−θ.
-            user_rot: glam::Quat::from_xyzw(self.user_rot.x, -self.user_rot.y, -self.user_rot.z, self.user_rot.w),
+            user_rot: glam::Quat::from_xyzw(
+                self.user_rot.x,
+                -self.user_rot.y,
+                -self.user_rot.z,
+                self.user_rot.w,
+            ),
             rot: self.rot,
         }
     }
@@ -337,7 +421,11 @@ impl PieceFit {
     /// piece to the body's left regardless of which bone it hangs off.
     fn matrix(&self) -> Mat4 {
         Mat4::from_quat(self.rot)
-            * Mat4::from_scale_rotation_translation(self.scale * self.uniform, self.user_rot, self.offset)
+            * Mat4::from_scale_rotation_translation(
+                self.scale * self.uniform,
+                self.user_rot,
+                self.offset,
+            )
     }
 }
 
@@ -360,7 +448,10 @@ fn load_fit_rows() -> Vec<(String, String)> {
         .map(|rows| {
             rows.iter()
                 .filter_map(|r| {
-                    Some((r["key"].as_str()?.to_string(), r["group"].as_str()?.to_string()))
+                    Some((
+                        r["key"].as_str()?.to_string(),
+                        r["group"].as_str()?.to_string(),
+                    ))
                 })
                 .collect()
         })
@@ -392,7 +483,8 @@ impl RecordedFit {
             uniform: a.uniform,
             scale: a.scale,
             offset: a.offset,
-            rotate: glam::Quat::from_xyzw(a.rotate[0], a.rotate[1], a.rotate[2], a.rotate[3]).normalize(),
+            rotate: glam::Quat::from_xyzw(a.rotate[0], a.rotate[1], a.rotate[2], a.rotate[3])
+                .normalize(),
         })
     }
 }
@@ -407,8 +499,8 @@ fn write_inline_attach(path: &Path, attach: serde_json::Value) -> Result<()> {
     // addressed by its LOGICAL path and re-emitted in its gz-at-rest form.
     let text = flicker_core::compression::read_text(path)
         .with_context(|| format!("reading piece {}", path.display()))?;
-    let mut doc: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| format!("parsing piece {}", path.display()))?;
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("parsing piece {}", path.display()))?;
     doc.as_object_mut()
         .with_context(|| format!("piece {} is not a JSON object", path.display()))?
         .insert("attach".to_string(), attach);
@@ -479,8 +571,20 @@ fn load_fits(path: &Path) -> HashMap<String, RecordedFit> {
 /// Always-worn props with no inventory cell (user, 2026-07-16: "the sheathes will
 /// remain where they are"). Same loading path as a slot's prop; simply never toggled.
 const SHEATHS: &[SlotDef] = &[
-    SlotDef { key: "katana_sheath", dir: "musefit", file: "Katana-Sheath.json", fit: Fit::Prop("pelvis") , mirror: None },
-    SlotDef { key: "dagger_sheath", dir: "musefit", file: "Dagger-Sheath.json", fit: Fit::Prop("pelvis") , mirror: None },
+    SlotDef {
+        key: "katana_sheath",
+        dir: "musefit",
+        file: "Katana-Sheath.json",
+        fit: Fit::Prop("pelvis"),
+        mirror: None,
+    },
+    SlotDef {
+        key: "dagger_sheath",
+        dir: "musefit",
+        file: "Dagger-Sheath.json",
+        fit: Fit::Prop("pelvis"),
+        mirror: None,
+    },
 ];
 
 /// A slot's loaded piece. `None` on `Slot::content` = nothing to wear (dim, inert cell).
@@ -490,7 +594,12 @@ enum SlotContent {
     /// taken) because click-to-select ray-casts against its triangles — brute force at click
     /// rate, the same tradeoff `flicker-pocclusters` makes. `uploaded` guards the one-shot
     /// GPU upload now that the mesh's presence no longer can.
-    Prop { mesh: format::Mesh, parts: Vec<PropPart>, bone: usize, uploaded: bool },
+    Prop {
+        mesh: format::Mesh,
+        parts: Vec<PropPart>,
+        bone: usize,
+        uploaded: bool,
+    },
 }
 
 /// One runtime slot: its definition, whatever loaded for it, whether it is worn, and its
@@ -517,32 +626,60 @@ impl Slot {
         // Load the piece AND its inline `attach` mount (WS-C C-γ): a piece carries its own fit in
         // its one self-describing file, so we no longer depend on the shared `fits.json` sidecar.
         let (content, attach) = if !flicker_core::compression::file_exists(&path) {
-            tracing::info!("slot '{}': no piece at {} — cell stays empty", def.key, path.display());
+            tracing::info!(
+                "slot '{}': no piece at {} — cell stays empty",
+                def.key,
+                path.display()
+            );
             (None, format::Attach::default())
         } else {
             match def.fit {
                 Fit::Garment => match format::load_outfit_with_attach(&path, bones) {
                     Ok((mesh, attach)) => {
                         tracing::info!("slot '{}': garment {} verts", def.key, mesh.vertices.len());
-                        (Some(SlotContent::Garment(OutfitLayer::new(mesh, bones))), attach)
+                        (
+                            Some(SlotContent::Garment(OutfitLayer::new(mesh, bones))),
+                            attach,
+                        )
                     }
                     Err(e) => {
-                        tracing::warn!("slot '{}': garment failed ({e}); cell stays empty", def.key);
+                        tracing::warn!(
+                            "slot '{}': garment failed ({e}); cell stays empty",
+                            def.key
+                        );
                         (None, format::Attach::default())
                     }
                 },
                 Fit::Prop(socket) => match bones.iter().position(|b| b.name == socket) {
                     None => {
-                        tracing::warn!("slot '{}': rig has no '{socket}' socket; cell stays empty", def.key);
+                        tracing::warn!(
+                            "slot '{}': rig has no '{socket}' socket; cell stays empty",
+                            def.key
+                        );
                         (None, format::Attach::default())
                     }
                     Some(bone) => match format::load_mesh_with_attach(&path) {
                         Ok((mesh, attach)) => {
-                            tracing::info!("slot '{}': prop {} verts @ {socket}", def.key, mesh.vertices.len());
-                            (Some(SlotContent::Prop { mesh, parts: Vec::new(), bone, uploaded: false }), attach)
+                            tracing::info!(
+                                "slot '{}': prop {} verts @ {socket}",
+                                def.key,
+                                mesh.vertices.len()
+                            );
+                            (
+                                Some(SlotContent::Prop {
+                                    mesh,
+                                    parts: Vec::new(),
+                                    bone,
+                                    uploaded: false,
+                                }),
+                                attach,
+                            )
                         }
                         Err(e) => {
-                            tracing::warn!("slot '{}': prop failed ({e}); cell stays empty", def.key);
+                            tracing::warn!(
+                                "slot '{}': prop failed ({e}); cell stays empty",
+                                def.key
+                            );
                             (None, format::Attach::default())
                         }
                     },
@@ -575,15 +712,32 @@ impl Slot {
             fit.scale = Vec3::from(r.scale);
             fit.offset = Vec3::from(r.offset);
             fit.user_rot = r.rotate;
-            let src = if attach.socket.is_empty() { "fits.json" } else { "inline attach" };
+            let src = if attach.socket.is_empty() {
+                "fits.json"
+            } else {
+                "inline attach"
+            };
             tracing::info!(
                 "slot '{}': recorded fit ({src}) — size {:.2}, stretch {:?}, offset {:?}, rot {:?}",
-                def.key, r.uniform, r.scale, r.offset, r.rotate
+                def.key,
+                r.uniform,
+                r.scale,
+                r.offset,
+                r.rotate
             );
         } else if content.is_some() {
-            tracing::info!("slot '{}': default fit — size {:.2} (no recorded fit)", def.key, fit.uniform);
+            tracing::info!(
+                "slot '{}': default fit — size {:.2} (no recorded fit)",
+                def.key,
+                fit.uniform
+            );
         }
-        Self { def, content, on, fit }
+        Self {
+            def,
+            content,
+            on,
+            fit,
+        }
     }
 
     fn loaded(&self) -> bool {
@@ -693,7 +847,12 @@ impl OutfitLayer {
         let sub = submeshes_of(&mesh);
         let sub_gpu = (0..sub.len()).map(|_| None).collect();
         let cloth = cloth::ClothSim::build(&mesh.cloth, &mesh.vertices, bones);
-        Self { mesh, sub, sub_gpu, cloth }
+        Self {
+            mesh,
+            sub,
+            sub_gpu,
+            cloth,
+        }
     }
 }
 
@@ -874,10 +1033,18 @@ impl Viewer {
         // Body height in the rig's own units — the reference every piece's default fit is
         // sized against (the vendor's ~1.899 normalisation carries no real scale).
         let body_height = {
-            let (mn, mx) = model.mesh.vertices.iter().fold((f32::MAX, f32::MIN), |(a, b), v| {
-                (a.min(v.p[2]), b.max(v.p[2]))
-            });
-            if mx > mn { mx - mn } else { 170.0 }
+            let (mn, mx) = model
+                .mesh
+                .vertices
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), v| {
+                    (a.min(v.p[2]), b.max(v.p[2]))
+                });
+            if mx > mn {
+                mx - mn
+            } else {
+                170.0
+            }
         };
         // Equip slots + the always-worn sheaths, loaded from the content tree. Each slot
         // resolves independently: a piece whose file is absent simply leaves that cell
@@ -891,7 +1058,16 @@ impl Viewer {
         }
         let slots: Vec<Slot> = SLOTS
             .iter()
-            .map(|d| Slot::load(d, chars, &model.bones, d.key == "rhand" || d.key == "hair", body_height, &fits))
+            .map(|d| {
+                Slot::load(
+                    d,
+                    chars,
+                    &model.bones,
+                    d.key == "rhand" || d.key == "hair",
+                    body_height,
+                    &fits,
+                )
+            })
             .collect();
         let sheaths: Vec<Slot> = SHEATHS
             .iter()
@@ -1139,7 +1315,9 @@ impl Viewer {
         );
         // `slot_at_mut` borrows all of self, so take the key first.
         let focus = self.fit_focus.clone();
-        let Some(s) = self.slot_at_mut(i) else { return false };
+        let Some(s) = self.slot_at_mut(i) else {
+            return false;
+        };
         match focus.as_str() {
             "fit_u" => s.fit.uniform = (s.fit.uniform + step).clamp(lo, hi),
             "fit_sx" => s.fit.scale.x = (s.fit.scale.x + step).clamp(lo, hi),
@@ -1147,9 +1325,21 @@ impl Viewer {
             "fit_sz" => s.fit.scale.z = (s.fit.scale.z + step).clamp(lo, hi),
             // Rotation nudges COMPOSE a world-axis quaternion (D.6): no gimbal fold, no clamp —
             // a prop can spin through a full turn on any axis. `step` is in degrees.
-            "fit_rx" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::X, step.to_radians()) * s.fit.user_rot).normalize(),
-            "fit_ry" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Y, step.to_radians()) * s.fit.user_rot).normalize(),
-            "fit_rz" => s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Z, step.to_radians()) * s.fit.user_rot).normalize(),
+            "fit_rx" => {
+                s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::X, step.to_radians())
+                    * s.fit.user_rot)
+                    .normalize()
+            }
+            "fit_ry" => {
+                s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Y, step.to_radians())
+                    * s.fit.user_rot)
+                    .normalize()
+            }
+            "fit_rz" => {
+                s.fit.user_rot = (glam::Quat::from_axis_angle(Vec3::Z, step.to_radians())
+                    * s.fit.user_rot)
+                    .normalize()
+            }
             "fit_x" => s.fit.offset.x = (s.fit.offset.x + step).clamp(lo, hi),
             "fit_y" => s.fit.offset.y = (s.fit.offset.y + step).clamp(lo, hi),
             "fit_z" => s.fit.offset.z = (s.fit.offset.z + step).clamp(lo, hi),
@@ -1178,14 +1368,23 @@ impl Viewer {
         self.sub_gpu = (0..self.sub.len()).map(|_| None).collect();
         // Keep the previewer pointed at the walk on the new body, if a preview is active.
         if self.preview && !self.model.clips.is_empty() {
-            if let Some(i) = self.model.clips.iter().position(|c| c.name == "walk_forward") {
+            if let Some(i) = self
+                .model
+                .clips
+                .iter()
+                .position(|c| c.name == "walk_forward")
+            {
                 self.preview_clip = i;
             }
             self.preview_clip = self.preview_clip.min(self.model.clips.len() - 1);
         }
         tracing::info!(
             "body → {} ({} verts, {} bones)",
-            if self.body_b { "PrismHumanBaseB (male)" } else { "PrismHumanBaseA (female)" },
+            if self.body_b {
+                "PrismHumanBaseB (male)"
+            } else {
+                "PrismHumanBaseA (female)"
+            },
             self.model.mesh.vertices.len(),
             self.model.bones.len(),
         );
@@ -1226,13 +1425,20 @@ impl Viewer {
     ///     partner's OWN socket and is re-derived from the rig.
     fn mirror_fit(&mut self, i: usize) {
         let Some(src) = self.slot_at(i) else { return };
-        let Some(partner) = src.def.mirror else { return };
+        let Some(partner) = src.def.mirror else {
+            return;
+        };
         let f = src.fit;
         let Some(j) = self
             .slots
             .iter()
             .position(|s| s.def.key == partner)
-            .or_else(|| self.sheaths.iter().position(|s| s.def.key == partner).map(|k| k + self.slots.len()))
+            .or_else(|| {
+                self.sheaths
+                    .iter()
+                    .position(|s| s.def.key == partner)
+                    .map(|k| k + self.slots.len())
+            })
         else {
             return;
         };
@@ -1346,7 +1552,13 @@ impl Viewer {
     /// so the raw mesh triangles can be tested untransformed — one matrix inverse per piece
     /// instead of transforming every vertex. Brute force over ~8-15k triangles per piece at
     /// CLICK rate (not per frame), matching the pocclusters precedent.
-    fn pick_slot(&self, cursor: Vec2, viewport: Vec2, world: Mat4, globals: &[Mat4]) -> Option<usize> {
+    fn pick_slot(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        world: Mat4,
+        globals: &[Mat4],
+    ) -> Option<usize> {
         let (o, d) = self.cam.camera().pick_ray(cursor, viewport)?;
         let mut best: Option<(usize, f32)> = None;
         // Worn slots AND the always-worn sheaths — same index space as `slot_at`.
@@ -1408,9 +1620,6 @@ impl Viewer {
         tracing::info!("recorded {n} inline attach fit(s) into their piece files");
         Ok(n)
     }
-
-
-
 
     /// Resolve a material's PBR map basenames to loaded texture handles (each `None`
     /// when the map is absent or failed to load → the pipeline default). `textures-off`
@@ -1479,7 +1688,13 @@ impl Viewer {
     /// rig/joint editor's pick (Slice 2). Returns the bone index, or `None` if the rig has no
     /// selectable segments. The synthetic root (no parent) has no segment and is skipped. Picks the
     /// globally-nearest bone (no distance threshold yet — a screen-space cutoff can refine it).
-    fn pick_bone(&self, cursor: Vec2, viewport: Vec2, world: Mat4, globals: &[Mat4]) -> Option<usize> {
+    fn pick_bone(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        world: Mat4,
+        globals: &[Mat4],
+    ) -> Option<usize> {
         let (o, d) = self.cam.camera().pick_ray(cursor, viewport)?;
         let mut best: Option<(usize, f32)> = None;
         for (i, bone) in self.model.bones.iter().enumerate() {
@@ -1521,7 +1736,9 @@ impl Viewer {
     fn collision_segments(&self, world: Mat4, globals: &[Mat4]) -> Vec<(Vec3, Vec3)> {
         let mut segs = Vec::new();
         // The whole-unit movement pill: bounds the body, fixed in the root frame (drawn at `world`).
-        segs.extend(mechanics::debug::wireframe(&self.body_pill.transformed(world)));
+        segs.extend(mechanics::debug::wireframe(
+            &self.body_pill.transformed(world),
+        ));
         // Player: the auto-fit capsule per bone, placed by the bone's current pose.
         for vol in &self.collision_volumes {
             let Some(bone_global) = globals.get(vol.bone) else {
@@ -1536,15 +1753,20 @@ impl Viewer {
         // over the ponytail was the big stray cylinder round the head/shoulders.
         for (i, slot) in self.slots.iter().chain(self.sheaths.iter()).enumerate() {
             let worn = slot.on || (i >= self.slots.len() && slot.loaded());
-            if !worn || !matches!(slot.def.key, "rhand" | "lhand" | "katana_sheath" | "dagger_sheath") {
+            if !worn
+                || !matches!(
+                    slot.def.key,
+                    "rhand" | "lhand" | "katana_sheath" | "dagger_sheath"
+                )
+            {
                 continue;
             }
             let Some(SlotContent::Prop { mesh, bone, .. }) = &slot.content else {
                 continue;
             };
             let model = world * globals[*bone] * slot.fit.matrix();
-            let shape =
-                mechanics::fit_capsule(mesh.vertices.iter().map(|v| Vec3::from(v.p))).transformed(model);
+            let shape = mechanics::fit_capsule(mesh.vertices.iter().map(|v| Vec3::from(v.p)))
+                .transformed(model);
             segs.extend(mechanics::debug::wireframe(&shape));
         }
         segs
@@ -1649,7 +1871,12 @@ impl Scene for Viewer {
         let textures = std::mem::take(&mut self.textures);
         let mut uploaded: Vec<(&str, usize)> = Vec::new();
         for s in self.slots.iter_mut().chain(self.sheaths.iter_mut()) {
-            let Some(SlotContent::Prop { mesh: m, parts, uploaded: done, .. }) = &mut s.content
+            let Some(SlotContent::Prop {
+                mesh: m,
+                parts,
+                uploaded: done,
+                ..
+            }) = &mut s.content
             else {
                 continue;
             };
@@ -1660,7 +1887,10 @@ impl Scene for Viewer {
             let ranges: Vec<(usize, usize, usize)> = if m.submeshes.is_empty() {
                 vec![(usize::MAX, 0, m.indices.len())]
             } else {
-                m.submeshes.iter().map(|s| (s.material, s.start, s.count)).collect()
+                m.submeshes
+                    .iter()
+                    .map(|s| (s.material, s.start, s.count))
+                    .collect()
             };
             for (mat, start, count) in ranges {
                 if count == 0 || start + count > m.vertices.len() {
@@ -1676,7 +1906,9 @@ impl Scene for Viewer {
                 let indices: Vec<u32> = (0..count as u32).collect();
                 let part = match tex {
                     Some(th) => {
-                        let maps = material.map(|x| resolve_maps_in(&textures, x)).unwrap_or_default();
+                        let maps = material
+                            .map(|x| resolve_maps_in(&textures, x))
+                            .unwrap_or_default();
                         let verts = build_textured_verts(
                             start..start + count,
                             |j| m.vertices[j].p,
@@ -1720,8 +1952,8 @@ impl Scene for Viewer {
         match ScriptHost::from_file(HUD_SCRIPT_PATH) {
             Ok(s) => {
                 flicker::ui::load_ui_json_for(&s, HUD_UI_THEME, Some(&crate::scene_styles())); // layout constants (`UI.paperdoll`)
-                // Build the component tree ONCE (step 4 lazy build-once): the walker
-                // redraws this cached tree every frame with fresh Model bindings.
+                                                                                               // Build the component tree ONCE (step 4 lazy build-once): the walker
+                                                                                               // redraws this cached tree every frame with fresh Model bindings.
                 match s.ui_tree() {
                     Ok(Some(tree)) => {
                         // The screen's declarative bindings (S9), read off the
@@ -1748,7 +1980,13 @@ impl Scene for Viewer {
         );
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, _renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        _renderer: &Renderer,
+    ) -> Transition {
         // NOTE Esc/Menu → pause is no longer edge-detected here: the resolver owns the
         // press edge and the `RootHandler` consumes `Menu` in the dispatch below, turning
         // it into `Transition::Push(PauseScene)`. The orbit camera is likewise NOT updated
@@ -1784,7 +2022,6 @@ impl Scene for Viewer {
             self.toggle_body();
         }
         self.prev_x = x;
-
 
         // ── Shared view controls (both modes) ──
         // Vertical reframing (held, smooth). Nudges the model up/down relative to the
@@ -1845,8 +2082,13 @@ impl Scene for Viewer {
         // steady-state frames resolve zero edges and allocate nothing).
         self.tick = self.tick.wrapping_add(1);
         self.ev.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
         let ctx = self.bindings.active();
         let events: Vec<InputEvent> = self
             .ev
@@ -1900,7 +2142,12 @@ impl Scene for Viewer {
                 // Rig view: a click selects a BONE (the joint editor, Slice 2). The interactive
                 // perspective is grid view 0, so map the click into that cell — the grid owns
                 // the layout, so the pick ray matches exactly what that panel displays.
-                let cell = self.grid.as_ref().map(|g| (g.local_cursor(0, input.mouse_position, screen), g.cell(0, screen).size));
+                let cell = self.grid.as_ref().map(|g| {
+                    (
+                        g.local_cursor(0, input.mouse_position, screen),
+                        g.cell(0, screen).size,
+                    )
+                });
                 if let Some((Some(local), viewport)) = cell {
                     self.selected_bone = self.pick_bone(local, viewport, world, &globals);
                     match self.selected_bone {
@@ -1963,7 +2210,12 @@ impl Scene for Viewer {
             if self.preview && !self.model.clips.is_empty() {
                 // Jump straight to the in-place walk on entry, if present, so the retargeted
                 // clip we care about is right there; otherwise keep the current index.
-                if let Some(i) = self.model.clips.iter().position(|c| c.name == "walk_forward") {
+                if let Some(i) = self
+                    .model
+                    .clips
+                    .iter()
+                    .position(|c| c.name == "walk_forward")
+                {
                     self.preview_clip = i;
                 }
                 self.preview_clip = self.preview_clip.min(self.model.clips.len() - 1);
@@ -1974,10 +2226,9 @@ impl Scene for Viewer {
                     if self.preview { "ON" } else { "OFF" },
                     c.name,
                 ),
-                None => tracing::info!(
-                    "clip previewer {}",
-                    if self.preview { "ON" } else { "OFF" }
-                ),
+                None => {
+                    tracing::info!("clip previewer {}", if self.preview { "ON" } else { "OFF" })
+                }
             }
         }
         // ↑/↓ pick a RAW clip from `model.clips` and play it ON REPEAT (auto-entering the
@@ -1992,14 +2243,20 @@ impl Scene for Viewer {
                 self.preview_clip = (self.preview_clip + n - 1) % n;
                 self.preview_time = 0.0;
                 up_edge = false;
-                tracing::info!("preview clip '{}'", self.model.clips[self.preview_clip].name);
+                tracing::info!(
+                    "preview clip '{}'",
+                    self.model.clips[self.preview_clip].name
+                );
             }
             if down_edge {
                 self.preview = true;
                 self.preview_clip = (self.preview_clip + 1) % n;
                 self.preview_time = 0.0;
                 down_edge = false;
-                tracing::info!("preview clip '{}'", self.model.clips[self.preview_clip].name);
+                tracing::info!(
+                    "preview clip '{}'",
+                    self.model.clips[self.preview_clip].name
+                );
             }
         }
         if self.preview {
@@ -2037,10 +2294,14 @@ impl Scene for Viewer {
             let (w, a, s, d, run, crouch) = {
                 let cfg = &self.gamepad_config;
                 (
-                    self.bindings.signal_held(ActionSignal::MoveForward, input, cfg),
-                    self.bindings.signal_held(ActionSignal::StrafeLeft, input, cfg),
-                    self.bindings.signal_held(ActionSignal::MoveBackward, input, cfg),
-                    self.bindings.signal_held(ActionSignal::StrafeRight, input, cfg),
+                    self.bindings
+                        .signal_held(ActionSignal::MoveForward, input, cfg),
+                    self.bindings
+                        .signal_held(ActionSignal::StrafeLeft, input, cfg),
+                    self.bindings
+                        .signal_held(ActionSignal::MoveBackward, input, cfg),
+                    self.bindings
+                        .signal_held(ActionSignal::StrafeRight, input, cfg),
                     self.bindings.signal_held(ActionSignal::Sprint, input, cfg),
                     self.bindings.signal_held(ActionSignal::Crouch, input, cfg),
                 )
@@ -2138,7 +2399,11 @@ impl Scene for Viewer {
                     }
                     let material = self.model.mesh.materials.get(mat);
                     let base = material.map(|m| m.base_color.as_str()).unwrap_or("");
-                    let tex = if self.show_textures { self.variant_albedo(base) } else { None };
+                    let tex = if self.show_textures {
+                        self.variant_albedo(base)
+                    } else {
+                        None
+                    };
                     let indices: Vec<u32> = (0..count as u32).collect();
                     match tex {
                         Some(th) => {
@@ -2149,7 +2414,8 @@ impl Scene for Viewer {
                                 |j| skinned[j].normal,
                                 |j| self.model.mesh.vertices[j].uv,
                             );
-                            let h = renderer.upload_textured_mesh(&verts, MeshIndices::U32(&indices));
+                            let h =
+                                renderer.upload_textured_mesh(&verts, MeshIndices::U32(&indices));
                             panel_subs.push(PanelSub::Textured { h, tex: th, maps });
                         }
                         None => {
@@ -2195,7 +2461,13 @@ impl Scene for Viewer {
                     for sub in subs {
                         match sub {
                             PanelSub::Textured { h, tex, maps } => {
-                                r.draw_textured_mesh_pbr(*h, *tex, *maps, world, MeshDrawOptions::default());
+                                r.draw_textured_mesh_pbr(
+                                    *h,
+                                    *tex,
+                                    *maps,
+                                    world,
+                                    MeshDrawOptions::default(),
+                                );
                             }
                             PanelSub::Flat(h) => r.draw_mesh(*h, world, MeshDrawOptions::default()),
                         }
@@ -2339,7 +2611,8 @@ impl Scene for Viewer {
                                 |j| skinned[j].normal,
                                 |j| outfit.mesh.vertices[j].uv,
                             );
-                            let h = renderer.upload_textured_mesh(&verts, MeshIndices::U32(&indices));
+                            let h =
+                                renderer.upload_textured_mesh(&verts, MeshIndices::U32(&indices));
                             renderer.draw_textured_mesh_pbr(
                                 h,
                                 th,
@@ -2438,10 +2711,12 @@ impl Scene for Viewer {
                     // (local Y normal) forward (−Y), so it always faces the viewer.
                     let hang = (pts[pts.len() - 1] - pts[pts.len() - 2]).normalize_or_zero();
                     let up = -hang; // toward the neck
-                    // Face the chest's (twisted) forward, not world-forward, so the medallion
-                    // turns with the body.
+                                    // Face the chest's (twisted) forward, not world-forward, so the medallion
+                                    // turns with the body.
                     let fwd = twist * Vec3::NEG_Y;
-                    let face = (fwd - up * fwd.dot(up)).try_normalize().unwrap_or(Vec3::NEG_Y);
+                    let face = (fwd - up * fwd.dot(up))
+                        .try_normalize()
+                        .unwrap_or(Vec3::NEG_Y);
                     let right = up.cross(face).normalize_or_zero();
                     let rot = glam::Mat3::from_cols(right, face, up);
                     // Cord attaches at the pendant's TOP → its centre is half a height further
@@ -2483,7 +2758,8 @@ impl Scene for Viewer {
             if let Some(i) = self.selected_bone {
                 if let Some(bone) = self.model.bones.get(i) {
                     if bone.parent >= 0 {
-                        let a = world.transform_point3(globals[bone.parent as usize].w_axis.truncate());
+                        let a =
+                            world.transform_point3(globals[bone.parent as usize].w_axis.truncate());
                         let b = world.transform_point3(globals[i].w_axis.truncate());
                         const SELECTED: [f32; 4] = [1.0, 0.8, 0.15, 1.0]; // amber
                         renderer.draw_lines_overlay(&[(a, b)], SELECTED);
@@ -2514,8 +2790,15 @@ impl Scene for Viewer {
         if self.grid.is_some() {
             let screen = renderer.size();
             renderer.draw_ui_panel(
-                Vec2::ZERO, screen, [0.03, 0.03, 0.04, 1.0], [0.03, 0.03, 0.04, 1.0], 0.0, 0.0, 0.0,
-                [0.0; 4], 0.0,
+                Vec2::ZERO,
+                screen,
+                [0.03, 0.03, 0.04, 1.0],
+                [0.03, 0.03, 0.04, 1.0],
+                0.0,
+                0.0,
+                0.0,
+                [0.0; 4],
+                0.0,
             );
         }
 
@@ -2564,8 +2847,8 @@ fn build_viewer(base_dir: &Path) -> Viewer {
         .filter(|d| d.is_dir())
         .or_else(|| content_root.map(|c| c.join("retarget/clips/locomotion")))
         .unwrap_or_else(|| base_dir.join("retarget/clips/locomotion"));
-    let model = format::load_dirs(&[base_dir, retarget_dir.as_path()])
-        .expect("load flicker.rig assets");
+    let model =
+        format::load_dirs(&[base_dir, retarget_dir.as_path()]).expect("load flicker.rig assets");
     tracing::info!(
         "loaded rig: {} bones, {} clips, mesh {} verts (base {}, source {}/{})",
         model.bones.len(),
@@ -2602,15 +2885,21 @@ fn build_viewer(base_dir: &Path) -> Viewer {
             let refs: Vec<state::ClipRef> = model
                 .clips
                 .iter()
-                .map(|c| state::ClipRef { name: &c.name, duration_ticks: c.duration_ticks })
+                .map(|c| state::ClipRef {
+                    name: &c.name,
+                    duration_ticks: c.duration_ticks,
+                })
                 .collect();
             match StateMachine::build(&def, &refs) {
                 Ok(sm) => {
                     for w in sm.warnings() {
                         tracing::warn!("state pack: {w}");
                     }
-                    tracing::info!("state machine ready ({} states), starting in '{}'",
-                        names.len(), sm.current_state_name());
+                    tracing::info!(
+                        "state machine ready ({} states), starting in '{}'",
+                        names.len(),
+                        sm.current_state_name()
+                    );
                     (Some(sm), names)
                 }
                 Err(e) => {
@@ -2640,7 +2929,14 @@ fn build_viewer(base_dir: &Path) -> Viewer {
     if alt_model.is_some() {
         tracing::info!("base B (male) loaded alongside base A — press X to toggle the body");
     }
-    Viewer::new(model, alt_model, base_dir.to_path_buf(), &chars, sm, sm_states)
+    Viewer::new(
+        model,
+        alt_model,
+        base_dir.to_path_buf(),
+        &chars,
+        sm,
+        sm_states,
+    )
 }
 
 /// Build the paperdoll rigging viewer as a boxed `Scene` for the shell's scene
@@ -2667,8 +2963,7 @@ pub fn scene() -> Box<dyn Scene> {
 /// in its scene file, and these move into this bench's own `.scene.json` at its
 /// migration. Do not grow this file.
 pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json"))
-        .expect("scene_styles.json parses")
+    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
 }
 
 #[cfg(test)]
@@ -2677,19 +2972,21 @@ mod tests {
     use flicker_skeletal::state::{self, StateMachine};
 
     fn assets_dir() -> PathBuf {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/katanami"))
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/package/characters/katanami"
+        ))
     }
 
     fn has_fixtures(dir: &std::path::Path) -> bool {
         std::fs::read_dir(dir)
             .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .any(|e| {
-                        e.path()
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.ends_with(".json") || n.ends_with(".json.gz"))
-                    })
+                rd.filter_map(|e| e.ok()).any(|e| {
+                    e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.ends_with(".json") || n.ends_with(".json.gz"))
+                })
             })
             .unwrap_or(false)
     }
@@ -2705,9 +3002,17 @@ mod tests {
             return;
         }
         let model = format::load_dir(&dir).expect("load rig");
-        assert!(model.bones.len() >= 90, "expected ~94 bones, got {}", model.bones.len());
+        assert!(
+            model.bones.len() >= 90,
+            "expected ~94 bones, got {}",
+            model.bones.len()
+        );
         for clip in &model.clips {
-            assert!(!clip.tracks.is_empty(), "clip {} resolved no tracks", clip.name);
+            assert!(
+                !clip.tracks.is_empty(),
+                "clip {} resolved no tracks",
+                clip.name
+            );
             for tr in &clip.tracks {
                 assert!(tr.bone < model.bones.len());
             }
@@ -2731,7 +3036,10 @@ mod tests {
         );
         let names: std::collections::HashSet<&str> =
             model.clips.iter().map(|c| c.name.as_str()).collect();
-        assert!(names.contains("Idle_nonWeapon"), "In-Place bare stem present");
+        assert!(
+            names.contains("Idle_nonWeapon"),
+            "In-Place bare stem present"
+        );
         assert!(names.contains("Attack_3"), "new combo clip present");
         assert!(names.contains("Strafe_Front"), "strafe set present");
         assert!(names.contains("RM/Slide"), "root-motion clip namespaced");
@@ -2768,7 +3076,10 @@ mod tests {
             .iter()
             .filter(|w| w.contains("unknown clip"))
             .collect();
-        assert!(unresolved.is_empty(), "pack references clips missing from the library: {unresolved:?}");
+        assert!(
+            unresolved.is_empty(),
+            "pack references clips missing from the library: {unresolved:?}"
+        );
     }
 
     /// The Prism locomotion pack (the base's OWN `PrismHumanBaseA.pack.json`) resolves every
@@ -2787,22 +3098,38 @@ mod tests {
             "/../../Alpha/content/package/retarget/clips/locomotion"
         ));
         let pack_path = base.join("PrismHumanBaseA.pack.json");
-        if !flicker_core::compression::file_exists(&pack_path) || !retarget.join("In-Place").exists() {
+        if !flicker_core::compression::file_exists(&pack_path)
+            || !retarget.join("In-Place").exists()
+        {
             return; // no converted fixtures on this checkout
         }
-        let model = format::load_dirs(&[base.as_path(), retarget.as_path()])
-            .expect("load base A rig + retargeted clips (pack.json beside the rig must be tolerated)");
+        let model = format::load_dirs(&[base.as_path(), retarget.as_path()]).expect(
+            "load base A rig + retargeted clips (pack.json beside the rig must be tolerated)",
+        );
         let def = state::load_pack(&pack_path).expect("load Prism pack");
         let refs: Vec<state::ClipRef> = model
             .clips
             .iter()
-            .map(|c| state::ClipRef { name: &c.name, duration_ticks: c.duration_ticks })
+            .map(|c| state::ClipRef {
+                name: &c.name,
+                duration_ticks: c.duration_ticks,
+            })
             .collect();
         let sm = StateMachine::build(&def, &refs).expect("build Prism state machine");
-        let unresolved: Vec<&String> =
-            sm.warnings().iter().filter(|w| w.contains("unknown clip")).collect();
-        assert!(unresolved.is_empty(), "Prism pack references missing clips: {unresolved:?}");
-        assert_eq!(sm.current_state_name(), "Idle", "Prism locomotion starts in Idle");
+        let unresolved: Vec<&String> = sm
+            .warnings()
+            .iter()
+            .filter(|w| w.contains("unknown clip"))
+            .collect();
+        assert!(
+            unresolved.is_empty(),
+            "Prism pack references missing clips: {unresolved:?}"
+        );
+        assert_eq!(
+            sm.current_state_name(),
+            "Idle",
+            "Prism locomotion starts in Idle"
+        );
     }
 
     /// Animate mode must actually MOVE the rig — the whole point is to leave bind. Advancing
@@ -2822,7 +3149,10 @@ mod tests {
         let refs: Vec<state::ClipRef> = model
             .clips
             .iter()
-            .map(|c| state::ClipRef { name: &c.name, duration_ticks: c.duration_ticks })
+            .map(|c| state::ClipRef {
+                name: &c.name,
+                duration_ticks: c.duration_ticks,
+            })
             .collect();
         let mut sm = StateMachine::build(&def, &refs).expect("build");
 
@@ -2837,7 +3167,10 @@ mod tests {
         let bind: Vec<Mat4> = model.bones.iter().map(|b| b.local).collect();
         let differs = |a: &[Mat4], b: &[Mat4]| {
             a.iter().zip(b).any(|(x, y)| {
-                x.to_cols_array().iter().zip(y.to_cols_array()).any(|(p, q)| (p - q).abs() > 1e-3)
+                x.to_cols_array()
+                    .iter()
+                    .zip(y.to_cols_array())
+                    .any(|(p, q)| (p - q).abs() > 1e-3)
             })
         };
 
@@ -2845,15 +3178,28 @@ mod tests {
         for _ in 0..30 {
             sm.advance(1.0 / 30.0, &Inputs::default());
         }
-        assert!(differs(&sample(&sm), &bind), "animating must move the rig off bind");
+        assert!(
+            differs(&sample(&sm), &bind),
+            "animating must move the rig off bind"
+        );
 
         // Forcing another state must give a different pose than the one we were in.
         let before = sample(&sm);
-        let other = def.states.iter().map(|s| s.name.as_str()).find(|n| *n != sm.current_state_name());
+        let other = def
+            .states
+            .iter()
+            .map(|s| s.name.as_str())
+            .find(|n| *n != sm.current_state_name());
         if let Some(name) = other {
-            assert!(sm.force_state_by_name(name), "force_state_by_name must accept a real state");
+            assert!(
+                sm.force_state_by_name(name),
+                "force_state_by_name must accept a real state"
+            );
             sm.advance(1.0 / 30.0, &Inputs::default());
-            assert!(differs(&sample(&sm), &before), "cycling to another state must change the pose");
+            assert!(
+                differs(&sample(&sm), &before),
+                "cycling to another state must change the pose"
+            );
         }
     }
 
@@ -2923,8 +3269,10 @@ mod tests {
     /// the .skinned.json build artifact isn't present.
     #[test]
     fn skinned_garment_loads_and_binds_to_the_body() {
-        let base_dir =
-            PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Alpha/content/package/characters/PrismHumanBaseA"));
+        let base_dir = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Alpha/content/package/characters/PrismHumanBaseA"
+        ));
         let garment = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../Alpha/content/package/characters/musefit/Corset-Duster.skinned.json"
@@ -2933,8 +3281,11 @@ mod tests {
             eprintln!("skipping: {} not generated", garment.display());
             return;
         }
-        let Ok(model) = format::load_dir(&base_dir) else { return };
-        let mesh = format::load_outfit(&garment, &model.bones).expect("load_outfit skinned garment");
+        let Ok(model) = format::load_dir(&base_dir) else {
+            return;
+        };
+        let mesh =
+            format::load_outfit(&garment, &model.bones).expect("load_outfit skinned garment");
         assert!(!mesh.vertices.is_empty(), "skinned garment has geometry");
         assert!(
             mesh.vertices
@@ -2952,7 +3303,10 @@ mod tests {
             .iter()
             .zip(&mesh.vertices)
             .map(|(s, v)| {
-                assert!(s.position.iter().all(|c| c.is_finite()), "no NaN in skinned garment");
+                assert!(
+                    s.position.iter().all(|c| c.is_finite()),
+                    "no NaN in skinned garment"
+                );
                 ((s.position[0] - v.p[0]).powi(2)
                     + (s.position[1] - v.p[1]).powi(2)
                     + (s.position[2] - v.p[2]).powi(2))
@@ -2978,7 +3332,11 @@ mod tests {
             // words must be (Model-channel strings gate).
             .with(
                 "stats",
-                format!("63 {} · 115221 {}", strings::resolve("$pd_bones"), strings::resolve("$pd_verts")),
+                format!(
+                    "63 {} · 115221 {}",
+                    strings::resolve("$pd_bones"),
+                    strings::resolve("$pd_verts")
+                ),
             );
         for d in SLOTS {
             m.set(format!("slot_{}_loaded", d.key), loaded);
@@ -3002,7 +3360,10 @@ mod tests {
         w: f32,
         h: f32,
     ) -> flicker::ui::UiFrame {
-        let tree = host.ui_tree().expect("ui_tree parses").expect("hud.lua exposes tree()");
+        let tree = host
+            .ui_tree()
+            .expect("ui_tree parses")
+            .expect("hud.lua exposes tree()");
         // Vocabulary gate: an unknown component kind draws nothing at all, so a name left
         // behind by a rename would only show up by eye in the window.
         assert!(
@@ -3021,7 +3382,10 @@ mod tests {
         // self-gates its OWN source — every `.set`/`.with` value must be a resolved
         // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
         let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
-        assert!(flags.is_empty(), "raw display copy published into the Model: {flags:?}");
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
         let styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
         let snap = UiInput {
             mouse: input.mouse_position,
@@ -3075,10 +3439,16 @@ mod tests {
             return;
         }
         let tmp = std::env::temp_dir().join("flicker_paperdoll_ws_c_record_roundtrip.json");
-        std::fs::write(&tmp, flicker_core::compression::read_bytes(&src).expect("read sample piece"))
-            .expect("copy sample piece");
+        std::fs::write(
+            &tmp,
+            flicker_core::compression::read_bytes(&src).expect("read sample piece"),
+        )
+        .expect("copy sample piece");
 
-        let before = format::load_mesh(&tmp).expect("baseline load").vertices.len();
+        let before = format::load_mesh(&tmp)
+            .expect("baseline load")
+            .vertices
+            .len();
         assert!(before > 0, "sample piece should have geometry");
 
         // Exactly the Record path: build the attach json, fold it in.
@@ -3089,10 +3459,17 @@ mod tests {
         write_inline_attach(&tmp, attach).expect("fold attach inline");
 
         let (mesh, at) = format::load_mesh_with_attach(&tmp).expect("reload folded piece");
-        assert_eq!(mesh.vertices.len(), before, "record must not disturb the mesh");
+        assert_eq!(
+            mesh.vertices.len(),
+            before,
+            "record must not disturb the mesh"
+        );
         assert_eq!(at.socket, "lhand");
         assert!((at.uniform - 37.76).abs() < 1e-3);
-        assert!(RecordedFit::from_attach(&at).is_some(), "inline attach must yield a recorded fit");
+        assert!(
+            RecordedFit::from_attach(&at).is_some(),
+            "inline attach must yield a recorded fit"
+        );
 
         // Idempotent: re-recording REPLACES (not duplicates) attach; mesh still intact.
         let attach2 = serde_json::json!({
@@ -3101,8 +3478,15 @@ mod tests {
         });
         write_inline_attach(&tmp, attach2).expect("second fold");
         let (mesh2, at2) = format::load_mesh_with_attach(&tmp).expect("reload again");
-        assert_eq!(mesh2.vertices.len(), before, "re-record must not disturb the mesh");
-        assert!((at2.uniform - 5.0).abs() < 1e-3, "re-record replaces the attach");
+        assert_eq!(
+            mesh2.vertices.len(),
+            before,
+            "re-record must not disturb the mesh"
+        );
+        assert!(
+            (at2.uniform - 5.0).abs() < 1e-3,
+            "re-record replaces the attach"
+        );
 
         let _ = std::fs::remove_file(&tmp);
         let _ = std::fs::remove_file(flicker_core::compression::gz_sibling(&tmp));
@@ -3115,11 +3499,20 @@ mod tests {
         // Unselected: the fit column is gated by `fit_active`, so its sliders are never
         // placed and report nothing.
         let res = run_hud(&h, &fit_model(false), &InputState::new(), 1920.0, 1080.0).results;
-        assert!(res.get("fit_u").is_none(), "no gadget values while unselected");
-        assert!(!res.is_on("fit_record"), "record cannot fire while unselected");
+        assert!(
+            res.get("fit_u").is_none(),
+            "no gadget values while unselected"
+        );
+        assert!(
+            !res.is_on("fit_record"),
+            "record cannot fire while unselected"
+        );
         // Selected: the sliders ARE placed and report their bound values.
         let res = run_hud(&h, &fit_model(true), &InputState::new(), 1920.0, 1080.0).results;
-        assert!(res.get("fit_u").is_some(), "gadget sliders report once a piece is selected");
+        assert!(
+            res.get("fit_u").is_some(),
+            "gadget sliders report once a piece is selected"
+        );
     }
 
     /// Selected: the gadget runs, reports its values back, and draws.
@@ -3131,7 +3524,10 @@ mod tests {
         // the tree silently ignores would be a dead control.
         for row in ui()["paperdoll"]["fit"]["rows"].as_array().unwrap() {
             let k = row["key"].as_str().unwrap();
-            assert!(frame.results.get(k).is_some(), "gadget must report the declared row '{k}'");
+            assert!(
+                frame.results.get(k).is_some(),
+                "gadget must report the declared row '{k}'"
+            );
         }
         assert!(
             (frame.results.number("fit_u").unwrap() - 44.79).abs() < 0.01,
@@ -3149,19 +3545,26 @@ mod tests {
         let (w, hgt) = (1920.0_f32, 1080.0_f32);
         let u = ui();
         let f = &u["paperdoll"]["fit"];
-        let (m, fw) = (f["margin"].as_f64().unwrap() as f32, f["w"].as_f64().unwrap() as f32);
+        let (m, fw) = (
+            f["margin"].as_f64().unwrap() as f32,
+            f["w"].as_f64().unwrap() as f32,
+        );
 
         let mut over = InputState::new();
         over.mouse_position = Vec2::new(w - m - fw * 0.5, m + 20.0); // inside the fit panel
         assert!(
-            run_hud(&h, &fit_model(true), &over, w, hgt).results.is_on("hud_hit"),
+            run_hud(&h, &fit_model(true), &over, w, hgt)
+                .results
+                .is_on("hud_hit"),
             "cursor over the fit panel"
         );
 
         let mut open = InputState::new();
         open.mouse_position = Vec2::new(w * 0.5, hgt * 0.35); // open scene, above the bar
         assert!(
-            !run_hud(&h, &fit_model(true), &open, w, hgt).results.is_on("hud_hit"),
+            !run_hud(&h, &fit_model(true), &open, w, hgt)
+                .results
+                .is_on("hud_hit"),
             "cursor over open scene"
         );
     }
@@ -3185,14 +3588,18 @@ mod tests {
         click.mouse_position = Vec2::new(w - g("margin") - g("w") * 0.5, rec_y + rec_h * 0.5);
         click.mouse_left_pressed = true;
         assert!(
-            run_hud(&h, &fit_model(true), &click, w, hgt).results.is_on("fit_record"),
+            run_hud(&h, &fit_model(true), &click, w, hgt)
+                .results
+                .is_on("fit_record"),
             "click on RECORD fires"
         );
 
         let mut hover = click.clone();
         hover.mouse_left_pressed = false;
         assert!(
-            !run_hud(&h, &fit_model(true), &hover, w, hgt).results.is_on("fit_record"),
+            !run_hud(&h, &fit_model(true), &hover, w, hgt)
+                .results
+                .is_on("fit_record"),
             "hover must not fire"
         );
     }
@@ -3247,7 +3654,14 @@ mod tests {
         // Focus persists: the engine echoes it back on the Model, cursor now elsewhere.
         let mut away = InputState::new();
         away.mouse_position = Vec2::new(w * 0.5, hgt * 0.3);
-        let res = run_hud(&h, &fit_model(true).with("fit_focus", "fit_sx"), &away, w, hgt).results;
+        let res = run_hud(
+            &h,
+            &fit_model(true).with("fit_focus", "fit_sx"),
+            &away,
+            w,
+            hgt,
+        )
+        .results;
         assert_eq!(
             res.get("fit_focus").and_then(|v| match v {
                 Value::Text(s) => Some(s.as_str()),
@@ -3305,13 +3719,22 @@ mod tests {
             uniform: 12.0,
             scale: Vec3::new(1.3, 0.8, 1.1),
             offset: Vec3::new(7.0, -3.0, 11.0),
-            user_rot: glam::Quat::from_euler(glam::EulerRot::XYZ, 20f32.to_radians(), 35f32.to_radians(), (-50f32).to_radians()),
+            user_rot: glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                20f32.to_radians(),
+                35f32.to_radians(),
+                (-50f32).to_radians(),
+            ),
             rot: glam::Quat::IDENTITY,
         };
         let m = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0)); // reflect across x = 0
         let expect = m * f.matrix() * m;
         let got = f.mirrored().matrix();
-        for (a, b) in expect.to_cols_array().iter().zip(got.to_cols_array().iter()) {
+        for (a, b) in expect
+            .to_cols_array()
+            .iter()
+            .zip(got.to_cols_array().iter())
+        {
             assert!(
                 (a - b).abs() < 1e-4,
                 "mirrored fit must equal M·fit·M (a true reflection)\n  expect {:?}\n  got    {:?}",
@@ -3329,12 +3752,23 @@ mod tests {
             uniform: 3.5,
             scale: Vec3::new(1.0, 2.0, 0.5),
             offset: Vec3::new(-4.0, 5.0, 6.0),
-            user_rot: glam::Quat::from_euler(glam::EulerRot::XYZ, 10f32.to_radians(), (-20f32).to_radians(), 30f32.to_radians()),
+            user_rot: glam::Quat::from_euler(
+                glam::EulerRot::XYZ,
+                10f32.to_radians(),
+                (-20f32).to_radians(),
+                30f32.to_radians(),
+            ),
             rot: glam::Quat::IDENTITY,
         };
         let b = f.mirrored().mirrored();
-        assert!((b.offset - f.offset).length() < 1e-6, "offset must round-trip");
-        assert!(b.user_rot.abs_diff_eq(f.user_rot, 1e-6), "rotation must round-trip");
+        assert!(
+            (b.offset - f.offset).length() < 1e-6,
+            "offset must round-trip"
+        );
+        assert!(
+            b.user_rot.abs_diff_eq(f.user_rot, 1e-6),
+            "rotation must round-trip"
+        );
         assert!((b.scale - f.scale).length() < 1e-6, "scale must round-trip");
         assert!((b.uniform - f.uniform).abs() < 1e-6, "size must round-trip");
     }
@@ -3378,17 +3812,29 @@ mod tests {
         click.mouse_position = center;
         click.mouse_left_pressed = true;
         assert!(
-            run_hud(&h, &hud_test_model(true, true).with("animate", true), &click, w, hgt)
-                .results
-                .is_on("attack"),
+            run_hud(
+                &h,
+                &hud_test_model(true, true).with("animate", true),
+                &click,
+                w,
+                hgt
+            )
+            .results
+            .is_on("attack"),
             "click on Attack fires while animating"
         );
 
         // Same click, but Pose mode → the button isn't even present, so no fire.
         assert!(
-            !run_hud(&h, &hud_test_model(true, true).with("animate", false), &click, w, hgt)
-                .results
-                .is_on("attack"),
+            !run_hud(
+                &h,
+                &hud_test_model(true, true).with("animate", false),
+                &click,
+                w,
+                hgt
+            )
+            .results
+            .is_on("attack"),
             "Attack must not fire in Pose mode"
         );
 
@@ -3396,9 +3842,15 @@ mod tests {
         let mut hover = InputState::new();
         hover.mouse_position = center;
         assert!(
-            !run_hud(&h, &hud_test_model(true, true).with("animate", true), &hover, w, hgt)
-                .results
-                .is_on("attack"),
+            !run_hud(
+                &h,
+                &hud_test_model(true, true).with("animate", true),
+                &hover,
+                w,
+                hgt
+            )
+            .results
+            .is_on("attack"),
             "hover must not fire"
         );
     }
@@ -3418,17 +3870,31 @@ mod tests {
         };
 
         let status = |msg: &str| {
-            run_hud(&h, &fit_model(true).with("fit_status", msg), &InputState::new(), w, hgt).commands
+            run_hud(
+                &h,
+                &fit_model(true).with("fit_status", msg),
+                &InputState::new(),
+                w,
+                hgt,
+            )
+            .commands
         };
-        assert!(has_text(&status("Saved 9 pieces -> inline attach"), "Saved 9 pieces"),
-            "the confirmation must be drawn");
+        assert!(
+            has_text(&status("Saved 9 pieces -> inline attach"), "Saved 9 pieces"),
+            "the confirmation must be drawn"
+        );
 
         // Blank (the engine expires it) → gone, so a stale "saved" can't be misread as fresh.
-        assert!(!has_text(&status(""), "Saved"), "an expired confirmation must disappear");
+        assert!(
+            !has_text(&status(""), "Saved"),
+            "an expired confirmation must disappear"
+        );
 
         // Failures must surface too, not just successes.
-        assert!(has_text(&status("SAVE FAILED: permission denied"), "SAVE FAILED"),
-            "a failed write must be visible in-window");
+        assert!(
+            has_text(&status("SAVE FAILED: permission denied"), "SAVE FAILED"),
+            "a failed write must be visible in-window"
+        );
     }
 
     /// A slider drag must CAPTURE the mouse for its whole duration — including after the
@@ -3453,8 +3919,18 @@ mod tests {
         let model = fit_model(true);
         let mut state = UiState::new();
         let mut captures = |mx: f32, my: f32, clicked: bool, down: bool| {
-            let snap = UiInput { mouse: Vec2::new(mx, my), clicked, down, screen: Vec2::new(w, hgt), typed: String::new(), backspace: false, wheel: 0.0 };
-            run_ui(&tree, &model, &styles, &snap, &mut state).results.is_on("hud_hit")
+            let snap = UiInput {
+                mouse: Vec2::new(mx, my),
+                clicked,
+                down,
+                screen: Vec2::new(w, hgt),
+                typed: String::new(),
+                backspace: false,
+                wheel: 0.0,
+            };
+            run_ui(&tree, &model, &styles, &snap, &mut state)
+                .results
+                .is_on("hud_hit")
         };
 
         // Press on the Size slider captures.
@@ -3491,7 +3967,10 @@ mod tests {
                 "'{group}' nudge {n} is {:.2}% of its range — not fine enough to beat a drag",
                 frac * 100.0
             );
-            assert!(coarse > n, "'{group}' coarse step must exceed the fine step");
+            assert!(
+                coarse > n,
+                "'{group}' coarse step must exceed the fine step"
+            );
         }
     }
 
@@ -3501,7 +3980,13 @@ mod tests {
     #[test]
     fn hud_script_runs_with_model() {
         let host = host();
-        let frame = run_hud(&host, &hud_test_model(true, false), &InputState::new(), 1920.0, 1080.0);
+        let frame = run_hud(
+            &host,
+            &hud_test_model(true, false),
+            &InputState::new(),
+            1920.0,
+            1080.0,
+        );
         // Every slot reports back, so the engine can never miss one.
         for d in SLOTS {
             assert!(
@@ -3510,7 +3995,10 @@ mod tests {
                 d.key
             );
         }
-        assert!(!frame.commands.is_empty(), "hud emits panel + cell + toggle commands");
+        assert!(
+            !frame.commands.is_empty(),
+            "hud emits panel + cell + toggle commands"
+        );
     }
 
     /// Clicking a loaded cell equips it; clicking an EMPTY cell must not — a slot with no
@@ -3542,6 +4030,9 @@ mod tests {
         assert!(res.is_on(&first), "clicking a LOADED cell equips it");
 
         let res = run_hud(&host, &hud_test_model(false, false), &click, w, h).results;
-        assert!(!res.is_on(&first), "clicking an EMPTY cell must stay unequipped");
+        assert!(
+            !res.is_on(&first),
+            "clicking an EMPTY cell must stay unequipped"
+        );
     }
 }

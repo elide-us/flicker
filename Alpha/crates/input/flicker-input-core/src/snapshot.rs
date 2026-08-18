@@ -81,7 +81,11 @@ impl GamepadState {
             self.axis_value(GamepadAxis::LeftStickX),
             self.axis_value(GamepadAxis::LeftStickY),
         );
-        apply_deadzone(raw, self.config.left_stick_deadzone, self.config.deadzone_shape)
+        apply_deadzone(
+            raw,
+            self.config.left_stick_deadzone,
+            self.config.deadzone_shape,
+        )
     }
 
     /// Right stick position with deadzone applied.
@@ -90,7 +94,11 @@ impl GamepadState {
             self.axis_value(GamepadAxis::RightStickX),
             self.axis_value(GamepadAxis::RightStickY),
         );
-        apply_deadzone(raw, self.config.right_stick_deadzone, self.config.deadzone_shape)
+        apply_deadzone(
+            raw,
+            self.config.right_stick_deadzone,
+            self.config.deadzone_shape,
+        )
     }
 
     /// Left trigger value (0.0–1.0).
@@ -624,7 +632,9 @@ mod tests {
 
         // Gamepad only
         let mut input = InputState::new();
-        input.gamepad_mut(0).set_button(GamepadButton::LeftStick, true);
+        input
+            .gamepad_mut(0)
+            .set_button(GamepadButton::LeftStick, true);
         assert!(input.input_active(&map, ActionSignal::MoveForward));
 
         // Neither

@@ -2,6 +2,7 @@
 name = "flicker-populous"
 version = "0.1.0"
 edition.workspace = true
+license.workspace = true
 publish = false
 
 # Populous Bench — the world as a MAP, built up from nothing. It starts with one
@@ -17,9 +18,9 @@ path = "src/lib.rs"
 flicker-worldgrid.workspace = true
 # The shared hex-globe view: mesh builder + graticule + orbit camera + the
 # offscreen viewport pass.
-flicker-globe = { path = "../../frontend/flicker-globe" }
+flicker-globe = { version = "0.1.0", path = "../../frontend/flicker-globe" }
 
-flicker = { path = "../../core/flicker" }
+flicker = { version = "0.1.0", path = "../../core/flicker" }
 flicker-shell.workspace = true
 # Input event bus — the shared resolve → route seam. The bench declares its
 # intents on the screen root and routes them like every other screen.

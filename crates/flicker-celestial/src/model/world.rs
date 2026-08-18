@@ -31,7 +31,10 @@ pub struct HexWorld {
 impl HexWorld {
     /// An empty world: `n` cells of no mass at resolution `freq`.
     pub fn new(freq: u32, n: usize) -> Self {
-        Self { freq, cells: vec![Composition::new(); n] }
+        Self {
+            freq,
+            cells: vec![Composition::new(); n],
+        }
     }
 
     /// A world from an explicit per-cell distribution (e.g. a materialised composition spread).

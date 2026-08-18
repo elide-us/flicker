@@ -10,7 +10,7 @@
 //! drift from the matter actually in it.
 
 use flicker_materials::ElementId;
-use flicker_worldstate::{CompoundLedger, Composition};
+use flicker_worldstate::{Composition, CompoundLedger};
 
 /// The aggregated world ocean — **no geometry** (spec §4.5). Its element content
 /// is the truth; mass is read off it.

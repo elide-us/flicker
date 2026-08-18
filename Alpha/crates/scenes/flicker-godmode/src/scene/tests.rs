@@ -30,7 +30,10 @@ fn the_air_veil_never_closes_into_a_lid() {
     // A trace sky is below the ceiling and must not be touched at all.
     let trace: Vec<(u16, f32)> = vec![(91, 100.0)];
     let c = veil_coverages(&trace)[0];
-    assert!((c - 0.1).abs() < 1e-9, "sqrt(100/1e4) = 0.1 passes through untouched: {c}");
+    assert!(
+        (c - 0.1).abs() < 1e-9,
+        "sqrt(100/1e4) = 0.1 passes through untouched: {c}"
+    );
 }
 
 /// **A rebirth clears the gate acknowledgement.** The sim clears its gate log
@@ -46,8 +49,15 @@ fn a_rebirth_clears_the_gate_acknowledgement() {
     // The maintainer read a gate at 500 My, then pressed RESET.
     scene.gate_ack = 500.0;
     let cmds = scene.apply_results(&ValueMap::new().with("reset", true));
-    assert!(matches!(cmds.as_slice(), [SimCommand::Reset]), "reset asks the sim to rebirth");
-    assert_eq!(scene.gate_ack, f64::NEG_INFINITY, "reset clears the read high-water");
+    assert!(
+        matches!(cmds.as_slice(), [SimCommand::Reset]),
+        "reset asks the sim to rebirth"
+    );
+    assert_eq!(
+        scene.gate_ack,
+        f64::NEG_INFINITY,
+        "reset clears the read high-water"
+    );
 
     // Same story through the transport's RESEED (= the Starter's FORGE).
     scene.gate_ack = 500.0;
@@ -56,7 +66,11 @@ fn a_rebirth_clears_the_gate_acknowledgement() {
         matches!(cmds.as_slice(), [SimCommand::Reseed(_)]),
         "reseed forges a new world with a fresh seed"
     );
-    assert_eq!(scene.gate_ack, f64::NEG_INFINITY, "a forged world has no read gates");
+    assert_eq!(
+        scene.gate_ack,
+        f64::NEG_INFINITY,
+        "a forged world has no read gates"
+    );
 }
 
 /// A snapshot with enough in it that the dispatcher's snapshot-reading arms
@@ -159,15 +173,22 @@ fn a_lever_at_its_echo_sends_nothing() {
     let mut scene = GodModeScene::new();
     scene.snap = Some(fixture_snapshot());
     // The fixture's levers ARE the defaults, so 1.0 is exactly the echo.
-    let echo = LEVERS.iter().fold(ValueMap::new(), |m, &(key, _, _)| m.with(key, 1.0));
-    assert!(scene.apply_results(&echo).is_empty(), "an unmoved rack is silent");
+    let echo = LEVERS
+        .iter()
+        .fold(ValueMap::new(), |m, &(key, _, _)| m.with(key, 1.0));
+    assert!(
+        scene.apply_results(&echo).is_empty(),
+        "an unmoved rack is silent"
+    );
 
     // And the rate dial, the same way.
     let mut scene = GodModeScene::new();
     scene.snap = Some(fixture_snapshot());
     let at_rest = scene.snap.as_ref().expect("primed").rate_hz as f64;
     assert!(
-        scene.apply_results(&ValueMap::new().with("rate", at_rest)).is_empty(),
+        scene
+            .apply_results(&ValueMap::new().with("rate", at_rest))
+            .is_empty(),
         "an unmoved rate dial is silent"
     );
     let moved = scene.apply_results(&ValueMap::new().with("rate", at_rest + 20.0));
@@ -231,7 +252,10 @@ fn the_verdict_lamp_lights_without_eating_the_life_line() {
     });
 
     let m = scene.hud_model();
-    assert!(m.is_on("life_light"), "a life-supporting world lights the lamp");
+    assert!(
+        m.is_on("life_light"),
+        "a life-supporting world lights the lamp"
+    );
     assert!(
         m.text("life").is_some_and(|s| !s.is_empty()),
         "and the life line is still its own text: {:?}",
@@ -260,7 +284,10 @@ fn rain_waits_for_the_life_light() {
     // The light turns: the same click starts the rain.
     scene.snap = Some(fixture_snapshot());
     let cmds = scene.apply_results(&ValueMap::new().with("erode", true));
-    assert!(matches!(cmds.as_slice(), [SimCommand::ErodeToggle]), "the light admits the rain");
+    assert!(
+        matches!(cmds.as_slice(), [SimCommand::ErodeToggle]),
+        "the light admits the rain"
+    );
     assert!(scene.eroding);
 
     // The world slides out of band mid-rain: shutting it OFF is still allowed.
@@ -268,7 +295,10 @@ fn rain_waits_for_the_life_light() {
     snap.habitability.life_supporting = false;
     scene.snap = Some(snap);
     let cmds = scene.apply_results(&ValueMap::new().with("erode", true));
-    assert!(matches!(cmds.as_slice(), [SimCommand::ErodeToggle]), "off is always reachable");
+    assert!(
+        matches!(cmds.as_slice(), [SimCommand::ErodeToggle]),
+        "off is always reachable"
+    );
     assert!(!scene.eroding);
 }
 
@@ -300,13 +330,19 @@ fn the_view_roster_agrees_with_itself() {
     let mut seen = Vec::new();
     let mut f = FIELD_ACTIONS[0].1;
     for _ in 0..FIELD_ACTIONS.len() {
-        assert!(!seen.contains(&f), "cycle() closes early at {f:?}: {seen:?}");
+        assert!(
+            !seen.contains(&f),
+            "cycle() closes early at {f:?}: {seen:?}"
+        );
         seen.push(f);
         f = f.cycle();
     }
     assert_eq!(f, FIELD_ACTIONS[0].1, "cycle() closes the ring");
     for &(_, field, _, _) in FIELD_ACTIONS.iter() {
-        assert!(seen.contains(&field), "{field:?} has a button but cycle() never reaches it");
+        assert!(
+            seen.contains(&field),
+            "{field:?} has a button but cycle() never reaches it"
+        );
     }
 
     // 2. Every label token resolves. An unresolved token renders as the token,
@@ -314,8 +350,14 @@ fn the_view_roster_agrees_with_itself() {
     //    saying $chem_field_motion.
     for &(action, _, token, _) in FIELD_ACTIONS.iter() {
         let text = flicker::ui::strings::resolve(token);
-        assert_ne!(text, token, "'{action}' label {token} is missing from the stringtable");
-        assert!(!text.is_empty(), "'{action}' label {token} resolves to nothing");
+        assert_ne!(
+            text, token,
+            "'{action}' label {token} is missing from the stringtable"
+        );
+        assert!(
+            !text.is_empty(),
+            "'{action}' label {token} resolves to nothing"
+        );
     }
 }
 
@@ -335,7 +377,10 @@ fn every_authored_view_names_a_real_one() {
             "processes.json: '{}' names view '{}', which is not one of {:?}",
             p.runs,
             p.view,
-            FIELD_ACTIONS.iter().map(|&(_, f, _, _)| f.view_name()).collect::<Vec<_>>(),
+            FIELD_ACTIONS
+                .iter()
+                .map(|&(_, f, _, _)| f.view_name())
+                .collect::<Vec<_>>(),
         );
     }
     // And the file is actually USING the mechanism — if every entry were blank
@@ -364,18 +409,27 @@ fn the_coast_view_separates_the_four_grounds() {
         (Oceanic, 500.0, SHELF_EXPOSED),
     ];
     for (kind, elev, want) in table {
-        assert_eq!(coast_class(kind, elev, sea), want, "{kind:?} at {elev} m under a {sea} m sea");
+        assert_eq!(
+            coast_class(kind, elev, sea),
+            want,
+            "{kind:?} at {elev} m under a {sea} m sea"
+        );
     }
     // Exactly at sea level is dry land: the sea covers what is BELOW it.
     assert_eq!(coast_class(Continental, sea, sea), SHELF_LAND);
 
     // The classes are visually distinct, and the coastline reads brighter than
     // the ground it edges — an outline without a shader.
-    let colors: Vec<[f32; 3]> =
-        [SHELF_NONE, SHELF_LAND, SHELF_SHELF, SHELF_BED, SHELF_EXPOSED]
-            .iter()
-            .map(|&c| coast_color(c))
-            .collect();
+    let colors: Vec<[f32; 3]> = [
+        SHELF_NONE,
+        SHELF_LAND,
+        SHELF_SHELF,
+        SHELF_BED,
+        SHELF_EXPOSED,
+    ]
+    .iter()
+    .map(|&c| coast_color(c))
+    .collect();
     for (i, a) in colors.iter().enumerate() {
         for b in colors.iter().skip(i + 1) {
             let d: f32 = a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum();
@@ -396,10 +450,17 @@ fn the_coast_view_separates_the_four_grounds() {
 /// had weather — which is exactly the failure the heat view had.
 #[test]
 fn the_rain_view_stays_dark_on_a_dry_world() {
-    assert_eq!(rain_color(0.0, 0.0), rain_color(0.0, 5.0), "no rain reads the same either way");
+    assert_eq!(
+        rain_color(0.0, 0.0),
+        rain_color(0.0, 5.0),
+        "no rain reads the same either way"
+    );
     let dry = rain_color(0.0, 5.0);
     let wet = rain_color(5.0, 5.0);
-    assert!(wet.iter().sum::<f32>() > dry.iter().sum::<f32>(), "rain is brighter than none");
+    assert!(
+        wet.iter().sum::<f32>() > dry.iter().sum::<f32>(),
+        "rain is brighter than none"
+    );
     // Monotone: more rain is never darker.
     let mid = rain_color(1.0, 5.0);
     assert!(mid.iter().sum::<f32>() >= dry.iter().sum::<f32>());
@@ -441,7 +502,10 @@ fn motion_arrows_draw_only_what_is_moving() {
     // Nothing moving: nothing drawn. (A still world with arrows all over it
     // would be the readout inventing motion.)
     let still: Vec<CellView> = (0..n).map(|_| moving_cell(1, 0.0)).collect();
-    assert!(motion_arrows(&dirs, &still, true, |_| true).is_empty(), "a still world draws nothing");
+    assert!(
+        motion_arrows(&dirs, &still, true, |_| true).is_empty(),
+        "a still world draws nothing"
+    );
 
     // Moving: arrows appear, in whole three-segment arrows (shaft + two barbs).
     let moving: Vec<CellView> = (0..n).map(|_| moving_cell(1, 0.5)).collect();
@@ -459,12 +523,20 @@ fn motion_arrows_draw_only_what_is_moving() {
             .map(|(_, s)| (s[0].1 - s[0].0).length())
             .unwrap_or(0.0)
     };
-    assert!(shaft(0.9) > shaft(0.3) * 2.0, "the arrow grows with the step it is part-way through");
+    assert!(
+        shaft(0.9) > shaft(0.3) * 2.0,
+        "the arrow grows with the step it is part-way through"
+    );
 
     // Two plates, two colours — and a cutaway hides what it cuts.
-    let mixed: Vec<CellView> =
-        (0..n).map(|i| moving_cell(if i % 2 == 0 { 1 } else { 2 }, 0.6)).collect();
-    assert_eq!(motion_arrows(&dirs, &mixed, true, |_| true).len(), 2, "a colour per plate");
+    let mixed: Vec<CellView> = (0..n)
+        .map(|i| moving_cell(if i % 2 == 0 { 1 } else { 2 }, 0.6))
+        .collect();
+    assert_eq!(
+        motion_arrows(&dirs, &mixed, true, |_| true).len(),
+        2,
+        "a colour per plate"
+    );
     assert!(
         motion_arrows(&dirs, &mixed, true, |_| false).is_empty(),
         "the cutaway takes the headings with the ground"
@@ -513,13 +585,19 @@ fn every_view_explains_its_colours() {
 
         let strip = m.is_on("legend_strip_shown");
         let rows = m.is_on("legend_r1_shown");
-        assert!(strip || rows, "{field:?} explains itself with rows or a scale");
+        assert!(
+            strip || rows,
+            "{field:?} explains itself with rows or a scale"
+        );
 
         if strip {
             // Every chip resolves, and the ends are labelled.
             for k in 0..LEGEND_STRIP {
                 let path = m.text(&format!("legend_g{k}")).unwrap_or_default();
-                assert!(resolves(path), "{field:?} strip chip {k} path {path:?} resolves");
+                assert!(
+                    resolves(path),
+                    "{field:?} strip chip {k} path {path:?} resolves"
+                );
             }
             for end in ["legend_lo", "legend_hi"] {
                 let label = m.text(end).unwrap_or_default();
@@ -559,12 +637,24 @@ fn every_view_explains_its_colours() {
             a[2].as_f64().unwrap() as f32,
         ]
     };
-    assert_eq!(chip("legend.coast_shelf"), coast_color(SHELF_SHELF), "shelf chip = shelf paint");
-    assert_eq!(chip("legend.heat_0"), temp_color(0.0), "cold end of the heat strip");
+    assert_eq!(
+        chip("legend.coast_shelf"),
+        coast_color(SHELF_SHELF),
+        "shelf chip = shelf paint"
+    );
+    assert_eq!(
+        chip("legend.heat_0"),
+        temp_color(0.0),
+        "cold end of the heat strip"
+    );
     assert_eq!(
         chip(&format!("legend.heat_{}", LEGEND_STRIP - 1)),
         temp_color(1.0),
         "hot end of the heat strip"
     );
-    assert_eq!(chip("legend.seam_conv"), seam_color(2), "convergent chip = seam paint");
+    assert_eq!(
+        chip("legend.seam_conv"),
+        seam_color(2),
+        "convergent chip = seam paint"
+    );
 }

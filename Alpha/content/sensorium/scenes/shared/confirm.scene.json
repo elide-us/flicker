@@ -1,0 +1,34 @@
+{
+  "_comment": "SHARED display-confirm overlay (scenes/shared/ — Aaron 2026-08-14 ruling 2A3592D0). Extracted from the retired Rust `menu_tree` builder: a full-bleed `screen` with a flat `screens.confirm` overlay (the new resolution stays visible behind it) under a centered `popup_panel` with Keep / Revert buttons (gated on the `show_keep` / `show_revert` slices its pair script `scripts/shared/confirm.lua` lights via `visible_bind` — the authoring example a human copies and varies; the auto-revert timeout is the safety net, so hiding a button never leaves the change un-decided). The live revert countdown rides the `subtitle` bind (ConfirmDisplayScene feeds `subtitle` each frame). NO `on_cancel`: Keep / Revert / timeout only, no Esc affordance. NO `behaviour` key (the manifest skips scenes/shared/); loaded by ConfirmDisplayScene via include_str! + parse_ui_json, which also holds `confirm.lua` through MenuView's pair-script slot; chrome styles ride Main.scene.json's carrier through `main_scene_styles()`.",
+  "tree": {
+    "component": "screen",
+    "anchor": "top_left",
+    "width_frac": 1.0,
+    "height_frac": 1.0,
+    "children": [
+      {
+        "component": "cell",
+        "anchor": "top_left",
+        "style": "screens.confirm",
+        "width_frac": 1.0,
+        "height_frac": 1.0,
+        "layer": 0
+      },
+      {
+        "component": "popup_panel",
+        "id": "popup",
+        "anchor": "center",
+        "layer": 1,
+        "divider": true,
+        "title": "$confirm_display_title",
+        "title_size": 38,
+        "subtitle_bind": "subtitle",
+        "subtitle_size": 15,
+        "children": [
+          { "component": "button", "id": "keep", "action": "keep", "visible_bind": "show_keep", "label": "$menu_keep", "label_size": 15, "size": 48, "variant": "primary", "tab_group": "confirm", "nav_ordinal": 0 },
+          { "component": "button", "id": "revert", "action": "revert", "visible_bind": "show_revert", "label": "$menu_revert", "label_size": 15, "size": 48, "variant": "danger", "tab_group": "confirm", "nav_ordinal": 1 }
+        ]
+      }
+    ]
+  }
+}

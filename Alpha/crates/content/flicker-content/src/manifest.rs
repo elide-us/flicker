@@ -2,9 +2,10 @@
 //!
 //! Ruled 2026-08-02 (Content Manager redesign): the manifest is **not an index**. An
 //! index is an observation, rebuilt by scanning; the manifest is authored BY the act
-//! of promoting — one row per promote, appended by the Quartermaster and consumed
-//! later by `content-tool pack`'s reserved subcommand. Undoing a promote removes its
-//! row: the manifest never claims something staging took back.
+//! of promoting — one row per promote, appended by the Quartermaster. Undoing a
+//! promote removes its row: the manifest never claims something staging took back.
+//! `content-tool pack` packs it as ordinary content (provenance riding along in the
+//! shipped package) — the packer's index comes from walking the TREE, never from here.
 //!
 //! v1 shape: `{ "version": 1, "entries": [ { name, class, path, promoted_from } ] }`,
 //! written through the shared gz-at-rest seam like every text file in the package.
@@ -49,7 +50,10 @@ pub fn read(path: &Path) -> Result<Vec<ManifestEntry>> {
 }
 
 fn write(path: &Path, entries: Vec<ManifestEntry>) -> Result<()> {
-    let f = ManifestFile { version: 1, entries };
+    let f = ManifestFile {
+        version: 1,
+        entries,
+    };
     crate::package::write_text(path, &serde_json::to_string_pretty(&f)?)
         .with_context(|| format!("writing manifest {}", path.display()))?;
     Ok(())
@@ -68,7 +72,11 @@ pub fn append(path: &Path, entry: ManifestEntry) -> Result<()> {
 pub fn remove(path: &Path, entry: &ManifestEntry) -> Result<()> {
     let mut entries = read(path)?;
     let Some(i) = entries.iter().rposition(|e| e == entry) else {
-        anyhow::bail!("manifest {} has no row for `{}`", path.display(), entry.name);
+        anyhow::bail!(
+            "manifest {} has no row for `{}`",
+            path.display(),
+            entry.name
+        );
     };
     entries.remove(i);
     write(path, entries)

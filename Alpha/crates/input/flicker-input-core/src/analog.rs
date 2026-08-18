@@ -65,7 +65,9 @@ pub struct AnalogCache {
 impl AnalogCache {
     /// New cache seeded with `initial` in both the current and previous slots.
     pub fn new(initial: AnalogFrame) -> Self {
-        Self { frames: Cell::new([initial, initial]) }
+        Self {
+            frames: Cell::new([initial, initial]),
+        }
     }
 
     /// The latest sample — an owned COPY, taken through `&self`, so every read is
@@ -247,7 +249,10 @@ mod tests {
 
     #[test]
     fn abstract_controls_stick_sensitivity() {
-        let ctrl = AbstractControls { stick_sensitivity: 5.0, ..Default::default() };
+        let ctrl = AbstractControls {
+            stick_sensitivity: 5.0,
+            ..Default::default()
+        };
         let (yaw, _) = ctrl.look_delta_stick(Vec2::new(1.0, 0.0));
         assert!((yaw - 5.0).abs() < 0.01);
     }

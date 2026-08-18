@@ -21,28 +21,24 @@
 
 use std::time::Duration;
 
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState,
-};
-use flicker::render::{
-    FrameGraph, Renderer, TextureHandle, Vec2, Vec3,
-};
+use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, UiNode, Value, ValueMap};
-use flicker::ui::{
-    render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler,
+use flicker::ui::{render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler};
+use flicker_input_core::{
+    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState,
 };
 use flicker_input_core::{Fired, Resolver};
 use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
 use flicker_shell::{PauseScene, Theme};
 
-use flicker_globe::{self as globe, GlobeWorld, ShellSpec, RADIUS};
 use crate::globe_view;
 use crate::route::RootHandler;
 use crate::sim_thread::{
     CellView, SeedSpec, SimCommand, SimHandle, Snapshot, TilePreview, BED_CONTINENTAL, BED_OCEANIC,
     SHELF_BED, SHELF_CLASS, SHELF_EDGE, SHELF_EXPOSED, SHELF_LAND, SHELF_NONE, SHELF_SHELF,
 };
+use flicker_globe::{self as globe, GlobeWorld, ShellSpec, RADIUS};
 use flicker_poc_chemistry::{ProcessDef, PLANET_FREQ};
 
 /// The Starter's one-click input bundles — see
@@ -56,10 +52,6 @@ enum Preset {
     Europa,
 }
 use flicker_poc_chemistry::{Levers, PlateEvent};
-
-/// The shared UI-element layout + palette.
-const HUD_UI_THEME: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../../content/sensorium/resources/ui_theme.json");
 
 /// Radii of the shells (exaggerated for legibility — real crust is a hair-thin
 /// rind on the mantle; here the gaps are opened up so the stack is visible and the
@@ -112,12 +104,12 @@ const MAX_STACK_TAU: f64 = 0.4;
 fn gas_tint(gas: u16) -> [f32; 3] {
     use flicker_poc_chemistry::atmosphere as sky;
     match gas {
-        sky::WATER_VAPOUR => [0.93, 0.95, 0.99],     // steam — near-white
-        sky::CARBON_DIOXIDE => [0.87, 0.58, 0.30],   // hotbox amber
-        sky::NITROGEN => [0.45, 0.62, 0.92],         // temperate blue
-        sky::SULFUR_DIOXIDE => [0.92, 0.86, 0.35],   // volcanic yellow
-        sky::HYDROGEN_CHLORIDE => [0.62, 0.86, 0.55],// acid green
-        sky::METHANE => [0.72, 0.45, 0.85],          // reducing violet — a young world
+        sky::WATER_VAPOUR => [0.93, 0.95, 0.99], // steam — near-white
+        sky::CARBON_DIOXIDE => [0.87, 0.58, 0.30], // hotbox amber
+        sky::NITROGEN => [0.45, 0.62, 0.92],     // temperate blue
+        sky::SULFUR_DIOXIDE => [0.92, 0.86, 0.35], // volcanic yellow
+        sky::HYDROGEN_CHLORIDE => [0.62, 0.86, 0.55], // acid green
+        sky::METHANE => [0.72, 0.45, 0.85],      // reducing violet — a young world
         flicker_poc_chemistry::biosphere::OXYGEN => [0.55, 0.92, 0.88], // the biosignature
         _ => [0.70, 0.72, 0.75],
     }
@@ -144,15 +136,60 @@ const GLOBE_SLOT: &str = "gm_globe";
 /// switch — read one roster; `the_view_roster_agrees_with_itself` pins these
 /// against the authored buttons.
 const FIELD_ACTIONS: [(&str, Field, &str, Paints); 10] = [
-    ("field_temperature", Field::Temperature, "$chem_field_heat", Paints::Interior),
-    ("field_differentiation", Field::Differentiation, "$chem_field_core", Paints::Interior),
-    ("field_plates", Field::Plates, "$chem_field_plates", Paints::Surface),
-    ("field_seams", Field::Seams, "$chem_field_seams", Paints::Surface),
-    ("field_elevation", Field::Elevation, "$chem_field_relief", Paints::Surface),
-    ("field_coast", Field::Coast, "$chem_field_coast", Paints::Surface),
-    ("field_motion", Field::Motion, "$chem_field_motion", Paints::Overlay),
-    ("field_rain", Field::Rain, "$chem_field_rain", Paints::Surface),
-    ("field_strata", Field::Strata, "$chem_field_strata", Paints::Surface),
+    (
+        "field_temperature",
+        Field::Temperature,
+        "$chem_field_heat",
+        Paints::Interior,
+    ),
+    (
+        "field_differentiation",
+        Field::Differentiation,
+        "$chem_field_core",
+        Paints::Interior,
+    ),
+    (
+        "field_plates",
+        Field::Plates,
+        "$chem_field_plates",
+        Paints::Surface,
+    ),
+    (
+        "field_seams",
+        Field::Seams,
+        "$chem_field_seams",
+        Paints::Surface,
+    ),
+    (
+        "field_elevation",
+        Field::Elevation,
+        "$chem_field_relief",
+        Paints::Surface,
+    ),
+    (
+        "field_coast",
+        Field::Coast,
+        "$chem_field_coast",
+        Paints::Surface,
+    ),
+    (
+        "field_motion",
+        Field::Motion,
+        "$chem_field_motion",
+        Paints::Overlay,
+    ),
+    (
+        "field_rain",
+        Field::Rain,
+        "$chem_field_rain",
+        Paints::Surface,
+    ),
+    (
+        "field_strata",
+        Field::Strata,
+        "$chem_field_strata",
+        Paints::Surface,
+    ),
     ("field_ore", Field::Ore, "$chem_field_ore", Paints::Surface),
 ];
 
@@ -197,7 +234,11 @@ impl LegendRanges {
         if cells.is_empty() {
             return Self::default();
         }
-        let mut r = Self { tmin: f32::MAX, tmax: f32::MIN, ..Self::default() };
+        let mut r = Self {
+            tmin: f32::MAX,
+            tmax: f32::MIN,
+            ..Self::default()
+        };
         for c in cells {
             r.tmin = r.tmin.min(c.temp_k);
             r.tmax = r.tmax.max(c.temp_k);
@@ -234,16 +275,40 @@ type LeverSet = fn(&mut Levers, f64);
 /// coverage fraction are not multiples of anything, so they keep their own
 /// arms with their own units.
 const LEVERS: &[(&str, LeverGet, LeverSet)] = &[
-    ("lv_veneer", |l| l.veneer_budget_kg, |l, v| l.veneer_budget_kg = v),
+    (
+        "lv_veneer",
+        |l| l.veneer_budget_kg,
+        |l, v| l.veneer_budget_kg = v,
+    ),
     ("lv_core_heat", |l| l.core_heat, |l, v| l.core_heat = v),
     ("lv_stellar", |l| l.stellar_heat, |l, v| l.stellar_heat = v),
-    ("lv_crust_gen", |l| l.crust_gen_rate, |l, v| l.crust_gen_rate = v),
+    (
+        "lv_crust_gen",
+        |l| l.crust_gen_rate,
+        |l, v| l.crust_gen_rate = v,
+    ),
     ("lv_arc", |l| l.arc_return, |l, v| l.arc_return = v),
     ("lv_outgas", |l| l.outgas_rate, |l, v| l.outgas_rate = v),
-    ("lv_eruption", |l| l.eruption_rate, |l, v| l.eruption_rate = v),
-    ("lv_production", |l| l.production_rate, |l, v| l.production_rate = v),
-    ("lv_decomposer", |l| l.decomposer_niche_kg, |l, v| l.decomposer_niche_kg = v),
-    ("lv_yield", |l| l.yield_strain as f64, |l, v| l.yield_strain = v as f32),
+    (
+        "lv_eruption",
+        |l| l.eruption_rate,
+        |l, v| l.eruption_rate = v,
+    ),
+    (
+        "lv_production",
+        |l| l.production_rate,
+        |l, v| l.production_rate = v,
+    ),
+    (
+        "lv_decomposer",
+        |l| l.decomposer_niche_kg,
+        |l, v| l.decomposer_niche_kg = v,
+    ),
+    (
+        "lv_yield",
+        |l| l.yield_strain as f64,
+        |l, v| l.yield_strain = v as f32,
+    ),
     ("lv_erosion", |l| l.erosion_rate, |l, v| l.erosion_rate = v),
     ("lv_leach", |l| l.leach_rate, |l, v| l.leach_rate = v),
 ];
@@ -263,7 +328,9 @@ fn toggled(results: &ValueMap, key: &str) -> Option<bool> {
 /// shell's stipple density follows its column mass (via [`veil_coverages`]),
 /// and a hash (not a random draw) keeps the veil stable frame to frame.
 fn stippled(i: usize, k: usize, coverage: f64) -> bool {
-    let h = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(k as u32 * 97);
+    let h = (i as u32)
+        .wrapping_mul(2_654_435_761)
+        .wrapping_add(k as u32 * 97);
     ((h >> 8) % 1000) < (coverage * 1000.0) as u32
 }
 
@@ -334,7 +401,11 @@ fn motion_arrows(
         let side = dirs[i].cross(heading).normalize_or_zero() * (shaft.length() * MOTION_BARB);
         let back = shaft.normalize_or_zero() * (shaft.length() * MOTION_BARB);
         // Diffuse lithosphere (plate 0) is nobody's raft; grey says so.
-        let rgb = if plates { plate_color(c.plate) } else { [0.85, 0.88, 0.95] };
+        let rgb = if plates {
+            plate_color(c.plate)
+        } else {
+            [0.85, 0.88, 0.95]
+        };
         let color = [rgb[0], rgb[1], rgb[2], 1.0];
         let slot = match groups.iter_mut().find(|(k, _)| *k == color) {
             Some(s) => &mut s.1,
@@ -360,13 +431,21 @@ fn veil_coverages(shells: &[(u16, f32)]) -> Vec<f64> {
     let raw: Vec<f64> = shells
         .iter()
         .map(|&(_, column)| {
-            (column as f64 / FULL_AIR_KG_M2).sqrt().clamp(0.0, MAX_SHELL_COVERAGE)
+            (column as f64 / FULL_AIR_KG_M2)
+                .sqrt()
+                .clamp(0.0, MAX_SHELL_COVERAGE)
         })
         .collect();
     let tau: f64 = raw.iter().map(|&c| -(1.0 - c).ln()).sum();
-    let squeeze = if tau > MAX_STACK_TAU { MAX_STACK_TAU / tau } else { 1.0 };
+    let squeeze = if tau > MAX_STACK_TAU {
+        MAX_STACK_TAU / tau
+    } else {
+        1.0
+    };
     // (1−c)^squeeze = e^(−squeeze·τ) — the τ-space scale, back in coverage.
-    raw.into_iter().map(|c| 1.0 - (1.0 - c).powf(squeeze)).collect()
+    raw.into_iter()
+        .map(|c| 1.0 - (1.0 - c).powf(squeeze))
+        .collect()
 }
 
 /// A fresh seed from the wall clock — a new initial condition (spec §3.5). Launch
@@ -581,7 +660,7 @@ impl GodModeScene {
         // (`stages.godmode_globe` — the light it is seen by and the backdrop it
         // sits on) is what the world is BUILT from, so the styles must exist
         // before the world does.
-        let ui_styles = flicker::ui::load_styles_for(HUD_UI_THEME, Some(&crate::scene_styles()));
+        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
         let world = GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None);
         Self {
             sim: SimHandle::spawn(seed),
@@ -647,7 +726,10 @@ impl GodModeScene {
                 rgba(strata_color(k as u8, (LEGEND_STRIP - 1) as u8)),
             );
             // Ore's ramp is logarithmic, so the strip walks the exponent.
-            block.insert(format!("ore_{k}"), rgba(ore_color(1000.0f32.powf(t), 1000.0)));
+            block.insert(
+                format!("ore_{k}"),
+                rgba(ore_color(1000.0f32.powf(t), 1000.0)),
+            );
         }
         // The categorical swatches — the four grounds and their lit coastline,
         // the three seam kinds, and the plate/loose pair.
@@ -656,7 +738,10 @@ impl GodModeScene {
         block.insert("coast_shelf".into(), rgba(coast_color(SHELF_SHELF)));
         block.insert("coast_bed".into(), rgba(coast_color(SHELF_BED)));
         block.insert("coast_exposed".into(), rgba(coast_color(SHELF_EXPOSED)));
-        block.insert("coast_edge".into(), rgba(coast_color(SHELF_LAND | SHELF_EDGE)));
+        block.insert(
+            "coast_edge".into(),
+            rgba(coast_color(SHELF_LAND | SHELF_EDGE)),
+        );
         block.insert("seam_int".into(), rgba(seam_color(0)));
         block.insert("seam_div".into(), rgba(seam_color(1)));
         block.insert("seam_conv".into(), rgba(seam_color(2)));
@@ -752,7 +837,11 @@ impl GodModeScene {
                 m,
                 "ore",
                 t("$chem_legend_ore_bg"),
-                format!("{:.0}\u{00d7} · {}", r.richest.max(1.0), t("$chem_legend_ore_rich")),
+                format!(
+                    "{:.0}\u{00d7} · {}",
+                    r.richest.max(1.0),
+                    t("$chem_legend_ore_rich")
+                ),
             ),
         }
     }
@@ -776,8 +865,11 @@ impl GodModeScene {
                     "stats",
                     format!(
                         "{} {}  ·  {:.1} My  ·  {} {}",
-                        strings::resolve("$chem_tick"), snap.tick, snap.tick_myr,
-                        snap.swept_cells, strings::resolve("$chem_cells"),
+                        strings::resolve("$chem_tick"),
+                        snap.tick,
+                        snap.tick_myr,
+                        snap.swept_cells,
+                        strings::resolve("$chem_cells"),
                     ),
                 );
                 // The readout lives in a 332-wide column now, so each reading
@@ -798,9 +890,12 @@ impl GodModeScene {
                     "interior2",
                     format!(
                         "{} {:.0} K  ·  {} {}  ·  {} {:.0} TW",
-                        strings::resolve("$chem_mantle"), s.mean_mantle_temp_k,
-                        snap.plate_count, strings::resolve("$chem_plates"),
-                        strings::resolve("$chem_radiogenic"), s.radiogenic_power_tw,
+                        strings::resolve("$chem_mantle"),
+                        s.mean_mantle_temp_k,
+                        snap.plate_count,
+                        strings::resolve("$chem_plates"),
+                        strings::resolve("$chem_radiogenic"),
+                        s.radiogenic_power_tw,
                     ),
                 );
 
@@ -809,8 +904,12 @@ impl GodModeScene {
                 //    request springs back instead of lying. ──
                 m.set(
                     "play_label",
-                    strings::resolve(if snap.playing { "$chem_pause" } else { "$chem_play" })
-                        .into_owned(),
+                    strings::resolve(if snap.playing {
+                        "$chem_pause"
+                    } else {
+                        "$chem_play"
+                    })
+                    .into_owned(),
                 );
                 m.set("rate", snap.rate_hz as f64);
                 m.set("cut", self.cut);
@@ -818,12 +917,19 @@ impl GodModeScene {
                 m.set("grid", self.grid);
                 m.set(
                     "erode_label",
-                    strings::resolve(if self.eroding { "$chem_erode_off" } else { "$chem_erode_on" })
-                        .into_owned(),
+                    strings::resolve(if self.eroding {
+                        "$chem_erode_off"
+                    } else {
+                        "$chem_erode_on"
+                    })
+                    .into_owned(),
                 );
                 // The pixel stage's era gate: RAIN ON waits for the five-axis
                 // life-supporting light; RAIN OFF is always reachable.
-                m.set("rain_allowed", self.eroding || snap.habitability.life_supporting);
+                m.set(
+                    "rain_allowed",
+                    self.eroding || snap.habitability.life_supporting,
+                );
                 // What the active view's colours mean — the card floating under
                 // the globe.
                 self.legend_model(&mut m);
@@ -865,7 +971,14 @@ impl GodModeScene {
                 let base = Levers::default();
                 for &(key, get, _) in LEVERS {
                     let d = get(&base);
-                    m.set(key, if d.abs() > 0.0 { get(&snap.levers) / d } else { 0.0 });
+                    m.set(
+                        key,
+                        if d.abs() > 0.0 {
+                            get(&snap.levers) / d
+                        } else {
+                            0.0
+                        },
+                    );
                 }
                 m.set(
                     "water_infall",
@@ -897,11 +1010,23 @@ impl GodModeScene {
                 for (i, p) in snap.processes.iter().enumerate().take(PROCESS_ROWS) {
                     let n = i + 1;
                     let (mark, state, color) = if p.held {
-                        ("\u{2298}", strings::resolve("$chem_held").into_owned(), "chemistry.held")
+                        (
+                            "\u{2298}",
+                            strings::resolve("$chem_held").into_owned(),
+                            "chemistry.held",
+                        )
                     } else if p.ready {
-                        ("\u{25cf}", strings::resolve("$chem_running").into_owned(), "chemistry.ok")
+                        (
+                            "\u{25cf}",
+                            strings::resolve("$chem_running").into_owned(),
+                            "chemistry.ok",
+                        )
                     } else {
-                        ("\u{25cb}", strings::resolve("$chem_waiting").into_owned(), "chemistry.waiting")
+                        (
+                            "\u{25cb}",
+                            strings::resolve("$chem_waiting").into_owned(),
+                            "chemistry.waiting",
+                        )
                     };
                     m.set(format!("proc_{n}"), format!("{mark} {:<18}{state}", p.name));
                     m.set(format!("proc_{n}_color"), color);
@@ -910,8 +1035,12 @@ impl GodModeScene {
                     // sanctioned per-process lever.
                     m.set(
                         format!("hold_{n}_label"),
-                        strings::resolve(if p.held { "$chem_release" } else { "$chem_hold" })
-                            .into_owned(),
+                        strings::resolve(if p.held {
+                            "$chem_release"
+                        } else {
+                            "$chem_hold"
+                        })
+                        .into_owned(),
                     );
                 }
                 for n in snap.processes.len() + 1..=PROCESS_ROWS {
@@ -947,13 +1076,17 @@ impl GodModeScene {
                 m.set("gates_open", self.gates_open);
                 // The coverage slider shows the lever as it stands (1.00 = no
                 // cutoff — the disabled position is on the scale, not a mode).
-                m.set("water_coverage", snap.levers.water_coverage_target.clamp(0.0, 1.0));
+                m.set(
+                    "water_coverage",
+                    snap.levers.water_coverage_target.clamp(0.0, 1.0),
+                );
                 // And the infall dial as a multiple of the Earth-scale default —
                 // the third water control: H endowment (Starter), delivery
                 // (this), coverage cutoff (below it).
                 m.set(
                     "water_infall",
-                    (snap.levers.water_budget_kg / flicker_poc_chemistry::surface::DEFAULT_WATER_KG)
+                    (snap.levers.water_budget_kg
+                        / flicker_poc_chemistry::surface::DEFAULT_WATER_KG)
                         .clamp(0.0, 10.0),
                 );
 
@@ -964,7 +1097,10 @@ impl GodModeScene {
                 for (i, (_, sym)) in self.seed_elements.iter().enumerate() {
                     let n = i + 1;
                     m.set(format!("seed_el_{n}_label"), sym.clone());
-                    m.set(format!("seed_el_{n}"), self.pending_scales.get(i).copied().unwrap_or(1.0));
+                    m.set(
+                        format!("seed_el_{n}"),
+                        self.pending_scales.get(i).copied().unwrap_or(1.0),
+                    );
                     m.set(format!("seed_el_{n}_shown"), true);
                 }
                 for n in self.seed_elements.len() + 1..=12 {
@@ -988,18 +1124,25 @@ impl GodModeScene {
                     "crust",
                     format!(
                         "{} {:.3}%  ·  {} {:.0}%  ·  {} {:.1}/{}",
-                        strings::resolve("$chem_crust"), s.crust_frac * 100.0,
-                        strings::resolve("$chem_continental"), s.continental_frac * 100.0,
-                        strings::resolve("$chem_strata"), s.mean_strata, s.max_strata,
+                        strings::resolve("$chem_crust"),
+                        s.crust_frac * 100.0,
+                        strings::resolve("$chem_continental"),
+                        s.continental_frac * 100.0,
+                        strings::resolve("$chem_strata"),
+                        s.mean_strata,
+                        s.max_strata,
                     ),
                 );
                 m.set(
                     "crust2",
                     format!(
                         "{} {:.0} m  ·  {} {:.0} m  ·  {} {:.0}%",
-                        strings::resolve("$chem_mean_elevation"), s.mean_elevation_m,
-                        strings::resolve("$chem_sea_level"), s.sea_level_m,
-                        strings::resolve("$chem_submerged"), s.submerged_frac * 100.0,
+                        strings::resolve("$chem_mean_elevation"),
+                        s.mean_elevation_m,
+                        strings::resolve("$chem_sea_level"),
+                        s.sea_level_m,
+                        strings::resolve("$chem_submerged"),
+                        s.submerged_frac * 100.0,
                     ),
                 );
 
@@ -1064,7 +1207,11 @@ impl GodModeScene {
                         );
                         m.set(
                             "gate_color",
-                            if g.opened { "chemistry.ok" } else { "chemistry.waiting" },
+                            if g.opened {
+                                "chemistry.ok"
+                            } else {
+                                "chemistry.waiting"
+                            },
                         );
 
                         // ── The pause summary. A gate moving is the world
@@ -1087,7 +1234,10 @@ impl GodModeScene {
                                 }),
                             ),
                         );
-                        m.set("gate_why", strings::resolve(gate_reason(g.stage, g.opened)).into_owned());
+                        m.set(
+                            "gate_why",
+                            strings::resolve(gate_reason(g.stage, g.opened)).into_owned(),
+                        );
                         m.set(
                             "gate_cause",
                             format!(
@@ -1102,7 +1252,10 @@ impl GodModeScene {
                                 strings::resolve(snap.life.token()),
                             ),
                         );
-                        m.set("gate_effect", strings::resolve("$chem_gate_effect").into_owned());
+                        m.set(
+                            "gate_effect",
+                            strings::resolve("$chem_gate_effect").into_owned(),
+                        );
                         // The card's WHAT and WATCH-FOR paragraphs come from
                         // processes.json (via StaticData) — authored content,
                         // the same file that defines the gate itself.
@@ -1228,7 +1381,11 @@ impl GodModeScene {
                                     "$chem_gate_shut"
                                 }),
                             ),
-                            if g.opened { "chemistry.ok" } else { "chemistry.held" },
+                            if g.opened {
+                                "chemistry.ok"
+                            } else {
+                                "chemistry.held"
+                            },
                         )
                     }))
                     .collect();
@@ -1298,12 +1455,25 @@ impl GodModeScene {
                     m.set(format!("a{n}_name"), strings::resolve(ax.name).into_owned());
                     m.set(
                         format!("a{n}_name_color"),
-                        if live { "pocepochs.hab.name_live" } else { "pocepochs.hab.name_dead" },
+                        if live {
+                            "pocepochs.hab.name_live"
+                        } else {
+                            "pocepochs.hab.name_dead"
+                        },
                     );
                     m.set(format!("a{n}_v"), ax.signal.unwrap_or(-1.0)); // −1 = no signal
-                    m.set(format!("a{n}_lolab"), strings::resolve(ax.low_label).into_owned());
-                    m.set(format!("a{n}_hilab"), strings::resolve(ax.high_label).into_owned());
-                    m.set(format!("a{n}_status"), strings::resolve(status).into_owned());
+                    m.set(
+                        format!("a{n}_lolab"),
+                        strings::resolve(ax.low_label).into_owned(),
+                    );
+                    m.set(
+                        format!("a{n}_hilab"),
+                        strings::resolve(ax.high_label).into_owned(),
+                    );
+                    m.set(
+                        format!("a{n}_status"),
+                        strings::resolve(status).into_owned(),
+                    );
                     m.set(format!("a{n}_status_color"), status_color);
                 }
                 let total = h.axes.len();
@@ -1313,7 +1483,10 @@ impl GodModeScene {
                     // replaced its own biosphere readout with the bool `true`
                     // and the lamp never lit, both from one name collision.
                     m.set("life_light", true);
-                    m.set("verdict", strings::resolve("$chem_life_supporting").into_owned());
+                    m.set(
+                        "verdict",
+                        strings::resolve("$chem_life_supporting").into_owned(),
+                    );
                     m.set("verdict_color", "pocepochs.hab.verdict_life");
                 } else {
                     m.set("no_life", true);
@@ -1329,14 +1502,17 @@ impl GodModeScene {
                 }
                 m.set(
                     "observed",
-                    format!("{} / {total} {}", h.axes_live, strings::resolve("$chem_observed")),
+                    format!(
+                        "{} / {total} {}",
+                        h.axes_live,
+                        strings::resolve("$chem_observed")
+                    ),
                 );
             }
         }
         UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
     }
-
 }
 
 impl Default for GodModeScene {
@@ -1362,13 +1538,18 @@ impl Scene for GodModeScene {
         self.inject_legend_styles();
     }
 
-
     fn exit(&mut self, renderer: &mut Renderer) {
         self.world.free(renderer);
         // The sim thread shuts down when `self.sim` (SimHandle) drops.
     }
 
-    fn update(&mut self, dt: Duration, input: &InputState, _signals: &mut SceneInput, renderer: &Renderer) -> Transition {
+    fn update(
+        &mut self,
+        dt: Duration,
+        input: &InputState,
+        _signals: &mut SceneInput,
+        renderer: &Renderer,
+    ) -> Transition {
         // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
         // ledger panel is a styled container, so the pointer over it sets
         // `hud_hit` — fed to the walker layer below as this frame's
@@ -1411,8 +1592,13 @@ impl Scene for GodModeScene {
         // (it borrows this frame's snapshot — RT-7).
         self.tick = self.tick.wrapping_add(1);
         self.ev.clear();
-        self.resolver
-            .resolve_frame(&self.bindings, &self.gamepad_config, input, self.tick, &mut self.ev);
+        self.resolver.resolve_frame(
+            &self.bindings,
+            &self.gamepad_config,
+            input,
+            self.tick,
+            &mut self.ev,
+        );
         let ctx = self.bindings.active();
         let events: Vec<InputEvent> = self
             .ev
@@ -1486,7 +1672,11 @@ impl Scene for GodModeScene {
                     );
                 }
             }
-            self.process_defs = s.processes.into_iter().map(|p| (p.runs.clone(), p)).collect();
+            self.process_defs = s
+                .processes
+                .into_iter()
+                .map(|p| (p.runs.clone(), p))
+                .collect();
             self.gas_names = s.gas_names;
             if self.pending_scales.len() != s.seed_elements.len() {
                 self.pending_scales = vec![1.0; s.seed_elements.len()];
@@ -1512,8 +1702,10 @@ impl Scene for GodModeScene {
         // Disabled bench (its input-P3 is task #3): it still self-resolves, so it resolves
         // the look tuple from its OWN bindings and hands GlobeWorld the result — the world
         // no longer takes a resolver.
-        let look = GlobeWorld::look_from(|s| self.bindings.signal_axis(s, input, &self.gamepad_config));
-        self.world.update(dt.as_secs_f32(), input, look, self.ui_state.focused());
+        let look =
+            GlobeWorld::look_from(|s| self.bindings.signal_axis(s, input, &self.gamepad_config));
+        self.world
+            .update(dt.as_secs_f32(), input, look, self.ui_state.focused());
         Transition::None
     }
 
@@ -1543,7 +1735,18 @@ impl Scene for GodModeScene {
         if self.world.dirty() {
             // Split the borrow: the world is written while the snapshot and the
             // topology it is built from are read.
-            let Self { world, snap, dirs, outlines, ranges, field, cut, air, grid, .. } = self;
+            let Self {
+                world,
+                snap,
+                dirs,
+                outlines,
+                ranges,
+                field,
+                cut,
+                air,
+                grid,
+                ..
+            } = self;
             let mut shells: Vec<ShellSpec> = Vec::new();
             let mut arrows: globe_view::Arrows = Vec::new();
             // The core sits UNDER everything, so it leads the list: the world
@@ -1564,9 +1767,9 @@ impl Scene for GodModeScene {
                 let dirs: &[Vec3] = dirs;
                 let outlines: &[Vec<Vec3>] = outlines;
                 let cells = &snap.cells;
-                let (tmin, tmax) = cells
-                    .iter()
-                    .fold((f32::MAX, f32::MIN), |(lo, hi), c| (lo.min(c.temp_k), hi.max(c.temp_k)));
+                let (tmin, tmax) = cells.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| {
+                    (lo.min(c.temp_k), hi.max(c.temp_k))
+                });
                 let tspan = (tmax - tmin).max(1.0);
                 let light = Vec3::new(0.4, 0.7, 0.55).normalize();
                 let lit = move |i: usize, base: [f32; 3]| {
@@ -1732,7 +1935,11 @@ impl GodModeScene {
     /// removed; the bench is not in the launcher roster, so `build_tree` returns an
     /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
     fn build_tree(&self) -> UiNode {
-        UiNode { component: "screen".to_string(), id: "godmode".to_string(), ..Default::default() }
+        UiNode {
+            component: "screen".to_string(),
+            id: "godmode".to_string(),
+            ..Default::default()
+        }
     }
 
     /// The cell being looked at: the one whose direction is closest to the camera.
@@ -1752,7 +1959,6 @@ impl GodModeScene {
         let handle = renderer.load_texture(&rgba, dim, dim);
         self.tile = Some((handle, dim, caption));
     }
-
 
     /// Stage a preset: **the whole bundle** — endowment scales + planet size
     /// into the Starter's pending knobs, and the water levers plus the star's
@@ -1796,9 +2002,7 @@ impl GodModeScene {
                 // Small, rock-light, far from the light, and drowned from
                 // outside: ten Earths of delivery onto a body that could never
                 // exhale that much.
-                Preset::Europa => {
-                    (&[("H", 1.5), ("Si", 0.8), ("Fe", 0.8)], 12, 10.0, 1.0, 0.04)
-                }
+                Preset::Europa => (&[("H", 1.5), ("Si", 0.8), ("Fe", 0.8)], 12, 10.0, 1.0, 0.04),
             };
         for slot in self.pending_scales.iter_mut() {
             *slot = 1.0;
@@ -1874,8 +2078,10 @@ impl GodModeScene {
         // The run stays stopped: the point was to LOOK.
         if results.is_on("gate_view") {
             if let Some(g) = self.snap.as_ref().and_then(|s| s.gate_events.last()) {
-                if let Some(v) =
-                    self.process_defs.get(g.stage).and_then(|d| Field::from_view(&d.view))
+                if let Some(v) = self
+                    .process_defs
+                    .get(g.stage)
+                    .and_then(|d| Field::from_view(&d.view))
                 {
                     self.field = v;
                     self.world.mark_dirty();
@@ -1937,7 +2143,10 @@ impl GodModeScene {
             // five-axis light says the world can sustain life. RAIN OFF is
             // always allowed; RAIN ON asks the light first (the button is
             // disabled until it turns, so this arm is the belt to that brace).
-            let alive = self.snap.as_ref().is_some_and(|s| s.habitability.life_supporting);
+            let alive = self
+                .snap
+                .as_ref()
+                .is_some_and(|s| s.habitability.life_supporting);
             if self.eroding || alive {
                 self.eroding = !self.eroding;
                 out.push(SimCommand::ErodeToggle);
@@ -1952,7 +2161,9 @@ impl GodModeScene {
             let mut next = s.levers;
             let mut moved = false;
             for &(key, get, set) in LEVERS {
-                let Some(v) = results.number(key) else { continue };
+                let Some(v) = results.number(key) else {
+                    continue;
+                };
                 let want = v.clamp(0.0, 4.0) * get(&base);
                 if (want - get(&s.levers)).abs() > 1e-3 * get(&base).abs().max(1e-9) {
                     set(&mut next, want);
@@ -1991,7 +2202,10 @@ impl GodModeScene {
         for n in 1..=PROCESS_ROWS {
             if results.is_on(&format!("hold_{n}")) {
                 if let Some(p) = self.snap.as_ref().and_then(|s| s.processes.get(n - 1)) {
-                    out.push(SimCommand::Hold { stage: p.name.to_string(), held: !p.held });
+                    out.push(SimCommand::Hold {
+                        stage: p.name.to_string(),
+                        held: !p.held,
+                    });
                 }
             }
         }
@@ -2020,7 +2234,10 @@ impl GodModeScene {
                 let kg = v.clamp(0.0, 10.0) * flicker_poc_chemistry::surface::DEFAULT_WATER_KG;
                 let step = 0.01 * flicker_poc_chemistry::surface::DEFAULT_WATER_KG;
                 if (kg - s.levers.water_budget_kg).abs() > step {
-                    out.push(SimCommand::SetLevers(Levers { water_budget_kg: kg, ..s.levers }));
+                    out.push(SimCommand::SetLevers(Levers {
+                        water_budget_kg: kg,
+                        ..s.levers
+                    }));
                 }
             }
         }
@@ -2085,7 +2302,11 @@ impl GodModeScene {
             .zip(&self.pending_scales)
             .map(|(&(e, _), &f)| (e, f))
             .collect();
-        SimCommand::Reseed(SeedSpec { seed: self.seed, freq: self.pending_freq, scales })
+        SimCommand::Reseed(SeedSpec {
+            seed: self.seed,
+            freq: self.pending_freq,
+            scales,
+        })
     }
 
     /// The HUD: the walker commands stashed by `update`, plus the ONE panel
@@ -2104,8 +2325,11 @@ impl GodModeScene {
     /// hand-placed panel.
     fn draw_hud(&self, renderer: &mut Renderer) {
         if let Some(white) = self.white {
-            let tex: Vec<TextureHandle> =
-                self.tile.as_ref().map(|(t, _, _)| vec![*t]).unwrap_or_default();
+            let tex: Vec<TextureHandle> = self
+                .tile
+                .as_ref()
+                .map(|(t, _, _)| vec![*t])
+                .unwrap_or_default();
             render_hud(renderer, &self.hud_commands, white, &tex);
         }
 
@@ -2118,13 +2342,33 @@ impl GodModeScene {
             let (pad, sw, row_h, panel_w) = (12.0f32, 12.0f32, 18.0f32, 210.0f32);
             let panel_h = pad + 24.0 + self.budget_dist.len() as f32 * row_h + pad;
             let (px, py) = (16.0f32, 158.0f32);
-            renderer.draw_sprite(white, Vec2::new(px, py), Vec2::new(panel_w, panel_h), [0.05, 0.06, 0.08, 0.94]);
-            renderer.draw_text("BULK ACCRETION SEED", Vec2::new(px + pad, py + pad), 14.0, gold);
+            renderer.draw_sprite(
+                white,
+                Vec2::new(px, py),
+                Vec2::new(panel_w, panel_h),
+                [0.05, 0.06, 0.08, 0.94],
+            );
+            renderer.draw_text(
+                "BULK ACCRETION SEED",
+                Vec2::new(px + pad, py + pad),
+                14.0,
+                gold,
+            );
             let mut ry = py + pad + 24.0;
             for (num, sym, pct) in &self.budget_dist {
                 let c = element_rgb(*num);
-                renderer.draw_sprite(white, Vec2::new(px + pad, ry + 2.0), Vec2::new(sw, sw), [c[0], c[1], c[2], 1.0]);
-                renderer.draw_text(&format!("{sym}   {pct:.1}%"), Vec2::new(px + pad + sw + 8.0, ry), 13.0, text);
+                renderer.draw_sprite(
+                    white,
+                    Vec2::new(px + pad, ry + 2.0),
+                    Vec2::new(sw, sw),
+                    [c[0], c[1], c[2], 1.0],
+                );
+                renderer.draw_text(
+                    &format!("{sym}   {pct:.1}%"),
+                    Vec2::new(px + pad + sw + 8.0, ry),
+                    13.0,
+                    text,
+                );
                 ry += row_h;
             }
         }
@@ -2212,7 +2456,11 @@ fn ore_color(enrichment: f32, richest: f32) -> [f32; 3] {
 /// Linear blend of two RGB triples.
 fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     let t = t.clamp(0.0, 1.0);
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
 }
 
 /// Temperature ramp over a normalised value: cool deep-blue → red → white-hot.
@@ -2246,7 +2494,11 @@ fn plate_color(id: u32) -> [f32; 3] {
         return [0.22, 0.23, 0.26];
     }
     let h = (id as f32 * 0.618_034).fract() * std::f32::consts::TAU;
-    [0.45 + 0.4 * h.cos(), 0.45 + 0.4 * (h + 2.094).cos(), 0.45 + 0.4 * (h + 4.188).cos()]
+    [
+        0.45 + 0.4 * h.cos(),
+        0.45 + 0.4 * (h + 2.094).cos(),
+        0.45 + 0.4 * (h + 4.188).cos(),
+    ]
 }
 
 /// Seam class → colour: divergent ridge (blue), convergent trench (red), transform
@@ -2328,18 +2580,28 @@ fn fmt_event(e: &PlateEvent) -> (String, &'static str) {
     // is precisely what kept this panel scene-drawn. The kinds are a finite
     // set, so both channels are ordinary data and the panel is ordinary UI.
     match e {
-        PlateEvent::Born(id) => {
-            (format!("{} P{id}", strings::resolve("$chem_ev_born")), "chemistry.ok")
-        }
-        PlateEvent::Died(id) => {
-            (format!("{} P{id}", strings::resolve("$chem_ev_died")), "chemistry.dim.color")
-        }
+        PlateEvent::Born(id) => (
+            format!("{} P{id}", strings::resolve("$chem_ev_born")),
+            "chemistry.ok",
+        ),
+        PlateEvent::Died(id) => (
+            format!("{} P{id}", strings::resolve("$chem_ev_died")),
+            "chemistry.dim.color",
+        ),
         PlateEvent::Merged { from, into } => (
-            format!("{} {}→P{into}", strings::resolve("$chem_ev_merge"), from.len() + 1),
+            format!(
+                "{} {}→P{into}",
+                strings::resolve("$chem_ev_merge"),
+                from.len() + 1
+            ),
             "chemistry.interior.color",
         ),
         PlateEvent::Split { from, into } => (
-            format!("{} P{from}→{}", strings::resolve("$chem_ev_split"), into.len()),
+            format!(
+                "{} P{from}→{}",
+                strings::resolve("$chem_ev_split"),
+                into.len()
+            ),
             "chemistry.crust.color",
         ),
     }
