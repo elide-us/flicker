@@ -168,7 +168,7 @@ flicker-mechanics = { version = "0.1.0", path = "Alpha/crates/mechanics/flicker-
 flicker-content = { version = "0.1.0", path = "Alpha/crates/content/flicker-content" }
 flicker-assetpipeline = { version = "0.1.0", path = "Alpha/crates/scenes/flicker-assetpipeline" }
 # Native open-folder dialog for the Asset Pipeline editor's Load step.
-rfd = "0.15.4"
+rfd = "0.17.2"
 # Shared GPU-free planet-layout model (the orrery) — the roster + orbits both the
 # solar-birth cinematic and the heliocentric sky read (single source of truth).
 flicker-orrery = { version = "0.1.0", path = "crates/flicker-orrery" }
