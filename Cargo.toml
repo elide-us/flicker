@@ -122,7 +122,7 @@ anyhow = "1.0.102"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 
 # Text rendering (cosmic-text on wgpu). Pinned to a version that resolves on wgpu 22.
-glyphon = "0.6.0"
+glyphon = "0.12.0"
 
 # Small, dependency-free RNG used by example games.
 fastrand = "2.4.1"
