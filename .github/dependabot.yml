@@ -1,6 +1,11 @@
 # Dependency update automation — both ecosystems land as reviewable PRs that
 # must pass CI (including the cargo-deny gate) before merge. This is how the
 # SHA-pinned actions and the Cargo.lock pin move forward without hand-tracking.
+#
+# COOLDOWN is the supply-chain stance: a release is not proposed until it has
+# been public long enough for a compromised publish to be caught and yanked
+# (recent crates.io incidents were pulled within hours-to-days). Fresh-off-the-
+# press versions never reach a PR here; RustSec-flagged ones die in cargo-deny.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -8,12 +13,25 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 14
+      semver-major-days: 30
     groups:
       cargo-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # The wgpu major upgrade is a deliberate engine project (API churn across
+      # the render stack), not a routine bump — and glyphon's major tracks wgpu's
+      # (0.6 pairs with wgpu 22). Lift both together when that project starts.
+      - dependency-name: "wgpu"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "glyphon"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
