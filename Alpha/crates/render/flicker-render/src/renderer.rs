@@ -896,6 +896,18 @@ impl Renderer {
         self.scene = scene;
     }
 
+    /// Upload the material-catalog colour palette for the 3D mesh pass — one
+    /// RGBA per `MaterialId` (index = id, `materials.json` order). The pipeline
+    /// boots all-magenta (loud-wrong), so a voxel scene sets this once from the
+    /// loaded catalog at init; undefined slots should be left magenta rather
+    /// than given an invented fallback colour. Persists until the next call.
+    pub fn set_material_palette(
+        &mut self,
+        colors: &[[f32; 4]; crate::pipeline_mesh::MATERIAL_PALETTE_LEN],
+    ) {
+        self.mesh.set_material_palette(&self.queue, colors);
+    }
+
     /// Request the procedural sky behind the 3D scene this frame. Fakes
     /// atmospheric scattering from the current [`SceneLighting`] (sun/moon
     /// directions + colours and the `sky_zenith`/`sky_horizon` palette) — a

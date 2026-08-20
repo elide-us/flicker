@@ -23,17 +23,15 @@ use std::time::Duration;
 
 use flicker::render::{FrameGraph, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, UiNode, Value, ValueMap};
-use flicker::ui::{render_hud, run_ui, strings, UiInput, UiIntents, UiState, WalkerHandler};
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState,
+use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::ui::{
+    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{Fired, Resolver};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 
 use crate::globe_view;
-use crate::route::RootHandler;
 use crate::sim_thread::{
     CellView, SeedSpec, SimCommand, SimHandle, Snapshot, TilePreview, BED_CONTINENTAL, BED_OCEANIC,
     SHELF_BED, SHELF_CLASS, SHELF_EDGE, SHELF_EXPOSED, SHELF_LAND, SHELF_NONE, SHELF_SHELF,
@@ -72,8 +70,9 @@ const BARE_MANTLE_COLOR: [f32; 3] = [0.16, 0.15, 0.17];
 /// current length: an unused row rides `proc_<n>_shown = false` and the walker's
 /// flow layout skips invisible children entirely, so it occupies nothing. Adding
 /// a stage therefore needs no change here or in the Lua — which is the point,
-/// because this list is meant to keep growing.
-const PROCESS_ROWS: usize = 20;
+/// because this list is meant to keep growing. (Was 20 — the pipeline reached
+/// 22 shipped stages and `.take()` silently truncated the last two rows.)
+const PROCESS_ROWS: usize = 24;
 
 /// Rows in the world-event bank. The sim keeps 8 plate events and 6 gate
 /// events; this is the window onto the merged, newest-first stream, and it
@@ -118,6 +117,22 @@ fn gas_tint(gas: u16) -> [f32; 3] {
 /// The `rtt` node the globe is drawn into — the one name the proto's `id` and
 /// the scene's slot lookup share.
 const GLOBE_SLOT: &str = "gm_globe";
+
+/// The pair script — the scene's LOGIC half, by name (five-line architecture).
+const GM_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/godmode.lua");
+/// The shipped scene file — the tests' copy of the authored tree (the runtime
+/// receives the same file through the manifest `SceneDef`).
+#[cfg(test)]
+const GM_SCENE: &str = include_str!("../../../../content/sensorium/scenes/godmode.scene.json");
+
+/// The viewport PANE (`pane: true` in the scene file) whose ENTERED group hands
+/// the world the camera — `in_panel` matches the walker's `entered_group`.
+const VIEW_PANE: &str = "gm_view";
+
+/// The life-supporting gauge row's authored heights (the refilled rows'
+/// geometry — name/status line · gauge bar · gap · end captions = 42px total).
+const AXIS_ROW_H: f32 = 42.0;
+const AXIS_BAR_H: f32 = 12.0;
 
 /// The field tabs: the action a button fires, and the view it selects. One
 /// table, so the tab strip, the dispatcher and the lit-tab styling can never
@@ -623,26 +638,16 @@ pub struct GodModeScene {
     theme: Option<Theme>,
     white: Option<TextureHandle>,
 
-    // ── input bus (spec §5/§9) ──
-    /// World-context bindings (Esc → `Menu`); the resolver resolves the active map.
-    /// The camera + the discrete keys below stay raw, so only `Menu` rides the bus.
-    bindings: ContextualBindings,
-    /// Gamepad axis/deadzone config, handed to the resolver and the pause overlay.
-    gamepad_config: GamepadConfig,
-    /// Stateful edge resolver — the single home of previous-frame state (replaces the
-    /// hand-rolled `prev_menu` bool).
-    resolver: Resolver,
-    /// Reused `Fired` scratch buffer (no per-frame alloc — RT-7).
-    ev: Vec<Fired>,
-    /// The router's per-frame request queue (context/focus intents; none arise here).
-    route: RouteCtx,
-    /// Monotonic frame tick — the resolver's `TickTime` (NOT wall-clock — spec §3.2a).
-    tick: u64,
-
-    // ── The declarative HUD (S10): a walker tree replaces the immediate text
-    // readout + conservation ledger. The tree + the screen's declared intents are
-    // cached at enter; every control draws in the engine, so there is no script
-    // host here at all. ──
+    // ── The scene pair (five-line split): the authored tree + the pair script.
+    // The PUMP owns bindings and the resolver now (input-P3) — the scene holds
+    // none; resolved signals arrive through `SceneInput`. ──
+    /// The AUTHORED tree off the manifest's def; its `gm_hab_rows` container is
+    /// REFILLED at construction from the observer's bands. `take`n around the
+    /// walk so the walker can borrow it beside the mutable UI state.
+    authored: Option<UiNode>,
+    /// The pair script (`godmode.lua`) — picks every state word, glyph and style
+    /// path from the RAW model each frame. `None` only if it failed to load.
+    script: Option<ScriptHost>,
     ui_intents: UiIntents,
     ui_styles: serde_json::Value,
     ui_state: UiState,
@@ -653,16 +658,92 @@ pub struct GodModeScene {
     fired_sigs: Vec<String>,
 }
 
+/// Find the first descendant (or self) with `id`, mutably — the seam the bench
+/// refills its gauge-row container through (the sablework Rust-fills-the-container
+/// pattern; there is no shared helper, so this is the local one).
+fn find_by_id_mut<'a>(node: &'a mut UiNode, id: &str) -> Option<&'a mut UiNode> {
+    if node.id == id {
+        return Some(node);
+    }
+    node.children.iter_mut().find_map(|c| find_by_id_mut(c, id))
+}
+
+fn node(component: &str) -> UiNode {
+    UiNode {
+        component: component.to_string(),
+        ..Default::default()
+    }
+}
+
+fn prop(mut n: UiNode, key: &str, value: Value) -> UiNode {
+    n.props.insert(key.to_string(), value);
+    n
+}
+
+fn text_val(s: impl Into<String>) -> Value {
+    Value::Text(s.into())
+}
+
+/// A bound `text` node for a refilled gauge row. `color_is_bind` picks the colour
+/// channel: a Model key holding a dotted path (`color_bind`) vs a static path
+/// (`color`) — stated explicitly so the two can never be confused.
+fn bind_text(bind: &str, size: f32, color: &str, color_is_bind: bool) -> UiNode {
+    let mut t = node("text");
+    t = prop(t, "text_bind", text_val(bind));
+    t = prop(t, "text_size", Value::Number(size as f64));
+    prop(
+        t,
+        if color_is_bind { "color_bind" } else { "color" },
+        text_val(color),
+    )
+}
+
 impl GodModeScene {
-    pub fn new() -> Self {
+    /// The runtime constructor — the manifest hands in the authored `SceneDef`
+    /// (the five-line split): the tree + this bench's style blocks come from
+    /// `godmode.scene.json`.
+    pub fn new(def: &SceneDef) -> Self {
+        Self::from_parts(def.tree.clone(), def.styles.clone())
+    }
+
+    /// A bench on the SHIPPED scene file — the seam a test drives without an
+    /// app, exercising the same authored tree the runtime gets.
+    #[cfg(test)]
+    pub fn shipped() -> Self {
+        let def =
+            SceneDef::parse("godmode", GM_SCENE).expect("the shipped godmode.scene.json parses");
+        Self::from_parts(def.tree, def.styles)
+    }
+
+    #[cfg(not(test))]
+    pub fn shipped() -> Self {
+        // Outside tests the manifest is the only construction path; a def-less
+        // bench would be a blank screen, so `Default` routes here loudly.
+        unreachable!("GodModeScene is built from the manifest's SceneDef")
+    }
+
+    fn from_parts(authored: Option<UiNode>, scene_styles_json: Option<serde_json::Value>) -> Self {
+        if authored.is_none() {
+            tracing::error!("godmode: the scene def declares no `tree` — no HUD will draw");
+        }
         let seed = clock_seed();
-        // Read here rather than in `enter`: the globe's authored look
+        // The styles are read HERE, not in `enter`: the globe's authored look
         // (`stages.godmode_globe` — the light it is seen by and the backdrop it
         // sits on) is what the world is BUILT from, so the styles must exist
-        // before the world does.
-        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
-        let world = GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None);
-        Self {
+        // before the world does. `in_panel` names the pane whose ENTERED group
+        // hands the world the camera.
+        let ui_styles = flicker::ui::load_shared_styles(scene_styles_json.as_ref());
+        let world =
+            GlobeWorld::new(globe_view::STAGE_SOURCE, &ui_styles, None).in_panel(VIEW_PANE);
+        let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(GM_SCRIPT, "godmode_pair.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("godmode.lua failed to load — raw HUD values only: {e}");
+                None
+            }
+        };
+        let mut scene = Self {
             sim: SimHandle::spawn(seed),
             seed,
             dirs: Vec::new(),
@@ -691,18 +772,79 @@ impl GodModeScene {
             eroding: false,
             theme: None,
             white: None,
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
-            gamepad_config: GamepadConfig::default(),
-            resolver: Resolver::new(),
-            ev: Vec::new(),
-            route: RouteCtx::new(),
-            tick: 0,
-            ui_intents: UiIntents::default(),
+            authored,
+            script,
+            ui_intents,
             ui_styles,
             ui_state: UiState::new(),
             hud_commands: Vec::new(),
             fired_sigs: Vec::new(),
-        }
+        };
+        // The observer's bands are runtime data: the gauge rows refill from
+        // them, never from authored literals that could fork the observer's
+        // numbers.
+        scene.refill_hab_rows();
+        scene
+    }
+
+    /// Rebuild the life-supporting gauge rows from the observer's bands — at
+    /// construction (the bands are constants of the observer, not of the world:
+    /// `habitability::BANDS` exists precisely so the HUD bakes its green zones
+    /// from the same numbers the verdict reads). Each row: the name/status
+    /// line, the gauge (band baked in), and the two end captions — every label
+    /// riding a bind.
+    fn refill_hab_rows(&mut self) {
+        let Some(cell) = self
+            .authored
+            .as_mut()
+            .and_then(|t| find_by_id_mut(t, "gm_hab_rows"))
+        else {
+            return;
+        };
+        cell.children = flicker_poc_chemistry::habitability::BANDS
+            .iter()
+            .enumerate()
+            .map(|(i, (lo, hi))| {
+                let n = i + 1;
+                let mut row = node("cell");
+                row.size = Some(AXIS_ROW_H);
+
+                let mut head = node("row");
+                head.size = Some(17.0);
+                let mut name =
+                    bind_text(&format!("a{n}_name"), 13.0, &format!("a{n}_name_color"), true);
+                name.grow = Some(1.0);
+                let mut status =
+                    bind_text(&format!("a{n}_status"), 11.0, &format!("a{n}_status_color"), true);
+                status.grow = Some(1.0);
+                status = prop(status, "align", text_val("right"));
+                head.children = vec![name, status];
+
+                let mut gauge = node("gauge");
+                gauge.size = Some(AXIS_BAR_H);
+                gauge.bind = Some(format!("a{n}_v"));
+                gauge = prop(gauge, "lo", Value::Number(*lo));
+                gauge = prop(gauge, "hi", Value::Number(*hi));
+                gauge = prop(gauge, "style", text_val("chemistry.hab.gauge"));
+
+                let mut gap = node("stack");
+                gap.size = Some(2.0);
+
+                let mut foot = node("row");
+                foot.size = Some(11.0);
+                let mut lolab =
+                    bind_text(&format!("a{n}_lolab"), 10.0, "chemistry.hab.caption.color", false);
+                lolab.grow = Some(1.0);
+                let mut hilab =
+                    bind_text(&format!("a{n}_hilab"), 10.0, "chemistry.hab.caption.color", false);
+                hilab.grow = Some(1.0);
+                hilab = prop(hilab, "align", text_val("right"));
+                foot.children = vec![lolab, hilab];
+
+                row.children = vec![head, gauge, gap, foot];
+                row
+            })
+            .collect();
     }
 
     /// **Write the `legend.*` style block** the legend card's swatches resolve
@@ -902,28 +1044,12 @@ impl GodModeScene {
                 // ── The transport: what the buttons say and where the dial
                 //    stands. The dial echoes the sim's OWN rate, so a clamped
                 //    request springs back instead of lying. ──
-                m.set(
-                    "play_label",
-                    strings::resolve(if snap.playing {
-                        "$chem_pause"
-                    } else {
-                        "$chem_play"
-                    })
-                    .into_owned(),
-                );
+                m.set("playing", snap.playing);
                 m.set("rate", snap.rate_hz as f64);
                 m.set("cut", self.cut);
                 m.set("air", self.air);
                 m.set("grid", self.grid);
-                m.set(
-                    "erode_label",
-                    strings::resolve(if self.eroding {
-                        "$chem_erode_off"
-                    } else {
-                        "$chem_erode_on"
-                    })
-                    .into_owned(),
-                );
+                m.set("eroding", self.eroding);
                 // The pixel stage's era gate: RAIN ON waits for the five-axis
                 // life-supporting light; RAIN OFF is always reachable.
                 m.set(
@@ -933,6 +1059,38 @@ impl GodModeScene {
                 // What the active view's colours mean — the card floating under
                 // the globe.
                 self.legend_model(&mut m);
+
+                // ── The pair script's WORD BANK: every state word resolved ONCE
+                //    here (localization lives in the stringtable, resolved
+                //    engine-side; godmode.lua only PICKS and COMPOSES). The
+                //    measurement lines keep composing at their own sites — they
+                //    ride fmt_mass/fmt_pressure, not state. ──
+                for (key, token) in [
+                    ("w_playing", "$chem_playing"),
+                    ("w_paused", "$chem_paused"),
+                    ("w_play", "$chem_play"),
+                    ("w_pause", "$chem_pause"),
+                    ("w_erode_on", "$chem_erode_on"),
+                    ("w_erode_off", "$chem_erode_off"),
+                    ("w_hold", "$chem_hold"),
+                    ("w_release", "$chem_release"),
+                    ("w_held", "$chem_held"),
+                    ("w_running", "$chem_running"),
+                    ("w_waiting", "$chem_waiting"),
+                    ("w_gates_chip", "$chem_gates_chip"),
+                    ("w_in_band", "$chem_in_band"),
+                    ("w_out_of_band", "$chem_out_of_band"),
+                    ("w_no_signal", "$chem_no_signal_yet"),
+                    ("w_life_supporting", "$chem_life_supporting"),
+                    ("w_axes_in_band", "$chem_axes_in_band"),
+                    ("w_observed", "$chem_observed"),
+                    ("w_gate_opened", "$chem_gate_opened"),
+                    ("w_gate_shut", "$chem_gate_shut"),
+                    ("w_balanced", "$chem_balanced"),
+                    ("w_broken", "$chem_broken"),
+                ] {
+                    m.set(key, strings::resolve(token).into_owned());
+                }
 
                 // ── The tab strip, in three brightnesses. ──
                 //
@@ -945,7 +1103,8 @@ impl GodModeScene {
                 // motion does, and when the rain arrives so does rain.
                 //
                 // A SUGGESTION and never a seizure: nothing here changes the
-                // view, it only says where something is happening.
+                // view, it only says where something is happening. The pair
+                // script maps the state word onto the button variant.
                 let suggested: Vec<Field> = snap
                     .processes
                     .iter()
@@ -955,13 +1114,13 @@ impl GodModeScene {
                     .collect();
                 for (action, field, _, _) in FIELD_ACTIONS {
                     m.set(
-                        format!("{action}_style"),
+                        format!("{action}_state"),
                         if self.field == field {
-                            "modal.buttons.variants.primary"
+                            "active"
                         } else if suggested.contains(&field) {
-                            "modal.buttons.variants.secondary"
+                            "suggested"
                         } else {
-                            "modal.buttons.variants.ghost"
+                            "dim"
                         },
                     );
                 }
@@ -980,11 +1139,8 @@ impl GodModeScene {
                         },
                     );
                 }
-                m.set(
-                    "water_infall",
-                    snap.levers.water_budget_kg / flicker_poc_chemistry::surface::DEFAULT_WATER_KG,
-                );
-                m.set("water_coverage", snap.levers.water_coverage_target);
+                // (water_infall + water_coverage echo below, CLAMPED — one write
+                // per key: a raw duplicate here used to shadow the clamped pair.)
 
                 // ── The tile inspector's picture and caption. ──
                 m.set("has_tile", self.tile.is_some());
@@ -994,54 +1150,27 @@ impl GodModeScene {
                     m.set("tile_caption", caption.clone());
                 }
 
-                let (word, color) = if snap.playing {
-                    ("$chem_playing", "chemistry.playing.color")
-                } else {
-                    ("$chem_paused", "chemistry.paused.color")
-                };
-                m.set("play_state", strings::resolve(word).into_owned());
-                m.set("play_state_color", color);
-                // ── The process panel: what every stage is doing, and why. ──
-                //
-                // Three states, and the third is the one that earns its keep: a
-                // process that is neither held nor running is WAITING ON THE WORLD,
-                // and the row says what for. Reporting that as "stopped" would hide
-                // the difference between a bug and a planet that is not ready yet.
+                // ── The process console, as RAW state words — the pair script
+                //    picks the glyph, the state copy, the row wash and the
+                //    ARM/RELEASE label off them. Three states, and the third is
+                //    the one that earns its keep: a process that is neither held
+                //    nor running is WAITING ON THE WORLD; reporting that as
+                //    "stopped" would hide the difference between a bug and a
+                //    planet that is not ready yet. ──
                 for (i, p) in snap.processes.iter().enumerate().take(PROCESS_ROWS) {
                     let n = i + 1;
-                    let (mark, state, color) = if p.held {
-                        (
-                            "\u{2298}",
-                            strings::resolve("$chem_held").into_owned(),
-                            "chemistry.held",
-                        )
-                    } else if p.ready {
-                        (
-                            "\u{25cf}",
-                            strings::resolve("$chem_running").into_owned(),
-                            "chemistry.ok",
-                        )
-                    } else {
-                        (
-                            "\u{25cb}",
-                            strings::resolve("$chem_waiting").into_owned(),
-                            "chemistry.waiting",
-                        )
-                    };
-                    m.set(format!("proc_{n}"), format!("{mark} {:<18}{state}", p.name));
-                    m.set(format!("proc_{n}_color"), color);
-                    m.set(format!("proc_{n}_shown"), true);
-                    // The console row's control: holding is ARM/RELEASE, the one
-                    // sanctioned per-process lever.
+                    m.set(format!("proc_{n}_name"), p.name);
                     m.set(
-                        format!("hold_{n}_label"),
-                        strings::resolve(if p.held {
-                            "$chem_release"
+                        format!("proc_{n}_state"),
+                        if p.held {
+                            "held"
+                        } else if p.ready {
+                            "running"
                         } else {
-                            "$chem_hold"
-                        })
-                        .into_owned(),
+                            "waiting"
+                        },
                     );
+                    m.set(format!("proc_{n}_shown"), true);
                 }
                 for n in snap.processes.len() + 1..=PROCESS_ROWS {
                     m.set(format!("proc_{n}_shown"), false);
@@ -1060,20 +1189,16 @@ impl GodModeScene {
                         waiting += 1;
                     }
                 }
-                // The chip SAYS it is the gates door — it spent its first day
-                // reading as a status line, and the only labelled way in that
-                // anyone found was the pause summary's GATES… button.
-                let mut chip = format!(
-                    "\u{2699} {}  ·  {running} {}  ·  {waiting} {}",
-                    strings::resolve("$chem_gates_chip"),
-                    strings::resolve("$chem_running"),
-                    strings::resolve("$chem_waiting"),
-                );
-                if held > 0 {
-                    chip.push_str(&format!("  ·  {held} {}", strings::resolve("$chem_held")));
-                }
-                m.set("proc_summary", chip);
-                m.set("gates_open", self.gates_open);
+                // The chip itself (glyph + copy + wash) rides the pair script;
+                // these are its raw counts.
+                m.set("procs_running", running as f64);
+                m.set("procs_waiting", waiting as f64);
+                m.set("procs_held", held as f64);
+                // The console popup's STATE key — `gates_shown`, deliberately NOT
+                // the `gates_open` ACTION the chip fires: results and Model share
+                // one namespace at the dispatcher, and a bind spelled like a
+                // button is a collision waiting to be misread.
+                m.set("gates_shown", self.gates_open);
                 // The coverage slider shows the lever as it stands (1.00 = no
                 // cutoff — the disabled position is on the scale, not a mode).
                 m.set(
@@ -1093,7 +1218,7 @@ impl GodModeScene {
                 // ── The Starter: NEW-WORLD knobs, published from the scene's
                 //    pending state (not the snapshot — these are conditions for
                 //    the NEXT forge, and the running world ignores them). ──
-                m.set("starter_open", self.starter_open);
+                m.set("starter_shown", self.starter_open);
                 for (i, (_, sym)) in self.seed_elements.iter().enumerate() {
                     let n = i + 1;
                     m.set(format!("seed_el_{n}_label"), sym.clone());
@@ -1192,27 +1317,11 @@ impl GodModeScene {
                     None => m.set("gate_shown", false),
                     Some(g) => {
                         m.set("gate_shown", true);
-                        m.set(
-                            "gate",
-                            format!(
-                                "\u{23f8} {} {}  ·  {:.0} My",
-                                g.stage,
-                                strings::resolve(if g.opened {
-                                    "$chem_gate_opened"
-                                } else {
-                                    "$chem_gate_shut"
-                                }),
-                                g.at_myr,
-                            ),
-                        );
-                        m.set(
-                            "gate_color",
-                            if g.opened {
-                                "chemistry.ok"
-                            } else {
-                                "chemistry.waiting"
-                            },
-                        );
+                        // The transition's RAW pieces — the header line, its
+                        // wash and the card headline compose in the pair script.
+                        m.set("gate_stage", g.stage);
+                        m.set("gate_opened", g.opened);
+                        m.set("gate_my", g.at_myr);
 
                         // ── The pause summary. A gate moving is the world
                         //    crossing one of its own thresholds — an epoch
@@ -1222,18 +1331,6 @@ impl GodModeScene {
                         //    acknowledged this transition.
                         let unread = g.at_myr > self.gate_ack;
                         m.set("gate_pause_shown", !snap.playing && unread);
-                        m.set(
-                            "gate_headline",
-                            format!(
-                                "{} {}",
-                                g.stage,
-                                strings::resolve(if g.opened {
-                                    "$chem_gate_opened"
-                                } else {
-                                    "$chem_gate_shut"
-                                }),
-                            ),
-                        );
                         m.set(
                             "gate_why",
                             strings::resolve(gate_reason(g.stage, g.opened)).into_owned(),
@@ -1412,16 +1509,8 @@ impl GodModeScene {
                 let balanced = (present - expected).abs() <= 1e-6 * expected.max(1.0);
                 let total = expected.max(1.0);
                 let pct = |mass: f64| mass / total * 100.0;
-                let (status, color) = if balanced {
-                    ("$chem_balanced", "chemistry.ok")
-                } else {
-                    ("$chem_broken", "chemistry.bad")
-                };
-                m.set(
-                    "ledger_status",
-                    format!("Σ {}  ·  {}", fmt_mass(expected), strings::resolve(status)),
-                );
-                m.set("ledger_status_color", color);
+                m.set("balanced", balanced);
+                m.set("ledger_total", fmt_mass(expected));
                 let rows: [(&str, f64); 6] = [
                     ("$chem_ledger_mantle", s.mantle_mass_kg),
                     ("$chem_ledger_core", s.core_mass_kg),
@@ -1442,25 +1531,9 @@ impl GodModeScene {
                 let h = &snap.habitability;
                 for (i, ax) in h.axes.iter().enumerate() {
                     let n = i + 1;
-                    let live = ax.signal.is_some();
-                    let (status, status_color) = if live {
-                        if ax.in_band() {
-                            ("$chem_in_band", "pocepochs.hab.status_in")
-                        } else {
-                            ("$chem_out_of_band", "pocepochs.hab.status_out")
-                        }
-                    } else {
-                        ("$chem_no_signal_yet", "pocepochs.hab.status_dead")
-                    };
+                    m.set(format!("a{n}_live"), ax.signal.is_some());
+                    m.set(format!("a{n}_in"), ax.in_band());
                     m.set(format!("a{n}_name"), strings::resolve(ax.name).into_owned());
-                    m.set(
-                        format!("a{n}_name_color"),
-                        if live {
-                            "pocepochs.hab.name_live"
-                        } else {
-                            "pocepochs.hab.name_dead"
-                        },
-                    );
                     m.set(format!("a{n}_v"), ax.signal.unwrap_or(-1.0)); // −1 = no signal
                     m.set(
                         format!("a{n}_lolab"),
@@ -1470,44 +1543,38 @@ impl GodModeScene {
                         format!("a{n}_hilab"),
                         strings::resolve(ax.high_label).into_owned(),
                     );
-                    m.set(
-                        format!("a{n}_status"),
-                        strings::resolve(status).into_owned(),
-                    );
-                    m.set(format!("a{n}_status_color"), status_color);
                 }
-                let total = h.axes.len();
+                m.set("axes_total", h.axes.len() as f64);
+                m.set("axes_in_band", h.axes_in_band as f64);
+                m.set("axes_live", h.axes_live as f64);
                 if h.life_supporting {
                     // The lamp's OWN key. It was `life` once, which is the
                     // readout's life-line TEXT bind — so a life-supporting world
                     // replaced its own biosphere readout with the bool `true`
                     // and the lamp never lit, both from one name collision.
                     m.set("life_light", true);
-                    m.set(
-                        "verdict",
-                        strings::resolve("$chem_life_supporting").into_owned(),
-                    );
-                    m.set("verdict_color", "pocepochs.hab.verdict_life");
                 } else {
                     m.set("no_life", true);
-                    m.set(
-                        "verdict",
-                        format!(
-                            "{} / {total} {}",
-                            h.axes_in_band,
-                            strings::resolve("$chem_axes_in_band")
-                        ),
-                    );
-                    m.set("verdict_color", "pocepochs.hab.verdict_count");
                 }
-                m.set(
-                    "observed",
-                    format!(
-                        "{} / {total} {}",
-                        h.axes_live,
-                        strings::resolve("$chem_observed")
-                    ),
-                );
+            }
+        }
+        m
+    }
+
+    /// The frame's full model: the raw variables plus the pair script's derived
+    /// words, glyphs and style paths, plus the transient `sig_<name>` mirror of
+    /// last frame's fired intents.
+    fn model(&mut self) -> ValueMap {
+        let raw = self.hud_model();
+        let mut m = raw.clone();
+        if let Some(script) = self.script.as_mut() {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("godmode.lua set_model failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => m.extend(derived),
+                Ok(None) => {}
+                Err(e) => tracing::error!("godmode.lua derive() failed: {e}"),
             }
         }
         UiIntents::mirror_into(&mut m, &self.fired_sigs);
@@ -1517,7 +1584,7 @@ impl GodModeScene {
 
 impl Default for GodModeScene {
     fn default() -> Self {
-        Self::new()
+        Self::shipped()
     }
 }
 
@@ -1528,11 +1595,10 @@ impl Scene for GodModeScene {
         self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
         self.theme = Some(theme);
 
-        // The declarative HUD is pure DATA: there is deliberately no
-        // `hud_chemistry.lua` — a per-scene HUD script that hand-composes the
-        // surface is the legacy idiom (rule E5AFBBAB); composition lives in
-        // `ui_templates.json` and this scene only configures it.
-        // The legend's swatch colours, GENERATED from the same colour functions
+        // The tree, styles, pair script and the refilled gauge rows were all
+        // built in `from_parts` — the five-line split leaves `enter` with the
+        // GPU only, plus the one styles write that needs the paint functions:
+        // the legend's swatch colours, GENERATED from the same colour functions
         // that paint the globe — never authored, so they cannot drift from the
         // sphere they explain.
         self.inject_legend_styles();
@@ -1547,81 +1613,51 @@ impl Scene for GodModeScene {
         &mut self,
         dt: Duration,
         input: &InputState,
-        _signals: &mut SceneInput,
+        signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
-        // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
-        // ledger panel is a styled container, so the pointer over it sets
-        // `hud_hit` — fed to the walker layer below as this frame's
-        // pointer-consume (the camera stays a raw poll, unchanged).
-        let over_hud;
-        let mut results;
-        {
-            let tree = self.build_tree();
-            self.ui_intents = UiIntents::of(&tree);
-            let model = self.hud_model();
-            let snap = UiInput {
-                mouse: input.mouse_position,
-                clicked: input.mouse_left_pressed,
-                down: input.mouse_left,
-                screen: renderer.size(),
-                typed: String::new(),
-                backspace: false,
-                wheel: input.mouse_wheel_delta,
-            };
-            let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
-            over_hud = frame.results.is_on("hud_hit");
-            // Where the globe landed. The walker RESERVES this rect and never
-            // fills it (it runs late; offscreen passes must run first), so the
-            // hand-off is: read it here, draw into it at the top of `render`.
-            self.world.place(frame.rtt_rect(GLOBE_SLOT));
-            // The CLICK channel. A button's `action` fires into the frame's
-            // results — reading only `hud_hit` and dropping the rest is exactly
-            // how CARRY ON came to do nothing: the click fired into a struct
-            // nobody read, while the keyboard path (walker intents) worked.
-            results = frame.results.clone();
-            self.hud_commands = frame.commands;
-        }
+        let Some(tree) = self.authored.take() else {
+            return Transition::None;
+        };
+        // The scene is DATA: walk the AUTHORED tree (its gauge rows refilled at
+        // construction) with the raw model + the pair script's derived words.
+        let model = self.model();
+        let snap = UiInput {
+            mouse: input.mouse_position,
+            clicked: input.mouse_left_pressed,
+            down: input.mouse_left,
+            screen: renderer.size(),
+            typed: String::new(),
+            backspace: false,
+            wheel: input.mouse_wheel_delta,
+        };
+        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        let over_hud = frame.results.is_on("hud_hit");
+        // Where the globe landed. The walker RESERVES this rect and never
+        // fills it (it runs late; offscreen passes must run first), so the
+        // hand-off is: read it here, draw into it at the top of `render`.
+        self.world.place(frame.rtt_rect(GLOBE_SLOT));
+        let mut results = frame.results.clone();
+        self.hud_commands = frame.commands;
 
-        // ── The input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the raw
-        // `prev_menu` edge. The resolver owns the `Menu` (Esc) press edge; the walker
-        // layer's DECLARED `on_menu` intent (S10) is the pause-open edge. The orbit
-        // camera + the discrete data-viewer keys below stay on the raw snapshot, but
-        // read its edge log rather than hand-rolled `*_prev` bools. `ev` is the
-        // REUSED `Fired` buffer; the `InputEvent` list is a short-lived local
-        // (it borrows this frame's snapshot — RT-7).
-        self.tick = self.tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.tick,
-            &mut self.ev,
-        );
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> = self
-            .ev
-            .iter()
-            .map(|f| InputEvent::from_fired(f, ctx, input))
-            .collect();
-        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-        let mut root = RootHandler;
-        let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        // ── The input seam (input-P3): the PUMP resolved this frame's events —
+        // the scene owns no Resolver. One dispatch through the walker, which
+        // owns the focus graph, consumes the pointer while it is over the HUD,
+        // and fires the screen's DECLARED intents (`on_menu` / `on_tab_*`) as
+        // result names. ──
+        let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
+            .with_nav(&tree, &model)
+            .with_rects(&frame.rects)
+            .with_intents(&self.ui_intents);
         {
-            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
-            Router::dispatch(&events, &mut chain, &mut self.route);
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        // Standard post-dispatch seam; no handler pushes context intents here.
-        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
-        walker.apply_focus(focus_change);
         self.fired_sigs = walker.take_fired();
-        self.route.requests.clear();
-
+        self.authored = Some(tree);
         // Fold the fired intent names in beside the click results, so both
-        // channels reach the ONE dispatcher identically — the Sablework idiom.
-        // A click on CARRY ON and the pad's Confirm are the same event from here.
+        // channels reach the ONE dispatcher identically — a click on a field
+        // tab and the pad's declared `on_tab_next` are the same event here.
         for name in &self.fired_sigs {
             results.set(name.clone(), true);
         }
@@ -1634,16 +1670,21 @@ impl Scene for GodModeScene {
             self.sim.send(cmd);
         }
 
-        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
-        // consumed the Menu press and fired the name; the scene maps it onto the
-        // shell pause push — the root's hardcoded Menu arm is gone.
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
+        // consumed the Menu press and fired the name. The overlay shows the
+        // PROFILE's map — the pump owns bindings now (input-P3), the scene
+        // holds none.
         if results.is_on("pause_open") {
             let theme = self.theme.expect("theme built in enter");
+            let pause_map = flicker_shell::input_profile()
+                .context_map("World")
+                .cloned()
+                .unwrap_or_else(InputMap::wasd_and_mouse);
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                self.bindings.active_map(),
+                &pause_map,
                 &AbstractControls::default(),
-                &self.gamepad_config,
+                &GamepadConfig::default(),
             )));
         }
 
@@ -1689,23 +1730,15 @@ impl Scene for GodModeScene {
             self.ready = true;
         }
 
-        // **No raw keys.** Every one of the twelve this scene used to poll
-        // (Space/Down/R/S/V/A/G/B/C/T/E/1-9) is now a control on the bench or a
-        // DECLARED intent on the screen root, which is what "the modern input
-        // system" means: a pad press, a key and a click become the same event
-        // before the scene sees any of them. A half-migrated surface answering
-        // two input vocabularies at once is a tracked defect, so they went
-        // together.
-        // One camera line, and it is the WORLD's: the look and zoom SIGNALS, gated by the
-        // focus of the panel the world names (this bench names none yet, so the globe
-        // stays pointer-flown), and the pointer drag latching inside the world's own rect.
-        // Disabled bench (its input-P3 is task #3): it still self-resolves, so it resolves
-        // the look tuple from its OWN bindings and hands GlobeWorld the result — the world
-        // no longer takes a resolver.
-        let look =
-            GlobeWorld::look_from(|s| self.bindings.signal_axis(s, input, &self.gamepad_config));
+        // One camera line, and it is the WORLD's: the look and zoom come from
+        // the PUMP's continuous queries (`signals.axis`, never a device), and
+        // the globe answers them only while its own pane is ENTERED — the
+        // LOCKED pane's group IS the gate the world matches (`in_panel`); the
+        // walker owns it, the scene only reads it, never a second focus system.
+        // The pointer half latches inside the world's own rect, as it always has.
+        let look = GlobeWorld::look_from(|s| signals.axis(s, input));
         self.world
-            .update(dt.as_secs_f32(), input, look, self.ui_state.focused());
+            .update(dt.as_secs_f32(), input, look, self.ui_state.entered_group());
         Transition::None
     }
 
@@ -1931,17 +1964,6 @@ impl Scene for GodModeScene {
 }
 
 impl GodModeScene {
-    /// This frame's screen. The template tier this bench composed against has been
-    /// removed; the bench is not in the launcher roster, so `build_tree` returns an
-    /// empty `screen` placeholder rather than rebuilding a UI ad-hoc.
-    fn build_tree(&self) -> UiNode {
-        UiNode {
-            component: "screen".to_string(),
-            id: "godmode".to_string(),
-            ..Default::default()
-        }
-    }
-
     /// The cell being looked at: the one whose direction is closest to the camera.
     /// The globe is centred on the origin, so "toward the camera" is the point of it
     /// the maintainer is actually facing.
@@ -2349,7 +2371,7 @@ impl GodModeScene {
                 [0.05, 0.06, 0.08, 0.94],
             );
             renderer.draw_text(
-                "BULK ACCRETION SEED",
+                &strings::resolve("$chem_bulk_seed_head"),
                 Vec2::new(px + pad, py + pad),
                 14.0,
                 gold,

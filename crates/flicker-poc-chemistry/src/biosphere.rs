@@ -181,7 +181,7 @@ impl Biosphere {
         let of = |name: &str, id: CompoundId| {
             let def = tables
                 .compound(name)
-                .unwrap_or_else(|| panic!("the biosphere needs '{name}' in compounds.json"));
+                .unwrap_or_else(|| panic!("the biosphere needs '{name}' in the compound catalog"));
             assert_eq!(
                 def.id, id,
                 "'{name}' moved in the catalog: {} != {id}",
@@ -535,7 +535,7 @@ impl Maturation {
         let of = |name: &str, id: CompoundId| {
             let def = tables
                 .compound(name)
-                .unwrap_or_else(|| panic!("maturation needs '{name}' in compounds.json"));
+                .unwrap_or_else(|| panic!("maturation needs '{name}' in the compound catalog"));
             assert_eq!(
                 def.id, id,
                 "'{name}' moved in the catalog: {} != {id}",

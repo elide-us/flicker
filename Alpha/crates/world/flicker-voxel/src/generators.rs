@@ -21,19 +21,18 @@ use crate::material::Material;
 use crate::voxel::Voxel;
 use crate::voxel_state::VoxelState;
 
-/// Demo material indices for the scene generators. **STUB** — there
-/// is no real material/contents system yet; these are stable indices
-/// the shader's `material_index_color` switches on. Replace when the
-/// real material system lands.
-///
-/// Indices `1..=5` cover the water depth band (deep → mid → shallow →
-/// crest → foam).
+/// Demo material ids for the scene generators — **catalog `MaterialId`s**
+/// (`materials.json`) since the demo palette was retired (2026-08-19); the
+/// mesh pass colours them from the catalog palette. The old five-shade water
+/// band collapsed onto the two real materials it approximated: submerged
+/// ground is Water (60), the crest/beach transition is Sand (22) — the band
+/// machinery still exercises the primary/secondary/blend packing.
 pub mod demo_materials {
-    pub const DEEP_WATER: u16 = 1;
-    pub const MID_WATER: u16 = 2;
-    pub const SHALLOW: u16 = 3;
-    pub const CREST: u16 = 4;
-    pub const FOAM: u16 = 5;
+    pub const DEEP_WATER: u8 = 60;
+    pub const MID_WATER: u8 = 60;
+    pub const SHALLOW: u8 = 60;
+    pub const CREST: u8 = 22;
+    pub const FOAM: u8 = 22;
 }
 
 /// Generate a cluster representing a flat terrain slab: every voxel at
@@ -257,7 +256,7 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
             for y in 0..top_y {
                 let t = ((y as f32 - BAND_LO) / BAND_SPAN).clamp(0.0, 1.0);
                 let (p, s, b) = water_material_at(t);
-                let m = Material::new(p, s, b).expect("demo indices in range");
+                let m = Material::new(p, s, b);
                 c.set(
                     LocalCoord::new(x, y, z).expect("in bounds"),
                     Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, m),
@@ -268,7 +267,7 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
             // fractional part of h (matches `heightmap_terrain_at`).
             let t_top = ((top_y as f32 - BAND_LO) / BAND_SPAN).clamp(0.0, 1.0);
             let (p, s, b) = water_material_at(t_top);
-            let m = Material::new(p, s, b).expect("demo indices in range");
+            let m = Material::new(p, s, b);
             let top_voxel = if capped {
                 Voxel::new(VoxelState::Solid, CornerVector::DEFAULT, m)
             } else {
@@ -290,12 +289,12 @@ pub fn heightmap_terrain_at_with_depth_materials(seed: u64, world_offset: [f32; 
 /// heightmap band to `(primary, secondary, blend_byte)`. `t = 0`
 /// is the deepest trough; `t = 1` is the highest crest. The blend
 /// byte is the local segment fraction scaled into `[0, 255]`.
-fn water_material_at(t: f32) -> (u16, u16, u8) {
+fn water_material_at(t: f32) -> (u8, u8, u8) {
     use demo_materials::*;
     // Segment edges over `t`. Each entry is `(edge, primary, secondary)`
     // — within `[prev_edge, edge)`, the voxel interpolates from
     // `primary` to `secondary`.
-    let segments: [(f32, u16, u16); 4] = [
+    let segments: [(f32, u8, u8); 4] = [
         (0.25, DEEP_WATER, MID_WATER),
         (0.55, MID_WATER, SHALLOW),
         (0.80, SHALLOW, CREST),
@@ -318,7 +317,7 @@ mod tests {
     use super::*;
 
     fn solid_material() -> Material {
-        Material::new(7, 7, 7).unwrap()
+        Material::new(7, 7, 7)
     }
 
     #[test]

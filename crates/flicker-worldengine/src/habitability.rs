@@ -33,6 +33,8 @@ pub struct Axis {
     /// Habitable green-band upper bound (`0..1`).
     pub hi: f32,
     /// What the low / high ends of this axis mean (gauge end captions).
+    /// Display metadata ships as stringtable `$token`s (like `name`) — the BENCH
+    /// resolves them at its publish site, so the observer never hands out raw copy.
     pub low_label: &'static str,
     pub high_label: &'static str,
 }
@@ -102,13 +104,13 @@ fn atmosphere_kind(world: &World) -> &'static str {
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(id, _)| id);
     match dominant {
-        Some(1) => "steam (H₂O)",
-        Some(2) => "carbon hotbox (CO₂)",
-        Some(91) => "temperate (N₂)",
-        Some(92) => "volcanic (SO₂)",
-        Some(93) => "acidic (HCl)",
-        Some(94) => "reducing (CH₄)",
-        Some(95) => "reducing (NH₃)",
+        Some(1) => "$hab_air_steam",
+        Some(2) => "$hab_air_co2",
+        Some(91) => "$hab_air_n2",
+        Some(92) => "$hab_air_so2",
+        Some(93) => "$hab_air_hcl",
+        Some(94) => "$hab_air_ch4",
+        Some(95) => "$hab_air_nh3",
         _ => "—",
     }
 }
@@ -147,12 +149,12 @@ fn layer_mass(world: &World, kind: LayerKind) -> f64 {
 pub fn observe(world: &World) -> Habitability {
     // Interior / tectonic — the live cooling clock (magma ocean → mobile lid → dead).
     let interior = Axis {
-        name: "Interior",
+        name: "$hab_ax_interior",
         signal: Some(normalized(world.temp)), // the 0..1 read of the Kelvin temperature
         lo: INTERIOR_LO,
         hi: INTERIOR_HI,
-        low_label: "dead/frozen",
-        high_label: "magma ocean",
+        low_label: "$hab_lo_dead_frozen",
+        high_label: "$hab_hi_magma_ocean",
     };
 
     // Hydrosphere: how much of the planet's water endowment (delivered + still-to-deliver)
@@ -167,39 +169,39 @@ pub fn observe(world: &World) -> Habitability {
     let atmo_signal = (total_vol > 0.0).then(|| (air_vol / total_vol).clamp(0.0, 1.0) as f32);
 
     let hydrosphere = Axis {
-        name: "Hydrosphere",
+        name: "$hab_ax_hydrosphere",
         signal: hydro_signal,
         lo: HYDRO_LO,
         hi: HYDRO_HI,
-        low_label: "desert",
-        high_label: "drowned",
+        low_label: "$hab_lo_desert",
+        high_label: "$hab_hi_drowned",
     };
     let atmosphere = Axis {
-        name: "Atmosphere",
+        name: "$hab_ax_atmosphere",
         signal: atmo_signal,
         lo: ATMO_LO,
         hi: ATMO_HI,
-        low_label: "too thin",
-        high_label: "runaway",
+        low_label: "$hab_lo_too_thin",
+        high_label: "$hab_hi_runaway",
     };
 
     // Not yet simulated — their causal stages (a surface energy balance, ocean chemistry) do
     // not exist in the tick sim, so they honestly have no signal until those procedures land.
     let surface = Axis {
-        name: "Surface temp",
+        name: "$hab_ax_surface_temp",
         signal: None,
         lo: 0.35,
         hi: 0.65,
-        low_label: "frozen",
-        high_label: "hothouse",
+        low_label: "$hab_lo_frozen",
+        high_label: "$hab_hi_hothouse",
     };
     let ocean_ph = Axis {
-        name: "Ocean pH",
+        name: "$hab_ax_ocean_ph",
         signal: None,
         lo: 0.35,
         hi: 0.65,
-        low_label: "acidic",
-        high_label: "alkaline",
+        low_label: "$hab_lo_acidic",
+        high_label: "$hab_hi_alkaline",
     };
 
     let axes = vec![interior, surface, atmosphere, hydrosphere, ocean_ph];

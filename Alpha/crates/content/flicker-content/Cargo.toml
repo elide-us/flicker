@@ -12,7 +12,7 @@ publish = false
 # ">1 → let the user choose" guard. Pure std; the FBX parser + rigging + bake land in later slices.
 # POC location (crates/) per the cluster migration policy; graduates once hardened.
 [dependencies]
-ufbx = "0.11.2"
+ufbx = "0.11.3"
 anyhow.workspace = true
 glam.workspace = true
 serde.workspace = true

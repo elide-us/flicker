@@ -1,46 +1,60 @@
 //! The world-gen scene, stripped to **Epoch 1 (seed) + Epoch 2 (molten convection)**.
 //!
-//! Epoch-1 generation controls: **R** reseeds a fresh planet, **`[` / `]`** shrink / grow the
-//! planet, **V** cycles the view (material → heat → layer stack; **Up** slices the stack
-//! open), and the element distribution is read on the left. Epoch-2 sim controls: **Space** starts / stops the
-//! convection run (each tick = one pass ≈ [`MY_PER_TICK`] My, the time for the crust to move
-//! one hex), **Down** resets to the Epoch-1 seed. **Esc** opens the pause menu.
+//! # The scene is a PAIR (five-line architecture)
+//!
+//! `pocepochs.scene.json` authors the HUD tree + this bench's style blocks;
+//! `pocepochs.lua` derives every display string (readout, transport words, axis
+//! statuses, the verdict footer) from the RAW model this behaviour publishes; the
+//! Rust component kinds draw. The condition-axis rows are REFILLED into the
+//! authored `pe_axis_rows` container at construction — the observer's bands are
+//! runtime data, and authoring them in the scene file would fork the observer's
+//! numbers. The seven raw keyboard verbs became the TRANSPORT row's controls
+//! (play/reset/reseed · size − + · view cycle · the Layers slice toggle) plus the
+//! declared `on_mode_next`/`on_mode_prev` view-cycle intents; the scene owns no
+//! resolver and no bindings — the PUMP hands it resolved signals. The planet
+//! itself stays Rust-drawn under the HUD (the shared `GlobeWorld`, handed the
+//! whole window), and the surface-view legend + element-distribution panels stay
+//! scene-drawn (their per-row swatch colours are DATA — the sanctioned exception).
 
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use flicker::render::{FrameGraph, Rect, Renderer, TextureHandle, Vec2, Vec3};
 use flicker::scene::{Scene, SceneInput, Transition};
-use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
-use flicker::ui::{render_hud, run_ui, UiInput, UiIntents, UiState, WalkerHandler};
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputMap, InputState, Key,
+use flicker::script::{HudCommand, ScriptHost, UiNode, Value, ValueMap};
+use flicker::ui::{
+    render_hud, run_ui, strings, SceneDef, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{Fired, Resolver};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_core::{AbstractControls, GamepadConfig, InputMap, InputState};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_worldengine::{observe, LayerKind, Simulation, MY_PER_TICK};
 
 use flicker_globe::{GlobeWorld, ShellSpec, RADIUS};
 
 use crate::appearance::{self, ViewMode};
-use crate::route::RootHandler;
 
-/// The declarative HUD tree (`hud_pocepochs.lua`: readout text + the
-/// life-supporting-conditions gauge panel) + the shared UI-element layout.
-fn hud_script_path() -> std::path::PathBuf {
-    flicker_core::roots::roots()
-        .sensorium()
-        .join("scripts/shared/hud_pocepochs.lua")
-}
-/// The globe's authored stage — `stages.pocepochs_globe` in that same file: the light the
-/// planet is seen by, the backdrop it sits on, and the fact that its shells come from the
+/// The pair script — the scene's LOGIC half, by name (five-line architecture).
+const PE_SCRIPT: &str = include_str!("../../../../content/sensorium/scripts/pocepochs.lua");
+/// The shipped scene file — the tests' copy of the authored tree (the runtime
+/// receives the same file through the manifest `SceneDef`).
+#[cfg(test)]
+const PE_SCENE: &str =
+    include_str!("../../../../content/sensorium/scenes/pocepochs.scene.json");
+
+/// The globe's authored stage — `stages.pocepochs_globe`: the light the planet is
+/// seen by, the backdrop it sits on, and the fact that its shells come from the
 /// simulation rather than the style sheet.
 const STAGE_SOURCE: &str = "pocepochs_globe";
 
+/// The condition-axis row's authored heights (the refilled rows' geometry —
+/// name/status line · gauge bar · gap · end captions = 42px total).
+const AXIS_ROW_H: f32 = 42.0;
+const AXIS_BAR_H: f32 = 12.0;
+
 /// Default planet size (grid frequency, ~49.65 mi/hex). ½ Earth — snappy but planet-scale.
 const PLANET_FREQ: u32 = 48;
-/// Planet-size range + step for the `[` / `]` controls (grid frequency; 96 ≈ full Earth).
+/// Planet-size range + step for the size − / + controls (grid frequency; 96 ≈ full Earth).
 const SIZE_MIN: u32 = 12;
 const SIZE_MAX: u32 = 96;
 const SIZE_STEP: u32 = 6;
@@ -60,36 +74,55 @@ fn clock_seed() -> u64 {
     z ^ (z >> 31)
 }
 
+
+/// The readout's cached census: the cooling clock and which layers have emerged
+/// from it across the planet, counted once per tick move.
+#[derive(Default)]
+struct Census {
+    temp_k: f32,
+    cells: usize,
+    core: usize,
+    crust: usize,
+    ocean: usize,
+    atm: usize,
+}
+
 pub struct WorldScene {
     sim: Simulation,
     /// **The planet, whole** — the shell meshes, the authored stage, the offscreen target and
     /// the orbit camera. This bench kept its own copy of every one of those; it keeps none now.
     world: GlobeWorld,
     tick: u64,
-    /// Current world seed (R rolls a new one).
+    /// Current world seed (Reseed rolls a new one).
     seed: u64,
-    /// Current planet size (grid frequency; `[` / `]` change it).
+    /// Current planet size (grid frequency; the size − / + controls change it).
     freq: u32,
     /// The seed's global element distribution: `(atomic number, symbol, percent)`, sorted
     /// descending, only the relevant (non-negligible) elements. Conserved across ticks, so it
     /// is a property of the Epoch-1 seed; recomputed on reseed / resize.
     element_dist: Vec<(u8, String, f32)>,
-    stats: String,
+    /// The cached census the readout composes from — recomputed on refresh (a
+    /// tick move), never per frame.
+    census: Census,
     theme: Option<Theme>,
     white: Option<TextureHandle>,
-    /// Surface colouring (`V` cycles material → heat → layer stack).
+    /// Surface colouring (the view control cycles material → heat → layer stack).
     mode: ViewMode,
-    /// Whether the layer stack is sliced open (`Up` toggles) — a wedge cut through the shells.
+    /// Whether the layer stack is sliced open (the Layers-view checkbox) — a wedge cut
+    /// through the shells.
     cutaway: bool,
     playing: bool,
     play_accum: f32,
-    /// The HUD's component tree, built ONCE at enter from `hud_pocepochs.lua` and
-    /// walked every frame with fresh Model bindings; `None` if the script failed to
-    /// load (the scene-drawn panels still draw).
-    ui_tree: Option<UiNode>,
-    /// The screen's declarative bindings (S9): `on_menu = "pause_open"`.
+    /// The AUTHORED tree off the manifest's def (the five-line split); its
+    /// `pe_axis_rows` container is REFILLED at construction. `take`n around the
+    /// walk so the walker can borrow it beside the mutable UI state.
+    authored: Option<UiNode>,
+    /// The pair script (`pocepochs.lua`) — derives every display string from the
+    /// raw Model each frame. `None` only if it failed to load.
+    script: Option<ScriptHost>,
+    /// The screen's declared bindings (S9), read off the authored root ONCE.
     ui_intents: UiIntents,
-    /// Token-resolved `ui_theme.json` styles (dotted `style` paths resolve here).
+    /// Token-resolved styles (dotted `style` paths resolve here).
     ui_styles: serde_json::Value,
     /// Retained walker interaction state.
     ui_state: UiState,
@@ -98,39 +131,92 @@ pub struct WorldScene {
     /// Intent names fired last frame — republished ONCE into the next Model as
     /// the transient `sig_<name>` mirror (S9 ruling), then dropped.
     fired_sigs: Vec<String>,
-    prev_play: bool,
-    prev_down: bool,
-    prev_view: bool,
-    prev_cut: bool,
-    prev_reseed: bool,
-    prev_size_down: bool,
-    prev_size_up: bool,
+}
 
-    /// Per-context action maps + active-context stack (spec §5/§9). This viewer only
-    /// ever sits in `World`; its map is `wasd_and_mouse`, whose `Menu`→Escape binding is
-    /// what the `Resolver` turns into the pause edge (the promoted `prev_menu`).
-    bindings: ContextualBindings,
-    gamepad_config: GamepadConfig,
-    /// The input seam: a stateful edge `Resolver` (the promoted `prev_menu`), a REUSED
-    /// `Fired` scratch buffer (no per-frame alloc), the router's request queue, and a
-    /// monotonic per-frame `input_tick` — the resolver's `TickTime`, kept distinct from
-    /// the simulation `tick` (which is not monotonic: reset returns it to 0).
-    resolver: Resolver,
-    ev: Vec<Fired>,
-    route: RouteCtx,
-    input_tick: u64,
+/// Find the first descendant (or self) with `id`, mutably — the seam the bench refills
+/// its axis-row container through (the sablework Rust-fills-the-container pattern;
+/// there is no shared helper, so this is the local one).
+fn find_by_id_mut<'a>(node: &'a mut UiNode, id: &str) -> Option<&'a mut UiNode> {
+    if node.id == id {
+        return Some(node);
+    }
+    node.children.iter_mut().find_map(|c| find_by_id_mut(c, id))
+}
+
+fn node(component: &str) -> UiNode {
+    UiNode {
+        component: component.to_string(),
+        ..Default::default()
+    }
+}
+
+fn prop(mut n: UiNode, key: &str, value: Value) -> UiNode {
+    n.props.insert(key.to_string(), value);
+    n
+}
+
+fn text_val(s: impl Into<String>) -> Value {
+    Value::Text(s.into())
+}
+
+/// A bound `text` node for a refilled axis row. `color_is_bind` picks the colour
+/// channel: a Model key holding a dotted path (`color_bind`) vs a static path
+/// (`color`) — stated explicitly so the two can never be confused.
+fn bind_text(bind: &str, size: f32, color: &str, color_is_bind: bool) -> UiNode {
+    let mut t = node("text");
+    t = prop(t, "text_bind", text_val(bind));
+    t = prop(t, "text_size", Value::Number(size as f64));
+    prop(
+        t,
+        if color_is_bind { "color_bind" } else { "color" },
+        text_val(color),
+    )
 }
 
 impl WorldScene {
-    pub fn new() -> Self {
+    /// The runtime constructor — the manifest hands in the authored `SceneDef`
+    /// (the five-line split): the tree + this bench's style blocks come from
+    /// `pocepochs.scene.json`.
+    pub fn new(def: &SceneDef) -> Self {
+        Self::from_parts(def.tree.clone(), def.styles.clone())
+    }
+
+    /// A bench on the SHIPPED scene file — the seam a test drives without an
+    /// app, exercising the same authored tree the runtime gets.
+    #[cfg(test)]
+    pub fn shipped() -> Self {
+        let def = SceneDef::parse("pocepochs", PE_SCENE)
+            .expect("the shipped pocepochs.scene.json parses");
+        Self::from_parts(def.tree, def.styles)
+    }
+
+    #[cfg(not(test))]
+    pub fn shipped() -> Self {
+        // Outside tests the manifest is the only construction path; a def-less
+        // bench would be a blank screen, so `Default` routes here loudly.
+        unreachable!("WorldScene is built from the manifest's SceneDef")
+    }
+
+    fn from_parts(authored: Option<UiNode>, scene_styles_json: Option<serde_json::Value>) -> Self {
+        if authored.is_none() {
+            tracing::error!("pocepochs: the scene def declares no `tree` — no HUD will draw");
+        }
         let seed = clock_seed();
         let sim = Simulation::from_repo_seeded(PLANET_FREQ, seed)
             .expect("tick sim loads from Alpha/content/data");
         // The styles are read HERE, not in `enter`, because the world is built FROM them: a
         // globe's look is authored, and the object that owns the look has to exist before the
         // first frame asks it to draw.
-        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
+        let ui_styles = flicker::ui::load_shared_styles(scene_styles_json.as_ref());
         let world = GlobeWorld::new(STAGE_SOURCE, &ui_styles, None);
+        let ui_intents = authored.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(PE_SCRIPT, "pocepochs_pair.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("pocepochs.lua failed to load — raw HUD values only: {e}");
+                None
+            }
+        };
         let mut scene = Self {
             sim,
             world,
@@ -138,36 +224,90 @@ impl WorldScene {
             seed,
             freq: PLANET_FREQ,
             element_dist: Vec::new(),
-            stats: String::new(),
+            census: Census::default(),
             theme: None,
             white: None,
             mode: ViewMode::Material, // Epoch 1 = the material cloud
             cutaway: false,
-            playing: false, // start paused at the Epoch-1 seed; Space begins Epoch 2
+            playing: false, // start paused at the Epoch-1 seed; Play begins Epoch 2
             play_accum: 0.0,
-            ui_tree: None,
-            ui_intents: UiIntents::default(),
+            authored,
+            script,
+            ui_intents,
             ui_styles,
             ui_state: UiState::new(),
             hud_commands: Vec::new(),
             fired_sigs: Vec::new(),
-            prev_play: false,
-            prev_down: false,
-            prev_view: false,
-            prev_cut: false,
-            prev_reseed: false,
-            prev_size_down: false,
-            prev_size_up: false,
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse()),
-            gamepad_config: GamepadConfig::default(),
-            resolver: Resolver::new(),
-            ev: Vec::new(),
-            route: RouteCtx::new(),
-            input_tick: 0,
         };
         scene.element_dist = scene.compute_element_dist();
         scene.refresh();
+        // The observer's bands are runtime data: the axis rows refill from them,
+        // never from authored literals that could fork the observer's numbers.
+        scene.refill_axis_rows();
         scene
+    }
+
+    /// Rebuild the condition-axis rows from the observer's bands — at construction
+    /// (the bands are constants of the observer, not of the seed). Each row: the
+    /// name/status line, the gauge (its band baked from the observer), and the two
+    /// end captions — every label riding a bind.
+    fn refill_axis_rows(&mut self) {
+        self.sim.ensure(0);
+        let bands: Vec<(f32, f32)> = self
+            .sim
+            .world(0)
+            .map(|w| observe(w).axes.iter().map(|ax| (ax.lo, ax.hi)).collect())
+            .unwrap_or_default();
+        let Some(cell) = self
+            .authored
+            .as_mut()
+            .and_then(|t| find_by_id_mut(t, "pe_axis_rows"))
+        else {
+            return;
+        };
+        cell.children = bands
+            .iter()
+            .enumerate()
+            .map(|(i, (lo, hi))| {
+                let n = i + 1;
+                let mut row = node("cell");
+                row.size = Some(AXIS_ROW_H);
+
+                let mut head = node("row");
+                head.size = Some(17.0);
+                let mut name = bind_text(&format!("a{n}_name"), 13.0, &format!("a{n}_name_color"), true);
+                name.grow = Some(1.0);
+                let mut status =
+                    bind_text(&format!("a{n}_status"), 11.0, &format!("a{n}_status_color"), true);
+                status.grow = Some(1.0);
+                status = prop(status, "align", text_val("right"));
+                head.children = vec![name, status];
+
+                let mut gauge = node("gauge");
+                gauge.size = Some(AXIS_BAR_H);
+                gauge.bind = Some(format!("a{n}_v"));
+                gauge = prop(gauge, "lo", Value::Number(f64::from(*lo)));
+                gauge = prop(gauge, "hi", Value::Number(f64::from(*hi)));
+                gauge = prop(gauge, "style", text_val("pocepochs.hab.gauge"));
+
+                let mut gap = node("stack");
+                gap.size = Some(2.0);
+
+                let mut foot = node("row");
+                foot.size = Some(11.0);
+                let mut lolab =
+                    bind_text(&format!("a{n}_lolab"), 10.0, "pocepochs.hab.caption.color", false);
+                lolab.grow = Some(1.0);
+                let mut hilab =
+                    bind_text(&format!("a{n}_hilab"), 10.0, "pocepochs.hab.caption.color", false);
+                hilab.grow = Some(1.0);
+                hilab = prop(hilab, "align", text_val("right"));
+                foot.children = vec![lolab, hilab];
+
+                row.children = vec![head, gauge, gap, foot];
+                row
+            })
+            .collect();
     }
 
     /// Rebuild the sim at the current seed + size, back to the Epoch-1 seed, paused.
@@ -236,33 +376,29 @@ impl WorldScene {
         }
     }
 
-    /// Ensure the current tick is computed, cache the readout, flag the mesh for rebuild.
+    /// Ensure the current tick is computed, cache the census, flag the mesh for rebuild.
     fn refresh(&mut self) {
         self.sim.ensure(self.tick);
         // The readout is the condition state, not an epoch number: the cooling clock `T` and
-        // which layers have emerged from it across the planet.
-        let stats = {
+        // which layers have emerged from it across the planet. Counted HERE (a tick move),
+        // never per frame; the pair script composes the display line from these raws.
+        self.census = {
             let w = self.sim.world(self.tick).expect("ensured this tick");
-            let n = w.cells.len();
             let count = |k: LayerKind| {
                 w.cells
                     .iter()
                     .filter(|c| c.column.find(k).is_some())
                     .count()
             };
-            format!(
-                "tick {}  ·  {:.0} My  ·  T {:.0} K  ·  {} cells  ·  core {} · crust {} · ocean {} · atm {}",
-                self.tick,
-                self.tick as f32 * MY_PER_TICK,
-                w.temp,
-                n,
-                count(LayerKind::Core),
-                count(LayerKind::Crust),
-                count(LayerKind::Ocean),
-                count(LayerKind::Atmosphere),
-            )
+            Census {
+                temp_k: w.temp,
+                cells: w.cells.len(),
+                core: count(LayerKind::Core),
+                crust: count(LayerKind::Crust),
+                ocean: count(LayerKind::Ocean),
+                atm: count(LayerKind::Atmosphere),
+            }
         };
-        self.stats = stats;
         self.publish_shells();
     }
 
@@ -282,85 +418,102 @@ impl WorldScene {
         world.set_shells(shells_for(sim, *tick, *mode, *cutaway));
     }
 
-    /// The per-frame HUD model: the readout lines (pre-formatted strings — Rust
-    /// owns the formatting), the life-supporting observer's reading of the
-    /// current world (per axis: the gauge value + name/status/caption binds and
-    /// their colour paths), the aggregate verdict, and the transient
-    /// `sig_<name>` mirror of last frame's fired intents. Pure read; the
-    /// observer encodes no causal rule.
+    /// The per-frame RAW model: the sim clock + census numbers, the transport
+    /// state, the observer's per-axis reading (signal + live/in-band booleans +
+    /// resolved metadata words), the aggregate verdict inputs, and the resolved
+    /// WORD variables the pair script composes with (localization stays
+    /// stringtable-resolved engine-side). Pure read; the observer encodes no
+    /// causal rule. Presentation strings belong to `pocepochs.lua`'s `derive()`.
     fn hud_model(&self) -> ValueMap {
+        let r = |t: &str| strings::resolve(t).into_owned();
         let mut m = ValueMap::new();
 
-        // ── readout (top-left) ──
-        m.set("stats", self.stats.as_str());
-        let (word, color) = if self.playing {
-            ("PLAYING", "pocepochs.playing.color")
-        } else {
-            ("PAUSED", "pocepochs.paused.color")
-        };
-        m.set("play_state", word);
-        m.set("play_state_color", color);
-        let cut_hint = if self.mode == ViewMode::Layers {
-            format!("  ·  Up slice: {}", if self.cutaway { "on" } else { "off" })
-        } else {
-            String::new()
-        };
+        // ── the readout raws ──
+        m.set("tick", self.tick as f64);
+        m.set("my", f64::from(self.tick as f32 * MY_PER_TICK));
+        m.set("temp_k", f64::from(self.census.temp_k));
+        m.set("cells_n", self.census.cells as f64);
+        m.set("core_n", self.census.core as f64);
+        m.set("crust_n", self.census.crust as f64);
+        m.set("ocean_n", self.census.ocean as f64);
+        m.set("atm_n", self.census.atm as f64);
+        m.set("playing", self.playing);
+        // The view cursor (a NUMBER — 1B64FF03) + the two-way slice toggle.
         m.set(
-            "hints",
-            format!(
-                "·  Space play/pause  ·  Down reset  ·  R reseed  ·  [ ] size  ·  V view: {}{}  ·  drag · wheel · Esc",
-                self.mode.label(),
-                cut_hint,
-            ),
+            "view",
+            match self.mode {
+                ViewMode::Material => 0.0,
+                ViewMode::Heat => 1.0,
+                ViewMode::Layers => 2.0,
+            },
         );
+        m.set("cut", self.cutaway);
+        m.set("freq", f64::from(self.freq));
 
-        // ── life-supporting conditions (bottom-right) ──
+        // Resolved WORDS the pair script composes with (never raw English).
+        m.set("w_tick", r("$pe_tick"));
+        m.set("w_cells", r("$pe_cells"));
+        m.set("w_core", r("$pe_core"));
+        m.set("w_crust", r("$pe_crust"));
+        m.set("w_ocean", r("$pe_ocean"));
+        m.set("w_atm", r("$pe_atm"));
+        m.set("w_playing", r("$pe_playing"));
+        m.set("w_paused", r("$pe_paused"));
+        m.set("w_play", r("$pe_play"));
+        m.set("w_pause", r("$pe_pause"));
+        m.set("w_view", r("$pe_view"));
+        m.set("w_size", r("$pe_size"));
+        m.set("w_view_0", r("$pe_view_material"));
+        m.set("w_view_1", r("$pe_view_heat"));
+        m.set("w_view_2", r("$pe_view_layers"));
+        m.set("w_in_band", r("$pe_in_band"));
+        m.set("w_out_of_band", r("$pe_out_of_band"));
+        m.set("w_no_signal", r("$pe_no_signal"));
+        m.set("w_life_supporting", r("$pe_life_supporting"));
+        m.set("w_axes_in_band", r("$pe_axes_in_band"));
+        m.set("w_observed", r("$pe_observed"));
+        m.set("w_air", r("$pe_air"));
+
+        // ── life-supporting conditions (the observer's reading, raw) ──
         if let Some(w) = self.sim.world(self.tick) {
             let h = observe(w);
             for (i, ax) in h.axes.iter().enumerate() {
                 let n = i + 1;
-                let live = ax.signal.is_some();
-                let (status, status_color) = if live {
-                    if ax.in_band() {
-                        ("in band", "pocepochs.hab.status_in")
-                    } else {
-                        ("out of band", "pocepochs.hab.status_out")
-                    }
-                } else {
-                    ("no signal yet", "pocepochs.hab.status_dead")
-                };
-                m.set(format!("a{n}_name"), ax.name);
-                m.set(
-                    format!("a{n}_name_color"),
-                    if live {
-                        "pocepochs.hab.name_live"
-                    } else {
-                        "pocepochs.hab.name_dead"
-                    },
-                );
-                m.set(format!("a{n}_v"), ax.signal.unwrap_or(-1.0)); // −1 = no signal yet
-                m.set(format!("a{n}_lolab"), ax.low_label);
-                m.set(format!("a{n}_hilab"), ax.high_label);
-                m.set(format!("a{n}_status"), status);
-                m.set(format!("a{n}_status_color"), status_color);
+                m.set(format!("a{n}_v"), f64::from(ax.signal.unwrap_or(-1.0))); // −1 = no signal yet
+                m.set(format!("a{n}_live"), ax.signal.is_some());
+                m.set(format!("a{n}_in_band"), ax.in_band());
+                // The observer's display metadata ships as `$token`s — resolved here,
+                // the bench's publish site.
+                m.set(format!("a{n}_name"), r(ax.name));
+                m.set(format!("a{n}_lolab"), r(ax.low_label));
+                m.set(format!("a{n}_hilab"), r(ax.high_label));
             }
-            let total = h.axes.len();
-            if h.life_supporting {
-                m.set("life", true);
-                m.set("verdict", "LIFE-SUPPORTING");
-                m.set("verdict_color", "pocepochs.hab.verdict_life");
-            } else {
-                m.set("no_life", true);
-                m.set(
-                    "verdict",
-                    format!("{} / {total} axes in band", h.axes_in_band),
-                );
-                m.set("verdict_color", "pocepochs.hab.verdict_count");
-            }
-            m.set("observed", format!("{} / {total} observed", h.axes_live));
-            m.set("air", format!("air: {}", h.atmosphere_kind));
+            m.set("axes_total", h.axes.len() as f64);
+            m.set("axes_live", h.axes_live as f64);
+            m.set("axes_in_band", h.axes_in_band as f64);
+            m.set("life", h.life_supporting);
+            m.set("no_life", !h.life_supporting);
+            m.set("air_kind", r(h.atmosphere_kind));
         }
+        m
+    }
 
+    /// The frame's full model: the raw variables plus the pair script's derived
+    /// display strings folded over them, and the transient `sig_<name>` mirror
+    /// (S9) riding the same ONE publish.
+    fn model(&mut self) -> ValueMap {
+        let raw = self.hud_model();
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("pocepochs: publishing the model to the script failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => m.extend(derived),
+                Ok(None) => {}
+                Err(e) => tracing::error!("pocepochs.lua derive() failed: {e}"),
+            }
+        }
         UiIntents::mirror_into(&mut m, &self.fired_sigs);
         m
     }
@@ -477,7 +630,7 @@ fn shells_for(sim: &Simulation, tick: u64, mode: ViewMode, cut: bool) -> Vec<She
 
 impl Default for WorldScene {
     fn default() -> Self {
-        Self::new()
+        Self::shipped()
     }
 }
 
@@ -487,49 +640,8 @@ impl Scene for WorldScene {
         let theme = Theme::build(renderer);
         self.white = Some(theme.lua_textures()[0].1); // id 0 = "white"
         self.theme = Some(theme);
-
-        // The declarative HUD (S10): styles + the `hud_pocepochs.lua` tree, built
-        // once. Each axis's band (lo/hi) is STATIC observer data, published once
-        // as the `HAB` data global and baked into the gauge nodes as props;
-        // live values ride the Model each frame. (The styles themselves were read in `new` —
-        // the world is built from them.)
-        let script_path = hud_script_path();
-        match ScriptHost::from_file(&script_path) {
-            Ok(script) => {
-                flicker::ui::load_shared_ui_json(&script, Some(&crate::scene_styles())); // layout (`UI.pocepochs`)
-                self.sim.ensure(0);
-                let bands: Vec<serde_json::Value> = self
-                    .sim
-                    .world(0)
-                    .map(|w| {
-                        observe(w)
-                            .axes
-                            .iter()
-                            .map(|ax| serde_json::json!({ "lo": ax.lo, "hi": ax.hi }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if let Err(e) = script.set_global_json("HAB", &serde_json::Value::Array(bands)) {
-                    tracing::error!("HAB global publish failed: {e}");
-                }
-                match script.ui_tree() {
-                    Ok(Some(tree)) => {
-                        self.ui_intents = UiIntents::of(&tree);
-                        self.ui_tree = Some(tree);
-                    }
-                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
-                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
-                }
-                // The host is dropped here: the parsed `UiNode` is fully owned data
-                // and every control draws in the engine, so nothing reads the VM again.
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "HUD script load failed ({}): {e} — no HUD",
-                    script_path.display()
-                )
-            }
-        }
+        // The tree, styles, pair script and the refilled axis rows were all built
+        // in `from_parts` — the five-line split leaves `enter` with the GPU only.
     }
 
     fn exit(&mut self, renderer: &mut Renderer) {
@@ -540,140 +652,119 @@ impl Scene for WorldScene {
         &mut self,
         dt: Duration,
         input: &InputState,
-        _signals: &mut SceneInput,
+        signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
-        // Walk the cached HUD tree: layout + hit-test + draw in one pass. The
-        // habitability panel is a styled container, so the pointer over it sets
-        // `hud_hit` — fed to the walker layer below as this frame's
-        // pointer-consume (the camera stays a raw poll, unchanged).
-        let mut over_hud = false;
-        if let Some(tree) = self.ui_tree.as_ref() {
-            let model = self.hud_model();
-            let snap = UiInput {
-                mouse: input.mouse_position,
-                clicked: input.mouse_left_pressed,
-                down: input.mouse_left,
-                screen: renderer.size(),
-                typed: String::new(),
-                backspace: false,
-                wheel: input.mouse_wheel_delta,
-            };
-            let frame = run_ui(tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
-            over_hud = frame.results.is_on("hud_hit");
-            self.hud_commands = frame.commands;
-        }
+        let Some(tree) = self.authored.take() else {
+            return Transition::None;
+        };
+        // The scene is DATA: walk the AUTHORED tree (its axis rows refilled at
+        // construction) with the raw model + the pair script's derived strings.
+        let model = self.model();
+        let snap = UiInput {
+            mouse: input.mouse_position,
+            clicked: input.mouse_left_pressed,
+            down: input.mouse_left,
+            screen: renderer.size(),
+            typed: String::new(),
+            backspace: false,
+            wheel: input.mouse_wheel_delta,
+        };
+        let frame = run_ui(&tree, &model, &self.ui_styles, &snap, &mut self.ui_state);
+        let over_hud = frame.results.is_on("hud_hit");
+        let mut results = frame.results.clone();
+        self.hud_commands = frame.commands;
 
-        // ── Input seam (spec §5/§9): ONE resolve + ONE dispatch replaces the hand-rolled
-        // `Esc` edge (`prev_menu`). The active context is always `World` here (no chat /
-        // modal ever pushes `TextEntry`); the walker layer's DECLARED `on_menu` intent
-        // (S10) is the pause-open edge. `ev` is the REUSED `Fired` buffer; the
-        // `InputEvent` list is a short-lived local because it borrows this frame's
-        // snapshot (RT-7: a steady-state frame resolves zero edges). ──
-        self.input_tick = self.input_tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.input_tick,
-            &mut self.ev,
-        );
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> = self
-            .ev
-            .iter()
-            .map(|f| InputEvent::from_fired(f, ctx, input))
-            .collect();
-        self.fired_sigs.clear(); // last frame's mirror rode the HUD walk above — done
-
-        self.route.requests.clear();
-        let mut root = RootHandler;
-        let mut walker =
-            WalkerHandler::hud(&mut self.ui_state, over_hud).with_intents(&self.ui_intents);
+        // ── The input seam (input-P3): the PUMP resolved this frame's events — the
+        // scene owns no Resolver. One dispatch through the walker, which owns the
+        // focus graph, consumes the pointer while it is over the HUD, and fires the
+        // screen's DECLARED intents (`on_menu` / `on_mode_*`) as result names. ──
+        let mut walker = WalkerHandler::hud(&mut self.ui_state, over_hud)
+            .with_nav(&tree, &model)
+            .with_rects(&frame.rects)
+            .with_intents(&self.ui_intents);
         {
-            let mut chain: [&mut dyn InputHandler; 2] = [&mut root, &mut walker];
-            Router::dispatch(&events, &mut chain, &mut self.route);
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
-        // Standard post-dispatch seam; no handler pushes context intents here.
-        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
-        walker.apply_focus(focus_change);
         self.fired_sigs = walker.take_fired();
-        self.route.requests.clear();
+        self.authored = Some(tree);
+        for name in &self.fired_sigs {
+            results.set(name.clone(), true);
+        }
 
-        // The screen DECLARED `on_menu = "pause_open"` (S9/S10): the walker layer
-        // consumed the Menu press and fired the name; the scene maps it onto the
-        // shell pause push — the root's hardcoded Menu arm is gone. Return before
-        // polling the camera / viewer keys, exactly as the old early-return did.
-        if self.fired_sigs.iter().any(|n| n == "pause_open") {
+        // ── The ONE dispatch: a click and a pad press arrive here identically.
+        // The seven raw keyboard verbs died with the migration — these are their
+        // controls (KBM reach is the pointer; pad reach is the nav ring + the
+        // declared `on_mode_*` view cycle). ──
+        if results.is_on("toggle_play") {
+            self.playing = !self.playing;
+            self.play_accum = 0.0;
+        }
+        if results.is_on("reset") {
+            self.playing = false;
+            self.go_to_tick(0);
+        }
+        if results.is_on("reseed") {
+            self.reseed();
+        }
+        if results.is_on("size_down") {
+            self.resize(-1);
+        }
+        if results.is_on("size_up") {
+            self.resize(1);
+        }
+        let cycled =
+            i32::from(results.is_on("view_next")) - i32::from(results.is_on("view_prev"));
+        if cycled != 0 {
+            self.mode = if cycled > 0 {
+                appearance::cycle_view(self.mode)
+            } else {
+                appearance::cycle_view_back(self.mode)
+            };
+            self.publish_shells();
+        }
+        // The slice toggle is a two-way checkbox that only EXISTS on the Layers
+        // view (its row gates on `layers_view`), so the read is gated the same
+        // way — off that view `is_on` reads false and would clear it.
+        if self.mode == ViewMode::Layers {
+            let cut = results.is_on("cut");
+            if cut != self.cutaway {
+                self.cutaway = cut;
+                self.publish_shells();
+            }
+        }
+
+        // The screen DECLARED `on_menu = "pause_open"` (S9): the walker layer
+        // consumed the Menu press and fired the name; the ONE dispatch maps it
+        // onto the shell pause overlay. The overlay shows the PROFILE's map —
+        // the pump owns bindings now (input-P3), the scene holds none.
+        if results.is_on("pause_open") {
             let theme = self.theme.expect("theme built in enter");
+            let pause_map = flicker_shell::input_profile()
+                .context_map("World")
+                .cloned()
+                .unwrap_or_else(InputMap::wasd_and_mouse);
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                &InputMap::default(),
+                &pause_map,
                 &AbstractControls::default(),
                 &GamepadConfig::default(),
             )));
         }
 
         // The globe fills the window: this bench reserves no `rtt` viewport, so the SCENE
-        // gives the world the whole screen and the HUD composites over it. Everything else
-        // about the camera — the drag latch, the wheel, the bound look signals — is the
-        // world's, and the scene neither keeps one nor reads a device for it.
+        // gives the world the whole screen and the HUD composites over it. The camera stays
+        // the world's own pointer path (drag latch + wheel), exactly as before — a
+        // fullscreen world has no pane to gate a stick tuple on (FLAGGED: the pointer
+        // still flies the planet over the HUD panels, and stick look needs a
+        // fullscreen-pane answer in flicker-globe).
         self.world.place(Some(Rect {
             pos: Vec2::ZERO,
             size: renderer.size(),
         }));
-        // Disabled bench (input-P3 pending): it names no panel, so the world never owns
-        // the camera (focus `None` → the look tuple is ignored). GlobeWorld now takes the
-        // resolved tuple, not a resolver; a zero tuple keeps the globe pointer-flown.
         self.world
             .update(dt.as_secs_f32(), input, (0.0, 0.0, 0.0), None);
-
-        let play = input.key_down(Key::Space);
-        let down = input.key_down(Key::Down);
-        let view = input.key_down(Key::V);
-        let reseed = input.key_down(Key::R);
-        let size_down = input.key_down(Key::LeftBracket);
-        let size_up = input.key_down(Key::RightBracket);
-        let cut_key = input.key_down(Key::Up);
-        // Space: start / stop the Epoch-2 convection run.
-        if play && !self.prev_play {
-            self.playing = !self.playing;
-            self.play_accum = 0.0;
-        }
-        // Down: reset to the Epoch-1 seed.
-        if down && !self.prev_down {
-            self.playing = false;
-            self.go_to_tick(0);
-        }
-        // R: reseed Epoch 1 — a fresh random planet.
-        if reseed && !self.prev_reseed {
-            self.reseed();
-        }
-        // [ / ]: shrink / grow the planet (Epoch-1 size).
-        if size_down && !self.prev_size_down {
-            self.resize(-1);
-        }
-        if size_up && !self.prev_size_up {
-            self.resize(1);
-        }
-        // V: cycle the surface view (material → heat → layer stack).
-        if view && !self.prev_view {
-            self.mode = appearance::cycle_view(self.mode);
-            self.publish_shells();
-        }
-        // Up: slice the layer stack open (a wedge cutaway through the shells).
-        if cut_key && !self.prev_cut {
-            self.cutaway = !self.cutaway;
-            self.publish_shells();
-        }
-        self.prev_play = play;
-        self.prev_down = down;
-        self.prev_view = view;
-        self.prev_cut = cut_key;
-        self.prev_reseed = reseed;
-        self.prev_size_down = size_down;
-        self.prev_size_up = size_up;
 
         self.advance_play(dt.as_secs_f32());
         Transition::None
@@ -716,7 +807,7 @@ impl Scene for WorldScene {
                 Vec2::new(panel_w, panel_h),
                 [0.05, 0.06, 0.08, 0.85],
             );
-            let title = self.mode.label().to_uppercase();
+            let title = strings::resolve(self.mode.label()).to_uppercase();
             renderer.draw_text(&title, Vec2::new(px + pad, py + pad), 14.0, gold);
             let mut ry = py + pad + 24.0;
             for (label, c) in &entries {
@@ -726,7 +817,12 @@ impl Scene for WorldScene {
                     Vec2::new(sw, sw),
                     [c[0], c[1], c[2], 1.0],
                 );
-                renderer.draw_text(label, Vec2::new(px + pad + sw + 8.0, ry), 13.0, text);
+                renderer.draw_text(
+                    &strings::resolve(label),
+                    Vec2::new(px + pad + sw + 8.0, ry),
+                    13.0,
+                    text,
+                );
                 ry += row_h;
             }
         }
@@ -745,7 +841,7 @@ impl Scene for WorldScene {
                     [0.05, 0.06, 0.08, 0.85],
                 );
                 renderer.draw_text(
-                    "ELEMENT DISTRIBUTION",
+                    &strings::resolve("$pe_element_distribution"),
                     Vec2::new(px + pad, py + pad),
                     14.0,
                     gold,
@@ -776,9 +872,20 @@ impl Scene for WorldScene {
 mod tests {
     use super::*;
 
+    /// Load the shipped stringtable (en-us) into the process-wide table, so tests
+    /// asserting composed copy read FINAL text.
+    fn load_shipped_strings() {
+        let strings = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../content/data/stringtable.json"
+        ))
+        .expect("stringtable reads");
+        flicker::ui::strings::load_str(&strings, "en-us");
+    }
+
     #[test]
     fn plays_epoch2_convection_and_resets_to_epoch1() {
-        let mut scene = WorldScene::new();
+        let mut scene = WorldScene::shipped();
         assert!(!scene.playing, "starts paused at the Epoch-1 seed");
         assert_eq!(scene.tick, 0);
 
@@ -792,63 +899,114 @@ mod tests {
         assert_eq!(scene.tick, 0, "reset to Epoch 1");
     }
 
-    /// Load the real `hud_pocepochs.lua` + the shared layout and walk a frame
-    /// against the LIVE observer model: the vocabulary gate holds, the root
-    /// declares the pause intent, and the readout + habitability panel render —
-    /// catches Lua/contract breakage headlessly (no window).
+    /// The shipped scene file IS the bench: it parses, names this behaviour,
+    /// declares the pause + view-cycle intents, and carries the axis-row refill
+    /// container and every transport control.
     #[test]
-    fn hud_tree_is_well_formed_and_draws_from_the_observer_model() {
-        use flicker::render::Vec2;
-        use flicker::ui::run_ui;
+    fn the_shipped_scene_file_authors_the_bench() {
         use flicker_input_core::ActionSignal;
-
-        // The HUD's display copy is `$token`s now (S10 strings gate); load the
-        // shipped table so the walked commands carry the resolved en-us text.
-        let strings = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../content/data/stringtable.json"
-        ))
-        .expect("stringtable reads");
-        flicker::ui::strings::load_str(&strings, "en-us");
-        let script = ScriptHost::from_file(hud_script_path()).expect("hud_pocepochs.lua loads");
-        flicker::ui::load_shared_ui_json(&script, Some(&crate::scene_styles()));
-        let mut scene = WorldScene::new();
-        scene.sim.ensure(0);
-        let bands: Vec<serde_json::Value> = scene
-            .sim
-            .world(0)
-            .map(|w| {
-                observe(w)
-                    .axes
-                    .iter()
-                    .map(|ax| serde_json::json!({ "lo": ax.lo, "hi": ax.hi }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        assert!(!bands.is_empty(), "the observer exposes the condition axes");
-        script
-            .set_global_json("HAB", &serde_json::Value::Array(bands))
-            .expect("HAB publishes");
-        let tree = script
-            .ui_tree()
-            .expect("tree builds")
-            .expect("script exposes tree()");
-        assert!(
-            flicker::ui::unknown_kinds(&tree).is_empty(),
-            "hud_pocepochs.lua names unknown kinds: {:?}",
-            flicker::ui::unknown_kinds(&tree)
-        );
-        // The strings gate (S10): every display literal is a `$token`.
-        assert!(
-            flicker::ui::raw_display_literals(&tree).is_empty(),
-            "hud_pocepochs.lua ships raw display literals: {:?}",
-            flicker::ui::raw_display_literals(&tree)
-        );
+        let def = SceneDef::parse("pocepochs", PE_SCENE).expect("scene file parses");
+        assert_eq!(def.behaviour, "pocepochs");
+        let tree = def.tree.expect("the scene file carries the HUD tree");
         let intents = UiIntents::of(&tree);
         assert_eq!(intents.result_for(ActionSignal::Menu), Some("pause_open"));
+        let mut t = tree.clone();
+        assert!(
+            find_by_id_mut(&mut t, "pe_axis_rows").is_some(),
+            "the axis-row refill container is authored"
+        );
+        fn ids(n: &UiNode, out: &mut Vec<String>) {
+            if !n.id.is_empty() {
+                out.push(n.id.clone());
+            }
+            for c in &n.children {
+                ids(c, out);
+            }
+        }
+        let mut all = Vec::new();
+        ids(&tree, &mut all);
+        for b in [
+            "pe_play",
+            "pe_reset",
+            "pe_reseed",
+            "pe_size_down",
+            "pe_size_up",
+            "pe_view",
+            "pe_cut",
+        ] {
+            assert!(all.iter().any(|i| i == b), "{b} authored");
+        }
+    }
 
-        let styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
-        let model = scene.hud_model();
+    /// THE PAIR-SCRIPT + REFILL GATE: build the bench exactly as the resolver does
+    /// (real def, real pocepochs.lua) and run the REAL model path — the raw
+    /// numbers must come back as the DERIVED display strings the tree binds, the
+    /// refilled axis rows must carry the observer's real bands, and the walked
+    /// surface must draw the readout, the transport, and the gauges.
+    #[test]
+    fn hud_tree_is_well_formed_and_draws_from_the_observer_model() {
+        load_shipped_strings();
+        let def = SceneDef::parse("pocepochs", PE_SCENE).expect("scene file parses");
+        let tree = def.tree.clone().expect("scene defines a tree");
+        assert!(
+            flicker::ui::unknown_kinds(&tree).is_empty(),
+            "pocepochs.scene.json names unknown kinds: {:?}",
+            flicker::ui::unknown_kinds(&tree)
+        );
+        assert!(
+            flicker::ui::raw_display_literals(&tree).is_empty(),
+            "pocepochs.scene.json ships raw display literals: {:?}",
+            flicker::ui::raw_display_literals(&tree)
+        );
+        // The MODEL-CHANNEL strings gate (S10's blind side).
+        let flags = strings::raw_model_publish_literals(include_str!("scene.rs"));
+        assert!(
+            flags.is_empty(),
+            "raw display copy published into the Model: {flags:?}"
+        );
+
+        let mut scene = WorldScene::shipped();
+        assert!(scene.script.is_some(), "pocepochs.lua loads (the pair script)");
+
+        // The refilled axis rows carry the observer's REAL bands, one row per axis.
+        scene.sim.ensure(0);
+        let bands: Vec<(f32, f32)> = scene
+            .sim
+            .world(0)
+            .map(|w| observe(w).axes.iter().map(|ax| (ax.lo, ax.hi)).collect())
+            .unwrap_or_default();
+        assert!(!bands.is_empty(), "the observer exposes the condition axes");
+        {
+            let rows = find_by_id_mut(scene.authored.as_mut().unwrap(), "pe_axis_rows")
+                .expect("refill container present");
+            assert_eq!(rows.children.len(), bands.len(), "one refilled row per axis");
+            for (row, (lo, hi)) in rows.children.iter().zip(&bands) {
+                let gauge = row
+                    .children
+                    .iter()
+                    .find(|c| c.component == "gauge")
+                    .expect("each axis row carries its gauge");
+                assert_eq!(
+                    gauge.props.get("lo"),
+                    Some(&Value::Number(f64::from(*lo))),
+                    "the gauge's band rides the OBSERVER's numbers"
+                );
+                assert_eq!(gauge.props.get("hi"), Some(&Value::Number(f64::from(*hi))));
+            }
+        }
+
+        // The pair script derives the display strings over the raw publish.
+        let m = scene.model();
+        for key in ["stats_val", "play_state", "view_line", "verdict", "observed", "air"] {
+            assert!(
+                m.text(key).is_some(),
+                "derive() must yield display TEXT for '{key}'"
+            );
+        }
+        assert_eq!(m.text("play_state"), Some("PAUSED"));
+
+        // Walk the real (refilled) tree with the real model.
+        let tree = scene.authored.clone().expect("authored tree held");
         let snap = UiInput {
             mouse: Vec2::new(-9.0, -9.0),
             clicked: false,
@@ -858,7 +1016,7 @@ mod tests {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui(&tree, &model, &styles, &snap, &mut UiState::new());
+        let frame = run_ui(&tree, &m, &scene.ui_styles, &snap, &mut UiState::new());
         let has = |s: &str| {
             frame
                 .commands
@@ -871,6 +1029,7 @@ mod tests {
             has("LIFE-SUPPORTING CONDITIONS"),
             "habitability panel renders"
         );
+        assert!(has("Reset"), "the transport buttons render");
         assert!(
             frame
                 .commands
@@ -880,9 +1039,41 @@ mod tests {
         );
     }
 
+    /// The declared pause intent through the scene's real chain (the re-pointed
+    /// half of the retired route.rs tests).
+    #[test]
+    fn the_declared_pause_intent_fires_through_the_authored_tree() {
+        use flicker_input_core::{ActionSignal, EventKind, InputContext};
+        use flicker_input_router::{InputEvent, RouteCtx};
+
+        let def = SceneDef::parse("pocepochs", PE_SCENE).expect("scene file parses");
+        let tree = def.tree.expect("scene defines a tree");
+        let intents = UiIntents::of(&tree);
+
+        let raw = InputState::new();
+        let events = [InputEvent::new(
+            ActionSignal::Menu,
+            EventKind::Press,
+            InputContext::World,
+            &raw,
+        )];
+        let mut ui = UiState::new();
+        let mut walker = WalkerHandler::hud(&mut ui, false).with_intents(&intents);
+        let mut rc = RouteCtx::new();
+        let report = {
+            let mut chain: [&mut dyn InputHandler; 1] = [&mut walker];
+            Router::dispatch(&events, &mut chain, &mut rc)
+        };
+        assert!(
+            report.consumed_by(0, ActionSignal::Menu),
+            "the walker layer consumed the declared Menu"
+        );
+        assert_eq!(walker.take_fired(), vec!["pause_open".to_string()]);
+    }
+
     #[test]
     fn epoch1_element_distribution_is_populated_and_sensible() {
-        let scene = WorldScene::new();
+        let scene = WorldScene::shipped();
         let dist = &scene.element_dist;
         assert!(
             !dist.is_empty(),
@@ -920,7 +1111,7 @@ mod tests {
     fn the_planet_is_the_shared_world_and_the_stack_rides_a_per_cell_radius() {
         use flicker_globe::{build, StageLayer};
 
-        let scene = WorldScene::new();
+        let scene = WorldScene::shipped();
         assert_eq!(
             scene.world.stage().layers,
             vec![StageLayer::Shells],
@@ -1022,7 +1213,7 @@ mod tests {
 
     #[test]
     fn resize_changes_the_planet_and_reseed_changes_the_composition() {
-        let mut scene = WorldScene::new();
+        let mut scene = WorldScene::shipped();
         let f0 = scene.freq;
         scene.resize(-1); // shrink
         assert!(scene.freq < f0, "resize should shrink the planet");

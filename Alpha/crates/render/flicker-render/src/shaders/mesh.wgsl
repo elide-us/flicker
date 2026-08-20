@@ -13,9 +13,10 @@
 //   * solid mode (`flags.x == 0.0`): Lambertian shading from two
 //     directional lights (sun + moon) over a flat ambient, all driven
 //     by the frame-global `Scene` uniform (`Renderer::set_scene`); the
-//     base color is resolved from the packed material — primary in low
-//     12 bits, secondary in next 12, blend factor in top 8 — by indexing
-//     a small color table and `mix`ing primary→secondary by `blend / 255`.
+//     base color is resolved from the packed material — primary id in
+//     bits 0-7, secondary id in 8-15, blend factor in 16-23 (bit 31 =
+//     direct-RGB escape) — by indexing a small color table and `mix`ing
+//     primary→secondary by `blend / 255`.
 //   * wireframe mode (`flags.x == 1.0`): emit the fixed wireframe
 //     color directly. The renderer enters this branch only when it
 //     issues a line-list draw against a separately built edge index
@@ -55,6 +56,10 @@ struct Scene {
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var<uniform> per_draw: PerDraw;
 @group(0) @binding(2) var<uniform> scene: Scene;
+// One colour per material-catalog slot (materials.json id = index). Booted
+// all-magenta by the pipeline; `Renderer::set_material_palette` uploads the
+// catalog colours, so an undefined id stays visibly "missing".
+@group(0) @binding(3) var<uniform> palette: array<vec4<f32>, 256>;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -84,84 +89,31 @@ fn vs_main(in: VertexIn) -> VertexOut {
     return out;
 }
 
-// Look up a base color for a single material index. Demo palette —
-// extend as new materials are added. The `default` arm returns magenta
-// so EMPTY (=0) and unknown indices remain visible as "missing".
+// Look up a base color for a single material id — one read from the
+// material-catalog palette (materials.json colours, uploaded by
+// `Renderer::set_material_palette`). Undefined ids (and an unset palette)
+// read the boot magenta, so "missing" stays visible.
 fn material_index_color(index: u32) -> vec3<f32> {
-    switch index {
-        // ---- water depth band ----
-        case 1u: { return vec3<f32>(0.04, 0.10, 0.28); } // DEEP_WATER   navy
-        case 2u: { return vec3<f32>(0.10, 0.25, 0.50); } // MID_WATER    blue
-        case 3u: { return vec3<f32>(0.30, 0.55, 0.75); } // SHALLOW      cerulean
-        case 4u: { return vec3<f32>(0.75, 0.85, 0.90); } // CREST        pale
-        case 5u: { return vec3<f32>(0.95, 0.97, 0.98); } // FOAM         off-white
-
-        // ---- cloud band ----
-        case 6u: { return vec3<f32>(0.30, 0.32, 0.36); } // CLOUD_DARK   storm underbelly
-        case 7u: { return vec3<f32>(0.65, 0.67, 0.70); } // CLOUD_MID    mid grey
-        case 8u: { return vec3<f32>(0.92, 0.94, 0.96); } // CLOUD_LIGHT  sunlit crown
-
-        // ---- atmospheric ----
-        case 9u: { return vec3<f32>(0.80, 0.82, 0.86); } // CIRRUS       wispy pale
-
-        // ---- matte test surface ----
-        // Neutral mid-value stone, faintly warm. Deliberately desaturated and
-        // ~0.45 so it reads Lambertian gradients, fog, and colour grading
-        // cleanly without fighting them — the surface the lighting cycle is
-        // assessed against. Used by the voxel-cluster field (`Material::new(10..)`).
-        case 10u: { return vec3<f32>(0.46, 0.44, 0.42); } // STONE        matte neutral
-
-        // ---- world-sim surface stack (demo) ----
-        case 11u: { return vec3<f32>(0.95, 0.35, 0.10); } // LAVA         hot orange
-        case 12u: { return vec3<f32>(0.80, 0.90, 1.00); } // ICE          pale icy blue
-        case 13u: { return vec3<f32>(0.32, 0.42, 0.24); } // LAND         mossy ground
-
-        // ---- upper atmosphere heatmaps (demo) ----
-        case 14u: { return vec3<f32>(0.20, 0.95, 0.55); } // AURORA       thermosphere glow
-        case 15u: { return vec3<f32>(0.55, 0.32, 0.88); } // UV           ozone absorption
-        case 16u: { return vec3<f32>(0.02, 0.02, 0.06); } // VOID         night-side / space
-
-        // ---- biomes (climate-classified land) ----
-        case 17u: { return vec3<f32>(0.82, 0.72, 0.45); } // DESERT       sand
-        case 18u: { return vec3<f32>(0.70, 0.68, 0.32); } // SAVANNA      dry grass
-        case 19u: { return vec3<f32>(0.45, 0.65, 0.30); } // GRASSLAND    green
-        case 20u: { return vec3<f32>(0.20, 0.45, 0.22); } // FOREST       forest green
-        case 21u: { return vec3<f32>(0.10, 0.33, 0.18); } // RAINFOREST   deep green
-        case 22u: { return vec3<f32>(0.26, 0.42, 0.34); } // TAIGA        cold conifer
-        case 23u: { return vec3<f32>(0.56, 0.52, 0.46); } // TUNDRA       grey-brown
-
-        // ---- world-gen rock hardness ramp (Epoch viz) ----
-        case 24u: { return vec3<f32>(0.30, 0.25, 0.22); } // ROCK_SOFT    dark, weak (shale/clay)
-        case 25u: { return vec3<f32>(0.82, 0.80, 0.75); } // ROCK_HARD    pale, resistant (granite)
-
-        // ---- world-gen ore veins (Epoch 5) ----
-        case 26u: { return vec3<f32>(0.62, 0.20, 0.14); } // ORE_IRON     hematite red
-        case 27u: { return vec3<f32>(0.78, 0.46, 0.16); } // ORE_COPPER   coppery rust
-        case 28u: { return vec3<f32>(0.93, 0.78, 0.28); } // ORE_GOLD     gold
-        case 29u: { return vec3<f32>(0.80, 0.82, 0.85); } // ORE_SILVER   bright silver
-        case 30u: { return vec3<f32>(0.58, 0.30, 0.66); } // ORE_OTHER    violet (rare metal)
-
-        // Fallback for unknown materials (also the EMPTY=0 case).
-        default: { return vec3<f32>(1.0, 0.0, 1.0); }
-    }
+    return palette[index & 0xFFu].rgb;
 }
 
-// Resolve a packed material to a color. Two encodings:
-//   * Direct RGB (escape): primary == 0xFFF marks a packed RGB666 colour in the
-//     upper bits (R bits 12-17, G 18-23, B 24-29) — for continuous data maps the
-//     palette can't express. No real palette entry uses index 0xFFF.
-//   * Palette blend (default): primary in low 12 bits, secondary in next 12,
-//     blend in top 8 — linear interpolation between two palette colours.
+// Resolve a packed material to a color. Two encodings (the u8 catalog layout,
+// 2026-08-19 — matches flicker-voxel `Material`):
+//   * Direct RGB (escape): bit 31 set marks an RGB888 colour in bits 0-23
+//     (R 0-7, G 8-15, B 16-23) — for continuous data maps the palette can't
+//     express. Costs no material id; catalog words never set the top byte.
+//   * Palette blend (default): primary id in bits 0-7, secondary id in 8-15,
+//     blend in 16-23 — linear interpolation between two palette colours.
 fn material_color(material: u32) -> vec3<f32> {
-    if ((material & 0xFFFu) == 0xFFFu) {
-        let r = f32((material >> 12u) & 0x3Fu) / 63.0;
-        let g = f32((material >> 18u) & 0x3Fu) / 63.0;
-        let b = f32((material >> 24u) & 0x3Fu) / 63.0;
+    if ((material & 0x80000000u) != 0u) {
+        let r = f32(material & 0xFFu) / 255.0;
+        let g = f32((material >> 8u) & 0xFFu) / 255.0;
+        let b = f32((material >> 16u) & 0xFFu) / 255.0;
         return vec3<f32>(r, g, b);
     }
-    let primary = material & 0xFFFu;
-    let secondary = (material >> 12u) & 0xFFFu;
-    let blend = f32((material >> 24u) & 0xFFu) / 255.0;
+    let primary = material & 0xFFu;
+    let secondary = (material >> 8u) & 0xFFu;
+    let blend = f32((material >> 16u) & 0xFFu) / 255.0;
     let c_primary = material_index_color(primary);
     let c_secondary = material_index_color(secondary);
     return mix(c_primary, c_secondary, blend);

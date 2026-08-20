@@ -1,31 +1,32 @@
 //! Per-cell colouring of the planet by epoch field.
 //!
-//! Reuses the engine's packed-material convention (hex-world's `pack_ramp`): the
-//! mesh shader resolves `material = primary | secondary<<12 | blend<<24` to
-//! `mix(palette[primary], palette[secondary], blend/255)`. So a continuous field
-//! becomes a heatmap with no shader change — we just pick two palette stops and a
-//! blend. Indices below mirror `flicker-render`'s `material_index_color` palette.
+//! Every view emits the mesh shader's **direct-RGB escape** (bit 31 + RGB888,
+//! packed by [`direct`]) — the views are continuous data visualisations, not
+//! materials, so they never touch the material-catalog palette (that palette
+//! belongs to `materials.json` ids; 2026-08-19). Ramps are mixed CPU-side per
+//! cell from the RGB stop constants below (the colours of the retired demo
+//! palette, kept verbatim so every view renders unchanged).
 
 use flicker_materials::ElementId;
 use flicker_worldgen::{Biome, HexState, LifeStage};
 
 use crate::world::Ranges;
 
-// Palette indices from flicker-render/src/shaders/mesh.wgsl.
-const MID_WATER: u32 = 2;
-const LAVA: u32 = 11;
-const ICE: u32 = 12;
-const DESERT: u32 = 17;
-const SAVANNA: u32 = 18;
-const GRASSLAND: u32 = 19;
-const FOREST: u32 = 20;
-const RAINFOREST: u32 = 21;
-const TAIGA: u32 = 22;
-const TUNDRA: u32 = 23;
-const ROCK_HARD: u32 = 25;
-const ORE_IRON: u32 = 26;
-const ORE_COPPER: u32 = 27;
-const ORE_GOLD: u32 = 28;
+// View stop colours (the retired mesh.wgsl demo palette entries, verbatim).
+const MID_WATER: [f32; 3] = [0.10, 0.25, 0.50];
+const LAVA: [f32; 3] = [0.95, 0.35, 0.10];
+const ICE: [f32; 3] = [0.80, 0.90, 1.00];
+const DESERT: [f32; 3] = [0.82, 0.72, 0.45];
+const SAVANNA: [f32; 3] = [0.70, 0.68, 0.32];
+const GRASSLAND: [f32; 3] = [0.45, 0.65, 0.30];
+const FOREST: [f32; 3] = [0.20, 0.45, 0.22];
+const RAINFOREST: [f32; 3] = [0.10, 0.33, 0.18];
+const TAIGA: [f32; 3] = [0.26, 0.42, 0.34];
+const TUNDRA: [f32; 3] = [0.56, 0.52, 0.46];
+const ROCK_HARD: [f32; 3] = [0.82, 0.80, 0.75];
+const ORE_IRON: [f32; 3] = [0.62, 0.20, 0.14];
+const ORE_COPPER: [f32; 3] = [0.78, 0.46, 0.16];
+const ORE_GOLD: [f32; 3] = [0.93, 0.78, 0.28];
 
 /// Which epoch field the planet is coloured by.
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -126,14 +127,24 @@ impl ViewMode {
     }
 }
 
-/// Pack a two-stop ramp into the shader's material word (see module doc).
-pub fn pack_ramp(cold: u32, hot: u32, t: f32) -> u32 {
-    let b = (t.clamp(0.0, 1.0) * 255.0) as u32;
-    (cold & 0xFFF) | ((hot & 0xFFF) << 12) | ((b & 0xFF) << 24)
+/// A two-stop ramp, mixed CPU-side and emitted as a direct-RGB escape word —
+/// per-cell colour, same result the shader-side palette mix used to produce.
+pub fn pack_ramp(cold: [f32; 3], hot: [f32; 3], t: f32) -> u32 {
+    direct(mix3(cold, hot, t))
 }
 
-fn solid(index: u32) -> u32 {
-    pack_ramp(index, index, 0.0)
+/// Linear blend of two RGB stops by `t` (`0..=1`).
+fn mix3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn solid(rgb: [f32; 3]) -> u32 {
+    direct(rgb)
 }
 
 fn norm(v: f32, lo: f32, hi: f32) -> f32 {
@@ -152,7 +163,7 @@ pub fn cell_material(mode: ViewMode, s: &HexState, r: &Ranges) -> u32 {
         // ocean is only drawn where water stands, so Epoch 3 is a dry world and the
         // seas arrive at Epoch 4 (see `relief_color`).
         ViewMode::Elevation => relief_color(s, r),
-        ViewMode::Biome => solid(biome_index(s.biome)),
+        ViewMode::Biome => solid(biome_rgb(s.biome)),
         ViewMode::Plates => solid(PLATE_PALETTE[s.plate as usize % PLATE_PALETTE.len()]),
         ViewMode::Temperature => {
             pack_ramp(MID_WATER, LAVA, norm(s.temperature, r.temp_min, r.temp_max))
@@ -203,11 +214,12 @@ pub fn cell_material(mode: ViewMode, s: &HexState, r: &Ranges) -> u32 {
     }
 }
 
-/// Direct RGB material (the shader's `primary == 0xFFF` escape; RGB666 in the
-/// upper bits). Lets a view express any colour, not just a palette ramp.
+/// Direct RGB material (the shader's bit-31 escape; RGB888 in bits 0-23,
+/// u8-catalog layout 2026-08-19). Lets a view express any colour, not just a
+/// palette ramp.
 fn direct(rgb: [f32; 3]) -> u32 {
-    let q = |v: f32| ((v.clamp(0.0, 1.0) * 63.0).round() as u32) & 0x3F;
-    0xFFF | (q(rgb[0]) << 12) | (q(rgb[1]) << 18) | (q(rgb[2]) << 24)
+    let q = |v: f32| ((v.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xFF;
+    0x8000_0000 | q(rgb[0]) | (q(rgb[1]) << 8) | (q(rgb[2]) << 16)
 }
 
 /// Terrain tint for the sub-hex relief view: ocean blue where submerged, else a
@@ -414,7 +426,7 @@ fn deposit_color(s: &HexState, dep_max: f32) -> u32 {
     direct([base[0] * lit, base[1] * lit, base[2] * lit])
 }
 
-fn biome_index(b: Biome) -> u32 {
+fn biome_rgb(b: Biome) -> [f32; 3] {
     match b {
         Biome::Ocean => MID_WATER,
         Biome::Ice => ICE,
@@ -429,8 +441,8 @@ fn biome_index(b: Biome) -> u32 {
     }
 }
 
-/// Distinct palette stops cycled per plate id, so adjacent plates contrast.
-const PLATE_PALETTE: [u32; 12] = [
+/// Distinct stop colours cycled per plate id, so adjacent plates contrast.
+const PLATE_PALETTE: [[f32; 3]; 12] = [
     DESERT, SAVANNA, GRASSLAND, FOREST, RAINFOREST, TAIGA, TUNDRA, LAVA, ICE, ORE_IRON, ORE_COPPER,
     ORE_GOLD,
 ];

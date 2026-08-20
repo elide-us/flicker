@@ -78,6 +78,16 @@ impl Cell {
     pub fn dominant_element(&self) -> Option<ElementId> {
         self.composition.dominant()
     }
+
+    /// Re-derive the classified surface face from the ledger
+    /// ([`crate::classify_material`]) and cache it in
+    /// [`Cell::surface_material`]. Call after ANY change to the composition or
+    /// to `compounds` — the cache is an optimization over a pure derived read,
+    /// never a second truth. A cell that tracks no formed compounds passes
+    /// `&CompoundLedger::new()` and classifies by element signature alone.
+    pub fn reclassify(&mut self, compounds: &crate::CompoundLedger, tables: &Tables) {
+        self.surface_material = crate::classify_material(&self.composition, compounds, tables);
+    }
 }
 
 #[cfg(test)]

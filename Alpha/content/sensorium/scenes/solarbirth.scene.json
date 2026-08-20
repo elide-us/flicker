@@ -25,50 +25,174 @@
           16,
           16
         ],
-        "width": 520,
-        "pad": 16,
-        "gap": 0,
+        "width": 340,
+        "pad": 18,
+        "gap": 12,
         "layer": 1,
         "style": "solarbirth.readout",
         "children": [
           {
             "component": "text",
             "text": "$sb_flicker_solarbirth",
-            "size": 34,
-            "text_size": 28,
+            "text_size": 26,
             "color": "solarbirth.title.color"
           },
           {
             "component": "text",
             "text_bind": "phase",
-            "size": 24,
-            "text_size": 16,
+            "text_size": 15,
             "color": "solarbirth.phase.color"
           },
           {
-            "component": "text",
-            "text": "$sb_drag_rotate_wheel_zoom_space_replay_fly",
-            "size": 30,
-            "text_size": 13,
-            "color": "solarbirth.hint.color"
-          },
-          {
-            "component": "text",
-            "text": "$sb_planets_inner_outer",
-            "size": 22,
-            "text_size": 14,
-            "color": "solarbirth.roster_header.color"
-          },
-          {
             "component": "cell",
-            "id": "roster_legend",
-            "gap": 0
+            "gap": 4,
+            "children": [
+              {
+                "component": "text",
+                "text": "$sb_planets_inner_outer",
+                "text_size": 13,
+                "color": "solarbirth.roster_header.color"
+              },
+              {
+                "component": "cell",
+                "id": "roster_legend",
+                "gap": 2
+              }
+            ]
+          },
+          {
+            "_comment": "P5 device-adaptive tooltip (ruling 7AB130A7): its leading slot shows the LIVE Interact binding — a keycap of the bound key on kbm (E today), the positional pad glyph (face_west) on a controller — from the same scene-published bind_/glyph_/input_device the footer uses.",
+            "component": "tooltip",
+            "id": "sb_restart_tip",
+            "style": "tooltip",
+            "signal": "Interact",
+            "name": "$sb_replay",
+            "meta": "$sb_restart_meta",
+            "size": 42
+          }
+        ]
+      },
+      {
+        "_comment": "NAV FOOTER (1A292918 T6): a bottom band over the rtt. LEFT = signal-bound control hints (Replay shows its live key via `hint_replay`, composed by the pair script from the published `bind_Interact`; orbit/zoom are descriptive). RIGHT = the MENU button, firing the same `pause_open` result the screen's `on_menu` (Esc) does. No tabs/pages here, so MENU is the only cluster button.",
+        "component": "nav_footer",
+        "id": "sb_footer",
+        "anchor": "bottom_left",
+        "width_frac": 1.0,
+        "height": 54,
+        "layer": 1,
+        "pad_x": 18,
+        "pad_y": 10,
+        "gap": 12,
+        "style": "nav_footer.frame",
+        "glyph_style": "pad_glyphs",
+        "children": [
+          {
+            "component": "option",
+            "id": "sb_hint_replay",
+            "signal": "Interact",
+            "label": "$sb_replay",
+            "text_size": 13,
+            "size": 190
+          },
+          {
+            "component": "option",
+            "id": "sb_hint_orbit",
+            "label": "$sb_orbit_hint",
+            "text_size": 13,
+            "size": 150
+          },
+          {
+            "component": "option",
+            "id": "sb_hint_zoom",
+            "label": "$sb_zoom_hint",
+            "text_size": 13,
+            "size": 150
+          },
+          {
+            "component": "button",
+            "id": "sb_footer_menu",
+            "action": "pause_open",
+            "label": "$sb_menu",
+            "size": 96,
+            "size_class": "md",
+            "variant": "secondary",
+            "tab_group": "sb_footer",
+            "nav_ordinal": 1
           }
         ]
       }
     ]
   },
   "styles": {
+    "tooltip": {
+      "pad": 2,
+      "name_color": [0.9, 0.92, 0.97, 1.0],
+      "name_size": 13,
+      "meta_color": [0.62, 0.66, 0.78, 1.0],
+      "meta_size": 11,
+      "cap": {
+        "fill_top": "$stone_btn_hi",
+        "fill_bot": "$stone_btn",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      }
+    },
+    "nav_footer": {
+      "frame": {
+        "fill_top": "$surface_top",
+        "fill_bot": "$stage_void",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 6
+      },
+      "rule": {
+        "color": "$seam"
+      },
+      "label": "$dim",
+      "cap": {
+        "fill_top": "$stone_btn_hi",
+        "fill_bot": "$stone_btn",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      }
+    },
+    "pad_glyphs": {
+      "tex": 2,
+      "cols": 4,
+      "rows": 4,
+      "color": "$bronze",
+      "flash": "$rune_glow_hi",
+      "cells": {
+        "lt": 0,
+        "rt": 1,
+        "lb": 2,
+        "rb": 3,
+        "a": 4,
+        "b": 5,
+        "x": 6,
+        "y": 7,
+        "menu": 8,
+        "view": 9,
+        "dpad": 10,
+        "dpad_up": 11,
+        "dpad_down": 12,
+        "dpad_left": 13,
+        "dpad_right": 14,
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
+      }
+    },
     "solarbirth": {
       "_comment": "flicker-solarbirth HUD (SolarBirth.scene.json): the walker readout — title, flight-phase line, controls hint, and the fixed 8-planet roster legend. Roster row colours are the scene's HUD tints: each school colour with every channel floored at 0.35 (the legacy `p.color[i].max(0.35)` lightening), authored here because the walker's colour channel is dotted style paths. The ruled school colours themselves stay in flicker-orrery.",
       "readout": {

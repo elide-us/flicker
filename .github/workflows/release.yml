@@ -229,9 +229,15 @@ jobs:
         run: |
           pkgbuild --component dist/PrismAlpha.app --install-location /Applications \
             --identifier net.elideus.prism-alpha --version "$VERSION" dist/component.pkg
-          productbuild --package dist/component.pkg \
+          # productbuild has no --title flag; synthesize the distribution file and
+          # inject one, else the installer greets with: Welcome to "" Installer.
+          productbuild --synthesize --package dist/component.pkg dist/distribution.xml
+          sed -E -i '' 's|(<installer-gui-script[^>]*>)|\1<title>Prism Alpha</title>|' dist/distribution.xml
+          grep -q "<title>Prism Alpha</title>" dist/distribution.xml \
+            || { echo "::error::title injection failed — distribution.xml layout changed"; exit 1; }
+          productbuild --distribution dist/distribution.xml --package-path dist \
             "dist/prism-alpha-v$VERSION-aarch64-apple-darwin.pkg"
-          rm dist/component.pkg
+          rm dist/component.pkg dist/distribution.xml
       - name: Sign + notarize pkg and app (gated on secrets)
         if: env.MACOS_CERT_P12_BASE64 != '' && env.MACOS_NOTARY_APPLE_ID != ''
         run: |

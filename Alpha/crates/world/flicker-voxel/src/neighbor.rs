@@ -147,7 +147,7 @@ mod tests {
         Voxel::new(
             VoxelState::Solid,
             CornerVector::DEFAULT,
-            Material::new(1, 0, 0).unwrap(),
+            Material::new(1, 0, 0),
         )
     }
 

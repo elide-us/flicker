@@ -160,6 +160,12 @@ pub struct ShellConfig {
     /// menu popup. `false` (the default via [`single`](ShellConfig::single)) keeps the
     /// plain-button menu every single-scene client uses.
     pub scene_select: bool,
+    /// The SHIPPED APP's version (`env!("CARGO_PKG_VERSION")` in the client crate —
+    /// prism-alpha's, not this library's). Non-empty ⇒ the menu shows it bottom-right
+    /// and a one-shot GitHub Releases check may light the UPDATE AVAILABLE chip.
+    /// Empty (the [`single`](ShellConfig::single) default) ⇒ no version line, no
+    /// network — dev/POC clients never phone home.
+    pub app_version: &'static str,
 }
 
 impl ShellConfig {
@@ -179,6 +185,7 @@ impl ShellConfig {
             })],
             settings_dir,
             scene_select: false,
+            app_version: "",
         }
     }
 }
@@ -201,6 +208,76 @@ fn set_scenes(scenes: Vec<SceneEntry>) {
 /// A cheap clone of the shared scene registry (the `Rc` is shared, not the data).
 fn scenes() -> Rc<[SceneEntry]> {
     SCENES.with(|s| s.borrow().clone())
+}
+
+/// The one-shot update check's lifecycle (ratified architecture 2026-08-18:
+/// in-app NOTIFY only — the launcher, arriving with the IdP work, owns actual
+/// patching). Same run()-installs / menu-reads shape as [`SCENES`].
+enum UpdateCheck {
+    /// No check runs: no `app_version` declared, or the check thread ended
+    /// without news (offline, current, or unparsable — all deliberately silent).
+    Off,
+    Pending(std::sync::mpsc::Receiver<flicker::net::update::UpdateInfo>),
+    Done(flicker::net::update::UpdateInfo),
+}
+
+thread_local! {
+    /// The shipped app's version + the update check's state. Set once by [`run`];
+    /// the menu polls per frame. `thread_local` beside [`SCENES`] for the same
+    /// reason — the whole shell lives on the winit thread.
+    static APP_VERSION: RefCell<&'static str> = const { RefCell::new("") };
+    static UPDATE: RefCell<UpdateCheck> = RefCell::new(UpdateCheck::Off);
+}
+
+/// Where prism-alpha's releases live — the only repository the shell checks
+/// against and the only host [`open_url`] will launch.
+const RELEASES_OWNER: &str = "elide-us";
+const RELEASES_REPO: &str = "flicker";
+
+/// Advance the update check and hand back the latched result, if any. Drains
+/// the receiver at most once per call (the menu calls once per frame).
+fn poll_update() -> Option<flicker::net::update::UpdateInfo> {
+    use std::sync::mpsc::TryRecvError;
+    UPDATE.with(|u| {
+        let mut u = u.borrow_mut();
+        match &*u {
+            UpdateCheck::Off => None,
+            UpdateCheck::Done(info) => Some(info.clone()),
+            UpdateCheck::Pending(rx) => match rx.try_recv() {
+                Ok(info) => {
+                    *u = UpdateCheck::Done(info.clone());
+                    Some(info)
+                }
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => {
+                    // The check finished with nothing to say — stop polling.
+                    *u = UpdateCheck::Off;
+                    None
+                }
+            },
+        }
+    })
+}
+
+/// Open a URL in the player's default browser — fire-and-forget, warn on
+/// failure. Guarded to our own release pages: the shell launches nothing else.
+fn open_url(url: &str) {
+    if !url.starts_with(concat!("https://github.com/", "elide-us/")) {
+        tracing::warn!("refusing to open non-release URL {url}");
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let spawned = std::process::Command::new("xdg-open").arg(url).spawn();
+    match spawned {
+        Ok(_) => tracing::info!("opened release page {url}"),
+        Err(e) => tracing::warn!("could not open {url}: {e}"),
+    }
 }
 
 /// Restore the persisted display setting, install the scene registry, then run the
@@ -226,6 +303,17 @@ pub fn run(config: ShellConfig) -> anyhow::Result<()> {
     }
     SCENE_SELECT.with(|s| s.set(config.scene_select));
     set_scenes(config.scenes);
+    // Kick the one-shot update check for clients that declare a version (the
+    // shipped game). Background thread; the menu polls; silence on any failure.
+    APP_VERSION.with(|v| *v.borrow_mut() = config.app_version);
+    if !config.app_version.is_empty() {
+        let rx = flicker::net::update::check_github_latest(
+            RELEASES_OWNER,
+            RELEASES_REPO,
+            config.app_version,
+        );
+        UPDATE.with(|u| *u.borrow_mut() = UpdateCheck::Pending(rx));
+    }
     // Every shell client inherits the Prism pointer (theme-tinted hardware
     // cursor); when the pointer is hidden/captured elsewhere it simply isn't
     // shown — no visibility wiring here.
@@ -751,7 +839,29 @@ impl MainMenuScene {
         if results.is_on("quit") {
             return Transition::Quit;
         }
+        if results.is_on("open_update_page") {
+            // Inline side effect, no transition: the player stays in the menu
+            // while the release page opens in their browser.
+            if let Some(info) = poll_update() {
+                open_url(&info.url);
+            }
+        }
         Transition::None
+    }
+
+    /// The menu's per-frame model: the shipped version (bottom-right text) and
+    /// the update chip's visibility. Values only — every display STRING in the
+    /// tree is a `$token` (the chip's label lives in the stringtable).
+    fn model(&self) -> ValueMap {
+        let mut model = ValueMap::new();
+        let version = APP_VERSION.with(|v| *v.borrow());
+        if !version.is_empty() {
+            model.set("app_version", format!("v{version}"));
+        }
+        if poll_update().is_some() {
+            model.set("update_available", true);
+        }
+        model
     }
 }
 
@@ -783,8 +893,9 @@ impl Scene for MainMenuScene {
         signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
+        let model = self.model();
         let results = match self.view.as_mut() {
-            Some(view) => view.update(signals, input, renderer, &ValueMap::new()),
+            Some(view) => view.update(signals, input, renderer, &model),
             None => return Transition::None,
         };
         self.route(&results, renderer)
@@ -1370,7 +1481,7 @@ impl Scene for LoadingScene {
     }
 
     /// The loading screen runs in the **Menu** input context so the pump resolves
-    /// Cancel (B / Esc) for the back-out; there is nothing to confirm.
+    /// both Confirm (A / click — clicks through) and Cancel (B / Esc — backs out).
     fn input_context(&self) -> Option<InputContext> {
         Some(InputContext::Menu)
     }
@@ -1384,8 +1495,8 @@ impl Scene for LoadingScene {
     ) -> Transition {
         self.elapsed += dt;
         // Skip is a SIGNAL on the ONE bus, not a raw key (rule 37722F91): Cancel /
-        // Menu (B / Esc / Start) BACKS OUT; Confirm is reported but `Loading.lua`
-        // ignores it (a load must not be click-skipped). Same responder shape the
+        // Menu (B / Esc / Start) BACKS OUT; Confirm (A / click) CLICKS THROUGH —
+        // `Loading.lua` now routes both to a transition. Same responder shape the
         // splashes use, a one-layer chain.
         let mut root = SplashSkip::default();
         {
@@ -1447,9 +1558,9 @@ impl Scene for LoadingScene {
                     if intents.is_on(SPLASH_NEXT) {
                         return Transition::Fire(SPLASH_NEXT.to_string());
                     }
-                    // The script ignored the skip (a Confirm mid-load) — its call.
-                    // A completed timeline with no intent would strand the player, so
-                    // that advances loudly.
+                    // The script named no intent for this signal — its call (e.g. a
+                    // react-less or custom script). A completed timeline with no intent
+                    // would strand the player, so that advances loudly.
                     if !done {
                         return Transition::None;
                     }
@@ -2630,6 +2741,183 @@ fn binding_label(b: &InputBinding) -> String {
                 None => base,
             }
         }
+    }
+}
+
+/// The POSITIONAL `pad_glyphs` atlas cell name for a bound gamepad control — the
+/// vendor-NEUTRAL vocabulary (concept 0F5E0201): the mapping names a POSITION
+/// (`face_south`, `bumper_l`, …), and only the atlas ART speaks a vendor's dialect
+/// (Xbox Ⓐ vs PS ✕ live at the same `face_south` cell). `None` for a keyboard/mouse
+/// binding, or a pad control with no atlas cell (the system/vendor + Switch-style
+/// buttons). The names match the `pad_glyphs.cells` map authored in the scene
+/// styles; the walker turns a name into a sprite (an unknown/empty name draws
+/// nothing — the deliberate fail-quiet the glyph face already has).
+fn gamepad_glyph_name(b: &InputBinding) -> Option<&'static str> {
+    use flicker_input_core::{GamepadAxis, GamepadButton};
+    match b {
+        InputBinding::GamepadButton(gb) => Some(match gb {
+            GamepadButton::South => "face_south",
+            GamepadButton::East => "face_east",
+            GamepadButton::West => "face_west",
+            GamepadButton::North => "face_north",
+            GamepadButton::LeftBumper => "bumper_l",
+            GamepadButton::RightBumper => "bumper_r",
+            GamepadButton::LeftTrigger => "trigger_l",
+            GamepadButton::RightTrigger => "trigger_r",
+            GamepadButton::Start => "menu",
+            GamepadButton::Select => "view",
+            GamepadButton::DPadUp => "dpad_up",
+            GamepadButton::DPadDown => "dpad_down",
+            GamepadButton::DPadLeft => "dpad_left",
+            GamepadButton::DPadRight => "dpad_right",
+            GamepadButton::LeftStick => "stick_l",
+            GamepadButton::RightStick => "stick_r",
+            // No atlas cell: system/vendor buttons and the Switch-style extras.
+            GamepadButton::Guide
+            | GamepadButton::Mode
+            | GamepadButton::Touchpad
+            | GamepadButton::C
+            | GamepadButton::Z => return None,
+        }),
+        InputBinding::GamepadAxis { axis, .. } => Some(match axis {
+            GamepadAxis::LeftStickX | GamepadAxis::LeftStickY => "stick_l",
+            GamepadAxis::RightStickX | GamepadAxis::RightStickY => "stick_r",
+            GamepadAxis::LeftTrigger => "trigger_l",
+            GamepadAxis::RightTrigger => "trigger_r",
+        }),
+        // Keyboard / mouse / mouse-motion are not pad glyphs.
+        InputBinding::Key(_)
+        | InputBinding::MouseButton(_)
+        | InputBinding::MouseMotion { .. } => None,
+    }
+}
+
+/// Publish the device-adaptive control display for `signals` into `model` — the ONE
+/// place a scene HUD turns an authored SIGNAL into the key/glyph the player will
+/// press. Per signal it sets:
+/// - `bind_<name>` — the localized text of the first keyboard/mouse binding (the
+///   keycap face), via [`binding_label`]; empty when the signal has no kbm binding.
+/// - `glyph_<name>` — the `pad_glyphs` atlas cell name of the first gamepad binding,
+///   via [`gamepad_glyph_name`]; empty when it has none.
+///
+/// and stamps `input_device` from the live last-used-device monitor, so a
+/// device-adaptive hint draws the keycap on kbm and the glyph on a pad. The scene
+/// authors the signal on the hint; the walker picks the face by `input_device`.
+/// (Settings' key-bindings page keeps its own slot-0 publish — it edits one specific
+/// slot, a different need — and shares only [`binding_label`] with this.)
+pub fn publish_signal_bindings(
+    model: &mut ValueMap,
+    map: &InputMap,
+    signals: impl IntoIterator<Item = ActionSignal>,
+) {
+    model.set(
+        "input_device",
+        flicker::input_device::last_input_context().token(),
+    );
+    for sig in signals {
+        let name = sig.name();
+        let binds = map.bindings_for(sig);
+        let cap = binds
+            .iter()
+            .copied()
+            .find(|b| matches!(b, InputBinding::Key(_) | InputBinding::MouseButton(_)))
+            .map(|b| binding_label(&b))
+            .unwrap_or_default();
+        model.set(format!("bind_{name}"), cap);
+        let glyph = binds.iter().find_map(gamepad_glyph_name).unwrap_or_default();
+        model.set(format!("glyph_{name}"), glyph);
+    }
+}
+
+#[cfg(test)]
+mod signal_display_tests {
+    use super::*;
+    use flicker_input_core::{GamepadButton, Key};
+
+    #[test]
+    fn glyph_names_are_positional() {
+        // Vendor-NEUTRAL positions, not an Xbox dialect (concept 0F5E0201): West is
+        // `face_west` (Xbox X / PS Square live at the same cell, different art).
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::West)),
+            Some("face_west")
+        );
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::LeftBumper)),
+            Some("bumper_l")
+        );
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::Start)),
+            Some("menu")
+        );
+        // No atlas cell for the Guide button, and never for a keyboard key.
+        assert_eq!(
+            gamepad_glyph_name(&InputBinding::GamepadButton(GamepadButton::Guide)),
+            None
+        );
+        assert_eq!(gamepad_glyph_name(&InputBinding::Key(Key::E)), None);
+    }
+
+    #[test]
+    fn keycap_text_rides_the_stringtable_not_display() {
+        // The kbm keycap MUST resolve the key NAME through the stringtable (the locale
+        // axis, concept 0F5E0201) — never Rust Display/debug formatting. If someone
+        // swaps `binding_label`'s Key arm to `format!("{k}")`, it diverges from the
+        // token path and this fails. (P4 drift gate.)
+        let via_label = binding_label(&InputBinding::Key(Key::E));
+        let via_token = flicker::ui::strings::resolve(&Key::E.token()).into_owned();
+        assert_eq!(via_label, via_token);
+    }
+
+    // These assert the glyph face + device stamp, which are DETERMINISTIC. The
+    // keycap TEXT is `binding_label`'s concern — it resolves through the stringtable
+    // (absent in a bare unit test) and `ValueMap::text` reports an empty value as
+    // `None`, so `.unwrap_or("")` reads a missing/empty face as `""` either way.
+
+    #[test]
+    fn publish_sets_the_glyph_face_and_device() {
+        // A signal bound to a key (kbm face) AND a pad button (glyph face).
+        let mut map = InputMap::empty();
+        map.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        map.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::West),
+        );
+
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &map, [ActionSignal::Interact]);
+
+        // Keys are `glyph_<name>` / `bind_<name>` where name is the stable PascalCase
+        // ActionSignal name (e.g. "Interact") — the SAME form scene trees author.
+        let gkey = format!("glyph_{}", ActionSignal::Interact.name());
+        // The pad face resolves to the West-button POSITIONAL cell …
+        assert_eq!(m.text(&gkey).unwrap_or(""), "face_west");
+        // … and the device family is always stamped (kbm is the resting default).
+        assert_eq!(m.text("input_device"), Some("kbm"));
+    }
+
+    #[test]
+    fn publish_reflects_which_family_is_bound() {
+        let gkey = format!("glyph_{}", ActionSignal::Interact.name());
+        let bkey = format!("bind_{}", ActionSignal::Interact.name());
+
+        // Pad only → glyph face set, keycap face empty.
+        let mut pad = InputMap::empty();
+        pad.bind(
+            ActionSignal::Interact,
+            InputBinding::GamepadButton(GamepadButton::South),
+        );
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &pad, [ActionSignal::Interact]);
+        assert_eq!(m.text(&gkey).unwrap_or(""), "face_south");
+        assert_eq!(m.text(&bkey).unwrap_or(""), "");
+
+        // Kbm only → glyph face empty (the keycap text is stringtable-resolved).
+        let mut kbm = InputMap::empty();
+        kbm.bind(ActionSignal::Interact, InputBinding::Key(Key::E));
+        let mut m = ValueMap::new();
+        publish_signal_bindings(&mut m, &kbm, [ActionSignal::Interact]);
+        assert_eq!(m.text(&gkey).unwrap_or(""), "");
     }
 }
 
@@ -4291,9 +4579,9 @@ mod script_smoke {
 
     /// The pre-load screen's pair script is a module like every other: `derive()`
     /// turns the engine's `loading_progress` into the percent readout the bar's
-    /// label binds, and `react()` maps the timeline completing to `next` and a
-    /// back-out to `exit` while REFUSING to let a Confirm skip a load in progress.
-    /// Its FILE routes both intents to authored scenes.
+    /// label binds, and `react()` maps the timeline completing — or a Confirm click-
+    /// through — to `next`, and a back-out to `exit`. Its FILE routes both intents to
+    /// authored scenes.
     #[test]
     fn loading_pair_script_derives_percent_and_routes() {
         let host = ScriptHost::new(LOADING_SCRIPT, "Loading.lua").expect("the pair script loads");
@@ -4327,11 +4615,14 @@ mod script_smoke {
             back.is_on(SPLASH_EXIT),
             "`{SIG_CANCEL}` yields `{SPLASH_EXIT}`"
         );
-        let skipped = host
+        let confirmed = host
             .react(&ValueMap::new().with(SIG_CONFIRM, true))
             .expect("react() runs")
-            .is_some_and(|m| m.is_on(SPLASH_NEXT) || m.is_on(SPLASH_EXIT));
-        assert!(!skipped, "a Confirm mid-load names no intent");
+            .expect("react() is exposed");
+        assert!(
+            confirmed.is_on(SPLASH_NEXT),
+            "`{SIG_CONFIRM}` clicks through to `{SPLASH_NEXT}`"
+        );
 
         // The FILE routes both intents, to authored scenes.
         let m = manifest();

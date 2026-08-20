@@ -44,21 +44,6 @@ impl Lane {
         Lane::Notify,
     ];
 
-    /// Gutter label.
-    pub fn label(self) -> &'static str {
-        match self {
-            Lane::Hitbox => "HITBOX",
-            Lane::IFrame => "I-FRAME",
-            Lane::Parry => "PARRY",
-            Lane::Cancel => "CANCEL",
-            Lane::HyperArmor => "HYPER ARMOR",
-            Lane::Telegraph => "TELEGRAPH",
-            Lane::Sfx => "SFX",
-            Lane::Vfx => "VFX",
-            Lane::Notify => "NOTIFY",
-        }
-    }
-
     /// Key into `loomforge.tae_lane` — where this lane's four colours live.
     pub fn id(self) -> &'static str {
         match self {

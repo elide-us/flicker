@@ -156,7 +156,7 @@ mod tests {
     use flicker_primitive::FlatField;
 
     fn grey() -> Material {
-        Material::new(1, 1, 0).expect("valid")
+        Material::new(1, 1, 0)
     }
 
     fn lod0_flat() -> Cluster {

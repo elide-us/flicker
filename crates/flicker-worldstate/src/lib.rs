@@ -27,18 +27,22 @@
 //!
 //! # Deliberately deferred (do not build here yet)
 //!
-//! The erosion sweep, the Rivulet flow structures, the degeneration/write-back
-//! routine (spec §5-6), and the classifier that fills [`Cell::surface_material`]
-//! (handoff §6). This crate supplies the substrate they will operate on.
+//! The erosion sweep, the Rivulet flow structures, and the degeneration/
+//! write-back routine (spec §5-6). This crate supplies the substrate they will
+//! operate on. (The classifier that fills [`Cell::surface_material`] — long on
+//! this list — landed 2026-08-19 as [`classify::classify_material`], the R7 v1
+//! composition read of the materials-unification plan.)
 //!
 //! [`MaterialId`]: flicker_materials::MaterialId
 
 pub mod cell;
+pub mod classify;
 pub mod composition;
 pub mod compound_ledger;
 pub mod ledger;
 
 pub use cell::{Cell, Effects};
+pub use classify::classify_material;
 pub use composition::Composition;
 pub use compound_ledger::{CompoundId, CompoundLedger};
 pub use ledger::{CellCoord, Ledger};

@@ -1,0 +1,2224 @@
+{
+  "_comment": "POCCLUSTERS 'Prism Test Room' — scene definition on the canonical system (migration P6 of the materials-unification plan, 2026-08-19; design mock DesignSync a39150df). Three HUD panels over the full-screen 3D cluster field (the clicktrainer layering): LEFT main (header + mode pill, readout box, 6 debug-overlay toggles, move-speed slider), RIGHT inspector (visible only with a pick: 7-column table over the selected voxel's 8 corners), BOTTOM-RIGHT celestial cycle (sun/moon + world sliders, view toggles). The tree is the former shared/hud_pocclusters.lua M.tree() authored as data with the quarantined scene_styles.json layout/label constants inlined; the style-only blocks live under `styles` below (chat = the floating comms window the scene runs as a second walker pass — see lib.rs). Readouts are text_bind values derived by the pair script; toggles + sliders are two-way binds. Nav: pc_main (1) and pc_cc (2) are panel stops per the flatten contract; the inspector is a pick-gated readout, not a stop. Esc fires the declared on_menu = pause_open.",
+  "behaviour": "pocclusters",
+  "params": {},
+  "exits": {},
+  "styles": {
+    "pocclusters": {
+      "col": {
+        "label": "$dim_soft",
+        "title": "$ink_bright",
+        "value": "$ink",
+        "dim": "$dim",
+        "accent": "$rune_glow_hi",
+        "amber": "$stam_hi",
+        "bronze": "$bronze",
+        "bronze_deep": "$bronze_deep",
+        "rune": "$rune_glow"
+      },
+      "panel": {
+        "fill_top": "$stone3",
+        "fill_bot": "$stone1",
+        "border": "$edge2",
+        "border_w": 1,
+        "radius": 4
+      },
+      "box": {
+        "fill_top": "$stone0",
+        "fill_bot": "$stone1",
+        "border": "$hairline",
+        "border_w": 1,
+        "radius": 3
+      },
+      "pill": {
+        "fill_top": "$accent_wash_2",
+        "fill_bot": "$accent_wash_2",
+        "border": "$sap_border",
+        "border_w": 1,
+        "radius": 3
+      },
+      "divider": {
+        "fill": "$seam"
+      },
+      "checkbox": {
+        "box": "$stone2",
+        "check": "$sig_green",
+        "border": "$edge4",
+        "pad": 3
+      },
+      "slider": {
+        "track": "$well",
+        "fill": "$sap_base",
+        "fill_hi": "$sap_border",
+        "handle": "$sap_border",
+        "handle_w": 18
+      },
+      "rune_halo": {
+        "fill": "$rune_halo",
+        "radius": 11,
+        "feather": 7
+      },
+      "keycap": {
+        "fill_top": "$stone2",
+        "fill_bot": "$stone2",
+        "border": "$edge4",
+        "border_w": 1,
+        "radius": 3
+      },
+      "chat": {
+        "_comment": "Floating in-world comms window — the flicker-widgets `chat_panel` builder (a per-frame Rust UiNode tree the pocclusters scene runs as a SECOND run_ui pass over the HUD, so the window can move + resize; not a cached tree). Maps the DesignSync ChatPanel (MCP 36F7946B) onto the clay-chat v0.1 line protocol (MCP D9FE6CE0). Container leaves (window/titlebar/tabstrip/tab_*/log/roster/input_bar/btn*) are panel styles (fill_top/fill_bot/border/radius); *_color + line_* + roster_* are TEXT colours (a text node's dotted `color` path). `input` is the text_field style (top/bot/border/caret/placeholder/label). Single palette: every value is a $token from theme.tokens.",
+        "window": {
+          "fill_top": "$stone3",
+          "fill_bot": "$stone1",
+          "border": "$edge3",
+          "border_w": 1,
+          "radius": 4
+        },
+        "titlebar": {
+          "fill_top": "$accent_wash_2",
+          "fill_bot": "$accent_wash",
+          "border": "$edge2",
+          "border_w": 1,
+          "radius": 3
+        },
+        "title_color": "$ink_bright",
+        "tabstrip": {
+          "fill_top": "$stone2",
+          "fill_bot": "$stone1",
+          "radius": 3
+        },
+        "tab_active": {
+          "fill_top": "$accent_wash_2",
+          "fill_bot": "$accent_wash_2",
+          "border": "$sap_border",
+          "border_w": 1,
+          "label": "$ink_bright",
+          "active_label": "$ink_bright",
+          "radius": 3,
+          "label_size": 12
+        },
+        "tab_idle": {
+          "fill_top": "$stone2",
+          "fill_bot": "$stone2",
+          "border": "$edge2",
+          "border_w": 1,
+          "label": "$dim_soft",
+          "radius": 3,
+          "label_size": 12
+        },
+        "log": {
+          "fill_top": "$well_top",
+          "fill_bot": "$well_bot",
+          "border": "$edge1",
+          "border_w": 1,
+          "radius": 3
+        },
+        "roster": {
+          "fill_top": "$stone1",
+          "fill_bot": "$stone0",
+          "border": "$edge1",
+          "border_w": 1,
+          "radius": 3
+        },
+        "roster_head": "$bronze",
+        "roster_here": "$ink",
+        "roster_op": "$bronze",
+        "roster_you": "$rune_glow_hi",
+        "input_bar": {
+          "fill_top": "$stone2",
+          "fill_bot": "$stone1",
+          "border": "$edge2",
+          "border_w": 1,
+          "radius": 3
+        },
+        "input": {
+          "top": "$well",
+          "bot": "$well",
+          "border": "$edge3",
+          "hover_border": "$bronze_deep",
+          "caret": "$rune_glow",
+          "placeholder": "$dim",
+          "label": "$ink",
+          "radius": 3,
+          "label_size": 14
+        },
+        "speaker_color": "$ink_bright",
+        "btn": {
+          "fill_top": "$sap_base",
+          "fill_bot": "$sap_base_lo",
+          "hover_top": "$sap_hover",
+          "hover_bot": "$sap_hover_lo",
+          "border": "$sap_border",
+          "hover_border": "$sap_hover_border",
+          "label": "$ink_sapphire",
+          "glow": "$sap_glow",
+          "radius": 3,
+          "label_size": 14
+        },
+        "btn_danger": {
+          "fill_top": "$danger_bg",
+          "fill_bot": "$danger_bg_lo",
+          "hover_top": "$danger_bg",
+          "hover_bot": "$danger_bg_lo",
+          "border": "$danger_border",
+          "hover_border": "$danger_hi",
+          "label": "$danger_text",
+          "hover_label": "$danger_text_hi",
+          "radius": 3,
+          "label_size": 14
+        },
+        "corner": "$bronze",
+        "line_say": "$ink",
+        "line_you": "$rune_glow_hi",
+        "line_op": "$bronze",
+        "line_emote": "$rune_glow",
+        "line_joined": "$rune_glow",
+        "line_left": "$dim",
+        "line_renamed": "$bronze"
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "pocclusters",
+    "on_menu": "pause_open",
+    "children": [
+      {
+        "component": "stack",
+        "id": "pc_main",
+        "nav_ordinal": 1,
+        "anchor": "top_left",
+        "offset": [
+          24,
+          24
+        ],
+        "style": "pocclusters.panel",
+        "children": [
+          {
+            "component": "cell",
+            "width": 360,
+            "pad": 18,
+            "gap": 12,
+            "children": [
+              {
+                "component": "row",
+                "size": 26,
+                "children": [
+                  {
+                    "component": "cell",
+                    "size": 10
+                  },
+                  {
+                    "component": "text",
+                    "size": 20,
+                    "height": 26,
+                    "text": "✦",
+                    "text_size": 15,
+                    "font": "display",
+                    "color": "pocclusters.col.bronze",
+                    "align": "center"
+                  },
+                  {
+                    "component": "text",
+                    "grow": 1.0,
+                    "height": 26,
+                    "text": "$pc_prism_test_room",
+                    "text_size": 21,
+                    "font": "display",
+                    "color": "pocclusters.col.title"
+                  },
+                  {
+                    "component": "stack",
+                    "size": 92,
+                    "height": 22,
+                    "style": "pocclusters.pill",
+                    "children": [
+                      {
+                        "component": "text",
+                        "anchor": "center",
+                        "text_bind": "mode_tag",
+                        "text_size": 11,
+                        "font": "label",
+                        "color": "pocclusters.col.accent",
+                        "align": "center"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "size": 14
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_readout",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "cell",
+                    "style": "pocclusters.box",
+                    "pad": 14,
+                    "gap": 4,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 26,
+                        "text_bind": "title_line",
+                        "text_size": 19,
+                        "font": "display",
+                        "color": "pocclusters.col.title"
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_cam",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "cam_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.value"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_grid",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "grid_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.value"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_move",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "move_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.value"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_diag",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "diag_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.value"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "size": 1,
+                        "style": "pocclusters.divider"
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_pick",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "pick_val",
+                            "visible_bind": "has_pick",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text": "$pc_none",
+                            "visible_bind": "no_pick",
+                            "text_size": 13,
+                            "font": "label",
+                            "color": "pocclusters.col.dim"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "row",
+                        "size": 19,
+                        "visible_bind": "walk",
+                        "children": [
+                          {
+                            "component": "text",
+                            "size": 52,
+                            "height": 19,
+                            "text": "$pc_walk",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.amber"
+                          },
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 19,
+                            "text_bind": "walk_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.amber"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 24,
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 42,
+                        "height": 24,
+                        "text": "$pc_press",
+                        "text_size": 14,
+                        "font": "body",
+                        "color": "pocclusters.col.dim"
+                      },
+                      {
+                        "component": "stack",
+                        "size": 34,
+                        "height": 18,
+                        "style": "pocclusters.keycap",
+                        "children": [
+                          {
+                            "component": "text",
+                            "anchor": "center",
+                            "text": "$pc_esc",
+                            "text_size": 11,
+                            "font": "label",
+                            "color": "pocclusters.col.value",
+                            "align": "center"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "text",
+                        "grow": 1.0,
+                        "height": 24,
+                        "text": "$pc_for_the_menu",
+                        "text_size": 14,
+                        "font": "body",
+                        "color": "pocclusters.col.dim"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_debug_overlays",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "row",
+                    "size": 90,
+                    "gap": 18,
+                    "children": [
+                      {
+                        "component": "cell",
+                        "grow": 1.0,
+                        "gap": 6,
+                        "children": [
+                          {
+                            "component": "checkbox",
+                            "id": "wireframe",
+                            "bind": "wireframe",
+                            "label": "$pc_wireframe_overlay",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          },
+                          {
+                            "component": "checkbox",
+                            "id": "arrows",
+                            "bind": "arrows",
+                            "label": "$pc_corner_vector_arrows",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          },
+                          {
+                            "component": "checkbox",
+                            "id": "navmesh",
+                            "bind": "navmesh",
+                            "label": "$pc_navmesh_wireframe",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "grow": 1.0,
+                        "gap": 6,
+                        "children": [
+                          {
+                            "component": "checkbox",
+                            "id": "camera_lod",
+                            "bind": "camera_lod",
+                            "label": "$pc_camera_driven_lod",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          },
+                          {
+                            "component": "checkbox",
+                            "id": "lod_billboards",
+                            "bind": "lod_billboards",
+                            "label": "$pc_lod_billboards",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          },
+                          {
+                            "component": "checkbox",
+                            "id": "walk",
+                            "bind": "walk",
+                            "label": "$pc_surface_walk",
+                            "size": 26,
+                            "box": 20,
+                            "label_x": 30,
+                            "label_size": 15,
+                            "style": "pocclusters.checkbox",
+                            "tab_group": "pc_main"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_controls",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "row",
+                    "size": 24,
+                    "children": [
+                      {
+                        "component": "text",
+                        "grow": 1.0,
+                        "height": 24,
+                        "text": "$pc_move_speed",
+                        "text_size": 15,
+                        "font": "label",
+                        "color": "pocclusters.col.value"
+                      },
+                      {
+                        "component": "text",
+                        "size": 90,
+                        "height": 24,
+                        "text_bind": "speed_val",
+                        "text_size": 13,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.accent",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "slider",
+                    "id": "move_speed",
+                    "size": 24,
+                    "bind": "move_speed",
+                    "min": 20,
+                    "max": 200,
+                    "slider_h": 8,
+                    "style": "pocclusters.slider",
+                    "tab_group": "pc_main"
+                  },
+                  {
+                    "component": "row",
+                    "size": 18,
+                    "children": [
+                      {
+                        "component": "text",
+                        "grow": 1.0,
+                        "height": 18,
+                        "text": "20",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label"
+                      },
+                      {
+                        "component": "text",
+                        "grow": 1.0,
+                        "height": 18,
+                        "text": "$pc_units_s",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.dim",
+                        "align": "center"
+                      },
+                      {
+                        "component": "text",
+                        "grow": 1.0,
+                        "height": 18,
+                        "text": "200",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label",
+                        "align": "right"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛞ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "cell",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛟ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_left",
+            "offset": [
+              3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛊ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_right",
+            "offset": [
+              -3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛝ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          }
+        ]
+      },
+      {
+        "component": "stack",
+        "anchor": "top_right",
+        "offset": [
+          -24,
+          24
+        ],
+        "style": "pocclusters.panel",
+        "visible_bind": "has_pick",
+        "children": [
+          {
+            "component": "cell",
+            "width": 392,
+            "pad": 18,
+            "gap": 8,
+            "children": [
+              {
+                "component": "row",
+                "size": 26,
+                "children": [
+                  {
+                    "component": "cell",
+                    "size": 8
+                  },
+                  {
+                    "component": "text",
+                    "size": 20,
+                    "height": 26,
+                    "text": "◈",
+                    "text_size": 14,
+                    "font": "display",
+                    "color": "pocclusters.col.bronze",
+                    "align": "center"
+                  },
+                  {
+                    "component": "text",
+                    "grow": 1.0,
+                    "height": 26,
+                    "text_bind": "insp_title",
+                    "text_size": 21,
+                    "font": "display",
+                    "color": "pocclusters.col.title"
+                  }
+                ]
+              },
+              {
+                "component": "text",
+                "size": 20,
+                "text_bind": "insp_sub",
+                "text_size": 10,
+                "font": "label",
+                "color": "pocclusters.col.accent"
+              },
+              {
+                "component": "cell",
+                "style": "pocclusters.box",
+                "pad": 10,
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "row",
+                    "size": 20,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 20,
+                        "text": "$pc_corner",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "X",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "Y",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "Z",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.label",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "$pc_wx",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.bronze_deep",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "$pc_wy",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.bronze_deep",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 20,
+                        "text": "$pc_wz",
+                        "text_size": 10,
+                        "font": "label",
+                        "color": "pocclusters.col.bronze_deep",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c0_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c0_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c1_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c1_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c2_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c2_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c3_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c3_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c4_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c4_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c5_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c5_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c6_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c6_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "row",
+                    "size": 22,
+                    "children": [
+                      {
+                        "component": "text",
+                        "size": 88,
+                        "height": 22,
+                        "text_bind": "insp_c7_name",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.bronze",
+                        "align": "left"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_lx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_ly",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_lz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.value",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_wx",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_wy",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      },
+                      {
+                        "component": "text",
+                        "size": 44,
+                        "height": 22,
+                        "text_bind": "insp_c7_wz",
+                        "text_size": 12,
+                        "font": "label",
+                        "tracking": 0,
+                        "color": "pocclusters.col.dim",
+                        "align": "right"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "row",
+                "size": 24,
+                "children": [
+                  {
+                    "component": "text",
+                    "grow": 1.0,
+                    "height": 24,
+                    "text": "$pc_local_corner",
+                    "text_size": 9,
+                    "font": "label",
+                    "color": "pocclusters.col.bronze",
+                    "align": "right"
+                  },
+                  {
+                    "component": "cell",
+                    "size": 22
+                  },
+                  {
+                    "component": "text",
+                    "grow": 1.0,
+                    "height": 24,
+                    "text": "$pc_wx_y_z_world_space",
+                    "text_size": 9,
+                    "font": "label",
+                    "color": "pocclusters.col.bronze_deep",
+                    "align": "left"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛜ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "cell",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛢ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_left",
+            "offset": [
+              3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛘ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_right",
+            "offset": [
+              -3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛉ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          }
+        ]
+      },
+      {
+        "component": "stack",
+        "id": "pc_cc",
+        "nav_ordinal": 2,
+        "anchor": "bottom_right",
+        "offset": [
+          -24,
+          -24
+        ],
+        "style": "pocclusters.panel",
+        "children": [
+          {
+            "component": "cell",
+            "width": 360,
+            "pad": 16,
+            "gap": 12,
+            "children": [
+              {
+                "component": "row",
+                "size": 26,
+                "children": [
+                  {
+                    "component": "cell",
+                    "size": 8
+                  },
+                  {
+                    "component": "text",
+                    "size": 20,
+                    "height": 26,
+                    "text": "✦",
+                    "text_size": 15,
+                    "font": "display",
+                    "color": "pocclusters.col.bronze",
+                    "align": "center"
+                  },
+                  {
+                    "component": "text",
+                    "grow": 1.0,
+                    "height": 26,
+                    "text": "$pc_celestial_cycle",
+                    "text_size": 21,
+                    "font": "display",
+                    "color": "pocclusters.col.title"
+                  }
+                ]
+              },
+              {
+                "component": "text",
+                "size": 18,
+                "text": "$pc_scrub_the_celestial_timeline_to_test_orb",
+                "text_size": 12,
+                "font": "body",
+                "italic": true,
+                "color": "pocclusters.col.dim"
+              },
+              {
+                "component": "cell",
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_sky_the_paired_hands",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "cell",
+                    "style": "pocclusters.box",
+                    "pad": 14,
+                    "gap": 10,
+                    "children": [
+                      {
+                        "component": "cell",
+                        "gap": 6,
+                        "children": [
+                          {
+                            "component": "row",
+                            "size": 20,
+                            "children": [
+                              {
+                                "component": "text",
+                                "grow": 1.0,
+                                "height": 20,
+                                "text": "$pc_sun",
+                                "text_size": 15,
+                                "font": "label",
+                                "color": "pocclusters.col.label"
+                              },
+                              {
+                                "component": "text",
+                                "size": 172,
+                                "height": 20,
+                                "text_bind": "cc_sun_val",
+                                "text_size": 13,
+                                "font": "label",
+                                "tracking": 0,
+                                "color": "pocclusters.col.accent",
+                                "align": "right"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "slider",
+                            "id": "cc_sun",
+                            "size": 20,
+                            "bind": "cc_sun",
+                            "min": 0.0,
+                            "max": 24.0,
+                            "slider_h": 8,
+                            "style": "pocclusters.slider",
+                            "tab_group": "pc_cc"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "cell",
+                        "gap": 6,
+                        "children": [
+                          {
+                            "component": "row",
+                            "size": 20,
+                            "children": [
+                              {
+                                "component": "text",
+                                "grow": 1.0,
+                                "height": 20,
+                                "text": "$pc_moon",
+                                "text_size": 15,
+                                "font": "label",
+                                "color": "pocclusters.col.label"
+                              },
+                              {
+                                "component": "text",
+                                "size": 172,
+                                "height": 20,
+                                "text_bind": "cc_moon_val",
+                                "text_size": 13,
+                                "font": "label",
+                                "tracking": 0,
+                                "color": "pocclusters.col.accent",
+                                "align": "right"
+                              }
+                            ]
+                          },
+                          {
+                            "component": "slider",
+                            "id": "cc_moon",
+                            "size": 20,
+                            "bind": "cc_moon",
+                            "min": 0.0,
+                            "max": 4.0,
+                            "slider_h": 8,
+                            "style": "pocclusters.slider",
+                            "tab_group": "pc_cc"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "gap": 10,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_world_independent",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "children": [
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 20,
+                            "text": "$pc_year",
+                            "text_size": 15,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "size": 172,
+                            "height": 20,
+                            "text_bind": "cc_year_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent",
+                            "align": "right"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "cc_year",
+                        "size": 20,
+                        "bind": "cc_year",
+                        "min": 0.0,
+                        "max": 12.0,
+                        "slider_h": 8,
+                        "style": "pocclusters.slider",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "children": [
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 20,
+                            "text": "$pc_speed",
+                            "text_size": 15,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "size": 172,
+                            "height": 20,
+                            "text_bind": "cc_speed_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent",
+                            "align": "right"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "cc_speed",
+                        "size": 20,
+                        "bind": "cc_speed",
+                        "min": 0.0,
+                        "max": 120.0,
+                        "slider_h": 8,
+                        "style": "pocclusters.slider",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "children": [
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 20,
+                            "text": "$pc_fog",
+                            "text_size": 15,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "size": 172,
+                            "height": 20,
+                            "text_bind": "cc_fog_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent",
+                            "align": "right"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "cc_fog",
+                        "size": 20,
+                        "bind": "cc_fog",
+                        "min": 0.0,
+                        "max": 1.0,
+                        "slider_h": 8,
+                        "style": "pocclusters.slider",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "children": [
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 20,
+                            "text": "$pc_latitude",
+                            "text_size": 15,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "size": 172,
+                            "height": 20,
+                            "text_bind": "cc_lat_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent",
+                            "align": "right"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "cc_lat",
+                        "size": 20,
+                        "bind": "cc_lat",
+                        "min": -90.0,
+                        "max": 90.0,
+                        "slider_h": 8,
+                        "style": "pocclusters.slider",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "row",
+                        "size": 20,
+                        "children": [
+                          {
+                            "component": "text",
+                            "grow": 1.0,
+                            "height": 20,
+                            "text": "$pc_epoch",
+                            "text_size": 15,
+                            "font": "label",
+                            "color": "pocclusters.col.label"
+                          },
+                          {
+                            "component": "text",
+                            "size": 172,
+                            "height": 20,
+                            "text_bind": "cc_epoch_val",
+                            "text_size": 13,
+                            "font": "label",
+                            "tracking": 0,
+                            "color": "pocclusters.col.accent",
+                            "align": "right"
+                          }
+                        ]
+                      },
+                      {
+                        "component": "slider",
+                        "id": "cc_epoch",
+                        "size": 20,
+                        "bind": "cc_epoch",
+                        "min": 0.0,
+                        "max": 20.0,
+                        "slider_h": 8,
+                        "style": "pocclusters.slider",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "component": "cell",
+                "gap": 0,
+                "children": [
+                  {
+                    "component": "text",
+                    "text": "$pc_view",
+                    "size": 22,
+                    "text_size": 11,
+                    "font": "label",
+                    "color": "pocclusters.col.label"
+                  },
+                  {
+                    "component": "cell",
+                    "gap": 6,
+                    "children": [
+                      {
+                        "component": "checkbox",
+                        "id": "constellations",
+                        "bind": "constellations",
+                        "label": "$pc_constellations",
+                        "size": 26,
+                        "box": 20,
+                        "label_x": 30,
+                        "label_size": 15,
+                        "style": "pocclusters.checkbox",
+                        "tab_group": "pc_cc"
+                      },
+                      {
+                        "component": "checkbox",
+                        "id": "planets",
+                        "bind": "planets",
+                        "label": "$pc_planets_ecliptic",
+                        "size": 26,
+                        "box": 20,
+                        "label_x": 30,
+                        "label_size": 15,
+                        "style": "pocclusters.checkbox",
+                        "tab_group": "pc_cc"
+                      },
+                      {
+                        "component": "checkbox",
+                        "id": "celestial_paths",
+                        "bind": "celestial_paths",
+                        "label": "$pc_celestial_paths_advent",
+                        "size": 26,
+                        "box": 20,
+                        "label_x": 30,
+                        "label_size": 15,
+                        "style": "pocclusters.checkbox",
+                        "tab_group": "pc_cc"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "component": "cell",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_left",
+            "offset": [
+              3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᚦ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "cell",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "style": "pocclusters.rune_halo"
+          },
+          {
+            "component": "text",
+            "anchor": "top_right",
+            "offset": [
+              -3,
+              3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛇ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 15,
+            "color": "pocclusters.col.rune"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_left",
+            "offset": [
+              3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛃ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          },
+          {
+            "component": "text",
+            "anchor": "bottom_right",
+            "offset": [
+              -3,
+              -3
+            ],
+            "width": 22,
+            "height": 22,
+            "text": "ᛒ",
+            "font": "rune",
+            "align": "center",
+            "text_size": 13,
+            "color": "pocclusters.col.bronze_deep"
+          }
+        ]
+      }
+    ]
+  }
+}

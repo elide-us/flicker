@@ -1,38 +1,37 @@
 //! flicker-godmode — **God Mode**, the world-simulation console (library).
 //!
-//! The maintainer's window onto a living planet: a Populous-style globe he can
-//! orbit, recolour by any field the simulation exposes, step or play, reseed, and
-//! eventually snapshot when he likes what he sees. It draws the world as a **stack
-//! of concentric layer shells** — core, mantle, then each bed the chemistry grows
+//! The maintainer's window onto a living planet: a globe he can orbit, recolour
+//! by any field the simulation exposes, step or play, reseed, and eventually
+//! snapshot when he likes what he sees. It draws the world as a **stack of
+//! concentric layer shells** — core, mantle, then each bed the chemistry grows
 //! above it — so the planet's structure is the picture, not a texture painted on
 //! one.
 //!
-//! The simulation lives in `flicker-poc-chemistry` and is **GPU-free**; it runs on
-//! its own thread ([`sim_thread`]) and this scene never steps it inside a frame.
-//! The scene sends commands and draws the latest published snapshot.
+//! The scene is a PAIR (five-line architecture): `godmode.scene.json` authors
+//! the HUD tree + this bench's style blocks; `godmode.lua` picks every state
+//! word, glyph and style path from the RAW model this behaviour publishes; the
+//! Rust component kinds draw. The life-supporting gauge rows are REFILLED into
+//! the authored `gm_hab_rows` container at construction from
+//! `habitability::BANDS` — the observer's numbers, never authored copies.
 //!
-//! A scene PACKAGE — library only, no binary (the standalone
-//! `flicker-poc-chemistry` app moved into the unified `prism-alpha` launcher, the
-//! same promotion `flicker-pocepochs` took): the launcher builds it via [`scene`]
-//! and registers it as a roster entry.
+//! The simulation lives in `flicker-poc-chemistry` and is **GPU-free**; it runs
+//! on its own thread ([`sim_thread`]) and this scene never steps it inside a
+//! frame. The scene sends commands and draws the latest published snapshot.
+//!
+//! A scene PACKAGE — library only, no binary: the launcher's roster entry is
+//! the CLIENT BEHAVIOUR that plays `godmode.scene.json`, built via [`scene`].
 
 mod globe_view;
-mod route;
 mod scene;
 mod sim_thread;
 
 pub use scene::GodModeScene;
 
-/// Build the world-simulation console as a boxed `Scene` for the shell's scene
-/// registry.
-pub fn scene() -> Box<dyn flicker::scene::Scene> {
-    Box::new(GodModeScene::new())
-}
+use flicker::ui::SceneDef;
 
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
+/// Build the world-simulation console as a boxed `Scene` — the CLIENT BEHAVIOUR
+/// the roster registers; the manifest resolves `godmode.scene.json` and hands
+/// its def here.
+pub fn scene(def: &SceneDef) -> Box<dyn flicker::scene::Scene> {
+    Box::new(GodModeScene::new(def))
 }

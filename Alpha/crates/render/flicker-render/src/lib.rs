@@ -41,6 +41,7 @@ pub use mesh::{
     ray_triangle, Camera, MeshDrawOptions, MeshHandle, MeshIndices, MeshVertex, SceneLighting,
 };
 pub use pipeline_ground_fog::GroundFog;
+pub use pipeline_mesh::MATERIAL_PALETTE_LEN;
 pub use pipeline_mesh_textured::{
     build_textured_verts, PbrMaps, TexturedMeshHandle, TexturedVertex,
 };

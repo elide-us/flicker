@@ -1,0 +1,501 @@
+{
+  "_meta": {
+    "source": "Split out of compounds.json on 2026-08-19 (Aaron): the mantle + world-formation-simulation compounds, ids 79-96 - separated from the gameplay compound catalog so the two material-slot budgets stay legible for the (future) materials-map design session.",
+    "scope": "Ids 79-90 = the 12 sim-required rock-forming minerals (Olivine..Serpentine, the R6b mineral merge - mantle/basalt/crust silicates plus ore/sulfide/carbonate phases). Ids 91-96 = the 6 sim-required volatile/atmosphere species (N2, SO2, HCl, CH4, NH3, O2) the outgassing/atmosphere/biosphere stages book gases in. Every row carries sim_required:true.",
+    "schema": "Same row schema as compounds.json - see that file's _meta for the field contract, the crystallizes/metamorphic semantics, and the ONE-TABLE physical-fields rule. This file adds no new fields.",
+    "id_space": "SHARED with compounds.json: one global id space across both files, ids never reused. retired_ids is tracked in compounds.json (this file retires none). A row's id is its stable catalog id (CompoundDef::id) everywhere in the sim.",
+    "use": "Loaded by flicker-materials Tables via TableSource alongside compounds.json and MERGED into the single in-memory compound catalog (flicker-materials/src/source.rs::load_compounds). The world-formation sim (flicker-poc-chemistry mantle/crust/atmosphere/biosphere stages and rocks.json modal recipes) resolves these by name/id from that unified catalog - nothing loads this file on its own.",
+    "counts": {
+      "mineral": 12,
+      "common": 6
+    },
+    "format": "flicker.compounds",
+    "version": 2
+  },
+  "compounds": [
+    {
+      "id": 79,
+      "name": "Olivine",
+      "formula": "Mg2SiO4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 2
+        },
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 7.0,
+      "density_g_cm3": 3.27,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "THE MANTLE. Forsterite end-member. Also the Mg ore."
+    },
+    {
+      "id": 80,
+      "name": "Pyroxene",
+      "formula": "MgSiO3",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 5.5,
+      "density_g_cm3": 3.2,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "Mantle + basalt. Enstatite end-member."
+    },
+    {
+      "id": 81,
+      "name": "Anorthite",
+      "formula": "CaAl2Si2O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 2
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.73,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "Ca-plagioclase. The other half of basalt."
+    },
+    {
+      "id": 82,
+      "name": "Albite",
+      "formula": "NaAlSi3O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Na",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.62,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "Na-plagioclase. Split out of the old two-formula Feldspar."
+    },
+    {
+      "id": 83,
+      "name": "Orthoclase",
+      "formula": "KAlSi3O8",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 8
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 2.56,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "K-feldspar. Granite. Split out of the old Feldspar."
+    },
+    {
+      "id": 84,
+      "name": "Biotite",
+      "formula": "KMg3AlSi3O10(OH)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Mg",
+          "count": 3
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 12
+        },
+        {
+          "symbol": "H",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 3.0,
+      "brittleness": 0.9,
+      "sim_required": true,
+      "note": "Mica. Granite + the foliation that makes slate cleave."
+    },
+    {
+      "id": 85,
+      "name": "Muscovite",
+      "formula": "KAl3Si3O10(OH)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "K",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 3
+        },
+        {
+          "symbol": "Si",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 12
+        },
+        {
+          "symbol": "H",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 2.5,
+      "density_g_cm3": 2.82,
+      "brittleness": 0.9,
+      "sim_required": true,
+      "note": "Mica. Metamorphic - the mineral slate is MADE of."
+    },
+    {
+      "id": 86,
+      "name": "Magnetite",
+      "formula": "Fe3O4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 3
+        },
+        {
+          "symbol": "O",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.15,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "BIF + the magnetic signature of ocean crust."
+    },
+    {
+      "id": 87,
+      "name": "Pyrite",
+      "formula": "FeS2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Fe",
+          "count": 1
+        },
+        {
+          "symbol": "S",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.0,
+      "density_g_cm3": 5.01,
+      "brittleness": 0.7,
+      "sim_required": true,
+      "note": "The sulfur cycle. Its OXIDATION is a primary O2 SINK pre-GOE."
+    },
+    {
+      "id": 88,
+      "name": "Dolomite",
+      "formula": "CaMg(CO3)2",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Ca",
+          "count": 1
+        },
+        {
+          "symbol": "Mg",
+          "count": 1
+        },
+        {
+          "symbol": "C",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 6
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.85,
+      "brittleness": 0.5,
+      "sim_required": true,
+      "note": "Mg carbonate. Second Mg ore; a carbon sink."
+    },
+    {
+      "id": 89,
+      "name": "Spodumene",
+      "formula": "LiAlSi2O6",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Li",
+          "count": 1
+        },
+        {
+          "symbol": "Al",
+          "count": 1
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 6
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 6.5,
+      "density_g_cm3": 3.15,
+      "brittleness": 0.6,
+      "sim_required": true,
+      "note": "The Li ore. Book has Li (F3450870) but no source mineral."
+    },
+    {
+      "id": 90,
+      "name": "Serpentine",
+      "formula": "Mg3Si2O5(OH)4",
+      "category": "mineral",
+      "elements": [
+        {
+          "symbol": "Mg",
+          "count": 3
+        },
+        {
+          "symbol": "Si",
+          "count": 2
+        },
+        {
+          "symbol": "O",
+          "count": 9
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "crystallizes": true,
+      "hardness_mohs": 3.5,
+      "density_g_cm3": 2.55,
+      "brittleness": 0.8,
+      "sim_required": true,
+      "note": "Hydrated olivine. HOW WATER RIDES A SLAB INTO THE MANTLE."
+    },
+    {
+      "id": 91,
+      "name": "Nitrogen",
+      "formula": "N2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "N",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00125,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Inert atmospheric gas. Outgasses slowly across the whole cooling run and becomes the residual air once reactive volatiles condense or draw down — the temperate atmosphere."
+    },
+    {
+      "id": 92,
+      "name": "Sulfur Dioxide",
+      "formula": "SO2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "S",
+          "count": 1
+        },
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00293,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Volcanic outgassing product, released in the hottest early degassing. Marks the acidic/volcanic atmosphere and feeds ocean acidity (the future pH axis)."
+    },
+    {
+      "id": 93,
+      "name": "Hydrogen Chloride",
+      "formula": "HCl",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "H",
+          "count": 1
+        },
+        {
+          "symbol": "Cl",
+          "count": 1
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.00164,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Acidic volcanic gas; scrubbed into the ocean as it condenses, another acid source for the pH axis."
+    },
+    {
+      "id": 94,
+      "name": "Methane",
+      "formula": "CH4",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "C",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 4
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.000717,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Reducing-atmosphere carbon gas; forms when free oxygen is scarce (an O-starved, reducing world) instead of CO2."
+    },
+    {
+      "id": 95,
+      "name": "Ammonia",
+      "formula": "NH3",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "N",
+          "count": 1
+        },
+        {
+          "symbol": "H",
+          "count": 3
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.000769,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Reducing-atmosphere nitrogen gas; the reduced counterpart to N2 in an O-starved world."
+    },
+    {
+      "id": 96,
+      "name": "Oxygen",
+      "formula": "O2",
+      "category": "common",
+      "elements": [
+        {
+          "symbol": "O",
+          "count": 2
+        }
+      ],
+      "natural": true,
+      "hardness_mohs": 0.0,
+      "density_g_cm3": 0.001429,
+      "brittleness": 0.0,
+      "sim_required": true,
+      "note": "Free molecular oxygen. Not primordial - a BIOSIGNATURE: it accumulates only where photosynthesis buries carbon faster than decay and weathering return it."
+    }
+  ]
+}

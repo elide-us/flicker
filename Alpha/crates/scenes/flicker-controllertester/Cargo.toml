@@ -27,4 +27,5 @@ flicker-input-router.workspace = true
 # The golem stage: the reference body playing locomotion off the dispatched signals
 # (rig/clip loading, the state machine, pose sampling and CPU skinning).
 flicker-skeletal.workspace = true
+serde_json.workspace = true
 tracing.workspace = true

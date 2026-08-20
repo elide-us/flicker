@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn fields_round_trip_via_new() {
         let corner = CornerVector::from_bytes([10, 20, 30]);
-        let material = Material::new(1, 2, 3).unwrap();
+        let material = Material::new(1, 2, 3);
         let v = Voxel::new(VoxelState::Solid, corner, material);
         assert_eq!(v.state(), VoxelState::Solid);
         assert_eq!(v.corner(), corner);
@@ -107,8 +107,8 @@ mod tests {
     fn equality_requires_all_three_fields() {
         let c1 = CornerVector::from_bytes([1, 2, 3]);
         let c2 = CornerVector::from_bytes([1, 2, 4]);
-        let m1 = Material::new(1, 0, 0).unwrap();
-        let m2 = Material::new(2, 0, 0).unwrap();
+        let m1 = Material::new(1, 0, 0);
+        let m2 = Material::new(2, 0, 0);
         let s = VoxelState::Solid;
         let v = VoxelState::Viscous;
         assert_eq!(Voxel::new(s, c1, m1), Voxel::new(s, c1, m1));

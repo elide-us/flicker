@@ -23,7 +23,7 @@
 //! "surprising but plausibly a material", not "uniformly random".
 
 use crate::channel::{BlendMode, Channel, NoiseKind, CHANNEL_COUNT};
-use crate::output::{ColorRamp, OutputStage, RampStop};
+use crate::output::{hsv, ColorRamp, OutputStage, RampStop};
 use crate::recipe::TextureRecipe;
 
 /// A splitmix64 stream — the same finalizer family the lattice hash uses, but a
@@ -199,24 +199,6 @@ fn random_output(r: &mut Roll) -> OutputStage {
         emissive_strength: if glowing { r.range(0.5, 1.0) } else { 0.0 },
         emissive_band: r.range(0.45, 0.85),
     }
-}
-
-/// HSV → linear RGB. `h` wraps, so a hue walked past 1.0 keeps going round the
-/// wheel rather than clamping to magenta.
-fn hsv(h: f32, s: f32, v: f32) -> [f32; 3] {
-    let h = h.rem_euclid(1.0) * 6.0;
-    let c = v * s;
-    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
-    let (r, g, b) = match h as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = v - c;
-    [r + m, g + m, b + m]
 }
 
 #[cfg(test)]

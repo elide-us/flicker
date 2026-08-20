@@ -98,6 +98,19 @@ pub struct SceneUniform {
 
 const SCENE_UNIFORM_SIZE: u64 = std::mem::size_of::<SceneUniform>() as u64;
 
+/// One colour per material-catalog slot (`materials.json`, ids `0..=255`),
+/// as `vec4<f32>` for trivial std140 layout. The whole palette is 4 KiB.
+pub const MATERIAL_PALETTE_LEN: usize = 256;
+const PALETTE_UNIFORM_SIZE: u64 = (MATERIAL_PALETTE_LEN * 16) as u64;
+
+/// The loud-wrong palette the pipeline boots with: every slot magenta, so an
+/// unset palette (or an undefined material id) is visible as "missing" rather
+/// than silently plausible. [`MeshPipeline::set_material_palette`] replaces it
+/// with the catalog's colours.
+fn magenta_palette() -> [[f32; 4]; MATERIAL_PALETTE_LEN] {
+    [[1.0, 0.0, 1.0, 1.0]; MATERIAL_PALETTE_LEN]
+}
+
 impl Default for SceneUniform {
     /// Reproduces the pre-uniform hardcoded look: a single warm-white sun
     /// at `normalize(0.5, 1.0, 0.3)` scaled to `0.7`, over a `0.3` ambient,
@@ -153,6 +166,10 @@ pub struct MeshPipeline {
     /// written each frame by [`MeshPipeline::set_scene_uniform`]. Lives in the
     /// same bind group as the camera and per-draw uniforms.
     scene_buf: wgpu::Buffer,
+    /// The material-catalog colour palette (one `vec4` per `MaterialId`),
+    /// booted all-magenta (loud-wrong) and replaced by
+    /// [`MeshPipeline::set_material_palette`] with `materials.json` colours.
+    palette_buf: wgpu::Buffer,
     per_draw_buf: wgpu::Buffer,
     /// Maximum number of per-draw entries the current `per_draw_buf` can
     /// hold. Grown lazily in `prepare`.
@@ -211,6 +228,18 @@ impl MeshPipeline {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: NonZeroU64::new(SCENE_UNIFORM_SIZE),
+                    },
+                    count: None,
+                },
+                // The material-catalog colour palette — fragment-only, set
+                // rarely (content load), read per-fragment by index.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(PALETTE_UNIFORM_SIZE),
                     },
                     count: None,
                 },
@@ -322,6 +351,13 @@ impl MeshPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Boot loud-wrong: every slot magenta until the catalog palette is set.
+        let palette_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("flicker.mesh.material_palette"),
+            contents: bytemuck::cast_slice(&magenta_palette()),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         let initial_capacity: u32 = 64;
         let per_draw_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("flicker.mesh.per_draw_uniform"),
@@ -335,6 +371,7 @@ impl MeshPipeline {
             &bind_group_layout,
             &camera_buf,
             &scene_buf,
+            &palette_buf,
             &per_draw_buf,
         );
 
@@ -345,6 +382,7 @@ impl MeshPipeline {
             bind_group,
             camera_buf,
             scene_buf,
+            palette_buf,
             per_draw_buf,
             per_draw_capacity: initial_capacity,
             per_draw_stride,
@@ -466,6 +504,18 @@ impl MeshPipeline {
         queue.write_buffer(&self.scene_buf, 0, bytemuck::bytes_of(&scene));
     }
 
+    /// Replace the material-catalog colour palette (one `vec4` RGBA per
+    /// `MaterialId`, index = id). Undefined slots should stay the loud-wrong
+    /// magenta the pipeline booted with — pass them through unchanged rather
+    /// than inventing a fallback colour.
+    pub fn set_material_palette(
+        &mut self,
+        queue: &wgpu::Queue,
+        colors: &[[f32; 4]; MATERIAL_PALETTE_LEN],
+    ) {
+        queue.write_buffer(&self.palette_buf, 0, bytemuck::cast_slice(colors));
+    }
+
     /// Queue a mesh for rendering this frame.
     pub fn push(
         &mut self,
@@ -507,6 +557,7 @@ impl MeshPipeline {
                 &self.bind_group_layout,
                 &self.camera_buf,
                 &self.scene_buf,
+                &self.palette_buf,
                 &self.per_draw_buf,
             );
         }
@@ -602,6 +653,7 @@ fn make_bind_group(
     layout: &wgpu::BindGroupLayout,
     camera_buf: &wgpu::Buffer,
     scene_buf: &wgpu::Buffer,
+    palette_buf: &wgpu::Buffer,
     per_draw_buf: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -619,6 +671,10 @@ fn make_bind_group(
                     offset: 0,
                     size: NonZeroU64::new(PER_DRAW_RAW_SIZE),
                 }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: palette_buf.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -701,6 +757,8 @@ mod tests {
         let mut pipeline = MeshPipeline::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, align);
         // Exercise the scene-uniform upload path too (writes binding 2).
         pipeline.set_scene_uniform(&queue, SceneUniform::default());
+        // And the material-palette upload path (writes binding 3).
+        pipeline.set_material_palette(&queue, &magenta_palette());
         device.poll(wgpu::Maintain::Wait);
         let err = pollster::block_on(device.pop_error_scope());
         assert!(err.is_none(), "mesh.wgsl failed validation: {err:?}");

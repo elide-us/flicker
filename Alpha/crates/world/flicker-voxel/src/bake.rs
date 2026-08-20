@@ -17,7 +17,7 @@
 //! surface data (sparse, `(corner, material)` at active cells only).
 //! On-disk fields:
 //!
-//! - `version` — `2`.
+//! - `version` — `3`.
 //! - `id` — `(lod, x, y, z)` from the `ClusterId`.
 //! - `default_material` — 4-byte little-endian `Material::raw()` for the
 //!   cluster's bulk-fill.
@@ -60,7 +60,11 @@ use crate::voxel_state::{StateField, STATE_FIELD_WORDS};
 /// Bake format version stamped into every file. Bump on every breaking
 /// schema change; loaders must reject mismatches loudly rather than try
 /// to migrate silently.
-pub const BAKE_VERSION: u32 = 2;
+///
+/// v3 (2026-08-19): the packed material narrowed from 12-bit subfields to
+/// u8 primary/secondary/blend (bits 0-7/8-15/16-23; bit 31 = direct-RGB
+/// escape) — v2 material words decode differently, so v2 bakes are rejected.
+pub const BAKE_VERSION: u32 = 3;
 
 /// A `Cluster` plus its bake-time metadata, ready to round-trip through
 /// JSON. Use [`Self::from_cluster`] to construct from a freshly
@@ -434,12 +438,12 @@ mod tests {
     use flicker_primitive::FlatField;
 
     fn grey() -> Material {
-        Material::new(1, 1, 0).expect("valid material")
+        Material::new(1, 1, 0)
     }
 
     #[test]
     fn version_constant_matches_format() {
-        assert_eq!(BAKE_VERSION, 2);
+        assert_eq!(BAKE_VERSION, 3);
     }
 
     #[test]
@@ -547,7 +551,7 @@ mod tests {
                 err,
                 BakeError::UnsupportedVersion {
                     got: 99,
-                    expected: 2
+                    expected: 3
                 }
             ),
             "wrong error: {err:?}"
@@ -561,7 +565,7 @@ mod tests {
         let zero_state = "0".repeat(STATE_FIELD_WORDS * 16);
         let json = format!(
             r#"{{
-                "version": 2,
+                "version": 3,
                 "id": {{ "lod": 0, "x": 0, "y": 0, "z": 0 }},
                 "default_material": [0, 0, 0, 0],
                 "state": "{zero_state}",

@@ -753,12 +753,12 @@ const FLAT_GRAY_MATERIAL: u32 = 10;
 const KATANA_COLOR: [f32; 3] = [0.55, 0.57, 0.62];
 
 /// Pack an RGB colour (0..1) into the mesh pipeline's direct-RGB material escape:
-/// the low 12 bits set to `0xFFF` mark a packed RGB666 in the upper bits (see
-/// `flicker-render` `mesh.wgsl` `material_color`), so an exact flat colour renders
+/// bit 31 set marks an RGB888 in bits 0-23 (see `flicker-render` `mesh.wgsl`
+/// `material_color`; u8-catalog layout 2026-08-19), so an exact flat colour renders
 /// through the existing lit-mesh pipeline with no tint fudging.
-fn pack_rgb666(r: f32, g: f32, b: f32) -> u32 {
-    let q = |c: f32| ((c.clamp(0.0, 1.0) * 63.0).round() as u32) & 0x3F;
-    0xFFF | (q(r) << 12) | (q(g) << 18) | (q(b) << 24)
+fn pack_direct_rgb(r: f32, g: f32, b: f32) -> u32 {
+    let q = |c: f32| ((c.clamp(0.0, 1.0) * 255.0).round() as u32) & 0xFF;
+    0x8000_0000 | q(r) | (q(g) << 8) | (q(b) << 16)
 }
 
 /// Orbit camera mirrored from `flicker-world`'s `OrbitCam` (drag rotates, wheel
@@ -1867,7 +1867,7 @@ impl Scene for Viewer {
         // always-worn sheaths. Each submesh is textured with its albedo + PBR maps (loaded
         // above) or flat steel where it has no maps. Drawn each frame at its socket bone's
         // animated transform. Taking the mesh leaves `mesh: None` — the upload is one-shot.
-        let steel = pack_rgb666(KATANA_COLOR[0], KATANA_COLOR[1], KATANA_COLOR[2]);
+        let steel = pack_direct_rgb(KATANA_COLOR[0], KATANA_COLOR[1], KATANA_COLOR[2]);
         let textures = std::mem::take(&mut self.textures);
         let mut uploaded: Vec<(&str, usize)> = Vec::new();
         for s in self.slots.iter_mut().chain(self.sheaths.iter_mut()) {
@@ -2421,7 +2421,7 @@ impl Scene for Viewer {
                         None => {
                             let mat_id = material
                                 .filter(|m| m.color.len() >= 3)
-                                .map(|m| pack_rgb666(m.color[0], m.color[1], m.color[2]))
+                                .map(|m| pack_direct_rgb(m.color[0], m.color[1], m.color[2]))
                                 .unwrap_or(FLAT_GRAY_MATERIAL);
                             let verts: Vec<MeshVertex> = (start..start + count)
                                 .map(|j| MeshVertex {
@@ -2552,7 +2552,7 @@ impl Scene for Viewer {
                             .materials
                             .get(mat)
                             .filter(|m| m.color.len() >= 3)
-                            .map(|m| pack_rgb666(m.color[0], m.color[1], m.color[2]))
+                            .map(|m| pack_direct_rgb(m.color[0], m.color[1], m.color[2]))
                             .unwrap_or(FLAT_GRAY_MATERIAL);
                         let verts: Vec<MeshVertex> = (start..start + count)
                             .map(|j| MeshVertex {
@@ -2625,7 +2625,7 @@ impl Scene for Viewer {
                         None => {
                             let mat_id = material
                                 .filter(|m| m.color.len() >= 3)
-                                .map(|m| pack_rgb666(m.color[0], m.color[1], m.color[2]))
+                                .map(|m| pack_direct_rgb(m.color[0], m.color[1], m.color[2]))
                                 .unwrap_or(FLAT_GRAY_MATERIAL);
                             let verts: Vec<MeshVertex> = (start..start + count)
                                 .map(|j| MeshVertex {

@@ -18,7 +18,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Stable catalog id of a compound (matches `compounds.json` / `CompoundDef::id`).
+/// Stable catalog id of a compound (matches the compound catalog / `CompoundDef::id`;
+/// one id space across `compounds.json` + `crust_compounds.json`).
 pub type CompoundId = u16;
 
 /// Absolute mass per compound. Stored sparsely, ordered by id, so iteration and

@@ -1,0 +1,80 @@
+{
+  "_comment": "Controller Tester SCENE DEFINITION (201F4F51 template-free; ruling DC217431). The live input-BUS inspector: this tree is the scene CHROME ONLY — the header block, the mouse readout, and the CONTEXT TAB BAR as real walker buttons (style_bind washes; the declared on_tab_* intents cycle the same ring). Everything below the chrome is the sanctioned SUB-SIGNAL diagnostic feed, scene-drawn by the behaviour from the raw device snapshot: the controller diagram, the analog latch, the golem stage, and the three bus panels (context stack · focus chain · consumed-this-frame) reporting the DEMO resolver/router exhibit. The `controllertester` behaviour plays it (flicker-controllertester); controllertester.lua composes the status/mouse readouts and picks the tab washes from the raw state.",
+  "behaviour": "controllertester",
+  "params": {},
+  "styles": {
+    "controllertester": {
+      "title": {
+        "color": [0.45, 0.68, 1.0, 1.0]
+      },
+      "dim": {
+        "color": [0.52, 0.56, 0.62, 1.0]
+      },
+      "ok": [0.45, 0.98, 0.62, 1.0],
+      "off": [0.52, 0.56, 0.62, 1.0],
+      "tab_active": {
+        "fill_top": [0.141, 0.247, 0.471, 0.30],
+        "fill_bot": [0.141, 0.247, 0.471, 0.30],
+        "border": [0.722, 0.592, 0.353, 1.0],
+        "border_w": 2,
+        "label": [0.906, 0.882, 0.824, 1.0],
+        "radius": 4
+      },
+      "tab_idle": {
+        "fill_top": [0.0, 0.0, 0.0, 0.0],
+        "fill_bot": [0.0, 0.0, 0.0, 0.0],
+        "border": [0.0, 0.0, 0.0, 0.0],
+        "border_w": 0,
+        "label": [0.561, 0.541, 0.49, 1.0],
+        "radius": 4
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "controllertester",
+    "on_menu": "pause_open",
+    "on_tab_next": "ctx_next",
+    "on_tab_prev": "ctx_prev",
+    "children": [
+      {
+        "component": "cell",
+        "id": "ctt_header",
+        "anchor": "top_left",
+        "offset": [18, 12],
+        "width": 960,
+        "gap": 0,
+        "children": [
+          { "component": "text", "text": "$ctt_title", "size": 26, "text_size": 20, "color": "controllertester.title.color" },
+          { "component": "text", "text": "$ctt_hint", "size": 18, "text_size": 12, "color": "controllertester.dim.color" },
+          { "component": "text", "text_bind": "status", "size": 16, "text_size": 12, "color_bind": "status_color" }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "ctt_mouse",
+        "anchor": "top_right",
+        "offset": [-18, 16],
+        "width": 230,
+        "children": [
+          { "component": "text", "text_bind": "mouse_line", "size": 16, "text_size": 12, "align": "right", "color": "controllertester.dim.color" }
+        ]
+      },
+      {
+        "component": "row",
+        "id": "ctt_tabs",
+        "anchor": "top_left",
+        "offset": [40, 86],
+        "width": 680,
+        "size": 28,
+        "gap": 0,
+        "children": [
+          { "component": "button", "id": "ctt_tab_world", "action": "ctx_world", "label": "$ctt_ctx_world", "style_bind": "ctx_world_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 1 },
+          { "component": "button", "id": "ctt_tab_menu", "action": "ctx_menu", "label": "$ctt_ctx_menu", "style_bind": "ctx_menu_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 2 },
+          { "component": "button", "id": "ctt_tab_radial", "action": "ctx_radial", "label": "$ctt_ctx_radial", "style_bind": "ctx_radial_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 3 },
+          { "component": "button", "id": "ctt_tab_textentry", "action": "ctx_textentry", "label": "$ctt_ctx_textentry", "style_bind": "ctx_textentry_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 4 }
+        ]
+      }
+    ]
+  }
+}

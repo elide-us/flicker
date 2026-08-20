@@ -1,3 +1,9 @@
+//! ⚠️ SUPERSEDED for the MATERIAL-PICK half (2026-08-19): the composition→MaterialId
+//! read now lives in `flicker_worldstate::classify_material` (materials-unification
+//! plan P2) — dominant-compound `represents` lookup + the element-signature match
+//! ported from `match_material` below. Do NOT extend the material matching here;
+//! this superseded viewer keeps only its phase/label/colour read.
+//!
 //! Derived layer/hex **classification** — the "(composition + conditions) → material" read
 //! (unification ruling R7, first cut). A layer is a **volume of material**; *what it is* —
 //! solid rock, molten rock, liquid water, ice, a gas envelope — is DERIVED here from its

@@ -133,6 +133,21 @@
                         "tab_group": "menu",
                         "nav_ordinal": 5,
                         "variant": "danger"
+                      },
+                      {
+                        "component": "cell",
+                        "size": 8
+                      },
+                      {
+                        "component": "button",
+                        "id": "open_update_page",
+                        "action": "open_update_page",
+                        "label": "$menu_update_available",
+                        "visible_bind": "update_available",
+                        "size_class": "lg",
+                        "tab_group": "menu",
+                        "nav_ordinal": 6,
+                        "variant": "primary"
                       }
                     ]
                   },
@@ -216,6 +231,20 @@
         "anchor": "bottom_left",
         "offset": [
           26,
+          -34
+        ],
+        "size": 13,
+        "text_size": 9,
+        "color": "modal.studio.color",
+        "font": "label",
+        "layer": 1
+      },
+      {
+        "component": "text",
+        "text_bind": "app_version",
+        "anchor": "bottom_right",
+        "offset": [
+          -26,
           -34
         ],
         "size": 13,
@@ -595,7 +624,17 @@
         "dpad_down": 12,
         "dpad_left": 13,
         "dpad_right": 14,
-        "stick": 15
+        "stick": 15,
+        "face_south": 4,
+        "face_east": 5,
+        "face_west": 6,
+        "face_north": 7,
+        "bumper_l": 2,
+        "bumper_r": 3,
+        "trigger_l": 0,
+        "trigger_r": 1,
+        "stick_l": 15,
+        "stick_r": 15
       }
     }
   }

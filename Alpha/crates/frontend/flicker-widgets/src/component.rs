@@ -298,16 +298,17 @@ pub struct UiState {
     /// OBSERVED by the walker layer, never consumed, so chord verbs elsewhere
     /// keep working. A held chord scales a nudge to the coarse step.
     pub(crate) chord: bool,
-    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8), NESTED per Aaron's
-    /// 2026-08-15 ruling: panels and subpanels are one mechanism at depth. Empty
-    /// while NAVIGATING between top-tier panes (the LEFT STICK cycles containers,
-    /// the d-pad no-ops on a container); each `Confirm` on a focused container
-    /// PUSHES its id and drops focus to its lowest-ordinal interior — so entering
-    /// the rack scopes the ring to its voice rows, and entering a row scopes it to
-    /// that row's controls. `Cancel` pops exactly ONE level and refocuses the
-    /// popped container (B never skips); a mouse click clears the whole stack
-    /// (pointer modality). The container whose `id` is the TOP of the stack wears
-    /// the gold lock rim; scenes gate viewport cameras on that top entry.
+    /// Pane ENTER STACK — the nav-tier contract (MCP 1B5F6BB8, FLATTENED per plan
+    /// 1A292918). Empty while NAVIGATING the top tier, where the LEFT STICK and the
+    /// D-PAD both move focus between panel stops (walker `move_focus`, geometrically
+    /// when rects are present). Each `Confirm` on a focused container PUSHES its id and
+    /// drops focus to its lowest-ordinal interior — so entering a channel scopes the
+    /// ring to its controls. Benches are FLAT (one Confirm reaches any control — enter
+    /// depth ≤ 1), but the stack still NESTS for a scene that authors subpanels.
+    /// `Cancel` pops exactly ONE level and refocuses the popped container (B never
+    /// skips); a mouse click clears the whole stack (pointer modality). The container
+    /// whose `id` is the TOP of the stack wears the gold lock rim; scenes gate viewport
+    /// cameras on that top entry.
     pub(crate) entered: Vec<String>,
     /// Live press-feedback flashes, `action/result name → intensity 0..1`
     /// (Aaron, 2026-08-08: *"the icons should briefly glow … to indicate the
@@ -3175,6 +3176,13 @@ fn component_props(
                 "glyph_style".to_string(),
                 jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
             );
+            // The keycap box for a kbm-side hint affordance (the twin of the pad
+            // `glyph_style` atlas) — resolved like the glyph atlas so a hint can render
+            // the bound KEY when the player is on keyboard/mouse (1A292918 T5).
+            props.insert(
+                "cap_style".to_string(),
+                jpath(styles, ptext(node, "cap_style").unwrap_or("nav_footer.cap")).clone(),
+            );
             // The legend label colour is a dotted path (a colour cannot ride as a
             // scalar prop) — resolved to rgba here, like the popup chrome colours.
             let c = json_color(
@@ -3284,6 +3292,29 @@ fn component_props(
             "rune_color".to_string(),
             serde_json::json!([c[0], c[1], c[2], c[3]]),
         );
+    }
+    // A `signal` node's DEVICE-ADAPTIVE control face (P5, ruling 7AB130A7): resolve
+    // which face the current device wants and its value, plus the atlas + keycap styles,
+    // so a presentational draw (the tooltip) has everything without a model/styles
+    // handle. The `input_device`/`bind_<sig>`/`glyph_<sig>` channel is scene-published,
+    // exactly like the nav_footer legend. `aff_glyph` (pad) / `aff_key` (kbm) are absent
+    // when that family is unbound — the draw then falls back to a static rune / plain name.
+    if let Some(sig) = ptext(node, "signal") {
+        props.insert(
+            "glyph_style".to_string(),
+            jpath(styles, ptext(node, "glyph_style").unwrap_or("pad_glyphs")).clone(),
+        );
+        props.insert(
+            "cap_style".to_string(),
+            jpath(styles, ptext(node, "cap_style").unwrap_or("tooltip.cap")).clone(),
+        );
+        if model.text("input_device").is_some_and(|d| d != "kbm") {
+            if let Some(g) = model.text(&format!("glyph_{sig}")).filter(|g| !g.is_empty()) {
+                props.insert("aff_glyph".to_string(), Json::String(g.to_string()));
+            }
+        } else if let Some(k) = model.text(&format!("bind_{sig}")).filter(|k| !k.is_empty()) {
+            props.insert("aff_key".to_string(), Json::String(k.to_string()));
+        }
     }
     // Segmented controls (pill_toggle / tabs / select / context_menu) iterate their
     // children's props (each carries a `value` / `label`); pass them as a plain list so
@@ -3958,10 +3989,45 @@ fn draw_tooltip(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     let meta_sz = jnum(s, "meta_size", 12.0);
     let gap = jnum(s, "gap", 4.0);
 
-    // Optional element rune, top-left — the text column then indents past it so the
-    // glyph and the headline share one baseline.
+    // Leading slot, top-left — the text column indents past it so the glyph and the
+    // headline share a baseline. A `signal` tooltip shows the DEVICE-ADAPTIVE control
+    // affordance (component_props resolved it into `aff_key`/`aff_glyph`): a keycap of
+    // the bound key on kbm, the positional pad glyph on a controller (P5, 7AB130A7).
+    // Otherwise an optional static element rune.
     let mut indent = 0.0;
-    if let Some(rune) = props
+    if let Some(key) = props.get("aff_key").and_then(|v| v.as_str()) {
+        let color = first_color(s, &["name_color"], INK);
+        let cap = Rect {
+            x: inner.x,
+            y: inner.y,
+            w: keycap_width(key, name_sz, name_sz),
+            h: name_sz,
+        };
+        draw_keycap(
+            cap,
+            key,
+            props.get("cap_style").unwrap_or(&Json::Null),
+            color,
+            0.0,
+            out,
+        );
+        indent = cap.w + 6.0;
+    } else if let Some(glyph) = props.get("aff_glyph").and_then(|v| v.as_str()) {
+        draw_paged_hint(
+            Some(Rect {
+                x: inner.x,
+                y: inner.y,
+                w: name_sz,
+                h: name_sz,
+            }),
+            glyph,
+            name_sz,
+            props.get("glyph_style").unwrap_or(&Json::Null),
+            0.0,
+            out,
+        );
+        indent = name_sz + 6.0;
+    } else if let Some(rune) = props
         .get("rune")
         .and_then(|v| v.as_str())
         .filter(|t| !t.is_empty())
@@ -4522,7 +4588,10 @@ fn box_rect(r: Rect, props: &Json) -> Rect {
     let size = jnum(props, "box", 14.0);
     Rect {
         x: r.x,
-        y: r.y,
+        // Vertically CENTRE the box in its node, so in a row of taller controls (buttons,
+        // sliders) the check/toggle/radio aligns with their centres instead of riding the
+        // top edge. When the node is exactly the box's height this is a no-op.
+        y: r.y + (r.h - size).max(0.0) * 0.5,
         w: size,
         h: size,
     }
@@ -5818,7 +5887,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
                 fill_hi,
             );
         }
-        let hy = track.y + track.h * (1.0 - t);
+        // INSET so the bar rides WITHIN the rail (its centre travels from `hw/2` above the
+        // floor at min to `hw/2` below the ceiling at max) instead of hanging half off each
+        // end. The live readout keys off this same centre, so it follows the bar.
+        let hy = track.y + hw * 0.5 + (track.h - hw) * (1.0 - t);
         push_panel(
             out,
             Rect {
@@ -5916,7 +5988,10 @@ fn draw_slider(r: Rect, props: &Json, out: &mut Vec<HudCommand>) {
     push_panel(
         out,
         Rect {
-            x: track.x + track.w * t - hw * 0.5,
+            // INSET so the knob rides WITHIN the rail — its left edge tracks the value from
+            // the rail's left (t=0) to `track.w - hw` (t=1). Centring on the value instead
+            // hangs half the knob off each end, which reads as broken alignment at 0/max.
+            x: track.x + (track.w - hw) * t,
             y: track.y - over,
             w: hw,
             h: track.h + 2.0 * over,
@@ -7940,6 +8015,15 @@ fn draw_paged_menu(
     if let (Some(rule), Some(rs)) = (lay.rule, jopt(props, "rule_style")) {
         draw_panel_bg(rule, rs, out);
     }
+    // Q2 (ruling 7AB130A7): the shoulder glyphs are a PAD affordance — a controller's
+    // limited control set needs tab/page steps taught. Suppress them when the system
+    // SAYS kbm: the rails stay mouse-clickable and the keyboard shortcuts still fire
+    // (`hit_paged_menu` is untouched — only the DRAW is gated). An absent/unknown device
+    // keeps them (no positive kbm signal → no hide), so a scene that never publishes
+    // `input_device` is unchanged.
+    if model.text("input_device") == Some("kbm") {
+        return;
+    }
     let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
     let hg = pnum(node, "hint_glyph").unwrap_or(26.0) as f32;
     let hg2 = pnum(node, "hint_glyph2").unwrap_or(22.0) as f32;
@@ -8065,17 +8149,24 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
         ));
         x += w + node.gap;
     }
-    // The legend: glyph + label pairs from the left, clipped at the cluster.
+    // The legend: affordance + label pairs from the left, clipped at the cluster. Each
+    // affordance is DEVICE-ADAPTIVE (a square controller glyph on a pad, a text-width
+    // keycap on kbm), so its width varies per hint — layout and draw share
+    // `hint_aff_kind`/`hint_aff_width` on the SAME `input_device` read.
     let g = pnum(node, "hint_glyph").unwrap_or(20.0) as f32;
     let hgap = pnum(node, "hint_gap").unwrap_or(8.0) as f32;
+    let cap_size = pnum(node, "cap_size").unwrap_or(13.0) as f32;
+    let pad = model.text("input_device").is_some_and(|d| d != "kbm");
     let mut hx = inner.x;
     let mut hints = Vec::new();
     for (i, c) in node.children.iter().enumerate() {
         if c.component != "option" || !visible(c, model) {
             continue;
         }
+        let aw = hint_aff_width(&hint_aff_kind(c, pad), c, model, g, cap_size);
+        let aff = if aw > 0.0 { aw + hgap } else { 0.0 };
         let lw = c.size.unwrap_or(80.0);
-        if hx + g + hgap + lw > cluster_left - node.gap {
+        if hx + aff + lw > cluster_left - node.gap {
             break;
         }
         hints.push((
@@ -8083,17 +8174,17 @@ fn footer_layout(node: &UiNode, outer: Rect, model: &ValueMap) -> FooterLayout {
             Rect {
                 x: hx,
                 y: inner.y + (inner.h - g) * 0.5,
-                w: g,
+                w: aw,
                 h: g,
             },
             Rect {
-                x: hx + g + hgap,
+                x: hx + aff,
                 y: inner.y,
                 w: lw,
                 h: inner.h,
             },
         ));
-        hx += g + hgap + lw + node.gap;
+        hx += aff + lw + node.gap;
     }
     FooterLayout {
         rule,
@@ -8111,6 +8202,111 @@ fn footer_span(glyph: &Rect, label: &Rect) -> Rect {
         w: label.x + label.w - glyph.x,
         h: label.h,
     }
+}
+
+/// A legend hint's affordance — the face that precedes its help label. A `signal` hint
+/// is DEVICE-ADAPTIVE: a controller [`Glyph`](AffKind::Glyph) when the player is on a
+/// pad, a [`Keycap`](AffKind::Keycap) of the bound key on kbm. A plain hint with a
+/// static `glyph` is always a glyph; a bare label hint has [`None`](AffKind::None).
+enum AffKind {
+    None,
+    Glyph,
+    Keycap,
+}
+
+/// Which affordance a hint shows, given whether the player is on a pad — the ONE
+/// decision `footer_layout` (sizing) and `draw_nav_footer` (drawing) both read, so the
+/// reserved slot and the drawn face can never disagree.
+fn hint_aff_kind(c: &UiNode, pad: bool) -> AffKind {
+    if ptext(c, "signal").is_some() {
+        if pad {
+            AffKind::Glyph
+        } else {
+            AffKind::Keycap
+        }
+    } else if ptext(c, "glyph").is_some() {
+        AffKind::Glyph
+    } else {
+        AffKind::None
+    }
+}
+
+/// The width to reserve for a hint's affordance: a square `g` for a glyph, a
+/// text-measured cap for a keycap (never below a square), nothing for a bare label.
+fn hint_aff_width(kind: &AffKind, c: &UiNode, model: &ValueMap, g: f32, cap_size: f32) -> f32 {
+    match kind {
+        AffKind::None => 0.0,
+        AffKind::Glyph => g,
+        AffKind::Keycap => {
+            let key = ptext(c, "signal")
+                .and_then(|s| model.text(&format!("bind_{s}")))
+                .unwrap_or("");
+            keycap_width(key, cap_size, g)
+        }
+    }
+}
+
+/// A keycap's width from its key text — a crude per-glyph advance (there are no font
+/// metrics at layout time) plus horizontal padding, never narrower than a square `min`.
+/// Short keys ("E") read square; longer legends ("Space") widen.
+fn keycap_width(key: &str, size: f32, min: f32) -> f32 {
+    if key.is_empty() {
+        return min;
+    }
+    (key.chars().count() as f32 * size * 0.62 + 14.0).max(min)
+}
+
+/// A KEYCAP affordance: the bound KEY drawn as a small bordered cap — the kbm twin of a
+/// controller glyph. The box is `cap_style` (its `$token` fills/border resolved by
+/// [`draw_panel_bg`]); an absent block falls back to neutral chrome. The key rides the
+/// legend colour, tinting toward the glyph flash under a press so a cap and a glyph
+/// acknowledge a click alike.
+fn draw_keycap(
+    r: Rect,
+    key: &str,
+    cap_style: &Json,
+    text_color: [f32; 4],
+    flash: f32,
+    out: &mut Vec<HudCommand>,
+) {
+    if cap_style.is_null() {
+        out.push(HudCommand::Panel {
+            x: r.x,
+            y: r.y,
+            w: r.w,
+            h: r.h,
+            color: PANEL,
+            color2: PANEL,
+            grad: 0.0,
+            radius: 3.0,
+            border: 1.0,
+            border_color: INK,
+            feather: 0.0,
+            layer: 0.0,
+        });
+    } else {
+        draw_panel_bg(r, cap_style, out);
+    }
+    let mut color = text_color;
+    if flash > 0.0 {
+        color = lerp_color(color, FLASH_LIT, flash);
+    }
+    let size = (r.h * 0.6).min(13.0);
+    let ty = r.y + (r.h - text_line_h(size)) * 0.5;
+    push_text(
+        out,
+        r.x + r.w * 0.5,
+        ty,
+        key,
+        size,
+        color,
+        TextAlign::Center,
+        FontRole::Label,
+        false,
+        false,
+        0.0,
+        None,
+    );
 }
 
 /// The **nav footer** — the bench-standard bottom band: a LEGEND of controller-glyph +
@@ -8137,7 +8333,12 @@ fn draw_nav_footer(
         draw_panel_bg(lay.rule, rs, out);
     }
     let glyph_style = props.get("glyph_style").unwrap_or(&Json::Null);
+    let cap_style = props.get("cap_style").unwrap_or(&Json::Null);
     let label_color = first_color(props, &["label_color_rgba"], DIM);
+    // The player's current device decides each hint's affordance: a controller glyph on
+    // a pad, a keycap of the bound key on kbm (1A292918 T5). The glyph NAME / key TEXT
+    // come from the scene-published `glyph_<sig>` / `bind_<sig>` for the hint's `signal`.
+    let pad = model.text("input_device").is_some_and(|d| d != "kbm");
     // A pressed pointer lights the entry under it — the same press-only highlight the
     // PTT's hint gutters carry (clears on release, so nothing lingers).
     let pressed = jbool(props, "pressed");
@@ -8149,14 +8350,26 @@ fn draw_nav_footer(
         } else {
             0.0
         };
-        draw_paged_hint(
-            Some(*gr),
-            ptext(c, "glyph").unwrap_or_default(),
-            gr.h,
-            glyph_style,
-            flash,
-            out,
-        );
+        match hint_aff_kind(c, pad) {
+            AffKind::None => {}
+            AffKind::Glyph => {
+                // A signal hint takes its glyph NAME from the published `glyph_<sig>`
+                // (the bound pad control); a plain hint keeps its static `glyph`.
+                let name = match ptext(c, "signal") {
+                    Some(s) => model.text(&format!("glyph_{s}")).unwrap_or_default(),
+                    None => ptext(c, "glyph").unwrap_or_default(),
+                };
+                draw_paged_hint(Some(*gr), name, gr.h, glyph_style, flash, out);
+            }
+            AffKind::Keycap => {
+                if let Some(key) = ptext(c, "signal")
+                    .and_then(|s| model.text(&format!("bind_{s}")))
+                    .filter(|k| !k.is_empty())
+                {
+                    draw_keycap(*gr, key, cap_style, label_color, flash, out);
+                }
+            }
+        }
         // The help label: `label_bind` (live Model text) else the `$token` literal.
         let text = match ptext(c, "label_bind").and_then(|k| model.text(k)) {
             Some(t) => t.to_string(),
@@ -12535,6 +12748,53 @@ mod tests {
     }
 
     #[test]
+    fn paged_menu_hides_glyph_hints_on_kbm_only() {
+        // Q2 (ruling 7AB130A7): the shoulder glyphs are a PAD affordance — suppressed
+        // when the system SAYS kbm, shown on a pad, and KEPT when the device is unknown
+        // (absent), so a scene that never publishes `input_device` is unchanged. The
+        // rails' hit-test (mouse click / keyboard shortcut) is untouched either way.
+        let styles = serde_json::json!({
+            "paged_menu": { "frame": { "fill": [0.05, 0.05, 0.07, 1.0] }, "rule": { "color": [0.4, 0.3, 0.2, 1.0] } },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "lt": 0, "rt": 1, "lb": 2, "rb": 3 } },
+        });
+        let probe = |device: Option<&str>| {
+            let mut model = ValueMap::new()
+                .with("page", 0.0)
+                .with("tab", 0.0)
+                .with("paged_tabs_shown", true);
+            if let Some(d) = device {
+                model.set("input_device", d);
+            }
+            let f = run_ui(
+                &paged_menu_tree(false),
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            );
+            let glyphs = f
+                .commands
+                .iter()
+                .filter(|c| matches!(c, HudCommand::Sprite { tex: 7, .. }))
+                .count();
+            let rule = f.commands.iter().any(|c| {
+                matches!(c, HudCommand::Panel { h, y, .. }
+                    if (*h - 1.0).abs() < 0.01 && (*y - 82.0).abs() < 0.01)
+            });
+            (glyphs, rule)
+        };
+        // kbm: no shoulder glyphs, but the chrome (1px rule) still draws.
+        assert_eq!(
+            probe(Some("kbm")),
+            (0, true),
+            "kbm hides the shoulder glyphs, keeps the chrome"
+        );
+        // A pad shows all four; an unknown/absent device keeps them too.
+        assert_eq!(probe(Some("xbox")).0, 4, "a pad shows the shoulder glyphs");
+        assert_eq!(probe(None).0, 4, "an unpublished device keeps the glyphs");
+    }
+
+    #[test]
     fn paged_menu_hint_gutter_click_fires_the_rails_step() {
         // Start on the LAST page (1 of 2) so a prev actually MOVES — a clamp at the
         // first would hide whether the gutter even fired.
@@ -12768,6 +13028,85 @@ mod tests {
         let mut screen = node("screen");
         screen.children = vec![ft];
         screen
+    }
+
+    #[test]
+    fn nav_footer_hint_swaps_keycap_and_glyph_by_device() {
+        // A `signal` hint renders the KEY as a keycap on kbm, the controller GLYPH on a
+        // pad — driven by the scene-published `input_device` + `bind_<sig>`/`glyph_<sig>`.
+        let styles = serde_json::json!({
+            "nav_footer": {
+                "rule": { "color": [0.4, 0.3, 0.2, 1.0] },
+                "label": [0.5, 0.5, 0.5, 1.0],
+                "cap": {
+                    "fill_top": [0.1, 0.1, 0.1, 1.0],
+                    "fill_bot": [0.1, 0.1, 0.1, 1.0],
+                    "border": [0.3, 0.3, 0.3, 1.0],
+                    "border_w": 1,
+                    "radius": 3
+                }
+            },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "x": 6 } },
+        });
+        let footer = || {
+            let mut hint = node("option");
+            hint = prop(hint, "signal", Value::Text("Interact".into()));
+            hint = prop(hint, "label", Value::Text("Replay".into()));
+            hint.size = Some(80.0);
+            let mut ft = node("nav_footer");
+            ft.id = "ft".into();
+            ft.anchor = Some(UiAnchor::TopLeft);
+            ft.width = Some(800.0);
+            ft.height = Some(52.0);
+            ft.pad = 10.0;
+            ft.gap = 8.0;
+            ft.children = vec![hint];
+            let mut screen = node("screen");
+            screen.children = vec![ft];
+            screen
+        };
+
+        // kbm: the bound key renders as a keycap (a Text "E"), no atlas sprite.
+        let kbm = ValueMap::new()
+            .with("input_device", "kbm")
+            .with("bind_Interact", "E");
+        let f = run_ui(
+            &footer(),
+            &kbm,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "E")),
+            "kbm draws the bound key as a keycap"
+        );
+        assert!(
+            !f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "kbm draws no controller glyph"
+        );
+
+        // pad: the bound control renders from the atlas, no keycap key text.
+        let pad = ValueMap::new()
+            .with("input_device", "xbox")
+            .with("glyph_Interact", "x");
+        let f = run_ui(
+            &footer(),
+            &pad,
+            &styles,
+            &input_at(-9.0, -9.0, false),
+            &mut UiState::new(),
+        );
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "pad draws the controller glyph from the atlas"
+        );
     }
 
     #[test]
@@ -14810,6 +15149,66 @@ mod tests {
         assert!(
             !frame.results.is_on("hud_hit"),
             "a rune-flagged bare cell claims nothing"
+        );
+    }
+
+    #[test]
+    fn tooltip_shows_the_device_adaptive_affordance() {
+        // A `signal` tooltip renders the bound control in its leading slot: a keycap of
+        // the key on kbm, the positional pad glyph on a controller (from the
+        // scene-published bind_/glyph_/input_device). It stays presentational.
+        let mut tip = node("tooltip");
+        tip.id = "tip".into();
+        tip.width = Some(220.0);
+        tip.height = Some(48.0);
+        tip.anchor = Some(UiAnchor::TopLeft);
+        tip.offset = [10.0, 10.0];
+        tip = prop(tip, "style", Value::Text("tip".into()));
+        tip = prop(tip, "signal", Value::Text("Interact".into()));
+        tip = prop(tip, "name", Value::Text("Restart".into()));
+        let styles = serde_json::json!({
+            "tip": {
+                "bg": [0.05, 0.06, 0.09, 0.94], "pad": 10,
+                "name_color": [0.9, 0.9, 0.85, 1.0], "name_size": 16
+            },
+            "tooltip": { "cap": { "fill_top": [0.1, 0.1, 0.1, 1.0], "fill_bot": [0.1, 0.1, 0.1, 1.0], "border": [0.3, 0.3, 0.3, 1.0], "border_w": 1, "radius": 3 } },
+            "pad_glyphs": { "tex": 7, "cols": 4, "rows": 4, "cells": { "face_west": 6 } },
+        });
+        let probe = |device: &str, face_key: &str, face_val: &str| {
+            let model = ValueMap::new()
+                .with("input_device", device)
+                .with(face_key, face_val);
+            let mut page = node("screen");
+            page.children = vec![tip.clone()];
+            run_ui(
+                &page,
+                &model,
+                &styles,
+                &input_at(-9.0, -9.0, false),
+                &mut UiState::new(),
+            )
+        };
+        // kbm: the bound key as a keycap (a Text "E"), no atlas glyph.
+        let f = probe("kbm", "bind_Interact", "E");
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Text { text, .. } if text == "E")),
+            "kbm tooltip draws the bound key as a keycap"
+        );
+        assert!(
+            !f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "kbm tooltip draws no controller glyph"
+        );
+        // pad: the positional glyph from the atlas, no keycap key text.
+        let f = probe("xbox", "glyph_Interact", "face_west");
+        assert!(
+            f.commands
+                .iter()
+                .any(|c| matches!(c, HudCommand::Sprite { tex: 7, .. })),
+            "pad tooltip draws the positional glyph from the atlas"
         );
     }
 
@@ -17105,8 +17504,9 @@ mod tests {
                 // Fill to 0.625 of 180, then the 1px highlight along its top edge.
                 pin_panel(92.0, 34.0, 112.5, 12.0, FILL, 6.0),
                 pin_rect(92.0, 34.0, 112.5, 1.0, HI),
-                // Handle: 7 wide, centred on the fill's end, overhanging 4px each side.
-                pin_panel(201.0, 30.0, 7.0, 20.0, HANDLE, 2.0),
+                // Handle: 7 wide, INSET within the rail (left edge at 92+(180−7)·0.625),
+                // overhanging 4px above/below the thin rail.
+                pin_panel(200.125, 30.0, 7.0, 20.0, HANDLE, 2.0),
                 // Readout: right-aligned on the row's own right edge.
                 pin_text(
                     312.0,
@@ -17151,10 +17551,10 @@ mod tests {
                 pin_panel(65.0, 33.0, 10.0, 177.0, TRACK, 5.0),
                 pin_panel(65.0, 143.625, 10.0, 66.375, FILL, 5.0),
                 pin_rect(65.0, 143.625, 10.0, 1.0, HI),
-                pin_panel(61.0, 140.125, 18.0, 7.0, HANDLE, 2.0),
+                pin_panel(61.0, 139.25, 18.0, 7.0, HANDLE, 2.0),
                 pin_text(
                     85.0,
-                    138.125,
+                    137.25,
                     "4",
                     11.0,
                     VALUE,
@@ -17183,6 +17583,45 @@ mod tests {
             ],
             "the upright slider draw is byte-stable"
         );
+    }
+
+    /// The handle stays WITHIN the rail at both extremes — at the minimum it does not hang
+    /// off the left (the bug Aaron caught in-window), and at the maximum it does not spill
+    /// off the right. Guards the inset positioning for every style/size.
+    #[test]
+    fn the_slider_handle_stays_within_the_rail() {
+        let props_of = |v: f64| {
+            serde_json::json!({
+                "style": pinned_slider_style(), "value_w": 40.0, "slider_h": 7.0,
+                "min": 0.0, "max": 1.0, "bind_value": v
+            })
+        };
+        let row = Rect { x: 0.0, y: 0.0, w: 200.0, h: 24.0 };
+        let track = slider_track(row, &props_of(0.0));
+        for v in [0.0_f64, 1.0] {
+            let mut out = Vec::new();
+            draw_slider(row, &props_of(v), &mut out);
+            // Track → fill → handle is the panel order, so the LAST panel is the handle.
+            let (hx, hw) = out
+                .iter()
+                .rev()
+                .find_map(|c| match c {
+                    HudCommand::Panel { x, w, .. } => Some((*x, *w)),
+                    _ => None,
+                })
+                .expect("a handle is drawn");
+            assert!(
+                hx >= track.x - 0.01,
+                "value {v}: handle left {hx} hangs off the rail (left {})",
+                track.x
+            );
+            assert!(
+                hx + hw <= track.x + track.w + 0.01,
+                "value {v}: handle right {} spills off the rail (right {})",
+                hx + hw,
+                track.x + track.w
+            );
+        }
     }
 
     #[test]

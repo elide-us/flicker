@@ -217,6 +217,11 @@ impl<A: App> ApplicationHandler for Runner<A> {
                 self.gamepad.drain_into(&mut self.input);
                 self.gamepad.tick_analog();
                 self.input.set_analog_latch(self.gamepad.analog().sample());
+                // Latch the last-used device family (kbm ⇄ pad, tagged with the pad's
+                // detected vendor) from the fully drained snapshot, BEFORE
+                // `clear_frame_edges` below wipes the KBM edges. Governs which bindings
+                // the UI shows (keycap vs pad glyph, and which vendor's glyph atlas).
+                flicker_input_device::note_frame(&self.input, self.gamepad.vendor());
 
                 let Some(renderer) = self.renderer.as_mut() else {
                     return;

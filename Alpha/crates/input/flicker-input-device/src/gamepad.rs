@@ -22,7 +22,7 @@ use std::time::Instant;
 use flicker_input_core::{AnalogCache, AnalogFrame, GamepadAxis, GamepadButton, InputState};
 use glam::Vec2;
 
-use crate::DiscreteSource;
+use crate::{DiscreteSource, PadVendor};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -76,6 +76,10 @@ struct PadSnapshot {
     buttons: HashSet<GamepadButton>,
     axes: HashMap<GamepadAxis, f32>,
     caps: DeviceCaps,
+    /// The connected pad's button-face family, classified from OS metadata on
+    /// connect (the display's "controller vocabulary" axis). [`PadVendor::Generic`]
+    /// while disconnected.
+    vendor: PadVendor,
 }
 
 impl PadSnapshot {
@@ -175,6 +179,10 @@ impl GamepadBackend {
     fn connected(&self) -> bool {
         self.snapshot.connected
     }
+
+    fn vendor(&self) -> PadVendor {
+        self.snapshot.vendor
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -234,6 +242,13 @@ impl GamepadSource {
     /// Is slot 0 currently connected?
     pub fn connected(&self) -> bool {
         self.backend.connected()
+    }
+
+    /// The connected pad's button-face family (from OS metadata) — the "controller
+    /// vocabulary" the display picks its glyph atlas by. [`PadVendor::Generic`] when
+    /// no pad is connected.
+    pub fn vendor(&self) -> PadVendor {
+        self.backend.vendor()
     }
 }
 

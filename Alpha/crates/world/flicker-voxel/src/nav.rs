@@ -318,7 +318,7 @@ mod tests {
         Cluster::uniform(Voxel::new(
             VoxelState::Solid,
             crate::corner_vector::CornerVector::DEFAULT,
-            crate::material::Material::new(1, 0, 0).unwrap(),
+            crate::material::Material::new(1, 0, 0),
         ))
     }
 

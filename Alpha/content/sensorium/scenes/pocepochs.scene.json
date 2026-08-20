@@ -1,0 +1,163 @@
+{
+  "_comment": "Epoch Simulation SCENE DEFINITION (201F4F51 template-free). The forward-regenerative epoch sim viewer: the fullscreen planet is Rust-drawn under the HUD (the shared GlobeWorld — no rtt reservation, the scene hands it the whole window), a top-left readout block with the TRANSPORT row (play/reset/reseed · size − + · view cycle · the Layers slice toggle — the seven raw keyboard verbs became these controls + the declared on_mode_* view-cycle intents), and the LIFE-SUPPORTING CONDITIONS panel bottom-right, whose per-axis rows are REFILLED by the behaviour at construction (the observer's bands are runtime data — authoring them here would fork the observer's numbers). The `pocepochs` behaviour plays it (flicker-pocepochs); pocepochs.lua derives every display string from the RAW numbers + resolved words. Styles folded from the crate's quarantined scene_styles.json (the dead flicker-sol2 `readout` block did not move).",
+  "behaviour": "pocepochs",
+  "params": {},
+  "styles": {
+    "pocepochs": {
+      "title": {
+        "color": "$bronze"
+      },
+      "text": {
+        "color": [0.85, 0.87, 0.92, 1.0]
+      },
+      "dim": {
+        "color": [0.6, 0.63, 0.68, 1.0]
+      },
+      "playing": {
+        "color": [0.55, 0.85, 0.55, 1.0]
+      },
+      "paused": {
+        "color": [0.92, 0.78, 0.42, 1.0]
+      },
+      "button": {
+        "fill_top": "$stone4",
+        "fill_bot": "$stone2",
+        "border": "$edge3",
+        "border_w": 1,
+        "label": "$ink",
+        "radius": 3
+      },
+      "checkbox": {
+        "box": "$stone2",
+        "check": "$sig_green",
+        "border": "$edge4",
+        "pad": 3
+      },
+      "hab": {
+        "panel": {
+          "fill": [0.055, 0.063, 0.086, 0.9],
+          "border": [0.227, 0.353, 0.627, 0.8],
+          "border_w": 1
+        },
+        "header": {
+          "color": "$bronze"
+        },
+        "name_live": "$ink",
+        "name_dead": "$dim",
+        "status_in": "$sig_green",
+        "status_out": "$stam_hi",
+        "status_dead": "$dim",
+        "caption": {
+          "color": "$dim"
+        },
+        "gauge": {
+          "track": [0.078, 0.09, 0.122, 0.95],
+          "band": [0.184, 0.616, 0.357, 0.55],
+          "marker": "$stam_hi",
+          "marker_in": "$sig_green",
+          "no_signal": [0.055, 0.063, 0.086, 0.72],
+          "sheen": [0.9, 0.94, 1.0, 0.1],
+          "marker_w": 5
+        },
+        "light_on": {
+          "fill": "$sig_green"
+        },
+        "light_off": {
+          "fill": [0.24, 0.1, 0.1, 1.0]
+        },
+        "verdict_life": "$sig_green",
+        "verdict_count": "$ink",
+        "observed": {
+          "color": "$dim"
+        },
+        "air": {
+          "color": "$dim"
+        }
+      }
+    }
+  },
+  "tree": {
+    "component": "screen",
+    "id": "pocepochs",
+    "on_menu": "pause_open",
+    "on_mode_next": "view_next",
+    "on_mode_prev": "view_prev",
+    "children": [
+      {
+        "component": "cell",
+        "id": "pe_readout",
+        "anchor": "top_left",
+        "offset": [24, 24],
+        "width": 980,
+        "gap": 0,
+        "nav_ordinal": 1,
+        "children": [
+          { "component": "text", "text": "$poc_flicker_planet_simulation", "size": 38, "text_size": 28, "color": "pocepochs.title.color" },
+          { "component": "text", "text_bind": "stats_val", "size": 28, "text_size": 17, "color": "pocepochs.text.color" },
+          {
+            "component": "row",
+            "size": 20,
+            "children": [
+              { "component": "text", "text_bind": "play_state", "size": 72, "text_size": 14, "color_bind": "play_state_color" },
+              { "component": "text", "text_bind": "view_line", "grow": 1.0, "text_size": 14, "color": "pocepochs.dim.color" }
+            ]
+          },
+          { "component": "cell", "size": 6 },
+          {
+            "component": "row",
+            "id": "pe_transport",
+            "size": 30,
+            "gap": 6,
+            "align": "center",
+            "children": [
+              { "component": "button", "id": "pe_play", "action": "toggle_play", "label_bind": "play_label", "style": "pocepochs.button", "size": 84, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 1 },
+              { "component": "button", "id": "pe_reset", "action": "reset", "label": "$pe_reset", "style": "pocepochs.button", "size": 72, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 2 },
+              { "component": "button", "id": "pe_reseed", "action": "reseed", "label": "$pe_reseed", "style": "pocepochs.button", "size": 84, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 3 },
+              { "component": "button", "id": "pe_size_down", "action": "size_down", "label": "−", "style": "pocepochs.button", "size": 30, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 4 },
+              { "component": "text", "text_bind": "size_line", "text_size": 12, "font": "label", "color": "pocepochs.dim.color", "align": "center", "size": 90 },
+              { "component": "button", "id": "pe_size_up", "action": "size_up", "label": "+", "style": "pocepochs.button", "size": 30, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 5 },
+              { "component": "button", "id": "pe_view", "action": "view_next", "label_bind": "view_label", "style": "pocepochs.button", "size": 130, "size_class": "sm", "tab_group": "pe_readout", "nav_ordinal": 6 },
+              { "component": "checkbox", "id": "pe_cut", "bind": "cut", "label": "$pe_slice", "visible_bind": "layers_view", "box": 14, "size": 110, "style": "pocepochs.checkbox", "tab_group": "pe_readout", "nav_ordinal": 7 }
+            ]
+          }
+        ]
+      },
+      {
+        "component": "cell",
+        "id": "pe_hab",
+        "anchor": "bottom_right",
+        "offset": [-32, -20],
+        "width": 330,
+        "pad": 12,
+        "gap": 0,
+        "style": "pocepochs.hab.panel",
+        "nav_ordinal": 2,
+        "children": [
+          { "component": "text", "text": "$poc_life_supporting_conditions", "size": 28, "text_size": 15, "color": "pocepochs.hab.header.color" },
+          { "component": "cell", "id": "pe_axis_rows", "gap": 0 },
+          {
+            "component": "cell",
+            "size": 50,
+            "gap": 0,
+            "children": [
+              { "component": "stack", "size": 6 },
+              {
+                "component": "row",
+                "size": 14,
+                "children": [
+                  { "component": "cell", "size": 14, "style": "pocepochs.hab.light_on", "visible_bind": "life" },
+                  { "component": "cell", "size": 14, "style": "pocepochs.hab.light_off", "visible_bind": "no_life" },
+                  { "component": "stack", "size": 10 },
+                  { "component": "text", "text_bind": "verdict", "grow": 1.0, "text_size": 14, "color_bind": "verdict_color" },
+                  { "component": "text", "text_bind": "observed", "grow": 1.0, "align": "right", "text_size": 11, "color": "pocepochs.hab.observed.color" }
+                ]
+              },
+              { "component": "stack", "size": 6 },
+              { "component": "text", "text_bind": "air", "size": 12, "text_size": 12, "color": "pocepochs.hab.air.color" }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

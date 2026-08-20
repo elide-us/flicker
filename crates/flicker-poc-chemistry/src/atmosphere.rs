@@ -44,7 +44,8 @@ use crate::mantle::MAGMA_OCEAN_K;
 use crate::planet::{sea_level_m, World};
 use crate::stage::{Stage, StageRng};
 
-/// Catalog ids of the gas species (compounds.json). Asserted against the loaded
+/// Catalog ids of the gas species (compounds.json + crust_compounds.json — N₂..O₂
+/// live in the latter). Asserted against the loaded
 /// catalog at [`Outgassing::new`] so a re-numbered table fails loudly, never
 /// silently misbooks a gas.
 pub const WATER_VAPOUR: CompoundId = 1;
@@ -147,7 +148,7 @@ impl GasVocabulary {
             .map(|(name, id, driver, floor_k)| {
                 let def = tables
                     .compound(name)
-                    .unwrap_or_else(|| panic!("outgassing needs '{name}' in compounds.json"));
+                    .unwrap_or_else(|| panic!("outgassing needs '{name}' in the compound catalog"));
                 assert_eq!(
                     def.id, id,
                     "'{name}' moved in the catalog: {} != {id}",

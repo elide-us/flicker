@@ -62,13 +62,11 @@ use flicker::scene::{Scene, SceneInput, Transition};
 use flicker::script::{HudCommand, ScriptHost, UiNode, ValueMap};
 use flicker::ui::{
     chat_panel, render_hud, run_ui, strings, ChatLineKind, ChatLineView, ChatView, RosterEntry,
-    Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
+    SceneDef, Surface, Surfaces, UiInput, UiIntents, UiState, WalkerHandler,
 };
-use flicker_input_core::{apply_deadzone, ActionSignal, Fired, Resolver};
-use flicker_input_core::{
-    AbstractControls, ContextualBindings, GamepadConfig, InputContext, InputMap, InputState,
-};
-use flicker_input_router::{apply_context_requests, InputEvent, InputHandler, RouteCtx, Router};
+use flicker_input_core::ActionSignal;
+use flicker_input_core::{AbstractControls, GamepadConfig, InputContext, InputState};
+use flicker_input_router::{InputHandler, Router};
 use flicker_shell::{PauseScene, Theme};
 use flicker_voxel::{
     cluster_center_world, contour, in_nav_rings, BakedCluster, Cluster, ClusterId, ClusterMap,
@@ -160,9 +158,6 @@ struct GameScene {
     position: Vec3,
     yaw: f32,
     pitch: f32,
-    /// Last cursor position while right-dragging, so we can compute a
-    /// per-frame delta. `None` when right is not held.
-    last_look_cursor: Option<Vec2>,
 
     /// The from-Home sky (sun/moon/planets/constellations), driven by the Celestial
     /// Cycle panel. The body layout is the shared `flicker_orrery` roster.
@@ -172,13 +167,20 @@ struct GameScene {
     /// Star glow sprite (core + halo + glint) for the constellation stars.
     star_tex: Option<TextureHandle>,
 
-    /// Per-context action maps + the active-context stack. `World` = wasd_and_mouse
-    /// (gameplay movement + look); `TextEntry` = an empty map, pushed while the chat
-    /// input owns the keyboard so no gameplay Action resolves. Movement/look read
-    /// `active_map()` and are gated on `active() == World`.
-    bindings: ContextualBindings,
+    /// Mouse-look tuning (sensitivity + invert) from the shell settings panel +
+    /// the scene-owned `move_speed` (the HUD slider). The action MAPS live with
+    /// the pump now — the scene resolves nothing itself.
     controls: AbstractControls,
+    /// Pad tuning handed to the pause overlay; the pump owns the live config.
     gamepad_config: GamepadConfig,
+    /// The pair script (`pocclusters.lua`) — derives the HUD display strings
+    /// from the raw Model each frame (five-line split). `None` if it failed to
+    /// load; the HUD then shows raw-less readouts.
+    script: Option<ScriptHost>,
+    /// Chat owns the keyboard — the scene-owned context truth the runner reads
+    /// through [`Scene::input_context`] (TextEntry while set, World otherwise).
+    /// Set by the command handler's one-way hand-off, cleared on submit/cancel.
+    chat_focused: bool,
 
     /// The in-scene HUD as a DECLARATIVE component tree, parsed ONCE from
     /// `hud_pocclusters.lua`'s `tree()` at construction (the walker redraws this
@@ -275,16 +277,10 @@ struct GameScene {
     /// generated asynchronously, so the snap waits for it).
     walk_needs_snap: bool,
 
-    /// The new-input-model per-frame seam (spec §5/§9): a stateful edge [`Resolver`]
-    /// (replaces every `*_prev` bool + `menu_prev`), a REUSED `Fired` scratch buffer
-    /// (no per-frame alloc — RT-7), the router's request queue, the exclusive-
-    /// TextEntry chat handler (owns the T hand-off + the key guard), and a monotonic
-    /// frame `tick` that is the `Resolver`'s `TickTime` (NOT wall-clock — spec §3.2a).
-    resolver: Resolver,
-    ev: Vec<Fired>,
-    route: RouteCtx,
+    /// The exclusive-TextEntry chat handler (owns the T hand-off + the key
+    /// guard). Events + the route scratch arrive from the PUMP via `SceneInput`
+    /// — the private resolver/tick rig deleted with the migration (P6).
     command: CommandHandler,
-    tick: u64,
 
     // ── In-world chat (clay-chat client; DesignSync ChatPanel over clay-chat v0.1) ──
     /// The clay-chat client (background socket thread). `None` until `enter` connects;
@@ -350,11 +346,10 @@ impl Default for GameScene {
             ),
             yaw: 0.0,
             pitch: 0.0,
-            last_look_cursor: None,
-            bindings: ContextualBindings::new(InputMap::wasd_and_mouse())
-                .with(InputContext::TextEntry, InputMap::empty()),
             controls: AbstractControls::default(),
             gamepad_config: GamepadConfig::default(),
+            script: None,
+            chat_focused: false,
             ui_tree: None,
             ui_intents: UiIntents::default(),
             fired_sigs: Vec::new(),
@@ -387,11 +382,7 @@ impl Default for GameScene {
             vy: 0.0,
             grounded: false,
             walk_needs_snap: false,
-            resolver: Resolver::new(),
-            ev: Vec::new(),
-            route: RouteCtx::new(),
             command: CommandHandler::default(),
-            tick: 0,
             chat: None,
             chat_ui_state: UiState::new(),
             chat_commands: Vec::new(),
@@ -411,45 +402,39 @@ impl Default for GameScene {
     }
 }
 
-/// Path to the HUD component-tree script (behaviour), resolved through the
-/// content-roots service so the scene finds it regardless of the working
-/// directory. Lives in the shared content tree alongside the other clients'
-/// HUD scripts.
-fn hud_script_path() -> std::path::PathBuf {
-    flicker_core::roots::roots()
-        .sensorium()
-        .join("scripts/shared/hud_pocclusters.lua")
-}
+/// The pair script (`content/sensorium/scripts/pocclusters.lua`) — embedded at
+/// compile time like every migrated scene's; `derive()` turns the raw Model
+/// into the HUD display strings.
+const POCCLUSTERS_SCRIPT: &str =
+    include_str!("../../../../content/sensorium/scripts/pocclusters.lua");
 
 impl GameScene {
-    /// Build the game scene, parsing the HUD component tree best-effort (the scene
-    /// still runs without a HUD). The tree is parsed ONCE here — the walker redraws
-    /// it every frame — and the resolved styles are loaded alongside. Other state
-    /// takes its placeholder values from [`Default`]; the world + camera come up in
+    /// Build the game scene off the manifest's def (the five-line split): the
+    /// authored HUD tree + the folded styles come from `pocclusters.scene.json`,
+    /// the pair script derives the display strings. Other state takes its
+    /// placeholder values from [`Default`]; the world + camera come up in
     /// [`Scene::enter`].
-    fn new() -> Self {
-        let ui_styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
-        let mut ui_tree = None;
-        let script_path = hud_script_path();
-        match ScriptHost::from_file(&script_path) {
-            Ok(s) => {
-                flicker::ui::load_shared_ui_json(&s, Some(&crate::scene_styles())); // HUD layout constants (`UI.pocclusters`)
-                match s.ui_tree() {
-                    Ok(Some(tree)) => ui_tree = Some(tree),
-                    Ok(None) => tracing::error!("HUD script exposes no `tree()` — no HUD"),
-                    Err(e) => tracing::error!("HUD tree build failed ({e}); no HUD"),
-                }
-                tracing::info!("loaded HUD script from {}", script_path.display());
-            }
-            Err(e) => tracing::error!("HUD script load failed (continuing without it): {e}"),
+    fn new(def: &SceneDef) -> Self {
+        let ui_styles = flicker::ui::load_shared_styles(def.styles.as_ref());
+        let ui_tree = def.tree.clone();
+        if ui_tree.is_none() {
+            tracing::error!("pocclusters scene file has no `tree` — no HUD");
         }
-        // The screen's declarative bindings (S9), read off the parsed root once —
+        // The screen's declarative bindings (S9), read off the authored root once —
         // cached exactly like the tree they were collected from.
         let ui_intents = ui_tree.as_ref().map(UiIntents::of).unwrap_or_default();
+        let script = match ScriptHost::new(POCCLUSTERS_SCRIPT, "pocclusters.lua") {
+            Ok(h) => Some(h),
+            Err(e) => {
+                tracing::error!("pocclusters.lua failed to load — raw HUD values only: {e}");
+                None
+            }
+        };
         Self {
             ui_tree,
             ui_intents,
             ui_styles,
+            script,
             ..Self::default()
         }
     }
@@ -757,10 +742,12 @@ impl GameScene {
         if !source.is_empty() {
             return;
         }
-        // Index 10 = STONE: a neutral matte surface (see `mesh.wgsl` palette)
-        // chosen so the fixed studio light reads cleanly against it. Was index 1
-        // (DEEP_WATER navy), which biased the scene blue and swallowed dim light.
-        let material = Material::new(10, 10, 0).expect("stone material is in-range");
+        // Id 23 = Gravel in the material catalog (materials.json): a neutral
+        // mid-value stone (~0.5, faintly warm) chosen so the fixed studio light
+        // reads Lambertian gradients cleanly — the closest catalog match to the
+        // retired demo palette's matte STONE. (History: was demo index 1,
+        // DEEP_WATER navy, which biased the scene blue and swallowed dim light.)
+        let material = Material::new(23, 23, 0);
         let bake_dir = bake_dir_path();
         let lod0_ids: Vec<ClusterId> = (0..FIELD_DIM)
             .flat_map(|x| (0..FIELD_DIM).map(move |z| ClusterId::new(0, x, 0, z)))
@@ -1285,7 +1272,7 @@ impl GameScene {
     /// outside), the snap recenters it over the field first. While the snap
     /// is pending, gravity and movement are frozen so the camera can't fall
     /// into the void before there's a surface to land on.
-    fn walk_step(&mut self, dt_s: f32, input: &InputState) {
+    fn walk_step(&mut self, dt_s: f32, wish: Vec2) {
         if self.walk_needs_snap {
             if let Some(g) = self.ground_height_at(self.position.x, self.position.z) {
                 self.position.y = g + EYE_HEIGHT;
@@ -1308,43 +1295,9 @@ impl GameScene {
         }
 
         // Horizontal intent, flattened to the XZ plane (R/F are inert while
-        // walking). Digital move via the active context's `signal_held` (keyboard /
-        // d-pad); stick move via the 120 Hz analog latch (gamepad). Both sources are
-        // summed so a player can use either (spec §9 / RT-13).
-        let cfg = &self.gamepad_config;
-        let mut horizontal = Vec3::ZERO;
-        if self
-            .bindings
-            .signal_held(ActionSignal::MoveForward, input, cfg)
-        {
-            horizontal += self.move_forward();
-        }
-        if self
-            .bindings
-            .signal_held(ActionSignal::MoveBackward, input, cfg)
-        {
-            horizontal -= self.move_forward();
-        }
-        if self
-            .bindings
-            .signal_held(ActionSignal::StrafeRight, input, cfg)
-        {
-            horizontal += self.move_right();
-        }
-        if self
-            .bindings
-            .signal_held(ActionSignal::StrafeLeft, input, cfg)
-        {
-            horizontal -= self.move_right();
-        }
-        if let Some(latch) = input.analog_latch() {
-            let s = apply_deadzone(
-                latch.left_stick,
-                self.gamepad_config.left_stick_deadzone,
-                self.gamepad_config.deadzone_shape,
-            );
-            horizontal += self.move_forward() * s.y + self.move_right() * s.x;
-        }
+        // walking). `wish` is the pump-resolved (strafe, forward) pair — one
+        // axis path for keyboard, d-pad, and stick alike (spec §9 / input-P3).
+        let horizontal = self.move_forward() * wish.y + self.move_right() * wish.x;
         let step = horizontal.normalize_or_zero() * WALK_SPEED * dt_s;
         let new_x = self.position.x + step.x;
         let new_z = self.position.z + step.z;
@@ -1487,13 +1440,17 @@ impl GameScene {
         match ev {
             ChatEvent::Connected => {
                 let active = self.chat_active.clone();
-                self.push_chat_line(&active, ChatLineKind::Joined, "· connected".to_string());
+                self.push_chat_line(
+                    &active,
+                    ChatLineKind::Joined,
+                    format!("· {}", strings::resolve("$pc_chat_connected")),
+                );
             }
             ChatEvent::Disconnected(reason) => {
                 let active = self.chat_active.clone();
                 let msg = match reason {
-                    Some(r) => format!("· disconnected — {r}"),
-                    None => "· disconnected".to_string(),
+                    Some(r) => format!("· {} — {r}", strings::resolve("$pc_chat_disconnected")),
+                    None => format!("· {}", strings::resolve("$pc_chat_disconnected")),
                 };
                 self.push_chat_line(&active, ChatLineKind::Left, msg);
             }
@@ -1513,7 +1470,11 @@ impl GameScene {
             }
             ChatEvent::Joined { nick, channel } => {
                 self.roster_add(&channel, &nick, my_nick);
-                self.push_chat_line(&channel, ChatLineKind::Joined, format!("◈ {nick} joined"));
+                self.push_chat_line(
+                    &channel,
+                    ChatLineKind::Joined,
+                    format!("◈ {nick} {}", strings::resolve("$pc_chat_joined")),
+                );
                 if nick == my_nick {
                     // Our own JOIN success: ensure the tab exists (+ seed the roster for
                     // a channel we joined mid-session) and switch to it.
@@ -1529,7 +1490,11 @@ impl GameScene {
             }
             ChatEvent::Parted { nick, channel } => {
                 self.roster_remove(&channel, &nick);
-                self.push_chat_line(&channel, ChatLineKind::Left, format!("◌ {nick} left"));
+                self.push_chat_line(
+                    &channel,
+                    ChatLineKind::Left,
+                    format!("◌ {nick} {}", strings::resolve("$pc_chat_left")),
+                );
                 if nick == my_nick {
                     self.chat_channels.retain(|c| c != &channel);
                     self.chat_logs.remove(&channel);
@@ -1563,7 +1528,7 @@ impl GameScene {
                     self.push_chat_line(
                         &channel,
                         ChatLineKind::Renamed,
-                        format!("ᛥ {old} is now {new}"),
+                        format!("ᛥ {old} {} {new}", strings::resolve("$pc_chat_is_now")),
                     );
                 }
             }
@@ -1584,7 +1549,7 @@ impl GameScene {
                 self.push_chat_line(
                     &active,
                     ChatLineKind::Joined,
-                    format!("· you are now '{nick}'"),
+                    format!("· {} '{nick}'", strings::resolve("$pc_chat_you_are_now")),
                 );
             }
             ChatEvent::Notice(text) => {
@@ -1600,6 +1565,12 @@ impl GameScene {
     }
 
     fn hud_model(&self) -> ValueMap {
+        // The ENGINE publishes RAW runtime variables + RESOLVED WORD tokens
+        // (localization stays stringtable-resolved engine-side); the PAIR SCRIPT
+        // (pocclusters.lua) derives the display strings — the five-line split.
+        // Pre-formatted values remain only where a readout IS one formatted
+        // value (the celestial fmt_* clock/phase/month strings, the sablework-
+        // sanctioned shape).
         let walk_mode = self.locomotion_walk;
         let mode_tag = strings::resolve(if walk_mode {
             "$pc_walk_mode"
@@ -1608,86 +1579,7 @@ impl GameScene {
         })
         .into_owned();
 
-        // Left-panel readout rows (label -> value), pre-formatted here (the walker has
-        // no printf) and bound by `text_bind` in hud_pocclusters.lua. Every English
-        // word is a stringtable token (Model-channel strings gate); the numbers and
-        // unit glyphs compose around the resolved text.
-        let cam_val = format!(
-            "({:.1}, {:.1}, {:.1}) \u{00B7} {} {:.0}\u{00B0} {} {:.0}\u{00B0}",
-            self.position.x,
-            self.position.y,
-            self.position.z,
-            strings::resolve("$pc_yaw"),
-            self.yaw.to_degrees(),
-            strings::resolve("$pc_pitch"),
-            self.pitch.to_degrees(),
-        );
-        let grid_val = format!(
-            "{} {} \u{00B7} {}\u{00B3} {}",
-            self.meshes.len(),
-            strings::resolve("$pc_clusters"),
-            CLUSTER_DIM,
-            strings::resolve("$pc_voxels"),
-        );
-        let move_val = format!(
-            "{} \u{00B7} {:.0} u/s",
-            strings::resolve(if walk_mode {
-                "$pc_mode_walk"
-            } else {
-                "$pc_mode_fly"
-            }),
-            self.controls.move_speed,
-        );
-        let diag_val = format!(
-            "{} {} \u{00B7} {} {}",
-            strings::resolve("$pc_arrows"),
-            self.corner_arrows.len(),
-            strings::resolve("$pc_nav"),
-            self.navs.len(),
-        );
-
-        // Pick: shown blue when a face is selected (the `inspector` / `pick_none`
-        // surfaces of the Screen declaration, synced from the selection in `update`
-        // and published below), dim "none" otherwise.
-        let pick_val = match self.selection {
-            Some((id, p)) => format!(
-                "{} ({}, {}, {}) {} {} \u{00B7} {} ({}, {}, {})",
-                strings::resolve("$pc_cluster"),
-                id.x(),
-                id.y(),
-                id.z(),
-                strings::resolve("$pc_lod"),
-                id.lod(),
-                strings::resolve("$pc_voxel"),
-                p[0],
-                p[1],
-                p[2],
-            ),
-            None => String::new(),
-        };
-
-        // Walk readout (its row is gated on `walk`).
-        let walk_val = if walk_mode {
-            let ground = match self.ground_height_at(self.position.x, self.position.z) {
-                Some(g) => format!("{g:.0}"),
-                None => "\u{2014}".to_string(),
-            };
-            format!(
-                "{} \u{00B7} {} {} \u{00B7} vy {:+.1}",
-                strings::resolve(if self.grounded {
-                    "$pc_grounded"
-                } else {
-                    "$pc_airborne"
-                }),
-                strings::resolve("$pc_ground_y"),
-                ground,
-                self.vy,
-            )
-        } else {
-            String::new()
-        };
-
-        let mut m = ValueMap::new()
+        let mut raw = ValueMap::new()
             // Debug-overlay toggles (BOOL, two-way).
             .with("wireframe", self.wireframe_on)
             .with("arrows", self.corner_arrows_on)
@@ -1695,28 +1587,57 @@ impl GameScene {
             .with("camera_lod", self.camera_lod_on)
             .with("lod_billboards", self.lod_billboards_on)
             .with("walk", walk_mode)
-            // Move-speed slider (NUMBER, two-way) + its readout. Mouse sensitivity is
-            // owned by the shell settings panel now, so it is not a HUD control.
+            // Move-speed slider (NUMBER, two-way).
             .with("move_speed", self.controls.move_speed)
-            .with("speed_val", format!("{:.0} u/s", self.controls.move_speed))
-            // Header + readout strings.
+            // Camera + grid + diagnostics raw values.
+            .with("cam_x", f64::from(self.position.x))
+            .with("cam_y", f64::from(self.position.y))
+            .with("cam_z", f64::from(self.position.z))
+            .with("yaw_deg", f64::from(self.yaw.to_degrees()))
+            .with("pitch_deg", f64::from(self.pitch.to_degrees()))
+            .with("mesh_count", self.meshes.len() as f64)
+            .with("cluster_dim", f64::from(CLUSTER_DIM))
+            .with("field_dim", f64::from(FIELD_DIM))
+            .with("arrow_count", self.corner_arrows.len() as f64)
+            .with("nav_count", self.navs.len() as f64)
+            .with("vy", f64::from(self.vy))
+            // Resolved WORDS the pair script composes with (never raw English).
             .with("mode_tag", mode_tag.as_str())
+            .with("w_cluster_field", strings::resolve("$pc_cluster_field").as_ref())
+            .with("w_yaw", strings::resolve("$pc_yaw").as_ref())
+            .with("w_pitch", strings::resolve("$pc_pitch").as_ref())
+            .with("w_clusters", strings::resolve("$pc_clusters").as_ref())
+            .with("w_voxels", strings::resolve("$pc_voxels").as_ref())
             .with(
-                "title_line",
-                format!(
-                    "{} {FIELD_DIM}\u{00D7}{FIELD_DIM} \u{2014} {mode_tag}",
-                    strings::resolve("$pc_cluster_field"),
-                ),
+                "w_mode",
+                strings::resolve(if walk_mode {
+                    "$pc_mode_walk"
+                } else {
+                    "$pc_mode_fly"
+                })
+                .as_ref(),
             )
-            .with("cam_val", cam_val)
-            .with("grid_val", grid_val)
-            .with("move_val", move_val)
-            .with("diag_val", diag_val)
-            .with("pick_val", pick_val)
-            .with("walk_val", walk_val)
+            .with("w_arrows", strings::resolve("$pc_arrows").as_ref())
+            .with("w_nav", strings::resolve("$pc_nav").as_ref())
+            .with("w_cluster", strings::resolve("$pc_cluster").as_ref())
+            .with("w_lod", strings::resolve("$pc_lod").as_ref())
+            .with("w_voxel", strings::resolve("$pc_voxel").as_ref())
+            .with(
+                "w_state",
+                strings::resolve(if self.grounded {
+                    "$pc_grounded"
+                } else {
+                    "$pc_airborne"
+                })
+                .as_ref(),
+            )
+            .with("w_ground_y", strings::resolve("$pc_ground_y").as_ref())
+            .with("w_cell", strings::resolve("$pc_cell").as_ref())
+            .with("w_corners", strings::resolve("$pc_corners").as_ref())
             // Celestial Cycle: seven two-way NUMBER binds (celestial math units) +
-            // their pre-formatted readouts + three view toggles. Formatting lives in
-            // `celestial` (the walker has no printf).
+            // their pre-formatted readouts + three view toggles. Each readout is
+            // ONE formatted value (clock / phase / month names), so `celestial`
+            // keeps the formatting.
             .with("cc_sun", self.celestial.time_of_day)
             .with(
                 "cc_sun_val",
@@ -1747,59 +1668,63 @@ impl GameScene {
             .with("planets", self.celestial.show_planets)
             .with("celestial_paths", self.celestial.show_paths);
 
-        // The declared surfaces' gates (`has_pick` / `no_pick` / `chat`) — one publish.
-        self.surfaces.publish(&mut m);
+        // Walk readout raws (their row is gated on `walk`).
+        if walk_mode {
+            let ground = match self.ground_height_at(self.position.x, self.position.z) {
+                Some(g) => format!("{g:.0}"),
+                None => "\u{2014}".to_string(),
+            };
+            raw.set("ground_y_s", ground);
+        }
 
-        // Right-panel inspector: the selected voxel's 8 corners. Each corner is a
-        // neighbour voxel's stored vector translated into THIS voxel's local frame
-        // (`self_relative`) plus its absolute world position. Published only while a
-        // face is selected (the panel is gated on `has_pick`); the 3D wireframe of the
-        // same cell is drawn as a world overlay in `render`.
+        // The declared surfaces' gates (`has_pick` / `no_pick` / `chat`) — one publish.
+        self.surfaces.publish(&mut raw);
+
+        // Selection raws: the picked face + the inspected cell's 8 corners (each a
+        // neighbour voxel's stored vector in THIS voxel's local frame plus its
+        // absolute world position). Published only while a face is selected — the
+        // inspector panel is gated on `has_pick`.
+        if let Some((id, p)) = self.selection {
+            raw.set("pick_cx", f64::from(id.x()));
+            raw.set("pick_cy", f64::from(id.y()));
+            raw.set("pick_cz", f64::from(id.z()));
+            raw.set("pick_lod", f64::from(id.lod()));
+            raw.set("pick_vx", f64::from(p[0]));
+            raw.set("pick_vy", f64::from(p[1]));
+            raw.set("pick_vz", f64::from(p[2]));
+        }
         if let Some(vv) = self.current_virtual_voxel() {
-            m.set(
-                "insp_title",
-                format!(
-                    "{} ({}, {}, {})",
-                    strings::resolve("$pc_cell"),
-                    vv.center_local[0],
-                    vv.center_local[1],
-                    vv.center_local[2],
-                ),
-            );
-            m.set(
-                "insp_sub",
-                format!(
-                    "{} ({}, {}, {}) {} {} \u{00B7} 8 {}",
-                    strings::resolve("$pc_cluster"),
-                    vv.cluster.x(),
-                    vv.cluster.y(),
-                    vv.cluster.z(),
-                    strings::resolve("$pc_lod"),
-                    vv.cluster.lod(),
-                    strings::resolve("$pc_corners"),
-                ),
-            );
+            raw.set("insp_cx", f64::from(vv.center_local[0]));
+            raw.set("insp_cy", f64::from(vv.center_local[1]));
+            raw.set("insp_cz", f64::from(vv.center_local[2]));
+            raw.set("insp_kx", f64::from(vv.cluster.x()));
+            raw.set("insp_ky", f64::from(vv.cluster.y()));
+            raw.set("insp_kz", f64::from(vv.cluster.z()));
+            raw.set("insp_lod", f64::from(vv.cluster.lod()));
             for (i, c) in vv.corners.iter().enumerate() {
-                let sign = |bit: usize| if (i >> bit) & 1 == 1 { '+' } else { '-' };
-                m.set(
-                    format!("insp_c{i}_name"),
-                    format!("c{i} {}{}{}", sign(0), sign(1), sign(2)),
-                );
-                m.set(
-                    format!("insp_c{i}_lx"),
-                    format!("{:.2}", c.self_relative[0]),
-                );
-                m.set(
-                    format!("insp_c{i}_ly"),
-                    format!("{:.2}", c.self_relative[1]),
-                );
-                m.set(
-                    format!("insp_c{i}_lz"),
-                    format!("{:.2}", c.self_relative[2]),
-                );
-                m.set(format!("insp_c{i}_wx"), format!("{:.2}", c.world.x));
-                m.set(format!("insp_c{i}_wy"), format!("{:.2}", c.world.y));
-                m.set(format!("insp_c{i}_wz"), format!("{:.2}", c.world.z));
+                raw.set(format!("c{i}_lx"), f64::from(c.self_relative[0]));
+                raw.set(format!("c{i}_ly"), f64::from(c.self_relative[1]));
+                raw.set(format!("c{i}_lz"), f64::from(c.self_relative[2]));
+                raw.set(format!("c{i}_wx"), f64::from(c.world.x));
+                raw.set(format!("c{i}_wy"), f64::from(c.world.y));
+                raw.set(format!("c{i}_wz"), f64::from(c.world.z));
+            }
+        }
+
+        // The pair script derives the display strings over the raw publish.
+        let mut m = raw.clone();
+        if let Some(script) = &self.script {
+            if let Err(e) = script.set_model(&raw) {
+                tracing::error!("pocclusters: publishing raw vars failed: {e}");
+            }
+            match script.derive() {
+                Ok(Some(derived)) => {
+                    for (k, v) in derived.entries() {
+                        m.set(k.clone(), v.clone());
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::error!("pocclusters.lua derive() failed: {e}"),
             }
         }
 
@@ -1815,12 +1740,26 @@ impl GameScene {
 /// Build the CSG-cluster editor as a boxed [`Scene`] for the `prism-alpha` launcher
 /// (and any other shell host). The one public entry point — the scene owns its world
 /// generation, HUD, and pause plumbing internally, exactly as the shell expects.
-pub fn scene() -> Box<dyn Scene> {
-    Box::new(GameScene::new())
+pub fn scene(def: &SceneDef) -> Box<dyn Scene> {
+    Box::new(GameScene::new(def))
 }
 
 impl Scene for GameScene {
     fn enter(&mut self, renderer: &mut Renderer) {
+        // The mesh pass boots with an all-magenta (loud-wrong) palette; give it
+        // the material catalog's colours so the field draws real materials. An
+        // unreadable catalog stays magenta — visibly wrong, never silently so.
+        let data_dir = flicker_content::roots().data();
+        match flicker_materials::Tables::from_source(&flicker_materials::JsonTableSource::new(
+            &data_dir,
+        )) {
+            Ok(t) => renderer.set_material_palette(&t.render_palette()),
+            Err(e) => tracing::warn!(
+                "material catalog unreadable at {} — mesh palette stays loud magenta: {e}",
+                data_dir.display()
+            ),
+        }
+
         // Start INSIDE the field, near its centre, angled slightly down. Done
         // before generation so the nav-ring gate (and the boot readiness
         // target) use the real camera pose.
@@ -1905,7 +1844,7 @@ impl Scene for GameScene {
         &mut self,
         dt: Duration,
         input: &InputState,
-        _signals: &mut SceneInput,
+        signals: &mut SceneInput,
         renderer: &Renderer,
     ) -> Transition {
         let dt_s = dt.as_secs_f32();
@@ -1927,11 +1866,9 @@ impl Scene for GameScene {
         // settings the panel owns (sensitivity + invert) + any keybind change.
         // `move_speed` is a scene control (the HUD slider), so it is NOT overwritten
         // — a wholesale `self.controls = controls` would reset it to the panel default.
-        if let Some((map, look, _gp)) = flicker_shell::take_pending_input() {
-            // Rebuild the context service around the new World map (rebinds only
-            // touch gameplay); TextEntry stays the empty keyboard-capture map.
-            self.bindings =
-                ContextualBindings::new(map).with(InputContext::TextEntry, InputMap::empty());
+        if let Some((_map, look, _gp)) = flicker_shell::take_pending_input() {
+            // The PUMP owns the live action maps (rebinds apply there); the scene
+            // takes only the mouse-LOOK half it still consumes directly.
             self.controls.mouse_sensitivity = look.mouse_sensitivity;
             self.controls.invert_mouse_pitch = look.invert_mouse_pitch;
             self.controls.invert_mouse_yaw = look.invert_mouse_yaw;
@@ -1950,7 +1887,7 @@ impl Scene for GameScene {
         // movement/look/pick suppress automatically (its map is empty). That is what the
         // deleted `chat_focus` bool used to track.
         let screen = renderer.size();
-        let focused = self.bindings.active() == InputContext::TextEntry;
+        let focused = self.chat_focused;
 
         // Chat window move/resize (scene-owned window management, NOT input arbitration):
         // update the rect and report whether a left-press landed in the panel this frame
@@ -2002,10 +1939,12 @@ impl Scene for GameScene {
         // `CommandHandler`. Runs before the chat pass so `guard` gates this frame's
         // typed(); its TextEntry-context + focus intents go into the reused RouteCtx and
         // are reconciled after dispatch.
-        self.route.requests.clear();
         let text = self
             .command
-            .drive(input, focused, click_focus, &mut self.route);
+            .drive(input, focused, click_focus, signals.route);
+        if text.entered {
+            self.chat_focused = true;
+        }
         let guard = self.command.guard();
 
         // The in-scene HUD is a DECLARATIVE component tree walked by the Rust
@@ -2165,6 +2104,7 @@ impl Scene for GameScene {
                     lines,
                     roster,
                     nick: &self.chat_nick,
+                    you_label: &strings::resolve("$pc_chat_you"),
                 },
             );
             // The floating window is a DECLARED surface of this screen: its root
@@ -2236,27 +2176,10 @@ impl Scene for GameScene {
             )
         };
 
-        // ── Resolve discrete edges over the active context → wrap → dispatch through the
-        // 4-handler chain (root → command → walker → gameplay). `ev` is the REUSED Fired
-        // buffer (no per-frame alloc); the InputEvent list is a short-lived local because
-        // it borrows THIS frame's snapshot, so it cannot be a persistent field — RT-7 is
-        // preserved because steady-state frames resolve zero edges and allocate nothing. ──
-        self.tick = self.tick.wrapping_add(1);
-        self.ev.clear();
-        self.resolver.resolve_frame(
-            &self.bindings,
-            &self.gamepad_config,
-            input,
-            self.tick,
-            &mut self.ev,
-        );
-        let ctx = self.bindings.active();
-        let events: Vec<InputEvent> = self
-            .ev
-            .iter()
-            .map(|f| InputEvent::from_fired(f, ctx, input))
-            .collect();
-
+        // ── Dispatch the PUMP's resolved events through the 4-handler chain
+        // (root → command → walker → gameplay). The runner resolved this frame
+        // over the scene's declared context (`input_context()`), so while chat
+        // owns the keyboard the TextEntry map resolves nothing at all. ──
         let mut root = RootHandler;
         let mut gameplay = GameplayBase::default();
         // The walker layer wraps the CHAT walker's retained focus (it owns the
@@ -2269,29 +2192,27 @@ impl Scene for GameScene {
         {
             let mut chain: [&mut dyn InputHandler; 4] =
                 [&mut root, &mut self.command, &mut walker, &mut gameplay];
-            Router::dispatch(&events, &mut chain, &mut self.route);
+            Router::dispatch(signals.events, &mut chain, signals.route);
         }
 
         // Any exit leaves TextEntry (Enter/send = submit, Esc = cancel): pop the context +
         // clear focus through the router queue. The panel's send button folds into submit.
         let submit = text.submit || chat_send;
         if submit || text.cancel {
-            self.route.pop_context();
-            self.route.clear_focus();
+            signals.route.pop_context();
+            signals.route.clear_focus();
+            self.chat_focused = false;
         }
 
         // Surface context wiring (S9): any declared-surface flip since last frame
         // becomes Push/PopContext on the same queue (no pocclusters surface
         // carries a context today — the seam is standard, the call a live no-op).
-        self.surfaces.apply_surface_contexts(&mut self.route);
-        // Reconcile this frame's context push/pop into ContextualBindings and apply the
-        // resolved focus decision THROUGH the walker — one id for mouse + gamepad (§4.2a).
-        let focus_change = apply_context_requests(&mut self.bindings, &self.route.requests);
-        walker.apply_focus(focus_change);
+        // The RUNNER applies the queued requests to the pump after `update`; the
+        // chat field's walker focus is re-asserted per-frame from `chat_focused`.
+        self.surfaces.apply_surface_contexts(signals.route);
         // The screen's fired intents (S9), drained once per frame: acted on below
         // and queued for the one-frame `sig_<name>` Model mirror.
         self.fired_sigs = walker.take_fired();
-        self.route.requests.clear();
 
         // Chat side effects (post the line / join / leave) — identical to the old inline
         // handling, now driven by the command handler's submit + the panel buttons.
@@ -2320,9 +2241,13 @@ impl Scene for GameScene {
         // the command layer's capture sits above the walker anyway.
         if self.fired_sigs.iter().any(|n| n == "pause_open") {
             let theme = self.ui_theme.expect("pause theme built in enter");
+            let pause_map = flicker_shell::input_profile()
+                .context_map("World")
+                .cloned()
+                .unwrap_or_else(flicker_input_core::InputMap::wasd_and_mouse);
             return Transition::Push(Box::new(PauseScene::new(
                 theme,
-                self.bindings.active_map(),
+                &pause_map,
                 &self.controls,
                 &self.gamepad_config,
             )));
@@ -2344,95 +2269,71 @@ impl Scene for GameScene {
             }
         }
 
-        // Camera look + movement — the gameplay base owns the frame only in World (the
-        // exclusive TextEntry context suppresses it; mouse-look has no discrete event to
-        // gate, so this stays the base handler's frame-ownership check). Digital move via
-        // `signal_held` (keyboard / d-pad) + left-stick via the analog latch; mouse-look
-        // via `mouse_position` + right-stick via the analog latch (spec §9 / RT-13).
-        if self.bindings.active() == InputContext::World {
-            if input.mouse_right {
-                if let Some(prev) = self.last_look_cursor {
-                    let (dyaw, dpitch) =
-                        self.controls.look_delta_mouse(input.mouse_position - prev);
-                    self.yaw -= dyaw;
-                    self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
-                }
-                self.last_look_cursor = Some(input.mouse_position);
-            } else {
-                self.last_look_cursor = None;
+        // Camera look + movement — continuous queries against the PUMP's
+        // active-context bindings (spec §9 / input-P3): `signals.pointer_delta`
+        // is the mouse-look channel (the profile gates Look* on MouseMotion
+        // right-drag), `signals.axis` unifies held keys and stick deflection
+        // into ONE 0..1 path per direction signal. While chat owns the keyboard
+        // the TextEntry map binds nothing, so every query reads zero — the gate
+        // below is belt-and-braces.
+        if !self.chat_focused {
+            // Mouse look: per-frame pixel deltas, frame-absolute (no dt).
+            let mouse = Vec2::new(
+                signals.pointer_delta(ActionSignal::LookRight, input)
+                    - signals.pointer_delta(ActionSignal::LookLeft, input),
+                signals.pointer_delta(ActionSignal::LookDown, input)
+                    - signals.pointer_delta(ActionSignal::LookUp, input),
+            );
+            if mouse != Vec2::ZERO {
+                let (dyaw, dpitch) = self.controls.look_delta_mouse(mouse);
+                self.yaw -= dyaw;
+                self.pitch = (self.pitch + dpitch).clamp(-1.5, 1.5);
             }
-            // Right-stick look via the 120 Hz analog latch (Option-aware: no pad → no
-            // stick contribution). dt-scaled so it matches the mouse feel.
-            if let Some(latch) = input.analog_latch() {
-                let s = apply_deadzone(
-                    latch.right_stick,
-                    self.gamepad_config.right_stick_deadzone,
-                    self.gamepad_config.deadzone_shape,
-                );
-                if s != Vec2::ZERO {
-                    let (dyaw, dpitch) = self.controls.look_delta_stick(s);
-                    self.yaw -= dyaw * dt_s;
-                    self.pitch = (self.pitch + dpitch * dt_s).clamp(-1.5, 1.5);
-                }
+            // Stick look: a deadzone-aware rate, dt-scaled to match the mouse feel.
+            let stick = Vec2::new(
+                signals.axis(ActionSignal::LookRight, input)
+                    - signals.axis(ActionSignal::LookLeft, input),
+                signals.axis(ActionSignal::LookUp, input)
+                    - signals.axis(ActionSignal::LookDown, input),
+            );
+            if stick != Vec2::ZERO {
+                let (dyaw, dpitch) = self.controls.look_delta_stick(stick);
+                self.yaw -= dyaw * dt_s;
+                self.pitch = (self.pitch + dpitch * dt_s).clamp(-1.5, 1.5);
             }
 
-            // Movement: fly (free 6-DOF) or walk (XZ + gravity/ground-clamp).
+            // Movement intent (KBM + pad on the one axis path): x = strafe, y =
+            // forward. Fly adds the vertical pair; walk flattens to XZ.
+            let wish = Vec2::new(
+                signals.axis(ActionSignal::StrafeRight, input)
+                    - signals.axis(ActionSignal::StrafeLeft, input),
+                signals.axis(ActionSignal::MoveForward, input)
+                    - signals.axis(ActionSignal::MoveBackward, input),
+            );
             if self.locomotion_walk {
-                self.walk_step(dt_s, input);
+                self.walk_step(dt_s, wish);
             } else {
-                let cfg = &self.gamepad_config;
-                let mut motion = Vec3::ZERO;
-                if self
-                    .bindings
-                    .signal_held(ActionSignal::MoveForward, input, cfg)
-                {
-                    motion += self.move_forward();
-                }
-                if self
-                    .bindings
-                    .signal_held(ActionSignal::MoveBackward, input, cfg)
-                {
-                    motion -= self.move_forward();
-                }
-                if self
-                    .bindings
-                    .signal_held(ActionSignal::StrafeRight, input, cfg)
-                {
-                    motion += self.move_right();
-                }
-                if self
-                    .bindings
-                    .signal_held(ActionSignal::StrafeLeft, input, cfg)
-                {
-                    motion -= self.move_right();
-                }
-                if self.bindings.signal_held(ActionSignal::MoveUp, input, cfg) {
-                    motion += Vec3::Y;
-                }
-                if self
-                    .bindings
-                    .signal_held(ActionSignal::MoveDown, input, cfg)
-                {
-                    motion -= Vec3::Y;
-                }
-                // Left-stick fly (analog channel, Option-aware; deadzoned like digital).
-                if let Some(latch) = input.analog_latch() {
-                    let s = apply_deadzone(
-                        latch.left_stick,
-                        self.gamepad_config.left_stick_deadzone,
-                        self.gamepad_config.deadzone_shape,
-                    );
-                    motion += self.move_forward() * s.y + self.move_right() * s.x;
+                let mut motion = self.move_forward() * wish.y + self.move_right() * wish.x;
+                motion += Vec3::Y
+                    * (signals.axis(ActionSignal::MoveUp, input)
+                        - signals.axis(ActionSignal::MoveDown, input));
+                if motion.length_squared() > 1.0 {
+                    motion = motion.normalize();
                 }
                 if motion.length_squared() > 0.0 {
-                    self.position += motion.normalize() * self.controls.move_speed * dt_s;
+                    self.position += motion * self.controls.move_speed * dt_s;
                 }
             }
-        } else {
-            self.last_look_cursor = None;
         }
 
         Transition::None
+    }
+
+    fn input_context(&self) -> Option<InputContext> {
+        // Chat owns the keyboard → the runner resolves the pump over the (empty)
+        // TextEntry map, so no gameplay signal fires and every continuous query
+        // reads zero. World otherwise (the default base).
+        self.chat_focused.then_some(InputContext::TextEntry)
     }
 
     fn render(&mut self, renderer: &mut Renderer) {
@@ -2658,142 +2559,132 @@ fn try_load_bake_field(
     Some(out)
 }
 
-/// ⛔ QUARANTINED scene styles (five-line split, Aaron 2026-08-12): this dormant
-/// bench's style blocks, vendored OUT of ui_theme.json — a scene's values belong
-/// in its scene file, and these move into this bench's own `.scene.json` at its
-/// migration. Do not grow this file.
-pub(crate) fn scene_styles() -> serde_json::Value {
-    serde_json::from_str(include_str!("../scene_styles.json")).expect("scene_styles.json parses")
-}
-
 #[cfg(test)]
 mod script_smoke {
-    //! Load the *real* HUD component-tree script + the shared `ui_theme.json`
-    //! and walk it for one frame, so a Lua syntax/runtime error — or a `tree()`
-    //! that reads a `UI.pocclusters` key the layout lacks — fails the build instead
-    //! of only surfacing in the running app. The build-time check that keeps the
-    //! Rust↔Lua HUD contract honest.
+    //! Load the *real* `pocclusters.scene.json` + the pair script and walk a
+    //! frame, so a broken tree, a Lua syntax/runtime error, or a raw English
+    //! string fails the build instead of only surfacing in the running app.
     use super::*;
 
-    /// Every key `hud_pocclusters.lua`'s `tree()` binds: the six toggle bools, the
-    /// move-speed slider + readout, the pre-formatted status/pick/walk strings, and —
-    /// with `has_pick` set — the inspector's per-corner cells.
-    fn model() -> ValueMap {
-        // The fixture's display words ride the SAME stringtable tokens the scene
-        // resolves (Model-channel strings gate); numbers compose around them.
-        let r = |t: &str| strings::resolve(t).into_owned();
-        let mut m = ValueMap::new()
-            .with("wireframe", true)
-            .with("arrows", false)
-            .with("navmesh", false)
-            .with("camera_lod", true)
-            .with("lod_billboards", false)
-            .with("walk", true)
-            .with("move_speed", 60.0_f32)
-            .with("speed_val", "60 u/s")
-            .with("mode_tag", r("$pc_walk_mode"))
-            .with(
-                "title_line",
-                format!("{} 3×3 — {}", r("$pc_cluster_field"), r("$pc_walk_mode")),
-            )
-            .with(
-                "cam_val",
-                format!(
-                    "(1.0, 2.0, 3.0) · {} 29° {} -14°",
-                    r("$pc_yaw"),
-                    r("$pc_pitch")
-                ),
-            )
-            .with(
-                "grid_val",
-                format!("9 {} · 256³ {}", r("$pc_clusters"), r("$pc_voxels")),
-            )
-            .with("move_val", format!("{} · 60 u/s", r("$pc_mode_walk")))
-            .with(
-                "diag_val",
-                format!("{} 12 · {} 5", r("$pc_arrows"), r("$pc_nav")),
-            )
-            .with("has_pick", true)
-            .with("no_pick", false)
-            .with(
-                "pick_val",
-                format!(
-                    "{} (1, 0, 2) {} 0 · {} (10, 20, 30)",
-                    r("$pc_cluster"),
-                    r("$pc_lod"),
-                    r("$pc_voxel")
-                ),
-            )
-            .with(
-                "walk_val",
-                format!(
-                    "{} · {} 128 · vy -1.5",
-                    r("$pc_grounded"),
-                    r("$pc_ground_y")
-                ),
-            )
-            .with("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")))
-            .with(
-                "insp_sub",
-                format!(
-                    "{} (1, 0, 2) {} 0 · 8 {}",
-                    r("$pc_cluster"),
-                    r("$pc_lod"),
-                    r("$pc_corners")
-                ),
-            );
-        for i in 0..8 {
-            m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
-            for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
-                m.set(format!("insp_c{i}_{ax}"), "0.50");
-            }
-        }
-        m
-    }
+    /// The shipped scene file, read by the gates exactly as the manifest reads it.
+    const POCCLUSTERS_SCENE: &str =
+        include_str!("../../../../content/sensorium/scenes/pocclusters.scene.json");
 
-    #[test]
-    fn hud_tree_walks_with_model() {
-        // The HUD's display copy is `$token`s now (S10 strings gate); load the
-        // shipped table so the walked commands carry the resolved en-us text.
+    fn load_strings() {
         let strings = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../../content/data/stringtable.json"
         ))
         .expect("stringtable reads");
         flicker::ui::strings::load_str(&strings, "en-us");
-        let host = ScriptHost::from_file(hud_script_path()).expect("load hud_pocclusters.lua");
-        flicker::ui::load_shared_ui_json(&host, Some(&crate::scene_styles())); // HUD layout (`UI.pocclusters`)
-        let tree = host
-            .ui_tree()
-            .expect("tree parses")
-            .expect("hud_pocclusters.lua exposes tree()");
-        let styles = flicker::ui::load_shared_styles(Some(&crate::scene_styles()));
+    }
 
-        // Vocabulary gate: an unknown kind renders NOTHING (anchor-overlaid children, no
-        // draw arm), so a name left behind by a rename would be invisible until someone
-        // opened the window.
+    fn scene_def() -> SceneDef {
+        SceneDef::parse("pocclusters", POCCLUSTERS_SCENE).expect("pocclusters.scene.json loads")
+    }
+
+    /// THE PAIR-SCRIPT REGRESSION GATE: build the bench exactly as the resolver
+    /// does (real def, real pocclusters.lua) and run the REAL hud_model path —
+    /// the raw variables must come back as the DERIVED display strings the tree
+    /// binds. A derive() that throws leaves numbers (or nothing) under the keys.
+    #[test]
+    fn the_pair_script_derives_the_display_strings() {
+        load_strings();
+        let def = scene_def();
+        assert_eq!(def.behaviour, "pocclusters");
+        let scene = GameScene::new(&def);
+        assert!(scene.script.is_some(), "pocclusters.lua loads (the pair script)");
+        assert!(scene.ui_tree.is_some(), "the scene file carries the HUD tree");
+        let m = scene.hud_model();
+        for key in [
+            "title_line",
+            "cam_val",
+            "grid_val",
+            "move_val",
+            "diag_val",
+            "speed_val",
+        ] {
+            assert!(
+                m.text(key).is_some(),
+                "derive() must yield display TEXT for '{key}' — got {:?}",
+                m.number(key).map(|n| format!("Number({n})"))
+            );
+        }
+        let title = m.text("title_line").unwrap();
+        assert!(
+            title.contains("3×3"),
+            "the title composes the field size: {title:?}"
+        );
+        assert!(
+            m.text("grid_val").unwrap().contains("256³"),
+            "the grid line composes the cluster dimension"
+        );
+        assert_eq!(
+            m.text("pick_val"),
+            Some(""),
+            "no pick yet → the pick readout is empty (its row is gated)"
+        );
+        assert_eq!(m.text("walk_val"), Some(""), "fly mode → no walk readout");
+    }
+
+    /// Walk the REAL tree with the REAL derived model (+ a pick fixture so the
+    /// gated inspector panel draws too) and gate the authored data: known kinds
+    /// only, no raw display literals in the tree, no raw display copy published
+    /// from Rust into the Model.
+    #[test]
+    fn hud_tree_walks_with_model() {
+        load_strings();
+        let def = scene_def();
+        let tree = def.tree.clone().expect("scene defines a tree");
+        let styles = flicker::ui::load_shared_styles(def.styles.as_ref());
+
+        // Vocabulary gate: an unknown kind renders NOTHING, so a name left
+        // behind by a rename would be invisible until someone opened the window.
         assert!(
             flicker::ui::unknown_kinds(&tree).is_empty(),
-            "hud_pocclusters.lua names unknown kinds: {:?}",
+            "pocclusters.scene.json names unknown kinds: {:?}",
             flicker::ui::unknown_kinds(&tree)
         );
         // The strings gate (S10): every display literal is a `$token`.
         assert!(
             flicker::ui::raw_display_literals(&tree).is_empty(),
-            "hud_pocclusters.lua ships raw display literals: {:?}",
+            "pocclusters.scene.json ships raw display literals: {:?}",
             flicker::ui::raw_display_literals(&tree)
         );
-        // The MODEL-CHANNEL strings gate (S10's blind side): display copy published
-        // from Rust into the Model bypasses the tree gate above, so the crate
-        // self-gates its OWN source — every `.set`/`.with` value must be a resolved
-        // `$token`, a data shape, or carry an explicit `strings-gate-exempt` reason.
+        // The MODEL-CHANNEL strings gate (S10's blind side): every `.set`/`.with`
+        // display value in this crate is a resolved `$token`, a data shape, or
+        // carries an explicit `strings-gate-exempt` reason.
         let flags = strings::raw_model_publish_literals(include_str!("lib.rs"));
         assert!(
             flags.is_empty(),
             "raw display copy published into the Model: {flags:?}"
         );
 
-        // A static frame (no hover): the panel draws its stats + checkboxes + sliders.
+        // The real derived model, plus a pick fixture so the `has_pick`-gated
+        // inspector panel draws (a real pick needs a meshed world; the fixture
+        // exercises the authored panel with the same key shapes derive() emits).
+        let scene = GameScene::new(&def);
+        let mut m = scene.hud_model();
+        m.set("has_pick", true);
+        m.set("no_pick", false);
+        let r = |t: &str| strings::resolve(t).into_owned();
+        m.set("insp_title", format!("{} (10, 20, 30)", r("$pc_cell")));
+        m.set(
+            "insp_sub",
+            format!(
+                "{} (1, 0, 2) {} 0 · 8 {}",
+                r("$pc_cluster"),
+                r("$pc_lod"),
+                r("$pc_corners")
+            ),
+        );
+        for i in 0..8 {
+            m.set(format!("insp_c{i}_name"), format!("c{i} +--"));
+            for ax in ["lx", "ly", "lz", "wx", "wy", "wz"] {
+                m.set(format!("insp_c{i}_{ax}"), "0.50");
+            }
+        }
+
         let snap = UiInput {
             mouse: Vec2::new(-1.0, -1.0),
             clicked: false,
@@ -2803,10 +2694,10 @@ mod script_smoke {
             backspace: false,
             wheel: 0.0,
         };
-        let frame = run_ui(&tree, &model(), &styles, &snap, &mut UiState::new());
+        let frame = run_ui(&tree, &m, &styles, &snap, &mut UiState::new());
         assert!(
             !frame.commands.is_empty(),
-            "the HUD draws its panel + controls"
+            "the HUD draws its panels + controls"
         );
         let has_text = |needle: &str| {
             frame
@@ -2817,8 +2708,9 @@ mod script_smoke {
         assert!(has_text("Cluster field"), "the title line renders");
         assert!(
             has_text("Wireframe overlay"),
-            "the data-driven checkbox list renders its labels"
+            "the authored checkbox labels render"
         );
+        assert!(has_text("Celestial Cycle"), "the celestial panel renders");
         assert!(has_text("Corner"), "the inspector table header renders");
         assert!(
             has_text("Cell (10, 20, 30)"),

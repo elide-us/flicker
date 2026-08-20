@@ -350,7 +350,7 @@ mod tests {
     use flicker_primitive::{FlatField, Hermite};
 
     fn grey() -> Material {
-        Material::new(1, 1, 0).expect("valid")
+        Material::new(1, 1, 0)
     }
 
     fn origin_id() -> ClusterId {

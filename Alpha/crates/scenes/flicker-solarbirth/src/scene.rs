@@ -192,7 +192,7 @@ impl Sim {
     fn hud_model(&self) -> ValueMap {
         // The ENGINE publishes raw flight variables + RESOLVED copy tokens; the PAIR
         // SCRIPT (`solarbirth.lua`) composes the phase line (five-line split).
-        let raw = ValueMap::new()
+        let mut raw = ValueMap::new()
             .with("segment", self.flight.segment_name().to_string())
             .with("progress_pct", f64::from(self.flight.progress() * 100.0))
             .with("sys", strings::resolve("$sb_the_prism_system").into_owned())
@@ -201,6 +201,27 @@ impl Sim {
                 strings::resolve("$sb_approaching").into_owned(),
             )
             .with("settled", strings::resolve("$sb_settled").into_owned());
+
+        // Publish the LIVE control bindings so the HUD/footer show the actual key
+        // (kbm) or glyph (pad) bound to each signal — never a hardcoded string
+        // (MCP 1A292918 T5, 5B9A8B50). Resolved from the ACTIVE context map (the
+        // same one the pause overlay takes), so a rebind or device switch shows next
+        // frame. `bind_Interact`/`glyph_Interact` (Replay) + `bind_Menu` + the device.
+        let ctx = if self.cinematic {
+            "FlightPath"
+        } else {
+            "Flying"
+        };
+        let map = flicker_shell::input_profile()
+            .context_map(ctx)
+            .cloned()
+            .unwrap_or_else(InputMap::flying);
+        flicker_shell::publish_signal_bindings(
+            &mut raw,
+            &map,
+            [ActionSignal::Interact, ActionSignal::Menu],
+        );
+
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -775,8 +796,13 @@ mod tests {
             .iter()
             .filter(|c| matches!(c, HudCommand::Text { .. }))
             .count();
-        // title + phase + hint + roster header + one row per planet.
-        assert_eq!(texts, 4 + planets.len(), "every readout line renders");
+        // The readout (title + phase + roster header + one row per planet) plus the
+        // footer's control-hint labels + MENU button all render as text.
+        assert!(
+            texts >= 3 + planets.len(),
+            "readout + footer text renders ({texts} lines for {} planets)",
+            planets.len()
+        );
         // The readout is a PANEL over the full-screen rtt now: the pointer on it is a
         // UI hit, so the camera (which gates on `!hud_hit`) won't orbit there — the
         // opposite of the old bare-text drag-through.

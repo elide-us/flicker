@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn backfill_adopts_new_defaults_and_keeps_user_binds() {
         // A "default"-named profile whose World map predates the bench tier:
-        // movement rebound (user choice), no PanelNext/NavUp/ZoomIn at all.
+        // movement rebound (user choice), no NavUp/NavRight/ZoomIn at all.
         let mut stale = InputMap::empty();
         stale.bind(ActionSignal::MoveForward, InputBinding::Key(Key::I)); // user rebind
         let mut profile = InputProfile::default_profile();
@@ -690,7 +690,7 @@ mod tests {
             "a user rebind is never overwritten by the preset"
         );
         assert!(
-            !world.bindings_for(ActionSignal::PanelNext).is_empty(),
+            !world.bindings_for(ActionSignal::NavRight).is_empty(),
             "a signal the save predates gains the current default"
         );
         assert!(

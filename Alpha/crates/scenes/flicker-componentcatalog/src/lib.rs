@@ -152,6 +152,12 @@ impl ComponentCatalog {
         raw.set(CONTENT_SCROLL_BIND, f64::from(self.content_scroll));
         raw.set("section", self.section as f64);
         raw.set("card_count", self.cards.len() as f64);
+        // Q2 (ruling 7AB130A7): publish the live display device so the Paged Menu drops
+        // its pad shoulder-glyph hints on kbm and shows them on a controller.
+        raw.set(
+            "input_device",
+            flicker::input_device::last_input_context().token(),
+        );
         let mut m = raw.clone();
         if let Some(script) = &self.script {
             if let Err(e) = script.set_model(&raw) {
@@ -609,12 +615,13 @@ mod tests {
     }
 
     /// **Every pane group has a clear panel-navigation layer** (nav-tier contract
-    /// 1B5F6BB8): a `tab_group` with interior controls must have exactly ONE ordinal-0
-    /// actionless CONTAINER whose id equals the group, so the left stick lands on the pane
-    /// (not a leaf) and the d-pad reaches the interior only after Confirm enters. This is
-    /// the "ambiguous panel navigation is a violation" rule as a gate — `cat_content` was a
-    /// container-less group (`PanelNext` deposited the cursor on a leaf inside it), which
-    /// this now forbids.
+    /// 1B5F6BB8, flattened per 1A292918): a `tab_group` with interior controls must have
+    /// exactly ONE actionless CONTAINER (with a non-zero authored ordinal) whose id equals
+    /// the group, so a panel stop is a real container and never a bare leaf. The flatten
+    /// lets BOTH the stick and the d-pad move between those stops; `Confirm` still scopes
+    /// into a container's interior. This is the "ambiguous panel navigation is a violation"
+    /// rule as a gate — `cat_content` was a container-less group (nav deposited the cursor
+    /// on a leaf inside it), which this forbids.
     #[test]
     fn every_pane_group_has_a_clear_container() {
         let tree = SceneDef::parse("componentcatalog", CATALOG_SCENE)

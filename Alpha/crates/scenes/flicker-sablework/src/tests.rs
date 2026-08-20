@@ -46,7 +46,8 @@ fn draw() -> Vec<HudCommand> {
     load_strings();
     let bench = Sablework::shipped();
     let tree = tree_of(&bench);
-    let styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    let mut styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    crate::palette::inject_glow_styles(&mut styles, &bench.palette);
     let snap = UiInput {
         mouse: Vec2::new(-1.0, -1.0),
         clicked: false,
@@ -780,4 +781,573 @@ fn the_lit_controls_are_not_recipe_edits() {
         "stopping the spin is not an edit"
     );
     assert!(!bench.lit.spinning);
+}
+
+// ── the base-colour tint knobs ────────────────────────────────────────────────
+
+/// The Hue and Saturation knobs are the bench's ONLY colour control: turning
+/// either recolours the base ramp and re-bakes, and driving hue toward yellow with
+/// saturation up makes the base map gold — red and green over blue, the colour the
+/// rack's grey noise never had on its own.
+#[test]
+fn the_tint_knobs_recolour_the_base_map_gold() {
+    let mut bench = Sablework::shipped();
+
+    // A colour knob is a recipe edit (unlike selecting a voice or switching a view).
+    assert!(fire(&mut bench, "tint_sat", 0.8_f64), "saturation is an edit");
+    assert!(fire(&mut bench, "tint_hue", 0.13_f64), "hue is an edit");
+
+    // The knob reads back the ramp it wrote: the ramp is the one source of colour,
+    // and the model publishes its hue for the slider to echo.
+    assert!(
+        (bench.model().number("tint_hue").unwrap() - 0.13).abs() < 0.02,
+        "the hue knob echoes the ramp it set"
+    );
+
+    // Gold: a yellow hue at real saturation makes a base map whose red and green
+    // dominate blue across the whole swatch.
+    let set = flicker_texture::bake(bench.recipe(), 32);
+    let base = set.get(MapKind::BaseColor).expect("the base map baked");
+    let (mut r, mut g, mut b) = (0u64, 0u64, 0u64);
+    for px in base.pixels.chunks(4) {
+        r += px[0] as u64;
+        g += px[1] as u64;
+        b += px[2] as u64;
+    }
+    assert!(
+        r > b && g > b,
+        "gold base is red+green over blue (r{r} g{g} b{b})"
+    );
+}
+
+/// Re-applying the ramp's current hue/saturation is not a change — a colour knob
+/// released on the value it already holds must not re-bake, the same no-op-is-not-
+/// an-edit contract the scalar knobs keep, checked on the tint channel too.
+#[test]
+fn re_tinting_the_same_colour_does_not_rebake() {
+    let mut bench = Sablework::shipped();
+    let (hue, sat) = bench.recipe().out.ramp.tint();
+    assert!(
+        !fire(&mut bench, "tint_hue", hue as f64),
+        "the ramp's own hue is not an edit"
+    );
+    assert!(
+        !fire(&mut bench, "tint_sat", sat as f64),
+        "the ramp's own saturation is not an edit"
+    );
+}
+
+// ── the flattened nav topology (plan 1A292918 T3) ─────────────────────────────
+
+/// THE FLATTEN GATE (the bench's first nav gate). The rack container dissolved: the
+/// six channels are DIRECT top-tier stops, so from the centre a single Left lands on
+/// a channel and Up/Down walks them — no rack→voice→control nesting (enter depth ≤ 1).
+/// Pins the stop roster, the depth invariant, and the geometric adjacency over the
+/// real resolved layout via the router's own `nav_geometric`.
+#[test]
+fn the_flattened_nav_topology_is_the_authored_surface() {
+    use flicker_input_router::{nav_geometric, Focusable, NavDir};
+    use std::collections::HashSet;
+
+    let bench = Sablework::shipped();
+    let tree = tree_of(&bench);
+    let mut all = Vec::new();
+    flatten(&tree, &mut all);
+
+    // Container discovery mirrors the walker: a node is a top-tier STOP when it has an
+    // id, carries NO tab_group, and is CLAIMED by a member (or authors `pane: true`).
+    let claimed: HashSet<&str> = all
+        .iter()
+        .filter(|n| !n.tab_group.is_empty())
+        .map(|n| n.tab_group.as_str())
+        .collect();
+    let is_container = |n: &UiNode| {
+        claimed.contains(n.id.as_str()) || matches!(n.props.get("pane"), Some(Value::Bool(true)))
+    };
+    let mut stops: Vec<&UiNode> = all
+        .iter()
+        .copied()
+        .filter(|n| !n.id.is_empty() && n.tab_group.is_empty() && is_container(n))
+        .collect();
+    stops.sort_by_key(|n| n.nav_ordinal);
+
+    // (a) The roster IS the flattened surface — the six channels as direct stops.
+    let roster: Vec<(u32, &str)> = stops.iter().map(|n| (n.nav_ordinal, n.id.as_str())).collect();
+    assert_eq!(
+        roster,
+        vec![
+            (1, "sw_top"),
+            (2, "sw_voice_1"),
+            (3, "sw_voice_2"),
+            (4, "sw_voice_3"),
+            (5, "sw_voice_4"),
+            (6, "sw_voice_5"),
+            (7, "sw_voice_6"),
+            (8, "sw_view"),
+            (9, "sw_out"),
+            (10, "sw_footer"),
+            (11, "sw_nav"),
+            // The materials-page container — claimed by the Rust-filled list rows. It is a
+            // structural stop but is `visible_bind`-gated OFF on the bench page (page 0), so
+            // the runtime walker never lands on it there; a degenerate rect keeps it out of
+            // the geometric adjacency below.
+            (12, "sw_mat_panel"),
+        ],
+        "the flattened top-tier stop roster"
+    );
+    assert!(
+        !claimed.contains("sw_rack"),
+        "the rack is pure layout now, not a nav stop"
+    );
+
+    // (b) ENTER DEPTH ≤ 1 + convention: no stop's interior is itself a container, and
+    // every stop authors a non-zero ordinal.
+    for stop in &stops {
+        assert!(stop.nav_ordinal > 0, "{} authors a zero ordinal", stop.id);
+        for n in &all {
+            if n.tab_group == stop.id {
+                assert!(
+                    !claimed.contains(n.id.as_str()),
+                    "enter depth > 1: container {} sits inside stop {}",
+                    n.id,
+                    stop.id
+                );
+            }
+        }
+    }
+
+    // (c) GEOMETRIC adjacency over the RESOLVED layout at 1920×1080.
+    let styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
+    let fo: Vec<Focusable> = stops
+        .iter()
+        .map(|n| Focusable {
+            id: n.id.clone(),
+            group: String::new(),
+            ordinal: n.nav_ordinal,
+            rect: frame
+                .rect(&n.id)
+                .map(|r| [r.pos.x, r.pos.y, r.size.x, r.size.y])
+                .unwrap_or([0.0; 4]),
+        })
+        .collect();
+    // The cards sit in a 2-COLUMN grid (voice_1/2 top, 3/4 middle, 5/6 bottom), so nav is
+    // grid-shaped: Left from the centre view lands on a channel, Right steps to the card
+    // beside it, Down to the card below it.
+    assert!(
+        nav_geometric(&fo, "sw_view", NavDir::Left)
+            .as_deref()
+            .is_some_and(|s| s.starts_with("sw_voice_")),
+        "Left from the centre view → a channel card, got {:?}",
+        nav_geometric(&fo, "sw_view", NavDir::Left)
+    );
+    assert_eq!(
+        nav_geometric(&fo, "sw_voice_1", NavDir::Right).as_deref(),
+        Some("sw_voice_2"),
+        "Right → the card beside it in the grid row"
+    );
+    assert_eq!(
+        nav_geometric(&fo, "sw_voice_1", NavDir::Down).as_deref(),
+        Some("sw_voice_3"),
+        "Down → the card below it in the grid column"
+    );
+}
+
+// ── the channel cards (B1) ────────────────────────────────────────────────────
+
+/// Each channel card publishes a LIVE effect blurb: the current source's $token when
+/// the voice sounds, or `$sw_fx_off` when it is silent.
+#[test]
+fn every_voice_card_publishes_a_live_description() {
+    let bench = Sablework::shipped();
+    let model = bench.model();
+    for n in 1..=flicker_texture::CHANNEL_COUNT {
+        let ch = &bench.recipe().channels[n - 1];
+        // The blurb is two lines: a "status" ($sw_fx_) and a "comment" ($sw_fx2_), split so
+        // neither runs off the narrow card.
+        let (fx, fx2) = if ch.enabled {
+            (
+                format!("$sw_fx_{}", ch.source.id()),
+                format!("$sw_fx2_{}", ch.source.id()),
+            )
+        } else {
+            ("$sw_fx_off".to_string(), "$sw_fx2_off".to_string())
+        };
+        assert_eq!(
+            model.text(&format!("ch{n}_fx")),
+            Some(fx.as_str()),
+            "voice {n} status line"
+        );
+        assert_eq!(
+            model.text(&format!("ch{n}_fx2")),
+            Some(fx2.as_str()),
+            "voice {n} comment line"
+        );
+    }
+}
+
+/// The blurb FOLLOWS the source pill and the on-toggle — it describes the current
+/// combination, not a static label.
+#[test]
+fn the_card_description_follows_source_and_enable() {
+    let mut bench = Sablework::shipped();
+    fire(&mut bench, "ch1_on", true); // ensure the voice sounds
+    let before = bench.model().text("ch1_fx").unwrap().to_string();
+    fire(&mut bench, "ch1_source", true); // step the source pill
+    let after = bench.model().text("ch1_fx").unwrap().to_string();
+    assert_ne!(before, after, "the blurb tracks the source pill");
+    assert!(after.starts_with("$sw_fx_"), "still a localised fx token: {after}");
+    fire(&mut bench, "ch1_on", false);
+    assert_eq!(
+        bench.model().text("ch1_fx"),
+        Some("$sw_fx_off"),
+        "a silenced voice describes itself as off"
+    );
+}
+
+/// The six cards FIT the rack at the reference resolution — none overflows the panel,
+/// and each resolves to its authored card height (not collapsed).
+#[test]
+fn the_six_channel_cards_fit_the_rack() {
+    let bench = Sablework::shipped();
+    let tree = tree_of(&bench);
+    let styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
+    let rack = frame.rect("sw_rack").expect("the rack resolves");
+    let last = frame.rect("sw_voice_6").expect("the sixth card resolves");
+    assert!(
+        last.pos.y + last.size.y <= rack.pos.y + rack.size.y + 0.5,
+        "card 6 (bottom {}) overflows the rack (bottom {})",
+        last.pos.y + last.size.y,
+        rack.pos.y + rack.size.y
+    );
+    for n in 1..=6 {
+        let c = frame
+            .rect(&format!("sw_voice_{n}"))
+            .expect("card resolves");
+        assert!(c.size.y >= 100.0, "card {n} height {} collapsed", c.size.y);
+    }
+}
+
+/// The card's contents FLOW inside the tile — the description wraps to the card width
+/// (never bleeding into the neighbour) and the four sliders stack vertically, each a real
+/// height. Pins the two flow bugs caught in-window: a `grow` text in a row overran its
+/// box, and sliders in an overlay `stack` piled on top of each other. The fix was using
+/// the components correctly — a direct-child wrap text (stretched to width) and a
+/// vertical-flow `cell` for the slider column.
+#[test]
+fn the_card_contents_flow_inside_the_tile() {
+    let bench = Sablework::shipped();
+    let tree = tree_of(&bench);
+    let styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let frame = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new());
+    let card = frame.rect("sw_voice_1").expect("card resolves");
+
+    // The description got a real, card-bounded width (so wrap has something to wrap to) and
+    // does NOT spill past the card's right edge into the neighbouring tile.
+    let desc = frame.rect("ch1_desc").expect("description resolves");
+    assert!(desc.size.x > 100.0, "description width {} collapsed", desc.size.x);
+    assert!(
+        desc.pos.x + desc.size.x <= card.pos.x + card.size.x + 0.5,
+        "description (right {}) overflows the card (right {})",
+        desc.pos.x + desc.size.x,
+        card.pos.x + card.size.x
+    );
+
+    // The four sliders stack vertically, each a real height, in order, inside the card.
+    let mut prev_y = card.pos.y;
+    for id in ["ch1_scale", "ch1_octaves", "ch1_warp", "ch1_amount"] {
+        let s = frame.rect(id).unwrap_or_else(|| panic!("{id} resolves"));
+        assert!(s.size.y >= 12.0, "{id} height {} collapsed", s.size.y);
+        assert!(s.pos.y >= prev_y - 0.5, "{id} is not below the previous control");
+        assert!(
+            s.pos.y + s.size.y <= card.pos.y + card.size.y + 0.5,
+            "{id} overflows the card bottom"
+        );
+        prev_y = s.pos.y;
+    }
+}
+
+// ── the emissive palette (C) ──────────────────────────────────────────────────
+
+/// The shipped curated plastic set loads (ruled 2026-08-19): 8 entries, unique
+/// ids, every component in range — and BLACK IS NOT A MEMBER (absence of light,
+/// excluded by the same ruling). Pins the shipped file so the invariant can't
+/// erode to an empty strip — or regrow a black swatch — unnoticed.
+#[test]
+fn the_glow_palette_loads_the_shipped_set() {
+    let bench = Sablework::shipped();
+    let pal = &bench.palette;
+    assert_eq!(pal.len(), 8, "the curated 8-colour emissive palette loads");
+    let mut ids: Vec<&str> = pal.iter().map(|c| c.id.as_str()).collect();
+    let n = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), n, "swatch ids are unique");
+    for c in pal.iter() {
+        assert!(
+            c.rgb.iter().all(|&x| (0.0..=1.0).contains(&x)),
+            "{}: rgb {:?} out of range",
+            c.id,
+            c.rgb
+        );
+        assert_ne!(c.rgb, [0.0, 0.0, 0.0], "{}: black is excluded from emissive", c.id);
+    }
+}
+
+/// `nearest` is exact on a member and picks the closest off-palette colour.
+#[test]
+fn glow_nearest_picks_the_closest_entry() {
+    let bench = Sablework::shipped();
+    let pal = &bench.palette;
+    let orange = pal.iter().position(|c| c.id == "orange").expect("orange");
+    assert_eq!(pal.nearest(pal.get(orange).unwrap().rgb), Some(orange), "exact member");
+    assert_eq!(pal.nearest([0.95, 0.60, 0.10]), Some(orange), "near-orange snaps to orange");
+}
+
+/// A swatch pick writes the EXACT palette colour into the glow and IS an image edit;
+/// re-picking the same colour is a no-op (no re-bake) — the dispatcher's contract.
+#[test]
+fn a_glow_pick_writes_the_exact_colour_and_re_bakes_once() {
+    let mut bench = Sablework::shipped();
+    let want = bench.palette.get(3).unwrap().rgb;
+    assert!(
+        fire(&mut bench, "glow_pick_3", true),
+        "a colour pick is an image edit"
+    );
+    assert_eq!(bench.recipe().out.emissive, want, "the exact palette colour is written");
+    assert!(
+        !fire(&mut bench, "glow_pick_3", true),
+        "re-picking the same colour must not re-bake"
+    );
+}
+
+/// Roll SNAPS the random glow onto the palette — emissive stays bounded.
+#[test]
+fn roll_snaps_the_glow_onto_the_palette() {
+    let mut bench = Sablework::shipped();
+    let set: Vec<[f32; 3]> = bench.palette.iter().map(|c| c.rgb).collect();
+    for _ in 0..8 {
+        fire(&mut bench, "roll", true);
+        assert!(
+            set.contains(&bench.recipe().out.emissive),
+            "a rolled glow {:?} is not a palette member",
+            bench.recipe().out.emissive
+        );
+    }
+}
+
+/// The model echoes the selected swatch (nearest match) and publishes each id.
+#[test]
+fn the_model_echoes_the_selected_swatch() {
+    let mut bench = Sablework::shipped();
+    fire(&mut bench, "glow_pick_5", true);
+    assert_eq!(bench.model().number("glow_sel"), Some(5.0), "the picked swatch echoes");
+    assert_eq!(bench.model().number("glow_count"), Some(8.0));
+    let want_id = bench.palette.get(5).unwrap().id.clone();
+    assert_eq!(
+        bench.model().text("glow_sw6_id"),
+        Some(want_id.as_str()),
+        "each swatch id is published for the wash"
+    );
+}
+
+/// FAIL-LOUD: every injected swatch style path resolves to a block. `style_bind` values
+/// escape the cross-scene style-path gate, so the crate must cover the channel (8634C200).
+#[test]
+fn every_swatch_style_path_resolves() {
+    let bench = Sablework::shipped();
+    let mut styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    crate::palette::inject_glow_styles(&mut styles, &bench.palette);
+    for c in bench.palette.iter() {
+        for suffix in ["", "_sel"] {
+            let path = format!("sablework.glowsw.{}{}", c.id, suffix);
+            let resolved = path.split('.').try_fold(&styles, |v, k| v.get(k));
+            assert!(
+                resolved.is_some_and(|v| v.is_object()),
+                "swatch style path {path} resolves to nothing"
+            );
+        }
+    }
+}
+
+/// Stepping patches loads each preset's glow VERBATIM — no snap on load, so a factory
+/// patch keeps its authored emissive until the user picks a swatch.
+#[test]
+fn stepping_patches_keeps_authored_glow_no_snap_on_load() {
+    let mut bench = Sablework::shipped();
+    for _ in 0..flicker_texture::presets::all().len() {
+        fire(&mut bench, "patch_next", true);
+        let id = bench.recipe().id.clone();
+        let authored = flicker_texture::presets::all()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap()
+            .out
+            .emissive;
+        assert_eq!(
+            bench.recipe().out.emissive,
+            authored,
+            "patch {id} keeps its authored glow (no snap on load)"
+        );
+    }
+}
+
+/// The pair script derives the selection wash: the picked swatch wears `_sel`, the rest
+/// their base block (mirrors the voice-row wash).
+#[test]
+fn the_selected_swatch_wears_the_wash() {
+    let mut bench = Sablework::shipped();
+    fire(&mut bench, "glow_pick_2", true);
+    let model = bench.model();
+    let id2 = bench.palette.get(2).unwrap().id.clone();
+    let id0 = bench.palette.get(0).unwrap().id.clone();
+    let sel = format!("sablework.glowsw.{id2}_sel");
+    let base = format!("sablework.glowsw.{id0}");
+    assert_eq!(model.text("glow_sw3_sty"), Some(sel.as_str()), "the picked swatch wears _sel");
+    assert_eq!(model.text("glow_sw1_sty"), Some(base.as_str()), "the rest wear the base");
+}
+
+/// The swatch strip is Rust-filled from the palette: one `button` per entry, each firing
+/// `glow_pick_<i>` in the sw_out ring.
+#[test]
+fn the_swatch_strip_is_filled_from_the_palette() {
+    let bench = Sablework::shipped();
+    let tree = tree_of(&bench);
+    let mut all = Vec::new();
+    flatten(&tree, &mut all);
+    let strip = all
+        .iter()
+        .find(|n| n.id == "sw_glow_swatches")
+        .expect("the swatch strip is authored");
+    assert_eq!(
+        strip.children.len(),
+        bench.palette.len(),
+        "one swatch per palette entry"
+    );
+    for (i, sw) in strip.children.iter().enumerate() {
+        assert_eq!(sw.component, "button");
+        assert_eq!(sw.id, format!("glow_pick_{i}"));
+        let want_action = format!("glow_pick_{i}");
+        assert_eq!(sw.action.as_deref(), Some(want_action.as_str()));
+        assert_eq!(sw.tab_group, "sw_out");
+        assert_eq!(sw.nav_ordinal, 11 + i as u32);
+    }
+}
+
+// ── the materials page (B2, v1: browse + bind) ────────────────────────────────
+
+/// The bench/materials page switch shows exactly one page and is a VIEW change (no
+/// re-bake). The pair script gates the two bodies off `sel_page`.
+#[test]
+fn the_page_switch_shows_exactly_one_page() {
+    let mut bench = Sablework::shipped();
+    let m = bench.model();
+    assert_eq!(m.get("page_bench_shown"), Some(&Value::Bool(true)), "opens on the bench");
+    assert_eq!(m.get("page_materials_shown"), Some(&Value::Bool(false)));
+
+    assert!(
+        !fire(&mut bench, "page_materials", true),
+        "switching pages is a view change, not an image edit"
+    );
+    let m = bench.model();
+    assert_eq!(m.get("page_bench_shown"), Some(&Value::Bool(false)));
+    assert_eq!(m.get("page_materials_shown"), Some(&Value::Bool(true)));
+    assert_eq!(bench.model().number("sel_page"), Some(1.0));
+
+    fire(&mut bench, "page_bench", true);
+    assert_eq!(bench.model().number("sel_page"), Some(0.0), "and back again");
+}
+
+/// The materials LIST is Rust-filled — one `button` row per defined material, in the
+/// materials-panel ring.
+#[test]
+fn the_materials_list_is_filled_from_the_index() {
+    let bench = Sablework::shipped();
+    let tree = tree_of(&bench);
+    let mut all = Vec::new();
+    flatten(&tree, &mut all);
+    let list = all
+        .iter()
+        .find(|n| n.id == "sw_mat_list")
+        .expect("the materials list is authored");
+    assert_eq!(list.children.len(), bench.materials.len(), "one row per material");
+    for (i, row) in list.children.iter().enumerate() {
+        assert_eq!(row.component, "button");
+        assert_eq!(row.id, format!("mat_pick_{i}"));
+        assert_eq!(row.tab_group, "sw_mat_panel");
+    }
+}
+
+/// A list row binds the recipe to THAT material by id — the same recipe field the header
+/// dropdown writes, and like it NOT an image edit.
+#[test]
+fn the_materials_list_binds_by_row() {
+    let mut bench = Sablework::shipped();
+    let count = bench.materials.len();
+    assert!(count > 0, "the material index loaded");
+    for i in 0..count {
+        let want = bench.materials[i].0;
+        assert!(
+            !fire(&mut bench, &format!("mat_pick_{i}"), true),
+            "binding a material is not an image edit"
+        );
+        assert_eq!(bench.recipe().material, Some(want), "row {i} binds its material");
+    }
+}
+
+/// The materials page draws no unresolved `$token` — the default frame gate never shows
+/// this page, so it is walked here with the page switched on.
+#[test]
+fn the_materials_page_tokens_resolve() {
+    load_strings();
+    let mut bench = Sablework::shipped();
+    fire(&mut bench, "page_materials", true);
+    let tree = tree_of(&bench);
+    let styles = flicker::ui::load_shared_styles(bench.scene_styles_json.as_ref());
+    let snap = UiInput {
+        mouse: Vec2::new(-1.0, -1.0),
+        clicked: false,
+        down: false,
+        screen: Vec2::new(1920.0, 1080.0),
+        typed: String::new(),
+        backspace: false,
+        wheel: 0.0,
+    };
+    let cmds = run_ui(&tree, &bench.model(), &styles, &snap, &mut UiState::new()).commands;
+    let unresolved: Vec<String> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            HudCommand::Text { text, .. } if text.starts_with('$') => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(unresolved.is_empty(), "materials page tokens: {unresolved:?}");
 }
