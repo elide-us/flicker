@@ -296,6 +296,9 @@
                       { "component": "text", "text": "$ap_fbx_glb_static", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
                       { "component": "button", "id": "import_animation", "action": "import_animation", "label": "$ap_animation", "style": "assetpipeline.card", "size": 44, "size_class": "lg", "tab_group": "ap_insp", "nav_ordinal": 4 },
                       { "component": "text", "text": "$ap_fbx_bvh_clip", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "size": 14 },
+                      { "component": "cell", "size": 6 },
+                      { "component": "checkbox", "id": "prefer_staged", "bind": "prefer_staged", "label": "$ap_prefer_staged", "box": 14, "size": 22, "style": "assetpipeline.checkbox", "tab_group": "ap_insp", "nav_ordinal": 5 },
+                      { "component": "text", "text": "$ap_prefer_staged_hint", "text_size": 10, "font": "label", "color": "assetpipeline.col.faint", "wrap": true, "size": 26 },
                       { "component": "text", "text": "$ap_select_a_workflow_to_begin", "text_size": 11, "font": "label", "color": "assetpipeline.col.faint", "size": 16 }
                     ]
                   },

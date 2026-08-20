@@ -68,6 +68,7 @@
         "width": 680,
         "size": 28,
         "gap": 0,
+        "align": "center",
         "children": [
           { "component": "button", "id": "ctt_tab_world", "action": "ctx_world", "label": "$ctt_ctx_world", "style_bind": "ctx_world_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 1 },
           { "component": "button", "id": "ctt_tab_menu", "action": "ctx_menu", "label": "$ctt_ctx_menu", "style_bind": "ctx_menu_style", "grow": 1.0, "size_class": "sm", "tab_group": "ctt_tabs", "nav_ordinal": 2 },

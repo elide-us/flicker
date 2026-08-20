@@ -182,6 +182,7 @@
             "style": "loomforge.tab_bar",
             "size": 40,
             "pad": 6,
+            "align": "center",
             "gap": 4,
             "children": [
               { "component": "button", "id": "tab_sm", "action": "tab_sm", "label": "$lf_tab_sm", "style_bind": "tab_sm_sty", "size": 170, "size_class": "sm", "tab_group": "lf_tabs", "nav_ordinal": 1 },

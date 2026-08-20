@@ -638,6 +638,18 @@
   "ap_scale_z": {
     "en-us": "Scale Z"
   },
+  "ap_prefer_staged": {
+    "en-us": "Load staged version first"
+  },
+  "ap_prefer_staged_hint": {
+    "en-us": "Re-open this asset's staged rig — or its promoted one if staging is empty — so you adjust the last committed fit instead of starting over from the source."
+  },
+  "ap_reopened_from_staging": {
+    "en-us": "RE-OPENED — staged rig, joints as last committed."
+  },
+  "ap_reopened_from_package": {
+    "en-us": "RE-OPENED — promoted rig, joints as last committed."
+  },
   "ap_select_a_workflow_to_begin": {
     "en-us": "SELECT A WORKFLOW TO BEGIN"
   },

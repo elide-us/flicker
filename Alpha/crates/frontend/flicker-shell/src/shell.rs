@@ -226,7 +226,7 @@ thread_local! {
     /// the menu polls per frame. `thread_local` beside [`SCENES`] for the same
     /// reason — the whole shell lives on the winit thread.
     static APP_VERSION: RefCell<&'static str> = const { RefCell::new("") };
-    static UPDATE: RefCell<UpdateCheck> = RefCell::new(UpdateCheck::Off);
+    static UPDATE: RefCell<UpdateCheck> = const { RefCell::new(UpdateCheck::Off) };
 }
 
 /// Where prism-alpha's releases live — the only repository the shell checks

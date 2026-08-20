@@ -518,6 +518,42 @@ mod tests {
             );
         }
 
+        // THE ANIMATED-POSE GUARD (2026-08-20 — the gap the bind guard above missed):
+        // a rig NOT conformed to GolemBaseSkeleton STANDS at its bind (so the check
+        // above passes) but LIES ON ITS SIDE the moment a clip plays, because the retarget
+        // rebases translation only — the bind's bone frames then fight the shared clips'
+        // absolute rotations (GolemBase_Low shipped this way: pelvis frame 90° off,
+        // extents X≈2.0 Y≈0.65). So the Idle pose the pack opens on must ALSO be tallest
+        // along Y — sampled exactly as `render()` does, world transform included.
+        {
+            let model = stage.model.as_ref().unwrap();
+            let machine = stage.machine.as_ref().unwrap();
+            assert_eq!(machine.current_state_name(), "Idle", "the pack opens on Idle");
+            let locals = pose::sample_local_poses(
+                &model.bones,
+                &model.clips[machine.current_clip()],
+                machine.current_tick(),
+                model.retarget,
+            );
+            let globals = pose::global_transforms(&model.bones, &locals);
+            let palette = skin::palette(&model.bones, &globals);
+            let posed = skin::skin(&model.mesh, &palette);
+            let mut min = Vec3::splat(f32::MAX);
+            let mut max = Vec3::splat(f32::MIN);
+            for v in &posed {
+                let p = model.world.transform_point3(Vec3::from(v.position));
+                min = min.min(p);
+                max = max.max(p);
+            }
+            let d = max - min;
+            assert!(
+                d.y > d.x && d.y > d.z,
+                "the ANIMATED Idle body must stand along +Y — a rig not conformed to \
+                 GolemBaseSkeleton animates on its side (bind frames fight the shared \
+                 clips); got extents {d:?}"
+            );
+        }
+
         let m = stage.machine.as_mut().unwrap();
         assert_eq!(m.current_state_name(), "Idle", "the pack opens on Idle");
 

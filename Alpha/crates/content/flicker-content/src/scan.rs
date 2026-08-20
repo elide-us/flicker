@@ -364,6 +364,11 @@ pub enum PackageClass {
     Font,
     /// A README / licence riding along in the tree.
     Doc,
+    /// The package's own promotion ledger (`package/manifest.json`) — the record of
+    /// promotion intent the Quartermaster writes ([`crate::manifest`]). First lands in a
+    /// live tree with the first real promotion (2026-08-20), so the every-file-classifies
+    /// gate must know it.
+    Manifest,
     /// A directory.
     Folder,
     /// Present, readable, and none of the above — reported honestly rather than
@@ -386,6 +391,7 @@ impl PackageClass {
             Self::TextureRecipe => "texture_recipe",
             Self::Font => "font",
             Self::Doc => "doc",
+            Self::Manifest => "manifest",
             Self::Folder => "folder",
             Self::Unknown => "unknown",
         }
@@ -450,6 +456,10 @@ pub fn classify_package(path: &Path) -> PackageClass {
     }
     if logical.ends_with(".md") || logical.ends_with(".txt") {
         return PackageClass::Doc;
+    }
+    // The promotion ledger (`package/manifest.json`, gz-at-rest in a live tree).
+    if logical.ends_with("/manifest.json") || logical == "manifest.json" {
+        return PackageClass::Manifest;
     }
     if logical.ends_with(".flight") {
         return PackageClass::Flight;

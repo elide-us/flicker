@@ -3,6 +3,17 @@
   "behaviour": "godmode",
   "params": {},
   "styles": {
+    "window": {
+      "_comment": "This bench's root slab (`gm_root`) — scene-owned like every migrated bench's (a shared file would fork the look; duplication is the pattern). Only draw-read keys: no dead w/h.",
+      "radius": 4,
+      "fill_top": "$stone3",
+      "fill_bot": "$stone1",
+      "border": "$edge2",
+      "shadow": "$shadow",
+      "shadow_dy": 18,
+      "shadow_feather": 46,
+      "shadow_grow": 4
+    },
     "chemistry": {
       "title": {
         "color": "$bronze"
@@ -494,6 +505,7 @@
                 "component": "row",
                 "size": 34,
                 "gap": 8,
+                "align": "center",
                 "children": [
                   { "component": "button", "id": "gm_gate_resume", "action": "gate_resume", "label": "$chem_gate_resume", "size_class": "lg", "variant": "primary", "grow": 1.0, "tab_group": "gm_gate_card", "nav_ordinal": 1 },
                   { "component": "button", "id": "gm_gate_view", "action": "gate_view", "label_bind": "gate_view_label", "visible_bind": "gate_view_shown", "size_class": "lg", "variant": "secondary", "grow": 1.0, "tab_group": "gm_gate_card", "nav_ordinal": 2 },
@@ -591,6 +603,7 @@
                 "component": "row",
                 "size": 26,
                 "gap": 4,
+                "align": "center",
                 "children": [
                   { "component": "button", "id": "gm_preset_mercury", "action": "preset_mercury", "label": "$chem_preset_mercury", "style": "chemistry.button", "grow": 1.0, "size_class": "sm", "tab_group": "gm_starter", "nav_ordinal": 14 },
                   { "component": "button", "id": "gm_preset_venus", "action": "preset_venus", "label": "$chem_preset_venus", "style": "chemistry.button", "grow": 1.0, "size_class": "sm", "tab_group": "gm_starter", "nav_ordinal": 15 },
@@ -603,6 +616,7 @@
                 "component": "row",
                 "size": 34,
                 "gap": 8,
+                "align": "center",
                 "children": [
                   { "component": "button", "id": "gm_forge", "action": "forge", "label": "$chem_forge", "size_class": "lg", "variant": "primary", "grow": 1.0, "tab_group": "gm_starter", "nav_ordinal": 19 },
                   { "component": "button", "id": "gm_starter_close", "action": "starter_close", "label": "$chem_gate_close", "size_class": "lg", "variant": "ghost", "grow": 1.0, "tab_group": "gm_starter", "nav_ordinal": 20 }

@@ -16,6 +16,7 @@ dist/
 .DS_Store
 
 /Alpha/content/source
+/Alpha/content/staging
 
 # Tier-3 player config — runtime-written, per-user, never committed
 settings.json

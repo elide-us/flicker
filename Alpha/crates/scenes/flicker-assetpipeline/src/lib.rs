@@ -1051,6 +1051,11 @@ struct Source {
     prop: PropKind,
     /// What Conform produced — `None` until the stage runs.
     rig: Option<Rig>,
+    /// Where a re-opened rig came from ("staging" / "package"), `None` on the vendor-FBX
+    /// path — the inspector surfaces it so a staged reload is never silent about its source
+    /// (Aaron 2026-08-20: the promoted fit lives in PACKAGE after Quartermaster's move-only
+    /// promote empties staging, and a silent fallthrough read as lost work).
+    reopened: Option<&'static str>,
     /// Authored attach points (always the six; `parent` resolves against the conformed rig).
     attach: Vec<AttachPoint>,
     /// Selected attach point.
@@ -1239,6 +1244,11 @@ pub struct AssetPipeline {
     /// decides the bake path (`Clothing` → `write_garment`; anything else → `write_prop`). Set by
     /// the Accessory/Prop cards; `None` (→ `PropKind::Accessory` default) for Character/Animation.
     pending_prop: Option<PropKind>,
+    /// Task-page toggle (Aaron 2026-08-20): before parsing the chosen folder's FBX, look for
+    /// this asset's already-STAGED rig (`staging/characters/<name>/<name>.json`) and re-open
+    /// THAT instead — the re-process loop, so an already-fitted body can be adjusted further
+    /// and re-committed without redoing the joint work from the vendor source.
+    prefer_staged: bool,
     source: Option<Source>,
     grid: Option<QuadGrid>,
     /// The framed holder rect the HUD reserves for the 2×2 (the `editor_quad` `stage` node). The
@@ -1728,6 +1738,7 @@ impl AssetPipeline {
             wf,
             pending_class: None,
             pending_prop: None,
+            prefer_staged: false,
             source: None,
             grid: None,
             quad_rect: None,
@@ -1866,6 +1877,7 @@ impl AssetPipeline {
                     // static) exactly like the class — not guessed. `None` keeps the historical default.
                     prop: self.pending_prop.unwrap_or(PropKind::Accessory),
                     rig: None,
+                    reopened: None,
                     attach: Self::new_attach(),
                     attach_sel: 0,
                     fit: PropFit::default(),
@@ -1886,6 +1898,13 @@ impl AssetPipeline {
                 self.dispatch_workflow(self.pending_class);
                 self.wf_advance();
                 if ok {
+                    // The Task page's staged-reload preference: adopt the asset's already-staged
+                    // rig when one exists, and `analyze`/`conform` below become no-ops (both
+                    // early-return once their outputs are present). Absence falls through to the
+                    // vendor-FBX path unchanged.
+                    if self.prefer_staged {
+                        self.adopt_staged();
+                    }
                     self.analyze();
                     // conform() is idempotent and early-returns for Prop/Animation, so a model gets
                     // its rig here and a prop/animation simply lands on its own Conform role page
@@ -1895,6 +1914,83 @@ impl AssetPipeline {
             }
             Err(e) => tracing::error!("scan failed: {e}"),
         }
+    }
+
+    /// Re-open the asset's already-PROCESSED rig instead of the vendor FBX — the Task page's
+    /// "prefer staged" toggle (Aaron 2026-08-20: the re-process loop, so an already-fitted
+    /// body is adjusted further instead of redoing the joint work from the source). Character
+    /// path only. Searches STAGING first (in-progress work wins), then PACKAGE — because the
+    /// Quartermaster's promote is MOVE-only, a promoted fit's ONE copy lives in package and
+    /// staging is empty, and a staging-only search silently fell through to a fresh un-fitted
+    /// conform (Aaron hit exactly this). The processed file is the bake's own output, so it
+    /// loads ALREADY-CONFORMED: `rig` is pre-filled (every bone-map row Ok, zero authored
+    /// offsets), which makes the `conform()` that `open` runs next a no-op — re-running the
+    /// derive passes would move the human's fitted joints. Nothing processed anywhere is
+    /// normal (a first import) and falls through to the FBX path.
+    fn adopt_staged(&mut self) {
+        let package_characters = flicker_content::roots().package().join("characters");
+        for (root, origin) in [(characters_dir(), "staging"), (package_characters, "package")] {
+            if self.adopt_staged_from(&root, origin) {
+                return;
+            }
+        }
+    }
+
+    /// [`adopt_staged`] against one explicit root — so the reload path is exercisable against
+    /// a scratch directory instead of the live trees, like `commit_to`. Returns whether the
+    /// rig was adopted; `origin` is surfaced as the inspector's provenance line.
+    fn adopt_staged_from(&mut self, root: &Path, origin: &'static str) -> bool {
+        if matches!(
+            self.pending_class,
+            Some(AssetClass::Prop | AssetClass::Animation)
+        ) {
+            return false;
+        }
+        let Some(src) = self.source.as_mut() else {
+            return false;
+        };
+        let name = src.asset_name().to_string();
+        let path = root.join(&name).join(format!("{name}.json"));
+        let mut model = match flicker_content::load_rig_raw(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::info!("no {origin} rig to re-open for {name}: {e:#}");
+                return false;
+            }
+        };
+        if model.bones.is_empty() {
+            tracing::warn!("{origin} {name} carries no skeleton — falling through");
+            return false;
+        }
+        // Chain repair on the way in: a rig staged BEFORE the splice fix carries the broken
+        // chain in its bake (the golem's head hung off `neck_01`, dangling `neck_02`). The
+        // splice preserves every fitted joint's world frame — only the composition is fixed —
+        // so reloading is also how an existing fit is healed without redoing it.
+        match flicker_content::splice_canonical_chain(&mut model, &default_reference()) {
+            Ok(spliced) if !spliced.is_empty() => {
+                tracing::info!("staged {name}: spliced {spliced:?} onto the canonical chain");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("staged {name}: chain check skipped: {e:#}"),
+        }
+        let n = model.bones.len();
+        let parsed = Parsed::new(model);
+        src.report = Some(classify_asset(&src.scan, Some(parsed.bones())));
+        src.parsed = Some(parsed);
+        src.rig = Some(Rig {
+            rename: RenameReport::default(),
+            out: ConformOutput::default(),
+            map: vec![MapState::Ok; n],
+            offsets: vec![BoneOffset::default(); n],
+            sel: 0,
+            focused: false,
+            window: 0,
+        });
+        src.reopened = Some(origin);
+        src.resolve_attach();
+        src.error = None;
+        tracing::info!("re-opened {origin} rig {name}: {n} bones");
+        true
     }
 
     /// ANALYZE — parse the chosen FBX and measure it. Synchronous today, so a large
@@ -2931,6 +3027,8 @@ impl AssetPipeline {
         m.set("show_base", self.show_base);
         m.set("show_collision", self.show_collision);
         m.set("mirror", self.mirror_joints);
+        // The Task page's staged-reload preference — checkbox state, mirrored like the toggles.
+        m.set("prefer_staged", self.prefer_staged);
         // The Clip page's variant pick — checkbox state, mirrored like the toggles above.
         m.set("variant_rm", self.variant_rm);
         m.set("variant_ip", self.variant_ip);
@@ -3449,6 +3547,15 @@ impl AssetPipeline {
             "conform" => match src.rig.as_ref() {
                 None => out.push(r("$ap_conform_runs_when_this_stage_is_reached")),
                 Some(rig) => {
+                    // A re-opened rig says so FIRST — the joints on screen are the last
+                    // committed fit, not a fresh conform, and that must never be ambiguous.
+                    if let Some(origin) = src.reopened {
+                        out.push(match origin {
+                            "package" => r("$ap_reopened_from_package"),
+                            _ => r("$ap_reopened_from_staging"),
+                        });
+                        out.push(String::new());
+                    }
                     // `{:<10}` / `{:<15}` reproduce the original aligned columns around
                     // the resolved words (en-us widths; other locales just realign).
                     out.push(format!("{:<10}{}", r("$ap_renamed"), rig.rename.renamed));
@@ -4391,6 +4498,11 @@ impl Scene for AssetPipeline {
         if self.wf.step() == "conform" {
             self.mirror_joints = results.is_on("mirror");
         }
+        // The staged-reload preference — read only on Task, where its checkbox lives (same
+        // page-gating rule as `mirror`: off the stage `is_on` reads false and would clear it).
+        if self.wf.step() == "task" {
+            self.prefer_staged = results.is_on("prefer_staged");
+        }
         // The variant pick — read only on the Clip page, where its checkboxes live
         // (off the stage `is_on` reads false and would clear the choice).
         if self.wf.step() == "conform" && self.conform_role() == ConformRole::Clip {
@@ -5307,6 +5419,172 @@ mod tests {
                 .any(|l| l.to_ascii_lowercase().contains("paperdoll")),
             "and says the socket/fit are authored in the paperdoll: {lines:?}"
         );
+    }
+
+    /// THE STAGED-RELOAD PATH (Aaron 2026-08-20): with a staged rig present under the asset's
+    /// name, `adopt_staged_from` replaces the parse+conform with the staged model loaded
+    /// ALREADY-CONFORMED — every bone-map row Ok, zero offsets, no rename — so the wizard
+    /// lands on the rig view holding exactly what was last committed, ready to adjust
+    /// further. Exercised against a scratch root, like the commit path.
+    #[test]
+    fn adopt_staged_reopens_the_committed_rig() {
+        let Some(mut ed) = at_conform() else {
+            eprintln!("skipping: no content tree");
+            return;
+        };
+        // Stage a small baked rig under this asset's name in a scratch root.
+        let name = ed.source.as_ref().unwrap().asset_name().to_string();
+        let scratch = std::env::temp_dir().join("flicker_assetpipeline_adopt_staged");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let staged = {
+            let parsed = ed.source.as_ref().unwrap().parsed.as_ref().unwrap();
+            flicker_content::bake_rig(&parsed.model, &name)
+        };
+        let dir = scratch.join(&name);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        std::fs::write(
+            dir.join(format!("{name}.json")),
+            serde_json::to_string(&staged).expect("staged rig serializes"),
+        )
+        .expect("staged rig writes");
+        let staged_bones = staged.skeleton.bones.len();
+
+        // Wipe the conform result and adopt: the rig must come back pre-filled from the file.
+        {
+            let s = ed.source.as_mut().unwrap();
+            s.parsed = None;
+            s.rig = None;
+        }
+        assert!(ed.adopt_staged_from(&scratch, "staging"), "the staged rig adopts");
+        let src = ed.source.as_ref().unwrap();
+        assert_eq!(
+            src.reopened,
+            Some("staging"),
+            "provenance names where the rig came from"
+        );
+        let parsed = src.parsed.as_ref().expect("the staged model is parsed-in");
+        assert_eq!(
+            parsed.bones() + 1,
+            staged_bones,
+            "the synthesized root strips back off on the way in"
+        );
+        let rig = src.rig.as_ref().expect("the staged model loads already-conformed");
+        assert!(
+            rig.map.iter().all(|s| *s == MapState::Ok),
+            "every staged bone carries Ok provenance"
+        );
+        assert_eq!(rig.rename.renamed, 0, "a staged rig is already canonical");
+        assert_eq!(
+            rig.offsets.len(),
+            parsed.bones(),
+            "offset rows parallel the staged skeleton"
+        );
+        assert!(
+            rig.out.reorient.limbs_aligned == 0,
+            "no conform pass ran over the human's fitted joints"
+        );
+
+        // A MISSING staged rig falls through: state stays untouched, ready for the next root
+        // in the staging→package search order (the promote-emptied-staging case Aaron hit —
+        // the ONE copy of a promoted fit lives in package).
+        {
+            let s = ed.source.as_mut().unwrap();
+            s.parsed = None;
+            s.rig = None;
+            s.reopened = None;
+        }
+        let empty = std::env::temp_dir().join("flicker_assetpipeline_adopt_staged_empty");
+        let _ = std::fs::remove_dir_all(&empty);
+        assert!(
+            !ed.adopt_staged_from(&empty, "staging"),
+            "an empty root adopts nothing"
+        );
+        {
+            let src = ed.source.as_ref().unwrap();
+            assert!(
+                src.parsed.is_none() && src.rig.is_none() && src.reopened.is_none(),
+                "no staged rig → the FBX path stays in charge"
+            );
+        }
+        // …and the same scratch rig offered as the PACKAGE root adopts with its provenance.
+        assert!(
+            ed.adopt_staged_from(&scratch, "package"),
+            "the promoted copy adopts when staging is empty"
+        );
+        assert_eq!(ed.source.as_ref().unwrap().reopened, Some("package"));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// THE FIT-RETENTION PROOF (Aaron 2026-08-20: "It is unclear if the repositioned skeleton
+    /// layout is retained. Check that." — skips without the promoted golem): re-opening the
+    /// PROMOTED rig keeps every fitted joint's WORLD position exactly — through the load, the
+    /// chain splice, and a re-bake — and the fitted signature (the hand-tuned depths, NOT the
+    /// canonical reference positions) is what comes back.
+    #[test]
+    fn adopting_the_promoted_golem_retains_the_fitted_joints() {
+        let path = flicker_content::roots()
+            .package()
+            .join("characters/GolemBase_Low/GolemBase_Low.json");
+        if !flicker_content::package::file_exists(&path) {
+            eprintln!("skipping: no promoted golem");
+            return;
+        }
+        let mut m = flicker_content::load_rig_raw(&path).expect("promoted golem loads");
+        let world = |m: &flicker_content::RawModel| -> std::collections::HashMap<String, Vec3> {
+            let (globals, _) = rest_globals(m, &[]);
+            m.bones
+                .iter()
+                .zip(&globals)
+                .map(|(b, g)| (b.name.clone(), g.w_axis.truncate()))
+                .collect()
+        };
+        let before = world(&m);
+        // The fitted signature, not canon: the head was hand-placed ~4 cm behind the canonical
+        // plane and the hands drawn far inboard of the canonical 63.9 — if a conform pass had
+        // run over the reload, these would snap back toward canon.
+        let head = before["head"];
+        assert!(
+            head.y > 2.0,
+            "the promoted rig carries the FITTED head depth, got {head}"
+        );
+        assert!(
+            before["hand_l"].x < 50.0,
+            "the promoted rig carries the FITTED hand, got {}",
+            before["hand_l"]
+        );
+        // The chain heal moves NO joint: world frames are preserved by construction.
+        let spliced =
+            flicker_content::splice_canonical_chain(&mut m, &flicker_content::default_reference())
+                .expect("splice runs");
+        let after = world(&m);
+        for (name, p) in &before {
+            let q = after[name];
+            assert!(
+                (q - *p).length() < 1e-2,
+                "splice moved {name}: {p} → {q} (spliced={spliced:?})"
+            );
+        }
+        // …and a re-commit round trip returns the same skeleton, byte-shaped.
+        let baked = flicker_content::bake_rig(&m, "GolemBase_Low");
+        let m2 = {
+            // rig_to_raw is crate-private to flicker-content; round-trip through serde instead.
+            let text = serde_json::to_string(&baked).expect("bake serializes");
+            let tmp = std::env::temp_dir().join("flicker_assetpipeline_fit_retention");
+            let _ = std::fs::remove_dir_all(&tmp);
+            std::fs::create_dir_all(tmp.join("X")).expect("tmp");
+            std::fs::write(tmp.join("X/X.json"), text).expect("write");
+            let m2 = flicker_content::load_rig_raw(&tmp.join("X/X.json")).expect("reload");
+            let _ = std::fs::remove_dir_all(&tmp);
+            m2
+        };
+        let rebaked = world(&m2);
+        for (name, p) in &after {
+            let q = rebaked[name];
+            assert!(
+                (q - *p).length() < 1e-2,
+                "re-bake moved {name}: {p} → {q}"
+            );
+        }
     }
 
     /// Commit ROUTES by class: a Prop writes a STATIC-prop rig (empty skeleton, retarget:false),

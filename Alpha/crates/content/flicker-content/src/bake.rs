@@ -18,7 +18,7 @@ use flicker_skeletal::format::{
     Attach, BoneRaw, Material, Mesh, RigFile, Skeleton, Source, Submesh, Vertex,
 };
 
-use crate::fbx::RawModel;
+use crate::fbx::{RawBone, RawModel, RawVertex};
 
 const IDENTITY16: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -123,11 +123,31 @@ pub fn bake_rig(model: &RawModel, source_name: &str) -> RigFile {
 ///     (`flicker-paperdoll::write_inline_attach`), which is why `export_prop` also omits them.
 ///
 /// Byte-shape parity with the Python `io_scene_flicker_rig.py::export_prop`.
-/// Recompute the mesh's skin WEIGHTS from the current skeleton — the in-app replacement for a
-/// source rig's (often poor) auto-skinning. Each vertex is bound to its nearest bone SEGMENTS
-/// (joint→first-child) by inverse-square distance, top-4, normalised. Run AFTER the bones are
-/// repositioned inside the mesh: the rest pose and `inverse_bind` are untouched, so this changes only
-/// how the mesh DEFORMS when posed, never where it sits at rest.
+/// Recompute the mesh's skin WEIGHTS from the current skeleton — DISCARDING the source rig's
+/// vendor auto-skin. This is the system's whole point (Aaron 2026-08-20): a vendor (Meshy)
+/// weights the mesh against ITS OWN skeleton, which rides the FRONT of the body — so once the
+/// joints are re-placed on the body's true spinal axis, the vendor weights are wrong by
+/// construction (the 2026-08-20 golem audit measured that bleed: forearms owning belly flesh,
+/// clavicles owning a third of the neck). Each vertex binds to its nearest bone SEGMENTS by
+/// inverse-square distance, top-4, pruned and normalised.
+///
+/// Segment defaults, hardened by that audit:
+///   * a bone's tail is the MEAN of its children's heads, not its FIRST child — first-child
+///     tails ran `pelvis→thigh_l` and `spine_03→clavicle_l` (both sideways-LEFT in canonical
+///     order), skewing the whole torso's weighting toward one side; the mean puts a
+///     multi-child bone's segment back on the chain (pelvis→up-the-spine, hand→out-the-palm);
+///   * non-deform bones never own flesh: `root` (whose segment spans the entire lower core)
+///     and the `Weapon_L`/`Weapon_R` mount sockets are excluded from candidacy;
+///   * a bone must sit INSIDE the flesh it owns: a candidate whose nearest point lies outward
+///     of the vertex along its normal is air, not anatomy — the A-posed forearms hang in
+///     FRONT of the belly, and by raw distance they claimed a third of it (measured on the
+///     golem); the normal test rejects them while keeping every bone genuinely under the skin
+///     (a vert with no inside candidate falls back to plain distance, so nothing is orphaned);
+///   * influences below 2% after normalisation are pruned and the rest renormalised, so a
+///     distant bone never keeps a token grip on flesh it has no business moving.
+///
+/// Run AFTER the bones are repositioned inside the mesh: the rest pose and `inverse_bind` are
+/// untouched, so this changes only how the mesh DEFORMS when posed, never where it sits at rest.
 pub fn bake_skin(model: &mut RawModel) {
     let n = model.bones.len();
     if n == 0 || model.vertices.is_empty() {
@@ -135,23 +155,70 @@ pub fn bake_skin(model: &mut RawModel) {
     }
     let globals = rest_world_frames(model);
     let heads: Vec<Vec3> = globals.iter().map(|g| g.w_axis.truncate()).collect();
-    // A bone's body = the segment from its joint to its FIRST child's joint; a leaf is a point.
+    // A bone's body = the segment from its joint to the MEAN of its children's joints; a leaf
+    // is a point. The mean keeps a multi-child bone's segment on the chain (see above).
+    let mut child_sum = vec![Vec3::ZERO; n];
+    let mut child_count = vec![0u32; n];
+    for (i, b) in model.bones.iter().enumerate() {
+        if let Ok(p) = usize::try_from(b.parent) {
+            if p < n {
+                child_sum[p] += heads[i];
+                child_count[p] += 1;
+            }
+        }
+    }
     let tails: Vec<Vec3> = (0..n)
         .map(|i| {
-            model
-                .bones
-                .iter()
-                .position(|b| b.parent == i as i32)
-                .map(|c| heads[c])
-                .unwrap_or(heads[i])
+            if child_count[i] > 0 {
+                child_sum[i] / child_count[i] as f32
+            } else {
+                heads[i]
+            }
         })
         .collect();
+    // Flesh candidates only: the bake-synthetic `root` and the weapon mount sockets are
+    // attachment frames, not deformers.
+    let deform: Vec<bool> = model
+        .bones
+        .iter()
+        .map(|b| !matches!(b.name.as_str(), "root" | "Weapon_L" | "Weapon_R"))
+        .collect();
+    /// An influence this weak after normalisation is noise — prune it and renormalise.
+    const MIN_INFLUENCE: f32 = 0.02;
+    /// How far outward (cosine vs the vertex normal) a bone's nearest point may sit before it
+    /// counts as OUTSIDE the flesh. 0 would reject bones lying tangentially along the surface
+    /// (a clavicle beside the neck); 1 would reject nothing. 0.25 keeps under-the-skin and
+    /// alongside-the-skin bones while cutting the in-the-air limb in front of the torso.
+    const OUTSIDE_COS: f32 = 0.25;
     for v in &mut model.vertices {
         let p = Vec3::from_array(v.p);
-        let mut scored: Vec<(usize, f32)> = (0..n)
-            .map(|i| (i, dist_point_segment(p, heads[i], tails[i])))
-            .collect();
-        scored.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let normal = Vec3::from_array(v.n).normalize_or_zero();
+        let inside = |cp: Vec3| -> bool {
+            let to_bone = cp - p;
+            let len = to_bone.length();
+            // A bone point ON the vertex, or a degenerate normal, can't be judged — allow it.
+            len < 1e-4 || normal.dot(to_bone) / len <= OUTSIDE_COS
+        };
+        let score = |filter_outside: bool| -> Vec<(usize, f32)> {
+            let mut s: Vec<(usize, f32)> = (0..n)
+                .filter(|&i| deform[i])
+                .filter_map(|i| {
+                    let cp = closest_point_segment(p, heads[i], tails[i]);
+                    if filter_outside && !inside(cp) {
+                        return None;
+                    }
+                    Some((i, (p - cp).length()))
+                })
+                .collect();
+            s.sort_by(|a, b| a.1.total_cmp(&b.1));
+            s
+        };
+        let mut scored = score(true);
+        if scored.is_empty() {
+            // Every candidate read as outside (a sliver, or junk normals) — plain distance
+            // is still better than an unskinned vertex.
+            scored = score(false);
+        }
         let mut joints = [0u32; 4];
         let mut weights = [0.0f32; 4];
         let mut sum = 0.0;
@@ -166,8 +233,93 @@ pub fn bake_skin(model: &mut RawModel) {
                 *w /= sum;
             }
         }
+        // Prune the noise influences and renormalise what remains (the strongest survivor is
+        // always ≥ 0.25 of the pre-prune sum, so the renormalisation basis can't vanish).
+        let mut kept = 0.0;
+        for k in 0..4 {
+            if weights[k] < MIN_INFLUENCE {
+                weights[k] = 0.0;
+                joints[k] = joints[0];
+            } else {
+                kept += weights[k];
+            }
+        }
+        if kept > 0.0 {
+            for w in &mut weights {
+                *w /= kept;
+            }
+        }
         v.joints = joints;
         v.weights = weights;
+    }
+}
+
+/// Load a baked `flicker.rig` back into the editor's [`RawModel`] — the INVERSE of [`bake_rig`],
+/// so an already-staged (or promoted) character can be re-opened, adjusted further, and
+/// re-committed without starting over from the vendor FBX. Gz-transparent like every package
+/// read, so it accepts the `.json` path whether the file at rest is loose or `.json.gz`.
+///
+/// Undoes the two bake concerns: the synthesized identity `root` at bone 0 is stripped (its
+/// exact signature — name, no parent, identity local and bind — is required, so a rig that
+/// legitimately authored a root is passed through untouched), and every parent index and
+/// vertex joint shifts back down by one.
+pub fn load_rig_raw(path: &Path) -> Result<RawModel> {
+    let text = crate::package::read_text(path)
+        .with_context(|| format!("reading staged rig {}", path.display()))?;
+    let rig: RigFile = serde_json::from_str(&text)
+        .with_context(|| format!("parsing staged rig {}", path.display()))?;
+    Ok(rig_to_raw(&rig))
+}
+
+/// The pure conversion under [`load_rig_raw`] — see there for the contract.
+fn rig_to_raw(rig: &RigFile) -> RawModel {
+    let synthesized_root = rig.skeleton.bones.first().is_some_and(|b| {
+        b.name == "root" && b.parent == -1 && b.local == IDENTITY16 && b.inverse_bind == IDENTITY16
+    });
+    let (skip, shift) = if synthesized_root { (1, 1u32) } else { (0, 0) };
+    let bones: Vec<RawBone> = rig
+        .skeleton
+        .bones
+        .iter()
+        .skip(skip)
+        .map(|b| {
+            let (scale, rotation, translation) =
+                Mat4::from_cols_array(&b.local).to_scale_rotation_translation();
+            RawBone {
+                name: b.name.clone(),
+                parent: if b.parent < skip as i32 {
+                    -1
+                } else {
+                    b.parent - skip as i32
+                },
+                translation: translation.to_array(),
+                rotation: rotation.to_array(),
+                scale: scale.to_array(),
+                inverse_bind: b.inverse_bind,
+            }
+        })
+        .collect();
+    let vertices: Vec<RawVertex> = rig
+        .mesh
+        .vertices
+        .iter()
+        .map(|v| RawVertex {
+            p: v.p,
+            n: v.n,
+            uv: v.uv,
+            joints: [
+                v.joints[0].saturating_sub(shift),
+                v.joints[1].saturating_sub(shift),
+                v.joints[2].saturating_sub(shift),
+                v.joints[3].saturating_sub(shift),
+            ],
+            weights: v.weights,
+        })
+        .collect();
+    RawModel {
+        vertices,
+        indices: rig.mesh.indices.clone(),
+        bones,
     }
 }
 
@@ -189,8 +341,8 @@ fn rest_world_frames(model: &RawModel) -> Vec<Mat4> {
     g
 }
 
-/// Shortest distance from point `p` to the segment `a`–`b`.
-fn dist_point_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
+/// Closest point on the segment `a`–`b` to point `p`.
+fn closest_point_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
     let ab = b - a;
     let len2 = ab.length_squared();
     let t = if len2 > 1e-12 {
@@ -198,8 +350,9 @@ fn dist_point_segment(p: Vec3, a: Vec3, b: Vec3) -> f32 {
     } else {
         0.0
     };
-    (p - (a + ab * t)).length()
+    a + ab * t
 }
+
 
 pub fn bake_prop(model: &RawModel, source_name: &str) -> RigFile {
     let vertices: Vec<Vertex> = model
@@ -720,8 +873,204 @@ pub fn garment_socket(name: &str) -> &'static str {
 mod tests {
     use super::*;
     use crate::conform::{conform_to_canonical, default_reference};
-    use crate::fbx::{parse_fbx, RawBone, RawVertex};
+    use crate::fbx::parse_fbx;
     use crate::rig::rename_to_canonical;
+
+    /// A minimal torso-and-legs skeleton for the skin tests: world heads via parent-relative
+    /// translations, identity rotations — the same shape a conformed model carries.
+    fn skin_fixture() -> RawModel {
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: IDENTITY16,
+        };
+        let vert = |p: [f32; 3]| RawVertex {
+            p,
+            n: [0.0, -1.0, 0.0],
+            uv: [0.0, 0.0],
+            joints: [0; 4],
+            weights: [0.0; 4],
+        };
+        RawModel {
+            bones: vec![
+                bone("root", -1, [0.0, 0.0, 0.0]),          // 0 — masked from flesh
+                bone("pelvis", 0, [0.0, 0.0, 95.0]),        // 1
+                bone("thigh_l", 1, [8.67, 0.0, -5.0]),      // 2
+                bone("thigh_r", 1, [-8.67, 0.0, -5.0]),     // 3
+                bone("spine_01", 1, [0.0, 0.0, 15.0]),      // 4
+                bone("calf_l", 2, [0.0, 0.0, -42.0]),       // 5
+                bone("calf_r", 3, [0.0, 0.0, -42.0]),       // 6
+                bone("neck_01", 4, [0.0, 0.0, 30.0]),       // 7
+            ],
+            vertices: vec![
+                vert([0.0, -9.0, 100.0]),  // front belly — torso flesh
+                vert([0.0, -14.0, 2.0]),   // between the feet — nearest the root segment
+            ],
+            indices: vec![0, 1, 0],
+        }
+    }
+
+    /// THE SKIN DEFAULTS GUARD (2026-08-20 audit): a multi-child bone's segment runs to the
+    /// MEAN of its children (first-child ran `pelvis→thigh_l`, leaning the torso weighting
+    /// left), the synthetic `root` never owns flesh (its segment spans the whole lower core),
+    /// and noise influences are pruned. All three are what "discard the vendor skin and bake
+    /// from OUR skeleton" depends on to come out clean.
+    #[test]
+    fn bake_skin_keeps_flesh_on_the_chain_and_off_the_root() {
+        let mut m = skin_fixture();
+        bake_skin(&mut m);
+        let nm: Vec<&str> = m.bones.iter().map(|b| b.name.as_str()).collect();
+        let share = |v: &RawVertex, name: &str| -> f32 {
+            (0..4)
+                .filter(|&k| nm[v.joints[k] as usize] == name)
+                .map(|k| v.weights[k])
+                .sum()
+        };
+        for v in &m.vertices {
+            assert_eq!(share(v, "root"), 0.0, "the root must never own flesh");
+            let sum: f32 = v.weights.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-4, "weights renormalise after pruning");
+            for k in 0..4 {
+                assert!(
+                    v.weights[k] == 0.0 || v.weights[k] >= 0.02,
+                    "influences below the prune floor must not survive"
+                );
+            }
+        }
+        // The belly vert is TORSO flesh: with mean-of-children tails the pelvis segment runs up
+        // the spine (not sideways down thigh_l), so pelvis outweighs either thigh, and the
+        // torso family in total dominates the legs.
+        let belly = &m.vertices[0];
+        assert!(
+            share(belly, "pelvis") > share(belly, "thigh_l"),
+            "pelvis must outweigh a thigh on front-belly flesh"
+        );
+        let torso = share(belly, "pelvis") + share(belly, "spine_01") + share(belly, "neck_01");
+        let legs = share(belly, "thigh_l")
+            + share(belly, "thigh_r")
+            + share(belly, "calf_l")
+            + share(belly, "calf_r");
+        assert!(torso > legs, "belly flesh belongs to the torso chain, got torso={torso} legs={legs}");
+        // Mean tails are symmetric, so a midline vert weights both sides identically.
+        assert!(
+            (share(belly, "thigh_l") - share(belly, "thigh_r")).abs() < 1e-4,
+            "midline flesh must weight left and right identically"
+        );
+        // The floor vert sits nearest the (masked) root segment — it must fall to the LEGS
+        // (thighs reach the calf heads in this footless fixture, so the four leg bones split
+        // it), never to the root frame.
+        let floor = &m.vertices[1];
+        let floor_legs = share(floor, "thigh_l")
+            + share(floor, "thigh_r")
+            + share(floor, "calf_l")
+            + share(floor, "calf_r");
+        assert!(
+            floor_legs > 0.99,
+            "floor flesh falls to the legs once root is masked, got {floor_legs}"
+        );
+    }
+
+    /// [`rig_to_raw`] is the exact inverse of [`bake_rig`]: the synthesized root strips, the
+    /// +1 joint/parent shift undoes, and a second bake reproduces the first file verbatim —
+    /// the round trip the staged-reload workflow rides.
+    #[test]
+    fn staged_rig_round_trips_through_load() {
+        let mut original = skin_fixture();
+        bake_skin(&mut original);
+        let baked = bake_rig(&original, "Fixture");
+        let reloaded = rig_to_raw(&baked);
+        assert_eq!(reloaded.bones.len(), original.bones.len(), "root strips back off");
+        for (a, b) in original.bones.iter().zip(&reloaded.bones) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.parent, b.parent);
+            assert_eq!(a.inverse_bind, b.inverse_bind);
+            for i in 0..3 {
+                assert!((a.translation[i] - b.translation[i]).abs() < 1e-5);
+                assert!((a.scale[i] - b.scale[i]).abs() < 1e-5);
+            }
+        }
+        for (a, b) in original.vertices.iter().zip(&reloaded.vertices) {
+            assert_eq!(a.joints, b.joints);
+            assert_eq!(a.weights, b.weights);
+            assert_eq!(a.p, b.p);
+        }
+        let rebaked = bake_rig(&reloaded, "Fixture");
+        assert_eq!(
+            serde_json::to_string(&baked.skeleton).unwrap(),
+            serde_json::to_string(&rebaked.skeleton).unwrap(),
+            "bake ∘ load ∘ bake is identity on the skeleton"
+        );
+        assert_eq!(
+            serde_json::to_string(&baked.mesh).unwrap(),
+            serde_json::to_string(&rebaked.mesh).unwrap(),
+            "bake ∘ load ∘ bake is identity on the mesh"
+        );
+    }
+
+    /// REAL-DATA GUARD (skips without the content tree): re-deriving the conformed golem's
+    /// skin from its own centred skeleton keeps the TORSO CORE on the torso chain, never
+    /// weights a mount frame, and stays left-right symmetric — the three hardened defaults,
+    /// pinned against the real body. (Honest-band note, 2026-08-20: the band is |x| < 16 —
+    /// the solid torso — because the A-posed forearms hang at belly HEIGHT, and a wider band
+    /// measures the arm's own flesh as "belly".)
+    #[test]
+    fn golem_rebake_keeps_the_torso_core_on_the_chain() {
+        let path = crate::roots::roots()
+            .package()
+            .join("characters/GolemBase_Low/GolemBase_Low.json");
+        if !crate::package::file_exists(&path) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let mut m = load_rig_raw(&path).expect("staged golem loads");
+        bake_skin(&mut m);
+        let nm: Vec<&str> = m.bones.iter().map(|b| b.name.as_str()).collect();
+        let mut torso = 0.0f32;
+        let mut band_total = 0.0f32;
+        let mut n = 0;
+        let (mut thigh_l, mut thigh_r) = (0.0f32, 0.0f32);
+        for v in &m.vertices {
+            for k in 0..4 {
+                let b = nm[v.joints[k] as usize];
+                let w = v.weights[k];
+                assert!(
+                    w == 0.0 || (b != "root" && b != "Weapon_L" && b != "Weapon_R"),
+                    "a mount frame must never own flesh, {b} got {w}"
+                );
+                if b == "thigh_l" {
+                    thigh_l += w;
+                }
+                if b == "thigh_r" {
+                    thigh_r += w;
+                }
+            }
+            // The solid-torso front-belly core (Z-up cm, −Y forward, |x| inside the trunk).
+            if v.p[0].abs() >= 16.0 || v.p[2] < 95.0 || v.p[2] >= 115.0 || v.p[1] >= -2.0 {
+                continue;
+            }
+            n += 1;
+            for k in 0..4 {
+                let b = nm[v.joints[k] as usize];
+                band_total += v.weights[k];
+                if b.starts_with("pelvis") || b.starts_with("spine") || b.starts_with("thigh") {
+                    torso += v.weights[k];
+                }
+            }
+        }
+        assert!(n > 100, "the belly core samples real flesh, got {n} verts");
+        assert!(
+            torso / band_total.max(1e-6) > 0.75,
+            "the belly core belongs to the torso chain: {torso:.1}/{band_total:.1} over {n} verts"
+        );
+        let (lo, hi) = (thigh_l.min(thigh_r), thigh_l.max(thigh_r));
+        assert!(
+            lo / hi.max(1e-6) > 0.85,
+            "mean-of-children tails weight the sides evenly, got thigh_l={thigh_l:.1} thigh_r={thigh_r:.1}"
+        );
+    }
 
     fn find_character() -> Option<std::path::PathBuf> {
         let dir =

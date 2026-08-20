@@ -459,6 +459,12 @@ fn limb_length_ratio(
 #[derive(Debug, Clone, Default)]
 pub struct InferReport {
     pub added: Vec<String>,
+    /// Bones REPARENTED onto the canonical chain (world frame preserved) — a source rig that
+    /// lacked a canonical link parented straight past it (Meshy's one-neck rig hangs `head`
+    /// off `neck_01`), and without the splice the inferred link dangles as a leaf and the
+    /// shared clips' rotation for it is silently lost on this body (the 2026-08-20 golem's
+    /// measured head jut).
+    pub spliced: Vec<String>,
     pub hand_scale_l: f32,
     pub hand_scale_r: f32,
 }
@@ -536,6 +542,7 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
     let mut idx = idx0;
     let mut report = InferReport {
         added: Vec::new(),
+        spliced: Vec::new(),
         hand_scale_l,
         hand_scale_r,
     };
@@ -561,7 +568,116 @@ pub fn infer_canonical_bones(model: &mut RawModel, reference: &Path) -> Result<I
         g.push(w);
         report.added.push(b.name.clone());
     }
+
+    report.spliced = splice_canonical_chain(model, reference)?;
     Ok(report)
+}
+
+/// Repair the CHAIN of an already-canonical model: reparent every canonical bone onto its
+/// canonical parent — PRESERVING its world frame, so the rest pose does not move — then
+/// re-sort parents-before-children and remap every parent index and vertex joint.
+///
+/// THE SPLICE (2026-08-20): a source rig that LACKED a canonical link parented straight past
+/// it — Meshy's one-neck rig hangs `head` off `neck_01`, so the inferred `neck_02` dangled as
+/// a childless leaf and every shared clip's neck_02 rotation was silently LOST on that body
+/// (the head composed one link short of the canonical chain — the measured golem head jut).
+/// Runs at the end of [`infer_canonical_bones`], and STANDALONE over a reloaded staged rig,
+/// whose baked file may carry the pre-fix chain: the human's fitted joints stay exactly where
+/// they were put, and only the chain composition is repaired. Returns the reparented names.
+pub fn splice_canonical_chain(model: &mut RawModel, reference: &Path) -> Result<Vec<String>> {
+    let refs = load_reference_skeleton(reference)?;
+    let cidx: HashMap<String, usize> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    let idx: HashMap<String, usize> = model
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    let g = model_world_frames(model);
+    let mut spliced = Vec::new();
+    for i in 0..model.bones.len() {
+        let name = model.bones[i].name.clone();
+        let Some(&ci) = cidx.get(&name) else { continue };
+        let cparent = refs[ci].parent;
+        // The reference's `root` is synthesized at bake, so a root-parented canonical bone
+        // (pelvis) stays a model root here.
+        let want: i32 = if cparent < 0 {
+            -1
+        } else {
+            let pname = &refs[cparent as usize].name;
+            if pname == "root" {
+                -1
+            } else {
+                match idx.get(pname.as_str()) {
+                    Some(&p) => p as i32,
+                    None => continue, // canonical parent absent — leave as-is
+                }
+            }
+        };
+        if want == model.bones[i].parent {
+            continue;
+        }
+        let local = match usize::try_from(want) {
+            Ok(p) => g[p].inverse() * g[i],
+            Err(_) => g[i],
+        };
+        let (sc, r, t) = local.to_scale_rotation_translation();
+        let b = &mut model.bones[i];
+        b.parent = want;
+        b.translation = t.to_array();
+        b.rotation = r.to_array();
+        b.scale = sc.to_array();
+        spliced.push(name);
+    }
+
+    // The splice can point a bone at a parent stored LATER in the vec (`head` at an appended
+    // `neck_02`), and every world-frame walk in the pipeline is a single forward pass that
+    // requires parents to precede children. Re-sort — canonical bones in the reference's own
+    // topological order, everything else after in its original relative order (its parents are
+    // canonical or preceded it before, so the invariant holds) — and remap every parent index
+    // and vertex joint through the permutation.
+    if !spliced.is_empty() {
+        let n = model.bones.len();
+        let mut order: Vec<usize> = (0..n).collect();
+        order.sort_by_key(|&i| {
+            match cidx.get(&model.bones[i].name) {
+                Some(&ci) => (0, ci, i), // canonical: reference topological order
+                None => (1, 0, i),       // stragglers: after, original relative order
+            }
+        });
+        let mut perm = vec![0usize; n]; // old index → new index
+        for (new_i, &old_i) in order.iter().enumerate() {
+            perm[old_i] = new_i;
+        }
+        let mut bones = Vec::with_capacity(n);
+        for &old_i in &order {
+            let mut b = model.bones[old_i].clone();
+            b.parent = match usize::try_from(b.parent) {
+                Ok(p) => perm[p] as i32,
+                Err(_) => -1,
+            };
+            bones.push(b);
+        }
+        model.bones = bones;
+        for v in &mut model.vertices {
+            for j in &mut v.joints {
+                *j = perm[*j as usize] as u32;
+            }
+        }
+        debug_assert!(
+            model
+                .bones
+                .iter()
+                .enumerate()
+                .all(|(i, b)| b.parent < i as i32),
+            "the splice re-sort must leave parents before children"
+        );
+    }
+    Ok(spliced)
 }
 
 /// The full canonical conform, in order: mesh-derived hip WIDTH → limb-align reorient → infer the
@@ -607,9 +723,87 @@ pub fn default_reference() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fbx::parse_fbx;
+    use crate::fbx::{parse_fbx, RawBone, RawVertex};
     use crate::rig::rename_to_canonical;
     use std::collections::HashSet;
+
+    /// THE SPLICE GUARD (2026-08-20, skips without the content tree): a Meshy-shaped source
+    /// parents `head` straight to `neck_01` (it has one neck), so the inferred `neck_02` used
+    /// to dangle as a leaf — the canonical clips' neck_02 rotation was silently lost and the
+    /// head composed one link short (the golem's measured head jut). After conform, `head`
+    /// must hang off `neck_02`, parents must precede children, and the mesh's joint indices
+    /// must follow the bones they were weighted to through the re-sort.
+    #[test]
+    fn conform_splices_inferred_links_into_the_chain() {
+        let reference = default_reference();
+        if !crate::package::file_exists(&reference) {
+            eprintln!("skipping: no content tree");
+            return;
+        }
+        let bone = |name: &str, parent: i32, t: [f32; 3]| RawBone {
+            name: name.to_string(),
+            parent,
+            translation: t,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0, 1.0, 1.0],
+            inverse_bind: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+        };
+        let mut model = RawModel {
+            bones: vec![
+                bone("pelvis", -1, [0.0, 0.0, 95.0]),
+                bone("spine_01", 0, [0.0, 0.0, 10.0]),
+                bone("spine_02", 1, [0.0, 0.0, 10.0]),
+                bone("spine_03", 2, [0.0, 0.0, 10.0]),
+                bone("neck_01", 3, [0.0, 0.0, 19.0]),
+                bone("head", 4, [0.0, 0.0, 4.0]), // Meshy shape: head skips the second neck link
+            ],
+            vertices: vec![RawVertex {
+                p: [0.0, -8.0, 155.0],
+                n: [0.0, -1.0, 0.0],
+                uv: [0.0, 0.0],
+                joints: [5, 0, 0, 0], // weighted to `head` at its pre-splice index
+                weights: [1.0, 0.0, 0.0, 0.0],
+            }],
+            indices: vec![0, 0, 0],
+        };
+        let out = conform_to_canonical(&mut model, &reference).expect("conform runs");
+        assert!(
+            out.infer.spliced.iter().any(|n| n == "head"),
+            "the head must be reported spliced, got {:?}",
+            out.infer.spliced
+        );
+        let idx = |name: &str| {
+            model
+                .bones
+                .iter()
+                .position(|b| b.name == name)
+                .unwrap_or_else(|| panic!("{name} present"))
+        };
+        let head = idx("head");
+        let parent = model.bones[head].parent;
+        assert_eq!(
+            model.bones[usize::try_from(parent).expect("head has a parent")].name,
+            "neck_02",
+            "the head hangs off the spliced neck_02"
+        );
+        for (i, b) in model.bones.iter().enumerate() {
+            assert!(
+                b.parent < i as i32,
+                "parents precede children after the re-sort ({} at {i} points at {})",
+                b.name,
+                b.parent
+            );
+        }
+        let v = &model.vertices[0];
+        assert_eq!(
+            usize::try_from(v.joints[0]).unwrap(),
+            head,
+            "the vertex follows the bone it was weighted to through the remap"
+        );
+        assert_eq!(v.weights[0], 1.0);
+    }
 
     /// Worst world position (cm) + orientation (deg) delta of `model`'s bones vs the oracle at
     /// `reference`, matched by name (bones absent from the oracle, e.g. a synthesized root, skipped).
